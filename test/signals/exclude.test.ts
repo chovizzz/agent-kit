@@ -26,6 +26,24 @@ describe('排除策略(决策 ③A)', () => {
     expect((await p.decide('/mine/social-ops-hub')).action).toBe('process');
   });
 
+  it('排除目录用符号链接前缀写法配置、会话 cwd 是已删除目录的真实路径写法 → 仍被排除(解析最长已存在前缀;对照:别的项目不受影响)', async () => {
+    const w = await newWork('excl-deleted-');
+    const real = path.join(w.dir, 'real');
+    await mkdirp(w.io, real);
+    const alias = path.join(w.dir, 'alias');
+    await symlink(w.io, real, alias);
+    // client-x 目录从未存在(等价于「项目目录已被删除」):realpath 对整条路径会失败。
+    const p = await createExcludePolicy({
+      excludeDirs: [path.join(alias, 'client-x')],
+      allowProjects: [],
+    });
+    expect((await p.decide(path.join(real, 'client-x', 'app'))).action).toBe('skip');
+    expect((await p.decide(path.join(alias, 'client-x', 'app'))).action).toBe('skip');
+    // 正向对照:同一个符号链接前缀下的其它项目不被误排除
+    expect((await p.decide(path.join(real, 'other', 'app'))).action).toBe('process');
+    expect((await p.decide(path.join(alias, 'other', 'app'))).action).toBe('process');
+  });
+
   it('cwd_hint 为 null:无法证明不在排除目录里 → 跳过并标 unknown_project', async () => {
     const p = await createExcludePolicy({ excludeDirs: ['/clients/acme'], allowProjects: [] });
     expect(await p.decide(null)).toEqual({ action: 'skip', reason: 'unknown_project' });

@@ -22,13 +22,23 @@ export class ExcludeConfigError extends Error {
 
 async function canonical(p: string): Promise<string> {
   const abs = path.resolve(p);
-  let real = abs;
-  try {
-    real = await realpath(abs);
-  } catch {
-    // 目录已不存在:用 resolve 后的路径比较
+  // 解析「最长的已存在前缀」的 realpath,再接回不存在的尾部:
+  // 项目目录被删除后(realpath 对整条路径失败),仍能通过符号链接前缀的不同写法被排除清单认出,
+  // 避免『同一目录两种写法』导致客户项目的会话漏过排除。
+  let head = abs;
+  const tail: string[] = [];
+  for (;;) {
+    try {
+      const real = await realpath(head);
+      const joined = tail.length > 0 ? path.join(real, ...tail.slice().reverse()) : real;
+      return joined.length > 1 ? joined.replace(/[\\/]+$/, '') : joined;
+    } catch {
+      const parent = path.dirname(head);
+      if (parent === head) return abs.length > 1 ? abs.replace(/[\\/]+$/, '') : abs;
+      tail.push(path.basename(head));
+      head = parent;
+    }
   }
-  return real.length > 1 ? real.replace(/[\\/]+$/, '') : real;
 }
 
 function fold(p: string): string {
