@@ -1,11 +1,19 @@
 /**
- * agent → reader 工厂表。P0 在 B10b 里是空的:B11–B14 各自实现 `TraceReader` 后,
- * 由主代理在集成(B19)时把 `src/readers/<agent>/index.ts` 的工厂挂到这里。
+ * agent → reader 工厂表。B11–B14 的四个 reader 挂在这里(opencode / openclaw 的 reader 不在 P0)。
  * 测试用 `createSignalsCollectCommand({ readers })` 直接注入,不依赖本表。
  */
 import type { AgentId } from '../contracts/common.js';
 import type { TraceReader } from '../contracts/reader.js';
+import { createClaudeReader } from '../readers/claude/index.js';
+import { createCodexReader } from '../readers/codex/index.js';
+import { createKimiReader } from '../readers/kimi/index.js';
+import { createPiReader } from '../readers/pi/index.js';
 
 export type ReaderRegistry = Partial<Record<AgentId, () => TraceReader>>;
 
-export const DEFAULT_READERS: ReaderRegistry = {};
+export const DEFAULT_READERS: ReaderRegistry = {
+  claude: createClaudeReader,
+  codex: createCodexReader,
+  pi: createPiReader,
+  kimi: createKimiReader,
+};
