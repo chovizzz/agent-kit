@@ -84,7 +84,8 @@ describe('redact --stdin', () => {
   it('--check 分块扫描超大输入,偏移是整份输入里的绝对偏移', async () => {
     const pad = 'lorem ipsum dolor sit amet\n'.repeat(30_000);
     const k = fakeSk();
-    const r = await run(['--stdin', '--check'], `${pad}${k}\n${pad}`);
+    // 本用例只验证分块偏移,与时限无关:显式给足预算,避免机器忙时默认 50ms 触发 fail-closed(退出 3)而偶发红。
+    const r = await run(['--stdin', '--check', '--timeout-ms', '10000'], `${pad}${k}\n${pad}`);
     expect(r.code).toBe(ExitCode.CHECK_FAILED);
     expect(r.err).toContain(`offset=${pad.length}`);
   });
