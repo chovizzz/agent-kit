@@ -483,6 +483,12 @@ describe('渲染报告与元数据', () => {
   it('默认注册表里 codex 适配器就是本适配器;claude 与 codex 同时跑也不冲突', () => {
     expect(defaultRegistry.get('codex')).toBe(adapter);
     const both = renderAll(inputOf(), defaultRegistry);
-    expect(new Set(both.files.map((x) => x.agent))).toEqual(new Set(['claude', 'codex']));
+    // 五家适配器现在都已实装(B08 合入后):默认注册表会渲染出五家的文件。
+    // 本用例关心的是 claude 与 codex 同时跑互不冲突(同一份输入得到两家各自的产物),所以只过滤这两家断言。
+    const agents = new Set(both.files.map((x) => x.agent));
+    expect(agents.has('claude')).toBe(true);
+    expect(agents.has('codex')).toBe(true);
+    const claudeCodex = both.files.filter((x) => x.agent === 'claude' || x.agent === 'codex');
+    expect(new Set(claudeCodex.map((x) => x.agent))).toEqual(new Set(['claude', 'codex']));
   });
 });
