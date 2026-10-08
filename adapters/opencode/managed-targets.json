@@ -1,5 +1,5 @@
 {
   "agent": "opencode",
   "tested_versions": [],
-  "managed_targets": []
+  "managed_targets": ["~/.config/opencode/AGENTS.md"]
 }

@@ -1,0 +1,86 @@
+{
+  "dropped": [
+    {
+      "field": "agents",
+      "reason": "Pi 本体文档没有提到子代理机制(源码里是否有未核实;第三方扩展 pi-subagents 的格式也未核实),不渲染子代理,留 P1;未渲染 3 个:diff-reviewer, implementer, web-scout"
+    },
+    {
+      "field": "files",
+      "file": "pi/home/.agents/skills/alpha-full/SKILL.md",
+      "reason": "渲染输入的 Skill 只带资源文件清单(relPath/sha256)不带内容,P0 渲染器只写 SKILL.md;未渲染 2 个资源文件:references/guide.md, scripts/run.sh"
+    },
+    {
+      "field": "paths",
+      "file": "pi/home/.pi/agent/AGENTS.md",
+      "reason": "原子 org-paths:Pi 的 AGENTS.md 没有路径作用域机制(按目录链加载),paths 无法保留,已降级为正文前缀「仅在处理 <glob> 时适用」"
+    },
+    {
+      "field": "paths",
+      "file": "pi/home/.pi/agent/AGENTS.md",
+      "reason": "原子 team-paths:Pi 的 AGENTS.md 没有路径作用域机制(按目录链加载),paths 无法保留,已降级为正文前缀「仅在处理 <glob> 时适用」"
+    },
+    {
+      "field": "paths",
+      "file": "pi/project/AGENTS.md",
+      "reason": "原子 project-paths:Pi 的 AGENTS.md 没有路径作用域机制(按目录链加载),paths 无法保留,已降级为正文前缀「仅在处理 <glob> 时适用」"
+    },
+    {
+      "field": "status",
+      "reason": "原子 still-proposed:状态 proposed 在 canary 渠道不渲染(advisory 只到 canary;proposed/deprecated/retired 不渲染)"
+    },
+    {
+      "field": "status",
+      "reason": "原子 was-deprecated:状态 deprecated 在 canary 渠道不渲染(advisory 只到 canary;proposed/deprecated/retired 不渲染)"
+    },
+    {
+      "field": "status",
+      "reason": "原子 was-retired:状态 retired 在 canary 渠道不渲染(advisory 只到 canary;proposed/deprecated/retired 不渲染)"
+    }
+  ],
+  "pendingProbes": [
+    {
+      "description": "Pi 子代理:本体文档未提及此机制(源码未核实),pi-subagents 扩展的文件格式未核实(Q-N17,留 P1)",
+      "id": "pi-subagents-format"
+    },
+    {
+      "description": "Pi:~/.pi/agent/AGENTS.md 是否加载;向上遍历的终点;体积上限(文档未给上限,预算 limit_source=assumed)",
+      "id": "P-Q4"
+    },
+    {
+      "description": "paths 降级成正文前缀后,Pi 是否真的只在处理匹配路径时才遵守该条(未验证)",
+      "id": "pi-paths-prefix-effect"
+    },
+    {
+      "description": "pi 渲染器的格式依据 Pi 0.87.1 随包官方文档(2026-10-08 读取),尚未跑兼容探针(P1 才有);golden 不构成兼容声明(Q-N14)",
+      "id": "compat-probe-not-run"
+    }
+  ],
+  "shadowChecks": [
+    "pi/home/.agents/skills/alpha-full/SKILL.md: Pi 对同名技能保留先发现者并警告,后发现的被丢弃(documented:Pi docs/skills.md);~/.pi/agent/skills、项目 .pi/skills、项目 .agents/skills 里的同名技能可能先于本文件被发现(发现顺序文档未给出,assumed);启动参数 -ns / --no-skills 会关闭技能发现(documented:Pi docs/cli.md;P0 不检查);共管目录里他方同名条目会冲突(§4.6;P0 不检查真实目录)",
+    "pi/home/.agents/skills/synced/SKILL.md: Pi 对同名技能保留先发现者并警告,后发现的被丢弃(documented:Pi docs/skills.md);~/.pi/agent/skills、项目 .pi/skills、项目 .agents/skills 里的同名技能可能先于本文件被发现(发现顺序文档未给出,assumed);启动参数 -ns / --no-skills 会关闭技能发现(documented:Pi docs/cli.md;P0 不检查);共管目录里他方同名条目会冲突(§4.6;P0 不检查真实目录)",
+    "pi/home/.agents/skills/zeta-plain/SKILL.md: Pi 对同名技能保留先发现者并警告,后发现的被丢弃(documented:Pi docs/skills.md);~/.pi/agent/skills、项目 .pi/skills、项目 .agents/skills 里的同名技能可能先于本文件被发现(发现顺序文档未给出,assumed);启动参数 -ns / --no-skills 会关闭技能发现(documented:Pi docs/cli.md;P0 不检查);共管目录里他方同名条目会冲突(§4.6;P0 不检查真实目录)",
+    "pi/home/.pi/agent/AGENTS.md: ~/.pi/agent/AGENTS.override.md 存在时替换同目录的 AGENTS.md / CLAUDE.md,本文件被遮蔽(documented:Pi docs/configuration.md;P0 不检查真实文件)",
+    "pi/home/.pi/agent/AGENTS.md: ~/.pi/agent/SYSTEM.md 替换 Pi 的默认系统提示;它对上下文文件(含本文件)是否仍注入的影响文档未说明(assumed;P0 不检查真实文件)",
+    "pi/home/.pi/agent/AGENTS.md: 启动参数 --no-context-files / -nc 会关闭 AGENTS.md 与 CLAUDE.md 的发现与加载(documented:Pi docs/cli.md;P0 不检查)",
+    "pi/home/.pi/agent/AGENTS.md: 启动参数 --system-prompt 与 SYSTEM.md 同族,同样替换默认系统提示;对上下文文件(含本文件)是否仍注入的影响文档未说明(assumed;P0 不检查)",
+    "pi/home/.pi/agent/AGENTS.md: 设置 PI_CODING_AGENT_DIR 会改变 agent-dir,~/.pi/agent/AGENTS.md 就不再是全局文件(documented;P0 不检查环境)",
+    "pi/project/AGENTS.md: 启动参数 --no-context-files / -nc 会关闭 AGENTS.md 与 CLAUDE.md 的发现与加载(documented:Pi docs/cli.md;P0 不检查)",
+    "pi/project/AGENTS.md: 项目各级 AGENTS.override.md 替换同目录的 AGENTS.md / CLAUDE.md,本文件被遮蔽(documented:Pi docs/configuration.md;P0 不检查真实文件)"
+  ],
+  "sideEffects": [
+    "pi/home/.agents/skills/alpha-full/SKILL.md: 技能写入共享目录 ~/.agents/skills/<name>/(设计 §4.1:Codex、Kimi、OpenCode、OpenClaw 也读该目录),装进去后这些 agent 都会看到;不写 ~/.pi/agent/skills",
+    "pi/home/.agents/skills/synced/SKILL.md: 技能写入共享目录 ~/.agents/skills/<name>/(设计 §4.1:Codex、Kimi、OpenCode、OpenClaw 也读该目录),装进去后这些 agent 都会看到;不写 ~/.pi/agent/skills",
+    "pi/home/.agents/skills/zeta-plain/SKILL.md: 技能写入共享目录 ~/.agents/skills/<name>/(设计 §4.1:Codex、Kimi、OpenCode、OpenClaw 也读该目录),装进去后这些 agent 都会看到;不写 ~/.pi/agent/skills",
+    "pi/home/.pi/agent/AGENTS.md: P0 按\"文件不存在\"状态渲染(不读真实文件,本机调研时 ~/.pi/agent/ 下没有 AGENTS.md);新建后 Pi 第一次读到全局规则,属行为变化;P2 写入前须由 sync 读取真实文件,非空时只改托管块",
+    "pi/home/.pi/agent/AGENTS.md: ⚠ 本 agent 无机械强制:Pi 没有声明式 hook(只有 TS 扩展),规则以文字形式交付,must 级规则也只靠模型遵守(TS 扩展垫片留 P4+)",
+    "pi/project/AGENTS.md: ⚠ 本 agent 无机械强制:Pi 没有声明式 hook(只有 TS 扩展),规则以文字形式交付,must 级规则也只靠模型遵守(TS 扩展垫片留 P4+)",
+    "pi/project/AGENTS.md: 与 codex / kimi / opencode 共用仓库根 AGENTS.md(同一托管块 id),P2 须合并成一个块而不是叠加;Pi 会遍历 cwd 的所有上级目录,~/AGENTS.md、~/workspace/AGENTS.md 等他方文件会随本块一起注入(调研 A §5.1 实测,P0 只列出,不读也不改真实文件)",
+    "pi: paths 原子降级为正文前缀,这是靠模型遵守的文字约束,不是机制"
+  ],
+  "skippedLayers": [
+    {
+      "layer": "personal",
+      "reason": "P2 才在本机渲染"
+    }
+  ]
+}

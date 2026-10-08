@@ -1,5 +1,5 @@
 {
   "agent": "kimi",
   "tested_versions": [],
-  "managed_targets": []
+  "managed_targets": ["~/.kimi-code/AGENTS.md", "~/.agents/skills/", "~/.kimi-code/agents/"]
 }
