@@ -1,5 +1,5 @@
 {
   "agent": "codex",
-  "tested_versions": [],
-  "managed_targets": []
+  "tested_versions": ["0.161.0"],
+  "managed_targets": ["~/.codex/AGENTS.md", "~/.agents/skills/", "~/.codex/agents/"]
 }

@@ -1,25 +1,17 @@
 import type { Adapter } from '../../src/contracts/render.js';
+import { DOCS_VERSION } from './common.js';
+import { renderAgents } from './agents.js';
+import { renderRules } from './rules.js';
+import { renderSkills } from './skills.js';
 
 /**
- * 骨架桩(B01):渲染器尚未实现,返回空输出并在报告里登记。
- * 由块 B07 替换本文件内容,保持 `export const adapter: Adapter` 的形状,
- * 并填写同目录的 managed-targets.json(格式 AdapterMetaSchema)。
+ * Claude Code 渲染器(B07)。只产出内存 OutFile,不读也不写任何真实路径。
+ * testedVersions 里的版本是"格式所依据的官方文档对应的版本",不是探针验证过的版本(探针在 P1)。
  */
 export const adapter: Adapter = {
   agent: 'claude',
-  testedVersions: [],
-  renderRules() {
-    return {
-      files: [],
-      report: {
-        dropped: [],
-        sideEffects: [],
-        shadowChecks: [],
-        pendingProbes: [
-          { id: 'adapter-not-implemented', description: 'claude 渲染器尚未实现(B01 骨架桩)' },
-        ],
-        skippedLayers: [],
-      },
-    };
-  },
+  testedVersions: [DOCS_VERSION],
+  renderRules,
+  renderSkills,
+  renderAgents,
 };

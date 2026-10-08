@@ -1,0 +1,72 @@
+{
+  "dropped": [
+    {
+      "field": "files",
+      "file": "claude/home/.claude/skills/alpha-full/SKILL.md",
+      "reason": "渲染输入的 Skill 只带资源文件清单(relPath/sha256)不带内容,P0 渲染器只写 SKILL.md;未渲染 2 个资源文件:references/guide.md, scripts/run.sh"
+    },
+    {
+      "field": "model_tier",
+      "file": "claude/home/.claude/agents/web-scout.md",
+      "reason": "覆盖层没有给 claude 的 readonly 档位映射模型,model 字段已省略(省略时 Claude Code 按子代理模型顺序解析)"
+    },
+    {
+      "field": "skill",
+      "reason": "技能名 synced 是 Claude Code 保留名,同名技能不会被加载,已不渲染"
+    },
+    {
+      "field": "status",
+      "reason": "原子 still-proposed:状态 proposed 在 canary 渠道不渲染(advisory 只到 canary;proposed/deprecated/retired 不渲染)"
+    },
+    {
+      "field": "status",
+      "reason": "原子 was-deprecated:状态 deprecated 在 canary 渠道不渲染(advisory 只到 canary;proposed/deprecated/retired 不渲染)"
+    },
+    {
+      "field": "status",
+      "reason": "原子 was-retired:状态 retired 在 canary 渠道不渲染(advisory 只到 canary;proposed/deprecated/retired 不渲染)"
+    }
+  ],
+  "pendingProbes": [
+    {
+      "description": "claude 渲染器的格式依据 Claude Code 2.1.294 的官方文档(2026-10-08 读取),尚未跑兼容探针(P1 才有);golden 不构成兼容声明(Q-N14)",
+      "id": "compat-probe-not-run"
+    },
+    {
+      "description": "仓库没有 CLAUDE.md 时 Claude 是否原生读 AGENTS.md(文档称 ≥2.1.277,本机 2.1.294 未实测)",
+      "id": "P-Q2"
+    },
+    {
+      "description": "用户级 ~/.claude/rules/agent-kit/ 子目录是否加载(官方文档只对项目级明说递归);与 AGENTS.md 并存时相同内容是否被去重(文档规定两者都加载,未知的是去重)",
+      "id": "P-Q1"
+    }
+  ],
+  "shadowChecks": [
+    "claude/home/.claude/agents/diff-reviewer.md: 同名子代理按文档优先级 项目级 > 用户级 > 插件 解析(本文件是用户级,会被项目级同名文件遮蔽;P0 不检查真实目录)",
+    "claude/home/.claude/agents/implementer.md: 同名子代理按文档优先级 项目级 > 用户级 > 插件 解析(本文件是用户级,会被项目级同名文件遮蔽;P0 不检查真实目录)",
+    "claude/home/.claude/agents/web-scout.md: 同名子代理按文档优先级 项目级 > 用户级 > 插件 解析(本文件是用户级,会被项目级同名文件遮蔽;P0 不检查真实目录)",
+    "claude/home/.claude/rules/agent-kit/org.md: 设置 Project instructions 取非默认值(如 managed-only)时本文件可被整体跳过(A §2.1-1b、§2.1-10;P0 不检查真实设置)",
+    "claude/home/.claude/rules/agent-kit/paths/org-paths.md: 设置 Project instructions 取非默认值(如 managed-only)时本文件可被整体跳过(A §2.1-1b、§2.1-10;P0 不检查真实设置)",
+    "claude/home/.claude/rules/agent-kit/paths/team-paths.md: 设置 Project instructions 取非默认值(如 managed-only)时本文件可被整体跳过(A §2.1-1b、§2.1-10;P0 不检查真实设置)",
+    "claude/home/.claude/rules/agent-kit/team.md: 设置 Project instructions 取非默认值(如 managed-only)时本文件可被整体跳过(A §2.1-1b、§2.1-10;P0 不检查真实设置)",
+    "claude/home/.claude/skills/alpha-full/SKILL.md: 共管目录 ~/.claude/skills 里 skills-hub、插件或手写的同名技能会与本技能冲突(§4.6;P0 不检查真实目录)",
+    "claude/home/.claude/skills/zeta-plain/SKILL.md: 共管目录 ~/.claude/skills 里 skills-hub、插件或手写的同名技能会与本技能冲突(§4.6;P0 不检查真实目录)",
+    "claude/project/.claude/rules/agent-kit/paths/project-paths.md: 设置 Project instructions 取非默认值(如 managed-only)时本文件可被整体跳过(A §2.1-1b、§2.1-10;P0 不检查真实设置)",
+    "claude/project/.claude/rules/agent-kit/project.md: 设置 Project instructions 取非默认值(如 managed-only)时本文件可被整体跳过(A §2.1-1b、§2.1-10;P0 不检查真实设置)",
+    "claude/project/AGENTS.md: 目录链上存在 CLAUDE.md / .claude/CLAUDE.md / CLAUDE.local.md 时 Claude 不读 AGENTS.md(A §2.1-1b;P0 不检查真实文件)",
+    "claude/project/AGENTS.md: 设置 Project instructions 取非默认值(如 managed-only)时本文件可被整体跳过(A §2.1-1b、§2.1-10;P0 不检查真实设置)"
+  ],
+  "sideEffects": [
+    "claude/project/AGENTS.md: 仓库已有 CLAUDE.md 而其中没有 @AGENTS.md 时 Claude 读不到该文件,建议由仓库所有者在 CLAUDE.md 加 @AGENTS.md(本渲染器不改 CLAUDE.md)",
+    "claude/project: AGENTS.md 托管块与 .claude/rules/agent-kit/project.md 内容相同;两者并存时是否重复加载未实测(P-Q1),预算按原子 id 去重只计一份",
+    "claude: 不改 ~/.claude/CLAUDE.md,不生成 personal.md(personal 层 P0 渲染为空,预算里 personal 份额为 0)",
+    "claude: 带 paths 的原子只渲染进带 paths frontmatter 的独立规则文件,不进 AGENTS.md(进了就丢掉路径作用域)",
+    "claude: 技能写入共管目录 ~/.claude/skills/<name>/(P2 sync 时只对 owner=kit 的条目负责,不改他方条目)"
+  ],
+  "skippedLayers": [
+    {
+      "layer": "personal",
+      "reason": "P2 才在本机渲染"
+    }
+  ]
+}

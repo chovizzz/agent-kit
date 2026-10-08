@@ -1,0 +1,98 @@
+{
+  "dropped": [
+    {
+      "field": "files",
+      "file": "codex/home/.agents/skills/alpha-full/SKILL.md",
+      "reason": "渲染输入的 Skill 只带资源文件清单(relPath/sha256)不带内容,P0 渲染器只写 SKILL.md;未渲染 2 个资源文件:references/guide.md, scripts/run.sh"
+    },
+    {
+      "field": "model_tier",
+      "file": "codex/home/.codex/agents/web-scout.toml",
+      "reason": "覆盖层没有给 codex 的 readonly 档位映射模型,model 字段已省略(文档:按 显式 spawn 值 → [agents] 默认 → 父会话 的顺序解析)"
+    },
+    {
+      "field": "paths",
+      "file": "codex/home/.codex/AGENTS.md",
+      "reason": "原子 org-paths:Codex 的 AGENTS.md 没有路径作用域机制(只按目录链加载),paths 无法保留,已降级为正文前缀「仅在处理 <glob> 时适用」"
+    },
+    {
+      "field": "paths",
+      "file": "codex/home/.codex/AGENTS.md",
+      "reason": "原子 team-paths:Codex 的 AGENTS.md 没有路径作用域机制(只按目录链加载),paths 无法保留,已降级为正文前缀「仅在处理 <glob> 时适用」"
+    },
+    {
+      "field": "paths",
+      "file": "codex/project/AGENTS.md",
+      "reason": "原子 project-paths:Codex 的 AGENTS.md 没有路径作用域机制(只按目录链加载),paths 无法保留,已降级为正文前缀「仅在处理 <glob> 时适用」"
+    },
+    {
+      "field": "status",
+      "reason": "原子 still-proposed:状态 proposed 在 canary 渠道不渲染(advisory 只到 canary;proposed/deprecated/retired 不渲染)"
+    },
+    {
+      "field": "status",
+      "reason": "原子 was-deprecated:状态 deprecated 在 canary 渠道不渲染(advisory 只到 canary;proposed/deprecated/retired 不渲染)"
+    },
+    {
+      "field": "status",
+      "reason": "原子 was-retired:状态 retired 在 canary 渠道不渲染(advisory 只到 canary;proposed/deprecated/retired 不渲染)"
+    },
+    {
+      "field": "tools",
+      "file": "codex/home/.codex/agents/diff-reviewer.toml",
+      "reason": "Codex 自定义代理文件没有工具白名单字段(文档:必填 name/description/developer_instructions,其余为 config.toml 键);工具类别 read、shell 无法逐项表达,已丢弃"
+    },
+    {
+      "field": "tools",
+      "file": "codex/home/.codex/agents/implementer.toml",
+      "reason": "Codex 自定义代理文件没有工具白名单字段(文档:必填 name/description/developer_instructions,其余为 config.toml 键);工具类别 read、shell 无法逐项表达,已丢弃"
+    },
+    {
+      "field": "tools",
+      "file": "codex/home/.codex/agents/web-scout.toml",
+      "reason": "Codex 自定义代理文件没有工具白名单字段(文档:必填 name/description/developer_instructions,其余为 config.toml 键);工具类别 web、agent 无法逐项表达,已丢弃"
+    }
+  ],
+  "pendingProbes": [
+    {
+      "description": "Codex 对技能 frontmatter 的 license / compatibility / metadata 的处理文档未明说(只要求 name+description),带这些键的技能文件标 assumed",
+      "id": "codex-skill-optional-fields"
+    },
+    {
+      "description": "Codex:~/.codex/AGENTS.md 与项目链的拼接顺序;实际截断点",
+      "id": "P-Q3"
+    },
+    {
+      "description": "codex 渲染器的格式依据 Codex CLI 0.161.0 的官方文档(2026-10-08 读取),尚未跑兼容探针(P1 才有);golden 不构成兼容声明(Q-N14)",
+      "id": "compat-probe-not-run"
+    },
+    {
+      "description": "paths 降级成正文前缀后,Codex 是否真的只在处理匹配路径时才遵守该条(未验证)",
+      "id": "codex-paths-prefix-effect"
+    }
+  ],
+  "shadowChecks": [
+    "codex/home/.agents/skills/alpha-full/SKILL.md: 同名技能不合并,~/.agents/skills 与仓库 .agents/skills 的同名技能会同时出现(documented);共管目录里他方同名条目会冲突(§4.6;P0 不检查真实目录)",
+    "codex/home/.agents/skills/synced/SKILL.md: 同名技能不合并,~/.agents/skills 与仓库 .agents/skills 的同名技能会同时出现(documented);共管目录里他方同名条目会冲突(§4.6;P0 不检查真实目录)",
+    "codex/home/.agents/skills/zeta-plain/SKILL.md: 同名技能不合并,~/.agents/skills 与仓库 .agents/skills 的同名技能会同时出现(documented);共管目录里他方同名条目会冲突(§4.6;P0 不检查真实目录)",
+    "codex/home/.codex/AGENTS.md: ~/.codex/AGENTS.override.md 存在且非空时 Codex 该层只读它,本文件被整体遮蔽(A §2.2-1;P0 不检查真实文件)",
+    "codex/home/.codex/agents/diff-reviewer.toml: 代理名与内置 default / worker / explorer 同名时,自定义代理覆盖内置(documented);项目级 .codex/agents 同名文件的优先级本渲染器未核实(P0 不检查真实目录)",
+    "codex/home/.codex/agents/implementer.toml: 代理名与内置 default / worker / explorer 同名时,自定义代理覆盖内置(documented);项目级 .codex/agents 同名文件的优先级本渲染器未核实(P0 不检查真实目录)",
+    "codex/home/.codex/agents/web-scout.toml: 代理名与内置 default / worker / explorer 同名时,自定义代理覆盖内置(documented);项目级 .codex/agents 同名文件的优先级本渲染器未核实(P0 不检查真实目录)",
+    "codex/project/AGENTS.md: 整条项目链合并后达到 project_doc_max_bytes(默认 32 KiB)即停止加入,更深层的 AGENTS.md 会被静默丢弃(预算检查须计入整条链)",
+    "codex/project/AGENTS.md: 项目各级 AGENTS.override.md、project_doc_fallback_filenames 设置可使本文件被遮蔽或改序(A §2.2-1;P0 不检查真实文件)"
+  ],
+  "sideEffects": [
+    "codex/home/.codex/agents/diff-reviewer.toml: 工具类别不含 edit,已映射为 sandbox_mode=\"read-only\"(映射策略为本渲染器设定);Codex 会按父会话的运行时沙箱覆盖(文档),文件里的值可能被盖掉",
+    "codex/home/.codex/agents/web-scout.toml: 工具类别不含 edit,已映射为 sandbox_mode=\"read-only\"(映射策略为本渲染器设定);Codex 会按父会话的运行时沙箱覆盖(文档),文件里的值可能被盖掉",
+    "codex: paths 原子降级为正文前缀,这是靠模型遵守的文字约束,不是机制",
+    "codex: ~/.codex/AGENTS.md 在 P0 按\"文件为空\"状态渲染(不读真实文件);P2 写入前须由 sync 读取真实文件,非空时只改托管块",
+    "codex: 技能写入共享目录 ~/.agents/skills/<name>/(设计 §4.1:其它 agent 也读该目录),不写 ~/.codex/skills"
+  ],
+  "skippedLayers": [
+    {
+      "layer": "personal",
+      "reason": "P2 才在本机渲染"
+    }
+  ]
+}

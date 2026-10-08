@@ -1,0 +1,12 @@
+{
+  "dropped": [],
+  "pendingProbes": [
+    {
+      "description": "codex 渲染器的格式依据 Codex CLI 0.161.0 的官方文档(2026-10-08 读取),尚未跑兼容探针(P1 才有);golden 不构成兼容声明(Q-N14)",
+      "id": "compat-probe-not-run"
+    }
+  ],
+  "shadowChecks": [],
+  "sideEffects": [],
+  "skippedLayers": []
+}
