@@ -1,0 +1,5 @@
+# 生成文件,勿手改;源:agent-kit-core@0.0.0
+name = "web-scout"
+description = "联网调研"
+sandbox_mode = "read-only"
+developer_instructions = "调研并给出出处。"

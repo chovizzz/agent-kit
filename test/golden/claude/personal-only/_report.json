@@ -1,0 +1,19 @@
+{
+  "dropped": [],
+  "pendingProbes": [
+    {
+      "description": "claude 渲染器的格式依据 Claude Code 2.1.294 的官方文档(2026-10-08 读取),尚未跑兼容探针(P1 才有);golden 不构成兼容声明(Q-N14)",
+      "id": "compat-probe-not-run"
+    }
+  ],
+  "shadowChecks": [],
+  "sideEffects": [
+    "claude: 不改 ~/.claude/CLAUDE.md,不生成 personal.md(personal 层 P0 渲染为空,预算里 personal 份额为 0)"
+  ],
+  "skippedLayers": [
+    {
+      "layer": "personal",
+      "reason": "P2 才在本机渲染"
+    }
+  ]
+}

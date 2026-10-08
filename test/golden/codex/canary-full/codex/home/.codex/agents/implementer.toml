@@ -1,0 +1,5 @@
+# 生成文件,勿手改;源:agent-kit-core@0.0.0
+name = "implementer"
+description = "实现者"
+model = "overlay-codex-impl"
+developer_instructions = "按计划实现。"
