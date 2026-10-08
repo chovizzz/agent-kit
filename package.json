@@ -16,6 +16,7 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
+    "golden:update": "vitest run test/golden -u",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check ."

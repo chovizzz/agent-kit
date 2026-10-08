@@ -1107,3 +1107,12 @@ P0 先把 schema 冻在这里,P1 的块直接消费,避免打 tag 之后再改�
 文件名约定(`attestFileName` / `reportFileName`):`attest/<rule-id>/<member 去掉 @>-<window_end>-<run_id>.json`,
 `reports/<case-id>/<rule_set_sha>-<run_id>.json`。`run_id` 限定为文件名安全字符 `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`。
 同一窗口重跑只新增文件;聚合取同 `(rule_id, member, window_start, window_end)` 里 `run_id` 最新的一份。
+
+## 9. 渲染核心须知(B06 → B07 / B08)
+
+- 渲染器**不要自己加独占头**:`owned` 文件头由渲染核心(`src/render/core.ts`)统一加;`.json` 不加头,改记入 `sideEffects`。
+- `mode: 'managed-block'` 的 `content` 必须恰好是**一个 intact 块**(由 `src/render/managed-block.ts` 生成)。
+- 托管块只能落在带注释语法的文件上:md / mdx / yml / yaml / toml / jsonc;落在 `.json` 或 BOM 开头且无法处理的文件上渲染核心会报错。
+- 块外内容(含 BOM、foreign-id 块)原样保留;块体被手改会被检测为 `drifted`,`onDrift` 必须由调用方显式选择(拒绝或覆盖)。形似标记但格式不严格的行一律判 corrupt 并拒绝,不追加。
+- manifest 的 `sha` 对**最终落盘内容**(含独占头)计算。
+- golden 更新:`pnpm run golden:update`(即 `vitest run test/golden -u`);更新模式的写根收窄到 golden 目录。该开关读的是 vitest 的非公开字段,升级 vitest 后需复核。
