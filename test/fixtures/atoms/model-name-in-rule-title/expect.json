@@ -1,0 +1,9 @@
+{
+  "diagnostics": [
+    {
+      "code": "ATOM_MODEL_NAME_IN_CORE",
+      "severity": "error",
+      "path": "rules/team/model-title.md"
+    }
+  ]
+}

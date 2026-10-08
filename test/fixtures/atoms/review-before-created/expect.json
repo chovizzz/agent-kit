@@ -1,0 +1,9 @@
+{
+  "diagnostics": [
+    {
+      "code": "ATOM_REVIEW_BEFORE_CREATED",
+      "severity": "error",
+      "path": "rules/team/review-early.md#/review_by"
+    }
+  ]
+}

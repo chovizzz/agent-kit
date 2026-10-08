@@ -1,0 +1,9 @@
+{
+  "diagnostics": [
+    {
+      "code": "ATOM_FRONTMATTER_SYNTAX",
+      "severity": "error",
+      "path": "rules/team/with-alias.md"
+    }
+  ]
+}

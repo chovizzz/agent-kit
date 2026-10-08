@@ -1,0 +1,19 @@
+{
+  "diagnostics": [
+    {
+      "code": "ATOM_BODY_SECTION_MISSING",
+      "severity": "error",
+      "path": "rules/team/no-body.md#/body/do"
+    },
+    {
+      "code": "ATOM_BODY_SECTION_MISSING",
+      "severity": "error",
+      "path": "rules/team/no-body.md#/body/why"
+    },
+    {
+      "code": "ATOM_BODY_SECTION_MISSING",
+      "severity": "error",
+      "path": "rules/team/no-body.md#/body/verify"
+    }
+  ]
+}

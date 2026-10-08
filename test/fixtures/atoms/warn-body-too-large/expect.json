@@ -1,0 +1,9 @@
+{
+  "diagnostics": [
+    {
+      "code": "ATOM_BODY_TOO_LARGE",
+      "severity": "warn",
+      "path": "rules/team/body-601.md"
+    }
+  ]
+}

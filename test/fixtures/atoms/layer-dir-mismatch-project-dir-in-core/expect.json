@@ -1,0 +1,9 @@
+{
+  "diagnostics": [
+    {
+      "code": "ATOM_LAYER_DIR_MISMATCH",
+      "severity": "error",
+      "path": "rules/project/project-in-core.md#/layer"
+    }
+  ]
+}

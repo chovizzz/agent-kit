@@ -1,0 +1,9 @@
+{
+  "diagnostics": [
+    {
+      "code": "SKILL_UNKNOWN_FILE",
+      "severity": "warn",
+      "path": "skills/stray.md"
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "diagnostics": [
+    {
+      "code": "ATOM_OWNER_NOT_IN_CODEOWNERS",
+      "severity": "error",
+      "path": "rules/team/stranger.md#/owner"
+    }
+  ]
+}

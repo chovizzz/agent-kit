@@ -1,0 +1,14 @@
+{
+  "diagnostics": [
+    {
+      "code": "ATOM_REF_SELF",
+      "severity": "error",
+      "path": "rules/team/narcissist.md#/supersedes/0"
+    },
+    {
+      "code": "ATOM_REF_SELF",
+      "severity": "error",
+      "path": "rules/team/narcissist.md#/overrides/0"
+    }
+  ]
+}

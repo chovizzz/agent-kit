@@ -1,0 +1,9 @@
+{
+  "diagnostics": [
+    {
+      "code": "ATOM_VERIFIER_REF_INVALID",
+      "severity": "error",
+      "path": "rules/team/ref-root.md#/verifier/ref"
+    }
+  ]
+}

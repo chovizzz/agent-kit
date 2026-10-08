@@ -1,0 +1,9 @@
+{
+  "diagnostics": [
+    {
+      "code": "ATOM_CODEOWNERS_MISSING",
+      "severity": "error",
+      "path": "CODEOWNERS"
+    }
+  ]
+}

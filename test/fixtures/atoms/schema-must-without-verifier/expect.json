@@ -1,0 +1,9 @@
+{
+  "diagnostics": [
+    {
+      "code": "SCHEMA_INVALID",
+      "severity": "error",
+      "path": "rules/team/must-no-verifier.md#/verifier/type"
+    }
+  ]
+}

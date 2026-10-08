@@ -1,0 +1,9 @@
+{
+  "diagnostics": [
+    {
+      "code": "SKILL_FILE_MISSING",
+      "severity": "error",
+      "path": "skills/empty-skill/SKILL.md"
+    }
+  ]
+}

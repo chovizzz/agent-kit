@@ -1,0 +1,9 @@
+{
+  "diagnostics": [
+    {
+      "code": "ATOM_VOLATILE_REVIEW_TOO_FAR",
+      "severity": "error",
+      "path": "rules/team/volatile-31.md#/review_by"
+    }
+  ]
+}

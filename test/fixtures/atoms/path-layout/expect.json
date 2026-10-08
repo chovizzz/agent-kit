@@ -1,0 +1,19 @@
+{
+  "diagnostics": [
+    {
+      "code": "ATOM_PATH_LAYOUT",
+      "severity": "error",
+      "path": "rules/top-level.md"
+    },
+    {
+      "code": "ATOM_PATH_LAYOUT",
+      "severity": "error",
+      "path": "rules/team/nested"
+    },
+    {
+      "code": "ATOM_UNKNOWN_FILE",
+      "severity": "warn",
+      "path": "rules/team/notes.txt"
+    }
+  ]
+}

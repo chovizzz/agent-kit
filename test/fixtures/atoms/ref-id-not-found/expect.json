@@ -1,0 +1,14 @@
+{
+  "diagnostics": [
+    {
+      "code": "ATOM_REF_ID_NOT_FOUND",
+      "severity": "error",
+      "path": "rules/team/dangling.md#/supersedes/0"
+    },
+    {
+      "code": "ATOM_REF_ID_NOT_FOUND",
+      "severity": "error",
+      "path": "rules/team/dangling.md#/merged_from/0"
+    }
+  ]
+}

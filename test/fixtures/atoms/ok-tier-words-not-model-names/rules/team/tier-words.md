@@ -1,0 +1,23 @@
+---
+id: tier-words
+title: 示例规则
+layer: team
+strength: should
+kind: practice
+volatility: stable
+status: proposed
+owner: '@owner-handle'
+created: 2026-10-08
+review_by: 2027-01-08
+evidence:
+  - type: memory
+    ref: 'sha256:0000000000000000000000000000000000000000000000000000000000000001'
+    excerpt: 合成的证据摘录
+verifier:
+  type: replay
+  ref: cases/x/
+---
+
+**做**:评审交给 judge 档位,实现交给 implement 档位。
+**为什么**:档位到模型的映射只在覆盖层。
+**怎么验**:core 里搜不到具体模型名。
