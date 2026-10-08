@@ -122,3 +122,72 @@ export async function genPi(ctx: IoContext, spec: PiSpec): Promise<GeneratedSess
     },
   };
 }
+
+/** 树结构用例的一行:对象会被 JSON.stringify,字符串原样写入(用来造畸形行)。 */
+export type RawPiLine = Record<string, unknown> | string;
+
+export interface RawPiSpec {
+  root: string;
+  /** 目录名 `--<...>--`;缺省按 cwd 生成 */
+  dir?: string;
+  cwd: string;
+  id: string;
+  /** 不含头;头由 `header` 控制 */
+  lines: readonly RawPiLine[];
+  /** false = 不写头行 */
+  header?: boolean;
+  eol?: '\n' | '\r\n';
+  bom?: boolean;
+  finalNewline?: boolean;
+  baseMs?: number;
+}
+
+/** 树节点行:`piNode('a2', 'a1', {...})` → `{id,parentId,timestamp,...body}`。 */
+export function piNode(
+  id: string | undefined,
+  parentId: unknown,
+  body: Record<string, unknown>,
+  tsMs?: number,
+): Record<string, unknown> {
+  return {
+    ...(id !== undefined ? { id } : {}),
+    parentId,
+    ...(tsMs !== undefined ? { timestamp: iso(tsMs) } : {}),
+    ...body,
+  };
+}
+
+export const piUserMsg = (text: string): Record<string, unknown> => ({
+  type: 'message',
+  message: { role: 'user', content: [{ type: 'text', text }] },
+});
+
+/** 逐行精确控制的 Pi 会话文件(树结构边界用例);期望值由调用方按构造手算。 */
+export async function genPiRaw(ctx: IoContext, spec: RawPiSpec): Promise<GeneratedSession> {
+  const base = spec.baseMs ?? BASE_MS;
+  const uuid = fakeUuid(spec.id);
+  const lines: string[] = [];
+  if (spec.header !== false) {
+    lines.push(
+      JSON.stringify({
+        type: 'session',
+        version: 3,
+        id: uuid,
+        timestamp: iso(base),
+        cwd: spec.cwd,
+      }),
+    );
+  }
+  for (const l of spec.lines) lines.push(typeof l === 'string' ? l : JSON.stringify(l));
+  const eol = spec.eol ?? '\n';
+  const content =
+    (spec.bom ? '﻿' : '') + lines.join(eol) + (spec.finalNewline === false ? '' : eol);
+  const dir = spec.dir ?? `--${spec.cwd.replaceAll('/', '-').replace(/^-/, '')}--`;
+  const file = path.join(spec.root, dir, `${iso(base).replaceAll(':', '-')}_${uuid}.jsonl`);
+  await writeSession(ctx, file, content);
+  return {
+    file,
+    cwd: spec.cwd,
+    expected: { user_messages: 0, tool_calls: 0, tool_failures: 0, unknown_event_types: {} },
+  };
+}
