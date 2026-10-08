@@ -1,0 +1,1 @@
+export const fs = process.getBuiltinModule('node:fs');
