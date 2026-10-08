@@ -1,0 +1,45 @@
+# agent-kit core 配置(示例值;预算数值待决策 ② 定稿,P0 只告警)
+
+[kit]
+name = "agent-kit"
+version = "0.0.0"
+
+[agents]
+# 渲染目标;openclaw 默认不渲染(设计 §4.2)
+enabled = ["claude", "codex", "pi", "kimi", "opencode"]
+
+[budget]
+# P0:真实仓库只告警;block 仅由 fixture 开启(Q-N2)。limit_source=assumed 的目标永远只告警。
+enforce = "warn"
+atom_max_bytes = 600
+threshold_percent = 90
+project_max_bytes = 16384
+
+[budget.claude]
+max_lines = 200
+limit_source = "documented" # 官方建议值,非硬限
+
+[budget.codex]
+max_bytes = 16384
+hard_limit = 32768
+limit_source = "documented"
+
+[budget.pi]
+max_bytes = 16384
+hard_limit = "unknown"
+limit_source = "assumed"
+
+[budget.kimi]
+max_bytes = 16384
+hard_limit = "unknown"
+limit_source = "assumed"
+
+[budget.opencode]
+max_bytes = 16384
+hard_limit = "unknown"
+limit_source = "assumed"
+
+# 渠道成员表按渠道登记(设计 §5.3)。P0 只做 schema 校验,不使用。
+[channels.canary.members]
+
+[channels.stable.members]
