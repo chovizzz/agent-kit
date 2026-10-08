@@ -1,0 +1,9 @@
+{
+  "diagnostics": [
+    {
+      "code": "ATOM_ID_DUPLICATE",
+      "severity": "error",
+      "path": "rules/team/dup-id.md#/id"
+    }
+  ]
+}

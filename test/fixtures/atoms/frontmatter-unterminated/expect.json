@@ -1,0 +1,9 @@
+{
+  "diagnostics": [
+    {
+      "code": "ATOM_FRONTMATTER_MISSING",
+      "severity": "error",
+      "path": "rules/team/open-fm.md"
+    }
+  ]
+}

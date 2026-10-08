@@ -1,0 +1,9 @@
+{
+  "diagnostics": [
+    {
+      "code": "AGENT_UNKNOWN_FILE",
+      "severity": "warn",
+      "path": "agents/notes.txt"
+    }
+  ]
+}

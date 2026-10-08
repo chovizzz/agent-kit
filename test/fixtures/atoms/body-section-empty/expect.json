@@ -1,0 +1,9 @@
+{
+  "diagnostics": [
+    {
+      "code": "ATOM_BODY_SECTION_EMPTY",
+      "severity": "error",
+      "path": "rules/team/empty-why.md#/body/why"
+    }
+  ]
+}

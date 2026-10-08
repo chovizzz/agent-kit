@@ -1,0 +1,5 @@
+name: bad-tier
+description: 只读评审者
+prompt: 你是只读的评审者。
+tools: [read, shell]
+model_tier: some-tier

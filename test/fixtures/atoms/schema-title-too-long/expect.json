@@ -1,0 +1,9 @@
+{
+  "diagnostics": [
+    {
+      "code": "SCHEMA_INVALID",
+      "severity": "error",
+      "path": "rules/team/long-title.md#/title"
+    }
+  ]
+}

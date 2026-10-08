@@ -1,0 +1,9 @@
+{
+  "diagnostics": [
+    {
+      "code": "ATOM_ID_FILENAME_MISMATCH",
+      "severity": "error",
+      "path": "rules/team/file-name.md#/id"
+    }
+  ]
+}

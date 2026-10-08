@@ -1,0 +1,14 @@
+{
+  "diagnostics": [
+    {
+      "code": "ATOM_BODY_SECTION_MISSING",
+      "severity": "error",
+      "path": "rules/team/open-fence.md#/body/why"
+    },
+    {
+      "code": "ATOM_BODY_SECTION_MISSING",
+      "severity": "error",
+      "path": "rules/team/open-fence.md#/body/verify"
+    }
+  ]
+}

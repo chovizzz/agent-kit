@@ -1,0 +1,13 @@
+{
+  "diagnostics": [
+    {
+      "code": "ATOM_BODY_TOO_LARGE",
+      "severity": "error",
+      "path": "rules/team/body-601.md"
+    }
+  ],
+  "budget": {
+    "enforce": "block",
+    "atom_max_bytes": 600
+  }
+}

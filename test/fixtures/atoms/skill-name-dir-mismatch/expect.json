@@ -1,0 +1,9 @@
+{
+  "diagnostics": [
+    {
+      "code": "SKILL_NAME_DIR_MISMATCH",
+      "severity": "error",
+      "path": "skills/dir-name/SKILL.md#/name"
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "diagnostics": [
+    {
+      "code": "AGENT_NAME_FILE_MISMATCH",
+      "severity": "error",
+      "path": "agents/file-name.yaml#/name"
+    }
+  ]
+}

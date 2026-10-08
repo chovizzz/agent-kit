@@ -1,0 +1,7 @@
+{
+  "diagnostics": [],
+  "budget": {
+    "enforce": "block",
+    "atom_max_bytes": 700
+  }
+}

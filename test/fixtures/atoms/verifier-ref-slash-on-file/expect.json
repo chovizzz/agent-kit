@@ -1,0 +1,9 @@
+{
+  "diagnostics": [
+    {
+      "code": "ATOM_VERIFIER_REF_MISSING",
+      "severity": "error",
+      "path": "rules/team/ref-file-slash.md#/verifier/ref"
+    }
+  ]
+}

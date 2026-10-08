@@ -1,0 +1,9 @@
+{
+  "diagnostics": [
+    {
+      "code": "ATOM_EVIDENCE_REDACTION_RESIDUAL",
+      "severity": "error",
+      "path": "rules/team/leaky.md#/evidence/0/excerpt"
+    }
+  ]
+}

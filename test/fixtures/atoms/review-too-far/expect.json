@@ -1,0 +1,9 @@
+{
+  "diagnostics": [
+    {
+      "code": "ATOM_REVIEW_TOO_FAR",
+      "severity": "error",
+      "path": "rules/team/review-181.md#/review_by"
+    }
+  ]
+}

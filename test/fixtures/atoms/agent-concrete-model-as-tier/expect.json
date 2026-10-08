@@ -1,0 +1,14 @@
+{
+  "diagnostics": [
+    {
+      "code": "SCHEMA_INVALID",
+      "severity": "error",
+      "path": "agents/model-tier.yaml#/model_tier"
+    },
+    {
+      "code": "AGENT_MODEL_NAME_IN_CORE",
+      "severity": "error",
+      "path": "agents/model-tier.yaml"
+    }
+  ]
+}

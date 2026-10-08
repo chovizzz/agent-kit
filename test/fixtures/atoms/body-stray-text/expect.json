@@ -1,0 +1,9 @@
+{
+  "diagnostics": [
+    {
+      "code": "ATOM_BODY_STRAY_TEXT",
+      "severity": "error",
+      "path": "rules/team/stray.md"
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "diagnostics": [
+    {
+      "code": "AGENT_MODEL_NAME_IN_CORE",
+      "severity": "error",
+      "path": "agents/names-model.yaml"
+    }
+  ]
+}

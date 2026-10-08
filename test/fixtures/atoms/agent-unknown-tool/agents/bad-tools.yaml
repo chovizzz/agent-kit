@@ -1,0 +1,5 @@
+name: bad-tools
+description: 只读评审者
+prompt: 你是只读的评审者。
+tools: [read, teleport]
+model_tier: judge

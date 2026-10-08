@@ -1,0 +1,9 @@
+{
+  "diagnostics": [
+    {
+      "code": "SCHEMA_INVALID",
+      "severity": "error",
+      "path": "skills/Bad_Name/SKILL.md#/name"
+    }
+  ]
+}

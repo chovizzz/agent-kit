@@ -1,0 +1,14 @@
+{
+  "diagnostics": [
+    {
+      "code": "ATOM_REVIEW_TOO_FAR",
+      "severity": "error",
+      "path": "rules/team/both-far.md#/review_by"
+    },
+    {
+      "code": "ATOM_VOLATILE_REVIEW_TOO_FAR",
+      "severity": "error",
+      "path": "rules/team/both-far.md#/review_by"
+    }
+  ]
+}
