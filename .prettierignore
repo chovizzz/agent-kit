@@ -3,3 +3,5 @@ dist/
 out/
 .state/
 pnpm-lock.yaml
+# golden 输出是生成物(md/toml/json 不可能同时满足 prettier),格式由渲染器自己保证
+test/golden/*/*/
