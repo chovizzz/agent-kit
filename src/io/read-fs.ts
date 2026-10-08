@@ -7,7 +7,6 @@
  */
 import * as fs from 'node:fs';
 import * as fsp from 'node:fs/promises';
-import { createInterface } from 'node:readline';
 
 export type { Stats, Dirent } from 'node:fs';
 
@@ -77,15 +76,26 @@ export function realpathSync(path: string): string {
 }
 
 /**
- * 逐行流式读取(去掉行尾 \n / \r\n,保留空行)。reader 读大 JSONL 用它,不要整个读进内存。
+ * 逐行流式读取(行分隔符只认 \n,行尾的一个 \r 一并去掉,保留空行)。reader 读大 JSONL 用它,不要整个读进内存。
+ * 不用 node:readline:它还把 U+2028/U+2029/孤立 \r 当行分隔符,会把 JSON 字符串里的裸 U+2028 切成两行,
+ * 与口径 C2(只认 \n)及 jq 对不上。
  */
 export async function* readLines(path: string): AsyncGenerator<string, void, undefined> {
   const stream = fs.createReadStream(path, { encoding: 'utf8' });
-  const rl = createInterface({ input: stream, crlfDelay: Infinity });
+  let buf = '';
+  const strip = (l: string): string => (l.endsWith('\r') ? l.slice(0, -1) : l);
   try {
-    for await (const line of rl) yield line;
+    for await (const chunk of stream) {
+      buf += chunk as string;
+      let i: number;
+      while ((i = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, i);
+        buf = buf.slice(i + 1);
+        yield strip(line);
+      }
+    }
+    if (buf.length > 0) yield strip(buf);
   } finally {
-    rl.close();
     stream.destroy();
   }
 }
