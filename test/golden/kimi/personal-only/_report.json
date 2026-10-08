@@ -1,0 +1,17 @@
+{
+  "dropped": [],
+  "pendingProbes": [
+    {
+      "description": "kimi 渲染器的格式依据 Kimi Code 2.1.1 文档站快照(2026-10-08 读取;调研时本机为 2.0.0),尚未跑兼容探针(P1 才有);golden 不构成兼容声明(Q-N14)",
+      "id": "compat-probe-not-run"
+    }
+  ],
+  "shadowChecks": [],
+  "sideEffects": [],
+  "skippedLayers": [
+    {
+      "layer": "personal",
+      "reason": "P2 才在本机渲染"
+    }
+  ]
+}
