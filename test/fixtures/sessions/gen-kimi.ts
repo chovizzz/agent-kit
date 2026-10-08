@@ -125,3 +125,49 @@ export async function genKimi(ctx: IoContext, spec: SessionSpec): Promise<KimiGe
     },
   };
 }
+
+export interface KimiCustomSpec {
+  root: string;
+  /** 会话目录名后缀(决定 wd/session 目录) */
+  id: string;
+  /** 主 wire 的原始行(调用方负责 JSON 序列化;可以放畸形行) */
+  lines: readonly string[];
+  /** 同级 state.json 的原始文本;null = 不写该文件 */
+  stateJson?: string | null;
+  /** 子代理 wire(agents/agent-1/wire.jsonl)的原始行;缺省不写 */
+  subagentLines?: readonly string[];
+  /** 额外在 main 旁写的非 wire 文件名(应被忽略) */
+  strayFiles?: readonly string[];
+}
+
+export interface KimiCustomGenerated {
+  file: string;
+  sessionDir: string;
+  subagentFile?: string;
+}
+
+/** 任意行内容的 Kimi 会话(B14 追加):用来构造口径边界(agentId、origin、agentsMdPaths 等)。 */
+export async function genKimiCustom(
+  ctx: IoContext,
+  spec: KimiCustomSpec,
+): Promise<KimiCustomGenerated> {
+  const sessionDir = path.join(
+    spec.root,
+    `wd_custom_${fakeUuid(spec.id).slice(0, 6)}`,
+    `session_${fakeUuid(spec.id).slice(0, 8)}`,
+  );
+  const file = path.join(sessionDir, 'agents', 'main', 'wire.jsonl');
+  await writeSession(ctx, file, `${spec.lines.join('\n')}\n`);
+  if (spec.stateJson !== null) {
+    await writeSession(ctx, path.join(sessionDir, 'state.json'), spec.stateJson ?? '{}');
+  }
+  let subagentFile: string | undefined;
+  if (spec.subagentLines) {
+    subagentFile = path.join(sessionDir, 'agents', 'agent-1', 'wire.jsonl');
+    await writeSession(ctx, subagentFile, `${spec.subagentLines.join('\n')}\n`);
+  }
+  for (const name of spec.strayFiles ?? []) {
+    await writeSession(ctx, path.join(sessionDir, 'agents', 'main', name), '{"type":"metadata"}\n');
+  }
+  return { file, sessionDir, ...(subagentFile ? { subagentFile } : {}) };
+}
