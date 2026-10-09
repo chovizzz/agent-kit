@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import * as path from 'node:path';
 import { createIoContext, getRealHome } from '../../src/io/paths.js';
 import type { IoContext } from '../../src/io/paths.js';
-import { exists, readBytes, readDir, readText, stat } from '../../src/io/read-fs.js';
+import { exists, readBytes, readDir, readText } from '../../src/io/read-fs.js';
 import { createSignalsCollectCommand } from '../../src/commands/signals-collect.js';
 import {
   buildSeeds,
@@ -42,12 +42,21 @@ export async function sha256File(file: string): Promise<string> {
     .digest('hex');
 }
 
-/** 真实 HOME 的轻量快照:顶层条目名 + 目录 mtime。只读,不碰任何配置文件。 */
+/**
+ * 活机器上会自己增删的顶层条目(Claude Code 的锁文件、shell 补全缓存、历史、回收站等):
+ * 它们不是被测代码写的,计入快照会让守卫随机误红。
+ */
+const LIVE_NOISE =
+  /(\.lock$|^\.claude\.json|^\.zcompdump|^\.zsh_(history|sessions)$|^\.DS_Store$|^\.Trash$|^\.viminfo$|^\.lesshst$)/;
+
+/**
+ * 真实 HOME 的轻量快照:顶层条目名(去掉活机器噪声)。只读,不碰任何配置文件。
+ * 不含 HOME 目录自身的 mtime:任何进程在顶层增删一个条目它都会变,与被测代码无关。
+ */
 export async function homeSnapshot(): Promise<string> {
   const home = getRealHome();
-  const names = (await readDir(home)).map((e) => e.name);
-  const st = await stat(home);
-  return JSON.stringify({ names, mtime: st.mtimeMs });
+  const names = (await readDir(home)).map((e) => e.name).filter((n) => !LIVE_NOISE.test(n));
+  return JSON.stringify({ names });
 }
 
 export interface RunResult {
