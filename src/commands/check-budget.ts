@@ -1,7 +1,158 @@
-import { stubExit } from './types.js';
+import * as path from 'node:path';
+import { parse as parseToml } from 'smol-toml';
+import { lintRepo } from '../atoms/lint.js';
+import { budgetFailed, budgetStats, computeBudget } from '../budget/budget.js';
+import type { BudgetReport } from '../contracts/budget.js';
+import { KitConfigSchema } from '../contracts/config.js';
+import type { KitConfig } from '../contracts/config.js';
+import { hasErrors, zodIssuesToDiagnostics } from '../contracts/diagnostics.js';
+import type { Diagnostic } from '../contracts/diagnostics.js';
+import { ExitCode } from '../contracts/exit-codes.js';
+import type { RenderInput, RenderOutput } from '../contracts/render.js';
+import { canonicalJson } from '../io/canonical-json.js';
+import { existsSync, readTextSync } from '../io/read-fs.js';
+import { mkdirp, writeFile } from '../io/safe-fs.js';
+import { mergeAtoms } from '../merge/merge.js';
+import { mergeCounts } from '../merge/report.js';
+import { RenderCoreError, renderAll } from '../render/core.js';
+import { createRegistry, defaultRegistry } from '../render/registry.js';
+import { formatDiagnostic } from './lint-cmd.js';
 import type { CheckStep } from './types.js';
 
-/** 命令桩:由块 B05 替换本文件内容,保持 `run` 的签名不变。 */
-export const run: CheckStep = async (ctx) => {
-  return stubExit(ctx, 'check (budget)', 'P0 内由块 B05 实装,当前是命令桩');
+/** 预算子 runner 的外部依赖;测试注入,B19 集成时通常不需要动。 */
+export interface BudgetDeps {
+  /** 渲染入口;缺省 = 在已启用 agent 的默认注册表上跑 renderAll */
+  render?: (input: RenderInput, enabled: KitConfig['agents']['enabled']) => RenderOutput;
+  /** Codex 项目链(根→cwd 各层 AGENTS.md 文本);P0 只由 fixture 提供,不读真实仓库 */
+  projectChain?: readonly string[];
+}
+
+export const budgetDeps: BudgetDeps = {};
+
+function defaultRender(input: RenderInput, enabled: KitConfig['agents']['enabled']): RenderOutput {
+  const registry = createRegistry(defaultRegistry.list().filter((a) => enabled.includes(a.agent)));
+  return renderAll(input, registry);
+}
+
+function loadConfig(root: string): { config?: KitConfig; diagnostics: Diagnostic[] } {
+  const file = path.join(root, 'kit.toml');
+  if (!existsSync(file)) {
+    return {
+      diagnostics: [
+        {
+          code: 'CFG_KIT_TOML_MISSING',
+          severity: 'error',
+          path: 'kit.toml',
+          message: '找不到 kit.toml,无法检查预算',
+        },
+      ],
+    };
+  }
+  let raw: unknown;
+  try {
+    raw = parseToml(readTextSync(file));
+  } catch (e) {
+    return {
+      diagnostics: [
+        {
+          code: 'CFG_TOML_SYNTAX',
+          severity: 'error',
+          path: 'kit.toml',
+          message: `kit.toml 无法解析:${(e as Error).message.split('\n')[0] ?? ''}`,
+        },
+      ],
+    };
+  }
+  const res = KitConfigSchema.safeParse(raw);
+  if (!res.success) return { diagnostics: zodIssuesToDiagnostics(res.error, 'kit.toml') };
+  return { config: res.data, diagnostics: [] };
+}
+
+function targetLine(t: BudgetReport['targets'][number]): string {
+  const limit = [
+    t.max_bytes !== undefined ? `max_bytes=${t.max_bytes}` : undefined,
+    t.max_lines !== undefined ? `max_lines=${t.max_lines}` : undefined,
+    t.hard_limit !== undefined ? `hard_limit=${t.hard_limit}` : undefined,
+  ].filter((x) => x !== undefined);
+  return `budget ${t.agent}: ${t.bytes} 字节 / ${t.lines} 行 [${t.level}] ${limit.join(' ')} limit_source=${t.limit_source}${t.blocking ? ' BLOCKING' : ''}`;
+}
+
+/**
+ * `check` 的预算步骤:lint 取原子 → 合并 → 渲染 → computeBudget。
+ * 退出码:合并/配置有 error 或有 blocking 目标 → 1;渲染/读取失败 → 3;否则 0
+ * (`warn` 与 `assumed` 目标超限只告警)。`--report` 另写 `.state/reports/budget.json` 并把统计表打到 stdout。
+ */
+export const run: CheckStep = async (ctx, opts) => {
+  const io = ctx.io;
+  const loaded = loadConfig(io.repoRoot);
+  const emit = (ds: readonly Diagnostic[]): void => {
+    for (const d of ds) ctx.stdout(`${formatDiagnostic(d)}\n`);
+  };
+  if (loaded.config === undefined) {
+    emit(loaded.diagnostics);
+    return ExitCode.CHECK_FAILED;
+  }
+  const config = loaded.config;
+
+  // lint 的诊断由 lint-cmd 输出并决定退出码;这里只取成功解析的原子/技能/子代理来算预算。
+  let lint;
+  try {
+    lint = await lintRepo(io.repoRoot);
+  } catch (e) {
+    ctx.stderr(`agent-kit check (budget): 读取仓库失败:${(e as Error).message}\n`);
+    return ExitCode.FAIL_CLOSED;
+  }
+
+  const merged = mergeAtoms(lint.atoms);
+  emit(merged.diagnostics);
+  if (hasErrors(merged.diagnostics)) {
+    ctx.stdout('budget: 合并失败,未计算预算\n');
+    return ExitCode.CHECK_FAILED;
+  }
+
+  let rendered: RenderOutput;
+  try {
+    const render = budgetDeps.render ?? defaultRender;
+    rendered = render(
+      {
+        resolved: merged.atoms,
+        skills: lint.skills,
+        agents: lint.agents,
+        kitVersion: config.kit.version,
+        // TODO(B19):渠道由覆盖层/参数决定;预算按 canary 渲染,stable 成员尚不单独检查
+        channel: 'canary',
+      },
+      config.agents.enabled,
+    );
+  } catch (e) {
+    const code = e instanceof RenderCoreError ? `${e.code}: ` : '';
+    ctx.stderr(`agent-kit check (budget): 渲染失败:${code}${(e as Error).message}\n`);
+    return ExitCode.FAIL_CLOSED;
+  }
+
+  const report = computeBudget({
+    outputs: rendered.files,
+    config: config.budget,
+    ...(budgetDeps.projectChain ? { projectChain: budgetDeps.projectChain } : {}),
+  });
+  for (const t of report.targets) ctx.stdout(`${targetLine(t)}\n`);
+  emit(report.diagnostics);
+  const counts = mergeCounts(merged);
+  ctx.stdout(
+    `budget: ${report.targets.length} 个目标, ${counts.core} 个原子可入 core 输出, ${counts.personal} 个 personal 原子不入(enforce=${report.enforce})\n`,
+  );
+
+  if (opts.report) {
+    const stats = canonicalJson(budgetStats(report, rendered.files));
+    const dir = path.join(io.stateDir, 'reports');
+    try {
+      await mkdirp(io, dir, 0o700);
+      await writeFile(io, path.join(dir, 'budget.json'), stats, { mode: 0o600 });
+    } catch (e) {
+      ctx.stderr(`agent-kit check (budget): 写 budget.json 失败:${(e as Error).message}\n`);
+      return ExitCode.FAIL_CLOSED;
+    }
+    ctx.stdout(`--- budget report (.state/reports/budget.json) ---\n${stats}`);
+  }
+  return budgetFailed(report) ? ExitCode.CHECK_FAILED : ExitCode.OK;
 };
