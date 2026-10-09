@@ -8,8 +8,10 @@
  *    (gitleaks 为 MIT,Copyright (c) 2019 Zachary Rice;见 docs/spikes/gitleaks.md)。
  *  - 规则 id 是变异自检的粒度:`--selftest --mutate` 逐条禁用,必须有种子变红。
  */
+import { PLACEHOLDER_SOURCE } from '../contracts/redact.js';
 import { shannon } from './entropy.js';
 import { buildView, safeLower } from './view.js';
+import { MAX_PLACEHOLDER_TYPE } from './types.js';
 import type { ResolvedConfig, Rule, ScanEnv } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -541,28 +543,325 @@ export function looksNonSecret(v: string): boolean {
 
 const KW =
   '(?:password|passwd|passphrase|pwd|secret|token|api[_-]?key|apikey|access[_-]?key|auth[_-]?key|private[_-]?key|credentials?)';
-const credAssign = simpleRegexRule(
-  'cred_assign',
-  'credential',
-  70,
-  false,
-  ['pass', 'pwd', 'secret', 'token', 'key', 'credential'],
-  new RegExp(
-    `${KW}(?:[_-][A-Za-z0-9_-]{1,16}|(?:key|id|value|secret|token|hash))?["']?[ \\t]{0,8}(?::=|=>|:|=)[ \\t]{0,8}(?:"([^"\\r\\n]{8,})"?|'([^'\\r\\n]{8,})'?|([^\\s"'\`]{8,}))`,
-    'gid',
-  ),
-  (m) => !looksNonSecret((m[1] ?? m[2] ?? m[3]) as string),
+
+/**
+ * 分组:1=操作符,2/3/4=值(双引号 / 单引号 / 无引号)。
+ * 值之前的 `[ \t]{0,8}` 允许 `key = value`;被拒绝的匹配不再吞掉后文(见 scan 里的 lastIndex 回退)。
+ */
+const CRED_ASSIGN_RE = new RegExp(
+  `${KW}(?:[_-][A-Za-z0-9_-]{1,16}|(?:key|id|value|secret|token|hash))?["']?[ \\t]{0,8}(:=|=>|:|=)[ \\t]{0,8}(?:\\\\*"((?:[^"\\\\\\r\\n]|\\\\(?!\\\\*")){8,})(?:\\\\*")?|'([^'\\r\\n]{8,})'?|([^\\s"'\`]{8,}))`,
+  'gid',
 );
 
-const credCliFlag = simpleRegexRule(
-  'cred_cli_flag',
-  'credential',
-  70,
-  false,
-  ['--'],
-  /--(?:password|passwd|passphrase|token|secret|api-key|apikey|access-token|auth-token|client-secret|private-key)(?:=|[ \t]{1,8})(?:"([^"\r\n]{4,})"?|'([^'\r\n]{4,})'?|([^\s"'`-][^\s"'`]{3,}))/dgi,
-  (m) => !looksNonSecret((m[1] ?? m[2] ?? m[3]) as string),
+/** 引用式候选:`NAME=` 之后紧跟一个(可带转义反斜杠的)引号;键名与 `=` 之间不许有引号。是否真的是引用由 quotedNameRef 判。 */
+const NAME_EQ_QUOTE_RE = new RegExp(
+  `${KW}(?:[_-][A-Za-z0-9_-]{1,16}|(?:key|id|value|secret|token|hash))?=(\\\\*["'])`,
+  'gi',
 );
+
+const PLACEHOLDER_RE = new RegExp(
+  PLACEHOLDER_SOURCE.replace('[a-z_]+', `[a-z_]{1,${MAX_PLACEHOLDER_TYPE}}`),
+  'g',
+);
+
+/** `$VAR` / `${VAR}`(可带路径后缀)。**不是**任意以 `$` 开头的串:`$Up3r…` 这类可能是口令本身。 */
+const VAR_REF = /^\$(?:\{[A-Za-z_]\w*\}|[A-Za-z_]\w*)(?:[\\/][\w.@+~\\/-]*)?$/;
+/** 路径:有根标记(`/` `~/` `./` `../` `C:\` `\\`)且至少两段,每段只含 `[\w.@+~-]`。 */
+const PATH_REF =
+  /^(?:[A-Za-z]:[\\/]+|\\\\|~[\\/]+|\.{1,2}[\\/]+|[\\/]+)(?:[\w.@+~-]+[\\/]+)+[\w.@+~-]+[\\/]*$/;
+/** 文件名:封闭的扩展名集合(`.env` 本身也算)。 */
+const FILE_REF =
+  /^[\w.@+~-]*\.(?:env|json|txt|ya?ml|conf|cfg|ini|log|sh|toml|pem|key|properties|secrets?|local|sample|example|bak)$|^[\w.@+~-]*\.env\.[\w-]+$/i;
+/** 命令行选项:`-d` `--no-color` `--color=never`。 */
+const FLAG_REF = /^--?[A-Za-z][\w-]*(?:=\S*)?$/;
+
+/**
+ * 「值之前紧跟的是引用而不是值」场景下,下一个词是不是引用。**白名单**:不匹配任何一种形状就一律当值脱敏
+ * (不看熵、字符类:低熵口令恰恰是最危险的)。形状 = 强上下文里本来就放行的那些(looksNonSecret,但去掉
+ * 以 `$` `%` `<` `{` 开头的宽松放行),加变量引用 / 命令替换 / 路径 / 文件名 / 选项。
+ */
+export function isReferenceWord(w: string): boolean {
+  if (w === '') return true;
+  if (VAR_REF.test(w)) return true;
+  if (PATH_REF.test(w) || FILE_REF.test(w) || FLAG_REF.test(w)) return true;
+  return !/^[$%<{]/.test(w) && looksNonSecret(w);
+}
+
+const NAME_CHAR = /[\w.^|(-]/;
+const TERMINATOR = /[\s|;&<>)]/;
+/** 为判断开引号的奇偶,最多回看这么多字符;回看不完就不认引用式(多脱敏的方向)。 */
+const QUOTE_LOOKBACK = 4096;
+
+interface QuotedNameRef {
+  /** 收尾引号之后的位置 */
+  after: number;
+}
+
+/**
+ * 引用式:`'^NAME='` `"^NAME="`(含 JSON 转义的 `\"^NAME=\"`)。`=` 之后紧跟的引号是**收尾**引号,
+ * 它的开引号在键名之前。三个条件缺一不可,否则按赋值处理(在 `'x'NAME=` 后面
+ * 再跟一段带引号的值时,`NAME` 前的引号是 `'x'` 的收尾,奇偶校验会拦下它):
+ *  - 开引号与键名之间只有 `[\w.^|(-]`(无空白、无别的引号;键名与 `=` 之间也不能有引号——`"NAME"="…` 里的引号是键名自己的),且转义反斜杠数与收尾引号一致;
+ *  - 同一行里该开引号之前、同种同转义深度的引号个数为偶数;
+ *  - 收尾引号之后是行尾 / 空白 / `| ; & < > )`。
+ */
+function quotedNameRef(text: string, keyStart: number, opEnd: number): QuotedNameRef | null {
+  let j = opEnd;
+  while (text.charCodeAt(j) === 92) j++;
+  const qc = text[j];
+  if (qc !== '"' && qc !== "'") return null;
+  const bs = j - opEnd;
+  const after = j + 1;
+  const nc = text[after];
+  if (nc !== undefined && !TERMINATOR.test(nc) && !endsJsonString(text, after)) return null;
+  let i = keyStart - 1;
+  for (let steps = 0; i >= 0 && steps < 96 && NAME_CHAR.test(text[i] as string); steps++) i--;
+  if (i < 0 || text[i] !== qc) return null;
+  let k = i - 1;
+  let obs = 0;
+  while (k >= 0 && text.charCodeAt(k) === 92) {
+    obs++;
+    k--;
+  }
+  if (obs !== bs) return null;
+  // 同一行、同种同转义深度的引号在开引号之前出现偶数次
+  const lineStart = text.lastIndexOf('\n', i) + 1;
+  if (i - lineStart > QUOTE_LOOKBACK) return null;
+  let count = 0;
+  for (let p = lineStart; p < i; p++) {
+    if (text[p] !== qc) continue;
+    let b = 0;
+    while (p - 1 - b >= lineStart && text.charCodeAt(p - 1 - b) === 92) b++;
+    if (b === bs) count++;
+  }
+  return count % 2 === 0 ? { after } : null;
+}
+
+/** 从 pos 起(可有若干转义反斜杠)是 JSON 字符串的收尾引号。 */
+function endsJsonString(text: string, pos: number): boolean {
+  let q = pos;
+  while (text.charCodeAt(q) === 92) q++;
+  return text[q] === '"' && jsonStringEnd(text, q);
+}
+
+/** `"` 之后是行尾 / 空白 / `, } ] :`:JSON 字符串的收尾引号(命令被整段放进 JSON 字符串的情形)。 */
+function jsonStringEnd(text: string, quotePos: number): boolean {
+  const c = text[quotePos + 1];
+  return c === undefined || /[\s,}\]:]/.test(c);
+}
+
+/** 一段区域里最多逐个判断多少个词(再多的不判,保持线性)。 */
+const MAX_UNITS = 64;
+
+interface Unit {
+  /** 核心区间(去掉两侧引号与转义反斜杠) */
+  s: number;
+  e: number;
+  /** 下一个词从这里开始找 */
+  next: number;
+}
+
+/**
+ * 读一个词(shell 意义上的一个参数):以引号开头的取到同种引号,否则取到空白 / `| ; & < >`。
+ * 返回核心区间与下一个词的起点。
+ */
+function readUnit(text: string, p: number): Unit {
+  const n = text.length;
+  let s = p;
+  while (s < n && text.charCodeAt(s) === 92) s++;
+  const q = text[s];
+  let e: number;
+  let next: number;
+  if (q === '"' || q === "'") {
+    s++;
+    const close = text.indexOf(q, s);
+    const eol = text.indexOf('\n', s);
+    if (close !== -1 && (eol === -1 || close < eol) && close - s <= 512) {
+      e = close;
+      next = close + 1;
+    } else {
+      e = next = wordEnd(text, s);
+    }
+  } else {
+    s = p;
+    e = wordEnd(text, s);
+    // 无引号的词里碰到 JSON 字符串的收尾引号就在此截断;引号紧贴着别的字符(拼接)则不截,整词参与判断
+    const dq = text.indexOf('"', s);
+    if (dq !== -1 && dq < e && jsonStringEnd(text, dq)) e = dq;
+    next = e;
+  }
+  for (;;) {
+    const c = text[e - 1] as string;
+    if (e <= s || !/[\\'"`),;\]}]/.test(c)) break;
+    // `}` 只在没有与之配对的 `{` 时才算外围的收尾(`${NAME}` 里的不能剥)
+    if (c === '}' && countChar(text, s, e, '{') >= countChar(text, s, e, '}')) break;
+    e--;
+  }
+  while (s < e && /[\\'"`]/.test(text[s] as string)) s++;
+  return { s, e, next };
+}
+
+/**
+ * 引用式收尾引号之后、同一条命令(到 `| ; & < > )` / 换行 / JSON 字符串收尾为止)里的各个词。
+ * 不是引用形状的词(长度 >= 8)返回其区间,由调用方脱敏。命令替换(`$(…)` 或反引号开头)不整体放行,
+ * 逐个判断里面的词:`$(echo 口令)` 里的口令要脱敏,`$(cat /etc/foo/x)` 里全是引用形状才放行。
+ */
+function valueWordsAfter(text: string, from: number): Array<[number, number]> {
+  const out: Array<[number, number]> = [];
+  const n = text.length;
+  let p = from;
+  for (let units = 0; units < MAX_UNITS; units++) {
+    while (p < n && (text[p] === ' ' || text[p] === '\t')) p++;
+    if (p >= n || /[\n\r|;&<>),}\]]/.test(text[p] as string) || endsJsonString(text, p)) break;
+    const u = readUnit(text, p);
+    if (u.next <= p) break;
+    p = u.next;
+    if (u.e - u.s < 8) continue;
+    const w = text.slice(u.s, u.e);
+    if (/^\$\(|^`/.test(w)) {
+      for (const m of w.matchAll(/[^\s()'"`;|&<>]+/g)) {
+        const tok = m[0].replace(/\\+$/, '');
+        if (tok.length >= 8 && !isReferenceWord(tok)) {
+          out.push([u.s + (m.index ?? 0), u.s + (m.index ?? 0) + tok.length]);
+        }
+      }
+      continue;
+    }
+    if (!isReferenceWord(w)) out.push([u.s, u.e]);
+  }
+  return out;
+}
+
+function countChar(text: string, s: number, e: number, ch: string): number {
+  let n = 0;
+  for (let i = s; i < e; i++) if (text[i] === ch) n++;
+  return n;
+}
+
+function wordEnd(text: string, from: number): number {
+  let e = from;
+  while (e < text.length && !/[\s|;&<>)]/.test(text[e] as string)) e++;
+  return e;
+}
+
+/**
+ * 操作符与值之间(原文里)夹着合法占位符:
+ *  - 值紧贴占位符(占位符后面没有任何间隔)→ 'tight':后面的字符仍是值的一部分,按赋值处理;
+ *  - 否则 → 'occupied':值的位置已经被占位符占了,后面的词是别的东西(`名字=占位符 https://…`),不是这个赋值的值。
+ */
+function placeholderGap(
+  text: string,
+  env: ScanEnv,
+  opEnd: number,
+  anchor: number,
+): 'none' | 'tight' | 'occupied' {
+  if (anchor < opEnd) return 'none';
+  const raw = env.rawSlice(opEnd - 1, anchor + 1);
+  if (!raw.includes('[[')) return 'none';
+  let lastEnd = -1;
+  PLACEHOLDER_RE.lastIndex = 0;
+  for (let m = PLACEHOLDER_RE.exec(raw); m !== null; m = PLACEHOLDER_RE.exec(raw)) {
+    lastEnd = m.index + m[0].length;
+  }
+  if (lastEnd === -1) return 'none';
+  if (raw.length - lastEnd > 1) return 'occupied';
+  // 占位符后面是空白(含视图里还原出来的 JSON 转义换行)或 JSON 转义的引号(`\\"`):行 / 字符串的边界,不是值的延续
+  return /^(?:\s|\\+["'])/.test(text.slice(anchor, anchor + 12)) ? 'occupied' : 'tight';
+}
+
+const credAssign: Rule = {
+  id: 'cred_assign',
+  type: 'credential',
+  prio: 70,
+  compact: false,
+  quick: ['pass', 'pwd', 'secret', 'token', 'key', 'credential'],
+  scan(text, _lower, push, env) {
+    // 先找引用式:`'^NAME='` 这类,收尾引号之后的词单独判;这些位置不再走下面的赋值匹配
+    const refOps = new Set<number>();
+    const ref = NAME_EQ_QUOTE_RE;
+    ref.lastIndex = 0;
+    for (let m = ref.exec(text); m !== null; m = ref.exec(text)) {
+      env.deadline.tick();
+      const opEnd = m.index + m[0].length - (m[1] as string).length;
+      const q = quotedNameRef(text, m.index, opEnd);
+      if (!q) continue;
+      refOps.add(opEnd);
+      for (const [a, b] of valueWordsAfter(text, q.after)) push(a, b);
+    }
+
+    const re = CRED_ASSIGN_RE;
+    re.lastIndex = 0;
+    for (let m = re.exec(text); m !== null; m = re.exec(text)) {
+      env.deadline.tick();
+      if (m[0].length === 0) {
+        re.lastIndex++;
+        continue;
+      }
+      const ind = (m as RegExpExecArray & { indices: Array<[number, number] | undefined> }).indices;
+      const op = ind[1] as [number, number];
+      const gi = m[2] !== undefined ? 2 : m[3] !== undefined ? 3 : 4;
+      const vr = ind[gi] as [number, number];
+      const val = m[gi] as string;
+      // 被放行的匹配不能把后面的文本一起吞掉(里面可能还有真值赋值):从操作符之后继续
+      const release = (): void => {
+        re.lastIndex = op[1];
+      };
+
+      if (refOps.has(op[1])) {
+        release();
+        continue;
+      }
+      if (looksNonSecret(val)) {
+        release();
+        continue;
+      }
+      if (placeholderGap(text, env, op[1], vr[0]) === 'occupied') {
+        release();
+        continue;
+      }
+      push(vr[0], vr[1]);
+    }
+  },
+};
+
+const CRED_CLI_FLAG_RE =
+  /--(password|passwd|passphrase|token|secret|api-key|apikey|access-token|auth-token|client-secret|private-key)(?:=|[ \t]{1,8})(?:"([^"\r\n]{4,})"?|'([^'\r\n]{4,})'?|([^\s"'`-][^\s"'`]{3,}))/dgi;
+
+const credCliFlag: Rule = {
+  id: 'cred_cli_flag',
+  type: 'credential',
+  prio: 70,
+  compact: false,
+  quick: ['--'],
+  scan(text, _lower, push, env) {
+    const re = CRED_CLI_FLAG_RE;
+    re.lastIndex = 0;
+    for (let m = re.exec(text); m !== null; m = re.exec(text)) {
+      env.deadline.tick();
+      if (m[0].length === 0) {
+        re.lastIndex++;
+        continue;
+      }
+      const ind = (m as RegExpExecArray & { indices: Array<[number, number] | undefined> }).indices;
+      const keyEnd = (ind[1] as [number, number])[1];
+      const gi = m[2] !== undefined ? 2 : m[3] !== undefined ? 3 : 4;
+      const vr = ind[gi] as [number, number];
+      const val = m[gi] as string;
+      const release = (): void => {
+        re.lastIndex = keyEnd;
+      };
+      if (looksNonSecret(val)) {
+        release();
+        continue;
+      }
+      if (placeholderGap(text, env, keyEnd, vr[0]) === 'occupied') {
+        release();
+        continue;
+      }
+      push(vr[0], vr[1]);
+    }
+  },
+};
 
 const credBearer = simpleRegexRule(
   'cred_bearer',
@@ -603,7 +902,11 @@ const credAuthz = simpleRegexRule(
   false,
   ['authorization'],
   /authorization["']?[ \t]{0,8}[:=][ \t]{0,8}["']?(?:(?:bearer|basic|token|digest|negotiate|aws4-hmac-sha256)[ \t]+)?(?![ \t])((?:=(?:"[^"\r\n]*"|'[^'\r\n]*')|[^\r\n"']){8,})/dgi,
-  (m) => !looksNonSecret(m[1] as string) && !AUTH_SCHEME_ONLY.test(m[1] as string),
+  (m) => {
+    // 值被 JSON 转义的引号(`\\"`)截断时,末尾会剩下孤立的反斜杠:去掉再判(`Bearer \\` 只是一个scheme)
+    const v = (m[1] as string).replace(/\\+$/, '');
+    return v.length >= 8 && !looksNonSecret(v) && !AUTH_SCHEME_ONLY.test(v);
+  },
 );
 
 const credCookie = simpleRegexRule(
@@ -958,4 +1261,5 @@ export const STAGE_IDS = [
   'decode_base32',
   'decode_hex',
   'decode_escape',
+  'view_json_ws',
 ] as const;

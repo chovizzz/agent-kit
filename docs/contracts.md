@@ -205,6 +205,7 @@ A2 的 12 格矩阵(`limit_source` × `enforce` × 超/不超;退出码 / 是否
 17. **`Overlay.internal_domains` → 脱敏**:B09 把它与 `sensitive_words` 同等处理(命中即替换为 `[[REDACTED:domain]]`),与 `allowed_url_hosts`(放行名单)语义相反。
 18. **`Proposal.reflector.vendor`** 必填(设计 §5.5 要按厂商比较);`Proposal` 上校验 `judge.vendor ≠ reflector.vendor`,且与反思器同厂商的跳必须记 `skipped:same-vendor`。
 19. **`oversized_lines`**:`Counts` / `CollectReport` 的可选计数,单行超 `maxEventBytes` 被丢弃时累加(B10b)。
+20. **Redactor 对「按名字读取变量」的处理(B09b)**:`NAME=` 之后跟的是引用(收尾引号 + 空白 / 终结符、占位符占了值的位置)而不是值时,`pass1` 不脱敏、`pass2` 不报残留;判据与取舍见 `docs/redaction.md` §3.1。接口 `Redactor` 本身不变;新增变异阶段 id `view_json_ws`(变异自检共 67 项)。
 
 ## 9. 标识符与哈希约定(Q-N7 的默认处理)
 
