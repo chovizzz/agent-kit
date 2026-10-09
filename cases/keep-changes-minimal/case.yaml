@@ -1,0 +1,8 @@
+id: keep-changes-minimal
+fixture:
+  type: dir
+  path: fixture
+prompt: 只修改 fixture 中指定文件里的一行,不要改动其他内容。
+agent: claude
+check: check.sh
+split: train
