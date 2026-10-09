@@ -214,6 +214,7 @@ A2 的 12 格矩阵(`limit_source` × `enforce` × 超/不超;退出码 / 是否
 18. **`Proposal.reflector.vendor`** 必填(设计 §5.5 要按厂商比较);`Proposal` 上校验 `judge.vendor ≠ reflector.vendor`,且与反思器同厂商的跳必须记 `skipped:same-vendor`。
 19. **`oversized_lines`**:`Counts` / `CollectReport` 的可选计数,单行超 `maxEventBytes` 被丢弃时累加(B10b)。
 20. **Redactor 对「按名字读取变量」的处理(B09b)**:`NAME=` 之后跟的是引用(收尾引号 + 空白 / 终结符、占位符占了值的位置)而不是值时,`pass1` 不脱敏、`pass2` 不报残留;判据与取舍见 `docs/redaction.md` §3.1。接口 `Redactor` 本身不变;新增变异阶段 id `view_json_ws`(变异自检共 67 项)。
+21. **Redactor 值类规则的召回修复(B09c,订正第 20 条)**:`cred_assign` / `cred_cli_flag` / `cred_authz` / `cred_cookie` 不再按前缀 / 形状放行(标识符后紧贴 `; , ) :`、`X(y)`、`env.` `vault` `...` `<` `%` `$` 开头等),改为**引用形态整词白名单**,不匹配就当口令;无引号的值先剥尾部标点再判,只脱敏核心。新增 `cred_assign_ext` 规则(反引号 / 三引号 / 类型标注 / 引号拼接 / `passphrase` 短语)与原视图补扫(口令里的字面 `\t` `\n` 不再截断值)。接口 `Redactor` 本身不变;新增变异阶段 id `view_orig_union` `ref_tail_punct` `ref_boundary` `ref_flag_strict` `placeholder_boundary` `ref_trailing_literal` 与规则 id `cred_assign_ext`(变异自检共 74 项);判据、取舍与剩余缺口见 `docs/redaction.md` §3.2、§7。第 20 条里「值本身像引用」指 §3.2 的引用形态。
 
 ## 9. 标识符与哈希约定(Q-N7 的默认处理)
 

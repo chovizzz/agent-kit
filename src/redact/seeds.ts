@@ -1310,6 +1310,323 @@ export function buildSeeds(seed: number = SEED): Seed[] {
     }
   }
 
+  // ---- B09c:值类规则的召回缺口(引用形态旁的真值、标点、转义空白、占位符间隔、其它值写法) ----
+  // 独立的 PRNG;口令 11 位、字母开头、含大小写与数字,低熵(<24 位),只有 cred_* 一类规则抓得住
+  {
+    const gc = makeGen(mulberry32((seed ^ 0xb09c) >>> 0));
+    const pw = (): string => 'K' + gc.entropic(ALNUM, 10, 3.0);
+    const PWK = ['pass', 'word'].join('');
+    const PWU = PWK.toUpperCase();
+    const PHR = ['pass', 'phrase'].join('');
+    const TK = ['to', 'ken'].join('');
+    const TKU = TK.toUpperCase();
+    const cred = 'credential';
+    const TQ = "'''";
+    const refQ = `grep '^${FST}='`;
+    add(
+      // P0:值后紧贴 ; , ) : { 的口令
+      make(
+        'b09c.p0.kwarg_paren',
+        'plain',
+        'recognized',
+        [`connect(host=h, ${PWK}=`, R(pw(), cred), ')'],
+        ['cred_assign', 'ref_tail_punct'],
+      ),
+      make(
+        'b09c.p0.kwarg_comma',
+        'plain',
+        'recognized',
+        [`login(user, ${PWK}=`, R(pw(), cred), ', retries=3)'],
+        ['cred_assign', 'ref_tail_punct'],
+      ),
+      make(
+        'b09c.p0.export_semicolon',
+        'plain',
+        'recognized',
+        [`export DB_${PWU}=`, R(pw(), cred), '; run.sh'],
+        ['cred_assign', 'ref_tail_punct'],
+      ),
+      make(
+        'b09c.p0.yaml_list_comma',
+        'plain',
+        'recognized',
+        [`  - ${PWK}=`, R(pw(), cred), ','],
+        ['cred_assign', 'ref_tail_punct'],
+      ),
+      make(
+        'b09c.p0.cli_flag_semicolon',
+        'plain',
+        'recognized',
+        [`mysql --${PWK}=`, R(pw(), cred), ';'],
+        ['ref_tail_punct'],
+        [],
+        'cred_assign 与 cred_cli_flag 都覆盖,单独禁用任一条不变红',
+      ),
+      make(
+        'b09c.p0.authz_token_semicolon',
+        'plain',
+        'recognized',
+        [`${AZ}: Token `, R(pw() + ';', cred)],
+        ['cred_authz', 'ref_tail_punct'],
+        [],
+        'cred_authz 的值整段(含尾部标点)脱敏',
+      ),
+      make(
+        'b09c.p0.conn_string',
+        'plain',
+        'recognized',
+        ['Server=db;Database=app;P' + PWK.slice(1) + '=', R(pw(), cred), ';'],
+        ['cred_assign', 'ref_tail_punct'],
+      ),
+      make(
+        'b09c.p0.open_brace',
+        'plain',
+        'recognized',
+        [`${TK}=`, R(pw(), cred), '{'],
+        ['cred_assign', 'ref_tail_punct'],
+      ),
+      make(
+        'b09c.p0.call_shape',
+        'plain',
+        'recognized',
+        [`${PWK}=`, R(pw() + '(x', cred), ')'],
+        ['cred_assign', 'ref_tail_punct'],
+      ),
+      // P1-1:口令里的字面 \t \n(JSON 转义空白还原后值被截断)
+      make(
+        'b09c.p1_1.tab_head_short',
+        'plain',
+        'recognized',
+        [`${PWK}=`, R('Xy\\tAb3Cd4Ef5Gh', cred)],
+        ['cred_assign', 'view_orig_union'],
+      ),
+      make(
+        'b09c.p1_1.json_double_backslash',
+        'plain',
+        'recognized',
+        [`{"cmd":"export ${PWU}=`, R('Q7\\\\tLm2Pq9Zx', cred), '"}'],
+        ['cred_assign', 'view_orig_union'],
+      ),
+      make(
+        'b09c.p1_1.tail_after_tab',
+        'plain',
+        'recognized',
+        [`${PWK}=`, R('Ab3Cd4Ef5Gh\\tXyz12345', cred)],
+        ['cred_assign', 'view_orig_union'],
+      ),
+      make(
+        'b09c.p1_1.quoted_newline',
+        'plain',
+        'recognized',
+        [`${PWK}="`, R('Xy\\nAb3Cd4Ef5Gh', cred), '"'],
+        ['cred_assign', 'view_orig_union'],
+      ),
+      make(
+        'b09c.p1_1.cli_flag_tab',
+        'plain',
+        'recognized',
+        [`tool --${TK} `, R('Xy\\tAb3Cd4Ef5Gh', cred)],
+        ['cred_cli_flag', 'view_orig_union'],
+      ),
+      // 输入里已有占位符:collect 管线会先把它拆开(合法占位符只由第一遍产生),所以这条种子不进端到端的
+      // 「种子秘密零命中」断言(needles 留空);该断言由 test/redact/b09c.test.ts 直接覆盖
+      {
+        ...make(
+          'b09c.p1_2.placeholder_then_quoted',
+          'plain',
+          'recognized',
+          [`${TKU}=[[REDACTED:credential]]"`, R(pw(), cred), '"'],
+          ['cred_assign', 'placeholder_boundary'],
+        ),
+        needles: [],
+      },
+      make(
+        'b09c.p1_2.glued_half',
+        'plain',
+        'recognized',
+        [`${TKU}=`, R(`abcdefgh123"${pw()}"`, cred)],
+        ['cred_assign_ext'],
+      ),
+      // P1-3:按前缀放行的口令
+      make(
+        'b09c.p1_3.env_dot',
+        'plain',
+        'recognized',
+        [`${PWK}=`, R('env.' + pw(), cred)],
+        ['cred_assign', 'ref_boundary'],
+      ),
+      make(
+        'b09c.p1_3.yaml_dollar',
+        'plain',
+        'recognized',
+        [`${PWK}: `, R('$' + pw(), cred)],
+        ['cred_assign', 'ref_boundary'],
+      ),
+      make(
+        'b09c.p1_3.vault_prefix',
+        'plain',
+        'recognized',
+        [`${PWK}=`, R('Vault' + pw(), cred)],
+        ['cred_assign', 'ref_boundary'],
+      ),
+      make(
+        'b09c.p1_3.ellipsis',
+        'plain',
+        'recognized',
+        [`${PWK}=`, R('...' + pw(), cred)],
+        ['cred_assign', 'ref_boundary'],
+      ),
+      make(
+        'b09c.p1_3.angle',
+        'plain',
+        'recognized',
+        [`${PWK}=`, R('<' + pw(), cred)],
+        ['cred_assign', 'ref_boundary'],
+      ),
+      make(
+        'b09c.p1_3.percent',
+        'plain',
+        'recognized',
+        [`${PWK}=`, R('%' + pw(), cred)],
+        ['cred_assign', 'ref_boundary'],
+      ),
+      make(
+        'b09c.p1_3.ref_next_word_vault',
+        'plain',
+        'recognized',
+        [`${refQ} `, R('vault' + pw(), cred)],
+        ['cred_assign', 'ref_boundary'],
+      ),
+      make(
+        'b09c.p1_3.ref_next_word_flag',
+        'plain',
+        'recognized',
+        [`env '${FST}=' `, R('--' + pw(), cred)],
+        ['cred_assign', 'ref_flag_strict'],
+      ),
+      make(
+        'b09c.p1_3.ref_next_word_call',
+        'plain',
+        'recognized',
+        [`printf '${FST}=' `, R(pw() + '(x', cred), ')'],
+        ['cred_assign', 'ref_tail_punct'],
+      ),
+      // P1-4:其它值写法
+      make(
+        'b09c.p1_4.js_template',
+        'plain',
+        'recognized',
+        [`const ${PWK} = \``, R(pw(), cred), '`;'],
+        ['cred_assign_ext'],
+      ),
+      make(
+        'b09c.p1_4.go_raw',
+        'plain',
+        'recognized',
+        [`${PWK} := \``, R(pw(), cred), '`'],
+        ['cred_assign_ext'],
+      ),
+      make(
+        'b09c.p1_4.triple_single',
+        'plain',
+        'recognized',
+        [`${PWK} = ${TQ}`, R(pw(), cred), TQ],
+        ['cred_assign_ext'],
+      ),
+      make(
+        'b09c.p1_4.triple_double',
+        'plain',
+        'recognized',
+        [`${PWK} = """`, R(pw(), cred), '"""'],
+        ['cred_assign_ext'],
+      ),
+      make(
+        'b09c.p1_4.py_annotation',
+        'plain',
+        'recognized',
+        [`${PWK}: str = "`, R(pw(), cred), '"'],
+        ['cred_assign_ext'],
+      ),
+      make(
+        'b09c.p1_4.ts_annotation',
+        'plain',
+        'recognized',
+        [`const ${PWK}: string = "`, R(pw(), cred), '";'],
+        ['cred_assign_ext'],
+      ),
+      make(
+        'b09c.p1_4.glued_short_prefix',
+        'plain',
+        'recognized',
+        [`${PWU}=`, R(`ab"${pw()}"`, cred)],
+        ['cred_assign_ext'],
+      ),
+      make(
+        'b09c.p1_4.glued_two_quoted',
+        'plain',
+        'recognized',
+        [`${PWU}=`, R(`"ab""${pw()}"`, cred)],
+        ['cred_assign_ext'],
+      ),
+      make(
+        'b09c.p1_4.phrase_unquoted',
+        'plain',
+        'recognized',
+        [`${PHR} = `, R('zebra quartz mango plume', cred)],
+        ['cred_assign_ext'],
+      ),
+      make(
+        'b09c.p1_4.phrase_quoted',
+        'plain',
+        'recognized',
+        [`${PWK} = "`, R('correct horse battery staple', cred), '"'],
+        ['cred_assign'],
+      ),
+      // 引用之后的默认值字面量
+      make(
+        'b09c.ref_default.getenv_arg',
+        'plain',
+        'recognized',
+        [`${PWK} = os.getenv("DB_${PWU}", "`, R(pw(), cred), '")'],
+        ['cred_assign', 'ref_trailing_literal'],
+      ),
+      make(
+        'b09c.ref_default.or_literal',
+        'plain',
+        'recognized',
+        [`${PWK} = process.env.DB_${PWU} || "`, R(pw(), cred), '"'],
+        ['cred_assign', 'ref_trailing_literal'],
+      ),
+      // 真值紧邻引用形态:互不干扰
+      make(
+        'b09c.mix.value_then_ref',
+        'plain',
+        'recognized',
+        [`export DB_${PWU}=`, R(pw(), cred), `; ${refQ} "$ENVFILE"`],
+        ['cred_assign', 'ref_tail_punct'],
+      ),
+      make(
+        'b09c.mix.ref_then_value',
+        'plain',
+        'recognized',
+        [`${refQ} "$ENVFILE"; connect(${PWK}=`, R(pw(), cred), ')'],
+        ['cred_assign', 'ref_tail_punct'],
+      ),
+    );
+    // 引用 / 类型 / 调用形态:一个字符都不许动
+    for (const [k, text] of [
+      ['type_array', `${PWK}_prefixes: string[];`],
+      ['type_generic', `${TK}: Map<string, number>;`],
+      ['call_getter', `${TK} = getToken(user);`],
+      ['shell_var_semicolon', `export ${TKU}=$API_${TKU}; run.sh`],
+      ['kwarg_var', `connect(host=h, ${PWK}=$DB_${PWU})`],
+      ['dotted_config', `${PWK}=config.dbPassword`],
+      ['env_access', `${PWK} = process.env.DB_${PWU};`],
+    ] as const) {
+      add(unchanged(`b09c.ref.${k}`, 'benign', 'benign', text));
+    }
+  }
+
   // ---- 做不到的形态(只报告,不计入召回) ----
   const hex32 = g.pick(HEXL, 32);
   const lower36 = (() => {
@@ -1397,13 +1714,6 @@ export function buildSeeds(seed: number = SEED): Seed[] {
       "cfg = '^" + FPW + "=' 'correcthorse'",
       ['correcthorse'],
       '`NAME=` 收尾引号之后的纯小写单词(<=12 字符)按引用放行,与 gap.word_password 同源',
-    ),
-    gap(
-      'gap.authz_value_ends_with_brace',
-      'plain',
-      `${AZ}: Digest response="${rep('a1', 8)}" {`,
-      [rep('a1', 8)],
-      'cred_authz 的值以 `{` `(` `[` 结尾时按代码形状放行(B09b 之前就存在,未改动)',
     ),
     gap(
       'gap.word_password',

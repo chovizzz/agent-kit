@@ -42,6 +42,9 @@ const PROBES: ReadonlyArray<readonly [string, RegExp]> = [
   ['pem', /-----BEGIN (?:[A-Z0-9]+ ){0,4}PRIVATE KEY-----\s{0,4}[A-Za-z0-9+/]{32,}/g],
 ];
 
+/** 转义空白开头:反斜杠(任意个)后跟 n / r / t */
+const ESC_WS_START = /^\\+[nrt]/;
+
 const PLACEHOLDER_STRIP = new RegExp(
   PLACEHOLDER_SOURCE.replace('[a-z_]+', `[a-z_]{1,${MAX_PLACEHOLDER_TYPE}}`),
   'g',
@@ -55,6 +58,7 @@ export const STAGES = {
   hex: 'decode_hex',
   escape: 'decode_escape',
   jsonWs: 'view_json_ws',
+  origUnion: 'view_orig_union',
 } as const;
 
 interface ScanCtx {
@@ -99,6 +103,11 @@ export class Engine {
     const ws = this.disabled.has(STAGES.jsonWs) ? base : jsonWhitespaceView(base);
     const stripped = this.stripPlaceholders(ws);
     this.scanView(stripped, text, depth, ctx, out);
+    // JSON 转义空白(`\t` `\n` `\r`)在口令里也可能是字面字符:ws 视图会把值从那里截断。
+    // 值类规则在原视图上再跑一遍取并集(多脱敏是安全的方向);pass2 / --check 走同一条路径。
+    if (ws !== base && !this.disabled.has(STAGES.origUnion)) {
+      this.runRules(this.stripPlaceholders(base), text, false, ctx, out, true);
+    }
     return out;
   }
 
@@ -171,7 +180,18 @@ export class Engine {
     }
   }
 
-  private runRules(view: View, root: string, isCompact: boolean, ctx: ScanCtx, out: Span[]): void {
+  /**
+   * valueOnly:原视图上的补扫——只跑值类规则;起点就是转义空白的命中丢弃(ws 视图里那是「值为空」,
+   * 例如 `NAME=<占位符>\nnext` 剥掉占位符后值从 `\n` 开始,不是口令)。
+   */
+  private runRules(
+    view: View,
+    root: string,
+    isCompact: boolean,
+    ctx: ScanCtx,
+    out: Span[],
+    valueOnly = false,
+  ): void {
     const text = view.text;
     if (text.length === 0) return;
     const lower = safeLower(text);
@@ -179,6 +199,8 @@ export class Engine {
       cfg: this.cfg,
       deadline: ctx.deadline,
       compactView: isCompact,
+      disabled: this.disabled,
+      origView: valueOnly,
       rawSlice: (s, e) => {
         const [a, b] = mapSpan(view, s, e);
         return root.slice(a, b);
@@ -187,6 +209,7 @@ export class Engine {
     for (const rule of this.rules) {
       if (this.disabled.has(rule.id)) continue;
       if (isCompact && !rule.compact) continue;
+      if (valueOnly && !rule.valueClass) continue;
       if (rule.quick && !rule.quick.some((q) => lower.includes(q))) continue;
       ctx.deadline.check();
       rule.scan(
@@ -194,6 +217,7 @@ export class Engine {
         lower,
         (s, e) => {
           if (e <= s) return;
+          if (valueOnly && ESC_WS_START.test(text.slice(s, s + 64))) return;
           const [a, b] = mapSpan(view, s, e);
           out.push({ start: a, end: b, type: rule.type, rule: rule.id, prio: rule.prio });
         },
