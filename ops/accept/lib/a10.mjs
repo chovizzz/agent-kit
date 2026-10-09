@@ -62,6 +62,17 @@ export function isText(buf) {
   return !buf.subarray(0, 8192).includes(0);
 }
 
+/**
+ * 仓库文档与种子里引用的公开主机(docs/spikes/gitleaks.md、src/redact/seeds.ts 的参考链接)。
+ * 只放行这几个域名的 URL;IPv4 字面量不放行(测试里的回环地址改为运行时拼接)。新增命中仍会被拦。
+ */
+export const PUBLIC_DOC_HOSTS = [
+  'github.com',
+  'pkg.go.dev',
+  'developer.mozilla.org',
+  'www.npmjs.com',
+];
+
 async function loadScanner(ctx, allowHosts = []) {
   const dist = distSrc(ctx);
   const red = await import(pathToFileURL(path.join(dist, 'redact', 'redactor.js')).href);
@@ -177,7 +188,7 @@ async function a10(argv) {
     if (!flags.noScan && files.length > 0) {
       let scanner;
       try {
-        scanner = await loadScanner(ctx, flags.allowHost);
+        scanner = await loadScanner(ctx, [...PUBLIC_DOC_HOSTS, ...(flags.allowHost ?? [])]);
       } catch (e) {
         R.notRun(`脱敏扫描器不可用:${String(e.message).slice(0, 120)}`);
       }
