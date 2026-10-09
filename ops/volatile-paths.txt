@@ -1,0 +1,16 @@
+# A5 副判据:易变路径(只用于剔除,展开后落在其中的路径不参与比对;设计 §10 P0 验收 5)。
+# 这里只放「agent 自己运行时会写」的会话/缓存/日志类路径。
+# 🔴 不得把 managed-paths.txt 里的条目(或其祖先)加到这里来消除差异:zero-write-check.sh 会拒绝(退出 3)。
+~/.claude/projects/**
+~/.claude/hooks/*.log
+~/.codex/sessions/**
+~/.codex/archived_sessions/**
+~/.codex/memories*
+~/.pi/agent/sessions/**
+~/.pi/agent/pi-hermes-memory/**
+~/.pi/agent/run-history.jsonl
+~/.pi/agent/mcp-cache.json
+~/.kimi-code/sessions/**
+~/.local/share/opencode/**
+~/.openclaw/agents/**
+**/.DS_Store

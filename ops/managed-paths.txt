@@ -1,0 +1,39 @@
+# A5 副判据:受管路径白名单(设计 §10 P0 验收 5)。验收开始与结束各快照一次,差异必须为空。
+# 行语义(N9):`~` = 真实 HOME;含 * ? [ 按 glob(`**` 跨目录);否则字面路径;`/` 结尾 = 目录条目;
+# 空行与 # 注释忽略。glob 在快照时展开,展开结果本身参与比对(空展开也记录)。
+# 🔴 不得为了消除差异把本文件的行挪进 volatile-paths.txt(zero-write-check.sh 会拒绝)。
+# 条目以 adapters/*/managed-targets.json 声明的落点取并集;手写清单没登记的 adapter 落点会被报出。
+
+# --- 各 agent 的全局文件 ---
+~/.claude/CLAUDE.md
+~/.claude/settings.json
+~/.claude/settings.local.json
+~/.claude/hooks/*.sh
+~/.codex/AGENTS.md
+~/.codex/AGENTS.override.md
+~/.codex/hooks.json
+~/.codex/config.toml
+~/.pi/agent/AGENTS.md
+~/.pi/agent/AGENTS.override.md
+~/.pi/agent/settings.json
+~/.kimi-code/AGENTS.md
+~/.kimi-code/config.toml
+~/.agents/AGENTS.md
+~/.config/opencode/AGENTS.md
+~/.config/opencode/opencode.json
+~/AGENTS.md
+~/workspace/AGENTS.md
+
+# --- 目录类条目(顶层条目名 + 每个条目 SKILL.md / 顶层文件的 sha256;符号链接记 readlink)---
+~/.claude/rules/
+~/.claude/skills/
+~/.claude/agents/
+~/.codex/agents/
+~/.agents/skills/
+~/.kimi-code/agents/
+~/.kimi-code/skills/
+~/.config/opencode/agents/
+
+# --- 本套件自己的位置:P0 期间二者必须不存在 ---
+~/.config/agent-kit/
+~/.local/state/agent-kit/
