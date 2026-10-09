@@ -14,7 +14,7 @@
  */
 import * as path from 'node:path';
 import type { AgentId } from '../contracts/common.js';
-import { readDir, realpath, lstat } from '../io/read-fs.js';
+import { MAX_LINE_BYTES, TOO_LONG_LINE, readDir, realpath, lstat } from '../io/read-fs.js';
 import type {
   Counts,
   NormEvent,
@@ -38,6 +38,8 @@ export type JsonObject = Record<string, unknown>;
 export const DEFAULT_MAX_EVENT_BYTES = 8 * 1024 * 1024;
 
 export const MALFORMED_KEY = '<malformed>';
+/** 单行超过硬上限(MAX_LINE_BYTES)而被丢弃正文的行;不产出事件,同时计入 oversized_lines(C8)。 */
+export const LINE_TOO_LARGE_KEY = '<line-too-large>';
 export const NO_TYPE_KEY = '<no-type>';
 
 export function isJsonObject(v: unknown): v is JsonObject {
@@ -45,6 +47,13 @@ export function isJsonObject(v: unknown): v is JsonObject {
 }
 
 /** 非空字符串或 undefined。 */
+const AGENT_VERSION_RE = /^[0-9]{1,9}\.[0-9]{1,9}\.[0-9]{1,9}(?:[-+][0-9A-Za-z.+-]{1,40})?$/;
+
+/** 版本号形状(`X.Y.Z[-+后缀]`,总长 ≤ 64);不符合的值不得进入 Signal。 */
+export function isVersionShape(v: unknown): v is string {
+  return typeof v === 'string' && v.length <= 64 && AGENT_VERSION_RE.test(v);
+}
+
 export function nonEmptyString(v: unknown): string | undefined {
   return typeof v === 'string' && v !== '' ? v : undefined;
 }
@@ -69,7 +78,25 @@ export function normalizeTs(raw: unknown, acceptEpochMs = false): string | undef
   return undefined;
 }
 
-/** 去掉文件首行开头的 UTF-8 BOM(U+FEFF)。 */
+/**
+ * 与 jq(Oniguruma)`test("\\S")` 对齐的「整行只有空白」判定(R2):Unicode White_Space,含 U+0085、不含 U+FEFF。
+ * 已用本机 jq 1.7.1 对全部 Unicode 码位逐个核对(JS 的 `\s` 恰好相反:含 FEFF、不含 0085)。
+ */
+const BLANK_LINE_RE = new RegExp(
+  '^[\\t\\n\\v\\f\\r \\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$',
+  'u',
+);
+export const isBlankLine = (line: string): boolean => BLANK_LINE_RE.test(line);
+
+/**
+ * 每一行(不只是首行)的待解析文本:先按原始行判空白(只含 U+FEFF 的行不是空白,会计 `<malformed>`,与 jq 一致),
+ * 再去掉行首恰好一个 U+FEFF(jq 的 fromjson 会跳过它,如 `cat a b` 拼出来的文件)。空白行返回 undefined。
+ */
+export function lineText(raw: string): string | undefined {
+  return isBlankLine(raw) ? undefined : stripBom(raw);
+}
+
+/** 去掉行首一个 UTF-8 BOM(U+FEFF)。 */
 export function stripBom(line: string): string {
   return line.charCodeAt(0) === 0xfeff ? line.slice(1) : line;
 }
@@ -204,6 +231,9 @@ export abstract class JsonlTraceReader<S = undefined> implements TraceReader {
 
   read(ref: SessionRef, opts: ReadOpts): SessionRead {
     const maxEventBytes = opts.maxEventBytes ?? DEFAULT_MAX_EVENT_BYTES;
+    if (maxEventBytes > MAX_LINE_BYTES) {
+      throw new Error(`maxEventBytes(${maxEventBytes})不得超过单行硬上限 ${MAX_LINE_BYTES}`);
+    }
     const sessionRef = sessionRefFor(opts.salt, ref.path);
     const state = this.newState(ref);
 
@@ -228,8 +258,8 @@ export abstract class JsonlTraceReader<S = undefined> implements TraceReader {
     };
 
     const applyMeta = (m: MetaUpdate): void => {
-      if (agentVersion === null && nonEmptyString(m.agent_version))
-        agentVersion = m.agent_version as string;
+      // R1:agent_version 是唯一原样来自 trace 的字符串,必须是版本号形状且有长度上限,否则当取不到
+      if (agentVersion === null && isVersionShape(m.agent_version)) agentVersion = m.agent_version;
       if (cwdHint === null && nonEmptyString(m.cwd_hint)) cwdHint = m.cwd_hint as string;
       if (startedAtMeta === null) {
         const t = normalizeTs(m.started_at, this.acceptEpochMs);
@@ -241,10 +271,9 @@ export abstract class JsonlTraceReader<S = undefined> implements TraceReader {
 
     /** 预扫:按行序第一个有效时间戳,读到即停(C3 第 2 级) */
     const prescan = async (): Promise<void> => {
-      let first = true;
       for await (const raw of openReadonlyLines(ref.path)) {
-        const line = first ? stripBom(raw) : raw;
-        first = false;
+        const line = raw === TOO_LONG_LINE ? undefined : lineText(raw);
+        if (line === undefined) continue;
         const obj = parseObject(line);
         if (obj === undefined) continue;
         const t = normalizeTs(this.lineTimestamp(obj), this.acceptEpochMs);
@@ -271,12 +300,16 @@ export abstract class JsonlTraceReader<S = undefined> implements TraceReader {
       };
 
       let lineNo = 0;
-      let firstLine = true;
       for await (const rawLine of openReadonlyLines(ref.path)) {
         lineNo++;
-        const line = firstLine ? stripBom(rawLine) : rawLine;
-        firstLine = false;
-        if (!/\S/.test(line)) continue; // 空白行(含 CRLF 残留的 \r)忽略
+        if (rawLine === TOO_LONG_LINE) {
+          // 超过硬上限:正文已丢弃,无法分类。计 oversized,不进 <malformed>(jq 能解析它),不产出事件
+          oversized++;
+          bump(unknown, LINE_TOO_LARGE_KEY);
+          continue;
+        }
+        const line = lineText(rawLine);
+        if (line === undefined) continue; // 空白行(含 CRLF 残留的 \r)忽略
         const lineBytes = Buffer.byteLength(line, 'utf8');
         const isOversized = lineBytes > maxEventBytes;
         if (isOversized) oversized++;

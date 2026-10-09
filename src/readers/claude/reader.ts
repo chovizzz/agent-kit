@@ -8,7 +8,9 @@
  * 不去重:同一文件里逐字节相同的两行算两行(C2);跨文件重复不处理(C9)。
  * 未核实的字段一律不当事实用:只读 spec 列出的键,其余忽略;不认识的类型/块走 unknown_event_types。
  */
+import * as path from 'node:path';
 import type { AgentId } from '../../contracts/common.js';
+import { lstat, realpath } from '../../io/read-fs.js';
 import type { TraceReader } from '../../contracts/reader.js';
 import {
   JsonlTraceReader,
@@ -26,7 +28,13 @@ import type {
 } from '../../signals/base-reader.js';
 import { isExternalToolName } from '../../signals/external-content.js';
 import { contentBlocks, isUserMessage, messageContent, userText } from './predicates.js';
-import { KNOWN_BLOCK_TYPES, KNOWN_LINE_TYPES, SESSION_FILE_RE, SIDECHAIN_KEY } from './schema.js';
+import {
+  KNOWN_BLOCK_TYPES,
+  KNOWN_LINE_TYPES,
+  SESSION_FILE_RE,
+  SESSION_NAME_RE,
+  SIDECHAIN_KEY,
+} from './schema.js';
 
 /** 每次 read() 一份:tool_use.id → 工具名,用来给 tool_result 回填 tool_name(可选信息,不影响计数)。 */
 interface ClaudeState {
@@ -150,9 +158,21 @@ function classifyUser(
 export class ClaudeReader extends JsonlTraceReader<ClaudeState> {
   readonly agent: AgentId = 'claude';
 
-  protected listSessionFiles(source: string): Promise<string[]> {
+  protected async listSessionFiles(source: string): Promise<string[]> {
     // 深度恰为 2(<项目目录>/<UUID>.jsonl);<UUID>/subagents/… 等更深的目录根本不进入(C1)
-    return walkFiles(source, { maxDepth: 1, match: (_abs, rel) => SESSION_FILE_RE.test(rel) });
+    const files = await walkFiles(source, {
+      maxDepth: 1,
+      match: (_abs, rel) => SESSION_FILE_RE.test(rel),
+    });
+    // R5:显式传入单个文件时 walkFiles 不过滤;子代理文件(<UUID>/subagents/agent-*.jsonl)在这里剔除,
+    // 与 Codex 一致(C1)。判据:文件名是 UUID 形状,且父目录不叫 subagents。
+    const real = await realpath(source);
+    if ((await lstat(real)).isFile()) {
+      const base = path.basename(real);
+      const parent = path.basename(path.dirname(real));
+      return SESSION_NAME_RE.test(base) && parent !== 'subagents' ? files : [];
+    }
+    return files;
   }
 
   protected newState(): ClaudeState {

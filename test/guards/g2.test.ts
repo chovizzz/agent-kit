@@ -29,10 +29,52 @@ describe('G2:非晋升/退役 PR 不得改已有原子的 status', () => {
     expect(s.codes).toEqual([]);
   });
 
-  it('正向控制:只改 review_by(G2 只看 status)→ 绿', async () => {
+  it('GD-2:内容 PR 单独把 review_by 往后延 → GUARD_G2_REVIEW_BY_EXTENDED', async () => {
     const s = await scenario(
       { [ATOM_PATH]: atom({ status: 'active', review_by: '2027-01-08' }) },
+      { [ATOM_PATH]: atom({ status: 'active', review_by: '2099-01-01' }) },
+    );
+    expect(s.codes).toEqual(['GUARD_G2_REVIEW_BY_EXTENDED']);
+  });
+
+  it('GD-2 对照:review_by 提前(安全方向)→ 绿', async () => {
+    const s = await scenario(
       { [ATOM_PATH]: atom({ status: 'active', review_by: '2027-06-08' }) },
+      { [ATOM_PATH]: atom({ status: 'active', review_by: '2027-01-08' }) },
+    );
+    expect(s.codes).toEqual([]);
+  });
+
+  it('GD-1/2:已有原子增删 disables/overrides、改 id/layer/strength/applies_to/paths → GUARD_G2_FIELD_LOCKED', async () => {
+    const cases: [string, string[], string[]][] = [
+      ['加 disables', [], ['disables: [other-atom]']],
+      ['加 overrides', [], ['overrides: [other-atom]']],
+      ['删 disables', ['disables: [other-atom]'], []],
+      ['改 disables 取值', ['disables: [a-one]'], ['disables: [a-two]']],
+      ['加 applies_to', [], ['applies_to: [claude]']],
+      ['加 paths', [], ['paths: ["src/**"]']],
+    ];
+    for (const [name, baseLines, headLines] of cases) {
+      const s = await scenario(
+        { [ATOM_PATH]: atom({ status: 'active', extraLines: baseLines }) },
+        { [ATOM_PATH]: atom({ status: 'active', extraLines: headLines }) },
+      );
+      expect(s.codes, name).toEqual(['GUARD_G2_FIELD_LOCKED']);
+    }
+  });
+
+  it('GD-1 对照:改 id 去对上存量边 → 红(id 被锁)', async () => {
+    const s = await scenario(
+      { [ATOM_PATH]: atom({ status: 'active', id: 'sample-atom' }) },
+      { [ATOM_PATH]: atom({ status: 'active', id: 'foo-target' }) },
+    );
+    expect(s.codes).toEqual(['GUARD_G2_FIELD_LOCKED']);
+  });
+
+  it('正向控制:owner/volatility 不在锁定集(人员交接可走内容 PR)', async () => {
+    const s = await scenario(
+      { [ATOM_PATH]: atom({ status: 'active' }) },
+      { [ATOM_PATH]: atom({ status: 'active' }).replace("'@owner-handle'", "'@new-owner'") },
     );
     expect(s.codes).toEqual([]);
   });
@@ -90,5 +132,28 @@ describe('G2:非晋升/退役 PR 不得改已有原子的 status', () => {
       { label: 'kit:reflector' },
     );
     expect(s.codes).toEqual(['GUARD_G2_STATUS_CHANGED']);
+  });
+});
+
+describe('GD-2 评审补充', () => {
+  it('基线还是 proposed 的原子可以改结构字段(paths/applies_to),否则写错的 proposed 原子无路可走', async () => {
+    const s = await scenario(
+      { [ATOM_PATH]: atom({ status: 'proposed', extraLines: ['paths: ["a/**"]'] }) },
+      { [ATOM_PATH]: atom({ status: 'proposed', extraLines: ['paths: ["b/**"]'] }) },
+    );
+    expect(s.codes).toEqual([]);
+  });
+
+  it('proposed 原子也不能动边;缺省与空数组等价(补 disables: [] 不算变化)', async () => {
+    const edge = await scenario(
+      { [ATOM_PATH]: atom({ status: 'proposed' }) },
+      { [ATOM_PATH]: atom({ status: 'proposed', extraLines: ['disables: [x-y]'] }) },
+    );
+    expect(edge.codes).toEqual(['GUARD_G2_FIELD_LOCKED']);
+    const empty = await scenario(
+      { [ATOM_PATH]: atom({ status: 'active' }) },
+      { [ATOM_PATH]: atom({ status: 'active', extraLines: ['disables: []'] }) },
+    );
+    expect(empty.codes).toEqual([]);
   });
 });
