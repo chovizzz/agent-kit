@@ -54,7 +54,7 @@ describe('命令表', () => {
 });
 
 // 已实装的命令不再是桩。新增块合入时在这里登记(避免『桩断言』误伤已实装命令,也避免漏掉仍是桩的命令)。
-const IMPLEMENTED_COMMANDS = new Set(['redact', 'signals collect']);
+const IMPLEMENTED_COMMANDS = new Set(['redact', 'signals collect', 'check']);
 
 describe('命令桩:每个命令退出 64 并说明原因(绝不静默成功)', () => {
   for (const def of COMMANDS.filter((d) => !IMPLEMENTED_COMMANDS.has(d.name))) {
@@ -62,10 +62,8 @@ describe('命令桩:每个命令退出 64 并说明原因(绝不静默成功)', 
       const r = await run(def.name.split(' '));
       expect(r.code).toBe(ExitCode.NOT_IMPLEMENTED);
       expect(r.err).toContain('未实现');
-      // `check` 是组合命令:lint 已由 B03 实装并向 stdout 打印摘要,仍因 budget 桩退出 64。
-      // 其余命令的桩不得有任何 stdout。待 B04/B05 合入后 check 将不再退出 64。
-      if (def.name === 'check') expect(r.out).toContain('lint:');
-      else expect(r.out).toBe('');
+      // 桩不得有任何 stdout。
+      expect(r.out).toBe('');
     });
   }
 
@@ -73,13 +71,13 @@ describe('命令桩:每个命令退出 64 并说明原因(绝不静默成功)', 
     expect((await run(['inventory'])).err).toContain('P1 才进 CLI');
   });
 
-  it('check:lint 已实装,budget / guards 仍是桩(各打印一行)', async () => {
+  it('check:lint 与 budget 已实装(退出 0),只有 --guards 仍是桩', async () => {
     const r = await run(['check']);
-    expect(r.code).toBe(64);
-    // lint 已由 B03 实装(不再是桩):stdout 有摘要,stderr 不再有 (lint) 的未实现提示。
+    expect(r.code).toBe(0);
     expect(r.out).toContain('lint:');
+    expect(r.out).toContain('budget claude:');
     expect(r.err).not.toContain('(lint)');
-    expect(r.err).toContain('(budget)');
+    expect(r.err).not.toContain('(budget)');
     expect(r.err).not.toContain('(guards)');
     const g = await run(['check', '--guards', '--base', 'a', '--head', 'b']);
     expect(g.err).toContain('(guards)');
