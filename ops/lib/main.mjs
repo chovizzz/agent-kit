@@ -23,10 +23,17 @@ function main(argv) {
       err('用法:main.mjs diff <before.json> <after.json>');
       return EXIT.USAGE;
     }
-    const d = diffSnapshots(
-      JSON.parse(fs.readFileSync(argv[0], 'utf8')),
-      JSON.parse(fs.readFileSync(argv[1], 'utf8')),
-    );
+    let d;
+    try {
+      d = diffSnapshots(
+        JSON.parse(fs.readFileSync(argv[0], 'utf8')),
+        JSON.parse(fs.readFileSync(argv[1], 'utf8')),
+      );
+    } catch (e) {
+      // 读不了/解析不了快照 = 没比较成:未执行(4),不能落成 node 的默认退出码 1(违规)
+      err(`ERROR 无法读取快照:${e.message}`);
+      return EXIT.NOT_RUN;
+    }
     out(JSON.stringify(d, null, 2));
     return d.count > 0 ? EXIT.FAIL : EXIT.OK;
   }

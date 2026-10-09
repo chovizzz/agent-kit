@@ -8,16 +8,40 @@ const retired = atom({ status: 'retired' });
 const BASE = { ...COMMON_FILES };
 
 describe('G4:删除原子文件的前提是 retired 已在 stable tag 里出现过', () => {
-  it('合法对照:retired 已在 stable-1.0(基线祖先)里 → 删除放行', async () => {
+  it('合法对照:retired 已在 stable-1.0(基线的严格祖先、注解 tag)里 → 删除放行', async () => {
     const s = await scenario(
       { ...BASE },
       { [ATOM_PATH]: null },
-      { history: [{ files: { ...BASE, [ATOM_PATH]: retired }, tag: 'stable-1.0' }] },
+      {
+        history: [{ files: { ...BASE, [ATOM_PATH]: retired }, tag: 'stable-1.0', annotated: true }],
+      },
     );
     expect(s.codes).toEqual([]);
   });
 
-  it('合法对照:注解 tag 同样有效', async () => {
+  it('GD-3:轻量 tag 不算 stable tag → 红', async () => {
+    const s = await scenario(
+      { ...BASE },
+      { [ATOM_PATH]: null },
+      {
+        history: [
+          { files: { ...BASE, [ATOM_PATH]: retired }, tag: 'stable-1.0', annotated: false },
+        ],
+      },
+    );
+    expect(s.codes).toEqual(['GUARD_G4_NOT_IN_STABLE_TAG']);
+  });
+
+  it('GD-3:注解 tag 直接打在基线提交本身上(现打现用)→ 红', async () => {
+    const s = await scenario(
+      { ...BASE, [ATOM_PATH]: retired },
+      { [ATOM_PATH]: null },
+      { afterHead: (r) => r.tag('stable-now', 'kit-base', true) },
+    );
+    expect(s.codes).toEqual(['GUARD_G4_NOT_IN_STABLE_TAG']);
+  });
+
+  it('合法对照:另一个注解 tag 同样有效', async () => {
     const s = await scenario(
       { ...BASE },
       { [ATOM_PATH]: null },

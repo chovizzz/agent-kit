@@ -112,9 +112,9 @@ export function createGuardGit(
     const commits: string[] = [];
     for (const line of out.split('\n')) {
       if (line === '') continue;
-      const [t1, o1, t2, o2, ref] = line.split(' ');
-      // 轻量 tag:自身是 commit;注解 tag:取剥离后的对象;指向树/blob 的 tag 忽略
-      const commit = t1 === 'commit' ? o1 : t2 === 'commit' ? o2 : undefined;
+      const [t1, , t2, o2, ref] = line.split(' ');
+      // 只认注解 tag(objecttype=tag,剥离后是 commit);轻量 tag(自身是 commit)不算——它连创建者都不留(GD-3)
+      const commit = t1 === 'tag' && t2 === 'commit' ? o2 : undefined;
       if (commit !== undefined && ref?.startsWith('refs/tags/stable-') && OID_RE.test(commit)) {
         commits.push(commit);
       }
