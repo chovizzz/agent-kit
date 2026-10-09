@@ -1,0 +1,61 @@
+{
+  "channel": "canary",
+  "files": [
+    {
+      "agent": "claude",
+      "atoms": [],
+      "confidence": "documented",
+      "mode": "owned",
+      "path": "claude/home/.claude/skills/commit-checklist/SKILL.md",
+      "sha256": "47e6ee68d75d7b6bde9f6682a65d3874eeb96e1a3798002981c286f19e100796",
+      "sourceRefs": [
+        "skill:commit-checklist"
+      ],
+      "target": "home"
+    },
+    {
+      "agent": "codex",
+      "atoms": [],
+      "confidence": "documented",
+      "mode": "owned",
+      "path": "codex/home/.agents/skills/commit-checklist/SKILL.md",
+      "sha256": "47e6ee68d75d7b6bde9f6682a65d3874eeb96e1a3798002981c286f19e100796",
+      "sourceRefs": [
+        "skill:commit-checklist"
+      ],
+      "target": "home"
+    },
+    {
+      "agent": "kimi",
+      "atoms": [],
+      "confidence": "documented",
+      "mode": "owned",
+      "path": "kimi/home/.agents/skills/commit-checklist/SKILL.md",
+      "sha256": "47e6ee68d75d7b6bde9f6682a65d3874eeb96e1a3798002981c286f19e100796",
+      "sourceRefs": [
+        "skill:commit-checklist"
+      ],
+      "target": "home"
+    },
+    {
+      "agent": "pi",
+      "atoms": [],
+      "confidence": "documented",
+      "mode": "owned",
+      "path": "pi/home/.agents/skills/commit-checklist/SKILL.md",
+      "sha256": "47e6ee68d75d7b6bde9f6682a65d3874eeb96e1a3798002981c286f19e100796",
+      "sourceRefs": [
+        "skill:commit-checklist"
+      ],
+      "target": "home"
+    }
+  ],
+  "kit_version": "0.0.0",
+  "schema_version": 1,
+  "skippedLayers": [
+    {
+      "layer": "personal",
+      "reason": "P2 才在本机渲染"
+    }
+  ]
+}
