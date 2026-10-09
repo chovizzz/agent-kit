@@ -110,5 +110,6 @@ describe('lint 正向对照:同样的代码放到被授权的文件里不报错'
         .map((m) => `${r.filePath}: ${m.ruleId} ${m.message}`),
     );
     expect(errors).toEqual([]);
-  });
+    // 全仓 lint 在机器忙时可能超过默认 20s;这里不是性能用例,给足时间。
+  }, 120_000);
 });

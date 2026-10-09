@@ -20,8 +20,11 @@ async function run(
       return stdin;
     },
   });
+  // 默认 50ms 预算是墙钟:机器忙时会(正确地)fail-closed。除非用例自己指定 --timeout-ms,
+  // 一律给足预算,让用例测的是脱敏结果而不是预算。
+  const withBudget = argv.includes('--timeout-ms') ? argv : [...argv, '--timeout-ms', '5000'];
   const code = await cmd.run({
-    argv,
+    argv: withBudget,
     io: baseCtx(),
     overlayPath: opts.overlayPath,
     stdout: (t) => (out += t),
@@ -32,6 +35,7 @@ async function run(
 
 describe('redact --stdin', () => {
   it('脱敏后输出到 stdout,退出 0', async () => {
+    // 给足时间预算:默认 50ms 是墙钟,机器忙时会正确地 fail-closed,但本用例测的是脱敏结果而不是预算。
     const r = await run(['--stdin'], `k=${fakeSk()} tail`);
     expect(r).toEqual({ code: 0, out: `k=${placeholder('api_key')} tail`, err: '' });
   });
