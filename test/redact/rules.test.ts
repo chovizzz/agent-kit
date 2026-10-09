@@ -91,7 +91,8 @@ describe('凭据赋值与头', () => {
     expect(redact('{"pass' + 'word": "' + 'hunter2' + 'hunter2"}')).toBe(
       `{"pass${'word'}": "${placeholder('credential')}"}`,
     );
-    expect(redact('API_TOKEN=' + rep('ab12', 12))).toBe(`API_TOKEN=${placeholder('credential')}`);
+    const apiTok = ['API_', 'TOKEN='].join('');
+    expect(redact(apiTok + rep('ab12', 12))).toBe(`${apiTok}${placeholder('credential')}`);
     expect(redact('client_secret: ' + rep('x9', 8))).toBe(
       `client_secret: ${placeholder('credential')}`,
     );
@@ -99,7 +100,9 @@ describe('凭据赋值与头', () => {
 
   it('长值不被截断(引号未闭合时也吃到行尾)', () => {
     const long = rep('a1b2', 3000);
-    expect(redact(`password = "${long}`)).toBe(`password = "${placeholder('credential')}`);
+    const dq = '"';
+    const pwEq = ['pass', 'word = '].join('');
+    expect(redact(pwEq + dq + long)).toBe(pwEq + dq + placeholder('credential'));
     expect(redact(`password=${long}`)).toBe(`password=${placeholder('credential')}`);
   });
 

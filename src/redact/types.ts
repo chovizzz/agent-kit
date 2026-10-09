@@ -55,6 +55,10 @@ export interface ScanEnv {
   rawSlice(start: number, end: number): string;
   /** 当前扫描的是压缩视图 */
   readonly compactView: boolean;
+  /** 被禁用的规则 / 阶段 id(变异自检用):判据类阶段据此退回旧行为 */
+  readonly disabled: ReadonlySet<string>;
+  /** 原视图补扫(JSON 转义空白未还原):引用式的引号奇偶在这里不可靠,引用式候选一律不判 */
+  readonly origView?: boolean;
 }
 
 export interface Rule {
@@ -65,6 +69,8 @@ export interface Rule {
   readonly prio: number;
   /** 结构化规则:也在"压缩视图"(去空白/引号/加号)上跑,抓分行与字符串拼接 */
   readonly compact: boolean;
+  /** 值类规则(`NAME=值` 一类):JSON 转义空白被还原前的原视图上也要再跑一遍,结果取并集 */
+  readonly valueClass?: boolean;
   /** 廉价预筛:小写文本不含其中任何一个子串就不跑这条规则 */
   readonly quick?: readonly string[];
   /** 在视图文本上扫描,用 push 登记视图坐标的区间 */

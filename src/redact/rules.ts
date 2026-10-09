@@ -429,17 +429,19 @@ function simpleRegexRule(
   compact: boolean,
   quick: readonly string[] | undefined,
   re: RegExp,
-  validate?: (m: RegExpExecArray) => boolean,
+  validate?: (m: RegExpExecArray, env: ScanEnv) => boolean,
+  valueClass = false,
 ): Rule {
   return {
     id,
     type,
     prio,
     compact,
+    ...(valueClass ? { valueClass } : {}),
     ...(quick ? { quick } : {}),
     scan(text, _lower, push, env) {
       eachMatch(re, text, env, (m) => {
-        if (validate && !validate(m)) return;
+        if (validate && !validate(m, env)) return;
         const g = re.hasIndices ? groupSpan(m) : null;
         if (g) push(g[0], g[1]);
         else push(m.index, m.index + m[0].length);
@@ -521,43 +523,180 @@ const telegramBot = simpleRegexRule(
 // 凭据赋值 / 头
 // ---------------------------------------------------------------------------
 
-const NON_SECRET_START =
-  /^(?:\$|<|\{\{|%|\[\[REDACTED|process\.env|os\.environ|os\.getenv|env\.|ENV\[|getenv|config\.|settings\.|secrets\.|vault|\.\.\.|None$|null$|undefined$|true$|false$)/i;
+// ---------------------------------------------------------------------------
+// 「值是不是引用」判据(B09c)
+//
+// 脱敏是信任边界:判据是**白名单**,不匹配任何一种引用形态就当口令脱敏。引用形态必须是**整词**
+// (不是前缀),并且不能同时是一个像样的口令:带数字的标识符段、混合大小写 + 数字的 `$xxx` 都不算引用。
+// ---------------------------------------------------------------------------
+
 const MASK = /^[*xX•#._-]{4,}$/;
-const CALL_CHAIN = /^[A-Za-z_$][\w$.]*\(.*\)[;,]?$/;
+const LITERAL = /^(?:none|null|undefined|true|false|nil)$/i;
 const PLAIN_WORD = /^[a-z][a-z-]{0,11}$/;
-/** `string[];` `string):` `Record<string,string>,` 这类类型标注/形参残片 */
-const CODE_SHAPE =
+const PH_WHOLE = /^\[\[REDACTED:[a-z_]{1,24}\]\]$/;
+/** 名字段:UPPER_SNAKE(可带数字),或只含字母 / 下划线(不带数字——带数字的段更像口令)。 */
+const NAME = '(?:[A-Z]+|[A-Z][A-Z0-9]*_[A-Z0-9_]*|[A-Za-z_]+)';
+/** 环境变量名风格的大写名:纯大写字母,或带下划线的 UPPER_SNAKE。大写 + 数字而没有下划线的(`ABC123XYZ9`)更像口令,不算。 */
+const UPPER_ENV = /^(?:[A-Z]+|[A-Z][A-Z0-9]*_[A-Z0-9_]*)$/;
+/** 环境变量访问(区分大小写、整词);`[` `(` 之后可以是被引号截断的残片。 */
+const ENV_ACCESS = new RegExp(
+  `^(?:process\\.env|import\\.meta\\.env|Deno\\.env(?:\\.get)?|os\\.environ(?:\\.get)?|os\\.getenv|System\\.getenv|getenv|ENV(?:\\.fetch)?|environ)(?:(?:\\.${NAME})+|[\\[(](?:${NAME})?[\\])]*)?$`,
+);
+/** 配置对象的属性路径:`config.dbPassword` `env.DB_PASSWORD`。 */
+const PROP_PATH = new RegExp(`^(?:env|config|settings|secrets|vault)(?:\\.${NAME})+$`);
+const ANGLE = /^<[A-Za-z][A-Za-z_-]*>$/;
+/** 以未闭合括号结尾的代码残片(`, R(` `' + rep(`):不含数字与引号,口令里不会有这种形状。 */
+const OPEN_CODE = /^[A-Za-z_$.,+\-*/ ]*[({[]$/;
+/** 模板串里被引号截断的表达式:`${placeholder(` `${a.b[`。 */
+const OPEN_TEMPLATE = /^\$\{[A-Za-z_][A-Za-z_.]*[([]?$/;
+const TEMPLATE = /^\{\{-?[A-Za-z_][A-Za-z_. |-]*-?\}\}$/;
+const PERCENT = /^(?:%(?:[A-Z]+|[A-Z][A-Z0-9]*_[A-Z0-9_]*)%|%\([a-z_]+\)s|%[sd])$/;
+
+const TYPE_BASE: ReadonlySet<string> = new Set([
+  'string', 'str', 'number', 'int', 'integer', 'float', 'double', 'bool', 'boolean', 'bytes',
+  'byte', 'object', 'any', 'unknown', 'void', 'never', 'Buffer', 'Record', 'Map', 'Set',
+  'Array', 'Promise', 'Optional', 'List', 'Dict', 'Sequence', 'Iterable', 'SecretStr',
+  'String', 'Number', 'Boolean', 'Object', 'Any', 'Secret', 'Uint8Array',
+]); // prettier-ignore
+
+/** 类型标注:`string[]` `Map<string,` `Optional[str]`。其后只允许类型括号 / 逗号 / 同集合的词,不得含数字。 */
+function typeish(s: string): boolean {
+  const m = /^([A-Za-z_][\w$.]*)(.*)$/s.exec(s);
+  if (!m || !TYPE_BASE.has(m[1] as string)) return false;
+  const rest = m[2] as string;
+  if (!/^[A-Za-z_.,<>[\]?| ]*$/.test(rest)) return false;
+  for (const w of rest.match(/[A-Za-z_]+/g) ?? []) {
+    if (!TYPE_BASE.has(w) && !PLAIN_WORD.test(w)) return false;
+  }
+  return true;
+}
+
+const CALL_VERB =
+  /^(?:get|read|load|fetch|resolve|lookup|find|prompt|input|ask|decrypt|generate|gen|random|make|create|build|parse|retrieve|getenv|getpass|environ)(?:[A-Z_]|$)/;
+const CALL_ARG = /^(?:|\$?(?:[A-Z]+|[A-Z][A-Z0-9]*_[A-Z0-9_]*)|\$?[A-Za-z_][A-Za-z_.]*)$/;
+
+/**
+ * 调用:`X(y)` 形状**不**自动放行。callee 路径不含数字,并且:没有参数 / 未闭合(`createToken(`),
+ * 或最后一段以「取值类动词」开头(getToken / read_secret / os.getenv)且参数是单个无数字标识符 / UPPER_SNAKE / `$VAR`。
+ */
+function harmlessCall(s: string): boolean {
+  const i = s.indexOf('(');
+  if (i <= 0) return false;
+  const callee = s.slice(0, i);
+  if (!/^[A-Za-z_$][A-Za-z_$.]*$/.test(callee)) return false;
+  const args = s.slice(i + 1).replace(/\)+$/, '');
+  // 无参数 / 未闭合(`createToken(` `build()`):没有口令可藏,callee 本身不带数字即可
+  if (args === '') return true;
+  const last = callee.slice(callee.lastIndexOf('.') + 1);
+  return CALL_VERB.test(last) && CALL_ARG.test(args);
+}
+
+/**
+ * 变量引用,按运算符语境:`${NAME}` 任何语境;`$UPPER_SNAKE` / `$lowerword`(只有字母下划线、无数字)/
+ * `$(命令` 只在 shell 语境(`=` `:=`)——yaml / ini 里的 `$` 是字面字符。不带路径后缀(`$HOME/<口令>`)。
+ */
+function varRef(s: string, shell: boolean): boolean {
+  if (!s.startsWith('$')) return false;
+  if (/^\$\{[A-Za-z_]\w*\}$/.test(s) || OPEN_TEMPLATE.test(s)) return true;
+  if (!shell) return false;
+  if (/^\$[A-Za-z_]\w*$/.test(s)) {
+    const name = s.slice(1);
+    return UPPER_ENV.test(name) || /^[A-Za-z_]+$/.test(name);
+  }
+  return /^\$\([A-Za-z_][A-Za-z_./-]*\)?$/.test(s);
+}
+
+/** 旧判据(B09b 及之前),只为变异自检保留:对应阶段被禁用时退回这些宽松放行。 */
+const LEGACY_NON_SECRET_START =
+  /^(?:\$|<|\{\{|%|\[\[REDACTED|process\.env|os\.environ|os\.getenv|env\.|ENV\[|getenv|config\.|settings\.|secrets\.|vault|\.\.\.|None$|null$|undefined$|true$|false$)/i;
+const LEGACY_CALL_CHAIN = /^[A-Za-z_$][\w$.]*\(.*\)[;,]?$/;
+const LEGACY_CODE_SHAPE =
   /^[A-Za-z_$][\w$.]*\(|^[A-Za-z_$][\w$.]*(?:\[\]|<[^>]*>)?[)\];,:]+$|^[A-Za-z_$][\w$.]*(?:\[\]|<[^>]*>)[)\];,:]*$|^[A-Za-z_$][\w$.]*<[^>]*$|[({[]$/;
 
-/** 值是不是"明显不是秘密"(变量引用、遮蔽、布尔、函数调用、单个小写词)。 */
-export function looksNonSecret(v: string): boolean {
+/** 引用核:去掉尾部标点之后剩下的部分是不是一种引用形态。 */
+function refCore(s: string, shell: boolean): boolean {
+  if (s === '') return true;
   return (
-    NON_SECRET_START.test(v) ||
-    MASK.test(v) ||
-    CALL_CHAIN.test(v) ||
-    PLAIN_WORD.test(v) ||
-    CODE_SHAPE.test(v)
+    MASK.test(s) ||
+    LITERAL.test(s) ||
+    PH_WHOLE.test(s) ||
+    PLAIN_WORD.test(s) ||
+    varRef(s, shell) ||
+    ENV_ACCESS.test(s) ||
+    PROP_PATH.test(s) ||
+    typeish(s) ||
+    harmlessCall(s) ||
+    ANGLE.test(s) ||
+    OPEN_CODE.test(s) ||
+    TEMPLATE.test(s) ||
+    PERCENT.test(s)
   );
 }
 
-const KW =
-  '(?:password|passwd|passphrase|pwd|secret|token|api[_-]?key|apikey|access[_-]?key|auth[_-]?key|private[_-]?key|credentials?)';
+export interface ValueVerdict {
+  /** 是口令(应脱敏) */
+  secret: boolean;
+  /** 脱敏范围的长度:值去掉尾部标点后的核心(尾部标点留在输出里,不破坏语法) */
+  coreLen: number;
+}
+
+const NO_DISABLED: ReadonlySet<string> = new Set();
+export const STAGE_REF_TAIL = 'ref_tail_punct';
+export const STAGE_REF_BOUNDARY = 'ref_boundary';
+export const STAGE_REF_FLAG = 'ref_flag_strict';
+export const STAGE_PLACEHOLDER = 'placeholder_boundary';
 
 /**
- * 分组:1=操作符,2/3/4=值(双引号 / 单引号 / 无引号)。
- * 值之前的 `[ \t]{0,8}` 允许 `key = value`;被拒绝的匹配不再吞掉后文(见 scan 里的 lastIndex 回退)。
+ * 判一个无引号值。尾部标点先剥掉再判:候选 c1=去 `;,:`、c2=再去 `)]}`、c3=再去 `({[`,
+ * **任一**候选是引用核就放行(`string[];` `getToken(x);`);全都不是 => 口令,脱敏 c3(核心)。
+ * 引用核是封闭集合里的整词形态,标识符本身(像口令的 `Hunter2…`)不在其中,所以「口令 + 标点」不会被放行。
+ */
+export function judgeValue(
+  v: string,
+  shell: boolean,
+  disabled: ReadonlySet<string> = NO_DISABLED,
+): ValueVerdict {
+  let e1 = v.length;
+  while (e1 > 0 && ';,:\\'.includes(v[e1 - 1] as string)) e1--;
+  let e2 = e1;
+  while (e2 > 0 && ';,:\\)]}'.includes(v[e2 - 1] as string)) e2--;
+  let e3 = e2;
+  while (e3 > 0 && ';,:\\)]}({['.includes(v[e3 - 1] as string)) e3--;
+  const cands = new Set<string>([v, v.slice(0, e1), v.slice(0, e2), v.slice(0, e3)]);
+  for (const c of cands) if (refCore(c, shell)) return { secret: false, coreLen: e3 };
+  if (disabled.has(STAGE_REF_TAIL) && (LEGACY_CODE_SHAPE.test(v) || LEGACY_CALL_CHAIN.test(v)))
+    return { secret: false, coreLen: e3 };
+  if (disabled.has(STAGE_REF_BOUNDARY) && LEGACY_NON_SECRET_START.test(v))
+    return { secret: false, coreLen: e3 };
+  return { secret: true, coreLen: e3 };
+}
+
+/** 值是不是"明显不是秘密"(变量引用、遮蔽、布尔、类型名、取值类调用、单个小写词)。shell 语境。 */
+export function looksNonSecret(v: string): boolean {
+  return !judgeValue(v, true).secret;
+}
+
+/** 运算符是 shell / makefile 的赋值(`$lowerword` `$(cmd)` 是引用),yaml / json 的 `:` 不是。 */
+const isShellOp = (op: string): boolean => op === '=' || op === ':=';
+
+const KW =
+  '(?:password|passwd|passphrase|pwd|secret|token|api[_-]?key|apikey|access[_-]?key|auth[_-]?key|private[_-]?key|credentials?)';
+/** 键名后缀(`_prod` `-v2` 或 key/id/value…)与引号 / 空白的上限:对齐排版的 `db_password      = …` 也要认。 */
+const SFX = '(?:[_-][A-Za-z0-9_-]{1,40}|(?:key|id|value|secret|token|hash))?';
+const SP = '[ \\t]{0,32}';
+
+/**
+ * 分组:1=操作符,2=双引号值(值长度 >= 8 由代码判),3=其中的反斜杠串(原子化用,不读),4=单引号值,5=无引号值。
+ * 双引号值里的反斜杠串用「前瞻捕获 + 反向引用」模拟原子组:一次吃掉整串,不在串内回溯(二次增长)。
+ * 值之前的空白允许 `key = value`;被拒绝的匹配不再吞掉后文(见 scan 里的 lastIndex 回退)。
  */
 const CRED_ASSIGN_RE = new RegExp(
-  `${KW}(?:[_-][A-Za-z0-9_-]{1,16}|(?:key|id|value|secret|token|hash))?["']?[ \\t]{0,8}(:=|=>|:|=)[ \\t]{0,8}(?:\\\\*"((?:[^"\\\\\\r\\n]|\\\\(?!\\\\*")){8,})(?:\\\\*")?|'([^'\\r\\n]{8,})'?|([^\\s"'\`]{8,}))`,
+  `${KW}${SFX}["']?${SP}(:=|=>|:|=)${SP}(?:\\\\*"((?:[^"\\\\\\r\\n]|(?=(\\\\+))\\3(?!"))*)(?:\\\\*")?|'([^'\\r\\n]{8,})'?|([^\\s"'\`]+))`,
   'gid',
 );
 
 /** 引用式候选:`NAME=` 之后紧跟一个(可带转义反斜杠的)引号;键名与 `=` 之间不许有引号。是否真的是引用由 quotedNameRef 判。 */
-const NAME_EQ_QUOTE_RE = new RegExp(
-  `${KW}(?:[_-][A-Za-z0-9_-]{1,16}|(?:key|id|value|secret|token|hash))?=(\\\\*["'])`,
-  'gi',
-);
+const NAME_EQ_QUOTE_RE = new RegExp(`${KW}${SFX}=(\\\\*["'])`, 'gi');
 
 const PLACEHOLDER_RE = new RegExp(
   PLACEHOLDER_SOURCE.replace('[a-z_]+', `[a-z_]{1,${MAX_PLACEHOLDER_TYPE}}`),
@@ -572,19 +711,37 @@ const PATH_REF =
 /** 文件名:封闭的扩展名集合(`.env` 本身也算)。 */
 const FILE_REF =
   /^[\w.@+~-]*\.(?:env|json|txt|ya?ml|conf|cfg|ini|log|sh|toml|pem|key|properties|secrets?|local|sample|example|bak)$|^[\w.@+~-]*\.env\.[\w-]+$/i;
-/** 命令行选项:`-d` `--no-color` `--color=never`。 */
-const FLAG_REF = /^--?[A-Za-z][\w-]*(?:=\S*)?$/;
+/** 旧的命令行选项判据(B09b 及之前),只为变异自检保留。 */
+const LEGACY_FLAG_REF = /^--?[A-Za-z][\w-]*(?:=\S*)?$/;
+
+/**
+ * 命令行选项:`-d` `--no-color` `--color=never`。长选项名只认小写 kebab(`--Hunter2…` 不算),
+ * 短选项只认 1-2 个字母或 `-f2-` 形;`--x=值` 的值部分要重新判(数字 / 引用才放行)。
+ */
+function isFlagRef(w: string, disabled: ReadonlySet<string>): boolean {
+  if (disabled.has(STAGE_REF_FLAG) && LEGACY_FLAG_REF.test(w)) return true;
+  const m = /^(--?)([A-Za-z][\w-]*)(?:=([\s\S]*))?$/.exec(w);
+  if (!m) return false;
+  const name = m[2] as string;
+  const nameOk =
+    m[1] === '--'
+      ? /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(name)
+      : /^[A-Za-z]{1,2}$|^[A-Za-z]\d+-?$/.test(name);
+  if (!nameOk) return false;
+  const v = m[3];
+  return v === undefined || v === '' || /^\d{1,6}$/.test(v) || isReferenceWord(v, disabled);
+}
 
 /**
  * 「值之前紧跟的是引用而不是值」场景下,下一个词是不是引用。**白名单**:不匹配任何一种形状就一律当值脱敏
- * (不看熵、字符类:低熵口令恰恰是最危险的)。形状 = 强上下文里本来就放行的那些(looksNonSecret,但去掉
- * 以 `$` `%` `<` `{` 开头的宽松放行),加变量引用 / 命令替换 / 路径 / 文件名 / 选项。
+ * (不看熵、字符类:低熵口令恰恰是最危险的)。形状 = 强上下文里本来就放行的那些(judgeValue,但以 `$` `%` `<` `{`
+ * 开头的词不走宽松放行),加变量引用 / 路径 / 文件名 / 选项。
  */
-export function isReferenceWord(w: string): boolean {
+export function isReferenceWord(w: string, disabled: ReadonlySet<string> = NO_DISABLED): boolean {
   if (w === '') return true;
   if (VAR_REF.test(w)) return true;
-  if (PATH_REF.test(w) || FILE_REF.test(w) || FLAG_REF.test(w)) return true;
-  return !/^[$%<{]/.test(w) && looksNonSecret(w);
+  if (PATH_REF.test(w) || FILE_REF.test(w) || isFlagRef(w, disabled)) return true;
+  return !/^[$%<{]/.test(w) && !judgeValue(w, true, disabled).secret;
 }
 
 const NAME_CHAR = /[\w.^|(-]/;
@@ -597,15 +754,68 @@ interface QuotedNameRef {
   after: number;
 }
 
+type Range = [number, number];
+
+/** ranges 按起点升序、互不嵌套(值区间):p 是否落在某个区间里。 */
+function inRanges(ranges: readonly Range[], p: number): boolean {
+  let lo = 0;
+  let hi = ranges.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const r = ranges[mid] as Range;
+    if (p < r[0]) hi = mid - 1;
+    else if (p >= r[1]) lo = mid + 1;
+    else return true;
+  }
+  return false;
+}
+
+/** [from, end) 内、同一行里、转义反斜杠数恰为 bs 的引号 qc 的个数;excl 里的位置(将被脱敏的值内部)不计。 */
+function countQuotes(
+  text: string,
+  from: number,
+  end: number,
+  qc: string,
+  bs: number,
+  excl: readonly Range[],
+): number {
+  let count = 0;
+  for (let p = from; p < end; p++) {
+    if (text[p] !== qc) continue;
+    if (excl.length > 0 && inRanges(excl, p)) continue;
+    let b = 0;
+    while (p - 1 - b >= from && text.charCodeAt(p - 1 - b) === 92) b++;
+    if (b === bs) count++;
+  }
+  return count;
+}
+
+/** 位置 i 所在行的行首;回看超过 QUOTE_LOOKBACK 返回 -1。 */
+function lineStartOf(text: string, i: number): number {
+  let ls = i;
+  while (ls > 0 && text.charCodeAt(ls - 1) !== 10) {
+    ls--;
+    if (i - ls > QUOTE_LOOKBACK) return -1;
+  }
+  return ls;
+}
+
 /**
  * 引用式:`'^NAME='` `"^NAME="`(含 JSON 转义的 `\"^NAME=\"`)。`=` 之后紧跟的引号是**收尾**引号,
  * 它的开引号在键名之前。三个条件缺一不可,否则按赋值处理(在 `'x'NAME=` 后面
  * 再跟一段带引号的值时,`NAME` 前的引号是 `'x'` 的收尾,奇偶校验会拦下它):
  *  - 开引号与键名之间只有 `[\w.^|(-]`(无空白、无别的引号;键名与 `=` 之间也不能有引号——`"NAME"="…` 里的引号是键名自己的),且转义反斜杠数与收尾引号一致;
- *  - 同一行里该开引号之前、同种同转义深度的引号个数为偶数;
+ *  - 同一行里该开引号之前、同种同转义深度的引号个数为偶数(**将被脱敏的值内部的引号不计**:
+ *    第二遍里那些值已经是占位符,两遍的奇偶判定因此一致);
  *  - 收尾引号之后是行尾 / 空白 / `| ; & < > )`。
  */
-function quotedNameRef(text: string, keyStart: number, opEnd: number): QuotedNameRef | null {
+function quotedNameRef(
+  text: string,
+  keyStart: number,
+  opEnd: number,
+  excl: readonly Range[],
+  strict = true,
+): QuotedNameRef | null {
   let j = opEnd;
   while (text.charCodeAt(j) === 92) j++;
   const qc = text[j];
@@ -613,7 +823,8 @@ function quotedNameRef(text: string, keyStart: number, opEnd: number): QuotedNam
   const bs = j - opEnd;
   const after = j + 1;
   const nc = text[after];
-  if (nc !== undefined && !TERMINATOR.test(nc) && !endsJsonString(text, after)) return null;
+  if (strict && nc !== undefined && !TERMINATOR.test(nc) && !endsJsonString(text, after))
+    return null;
   let i = keyStart - 1;
   for (let steps = 0; i >= 0 && steps < 96 && NAME_CHAR.test(text[i] as string); steps++) i--;
   if (i < 0 || text[i] !== qc) return null;
@@ -624,17 +835,11 @@ function quotedNameRef(text: string, keyStart: number, opEnd: number): QuotedNam
     k--;
   }
   if (obs !== bs) return null;
+  if (!strict) return { after }; // 只看结构(开引号紧贴键名),不数奇偶
   // 同一行、同种同转义深度的引号在开引号之前出现偶数次
-  const lineStart = text.lastIndexOf('\n', i) + 1;
-  if (i - lineStart > QUOTE_LOOKBACK) return null;
-  let count = 0;
-  for (let p = lineStart; p < i; p++) {
-    if (text[p] !== qc) continue;
-    let b = 0;
-    while (p - 1 - b >= lineStart && text.charCodeAt(p - 1 - b) === 92) b++;
-    if (b === bs) count++;
-  }
-  return count % 2 === 0 ? { after } : null;
+  const lineStart = lineStartOf(text, i);
+  if (lineStart < 0) return null;
+  return countQuotes(text, lineStart, i, qc, bs, excl) % 2 === 0 ? { after } : null;
 }
 
 /** 从 pos 起(可有若干转义反斜杠)是 JSON 字符串的收尾引号。 */
@@ -652,6 +857,10 @@ function jsonStringEnd(text: string, quotePos: number): boolean {
 
 /** 一段区域里最多逐个判断多少个词(再多的不判,保持线性)。 */
 const MAX_UNITS = 64;
+/** 单个词里最多剥这么多个外围收尾字符(每次剥都要数括号,不设上限会二次增长)。 */
+const MAX_TRIM = 64;
+/** 找收尾引号 / 行尾的窗口(超出的当作没找到,与旧的「<= 512 字符」一致)。 */
+const UNIT_WINDOW = 513;
 
 interface Unit {
   /** 核心区间(去掉两侧引号与转义反斜杠) */
@@ -663,7 +872,7 @@ interface Unit {
 
 /**
  * 读一个词(shell 意义上的一个参数):以引号开头的取到同种引号,否则取到空白 / `| ; & < >`。
- * 返回核心区间与下一个词的起点。
+ * 返回核心区间与下一个词的起点。所有向前查找都限制在窗口 / 词内,单个词的代价与词长成正比。
  */
 function readUnit(text: string, p: number): Unit {
   const n = text.length;
@@ -674,11 +883,12 @@ function readUnit(text: string, p: number): Unit {
   let next: number;
   if (q === '"' || q === "'") {
     s++;
-    const close = text.indexOf(q, s);
-    const eol = text.indexOf('\n', s);
-    if (close !== -1 && (eol === -1 || close < eol) && close - s <= 512) {
-      e = close;
-      next = close + 1;
+    const win = text.slice(s, s + UNIT_WINDOW);
+    const close = win.indexOf(q);
+    const eol = win.indexOf('\n');
+    if (close !== -1 && (eol === -1 || close < eol)) {
+      e = s + close;
+      next = e + 1;
     } else {
       e = next = wordEnd(text, s);
     }
@@ -686,11 +896,11 @@ function readUnit(text: string, p: number): Unit {
     s = p;
     e = wordEnd(text, s);
     // 无引号的词里碰到 JSON 字符串的收尾引号就在此截断;引号紧贴着别的字符(拼接)则不截,整词参与判断
-    const dq = text.indexOf('"', s);
-    if (dq !== -1 && dq < e && jsonStringEnd(text, dq)) e = dq;
+    const dq = text.slice(s, e).indexOf('"');
+    if (dq !== -1 && jsonStringEnd(text, s + dq)) e = s + dq;
     next = e;
   }
-  for (;;) {
+  for (let trim = 0; trim < MAX_TRIM; trim++) {
     const c = text[e - 1] as string;
     if (e <= s || !/[\\'"`),;\]}]/.test(c)) break;
     // `}` 只在没有与之配对的 `{` 时才算外围的收尾(`${NAME}` 里的不能剥)
@@ -706,7 +916,11 @@ function readUnit(text: string, p: number): Unit {
  * 不是引用形状的词(长度 >= 8)返回其区间,由调用方脱敏。命令替换(`$(…)` 或反引号开头)不整体放行,
  * 逐个判断里面的词:`$(echo 口令)` 里的口令要脱敏,`$(cat /etc/foo/x)` 里全是引用形状才放行。
  */
-function valueWordsAfter(text: string, from: number): Array<[number, number]> {
+function valueWordsAfter(
+  text: string,
+  from: number,
+  disabled: ReadonlySet<string>,
+): Array<[number, number]> {
   const out: Array<[number, number]> = [];
   const n = text.length;
   let p = from;
@@ -721,13 +935,13 @@ function valueWordsAfter(text: string, from: number): Array<[number, number]> {
     if (/^\$\(|^`/.test(w)) {
       for (const m of w.matchAll(/[^\s()'"`;|&<>]+/g)) {
         const tok = m[0].replace(/\\+$/, '');
-        if (tok.length >= 8 && !isReferenceWord(tok)) {
+        if (tok.length >= 8 && !isReferenceWord(tok, disabled)) {
           out.push([u.s + (m.index ?? 0), u.s + (m.index ?? 0) + tok.length]);
         }
       }
       continue;
     }
-    if (!isReferenceWord(w)) out.push([u.s, u.e]);
+    if (!isReferenceWord(w, disabled)) out.push([u.s, u.e]);
   }
   return out;
 }
@@ -747,11 +961,15 @@ function wordEnd(text: string, from: number): number {
 /**
  * 操作符与值之间(原文里)夹着合法占位符:
  *  - 值紧贴占位符(占位符后面没有任何间隔)→ 'tight':后面的字符仍是值的一部分,按赋值处理;
- *  - 否则 → 'occupied':值的位置已经被占位符占了,后面的词是别的东西(`名字=占位符 https://…`),不是这个赋值的值。
+ *  - 占位符与值起点之间有间隔:间隔以空白开头 → 'occupied'(值的位置被占位符占了,后面的词是别的东西:`名字=占位符 https://…`);
+ *    间隔以引号开头 → 引号后面是边界(空白 / 行尾 / 分隔符)才是 'occupied'(`"NAME=占位符" && …`);引号后面紧跟值字符
+ *    是拼接或新值的开引号 → 'tight',后面的值照常脱敏(第一遍可能只脱敏了拼接值的前一截:`NAME=占位符"口令"`);
+ *    其余 → 'tight'(fail-closed)。
  */
 function placeholderGap(
   text: string,
   env: ScanEnv,
+  _keyStart: number,
   opEnd: number,
   anchor: number,
 ): 'none' | 'tight' | 'occupied' {
@@ -764,9 +982,116 @@ function placeholderGap(
     lastEnd = m.index + m[0].length;
   }
   if (lastEnd === -1) return 'none';
-  if (raw.length - lastEnd > 1) return 'occupied';
-  // 占位符后面是空白(含视图里还原出来的 JSON 转义换行)或 JSON 转义的引号(`\\"`):行 / 字符串的边界,不是值的延续
-  return /^(?:\s|\\+["'])/.test(text.slice(anchor, anchor + 12)) ? 'occupied' : 'tight';
+  const gap = raw.slice(lastEnd, raw.length - 1);
+  if (env.disabled.has(STAGE_PLACEHOLDER)) {
+    // 旧判据(B09b):间隔多于一个字符一律 occupied
+    if (raw.length - lastEnd > 1) return 'occupied';
+    return /^(?:\s|\\+["'])/.test(text.slice(anchor, anchor + 12)) ? 'occupied' : 'tight';
+  }
+  if (gap === '') {
+    // 占位符后面是空白(含视图里还原出来的 JSON 转义换行)或 JSON 转义的引号(`\\"`):行 / 字符串的边界,不是值的延续
+    return /^(?:\s|\\+["'])/.test(text.slice(anchor, anchor + 12)) ? 'occupied' : 'tight';
+  }
+  if (/^\s/.test(gap)) return 'occupied';
+  const q = /^(\\*)(["'])/.exec(gap);
+  if (!q) return 'tight';
+  // 引号后面紧跟边界(空白 / 行尾 / 分隔符):它是收尾引号,值的位置仍被占着;紧跟值字符:拼接或新值的开引号,按赋值处理
+  return /[\s|;&<>),}\]:]/.test(text[anchor] ?? ' ') ? 'occupied' : 'tight';
+}
+
+// ---------------------------------------------------------------------------
+// 引用之后的默认值字面量(取环境变量的调用参数、`|| "默认值"`)
+// ---------------------------------------------------------------------------
+
+/** 找字符串字面量的窗口:到 `;` / 行尾 / 配平的 `)` 为止,最多这么多字符。 */
+const TRAILING_WINDOW = 256;
+const STAGE_TRAILING = 'ref_trailing_literal';
+const DEFAULT_OP = /^[ \t]*(?:\|\||\?\?|\bor\b|:-|\|)/;
+/** 环境变量名本身(UPPER_SNAKE)是引用,不是口令。 */
+const ENV_NAME = UPPER_ENV;
+
+/**
+ * 值被判为引用(`os.getenv(` `process.env.X` `$(echo`)之后,同一条语句里还可能有引号字面量:
+ * 调用的参数(默认值)、`|| "默认"`、命令替换里的词。其中长度 >= 8 且不是引用核 / 环境变量名的一律脱敏。
+ * 只在「值停在未闭合的 `(` `[`」、「后面紧跟默认值运算符」、「值是 `$(…`」三种情形下才扫,避免把无关的后文吞进来。
+ */
+function trailingLiterals(
+  text: string,
+  valEnd: number,
+  val: string,
+  core: string,
+  shell: boolean,
+  disabled: ReadonlySet<string>,
+  origView = false,
+): Array<[number, number]> {
+  const out: Array<[number, number]> = [];
+  const opensCall = /[(,]\\*$/.test(val) || (/\[$/.test(val) && ENV_ACCESS.test(core));
+  let tail = text.slice(valEnd, valEnd + TRAILING_WINDOW);
+  // 原视图补扫:转义的 `\n` `\r` 是语句边界
+  if (origView) {
+    const cut = ESC_NL.exec(tail);
+    if (cut) tail = tail.slice(0, cut.index);
+  }
+  // 只在「值是取环境变量 / 调用 / 命令替换」或后面紧跟默认值运算符时扫:整条语句里的字面量都看(三元、`??` `or` 都算)
+  if (!opensCall && !DEFAULT_OP.test(tail) && !/^\$\(/.test(val) && !ENV_ACCESS.test(core))
+    return out;
+  let depth = opensCall ? 1 : 0;
+  for (let i = 0; i < tail.length && out.length < 16; i++) {
+    const c = tail[i] as string;
+    if (c === '\n' || c === '\r' || c === ';') break;
+    if (c === '(') depth++;
+    else if (c === ')') {
+      depth--;
+      if (depth < 0) break;
+    } else if (c === '\\' && (tail[i + 1] === '"' || tail[i + 1] === "'")) {
+      continue; // JSON 转义的引号:下一轮按引号处理
+    } else if (c === '"' || c === "'" || c === '`') {
+      const close = tail.indexOf(c, i + 1);
+      const nl = tail.indexOf('\n', i + 1);
+      // 字面量必须在同一行闭合:跨行的多半是源码里字符串的收尾引号
+      if (close === -1 || (nl !== -1 && nl < close)) continue;
+      const e = close;
+      const inner = tail.slice(i + 1, e).replace(/\\+$/, '');
+      if (
+        inner.length >= 8 &&
+        !(c === '`' && /^\s/.test(inner)) &&
+        !ENV_NAME.test(inner) &&
+        judgeValue(inner, shell, disabled).secret
+      ) {
+        out.push([valEnd + i + 1, valEnd + e]);
+      }
+      i = e;
+    } else if (/^\$\(/.test(val) && /[^\s()'"`;|&<>]/.test(c)) {
+      // 命令替换里的裸词
+      let e = i;
+      while (e < tail.length && /[^\s()'"`;|&<>]/.test(tail[e] as string)) e++;
+      const tok = tail.slice(i, e);
+      if (tok.length >= 8 && !isReferenceWord(tok, disabled)) out.push([valEnd + i, valEnd + e]);
+      i = e - 1;
+    }
+  }
+  return out;
+}
+
+const ESC_NL = /\\+[nr]/;
+
+function cutAtEscNewline(h: AssignHit): AssignHit | null {
+  const m = ESC_NL.exec(h.val);
+  if (!m) return h;
+  // 值本身以转义换行开头:交给引擎的「起点是转义空白就丢弃」;截断点之前不足 8 个字符:整值脱敏(fail-closed)
+  if (m.index === 0) return null;
+  // 引用 / 标点残片(`{` `)`):那是「值为空」,后面是下一行;像口令的短头部(`Kx8q2\nLm9pQz`):整值脱敏
+  if (m.index < 8) return judgeValue(h.val.slice(0, m.index), true).secret ? h : null;
+  return { ...h, val: h.val.slice(0, m.index), vr: [h.vr[0], h.vr[0] + m.index] };
+}
+
+interface AssignHit {
+  keyStart: number;
+  opText: string;
+  op: Range;
+  gi: number;
+  vr: Range;
+  val: string;
 }
 
 const credAssign: Rule = {
@@ -774,20 +1099,53 @@ const credAssign: Rule = {
   type: 'credential',
   prio: 70,
   compact: false,
+  valueClass: true,
   quick: ['pass', 'pwd', 'secret', 'token', 'key', 'credential'],
   scan(text, _lower, push, env) {
-    // 先找引用式:`'^NAME='` 这类,收尾引号之后的词单独判;这些位置不再走下面的赋值匹配
-    const refOps = new Set<number>();
+    // 引用式候选:`'^NAME='` 这类,收尾引号之后的词单独判。先只登记,等所有普通赋值处理完,再按「值内部的引号不计」判奇偶
+    const cand = new Map<number, number>();
     const ref = NAME_EQ_QUOTE_RE;
     ref.lastIndex = 0;
     for (let m = ref.exec(text); m !== null; m = ref.exec(text)) {
       env.deadline.tick();
-      const opEnd = m.index + m[0].length - (m[1] as string).length;
-      const q = quotedNameRef(text, m.index, opEnd);
-      if (!q) continue;
-      refOps.add(opEnd);
-      for (const [a, b] of valueWordsAfter(text, q.after)) push(a, b);
+      cand.set(m.index + m[0].length - (m[1] as string).length, m.index);
     }
+
+    const excl: Range[] = [];
+    const deferred = new Map<number, AssignHit>();
+
+    /** 判一次赋值:是口令就登记脱敏区间;是引用就看后面有没有默认值字面量。返回是否登记了值本身。 */
+    /** 值停在未闭合的调用 / 取环境变量之后:同一语句里的字符串字面量(默认值、参数)另外判 */
+    const trail = (h: AssignHit, shell: boolean, v: ValueVerdict): void => {
+      if (env.disabled.has(STAGE_TRAILING) || h.gi !== 5) return;
+      const core = h.val.slice(0, v.coreLen);
+      for (const [a, b] of trailingLiterals(
+        text,
+        h.vr[1],
+        h.val,
+        core,
+        shell,
+        env.disabled,
+        env.origView,
+      ))
+        push(a, b);
+    };
+    const decide = (h0: AssignHit): boolean => {
+      // 原视图补扫里,无引号值在转义的 `\n` `\r` 处仍是边界(与真换行同口径;`\t` 则不是),否则会吞掉下一行
+      const h = env.origView && h0.gi === 5 ? cutAtEscNewline(h0) : h0;
+      if (h === null) return false;
+      const shell = isShellOp(h.opText);
+      const v = judgeValue(h.val, shell, env.disabled);
+      if (!v.secret) {
+        trail(h, shell, v);
+        return false;
+      }
+      if (h.val.length < 8) return false; // 不足 8 个字符的口令不脱敏(最小长度契约);引用的默认值字面量上面已判
+      if (placeholderGap(text, env, h.keyStart, h.op[1], h.vr[0]) === 'occupied') return false;
+      push(h.vr[0], h.gi === 5 ? h.vr[0] + v.coreLen : h.vr[1]);
+      trail(h, shell, v);
+      return true;
+    };
 
     const re = CRED_ASSIGN_RE;
     re.lastIndex = 0;
@@ -799,39 +1157,256 @@ const credAssign: Rule = {
       }
       const ind = (m as RegExpExecArray & { indices: Array<[number, number] | undefined> }).indices;
       const op = ind[1] as [number, number];
-      const gi = m[2] !== undefined ? 2 : m[3] !== undefined ? 3 : 4;
+      const gi = m[2] !== undefined ? 2 : m[4] !== undefined ? 4 : 5;
       const vr = ind[gi] as [number, number];
       const val = m[gi] as string;
       // 被放行的匹配不能把后面的文本一起吞掉(里面可能还有真值赋值):从操作符之后继续
       const release = (): void => {
         re.lastIndex = op[1];
       };
+      const h: AssignHit = { keyStart: m.index, opText: m[1] as string, op, gi, vr, val };
+      if (val.length < 8) {
+        // 太短不是口令;但引用(`env(` `ENV[` `$(echo`)后面的默认值字面量仍要判
+        if (gi === 5) decide(h);
+        release();
+        continue;
+      }
+      if (cand.has(op[1])) {
+        deferred.set(op[1], h);
+        release();
+        continue;
+      }
+      excl.push(vr);
+      if (!decide(h)) release();
+    }
 
-      if (refOps.has(op[1])) {
-        release();
+    if (cand.size === 0) return;
+    if (env.origView) {
+      // 原视图补扫:引用式的引号奇偶不可靠(没有真换行),引用式候选一律不判;其余当普通赋值判
+      for (const [opEnd, h] of deferred) {
+        // 键名前面就是同种开引号(`'^NAME='`):结构上是引用式,交给 ws 视图那一遍判
+        if (quotedNameRef(text, h.keyStart, opEnd, [], false) === null) decide(h);
+      }
+      return;
+    }
+    excl.sort((a, b) => a[0] - b[0]);
+    for (const [opEnd, keyStart] of cand) {
+      env.deadline.tick();
+      const q = quotedNameRef(text, keyStart, opEnd, excl);
+      if (q) {
+        for (const [a, b] of valueWordsAfter(text, q.after, env.disabled)) push(a, b);
         continue;
       }
-      if (looksNonSecret(val)) {
-        release();
+      const h = deferred.get(opEnd);
+      if (h) {
+        decide(h);
+        excl.push(h.vr);
+        excl.sort((a, b) => a[0] - b[0]);
+      }
+    }
+  },
+};
+
+// ---------------------------------------------------------------------------
+// 值的其它写法(B09c):反引号 / 三引号 / 类型标注 / 引号拼接 / 口令短语
+// ---------------------------------------------------------------------------
+
+/**
+ * 分组:1=`:=` `=>` `=`,2=`:`(无标注),3=标注之后的 `=`。标注 `: str =` 的类型部分有长度上限、不含引号。
+ */
+const EXT_HEAD_RE = new RegExp(
+  `${KW}${SFX}["']?${SP}(?:(:=|=>|=)|(:)(?:${SP}[A-Za-z_][\\w.\\[\\], |?]{0,40}?${SP}(=)(?!=))?)${SP}`,
+  'gid',
+);
+const WORD_STOP = /[\s|&;<>(),\]}`]/;
+const EXT_CAP = 4096;
+
+function eolWithin(text: string, from: number): number {
+  const w = text.slice(from, from + EXT_CAP);
+  const i = w.search(/[\r\n]/);
+  return i === -1 ? from + w.length : from + i;
+}
+
+/** 无引号 + 引号段拼接成的一个词(shell 语义)。返回词的终点、拼接后的内容、段数。 */
+function readGluedWord(
+  text: string,
+  p: number,
+  eol: number,
+  quoteFirstNeedsQuote = false,
+): { end: number; content: string; segs: number } {
+  let q = p;
+  let content = '';
+  let segs = 0;
+  /** q 处:若是(带转义反斜杠的)引号,返回 [反斜杠数, 引号字符] */
+  const quoteAt = (at: number): [number, string] | null => {
+    let b = 0;
+    while (text.charCodeAt(at + b) === 92) b++;
+    const qc = text[at + b];
+    return qc === '"' || qc === "'" ? [b, qc] : null;
+  };
+  while (q < eol) {
+    const c = text[q] as string;
+    const qa = quoteAt(q);
+    if (qa) {
+      const [bs, qc] = qa;
+      const delim = '\\'.repeat(bs) + qc;
+      const close = text.indexOf(delim, q + delim.length);
+      const e = close === -1 || close >= eol ? eol : close;
+      // 引号没有闭合:多半是 JSON 字符串 / 源码字符串的收尾引号,不算词的一段,词到此为止
+      if (e === eol) break;
+      content += text.slice(q + delim.length, e);
+      segs++;
+      q = e + delim.length;
+      // 以引号段开头的词:紧跟的必须还是引号段(`"ab""口令"`),否则多半是源码里字符串字面量的收尾引号
+      // 例外:引号段是短的无空白前缀(`"ab"口令`),shell 里同样是一个词
+      if (
+        quoteFirstNeedsQuote &&
+        segs === 1 &&
+        quoteAt(q) === null &&
+        !/^[\w.@%+-]{1,7}$/.test(content)
+      )
+        break;
+    } else if (WORD_STOP.test(c)) {
+      break;
+    } else {
+      const st = q;
+      while (q < eol && !WORD_STOP.test(text[q] as string) && quoteAt(q) === null) q++;
+      content += text.slice(st, q);
+      segs++;
+    }
+  }
+  return { end: Math.min(q, eol), content, segs };
+}
+
+const credAssignExt: Rule = {
+  id: 'cred_assign_ext',
+  type: 'credential',
+  prio: 70,
+  compact: false,
+  valueClass: true,
+  quick: ['pass', 'pwd', 'secret', 'token', 'key', 'credential'],
+  scan(text, _lower, push, env) {
+    const re = EXT_HEAD_RE;
+    re.lastIndex = 0;
+    for (let m = re.exec(text); m !== null; m = re.exec(text)) {
+      env.deadline.tick();
+      if (m[0].length === 0) {
+        re.lastIndex++;
         continue;
       }
-      if (placeholderGap(text, env, op[1], vr[0]) === 'occupied') {
-        release();
+      const ind = (m as RegExpExecArray & { indices: Array<[number, number] | undefined> }).indices;
+      const annotated = m[3] !== undefined;
+      const opText = annotated ? '=' : (m[1] ?? ':');
+      const opRange = (ind[1] ?? ind[3] ?? ind[2]) as [number, number];
+      const opEnd = opRange[1];
+      const p = m.index + m[0].length;
+      if (p >= text.length) continue;
+      const shell = isShellOp(opText);
+      let eol = eolWithin(text, p);
+      if (env.origView) {
+        const cut = ESC_NL.exec(text.slice(p, eol));
+        if (cut) eol = p + cut.index;
+      }
+      const c = text[p] as string;
+      const judge = (v: string): boolean => judgeValue(v, shell, env.disabled).secret;
+      /** 值的位置已经被占位符占了(第二遍复扫第一遍的输出):后面的词不是这个赋值的值 */
+      const free = (anchor: number): boolean =>
+        placeholderGap(text, env, m.index, opEnd, anchor) !== 'occupied';
+
+      // 反引号值(JS 模板串 / Go 原始字符串)
+      if (c === '`') {
+        const close = text.indexOf('`', p + 1);
+        const e = close === -1 || close > eol ? eol : close;
+        const inner = text.slice(p + 1, e);
+        // 必须在同一行闭合,且内容不以空白开头(否则多半是 markdown 行内代码的收尾反引号)
+        if (
+          close !== -1 &&
+          close <= eol &&
+          inner.length >= 8 &&
+          !/^\s/.test(inner) &&
+          judge(inner) &&
+          free(p + 1)
+        )
+          push(p + 1, e);
         continue;
       }
-      push(vr[0], vr[1]);
+      // 同行三引号值(TOML / Python)
+      if (text.startsWith("'''", p) || text.startsWith('"""', p)) {
+        const close = text.indexOf(text.slice(p, p + 3), p + 3);
+        const e = close === -1 || close > eol ? eol : close;
+        const inner = text.slice(p + 3, e);
+        if (inner.length >= 8 && judge(inner) && free(p + 3)) push(p + 3, e);
+        continue;
+      }
+      // 类型标注之后的值:`password: str = "…"`,任意写法
+      if (annotated) {
+        if (c === '"' || c === "'") {
+          const w = readGluedWord(text, p, eol);
+          if (w.segs === 1) {
+            const e = Math.max(p + 1, w.end - (text[w.end - 1] === c ? 1 : 0));
+            const inner = text.slice(p + 1, e);
+            if (inner.length >= 8 && judge(inner) && free(p + 1)) push(p + 1, e);
+            continue;
+          }
+        }
+        const w = readGluedWord(text, p, eol);
+        if (w.content.length >= 8 && judge(w.content) && free(p)) push(p, w.end);
+        // 类型标注之后跟调用(pydantic 的 Field(default=…)):调用参数里的字面量
+        if (text[w.end] === '(' && !env.disabled.has(STAGE_TRAILING)) {
+          for (const [a, b] of trailingLiterals(
+            text,
+            w.end + 1,
+            `${w.content}(`,
+            w.content,
+            shell,
+            env.disabled,
+            env.origView,
+          ))
+            push(a, b);
+        }
+        continue;
+      }
+      // 引号拼接:`NAME=ab"口令"`(shell 里是同一个值)。`NAME='^X='` 这种引用式候选由 cred_assign 判,这里让开
+      if (opText !== ':') {
+        // 键名自己的收尾引号(`'NAME='`):不是值的开引号;JSON 转义的引号(`\"`)也不是拼接
+        const nameQuote =
+          p === opEnd &&
+          (c === '"' || c === "'") &&
+          quotedNameRef(text, m.index, opEnd, [], false) !== null;
+        if (!nameQuote) {
+          const w = readGluedWord(text, p, eol, c === '"' || c === "'" || c === '\\');
+          if (w.segs >= 2 && w.content.length >= 8 && judge(w.content) && free(p)) {
+            push(p, w.end);
+            continue;
+          }
+        }
+      }
+      // 口令短语:键名含 passphrase、值是无引号的多个词(含空格)。引号里的整串由 cred_assign 覆盖
+      if (
+        text.slice(m.index, opEnd).toLowerCase().includes('passphrase') &&
+        c !== '"' &&
+        c !== "'"
+      ) {
+        let e = p;
+        while (e < eol && text[e] !== ';') e++;
+        while (e > p && /[\s,.:)\]}]/.test(text[e - 1] as string)) e--;
+        const phrase = text.slice(p, e);
+        const words = phrase.split(/\s+/).filter((w) => w.length > 0);
+        if (words.length >= 2 && phrase.length >= 12 && judge(phrase) && free(p)) push(p, e);
+      }
     }
   },
 };
 
 const CRED_CLI_FLAG_RE =
-  /--(password|passwd|passphrase|token|secret|api-key|apikey|access-token|auth-token|client-secret|private-key)(?:=|[ \t]{1,8})(?:"([^"\r\n]{4,})"?|'([^'\r\n]{4,})'?|([^\s"'`-][^\s"'`]{3,}))/dgi;
+  /--(?:[A-Za-z0-9_-]{1,24}[-_])?(password|passwd|passphrase|token|secret|api-key|apikey|access-token|auth-token|client-secret|private-key)(?:=|[ \t]{1,8})(?:"([^"\r\n]{4,})"?|'([^'\r\n]{4,})'?|([^\s"'`-][^\s"'`]{3,}))/dgi;
 
 const credCliFlag: Rule = {
   id: 'cred_cli_flag',
   type: 'credential',
   prio: 70,
   compact: false,
+  valueClass: true,
   quick: ['--'],
   scan(text, _lower, push, env) {
     const re = CRED_CLI_FLAG_RE;
@@ -846,19 +1421,28 @@ const credCliFlag: Rule = {
       const keyEnd = (ind[1] as [number, number])[1];
       const gi = m[2] !== undefined ? 2 : m[3] !== undefined ? 3 : 4;
       const vr = ind[gi] as [number, number];
-      const val = m[gi] as string;
+      let val = m[gi] as string;
       const release = (): void => {
         re.lastIndex = keyEnd;
       };
-      if (looksNonSecret(val)) {
+      if (env.origView && gi === 4) {
+        const cut = ESC_NL.exec(val);
+        if (cut) val = val.slice(0, cut.index);
+        if (val.length < 4) {
+          release();
+          continue;
+        }
+      }
+      const v = judgeValue(val, true, env.disabled);
+      if (!v.secret) {
         release();
         continue;
       }
-      if (placeholderGap(text, env, keyEnd, vr[0]) === 'occupied') {
+      if (placeholderGap(text, env, m.index, keyEnd, vr[0]) === 'occupied') {
         release();
         continue;
       }
-      push(vr[0], vr[1]);
+      push(vr[0], gi === 4 ? vr[0] + v.coreLen : vr[0] + val.length);
     }
   },
 };
@@ -902,10 +1486,10 @@ const credAuthz = simpleRegexRule(
   false,
   ['authorization'],
   /authorization["']?[ \t]{0,8}[:=][ \t]{0,8}["']?(?:(?:bearer|basic|token|digest|negotiate|aws4-hmac-sha256)[ \t]+)?(?![ \t])((?:=(?:"[^"\r\n]*"|'[^'\r\n]*')|[^\r\n"']){8,})/dgi,
-  (m) => {
+  (m, env) => {
     // 值被 JSON 转义的引号(`\\"`)截断时,末尾会剩下孤立的反斜杠:去掉再判(`Bearer \\` 只是一个scheme)
     const v = (m[1] as string).replace(/\\+$/, '');
-    return v.length >= 8 && !looksNonSecret(v) && !AUTH_SCHEME_ONLY.test(v);
+    return v.length >= 8 && judgeValue(v, true, env.disabled).secret && !AUTH_SCHEME_ONLY.test(v);
   },
 );
 
@@ -916,7 +1500,7 @@ const credCookie = simpleRegexRule(
   false,
   ['cookie'],
   /(?:^|[\r\n])[ \t]*(?:set-)?cookie[ \t]{0,4}:[ \t]{0,4}(?![ \t])([^\r\n]{12,})/dgim,
-  (m) => !looksNonSecret(m[1] as string),
+  (m, env) => judgeValue(m[1] as string, true, env.disabled).secret,
 );
 
 const urlUserinfo = simpleRegexRule(
@@ -926,6 +1510,8 @@ const urlUserinfo = simpleRegexRule(
   false,
   ['://'],
   /:\/\/[^\s/@:]{0,64}:([^\s/@]{3,})@/dg,
+  undefined,
+  true,
 );
 
 // ---------------------------------------------------------------------------
@@ -1229,6 +1815,7 @@ export function buildRules(cfg: ResolvedConfig): Rule[] {
     zhipuKey,
     telegramBot,
     credAssign,
+    credAssignExt,
     credCliFlag,
     credBearer,
     credBasic,
@@ -1262,4 +1849,10 @@ export const STAGE_IDS = [
   'decode_hex',
   'decode_escape',
   'view_json_ws',
+  'view_orig_union',
+  STAGE_REF_TAIL,
+  STAGE_REF_BOUNDARY,
+  STAGE_REF_FLAG,
+  STAGE_PLACEHOLDER,
+  STAGE_TRAILING,
 ] as const;
