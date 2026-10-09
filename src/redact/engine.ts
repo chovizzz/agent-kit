@@ -17,24 +17,21 @@ import {
 } from './decode.js';
 import { buildRules } from './rules.js';
 import type { Candidate } from './decode.js';
-import { Deadline, RedactError } from './types.js';
+import { Deadline, MAX_PLACEHOLDER_TYPE, RedactError } from './types.js';
 import type { ResolvedConfig, Rule, ScanEnv, Span } from './types.js';
 import {
   buildView,
   compactRanges,
   deriveRemoving,
   identityView,
+  jsonWhitespaceView,
   mapSpan,
   maskView,
   safeLower,
 } from './view.js';
 import type { View } from './view.js';
 
-/**
- * 合法占位符类型的长度上限(契约正则 `[a-z_]+` 的子集)。更长的、大小写不对的、嵌套的"占位符"
- * 都不剥离,按普通文本继续扫:伪造形态拿不到任何豁免,里面藏的秘密照样被抓。
- */
-export const MAX_PLACEHOLDER_TYPE = 24;
+export { MAX_PLACEHOLDER_TYPE };
 
 const PROBES: ReadonlyArray<readonly [string, RegExp]> = [
   ['sk', /(?<![A-Za-z0-9])sk-(?=[A-Za-z_-]{0,200}[0-9])[A-Za-z0-9_-]{20,}/gi],
@@ -57,6 +54,7 @@ export const STAGES = {
   base32: 'decode_base32',
   hex: 'decode_hex',
   escape: 'decode_escape',
+  jsonWs: 'view_json_ws',
 } as const;
 
 interface ScanCtx {
@@ -98,7 +96,8 @@ export class Engine {
     ctx.deadline.check();
     const out: Span[] = [];
     const base = this.disabled.has(STAGES.normalize) ? identityView(text) : buildView(text);
-    const stripped = this.stripPlaceholders(base);
+    const ws = this.disabled.has(STAGES.jsonWs) ? base : jsonWhitespaceView(base);
+    const stripped = this.stripPlaceholders(ws);
     this.scanView(stripped, text, depth, ctx, out);
     return out;
   }

@@ -1,5 +1,11 @@
 import type { RedactFailReason, RedactionConfig } from '../contracts/redact.js';
 
+/**
+ * 合法占位符类型的长度上限(契约正则 `[a-z_]+` 的子集)。更长的、大小写不对的、嵌套的"占位符"
+ * 都不剥离,按普通文本继续扫:伪造形态拿不到任何豁免,里面藏的秘密照样被抓。
+ */
+export const MAX_PLACEHOLDER_TYPE = 24;
+
 /** 扫描器内部失败:apply 把它翻成 {ok:false, reason}。 */
 export class RedactError extends Error {
   readonly reason: RedactFailReason;

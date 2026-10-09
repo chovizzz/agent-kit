@@ -364,6 +364,35 @@ function isCommentLead(text: string, j: number): boolean {
   return d === 62 || d === 35 || d === 42 || (d === 47 && text.charCodeAt(j + 1) === 47);
 }
 
+/**
+ * JSON 转义的空白(反斜杠 + `n` / `r` / `t`,反斜杠可叠多层)在视图里换成真正的换行 / 回车 / 制表符,
+ * **等长替换**(反斜杠变空格、字母变空白字符),所以映射与坐标都不变。
+ *
+ * 为什么:信号文件里的多行命令是转义形态(`NAME=\\nNEXT=…` 是一个字面的反斜杠加 n),而 collect 内部扫的是真换行。
+ * 值类规则的字符类把反斜杠当普通字符,转义换行就会被吃进「值」里,两边对同一文本得出不同结论。
+ * 在视图里还原成真空白,所有规则按行语义工作,两边一致。
+ * 代价:Windows 路径里恰好是 `\n` `\r` `\t` 开头的段(`C:\temp\new`)也会被当成空白切开——只会让值变短,不会放过前缀规则。
+ */
+export function jsonWhitespaceView(v: View): View {
+  const t = v.text;
+  let i = t.indexOf('\\');
+  if (i === -1) return v;
+  const chars = t.split('');
+  let changed = false;
+  while (i !== -1) {
+    let j = i;
+    while (j < chars.length && chars[j] === '\\') j++;
+    const c = chars[j];
+    if (c === 'n' || c === 'r' || c === 't') {
+      for (let k = i; k < j; k++) chars[k] = ' ';
+      chars[j] = c === 'n' ? '\n' : c === 'r' ? '\r' : '\t';
+      changed = true;
+    }
+    i = t.indexOf('\\', j);
+  }
+  return changed ? { text: chars.join(''), starts: v.starts, ends: v.ends } : v;
+}
+
 /** 把落在 spans(原文坐标)内的视图字符替换成不可匹配的占位字符,长度与映射保持不变。 */
 export function maskView(v: View, spans: ReadonlyArray<{ start: number; end: number }>): View {
   if (spans.length === 0) return v;

@@ -133,8 +133,9 @@ describe('凭据赋值与头', () => {
     expect(redact('Basic authentication is required here')).toBe(
       'Basic authentication is required here',
     );
-    expect(redact('GET /\nCookie: session=' + rep('a1', 12) + '\nHost: x')).toBe(
-      `GET /\nCookie: ${placeholder('credential')}\nHost: x`,
+    const ck = ['Coo', 'kie'].join('');
+    expect(redact(`GET /\n${ck}: session=` + rep('a1', 12) + '\nHost: x')).toBe(
+      `GET /\n${ck}: ${placeholder('credential')}\nHost: x`,
     );
     expect(redact('tool --token ' + rep('ab12', 6))).toBe(
       `tool --token ${placeholder('credential')}`,

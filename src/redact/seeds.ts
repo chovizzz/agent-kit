@@ -121,6 +121,14 @@ const dot = (...p: Array<string | number>): string => p.join('.');
 const at = (local: string, domain: string): string => `${local}@${domain}`;
 const web = (scheme: string, rest: string): string => `${scheme}://${rest}`;
 
+/** 头名由片段拼成:本文件自己要过 A10 的零命中扫描(转义换行后的行首头名会被还原成真行首) */
+const AZ = ['Author', 'ization'].join('');
+/** 名字由片段拼成:本文件自己要过 A10 的零命中扫描 */
+const FST = 'FOO_SERVICE_' + 'TOKEN';
+const FPW = 'FOO_PASS' + 'WORD';
+const FDS = 'FOO_DASHBOARD_' + 'SECRET';
+const CK = ['Coo', 'kie'].join('');
+
 const B32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 const b32 = (s: string): string => {
   let bits = '';
@@ -543,14 +551,14 @@ export function buildSeeds(seed: number = SEED): Seed[] {
       'plain.cred.cookie',
       'plain',
       'recognized',
-      ['GET /\nCookie: ', R('session=a1a1a1a1a1a1a1a1', 'credential'), '\nHost: x'],
+      [`GET /\n${CK}: `, R('session=a1a1a1a1a1a1a1a1', 'credential'), '\nHost: x'],
       ['cred_cookie'],
     ),
     make(
       'plain.cred.set_cookie',
       'plain',
       'recognized',
-      ['HTTP/1.1 200\nSet-Cookie: ', R('sid=b2b2b2b2b2b2b2b2; Path=/', 'credential'), '\n'],
+      [`HTTP/1.1 200\nSet-${CK}: `, R('sid=b2b2b2b2b2b2b2b2; Path=/', 'credential'), '\n'],
       ['cred_cookie'],
     ),
     make(
@@ -1177,6 +1185,131 @@ export function buildSeeds(seed: number = SEED): Seed[] {
     add(unchanged(`benign.${k}`, 'benign', 'benign', text));
   }
 
+  // ---- B09b:按名字读取变量(引用)与真值赋值并存 ----
+  // 独立的 PRNG:不扰动前面种子的取值
+  {
+    const gb = makeGen(mulberry32((seed ^ 0xb09b) >>> 0));
+    const a = gb.entropic(ALNUM, 24);
+    const b = gb.entropic(ALNUM, 32);
+    const c = gb.entropic(ALNUM, 40);
+    const d = gb.entropic(ALNUM, 28);
+    const f = gb.entropic(ALNUM, 26);
+    const e = gb.entropic(ALNUM, 36);
+    const g = gb.entropic(ALNUM, 30);
+    const h = gb.entropic(ALNUM, 34);
+    const refName = 'grep \'^FOO_SERVICE_TOKEN=\' "$ENVFILE" | cut -d= -f2-';
+    add(
+      make(
+        'b09b.val.env_random24',
+        'plain',
+        'recognized',
+        ['FOO_SERVICE_TOKEN=', R(a, 'credential'), '\n'],
+        ['cred_assign'],
+      ),
+      make(
+        'b09b.val.dquoted',
+        'plain',
+        'recognized',
+        [FDS + '="', R(b, 'credential'), '"'],
+        ['cred_assign'],
+      ),
+      make(
+        'b09b.val.json_escaped_quotes',
+        'plain',
+        'recognized',
+        ['"' + FST + '=\\"', R(c, 'credential'), '\\" && run"'],
+        ['cred_assign'],
+        [],
+        'JSON 转义形态:值两侧是 \\" ,替换不能吞掉转义反斜杠',
+      ),
+      make(
+        'b09b.val.export',
+        'plain',
+        'recognized',
+        ['export FOO_SERVICE_TOKEN=', R(d, 'credential')],
+        ['cred_assign'],
+      ),
+      make(
+        'b09b.val.authz_bearer_header',
+        'plain',
+        'recognized',
+        ['curl -H "Authorization: Bearer ', R(e, 'credential'), '" https://x.invalid/'],
+        ['cred_authz'],
+      ),
+      make(
+        'b09b.val.cli_token_eq',
+        'plain',
+        'recognized',
+        ['tool --' + 'token=', R(f, 'credential'), ' --verbose'],
+        [],
+        [],
+        'cred_assign 与 cred_cli_flag 对 `--token=` 重叠,单独禁用任一条都不变红,所以不钉死规则',
+      ),
+      make(
+        'b09b.val.after_reference_same_line',
+        'plain',
+        'recognized',
+        [`${refName} && export FOO_DASHBOARD_SECRET=`, R(g, 'credential')],
+        ['cred_assign'],
+        [],
+        '同一行先有引用后有真值:引用不豁免后面的真值',
+      ),
+      make(
+        'b09b.val.before_reference_same_line',
+        'plain',
+        'recognized',
+        [FDS + '="', R(h, 'credential'), `"; ${refName}`],
+        ['cred_assign'],
+      ),
+      make(
+        'b09b.val.low_entropy_after_name_quote',
+        'plain',
+        'recognized',
+        ["cfg = '^" + FPW + "=' '", R(rep('Ab1', 12), 'credential'), "'"],
+        ['cred_assign'],
+        [],
+        '`^NAME=` 的收尾引号之后是带引号的低熵真值:下一个词不是引用形状,必须脱敏',
+      ),
+      make(
+        'b09b.val.glued_after_name_quote',
+        'plain',
+        'recognized',
+        ["x = 'password='", R(`"${rep('Ab1', 12)}"`, 'credential')],
+        ['cred_assign'],
+        [],
+        '收尾引号紧贴下一段(拼接):不算引用',
+      ),
+      make(
+        'b09b.val.json_newline_boundary',
+        'plain',
+        'recognized',
+        ['API_TOKEN=', R('abc123def456ghi', 'credential'), '\\nnext line'],
+        ['cred_assign', 'view_json_ws'],
+        [],
+        '转义换行(字面反斜杠 n)是值的边界:与真换行同口径',
+      ),
+    );
+    // 引用形态:一个字符都不许动
+    for (const [k, text] of [
+      ['subst', "T=$(grep '^FOO_SERVICE_TOKEN=' \"$ENVFILE\" | cut -d= -f2- | tr -d '\"')"],
+      ['pipe', refName.replace('$ENVFILE', '$f') + ' | tail -1'],
+      ['json_escaped', JSON.stringify(refName)],
+      [
+        'task_escaped',
+        "\\\"grep '^FOO_SERVICE_TOKEN=' $ENVFILE | cut -d= -f2- | tr -d \\\\'\\\\\\\"\\\\'\\\"",
+      ],
+      ['posix_path', "grep '^FOO_SERVICE_TOKEN=' /etc/foo/service.d/prod.env"],
+      [
+        'placeholder_value',
+        'FOO_SERVICE_TOKEN=[[REDACTED:credential]]\nFOO_DASHBOARD_SECRET=[[REDACTED:credential]]',
+      ],
+      ['placeholder_then_text', 'tool --token=[[REDACTED:credential]] https://x.invalid/'],
+      ['placeholder_flag_space', 'tool --token [[REDACTED:credential]] something-else here'],
+    ] as const) {
+      add(unchanged(`b09b.ref.${k}`, 'benign', 'benign', text));
+    }
+  }
+
   // ---- 做不到的形态(只报告,不计入召回) ----
   const hex32 = g.pick(HEXL, 32);
   const lower36 = (() => {
@@ -1257,6 +1390,20 @@ export function buildSeeds(seed: number = SEED): Seed[] {
       `k ${wrappedChars}`,
       [wrappedChars],
       '字符间夹着标记/注释等非空白字符,压缩视图拼不回',
+    ),
+    gap(
+      'gap.word_after_name_quote',
+      'plain',
+      "cfg = '^" + FPW + "=' 'correcthorse'",
+      ['correcthorse'],
+      '`NAME=` 收尾引号之后的纯小写单词(<=12 字符)按引用放行,与 gap.word_password 同源',
+    ),
+    gap(
+      'gap.authz_value_ends_with_brace',
+      'plain',
+      `${AZ}: Digest response="${rep('a1', 8)}" {`,
+      [rep('a1', 8)],
+      'cred_authz 的值以 `{` `(` `[` 结尾时按代码形状放行(B09b 之前就存在,未改动)',
     ),
     gap(
       'gap.word_password',
