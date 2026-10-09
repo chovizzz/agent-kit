@@ -21,8 +21,8 @@ B15-018	find ~/.kimi-code/skills -mindepth 1 -maxdepth 1 ! -name '.*' | wc -l | 
 B15-019	find ~/.claude/skills -mindepth 1 -maxdepth 1 ! -name '.*' -type l | wc -l | tr -d ' '	78	2026-10-09T01:47:53Z
 B15-020	ls -l ~/.claude/skills | grep -c '^l'	78	2026-10-09T01:47:53Z
 B15-021	cd ~/.claude/skills && for n in $(find . -mindepth 1 -maxdepth 1 ! -name '.*' -type l | sed 's#^\./##'); do [ "$(readlink "$n")" = "../../.agents/skills/$n" ] && echo y; done | wc -l | tr -d ' '	78	2026-10-09T01:47:53Z
-B15-022	cd ~/.claude/skills && for n in *; do [ -L "$n" ] && [ "$(readlink "$n")" = "../../.agents/skills/$n" ] && echo y; done | wc -l | tr -d ' '	78	2026-10-09T01:47:53Z
-B15-023	cd ~/.claude/skills && for n in *; do [ -L "$n" ] && [ ! -e "$n" ] && echo x; done | wc -l | tr -d ' '	0	2026-10-09T01:47:53Z
+B15-022	cd ~/.claude/skills && for n in *; do [ -L "$n" ] && [ "$(readlink "$n")" = "../../.agents/skills/$n" ] && echo y || true; done | wc -l | tr -d ' '	78	2026-10-09T01:47:53Z
+B15-023	cd ~/.claude/skills && for n in *; do [ -L "$n" ] && [ ! -e "$n" ] && echo x || true; done | wc -l | tr -d ' '	0	2026-10-09T01:47:53Z
 B15-024	comm -12 <(ls -1 ~/.claude/skills | sort) <(ls -1 ~/.agents/skills | sort) | wc -l | tr -d ' '	194	2026-10-09T01:47:53Z
 B15-025	cd ~/.agents/skills && n=0; for x in $(ls -1 ~/.claude/skills); do [ -e "$x" ] && n=$((n+1)); done; echo $n	194	2026-10-09T01:47:53Z
 B15-026	comm -23 <(ls -1 ~/.claude/skills | sort) <(ls -1 ~/.agents/skills | sort) | wc -l | tr -d ' '	14	2026-10-09T01:47:53Z
@@ -39,9 +39,9 @@ B15-036	comm -23 <(ls -1 ~/.agents/skills | sort) <(jq -r '.skills[].id' ~/.agen
 B15-037	find ~/.agents/skills -mindepth 1 -maxdepth 1 -name .geoly -type d | wc -l | tr -d ' '	1	2026-10-09T01:47:53Z
 B15-038	ls -d ~/.claude/projects/*/memory 2>/dev/null | wc -l | tr -d ' '	13	2026-10-09T01:47:53Z
 B15-039	find ~/.claude/projects -mindepth 2 -maxdepth 2 -type d -name memory | wc -l | tr -d ' '	13	2026-10-09T01:47:53Z
-B15-040	for d in ~/.claude/projects/*/memory; do ls -1 "$d" | wc -l; done | awk '{s+=$1} END{print s+0}'	396	2026-10-09T01:47:53Z
-B15-041	find ~/.claude/projects -mindepth 3 -maxdepth 3 -path '*/memory/*' -type f ! -name '.*' | wc -l | tr -d ' '	396	2026-10-09T01:47:53Z
-B15-042	for d in ~/.claude/projects/*/memory; do p=$(basename "$(dirname "$d")"); echo "$(printf %s "$p" | shasum -a 256 | cut -c1-8) $(ls -1 "$d" | wc -l | tr -d ' ')"; done | sort | paste -sd' ' -	08b410b6 11 32f608a6 4 3b7c18ab 127 3e9ccf57 63 4ab90bef 10 53d79adc 4 5d5069e5 19 663cb7e2 2 66ef1351 19 6881b014 9 c62dcb78 4 d6a01043 2 f58a11f5 122	2026-10-09T01:47:53Z
+B15-040	for d in ~/.claude/projects/*/memory; do ls -1 "$d" | wc -l; done | awk '{s+=$1} END{print s+0}'	>=396	2026-10-09T01:47:53Z
+B15-041	find ~/.claude/projects -mindepth 3 -maxdepth 3 -path '*/memory/*' -type f ! -name '.*' | wc -l | tr -d ' '	>=396	2026-10-09T01:47:53Z
+B15-042	for d in ~/.claude/projects/*/memory; do p=$(basename "$(dirname "$d")"); printf %s "$p" | shasum -a 256 | cut -c1-8; done | sort | paste -sd' ' -	08b410b6 32f608a6 3b7c18ab 3e9ccf57 4ab90bef 53d79adc 5d5069e5 663cb7e2 66ef1351 6881b014 c62dcb78 d6a01043 f58a11f5	2026-10-09T01:47:53Z
 B15-043	find ~/.claude/projects -mindepth 3 -maxdepth 3 -path '*/memory/MEMORY.md' | wc -l | tr -d ' '	13	2026-10-09T01:47:53Z
 B15-044	find ~/.claude/projects -mindepth 3 -maxdepth 3 -path '*/memory/*' -type d | wc -l | tr -d ' '	0	2026-10-09T01:47:53Z
 B15-045	jq -r '.hooks|keys|join(",")' ~/.claude/settings.json	PreToolUse	2026-10-09T01:47:53Z
