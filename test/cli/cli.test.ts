@@ -54,7 +54,7 @@ describe('命令表', () => {
 });
 
 // 已实装的命令不再是桩。新增块合入时在这里登记(避免『桩断言』误伤已实装命令,也避免漏掉仍是桩的命令)。
-const IMPLEMENTED_COMMANDS = new Set(['redact', 'signals collect', 'check']);
+const IMPLEMENTED_COMMANDS = new Set(['redact', 'signals collect', 'check', 'build']);
 
 describe('命令桩:每个命令退出 64 并说明原因(绝不静默成功)', () => {
   for (const def of COMMANDS.filter((d) => !IMPLEMENTED_COMMANDS.has(d.name))) {
@@ -128,8 +128,8 @@ describe('help / version', () => {
 
 describe('全局选项位置', () => {
   it('--root / --overlay 可放在命令前后,不影响桩的退出码', async () => {
-    expect((await run(['--root', REPO_ROOT, 'build'])).code).toBe(64);
-    expect((await run(['build', '--root', REPO_ROOT, '--overlay', 'x.toml'])).code).toBe(64);
+    expect((await run(['--root', REPO_ROOT, 'inventory'])).code).toBe(64);
+    expect((await run(['inventory', '--root', REPO_ROOT, '--overlay', 'x.toml'])).code).toBe(64);
   });
 
   it('KIT_WRITE_ROOTS 配置非法 → fail-closed 退出 3', async () => {
