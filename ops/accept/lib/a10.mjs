@@ -1,5 +1,6 @@
 // A10 隐私卫生:.state/ 0700/0600、git 不含 .state / 会话原文、reader-samples 只含哈希与行数、全量脱敏扫描零命中。
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
@@ -89,6 +90,7 @@ async function a10(argv) {
   const { flags } = parseCommon(argv, { bool: ['no-vitest', 'no-scan'], multi: ['allow-host'] });
   const ctx = makeCtx(flags);
   const tmp = mkTmp(ctx, 'a10');
+  let probeBase = null;
   try {
     // 1) 仓库内已有的 .state/
     const stateDir = path.join(ctx.root, '.state');
@@ -104,8 +106,14 @@ async function a10(argv) {
     // 2) 主动探针:产品自己建 state 时的权限(防"没有 .state 就空通过")
     if (!fs.existsSync(ctx.cli)) R.notRun(`找不到 CLI:${ctx.cli}`);
     else {
-      const probeState = path.join(sandbox(tmp).kit, 'probe-state');
-      const src = path.join(tmp, 'probe-source');
+      // 探针的假 HOME 必须在仓库**外**:产品的路径守卫(paths.ts assertNotHomeOrAncestor)会拒绝
+      // 「仓库根是 HOME 的上级」,而 ctx.tmpBase 在仓库的 .state/ 里。守卫是对的,不能放宽。
+      probeBase = fs.realpathSync(
+        fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'a10-probe-')),
+      );
+      const probeSbx = sandbox(probeBase);
+      const probeState = path.join(probeSbx.kit, 'probe-state');
+      const src = path.join(probeBase, 'probe-source');
       fs.mkdirSync(src, { recursive: true });
       const r = run(
         ctx.node,
@@ -125,9 +133,9 @@ async function a10(argv) {
         {
           cwd: ctx.root,
           env: cleanEnv({
-            HOME: sandbox(tmp).home,
-            KIT_TMP: sandbox(tmp).kit,
-            KIT_STATE_DIR: path.join(sandbox(tmp).kit, 'probe-state'),
+            HOME: probeSbx.home,
+            KIT_TMP: probeSbx.kit,
+            KIT_STATE_DIR: probeState,
           }),
         },
       );
@@ -214,6 +222,7 @@ async function a10(argv) {
     }
   } finally {
     rmTmp(tmp);
+    if (probeBase) fs.rmSync(probeBase, { recursive: true, force: true });
   }
   return R.exit();
 }
