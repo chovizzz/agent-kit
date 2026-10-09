@@ -15,6 +15,7 @@
  * 不判 external_content:由管线按 tool_name 兜底(isExternalToolName)。
  */
 import * as path from 'node:path';
+import { lstat } from '../../io/read-fs.js';
 import type {
   MetaUpdate,
   JsonObject,
@@ -88,7 +89,14 @@ export class KimiReader extends JsonlTraceReader {
   /** `cwd_hint`:同级 `state.json`(`<session>/state.json`,wire 在 `<session>/agents/main/`)。 */
   protected override async prepare(ref: SessionRef): Promise<MetaUpdate | undefined> {
     const sessionDir = path.dirname(path.dirname(path.dirname(ref.path)));
-    const text = await readCompanionText(path.join(sessionDir, 'state.json'));
+    const stateFile = path.join(sessionDir, 'state.json');
+    // R6:只读普通文件。符号链接会读到会话目录之外;命名管道/设备文件的 readFile 会永远阻塞 → 一律当 cwd 未知
+    try {
+      if (!(await lstat(stateFile)).isFile()) return undefined;
+    } catch {
+      return undefined;
+    }
+    const text = await readCompanionText(stateFile);
     if (text === undefined) return undefined;
     let parsed: unknown;
     try {

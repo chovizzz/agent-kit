@@ -17,6 +17,8 @@ import { ExitCode } from '../contracts/exit-codes.js';
 import type { Overlay } from '../contracts/config.js';
 import { outKey } from '../render/out-layout.js';
 import { canonicalJson } from '../io/canonical-json.js';
+import type { IoContext } from '../io/paths.js';
+import { existsSync, lstat } from '../io/read-fs.js';
 import { mkdirp, writeFile } from '../io/safe-fs.js';
 import { formatDiagnostic } from './lint-cmd.js';
 import type { CommandDef } from './types.js';
@@ -46,6 +48,25 @@ function targetLine(t: BudgetReport['targets'][number]): string {
     t.hard_limit !== undefined ? `hard_limit=${t.hard_limit}` : undefined,
   ].filter((x) => x !== undefined);
   return `budget ${t.agent}: ${t.bytes} 字节 / ${t.lines} 行 [${t.level}] ${limit.join(' ')} limit_source=${t.limit_source}${t.blocking ? ' BLOCKING' : ''}`;
+}
+
+function within(root: string, p: string): boolean {
+  const rel = path.relative(root, p);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+/** 写 out/ 只用 out/ 之内的写入根(.state、KIT_TMP 不在其中):out/ 内部的链接再也引不到它们。 */
+function narrowTo(io: IoContext, base: string): IoContext {
+  return { ...io, writeRoots: io.writeRoots.filter((r) => within(base, r)) };
+}
+
+/** `.state` 及 `.state/reports` 不得是符号链接(存在时)。 */
+async function assertStateNotLink(io: IoContext): Promise<void> {
+  for (const p of [io.stateDir, path.join(io.stateDir, 'reports')]) {
+    if (existsSync(p) && (await lstat(p)).isSymbolicLink()) {
+      throw new Error(`${path.relative(io.repoRoot, p) || p} 是符号链接,拒绝写入`);
+    }
+  }
 }
 
 export const command: CommandDef = {
@@ -115,9 +136,10 @@ export const command: CommandDef = {
     const manifestText = canonicalJson(res.manifest);
     const newPaths = new Set(files.map((f) => outKey(f)));
 
+    const outIo = narrowTo(io, io.outDir);
     try {
       await assertOutDirNotLink(io);
-      const prev = await readPreviousOut(io);
+      const prev = await readPreviousOut(outIo);
       if (prev.untrusted !== undefined) {
         ctx.stdout(
           `warn BUILD_PREVIOUS_MANIFEST_UNTRUSTED out/manifest.json: ${prev.untrusted},不据此清理\n`,
@@ -137,9 +159,14 @@ export const command: CommandDef = {
           `would write out/${MANIFEST_NAME} (${Buffer.byteLength(manifestText, 'utf8')} 字节)\n`,
         );
       } else {
-        await cleanPrevious(io, prev);
-        await writeOut(io, files, manifestText);
-        const stray = await listUnmanaged(io, newPaths);
+        const modified = await cleanPrevious(outIo, prev, newPaths);
+        for (const m of modified) {
+          ctx.stdout(
+            `warn BUILD_MODIFIED_MANAGED_FILE out/${m}: 内容与 manifest 登记的 sha256 不符(被手改?),未删除\n`,
+          );
+        }
+        await writeOut(outIo, files, manifestText);
+        const stray = await listUnmanaged(outIo, newPaths);
         for (const s of stray) {
           ctx.stdout(`warn BUILD_UNMANAGED_FILE out/${s}: 不是本次 build 产物,未触碰\n`);
         }
@@ -153,9 +180,11 @@ export const command: CommandDef = {
         if (opts.dryRun) {
           ctx.stdout(`--- build report (dry-run, 未写 .state/reports/build.json) ---\n${report}`);
         } else {
+          await assertStateNotLink(io);
+          const stateIo = narrowTo(io, io.stateDir);
           const dir = path.join(io.stateDir, 'reports');
-          await mkdirp(io, dir, 0o700);
-          await writeFile(io, path.join(dir, 'build.json'), report, { mode: 0o600 });
+          await mkdirp(stateIo, dir, 0o700);
+          await writeFile(stateIo, path.join(dir, 'build.json'), report, { mode: 0o600 });
           ctx.stdout(`--- build report (.state/reports/build.json) ---\n${report}`);
         }
       }

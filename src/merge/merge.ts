@@ -7,7 +7,7 @@
  *  2. should 可被下层 overrides 替换,或被 personal / project 层 disables 关闭;其余层写 disables → MERGE_DISABLE_NOT_ALLOWED
  *  3. 同一 id 出现多次且没有声明 overrides → MERGE_DUPLICATE_ID(同层重复永远报错,没有「就近」可言)
  *  4. 语义矛盾由裁判出建议性报告,不在这里处理
- *  5. personal 原子留在结果里,但 coreEligible=false(渲染器必须跳过)
+ *  5. personal 原子留在结果里,但 coreEligible=false(渲染器必须跳过);它的 overrides / disables 在 core 视图里只记录、不剔除(B2)
  * 其它防御性诊断:MERGE_TARGET_MISSING(目标不存在)、MERGE_OVERRIDE_DIRECTION(上层去覆盖下层)、MERGE_OVERRIDE_CYCLE(overrides / disables 互相成环)。
  *
  * 语义说明:
@@ -49,7 +49,17 @@ interface Edge {
 const rank = (a: Atom): number => LAYER_RANK[a.fm.layer];
 const key = (a: Atom): string => `${a.fm.layer}/${a.fm.id}`;
 
-export function mergeAtoms(input: readonly Atom[]): MergeResult {
+export interface MergeOptions {
+  /**
+   * `core`(默认):结果用于渲染 out/,personal 层的 overrides / disables 只记录、不剔除任何原子
+   * (core 输出必须与个人无关且确定;docs/contracts.md §4.2)。
+   * `preview`:personal 的边也生效,供 P2 本机预览;P0 没有调用方。
+   */
+  view?: 'core' | 'preview';
+}
+
+export function mergeAtoms(input: readonly Atom[], opts: MergeOptions = {}): MergeResult {
+  const view = opts.view ?? 'core';
   const diagnostics: Diagnostic[] = [];
   const atoms = [...input].sort(
     (a, b) => rank(a) - rank(b) || byteCmp(a.fm.id, b.fm.id) || byteCmp(a.sourcePath, b.sourcePath),
@@ -166,7 +176,10 @@ export function mergeAtoms(input: readonly Atom[]): MergeResult {
   // 环上原子的一切替换/关闭边都作废(带 error 的原子不得行使替换权),交人工处理
   const live = edges.filter((e) => !cyclic.has(e.from));
 
-  const removed = new Set<Atom>(live.map((e) => e.to));
+  // B2:core 视图里 personal 的边不剔除任何原子(它们仍进 overridden / replaced,诊断照常)
+  const removed = new Set<Atom>(
+    live.filter((e) => view === 'preview' || isCoreEligible(e.from.fm.layer)).map((e) => e.to),
+  );
   const replacedBy = new Map<Atom, string[]>();
   const overridden: OverrideRecord[] = [];
   for (const e of live) {
@@ -177,8 +190,14 @@ export function mergeAtoms(input: readonly Atom[]): MergeResult {
   }
   overridden.sort((a, b) => byteCmp(a.id, b.id) || byteCmp(a.by, b.by) || byteCmp(a.kind, b.kind));
 
-  const resolved: ResolvedAtom[] = atoms
-    .filter((a) => !removed.has(a))
+  // B2:core 视图下,personal 用同 id 覆盖时两者都活着;渲染层按 id 建索引(后者覆盖前者),personal 会盖住 team 原子并触发
+  // OUT_PERSONAL_LEAK。所以 core 视图里与别的幸存原子同 id 的 personal 原子不进 atoms(边仍记在 overridden,preview 视图照旧保留)。
+  const survivors = atoms.filter((a) => !removed.has(a));
+  const survivingIds = new Set(
+    survivors.filter((a) => isCoreEligible(a.fm.layer)).map((a) => a.fm.id),
+  );
+  const resolved: ResolvedAtom[] = survivors
+    .filter((a) => view === 'preview' || isCoreEligible(a.fm.layer) || !survivingIds.has(a.fm.id))
     .map((a) => ({
       atom: a,
       layer: a.fm.layer,
