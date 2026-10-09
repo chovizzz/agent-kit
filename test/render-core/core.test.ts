@@ -28,7 +28,7 @@ describe('renderAll', () => {
     ]),
   ]);
 
-  it('默认注册表五个桩:空输出、可跑通', () => {
+  it('默认注册表按固定顺序登记五个适配器;空输入可跑通(不再假设它们是空桩)', () => {
     expect(defaultRegistry.list().map((a) => a.agent)).toEqual([
       'claude',
       'codex',
@@ -36,7 +36,9 @@ describe('renderAll', () => {
       'kimi',
       'opencode',
     ]);
-    expect(renderAll(input).files).toEqual([]);
+    // Claude / Codex 已由 B07 实装、Pi / Kimi / OpenCode 仍是桩:这里只断言可跑通且产出是数组,
+    // 具体输出由各适配器自己的 golden 测试钉住。
+    expect(Array.isArray(renderAll(input).files)).toBe(true);
   });
 
   it('规范化 + 独占头 + 字节序排序;managed-block 不加头', () => {

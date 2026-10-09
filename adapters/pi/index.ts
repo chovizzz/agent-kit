@@ -1,25 +1,18 @@
 import type { Adapter } from '../../src/contracts/render.js';
+import { DOCS_VERSION } from './common.js';
+import { renderAgents } from './agents.js';
+import { renderRules } from './rules.js';
+import { renderSkills } from './skills.js';
 
 /**
- * 骨架桩(B01):渲染器尚未实现,返回空输出并在报告里登记。
- * 由块 B08 替换本文件内容,保持 `export const adapter: Adapter` 的形状,
- * 并填写同目录的 managed-targets.json(格式 AdapterMetaSchema)。
+ * Pi 渲染器(B08)。只产出内存 OutFile,不读也不写任何真实路径(P0 里 ~/.pi/agent/AGENTS.md 按"不存在"渲染)。
+ * testedVersions 里的版本是"格式所依据的随包官方文档对应的版本",不是探针验证过的版本(探针在 P1)。
+ * 子代理:不渲染(renderAgents 返回空输出 + 报告说明,Q-N17)。
  */
 export const adapter: Adapter = {
   agent: 'pi',
-  testedVersions: [],
-  renderRules() {
-    return {
-      files: [],
-      report: {
-        dropped: [],
-        sideEffects: [],
-        shadowChecks: [],
-        pendingProbes: [
-          { id: 'adapter-not-implemented', description: 'pi 渲染器尚未实现(B01 骨架桩)' },
-        ],
-        skippedLayers: [],
-      },
-    };
-  },
+  testedVersions: [DOCS_VERSION],
+  renderRules,
+  renderSkills,
+  renderAgents,
 };

@@ -1,5 +1,6 @@
 import * as path from 'node:path';
 import { createIoContext } from '../../src/io/paths.js';
+import { realpath } from '../../src/io/read-fs.js';
 import { mkdtemp } from '../../src/io/safe-fs.js';
 import type { IoContext } from '../../src/io/paths.js';
 
@@ -14,7 +15,10 @@ export function baseCtx(): IoContext {
 export async function makeTempDir(prefix: string): Promise<{ ctx: IoContext; dir: string }> {
   const ctx = baseCtx();
   const parent = ctx.tmpDir ?? path.join(ctx.stateDir, 'test-tmp');
-  const dir = await mkdtemp(ctx, parent, prefix);
+  const made = await mkdtemp(ctx, parent, prefix);
+  // macOS 的 mktemp 目录在 /var(指向 /private/var 的符号链接)下;返回真实路径,
+  // 避免测试与按 realpath 工作的产品代码(walkFiles / 排除清单)比较路径字符串时因写法不同而失败。
+  const dir = await realpath(made);
   return { ctx, dir };
 }
 

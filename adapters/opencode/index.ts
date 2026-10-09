@@ -1,25 +1,22 @@
 import type { Adapter } from '../../src/contracts/render.js';
+import { renderAgents } from './agents.js';
+import { renderRules } from './rules.js';
+import { renderSkills } from './skills.js';
 
 /**
- * 骨架桩(B01):渲染器尚未实现,返回空输出并在报告里登记。
- * 由块 B08 替换本文件内容,保持 `export const adapter: Adapter` 的形状,
- * 并填写同目录的 managed-targets.json(格式 AdapterMetaSchema)。
+ * OpenCode 渲染器(B08)。只产出内存 OutFile,不读也不写任何真实路径。
+ * **只渲染规则**:技能(P-Q6 之前,设计 §10 L1)与子代理(留 P1,Q-N17)的调用返回空输出 + 报告说明。
+ * testedVersions 为空:格式依据是无版本号的线上文档快照,本机 1.1.19 与之差异未核实,没有任何已验证版本。
+ *
+ * 与 codex / pi / kimi 的差异是有意的:它们的格式依据带版本号的文档(documented + compat-probe-not-run),
+ * OpenCode 的文档无版本号且本机版本远落后,所以规则文件整体 assumed、tested_versions 为空。
+ * 不设 conditional:conditional 表示"文件是否被识别取决于某个探针"(如 Claude 的 P-Q1),会让文件不计预算;
+ * 这里的不确定性靠 assumed 表达(assumed 目标预算只告警,不阻断),而不是把文件排除出预算。
  */
 export const adapter: Adapter = {
   agent: 'opencode',
   testedVersions: [],
-  renderRules() {
-    return {
-      files: [],
-      report: {
-        dropped: [],
-        sideEffects: [],
-        shadowChecks: [],
-        pendingProbes: [
-          { id: 'adapter-not-implemented', description: 'opencode 渲染器尚未实现(B01 骨架桩)' },
-        ],
-        skippedLayers: [],
-      },
-    };
-  },
+  renderRules,
+  renderSkills,
+  renderAgents,
 };

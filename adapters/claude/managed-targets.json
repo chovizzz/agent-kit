@@ -1,5 +1,5 @@
 {
   "agent": "claude",
-  "tested_versions": [],
-  "managed_targets": []
+  "tested_versions": ["2.1.294"],
+  "managed_targets": ["~/.claude/rules/agent-kit/", "~/.claude/skills/", "~/.claude/agents/"]
 }

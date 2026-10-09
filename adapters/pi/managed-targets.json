@@ -1,5 +1,5 @@
 {
   "agent": "pi",
-  "tested_versions": [],
-  "managed_targets": []
+  "tested_versions": ["0.87.1"],
+  "managed_targets": ["~/.pi/agent/AGENTS.md", "~/.agents/skills/"]
 }

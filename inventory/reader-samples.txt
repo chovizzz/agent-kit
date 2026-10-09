@@ -1,0 +1,33 @@
+# B16 reader 对照样本清单(B10a docs/reader-counting-spec.md §5 抽样规则)
+# 行格式:<agent>\t<会话文件绝对路径的 sha256 前 16 位>\t<行数(wc -l)>;真实路径只在 .state/reader-samples.local.txt(gitignored)
+# 范围:四家 --source 下,路径含"允许项目清单"中任一项的会话(清单共 2 项,名称见 B16 计划,不入仓;claude/pi/kimi 按目录名;codex 按首行 session_meta.payload.cwd 判定)
+# Codex 仅主会话(首行 payload.source 非 subagent 对象);kimi 仅 agents/main/wire.jsonl;claude 仅深度 2 的 UUID.jsonl(不含 subagents/)
+# 排除:最近 60 分钟内修改过的文件(find -mmin +60,C10)
+# 排序:LC_ALL=C 字典序(完整路径);取行数在 [50,5000] 内的前 5 个(wc -l)
+# 放宽下限:pi 在 [50,5000] 内只有 1 个候选,下限放宽为 12(能凑满 5 个的最大下限;B10a 未定放宽值,见 B16 汇报)
+# 正向控制(§5 规则 3):tool_calls、tool_failures、user_messages 各至少 1 个样本 > 0;codex 另需 1 个样本含 CommandExecution failed
+# 正向控制替换记录(序号按合格候选的排序位次从 1 计):
+#   pi:tool_calls 无正例 -> 第 5 个替换为合格候选第 7 个
+#   codex:tool_failures 无正例 -> 第 5 个替换为合格候选第 51 个;随后 CommandExecution 无正例 -> 第 5 个替换为合格候选第 753 个(该样本同时满足 tool_failures>0)
+# 超长行注记(C8/D3,未定 maxEventBytes,未据此剔除):claude 样本 1 最长行约 0.76 MB;codex 样本 5 最长行约 2.26 MB(字节,LC_ALL=C awk)
+# 选样日期 2026-10-08;候选集合随时间变化,复算以哈希与行数比对
+claude	75cef9ff0e456441	3435
+claude	a879a3d9a616bb9c	3018
+claude	410a0b1b5534b151	138
+claude	25191f72b22f3391	85
+claude	a327f091571814d1	3347
+codex	5ce5f385fe53d605	996
+codex	f7008ed18db82be3	348
+codex	af3e6f632b1352dd	833
+codex	f69c18c9a85c18d5	1115
+codex	670d6477e48c051f	446
+pi	04c49dbb89530bbe	12
+pi	922196e00b6c3be3	12
+pi	270431e245faec19	12
+pi	5241f385eb1006f4	12
+pi	18f8193e48262350	805
+kimi	ec0559e33b12c7a1	1156
+kimi	9270f7c8a7460b6c	172
+kimi	c80cf159ea0dfe24	1864
+kimi	9307eeac94ecdcfd	81
+kimi	309ce5764c9df817	81

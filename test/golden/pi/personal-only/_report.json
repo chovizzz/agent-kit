@@ -1,0 +1,21 @@
+{
+  "dropped": [],
+  "pendingProbes": [
+    {
+      "description": "Pi 子代理:本体文档未提及此机制(源码未核实),pi-subagents 扩展的文件格式未核实(Q-N17,留 P1)",
+      "id": "pi-subagents-format"
+    },
+    {
+      "description": "pi 渲染器的格式依据 Pi 0.87.1 随包官方文档(2026-10-08 读取),尚未跑兼容探针(P1 才有);golden 不构成兼容声明(Q-N14)",
+      "id": "compat-probe-not-run"
+    }
+  ],
+  "shadowChecks": [],
+  "sideEffects": [],
+  "skippedLayers": [
+    {
+      "layer": "personal",
+      "reason": "P2 才在本机渲染"
+    }
+  ]
+}

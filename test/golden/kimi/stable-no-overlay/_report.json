@@ -1,0 +1,116 @@
+{
+  "dropped": [
+    {
+      "field": "files",
+      "file": "kimi/home/.agents/skills/alpha-full/SKILL.md",
+      "reason": "渲染输入的 Skill 只带资源文件清单(relPath/sha256)不带内容,P0 渲染器只写 SKILL.md;未渲染 2 个资源文件:references/guide.md, scripts/run.sh"
+    },
+    {
+      "field": "model_tier",
+      "file": "kimi/home/.kimi-code/agents/diff-reviewer.md",
+      "reason": "Kimi 忽略 agent 文件里来自其他工具的 model 字段(documented:agents.md),不能在文件里指定模型;档位 judge 未渲染(模型如何选取不在本渲染器范围;调研 A §2.4-3 提到全局 [secondary_model] 为实验项,未验证)"
+    },
+    {
+      "field": "model_tier",
+      "file": "kimi/home/.kimi-code/agents/implementer.md",
+      "reason": "Kimi 忽略 agent 文件里来自其他工具的 model 字段(documented:agents.md),不能在文件里指定模型;档位 implement 未渲染(模型如何选取不在本渲染器范围;调研 A §2.4-3 提到全局 [secondary_model] 为实验项,未验证)"
+    },
+    {
+      "field": "model_tier",
+      "file": "kimi/home/.kimi-code/agents/web-scout.md",
+      "reason": "Kimi 忽略 agent 文件里来自其他工具的 model 字段(documented:agents.md),不能在文件里指定模型;档位 readonly 未渲染(模型如何选取不在本渲染器范围;调研 A §2.4-3 提到全局 [secondary_model] 为实验项,未验证)"
+    },
+    {
+      "field": "paths",
+      "file": "kimi/home/.kimi-code/AGENTS.md",
+      "reason": "原子 org-paths:Kimi 的 AGENTS.md 没有路径作用域机制(文档未提供),paths 无法保留,已降级为正文前缀「仅在处理 <glob> 时适用」"
+    },
+    {
+      "field": "paths",
+      "file": "kimi/home/.kimi-code/AGENTS.md",
+      "reason": "原子 team-paths:Kimi 的 AGENTS.md 没有路径作用域机制(文档未提供),paths 无法保留,已降级为正文前缀「仅在处理 <glob> 时适用」"
+    },
+    {
+      "field": "paths",
+      "file": "kimi/project/AGENTS.md",
+      "reason": "原子 project-paths:Kimi 的 AGENTS.md 没有路径作用域机制(文档未提供),paths 无法保留,已降级为正文前缀「仅在处理 <glob> 时适用」"
+    },
+    {
+      "field": "status",
+      "reason": "原子 still-proposed:状态 proposed 在 stable 渠道不渲染(advisory 只到 canary;proposed/deprecated/retired 不渲染)"
+    },
+    {
+      "field": "status",
+      "reason": "原子 team-trial:状态 advisory 在 stable 渠道不渲染(advisory 只到 canary;proposed/deprecated/retired 不渲染)"
+    },
+    {
+      "field": "status",
+      "reason": "原子 was-deprecated:状态 deprecated 在 stable 渠道不渲染(advisory 只到 canary;proposed/deprecated/retired 不渲染)"
+    },
+    {
+      "field": "status",
+      "reason": "原子 was-retired:状态 retired 在 stable 渠道不渲染(advisory 只到 canary;proposed/deprecated/retired 不渲染)"
+    },
+    {
+      "field": "tools",
+      "file": "kimi/home/.kimi-code/agents/web-scout.md",
+      "reason": "工具类别 agent 里的 AgentSwarm 未映射:中立 agent 类别只表示可委派子代理,AgentSwarm(documented 的工具名)是并行扩散的更宽能力,不自动授予"
+    }
+  ],
+  "pendingProbes": [
+    {
+      "description": "Kimi 对技能 frontmatter 的 license / compatibility / metadata 的处理文档未说明(frontmatter 表只列 name/description/type/whenToUse/disableModelInvocation/arguments),带这些键的技能文件标 assumed",
+      "id": "kimi-skill-optional-fields"
+    },
+    {
+      "description": "Kimi 工具名 Edit / Write(更新日志)与 WebSearch / FetchURL(环境变量文档)只被二手提到,工具参考页(reference/tools.md)未抓取,所以也不知道 Kimi 工具全集是否更大(如独立的目录列举工具,read 类映射可能不全);含 edit / web 类别的子代理文件标 assumed",
+      "id": "kimi-tool-names"
+    },
+    {
+      "description": "Kimi:AGENTS.md 截断上限数值(文档只提到截断警告,预算 limit_source=assumed);~/.kimi-code/agents/ 是否加载;未信任目录下 kimi -p 的行为(2.1.0 更新日志:项目本地配置仅在工作区被信任后生效,可能影响项目级 AGENTS.md / agents / skills 的加载)",
+      "id": "P-Q5"
+    },
+    {
+      "description": "Kimi:~/.kimi-code/agents/ 是否被加载;tools 里 Edit / Write / WebSearch / FetchURL 的工具名需对照工具参考页",
+      "id": "P-Q5"
+    },
+    {
+      "description": "kimi 渲染器的格式依据 Kimi Code 2.1.1 文档站快照(2026-10-08 读取;调研时本机为 2.0.0),尚未跑兼容探针(P1 才有);golden 不构成兼容声明(Q-N14)",
+      "id": "compat-probe-not-run"
+    },
+    {
+      "description": "paths 降级成正文前缀后,Kimi 是否真的只在处理匹配路径时才遵守该条(未验证)",
+      "id": "kimi-paths-prefix-effect"
+    }
+  ],
+  "shadowChecks": [
+    "kimi/home/.agents/skills/alpha-full/SKILL.md: 项目 .kimi-code/skills、.agents/skills 里的同名技能优先于用户级(documented:Project > User > Extra > Built-in);用户级 ~/.kimi-code/skills 与 ~/.agents/skills 同名时谁优先文档未说明(assumed,探针 P-Q5;本机两处有大量同名);共管目录里他方同名条目会冲突(§4.6;P0 不检查真实目录)",
+    "kimi/home/.agents/skills/synced/SKILL.md: 项目 .kimi-code/skills、.agents/skills 里的同名技能优先于用户级(documented:Project > User > Extra > Built-in);用户级 ~/.kimi-code/skills 与 ~/.agents/skills 同名时谁优先文档未说明(assumed,探针 P-Q5;本机两处有大量同名);共管目录里他方同名条目会冲突(§4.6;P0 不检查真实目录)",
+    "kimi/home/.agents/skills/zeta-plain/SKILL.md: 项目 .kimi-code/skills、.agents/skills 里的同名技能优先于用户级(documented:Project > User > Extra > Built-in);用户级 ~/.kimi-code/skills 与 ~/.agents/skills 同名时谁优先文档未说明(assumed,探针 P-Q5;本机两处有大量同名);共管目录里他方同名条目会冲突(§4.6;P0 不检查真实目录)",
+    "kimi/home/.kimi-code/AGENTS.md: $KIMI_CODE_HOME/SYSTEM.md(默认 ~/.kimi-code/SYSTEM.md)非空时整体替换主 agent 的默认系统提示(documented);它只有含 ${agents_md} 变量才会注入 AGENTS.md 内容——这一推论文档未直接说明(assumed;P0 不检查真实文件)",
+    "kimi/home/.kimi-code/AGENTS.md: 带 override: true 的 agent 文件(如项目 agent.md)会整体替换主 agent 的系统提示,AGENTS.md 是否仍注入取决于其正文是否引用 ${agents_md} / ${base_prompt}(推论,assumed;P0 不检查真实文件)",
+    "kimi/home/.kimi-code/AGENTS.md: 设置 KIMI_CODE_HOME 会移动数据根,~/.kimi-code/AGENTS.md 就不再是全局文件(documented;P0 不检查环境)",
+    "kimi/home/.kimi-code/agents/diff-reviewer.md: 项目 .kimi-code/agents、.agents/agents 里的同名文件优先于用户级(documented:Project > Extra > User);$KIMI_CODE_HOME/SYSTEM.md 在用户级内部优先于 agents/ 目录里同名文件(documented);P0 不检查真实目录",
+    "kimi/home/.kimi-code/agents/implementer.md: 项目 .kimi-code/agents、.agents/agents 里的同名文件优先于用户级(documented:Project > Extra > User);$KIMI_CODE_HOME/SYSTEM.md 在用户级内部优先于 agents/ 目录里同名文件(documented);P0 不检查真实目录",
+    "kimi/home/.kimi-code/agents/web-scout.md: 项目 .kimi-code/agents、.agents/agents 里的同名文件优先于用户级(documented:Project > Extra > User);$KIMI_CODE_HOME/SYSTEM.md 在用户级内部优先于 agents/ 目录里同名文件(documented);P0 不检查真实目录",
+    "kimi/project/AGENTS.md: Kimi 只向上找到 git 根(调研 A §5.2 本机 wire.jsonl 实测 agentsMdPaths;非 git 目录或 git 根之上的 AGENTS.md 不会加载,P0 不检查)",
+    "kimi/project/AGENTS.md: 项目根 AGENTS.md 与 .kimi-code/AGENTS.md 并存时的加载与顺序文档未说明(assumed;P0 不检查真实文件)"
+  ],
+  "sideEffects": [
+    "kimi/home/.agents/skills/alpha-full/SKILL.md: 技能写入共享目录 ~/.agents/skills/<name>/(设计 §4.1:Codex、Pi、OpenCode、OpenClaw 也读该目录),装进去后这些 agent 都会看到;不写 ~/.kimi-code/skills",
+    "kimi/home/.agents/skills/synced/SKILL.md: 技能写入共享目录 ~/.agents/skills/<name>/(设计 §4.1:Codex、Pi、OpenCode、OpenClaw 也读该目录),装进去后这些 agent 都会看到;不写 ~/.kimi-code/skills",
+    "kimi/home/.agents/skills/zeta-plain/SKILL.md: 技能写入共享目录 ~/.agents/skills/<name>/(设计 §4.1:Codex、Pi、OpenCode、OpenClaw 也读该目录),装进去后这些 agent 都会看到;不写 ~/.kimi-code/skills",
+    "kimi/home/.kimi-code/AGENTS.md: P0 按\"文件为空\"状态渲染(不读真实文件);本机现有的 ~/.kimi-code/AGENTS.md 是 Claude CLAUDE.md 的一次性陈旧拷贝(调研 A §2.4-10⑦),P2 写入将替换它,须人批;不渲染 ~/.agents/AGENTS.md(Kimi 两处都读,写两处会重复加载)",
+    "kimi/home/.kimi-code/agents/diff-reviewer.md: tools 显式写成白名单(Kimi 缺省 = 全部工具);工具名大小写敏感,写错的名字只产生警告不报错(documented:agents.md)",
+    "kimi/home/.kimi-code/agents/implementer.md: tools 显式写成白名单(Kimi 缺省 = 全部工具);工具名大小写敏感,写错的名字只产生警告不报错(documented:agents.md)",
+    "kimi/home/.kimi-code/agents/web-scout.md: tools 显式写成白名单(Kimi 缺省 = 全部工具);工具名大小写敏感,写错的名字只产生警告不报错(documented:agents.md)",
+    "kimi/project/AGENTS.md: 与 codex / pi / opencode 共用仓库根 AGENTS.md(同一托管块 id),P2 须合并成一个块而不是叠加;Kimi 不读 CLAUDE.md(调研 A §5.2)",
+    "kimi: paths 原子降级为正文前缀,这是靠模型遵守的文字约束,不是机制"
+  ],
+  "skippedLayers": [
+    {
+      "layer": "personal",
+      "reason": "P2 才在本机渲染"
+    }
+  ]
+}

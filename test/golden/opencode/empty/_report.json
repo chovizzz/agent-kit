@@ -1,0 +1,20 @@
+{
+  "dropped": [],
+  "pendingProbes": [
+    {
+      "description": "OpenCode 1.1.19:agents/ 目录是否被识别;通过前子代理不渲染(Q-N17,留 P1)",
+      "id": "P-Q6"
+    },
+    {
+      "description": "OpenCode 1.1.19:~/.claude/skills 与 ~/.agents/skills 同名技能的行为;通过前技能不渲染(设计 §10 L1)",
+      "id": "P-Q6"
+    },
+    {
+      "description": "opencode 渲染器的格式依据是线上文档快照(2026-10-08 读取,无版本号);本机 1.1.19 远落后于文档(调研 A §2.5-10),二者差异未核实,所以没有任何已验证的版本(tested_versions 为空),使用前必须先跑兼容探针(P1 才有);golden 不构成兼容声明(Q-N14)",
+      "id": "compat-probe-not-run"
+    }
+  ],
+  "shadowChecks": [],
+  "sideEffects": [],
+  "skippedLayers": []
+}

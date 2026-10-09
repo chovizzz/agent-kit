@@ -1,0 +1,5 @@
+# 生成文件,勿手改;源:agent-kit-core@0.0.0
+name = "diff-reviewer"
+description = "只读评审者"
+sandbox_mode = "read-only"
+developer_instructions = "你是只读的代码评审者。\n只输出问题清单。"
