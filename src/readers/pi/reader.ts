@@ -7,13 +7,13 @@
 import * as path from 'node:path';
 import type { AgentId } from '../../contracts/common.js';
 import type { SessionRef } from '../../contracts/reader.js';
-import { lstat, realpath } from '../../io/read-fs.js';
+import { TOO_LONG_LINE, lstat, realpath } from '../../io/read-fs.js';
 import { openReadonlyLines } from '../../signals/open-readonly.js';
 import {
   JsonlTraceReader,
   NO_TYPE_KEY,
   isJsonObject,
-  stripBom,
+  lineText,
   unknownOutcome,
   walkFiles,
 } from '../../signals/base-reader.js';
@@ -73,11 +73,10 @@ function loadedRulePaths(msg: JsonObject): string[] {
 
 /** 首个非空白行若是「type 为字符串且不是 session」的对象,说明这不是 Pi 会话文件。其余情况(空、畸形、头)都放行。 */
 async function isClearlyNotPiSession(file: string): Promise<boolean> {
-  let first = true;
   for await (const raw of openReadonlyLines(file)) {
-    const line = first ? stripBom(raw) : raw;
-    first = false;
-    if (!/\S/.test(line)) continue;
+    if (raw === TOO_LONG_LINE) return false;
+    const line = lineText(raw);
+    if (line === undefined) continue;
     try {
       const v: unknown = JSON.parse(line);
       return isJsonObject(v) && typeof v['type'] === 'string' && v['type'] !== 'session';
@@ -96,7 +95,7 @@ export class PiReader extends JsonlTraceReader<PiState> {
       maxDepth: 1,
       match: (_abs, rel) => SESSION_FILE.test(rel),
     });
-    // 显式传入单个文件时不过滤(与 walkFiles 一致)
+    // 显式传入单个文件时不过滤(与 walkFiles 一致;Pi 没有子代理文件,已有测试钉住「原样接受」)
     if ((await lstat(await realpath(source))).isFile()) return files;
     const out: string[] = [];
     for (const f of files) if (!(await isClearlyNotPiSession(f))) out.push(f);

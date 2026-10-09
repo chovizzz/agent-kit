@@ -64,6 +64,9 @@ zod 校验失败统一映射为 `SCHEMA_INVALID`(`zodIssuesToDiagnostics`);各�
   `{ layer: 'personal', reason: 'P2 才在本机渲染' }`。真实渲染留 P2。
 - `out/manifest.json`(`Manifest`)记录每个输出文件的来源原子 `{ id, layer }`;A15 脚本逐文件核对不存在 `layer=personal` 的来源。
 - 预算口径里 personal 份额在 P0 为 0,并在报告说明。
+- **personal 的 `overrides` / `disables` 不影响 core 输出**(B21/B2):`mergeAtoms` 默认 `view: 'core'`,personal 层发出的边照常做全部校验(`MERGE_MUST_LOCKED` / `MERGE_TARGET_MISSING` / `MERGE_OVERRIDE_DIRECTION` / `MERGE_OVERRIDE_CYCLE` 仍是 error,会阻断 build),
+  也照常记入 `overridden`(`byLayer: 'personal'`,报告里表示「P2 本机才生效」),但**不把目标从结果里剔除**——被指向的 team / org 的 should 原子仍在,`coreEligible=true`,仍渲染进 `out/`。
+  `mergeAtoms(atoms, { view: 'preview' })` 让 personal 的边也生效,留给 P2 的本机预览;P0 没有调用方。
 
 ### 4.3 `inventory/commands.sh` 格式契约
 
@@ -135,6 +138,11 @@ zod 校验失败统一映射为 `SCHEMA_INVALID`(`zodIssuesToDiagnostics`);各�
   `assumed` 目标不论 `enforce` 都只告警(设计 §3.6 硬规则)。blocking 的诊断 severity 为 `error`,否则为 `warn`;`check` 在存在 `error` 时退出 1。
 - 决策 ②:真实仓库 `kit.toml` 的 `enforce = "warn"`;`block` 只由 fixture 开启;P1 把默认值改为 `block`(documented/probed 目标)。
 
+- **实现与上述口径的已知偏离(如实记录,B21/B5)**:
+  1. 除 `conditional` 非空外,**纯技能/子代理文件**(有 `sourceRefs`、不含规则原子)也**不计入**预算(`countsTowardBudget`):技能/子代理按需加载、不常驻,这是实现里加的口径,各 agent 是否真如此未逐家核实。
+  2. 去重公式实现为「目标总字节 = Σ 各处该原子的 `atomBytes` − 其中最大的一份」(同一原子各处字节相同时与上面的 `(k−1)×atomBytes` 等价;不同时实现更保守,即扣得少)。
+  3. 预算报告 `targets[].files` 只记文件的 `relPath`(项目链为 `projectChain#i`),不含 `<agent>/<target>/` 前缀:同一目标下 home 与 project 都有 `AGENTS.md` / `CLAUDE.md` 时会出现两个同名项,报告里无法区分是哪一个。
+  4. `budgetFailed` 用「诊断里有 error」判断,所以 `enforce=block` 下的 `BUDGET_ATOM_TOO_LARGE`(单原子正文超限,**不看** `limit_source`)也会让 build 退出 1;lint 的 `ATOM_BODY_TOO_LARGE` 通常更早拦下。
 - **多维度目标**:逐维度判断(bytes↔`max_bytes`,lines↔`max_lines`),只配了一个维度的目标只看那一维;目标级 `level` = 任一维度 `over` 则 `over`,否则任一维度 `near` 则 `near`,否则 `ok`。
 - **Codex 项目链**:`projectChain` 是根→cwd 各层 AGENTS.md 的**文本内容**数组,字节数按 UTF-8 计后与托管块产物相加。
 
@@ -1133,18 +1141,26 @@ P0 先把 schema 冻在这里,P1 的块直接消费,避免打 tag 之后再改�
 | `mergeAtoms`(error)                                                                        | 打印诊断                                  | 1      |
 | `renderAll`(只含 `kit.toml` 里 `enabled` 的 agent;覆盖层 `enabled_agents` 只取交集,不放大) | fail-closed                               | 3      |
 | `computeBudget` 且 `budgetFailed`(`enforce=block` 且有非 `assumed` 目标超限)               | 打印诊断                                  | 1      |
-| 写盘(写出口拒绝、`out/` 是符号链接、IO 错误)                                               | fail-closed                               | 3      |
+| 写盘(写出口拒绝、`out/` 或其内部任一段路径是符号链接、IO 错误)                             | fail-closed                               | 3      |
 | 全部通过(`enforce=warn` 下超限只告警)                                                      | 打印各目标预算行与 `build: 已写 N 个文件` | 0      |
 
 不再是命令桩,任何路径都不退 64。lint 步骤带真实 `Redactor`(`createRedactor`,敏感词/内部域名取自 `--overlay`),所以 `ATOM_EVIDENCE_NOT_SCANNED` 告警在 `build` 里不出现。
 
 **写盘顺序**(全部经 `safe-fs`,写入根只有 `<repo>/out/`;`--report` 另写 `<repo>/.state/reports/build.json`):
 
+0. **写入根收窄(B21/B1)**:build 写 `out/` 只用 `out/` 之内的写入根(`.state/`、`KIT_TMP` 不在其中);`--report` 只用 `.state/` 之内的写入根。
+   `out/` 内部的符号链接因此再也引不到 `.state/` 或 `KIT_TMP`。
 1. `lstat out/`:是符号链接或不是目录 → 退出 3(否则 realpath 会把写入根悄悄换成仓库外的目录)。
+   **逐段检查**:删/写 `out/` 下任一路径前,从 `out/` 往下逐段 `lstat`;**中间段**是符号链接(写时含叶子)→ 拒绝并退出 3。
+   旧 manifest 登记的路径若有链接中间段,视为不可信(`BUILD_PREVIOUS_MANIFEST_UNTRUSTED`,不据此清理),随后写入阶段同样退出 3。
+   `out/manifest.json` 不是普通文件(目录、链接、悬空链接)同样视为不可信;它是目录时不递归删除,写入失败退出 3。
+   登记路径不是 `<agent>/<home|project>/<relPath>` 形状(如 `tmp/x`)也视为不可信,避免删到用户自己放在 `out/` 里的文件。
 2. 读上一次的 `out/manifest.json`(必须是普通文件、过 `ManifestSchema`、每个 `path` 过 `OutRelPathSchema`)。不可信则**不据此清理**,打印 `warn BUILD_PREVIOUS_MANIFEST_UNTRUSTED`。
-3. 删掉旧 manifest 登记过的文件、`manifest.json`,以及因此变空的目录。**不在 manifest 里的文件(含 `out/tmp/`)一律不动**,写完后以 `warn BUILD_UNMANAGED_FILE out/<path>` 列出。
+3. 删掉旧 manifest 登记过的文件、`manifest.json`,以及因此变空的目录。登记文件的内容与登记的 `sha256` 不符(被手改)时**不删**,打印 `warn BUILD_MODIFIED_MANAGED_FILE`;本轮还会写的同路径文件照常被覆盖。**不在 manifest 里的文件(含 `out/tmp/`)一律不动**,写完后以 `warn BUILD_UNMANAGED_FILE out/<path>` 列出。
 4. 写新文件,**最后**写 `out/manifest.json`。manifest 存在 = 这一轮写完了;中途失败(退出 3)时 manifest 缺失,下次 build 因读不到旧 manifest 而不清理孤儿,只告警。
-5. 文件权限 0644、目录 0755;内容与 manifest 都经 `canonicalText` / `canonicalJson`。
+5. 文件权限 0644、目录 0755(文件每次写完显式 `chmod 0644`,旧文件的 0755 不会保留);内容与 manifest 都经 `canonicalText` / `canonicalJson`。
+6. `--report` 写 `.state/reports/build.json` 前,`.state/` 与 `.state/reports` 若是符号链接 → 退出 3。
+7. **已知局限(待 `safe-fs` 改动)**:登记文件是硬链接(nlink>1)时 `safe-fs` 的删除校验一律拒绝,build 会退出 3(例如做过 `cp -al out out.bak`);修法在 `src/io/safe-fs.ts`,不在本块范围。
 
 `--dry-run`:不调用任何 `safe-fs` 写函数(不建 `out/`、不建 `.state/`),打印 `would write out/<path> (<字节> 字节, sha256=…)`、`would remove out/<path>`(旧 manifest 里有而新结果没有的)与 `would write out/manifest.json`。预算阻断(退出 1)时同样不列清单。`--report` 与 `--dry-run` 同用时只打印报告,不写 `.state/reports/build.json`。
 
@@ -1162,3 +1178,10 @@ P0 先把 schema 冻在这里,P1 的块直接消费,避免打 tag 之后再改�
 **golden**:`test/build/golden/<用例>/tree.txt`(out/ 整树的单文件快照)。`pnpm run golden:update` 只覆盖 `test/golden`;build 的快照用 `vitest run test/build -u` 更新。
 
 **空仓库**:没有任何规则/技能/子代理时 `out/` 只有 `manifest.json`(`files: []`),打印 `warn BUILD_EMPTY_OUTPUT`,退出 0。
+
+## 12. reader 已知差异(B21 记录;口径正文见 `docs/reader-counting-spec.md` §8.3)
+
+- **agent_version 形状(R1)**:只接受版本号形状(`X.Y.Z[-+后缀]`,总长 ≤ 64);其余值当取不到,走 `collector_fallback`。四家共用基类校验。
+- **R8**:Claude reader 取 `version` 时跳过侧链行,§7.5 探针不跳过;首个带 `version` 的行恰是内联侧链行时两边版本可能不同。已知差异,未改。
+- **单行硬上限 64 MiB(R3)**:超限的行记 `oversized_lines` 与 `unknown_event_types["<line-too-large>"]`,不使整个会话失败。
+- **空白/BOM(R2)**:每一行按 jq 的空白集判空白、去行首一个 BOM(详见口径 C2 补充)。

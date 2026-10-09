@@ -10,6 +10,7 @@
  */
 import * as path from 'node:path';
 import type { AgentId } from '../../contracts/common.js';
+import { TOO_LONG_LINE } from '../../io/read-fs.js';
 import { openReadonlyLines } from '../../signals/open-readonly.js';
 import {
   JsonlTraceReader,
@@ -64,7 +65,7 @@ export async function isMainSessionFile(file: string): Promise<boolean> {
     first = line;
     break;
   }
-  if (first === undefined) return false;
+  if (first === undefined || first === TOO_LONG_LINE) return false;
   let parsed: unknown;
   try {
     parsed = JSON.parse(stripBom(first));
