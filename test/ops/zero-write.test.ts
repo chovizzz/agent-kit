@@ -52,6 +52,7 @@ async function zw(
     '--tmp',
     fx.dir,
     '--require-success',
+    ...(extra.includes('--settle-ms') ? [] : ['--settle-ms', '120']),
     ...extra,
   ]);
   // report.json 在 out-root/<ts>/ 下;只有一个子目录
@@ -414,7 +415,7 @@ describe('自检(--selftest)与真实仓库清单', () => {
     expect(r.stdout).not.toContain('FAIL');
     expect(r.stdout).toMatch(/selftest: 28\/28/);
     expect(r.status).toBe(0);
-  });
+  }, 120_000); // 自检 28 项各跑一遍(含静置),全仓并行时可能超过默认 20s
 
   it('仓库自带的 managed/volatile 清单通过卫生检查(不重叠),且内容符合设计初始值', async () => {
     const fx = await makeFixture('', '');

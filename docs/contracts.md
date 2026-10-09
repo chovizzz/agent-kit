@@ -1179,7 +1179,32 @@ P0 先把 schema 冻在这里,P1 的块直接消费,避免打 tag 之后再改�
 
 **空仓库**:没有任何规则/技能/子代理时 `out/` 只有 `manifest.json`(`files: []`),打印 `warn BUILD_EMPTY_OUTPUT`,退出 0。
 
-## 12. reader 已知差异(B21 记录;口径正文见 `docs/reader-counting-spec.md` §8.3)
+## 12. 零写入验收与状态守卫的已知边界(B20 评审后订正)
+
+### 12.1 零写入验收(A5,`ops/lib/**`)
+
+- **整棵目录被删**:归因取不到被删路径自身的 ctime 时,沿祖先链向上取快照里最近记录过的祖先目录的 ctime;前后确实不同却完全取不到 ctime 的差异判「待人工归因」(退出 5),**不再**当作外部临时改动放行。
+- **目录摘要到文件级**:受管目录条目的子树摘要含每个文件的「路径 + 大小 + 内容 sha256」(ctime **不**进摘要:别处的 git index 刷新之类无关写入会大面积误报;写后还原由「被碰过」判据在命令窗口内抓)(总哈希预算 1GiB、5 万项;超限或读不了的子目录 => `SNAPSHOT_TRUNCATED`,退出 5,不再静默)。「被碰过」判据对目录记录用子树内文件/链接的最大 ctime(不含目录自身,避免 volatile 子项增删误报)。
+- **符号链接**:记 readlink,并跟随到目标——目标在(真实)HOME 内且不在凭据位置(`.ssh .gnupg .aws .kube .azure .docker .netrc .npmrc .pypirc .config/gcloud .config/gh`)时记目标文件 sha256 / 目录树摘要,目标 ctime 并入归因;目标在 HOME 之外、是 HOME 本身、或是凭据位置(`.ssh .gnupg .aws .kube .azure .docker .netrc .npmrc .pypirc .git-credentials .zshrc 等 shell rc、.config/{gcloud,gh,lark-cli}、.codex/auth.json、.pi/agent/auth.json、Library`)及其祖先时**不读内容**,只记目标 size/ctime,目录再记「路径 + 大小 + ctime」元数据树(原地改写文件会改文件 ctime,所以仍检出),报告里以 NOTE + `outside_links` 披露盲区(不单独判红,否则常见的「链到 /opt/…」布局会让验收永久红)。只读普通文件(FIFO/设备不读)。悬空链接记 `dangling`,目标被新建同样出差异。树内部的嵌套链接只记 readlink 与文件目标哈希。已知局限:链接目标的内容哈希与其它受管文件一样是明文 sha256 写进 `.state`。
+- **全程比对与静置**:最后一轮之后静置 `--settle-ms`(默认 800)再取终态快照;「两轮之间」「最后一轮之后」「首轮开始 vs 终态」任何受管路径变化 => `CHANGE_OUTSIDE_COMMAND_WINDOW`(退出 5);静置后假 HOME 新增残留、git 工作树再变化 => 退出 1;带本次运行 nonce 环境变量的后代进程静置后仍存活 => `LEFTOVER_PROCESS_AFTER_RUN`(退出 1,并终止)。**已知局限**:延迟超过静置时间的后台写入仍漏;nonce 扫描依赖 `ps -E` 能看到环境(尽力而为)。
+- **volatile 不得挖空受管目录之下**:volatile 条目的匹配空间与任一受管目录条目(含 adapter 落点)子树相交 => `VOLATILE_UNDER_MANAGED_DIR`(退出 3);基线比较里新增的这类行 => `VOLATILE_ADDED_UNDER_MANAGED`。唯一豁免:不以 `/` 结尾、末段为字面 `.DS_Store` 的条目,且它只剔除同名**普通文件**(同名目录不剔除)。已知局限:volatile 仍可挖空 `HOME_WATCH` 的名字表(现有清单有意如此,如 `~/.local/share/opencode/**`);被跟随的链接目标按**链接路径**判 volatile(对目标真实路径写 volatile 行挖空不了)。
+- **评审后仍未处理(待主代理/后续)**:①`SNAPSHOT_TRUNCATED`(退出 5)没有带理由的放行参数,跟随到大仓库的链接会让验收长期为 5——主代理在真实 HOME 上先数 `~/.claude/skills`、`~/.agents/skills` 跟随链接后的文件数/字节数;②`linkTarget` 在判定 scope 之前对 realpath 做 `statSync`,目标在失效 NFS/SMB 挂载上会阻塞;③单目录上百万项时 5 万上限只在进入目录时检查;④沿祖先取 ctime 可能一路取到 `~`(其 ctime 常被 shell 历史刷新)导致误判 `ours`;⑤`ps` 不可用或不显示环境(Linux 的 `-e` 语义不同)时只出 NOTE;kill 前未再核验 pid(复用);⑥基线 volatile 对外置清单(`--volatile` 在仓库外)不比较;⑦`volatileCoversManagedSubtree` 对非目录形态的受管条目(自身是指向目录的链接)返回 false。
+- 其它:零条命令 => 退出 4(`NO_COMMANDS`);第二轮的命令异常与 git 树变化同样计入;`main.mjs diff` 读不了快照 => 退出 4。
+- **未处理(延后)**:默认仍接受命令桩退出 64(A5 自己改判为 4);命令桩掩盖同轮受管写入(ZW-7);gitignored 路径写入不可见;`--base-ref` 默认 HEAD;adapter `managed-targets.json` 解析失败仍被跳过;HOME 顶层「写了又删」不可见。
+
+### 12.2 no-net 垫片(A8)
+
+`ops/guards/no-net.cjs` 是 **API 级拦截,不是沙箱**。未覆盖:`process.binding` 取 tcp/udp/cares/spawn_sync、直接构造 `dgram.Socket`、`process.dlopen`、子进程丢掉垫片(改写 `NODE_OPTIONS`/`env`)、名单外联网二进制(`git fetch|clone|ls-remote`、`npm`、`pnpm`、`npx`、`gh`、`rsync`、`dig`、`nslookup`、`host`、`openssl s_client`)、「解释器 + 脚本文件」。A8 通过 = 「没有走被拦截的 API」,不是「没有联网」。更硬的方案(后续):macOS `sandbox-exec` deny network / Linux `unshare -n` 作为正向判据。
+
+### 12.3 状态守卫 G1–G4 的语义订正
+
+- **GD-1(边)**:`merge` 不看声明者的 status,`disables`/`overrides` 一合入就生效。守卫层的处置(`src/merge/**` 不在本块范围):G1 拒绝**新增**原子声明非空 `disables`/`overrides`(`GUARD_G1_NEW_ATOM_HAS_EDGES`);G2 拒绝**已有**原子对这两个字段的任何增、删、改(`GUARD_G2_FIELD_LOCKED`;删边会让被压掉的原子复活);`kit:retire` 不放开(退役靠改 status 即可)。**后果**:P0 里新边只能在守卫之外由人引入。**根治(待主代理)**:`src/merge/merge.ts` 只采纳 status 为 active/advisory 的声明者发出的边。另注意:retired/proposed 原子身上的存量边仍然生效,删掉持边原子会让目标恢复,这一步只受 G4 约束。
+- **GD-2(治理字段)**:内容 PR 不得改已有原子的 `status`、`id`、`layer`、`strength`、`applies_to`、`paths`、`overrides`、`disables`,`review_by` 不得延长或改写(只允许提前)。`id` 被锁是因为边按 id 解析;要改这些字段,新建新 id 的原子并走退役。例外:基线 status 仍是 `proposed`(尚未生效)的原子可以改 `id/layer/strength/applies_to/paths`,否则写错的 proposed 原子既改不了也删不掉;`overrides/disables` 不论状态一律锁定(缺省与 `[]` 视为相同)。`owner`/`volatility` 不锁。**策略层说明**:内容 PR 仍可改 active 原子的正文、`verifier`、`evidence`、`signature`——守卫不约束正文,这是已接受的策略选择,靠人工评审。
+- **GD-3(stable tag)**:只认**注解** `stable-*` tag,且其提交须是基线的**严格**祖先(指向基线本身的不算)。**已知缺口**:没有签名/创建者校验(tagger 可伪造,CODEOWNERS 的 handle 与 tagger 邮箱也无映射,故不做该匹配);任何能在本地打注解 tag 的人都能在基线祖先上补 tag。**P1 CI 必须使用服务端受保护 tag 或 `verify-tag` 验签,不得信任仓库内可写的 tag。**
+- 发版说明:仓库里存量的轻量 `stable-*` tag 现在被忽略,原本能通过的删除会变红(收紧方向)。
+- GD-4(`.kit/rules/` 子模块被 lint 读到而守卫看不到)、GD-5(merge-base 契约未强制,只会假阳性)、GD-6(晋升 PR 不能同时补 `signature`,须先走内容 PR 补)延后;GD-6 的两步流程以此处为准。
+
+## 13. reader 已知差异(B21 记录;口径正文见 `docs/reader-counting-spec.md` §8.3)
 
 - **agent_version 形状(R1)**:只接受版本号形状(`X.Y.Z[-+后缀]`,总长 ≤ 64);其余值当取不到,走 `collector_fallback`。四家共用基类校验。
 - **R8**:Claude reader 取 `version` 时跳过侧链行,§7.5 探针不跳过;首个带 `version` 的行恰是内联侧链行时两边版本可能不同。已知差异,未改。

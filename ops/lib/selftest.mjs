@@ -65,6 +65,7 @@ export function runSelfTest(base, log) {
       baseRef: '',
       allowKitPaths: false,
       requireSuccess: true,
+      settleMs: 120,
       selftest: false,
       ...extra,
     };

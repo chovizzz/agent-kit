@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ATOM_PATH, OTHER_PATH, atom } from '../fixtures/guards/atoms.js';
+import { ATOM_PATH, COMMON_FILES, OTHER_PATH, atom } from '../fixtures/guards/atoms.js';
 import { scenario, useRepoCleanup } from './helpers.js';
 
 useRepoCleanup();
@@ -97,5 +97,27 @@ describe('G1:新增原子的 status 必须是 proposed', () => {
       { 'docs/not-an-atom.md': atom({ status: 'active' }), 'rules/readme.txt': 'x\n' },
     );
     expect(s.codes).toEqual([]);
+  });
+});
+
+describe('GD-1:新增原子不得带 disables/overrides', () => {
+  it('proposed 新原子带 disables / overrides → GUARD_G1_NEW_ATOM_HAS_EDGES', async () => {
+    for (const line of ['disables: [other-atom]', 'overrides: [other-atom]', 'disables: foo']) {
+      const s = await scenario(
+        { ...COMMON_FILES },
+        { [ATOM_PATH]: atom({ status: 'proposed', extraLines: [line] }) },
+      );
+      expect(s.codes, line).toEqual(['GUARD_G1_NEW_ATOM_HAS_EDGES']);
+    }
+  });
+
+  it('对照:空数组 / 不带边的 proposed 新原子 → 绿', async () => {
+    for (const extra of [[], ['disables: []']]) {
+      const s = await scenario(
+        { ...COMMON_FILES },
+        { [ATOM_PATH]: atom({ status: 'proposed', extraLines: extra }) },
+      );
+      expect(s.codes).toEqual([]);
+    }
   });
 });

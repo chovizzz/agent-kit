@@ -2,9 +2,12 @@
 // 报告里只放 `~/…` 形式的路径与哈希,不放文件内容。
 //
 // 快照记录(按 plan B17 要点):
-//   - 字面文件:存在与否 + sha256;符号链接记录 readlink 目标,不跟随。
+//   - 字面文件:存在与否 + sha256;符号链接记录 readlink 目标,并(目标在 HOME 内时)跟随到目标:
+//     文件记 size/sha256,目录记整棵树摘要;目标在 HOME 之外时不读内容,只记目标 lstat 元数据并登记
+//     outside_links(=> 退出 5 待人工归因)。通过链接写入因此检测得到(B20 ZW-3)。
 //   - 目录条目(以 / 结尾):顶层条目名列表 + 每个条目的 sha256(文件)/ readlink(符号链接)/
-//     (子目录)SKILL.md 与其顶层普通文件的 sha256 + 子目录条目名列表。
+//     (子目录)SKILL.md 与其顶层普通文件的 sha256 + 整棵子树的「路径 + 类型 + 大小 + 内容 sha256 + ctime」摘要
+//     (深层文件的同长度改写、写后还原都会改变摘要;B20 ZW-2)。
 //   - glob:展开结果本身(含空展开)参与比对。
 //   - volatile:只剔除(路径或其祖先命中)。
 import * as crypto from 'node:crypto';
@@ -80,10 +83,61 @@ function readdirNames(p) {
 }
 
 const TREE_MAX_FILES = 50000;
-/** 目录整棵树的「相对路径 + 类型 + 大小」摘要(不读内容、不跟随符号链接;volatile 剔除)。抓得到嵌套文件的增删与大小变化。 */
-function treeDigest(root, vol) {
+/** 整棵树里读内容哈希的总字节上限;超过后只记 size+ctime 并标记截断(=> fail-closed,不是静默)。 */
+const TREE_MAX_HASH_TOTAL = 1024 * 1024 * 1024;
+
+/** HOME 内但含凭据的位置:不跟随读内容(报告里会有内容哈希),按「HOME 之外」处理——只记元数据。 */
+const SENSITIVE_HOME_DIRS = [
+  '.ssh',
+  '.gnupg',
+  '.aws',
+  '.kube',
+  '.azure',
+  '.docker',
+  '.netrc',
+  '.npmrc',
+  '.pypirc',
+  '.config/gcloud',
+  '.config/gh',
+  '.config/lark-cli',
+  '.git-credentials',
+  '.zshrc',
+  '.zprofile',
+  '.zshenv',
+  '.bash_profile',
+  '.bashrc',
+  '.codex/auth.json',
+  '.pi/agent/auth.json',
+  'Library',
+];
+
+/** 路径是否落在凭据位置(按 ctx.home 与其 realpath 两种前缀判断)。 */
+function isSensitivePath(p, ctx) {
+  return SENSITIVE_HOME_DIRS.some(
+    (d) => isUnder(p, path.join(ctx.home, d)) || isUnder(p, path.join(ctx.realHome, d)),
+  );
+}
+
+/** 能跟随读内容的目标:在 HOME 内、不是 HOME 本身、不是凭据位置、也不是任何凭据位置的祖先。 */
+function inFollowScope(real, realHome) {
+  if (!isUnder(real, realHome) || real === realHome) return false;
+  return !SENSITIVE_HOME_DIRS.some((d) => {
+    const sd = path.join(realHome, d);
+    return isUnder(real, sd) || isUnder(sd, real);
+  });
+}
+
+/** volatile 判定:被跟随的链接目标按「链接路径」判(而不是 realpath),否则可以对目标真实路径写 volatile 行挖空监视。 */
+function isVol(ctx, p) {
+  for (const a of ctx.aliases) {
+    if (isUnder(p, a.real)) return ctx.vol.isVolatile(a.link + p.slice(a.real.length));
+  }
+  return ctx.vol.isVolatile(p);
+}
+
+/** HOME 之外的目录:不读内容,只记「路径 + 类型 + 大小 + ctime」(原地改写文件会改文件 ctime)。 */
+function metaDigest(root) {
   const lines = [];
-  let maxCtime = 0;
   let truncated = false;
   const walk = (dir, rel) => {
     if (lines.length > TREE_MAX_FILES) {
@@ -94,16 +148,148 @@ function treeDigest(root, vol) {
     if (ents === null) return;
     for (const e of ents.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
       const p = path.join(dir, e.name);
-      if (vol.isVolatile(p)) continue;
+      const r = rel ? `${rel}/${e.name}` : e.name;
+      const lst = lstatOrNull(p);
+      if (!lst) continue;
+      if (lst.isDirectory()) {
+        lines.push(`${r}\tD`);
+        walk(p, r);
+      } else
+        lines.push(
+          `${r}\t${lst.isSymbolicLink() ? 'L' : 'F'}\t${lst.size}\t${Math.trunc(lst.ctimeMs)}`,
+        );
+    }
+  };
+  walk(root, '');
+  if (truncated) lines.push('TRUNCATED');
+  return { digest: crypto.createHash('sha256').update(lines.join('\n')).digest('hex'), truncated };
+}
+
+function isUnder(p, root) {
+  return p === root || p.startsWith(root.endsWith('/') ? root : root + '/');
+}
+
+function realpathOrNull(p) {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 符号链接目标摘要(只在 HOME 内跟随)。返回 { rec, ctime } :
+ *   rec  - 并入快照记录的 target 字段(文件:size+sha;目录:树摘要;HOME 之外:仅元数据);
+ *   ctime - 目标(及目标树)的最大 ctime,并入 meta 供归因/「被碰过」判断。
+ * nested=true(树内部的链接)时不再递归目录,只记目录的存在。
+ */
+function linkTarget(abs, ctx, nested) {
+  const real = realpathOrNull(abs);
+  if (real === null) return { rec: { dangling: true }, ctime: 0, contentCtime: 0 };
+  let tst;
+  try {
+    tst = fs.statSync(real);
+  } catch {
+    return { rec: { dangling: true }, ctime: 0, contentCtime: 0 };
+  }
+  if (!inFollowScope(real, ctx.realHome)) {
+    // 不读 HOME 之外(或凭据位置)的内容;只记元数据(写入会改 ctime/size => 快照有差异),并登记为盲区链接
+    ctx.outsideLinks.add(ctx.tilde(abs));
+    let meta = {};
+    if (tst.isDirectory() && !nested) {
+      const md = metaDigest(real);
+      if (md.truncated) ctx.truncated = true;
+      meta = { tree: md.digest };
+    }
+    return {
+      rec: {
+        outside: true,
+        t: tst.isDirectory() ? 'dir' : 'file',
+        size: tst.size,
+        ctime_ms: Math.trunc(tst.ctimeMs),
+        ...meta,
+      },
+      ctime: Math.trunc(tst.ctimeMs),
+      contentCtime: Math.trunc(tst.ctimeMs),
+    };
+  }
+  if (tst.isDirectory()) {
+    if (nested) return { rec: { t: 'dir' }, ctime: Math.trunc(tst.ctimeMs), contentCtime: 0 };
+    ctx.aliases.push({ real, link: abs });
+    const tree = treeDigest(real, ctx.vol, ctx);
+    ctx.aliases.pop();
+    if (tree.truncated) ctx.truncated = true;
+    return {
+      rec: { t: 'dir', tree: tree.digest },
+      ctime: Math.max(Math.trunc(tst.ctimeMs), tree.maxCtime),
+      contentCtime: tree.contentCtime,
+    };
+  }
+  if (tst.isFile()) {
+    return {
+      rec: { t: 'file', size: tst.size, sha: sha256File(real, tst.size) },
+      ctime: Math.trunc(tst.ctimeMs),
+      contentCtime: Math.trunc(tst.ctimeMs),
+    };
+  }
+  return {
+    rec: { t: 'other' },
+    ctime: Math.trunc(tst.ctimeMs),
+    contentCtime: Math.trunc(tst.ctimeMs),
+  };
+}
+
+/**
+ * 目录整棵树的摘要:每个文件「相对路径 + 大小 + 内容 sha256 + ctime」(不跟随目录符号链接;volatile 剔除)。
+ * 抓得到嵌套文件的增删、大小变化、同长度改写、写后还原(ctime 变)。
+ * 树内部的符号链接只记 readlink 与文件目标的哈希(目录目标不再递归),HOME 之外的目标不读内容。
+ */
+function treeDigest(root, vol, ctx) {
+  const lines = [];
+  let maxCtime = 0;
+  let contentCtime = 0; // 只算文件/链接,不算目录:目录 ctime 会被 volatile 子项的增删抬高
+  let truncated = false;
+  const walk = (dir, rel) => {
+    if (lines.length > TREE_MAX_FILES) {
+      truncated = true;
+      return;
+    }
+    const ents = readdirNames(dir);
+    if (ents === null) {
+      // 遍历中途消失的目录(竞态)不算读不了;真读不了的不再静默:摘要里留一行,且按截断处理(fail-closed)
+      if (lstatOrNull(dir) === null) return;
+      lines.push(`${rel || '.'}\tUNREADABLE`);
+      truncated = true;
+      return;
+    }
+    for (const e of ents.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
+      const p = path.join(dir, e.name);
+      if (isVol(ctx, p)) continue;
       const r = rel ? `${rel}/${e.name}` : e.name;
       const lst = lstatOrNull(p);
       if (lst) maxCtime = Math.max(maxCtime, Math.trunc(lst.ctimeMs));
-      if (e.isSymbolicLink()) lines.push(`${r}\tL\t${readlinkOrNull(p) ?? ''}`);
-      else if (e.isDirectory()) {
+      if (e.isSymbolicLink()) {
+        const t = linkTarget(p, ctx, true);
+        maxCtime = Math.max(maxCtime, t.ctime);
+        contentCtime = Math.max(contentCtime, t.contentCtime, lst ? Math.trunc(lst.ctimeMs) : 0);
+        lines.push(`${r}\tL\t${readlinkOrNull(p) ?? ''}\t${JSON.stringify(t.rec)}`);
+      } else if (e.isDirectory()) {
         lines.push(`${r}\tD`);
         walk(p, r);
       } else {
-        lines.push(`${r}\tF\t${lst ? lst.size : -1}`);
+        let sha = '-';
+        if (lst) contentCtime = Math.max(contentCtime, Math.trunc(lst.ctimeMs));
+        if (lst && lst.isFile() && !isSensitivePath(p, ctx)) {
+          if (lst.size > MAX_HASH_BYTES) sha = `oversize:${lst.size}`;
+          else if (ctx.hashedBytes + lst.size > TREE_MAX_HASH_TOTAL) truncated = true;
+          else {
+            sha = sha256File(p, lst.size);
+            ctx.hashedBytes += lst.size;
+          }
+        }
+        // ctime 不进摘要(只读之外的无关写入如 git index 刷新会造成大面积误报);同长度改写由 sha 抓,
+        // 窗口内的「碰过/写后还原」由 content_ctime_ms 的 touched 判据抓
+        lines.push(`${r}\tF\t${lst ? lst.size : -1}\t${sha}`);
       }
     }
   };
@@ -112,6 +298,7 @@ function treeDigest(root, vol) {
   return {
     digest: crypto.createHash('sha256').update(lines.join('\n')).digest('hex'),
     maxCtime,
+    contentCtime,
     truncated,
   };
 }
@@ -124,18 +311,24 @@ function describe(abs, ctx) {
     return { t: 'absent' };
   }
   ctx.meta[ctx.tilde(abs)] = { ctime_ms: Math.trunc(st.ctimeMs), mtime_ms: Math.trunc(st.mtimeMs) };
-  if (st.isSymbolicLink()) return { t: 'symlink', link: readlinkOrNull(abs, ctx) };
+  if (st.isSymbolicLink()) {
+    const t = linkTarget(abs, ctx, false);
+    const m = ctx.meta[ctx.tilde(abs)];
+    m.content_ctime_ms = Math.max(m.ctime_ms, t.contentCtime);
+    m.ctime_ms = Math.max(m.ctime_ms, t.ctime);
+    return { t: 'symlink', link: readlinkOrNull(abs, ctx), target: t.rec };
+  }
   if (st.isFile()) return { t: 'file', size: st.size, sha: sha256File(abs, st.size) };
   if (st.isDirectory()) {
     const ents = readdirNames(abs);
     if (ents === null) return { t: 'dir', unreadable: true };
     noteDir(abs, st, ctx);
-    const names = ents.map((e) => e.name).filter((n) => !ctx.vol.isVolatile(path.join(abs, n)));
+    const names = ents.map((e) => e.name).filter((n) => !isVol(ctx, path.join(abs, n)));
     names.sort();
     const rec = { t: 'dir', names };
     const files = {};
     for (const e of ents) {
-      if (!e.isFile() || ctx.vol.isVolatile(path.join(abs, e.name))) continue;
+      if (!e.isFile() || isVol(ctx, path.join(abs, e.name))) continue;
       const fst = lstatOrNull(path.join(abs, e.name));
       if (!fst) continue;
       files[e.name] = sha256File(path.join(abs, e.name), fst.size);
@@ -144,7 +337,7 @@ function describe(abs, ctx) {
         mtime_ms: Math.trunc(fst.mtimeMs),
       };
     }
-    const tree = treeDigest(abs, ctx.vol);
+    const tree = treeDigest(abs, ctx.vol, ctx);
     if (tree.truncated) ctx.truncated = true;
     rec.tree = tree.digest;
     if (Object.keys(files).length) rec.files = Object.fromEntries(Object.entries(files).sort());
@@ -152,7 +345,11 @@ function describe(abs, ctx) {
     let c = Math.max(Math.trunc(st.ctimeMs), tree.maxCtime);
     for (const n of Object.keys(files))
       c = Math.max(c, ctx.meta[ctx.tilde(path.join(abs, n))]?.ctime_ms ?? 0);
-    ctx.meta[ctx.tilde(abs)] = { ctime_ms: c, mtime_ms: Math.trunc(st.mtimeMs) };
+    ctx.meta[ctx.tilde(abs)] = {
+      ctime_ms: c,
+      content_ctime_ms: tree.contentCtime,
+      mtime_ms: Math.trunc(st.mtimeMs),
+    };
     return rec;
   }
   return { t: 'other', mode: st.mode & 0o170000 };
@@ -204,6 +401,26 @@ function snapDir(abs, source, ctx) {
       addPath(abs, { t: 'symlink', link, dangling: true }, source, ctx);
       return;
     }
+    if (!inFollowScope(real, ctx.realHome)) {
+      // 不跟随到 HOME 之外读内容:只记目标元数据(写入会改 ctime/size => 快照有差异),登记为盲区链接
+      ctx.outsideLinks.add(ctx.tilde(abs));
+      const ost = lstatOrNull(real);
+      const md = ost && ost.isDirectory() ? metaDigest(real) : null;
+      if (md?.truncated) ctx.truncated = true;
+      addPath(
+        abs,
+        {
+          t: 'symlink',
+          link,
+          outside: true,
+          ...(ost ? { size: ost.size, ctime_ms: Math.trunc(ost.ctimeMs) } : {}),
+          ...(md ? { tree: md.digest } : {}),
+        },
+        source,
+        ctx,
+      );
+      return;
+    }
   }
   const ents = readdirNames(real);
   if (ents === null) {
@@ -219,12 +436,14 @@ function snapDir(abs, source, ctx) {
     source,
     ctx,
   );
+  if (link !== null) ctx.aliases.push({ real, link: abs });
   for (const e of visible) {
     const child = path.join(abs, e.name);
     // 子路径记录:用 real 目录下的同名项读取(符号链接目录本身时通过 real 访问)
     const readFrom = link !== null ? path.join(real, e.name) : child;
     addPath(child, describeChild(readFrom, child, ctx), source, ctx);
   }
+  if (link !== null) ctx.aliases.pop();
 }
 
 function describeChild(readFrom, keyPath, ctx) {
@@ -256,6 +475,10 @@ export function takeSnapshot(o) {
     meta: {},
     dirs: {},
     volatileExcluded: new Set(),
+    realHome: realpathOrNull(home) ?? home,
+    outsideLinks: new Set(),
+    hashedBytes: 0,
+    aliases: [],
   };
   const entries = [];
   const all = [
@@ -318,6 +541,7 @@ export function takeSnapshot(o) {
     ),
     meta: Object.fromEntries(Object.entries(ctx.meta).sort(([a], [b]) => (a < b ? -1 : 1))),
     dirs: Object.fromEntries(Object.entries(ctx.dirs).sort(([a], [b]) => (a < b ? -1 : 1))),
+    outside_links: [...ctx.outsideLinks].sort(),
     stats: {
       entries: entries.length,
       recorded_paths: Object.keys(sortedPaths).length,

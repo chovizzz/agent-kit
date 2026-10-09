@@ -126,12 +126,27 @@ export function compileEntry(entry, home) {
   };
 }
 
+/**
+ * 唯一允许落在受管目录之下的 volatile 形态:不以 `/` 结尾、末段是字面 `.DS_Store` 的条目。
+ * 它只剔除「名叫 .DS_Store 的普通文件」——不按祖先规则剔除子树,目录形态的 .DS_Store 不被剔除(B20 ZW-5)。
+ */
+export function isFileOnlyVolatile(entry) {
+  if (entry.isDir) return false;
+  const segs = splitAbs(entry.pattern);
+  return segs[segs.length - 1] === '.DS_Store';
+}
+
 export function compileVolatile(entries, home) {
-  const list = entries.map((e) => compileEntry(e, home));
+  const list = entries.map((e) => ({ ...compileEntry(e, home), fileOnly: isFileOnlyVolatile(e) }));
   return {
     list,
     isVolatile(absPath) {
-      return list.some((c) => c.covers(absPath));
+      return list.some((c) => {
+        if (!c.fileOnly) return c.covers(absPath);
+        if (!c.matchesExactly(absPath)) return false;
+        const st = safeLstat(absPath);
+        return st === null || st.isFile(); // 目录、符号链接、FIFO 形态的同名项不剔除
+      });
     },
   };
 }
@@ -201,9 +216,51 @@ export function expandGlob(absPattern) {
  * 静态冲突检查:任一 managed 条目(字面/目录路径、glob 模式串、glob 现有展开)被 volatile 覆盖 => 冲突。
  * 返回 [{ code:'MANAGED_COVERED_BY_VOLATILE', managed, volatile, via }]
  */
+function segsMayOverlap(a, b) {
+  const ga = GLOB_CHARS.test(a);
+  const gb = GLOB_CHARS.test(b);
+  if (!ga && !gb) return a === b;
+  if (ga && gb) return true; // 保守:两边都是通配就当作相交
+  return ga ? segMatches(a, b) : segMatches(b, a);
+}
+
+/** volatile 模式(段数组)能否匹配到 dirSegs 所在目录「之下」的某个路径(保守)。 */
+function mayReachInside(pat, dirSegs, pi = 0, si = 0) {
+  if (si === dirSegs.length) return pi < pat.length;
+  if (pi === pat.length) return false;
+  const p = pat[pi];
+  const d = dirSegs[si];
+  if (p === '**')
+    return mayReachInside(pat, dirSegs, pi + 1, si) || mayReachInside(pat, dirSegs, pi, si + 1);
+  if (d === '**') return true;
+  return segsMayOverlap(p, d) && mayReachInside(pat, dirSegs, pi + 1, si + 1);
+}
+
+/** volatile 条目是否会剔除某个受管目录条目「之下」的东西(豁免:仅 .DS_Store 文件形态)。 */
+export function volatileCoversManagedSubtree(volEntry, managedEntry, home) {
+  if (!managedEntry.isDir || isFileOnlyVolatile(volEntry)) return false;
+  return mayReachInside(
+    splitAbs(toAbsolute(volEntry.pattern, home)),
+    splitAbs(toAbsolute(managedEntry.pattern, home)),
+  );
+}
+
 export function findListConflicts(managedEntries, volatileEntries, home) {
   const vol = compileVolatile(volatileEntries, home);
   const conflicts = [];
+  // 受管目录「之下」被 volatile 挖空(B20 ZW-5):~/.claude/skills/* 、**/SKILL.md 这类
+  for (const m of managedEntries) {
+    for (const v of volatileEntries) {
+      if (volatileCoversManagedSubtree(v, m, home)) {
+        conflicts.push({
+          code: 'VOLATILE_UNDER_MANAGED_DIR',
+          managed: m.raw,
+          volatile: v.raw,
+          via: 'subtree',
+        });
+      }
+    }
+  }
   for (const m of managedEntries) {
     const abs = toAbsolute(m.pattern, home);
     const candidates = [{ p: abs, via: m.isGlob ? 'pattern' : 'path' }];
@@ -271,12 +328,29 @@ export function gitStatusPorcelain(repo) {
  *   MANAGED_REMOVED:           基线 managed 里有、现在没有(未被 volatile 覆盖)——同样要显式批准(--allow-managed-removal)。
  * baseManaged / baseVolatile: 文本(基线不存在时传 null => 不检查)。
  */
-export function compareWithBase(baseManagedText, nowManagedText, nowVolatileText, home) {
+export function compareWithBase(
+  baseManagedText,
+  nowManagedText,
+  nowVolatileText,
+  home,
+  baseVolatileText = null,
+) {
   if (baseManagedText === null) return [];
   const base = parseList(baseManagedText);
+  const added = [];
+  if (baseVolatileText !== null) {
+    const baseVol = new Set(parseList(baseVolatileText).map((e) => e.raw));
+    const nowManaged = parseList(nowManagedText);
+    for (const v of parseList(nowVolatileText)) {
+      if (baseVol.has(v.raw)) continue;
+      for (const m of nowManaged)
+        if (volatileCoversManagedSubtree(v, m, home))
+          added.push({ code: 'VOLATILE_ADDED_UNDER_MANAGED', managed: m.raw, volatile: v.raw });
+    }
+  }
   const nowSet = new Set(parseList(nowManagedText).map((e) => e.raw));
   const vol = compileVolatile(parseList(nowVolatileText), home);
-  const out = [];
+  const out = [...added];
   for (const b of base) {
     if (nowSet.has(b.raw)) continue;
     const abs = toAbsolute(b.pattern, home);

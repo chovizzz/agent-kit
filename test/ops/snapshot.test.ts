@@ -146,19 +146,39 @@ describe('快照语法:字面 / glob / 目录 / 注释空行', () => {
     expect(s.paths['~/star/*']?.expansion).toEqual(['~/star/vis']);
   });
 
-  it('符号链接记录 readlink 目标而不是跟随', async () => {
+  it('符号链接记录 readlink 目标,并跟随到 HOME 内的目标内容(B20 ZW-3)', async () => {
     const fx = await makeFixture('~/.claude/skills/\n', '');
     await fx.put('real/SKILL.md', '# real\n');
     await fx.link('.claude/skills/alias', '../../real');
     const a = await snap(fx, 'l1');
     const rec = a.paths['~/.claude/skills/alias'];
     expect(rec?.t).toBe('symlink');
-    // 指向 HOME 内的目标折成 ~/…(报告里不出现 HOME 的绝对路径),且是 readlink 值而非目标内容
+    // 指向 HOME 内的目标折成 ~/…(报告里不出现 HOME 的绝对路径)
     expect(rec?.link).toBe('~/real');
-    // 改链接指向目标里的文件 => 链接本身不变 => 快照无差异(不跟随)
+    // 目标内容变化(链接字符串不变)=> 快照有差异:通过链接写入不再是盲区
     await fx.put('real/SKILL.md', '# changed\n');
     await snap(fx, 'l2');
-    expect(diff(fx, 'l1', 'l2').d.count).toBe(0);
+    expect(diff(fx, 'l1', 'l2').d.changed.map((c) => c.path)).toEqual(['~/.claude/skills/alias']);
+    // 对照:目标没变 => 无差异
+    await snap(fx, 'l3');
+    expect(diff(fx, 'l2', 'l3').d.count).toBe(0);
+  });
+
+  it('凭据位置(~/.ssh 等)里的链接目标不读内容,按「HOME 之外」只记元数据', async () => {
+    const fx = await makeFixture('~/.claude/CLAUDE.md\n', '');
+    await fx.put('.ssh/notes.md', 'PRIVATE-CONTENT');
+    await fx.link('.claude/CLAUDE.md', path.join(fx.home, '.ssh/notes.md'));
+    const o = path.join(fx.out, 's');
+    runMain(['snap', '--repo', fx.repo, '--home', fx.home, '--base-ref', '', '--out-root', o]);
+    const text = await readText(path.join(o, 'snapshot.json'));
+    expect(text).not.toContain('PRIVATE-CONTENT');
+    const j = JSON.parse(text) as {
+      outside_links: string[];
+      paths: Record<string, { target?: { outside?: boolean; sha?: string } }>;
+    };
+    expect(j.outside_links).toEqual(['~/.claude/CLAUDE.md']);
+    expect(j.paths['~/.claude/CLAUDE.md']?.target?.outside).toBe(true);
+    expect(j.paths['~/.claude/CLAUDE.md']?.target?.sha).toBeUndefined();
   });
 });
 

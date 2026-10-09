@@ -5,6 +5,11 @@
 //       / child_process 启动 curl|wget|nc|ncat|ssh|scp|telnet|ftp。
 // 被拦时抛 Error(code='ENO_NET'),并向 stderr 写一行 `[no-net] blocked <api>`(即使调用方吞掉异常也留痕);
 // 若设了 KIT_NO_NET_LOG,同时追加写入该文件。
+// 🔴 这是 API 级拦截(lint),不是沙箱。已知**不**覆盖:`process.binding('tcp_wrap'|'cares_wrap'|'spawn_sync'…)`、
+//    直接构造 `new dgram.Socket()` 后 send/connect、`process.dlopen` 原生模块、子进程重写 NODE_OPTIONS/env 丢掉本垫片、
+//    名单外的联网二进制(git fetch/clone/ls-remote、npm/pnpm/npx、gh、rsync、dig/nslookup/host、openssl s_client 等)、
+//    「解释器 + 脚本文件」(只查内联代码)。所以 A8 通过只证明「没有走被拦的 API」,不证明「没有联网」。
+//    要真不联网需系统级手段(macOS `sandbox-exec` 的 deny network、Linux `unshare -n`),列为后续。
 // 作用域:只管运行期命令(build/check/redact/signals);安装/audit/spike 属开发期,不要给它们加这个垫片。
 const fs = require('node:fs');
 const path = require('node:path');
