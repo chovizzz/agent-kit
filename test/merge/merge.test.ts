@@ -86,14 +86,57 @@ describe('合并规则 2:should 可被替换或关闭', () => {
     expect(mergeReportText(r)).toContain('soft ← project 层的 better(替换)');
   });
 
-  it('disables:personal / project 层可以关掉上层 should,目标被剔除、覆盖者不记 replaced', () => {
-    for (const layer of ['personal', 'project'] as const) {
-      const r = mergeAtoms([atom('soft', 'org'), atom('off', layer, { disables: ['soft'] })]);
-      expect(r.diagnostics).toEqual([]);
-      expect(ids(r)).toEqual(['off']);
-      expect(r.atoms[0]?.replaced).toEqual([]);
-      expect(r.overridden).toEqual([{ id: 'soft', by: 'off', kind: 'disables', byLayer: layer }]);
+  it('disables:project 层可以关掉上层 should,目标被剔除、覆盖者不记 replaced', () => {
+    const r = mergeAtoms([atom('soft', 'org'), atom('off', 'project', { disables: ['soft'] })]);
+    expect(r.diagnostics).toEqual([]);
+    expect(ids(r)).toEqual(['off']);
+    expect(r.atoms[0]?.replaced).toEqual([]);
+    expect(r.overridden).toEqual([{ id: 'soft', by: 'off', kind: 'disables', byLayer: 'project' }]);
+  });
+
+  it('B2:personal 的 disables / overrides 不改变 core 视图——被指向的 team should 原子仍在且 coreEligible', () => {
+    for (const kind of ['disables', 'overrides'] as const) {
+      const r = mergeAtoms([atom('soft', 'team'), atom('mine', 'personal', { [kind]: ['soft'] })]);
+      expect(r.diagnostics, kind).toEqual([]);
+      expect(ids(r).sort(), kind).toEqual(['mine', 'soft']);
+      expect(r.atoms.find((a) => a.atom.fm.id === 'soft')?.coreEligible, kind).toBe(true);
+      expect(r.atoms.find((a) => a.atom.fm.id === 'mine')?.coreEligible, kind).toBe(false);
+      // 边仍然记录,供报告标注「本机(P2)才生效」
+      expect(r.overridden, kind).toEqual([{ id: 'soft', by: 'mine', kind, byLayer: 'personal' }]);
     }
+  });
+
+  it('B2:personal 用同 id overrides team 原子——core 视图只留 team 原子(不让渲染层按 id 索引时被 personal 盖住),overridden 仍记边', () => {
+    const r = mergeAtoms([atom('soft', 'team'), atom('soft', 'personal', { overrides: ['soft'] })]);
+    expect(r.diagnostics).toEqual([]);
+    expect(r.atoms.map((a) => `${a.layer}/${a.atom.fm.id}:${a.coreEligible}`)).toEqual([
+      'team/soft:true',
+    ]);
+    expect(r.overridden).toEqual([
+      { id: 'soft', by: 'soft', kind: 'overrides', byLayer: 'personal' },
+    ]);
+    const p = mergeAtoms(
+      [atom('soft', 'team'), atom('soft', 'personal', { overrides: ['soft'] })],
+      {
+        view: 'preview',
+      },
+    );
+    expect(p.atoms.map((a) => a.layer)).toEqual(['personal']);
+  });
+
+  it('B2 控制组:view=preview 时 personal 的边照常生效(P2 预览用)', () => {
+    const r = mergeAtoms([atom('soft', 'team'), atom('mine', 'personal', { disables: ['soft'] })], {
+      view: 'preview',
+    });
+    expect(ids(r)).toEqual(['mine']);
+  });
+
+  it('B2:personal 的写法错误仍是 error(目标缺失 / 指向 must / 方向)', () => {
+    const r = mergeAtoms([
+      atom('lock', 'team', { strength: 'must' }),
+      atom('mine', 'personal', { disables: ['lock', 'nope'] }),
+    ]);
+    expect(codes(r).sort()).toEqual(['MERGE_MUST_LOCKED', 'MERGE_TARGET_MISSING']);
   });
 
   it('org / team 层不能 disables → MERGE_DISABLE_NOT_ALLOWED,目标不被关闭', () => {

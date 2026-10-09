@@ -111,3 +111,34 @@ describe('discover', () => {
     expect(await createClaudeReader().discover(w.sessions)).toEqual([]);
   });
 });
+
+describe('R5:显式传入单个文件', () => {
+  it('子代理文件当 --source:不算会话(正向对照:显式传主会话文件照常收)', async () => {
+    const w = await newWork('cl-disc-explicit-');
+    const sub = await writeClaudeLines(w.io, {
+      root: w.sessions,
+      cwd: '/work/proj-a',
+      id: 'sub',
+      lines: [userLine('x')],
+      relPath: `${fakeUuid('a')}/subagents/agent-1.jsonl`,
+    });
+    // 即使文件名是 UUID 形状,放在 subagents/ 下也不是主会话
+    const subUuid = await writeClaudeLines(w.io, {
+      root: w.sessions,
+      cwd: '/work/proj-a',
+      id: 'sub2',
+      lines: [userLine('x')],
+      relPath: `${fakeUuid('a')}/subagents/${main('zz')}`,
+    });
+    const mainFile = await writeClaudeLines(w.io, {
+      root: w.sessions,
+      cwd: '/work/proj-a',
+      id: 'm',
+      lines: [userLine('x')],
+    });
+    const reader = createClaudeReader();
+    expect(await reader.discover(sub)).toEqual([]);
+    expect(await reader.discover(subUuid)).toEqual([]);
+    expect((await reader.discover(mainFile)).map((r) => r.path)).toEqual([mainFile]);
+  });
+});

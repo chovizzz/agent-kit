@@ -75,26 +75,69 @@ export function realpathSync(path: string): string {
   return fs.realpathSync(path);
 }
 
+/** 单行硬上限(UTF-8 字节)。超过的行不拼接正文,readLines 以 TOO_LONG_LINE 占位产出。 */
+export const MAX_LINE_BYTES = 64 * 1024 * 1024;
+
+/**
+ * 超过硬上限的行的占位串。它含裸 NUL,任何 JSON 文本都不可能等于它(NUL 在 JSON 里非法),
+ * 所以调用方用 `=== TOO_LONG_LINE` 判断不会与真实行混淆。
+ */
+export const TOO_LONG_LINE = '\u0000agent-kit:line-too-large\u0000';
+
 /**
  * 逐行流式读取(行分隔符只认 \n,行尾的一个 \r 一并去掉,保留空行)。reader 读大 JSONL 用它,不要整个读进内存。
  * 不用 node:readline:它还把 U+2028/U+2029/孤立 \r 当行分隔符,会把 JSON 字符串里的裸 U+2028 切成两行,
  * 与口径 C2(只认 \n)及 jq 对不上。
+ *
+ * 按字节读:换行从上次扫到的位置继续找(线性),整行字节凑齐后再一次性解码(多字节字符跨块也完整)。
+ * 单行超过 maxLineBytes(缺省 MAX_LINE_BYTES)时不再累积正文,只数字节直到下一个 \n,产出 TOO_LONG_LINE。
  */
-export async function* readLines(path: string): AsyncGenerator<string, void, undefined> {
-  const stream = fs.createReadStream(path, { encoding: 'utf8' });
-  let buf = '';
-  const strip = (l: string): string => (l.endsWith('\r') ? l.slice(0, -1) : l);
+export async function* readLines(
+  path: string,
+  maxLineBytes: number = MAX_LINE_BYTES,
+): AsyncGenerator<string, void, undefined> {
+  const stream = fs.createReadStream(path);
+  let parts: Buffer[] = [];
+  let curLen = 0;
+  let tooLong = false;
+  let any = false; // 当前行是否已有任何字节(区分「末尾 \n 之后」与「末行无换行」)
+  const decode = (): string => {
+    const l = Buffer.concat(parts, curLen).toString('utf8');
+    return l.endsWith('\r') ? l.slice(0, -1) : l;
+  };
+  const append = (seg: Buffer): void => {
+    if (seg.length === 0) return;
+    any = true;
+    if (tooLong) return;
+    if (curLen + seg.length > maxLineBytes) {
+      tooLong = true;
+      parts = [];
+      curLen = 0;
+      return;
+    }
+    parts.push(seg);
+    curLen += seg.length;
+  };
   try {
     for await (const chunk of stream) {
-      buf += chunk as string;
-      let i: number;
-      while ((i = buf.indexOf('\n')) >= 0) {
-        const line = buf.slice(0, i);
-        buf = buf.slice(i + 1);
-        yield strip(line);
+      const buf = chunk as Buffer;
+      let pos = 0;
+      for (;;) {
+        const idx = buf.indexOf(0x0a, pos);
+        if (idx < 0) {
+          append(buf.subarray(pos));
+          break;
+        }
+        append(buf.subarray(pos, idx));
+        yield tooLong ? TOO_LONG_LINE : decode();
+        parts = [];
+        curLen = 0;
+        tooLong = false;
+        any = false;
+        pos = idx + 1;
       }
     }
-    if (buf.length > 0) yield strip(buf);
+    if (any) yield tooLong ? TOO_LONG_LINE : decode();
   } finally {
     stream.destroy();
   }

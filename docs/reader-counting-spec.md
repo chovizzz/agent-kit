@@ -29,6 +29,8 @@ C1 到 C12 对四家都成立。四家各自的细节在 §2。
 - 不是合法 JSON、或合法 JSON 但不是对象的行 = **畸形行**:不产出事件,计入 `unknown_event_types["<malformed>"]`。文件被截断的末行(正在写入的会话)属于这一类。
 - 对象行缺 `type` 字段(或 `type` 不是字符串):计入 `unknown_event_types["<no-type>"]`,不产出事件。判定顺序:先判畸形,再判 Claude/Kimi 的侧链过滤(Claude `isSidechain==true`、Kimi `agentId` 非 `main`),侧链行优先于 `<no-type>`,即缺 `type` 的侧链行只算侧链,不计 `<no-type>`。
 - 行分隔符是 `\n`;行尾的 `\r` 当空白处理(CRLF 文件与 LF 文件结果相同);文件末行没有换行符照样算一行;文件开头的 UTF-8 BOM 忽略,不算畸形行。本机四家的语料里 BOM 为 0 个文件,jq 1.7.1 对 BOM、CRLF 都已按夹具实测(§7.6);Node 侧 `readFileSync(…,'utf8')` 会去掉 BOM,reader 若用流式读取要自己去。
+- **B21 补充(R2,以 jq 1.7.1 实测为准,取代上一条里关于 BOM 的说法)**:判空白与去 BOM 对**每一行**同样处理,首行不特殊。先在原始行上判「整行只含空白」(字符集 = Unicode White_Space:`\t \n \v \f \r`、空格、`U+0085`、`U+00A0`、`U+1680`、`U+2000–U+200A`、`U+2028`、`U+2029`、`U+202F`、`U+205F`、`U+3000`;**不含 `U+FEFF`**,已对全部码位逐个与 jq 的 `test("\\S")` 核对);非空白行再去掉行首**恰好一个** `U+FEFF`(jq 的 `fromjson` 跳过它),然后解析。
+  结果:只含 `U+FEFF` 的行(含首行)计 `<malformed>`;只含 `U+0085` 的行是空白、跳过;行首一个 BOM + 对象的非首行(如 `cat a b` 拼接)正常计数;BOM 在行尾、连续两个、或在空格之后仍是 `<malformed>`。
 - 重复行**不去重**:同一文件里逐字节相同的两行算两行。本机 Claude 主文件内 `uuid` 重复为 0,不需要文件内去重。
 - 只收**已关闭**的文件做验收比对(C10)。
 
@@ -55,6 +57,8 @@ C1 到 C12 对四家都成立。四家各自的细节在 §2。
 **C7 `ignored_duplicate_kinds` 的键。** 键 = 各家小节列出的「重复键」,值 = 被忽略的行数。Codex、Kimi 的键对应同一事件的两种记录;Claude 只有一个键 `claude.sidechain_line`(主文件内联的侧链行,被整体跳过);Pi 不填。Claude、Pi 的**跨文件**重复不在这里计(见 C9)。各家都有 §7 的 jq 程序可复算(`*-ignored`),夹具上有期望值。
 
 **C8 `oversized_lines`。** 单行字节数超过 `maxEventBytes` 的行。**口径要求**:计数不得因行超长而改变——reader 必须在丢弃文本前完成分类并计数,只截断/丢弃 `text`;oracle 不丢行。如果 reader 实现做不到(要整行解析才能分类),则 `oversized_lines > 0` 的文件**不得**用于 A6 比对(A6 必须在 `oversized_lines == 0` 的样本上比)。本机各家单行最大值:Claude 约 1.3 MB、Kimi 约 2.5 MB、Pi 约 4.0 MB,所以 `maxEventBytes` 默认值不够大时这条会真实触发。这是 §8 的 D3,**待设计者定**。
+
+**C8 补充(B21/R3)。** reader 另有一个单行**硬上限 64 MiB**(UTF-8 字节,不含 `\n` 但含行尾 `\r`;`maxEventBytes` 不得超过它,否则 `read()` 直接报错)。超过硬上限的行不再累积正文,无法分类,不产出事件:计入 `oversized_lines`,并计入 `unknown_event_types["<line-too-large>"]`(不计 `<malformed>`,因为 jq 能解析它)。会话其余行照常读取。这类文件按 C8 的规则不得用于 A6 比对;A6 对 `unknown_event_types == {}` 的断言会直接发现它。
 
 **C9 跨文件重复(已知,P0 不处理)。** Claude 续接(resume)会把旧历史复制进新文件(`uuid`、`tool_use.id` 相同,`sessionId` 被改写成新文件的):本机 42 个主文件里有 1922 个 `uuid`、355 个 `tool_use.id` 出现在多个文件里。Pi `/fork` 会把父会话条目复制进新文件(本机 808 个 `id` 出现在 9 个文件里)。P0 的计数**按文件**:①继承来的历史在每个后代文件里都重复计入,不做跨文件去重;②因此跨文件求和没有全局意义;③这对 A6(逐文件比对)没有影响,但会让跨文件汇总(P1 attest 的 `sessions_total`、`fired`)重复计数;④量级校准:Claude 1922 个 `uuid` / 42 个文件,Pi 808 个 `id` / 9 个文件。去重键:Claude 用 `uuid`,Pi 用条目 `id`(都需要跨文件索引)。这是 §8 的 D4。
 
@@ -759,6 +763,14 @@ perl -pe 'chomp if eof' pi.jsonl | jq -nRc "$P_PI"                  # 末行无�
 - Kimi:`context.undo`/`context.apply_compaction` 对计数的影响;协议 1.4/1.5 之外的版本;`assistant` 角色的 `append_message` 本机零样本(按 `meta` 处理)。
 - `ts` 第 3 级回退(文件 mtime)本机零命中,只能用合成夹具测。`agent_version` 的 CLI 版本兜底,本机只有 Pi、Kimi 会走到;Claude(42/42)和 Codex(除空文件外全部)的会话内版本都取得到,它们的兜底分支本机零命中。
 - 事件文本里是否含外部内容(`external_content`)的判定不在本文范围。
+
+### 8.3 已知差异(B21 记录,未改口径)
+
+- **R1 agent_version 形状**:reader 只接受 `^[0-9]{1,9}\.[0-9]{1,9}\.[0-9]{1,9}([-+][0-9A-Za-z.+-]{0,40})?$` 且总长 ≤ 64 的值;不符合的当作「这一行没有版本」,继续找后面第一个合法的,都没有则走 `collector_fallback`。§7.5 的探针取「第一个非空字符串」,两者只在 trace 里出现畸形 `version` 时不同(此时探针的值本来就不该进 Signal)。
+- **R8 Claude 的 version 与侧链行**:reader 先跳过侧链行(`isSidechain==true`),所以侧链行上的 `version` 不参与取值;§7.5 的探针不过滤侧链。首个带 `version` 的行恰是内联侧链行(老版本)时,两边取到的版本可能不同。本机零样本,不影响 A6 计数;未改。
+- **R4 目录布局与首行过滤**:Claude 要求 `<项目目录>/<UUID>.jsonl`、Kimi 要求 `…/agents/main/wire.jsonl`、Pi 要求 `--<路径>--/<文件>.jsonl`,而 §5 的抽样是 `find -name '*.jsonl'`(任意深度)。A6 复制样本时**必须保留相对布局**(Codex 只看文件名,不受此限)。Pi 的 discover 还会跳过「首个非空白行是 type 非 session 的对象」的文件(被截掉文件头的会话),该过滤不在 §2.3.1 里,被跳过的文件没有诊断;未改。
+- **R5 显式文件**:`--source` 指向单个文件时,Claude 要求文件名是 UUID 形状且父目录不叫 `subagents`(与 Codex 的首行判定同为「子代理文件不是会话」);Pi 没有子代理文件,显式文件原样接受;Kimi 按路径尾部卡。
+- **R6 Kimi state.json**:只读普通文件;符号链接、命名管道、目录一律当 cwd 未知(`cwd_hint=null`)。
 
 ## 9. 本机语料概况(2026-10-08,仅供量级参考,不是验收数据)
 

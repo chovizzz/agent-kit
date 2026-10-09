@@ -4,6 +4,7 @@
 import * as path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { readText } from '../../../src/io/read-fs.js';
+import { mkdirp, symlink, writeFile } from '../../../src/io/safe-fs.js';
 import { createKimiReader } from '../../../src/readers/kimi/index.js';
 import { KNOWN_LOOP_EVENT_TYPES, KNOWN_TOP_TYPES } from '../../../src/readers/kimi/known.js';
 import { setOpenObserver } from '../../../src/signals/open-readonly.js';
@@ -380,6 +381,36 @@ describe('ts 与 agent_version(§2.4.4、C3)', () => {
       stateJson: L({ version: 2, cwd: '/x/y' }),
     });
     expect(meta.agent_version).toBeNull();
+  });
+});
+
+describe('R6:state.json 只读普通文件', () => {
+  it('state.json 是符号链接:不跟随,cwd_hint=null(正向对照:同内容的普通文件被读到)', async () => {
+    const w = await newWork('kimi-state-link-');
+    const lines = [metadataLine(), userMsg('a')];
+    const plain = await runCustom(w, {
+      id: 'p1',
+      lines,
+      stateJson: L({ cwd: '/work/proj-z' }),
+    });
+    expect(plain.meta.cwd_hint).toBe('/work/proj-z');
+
+    const target = path.join(w.dir, 'elsewhere-state.json');
+    await writeFile(w.io, target, L({ cwd: '/leaked/dir' }));
+    const linked = await runCustom(w, { id: 'p2', lines, stateJson: null });
+    await symlink(w.io, target, path.join(linked.g.sessionDir, 'state.json'));
+    const again = await runCustom(w, { id: 'p2', lines, stateJson: null });
+    expect(again.meta.cwd_hint).toBeNull();
+    expect(again.counts.user_messages).toBe(1);
+  });
+
+  it('state.json 是目录(非普通文件的代表):cwd_hint=null,不抛错', async () => {
+    const w = await newWork('kimi-state-dir-');
+    const lines = [metadataLine(), userMsg('a')];
+    const g = await runCustom(w, { id: 'd1', lines, stateJson: null });
+    await mkdirp(w.io, path.join(g.g.sessionDir, 'state.json'));
+    const again = await runCustom(w, { id: 'd1', lines, stateJson: null });
+    expect(again.meta.cwd_hint).toBeNull();
   });
 });
 

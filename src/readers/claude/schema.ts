@@ -37,4 +37,7 @@ export const KNOWN_BLOCK_TYPES: Readonly<Record<'user' | 'assistant', ReadonlySe
 /** 主文件名:`<项目目录>/<UUID>.jsonl`,按 spec §2.1.1 的 glob `????????-????-????-????-????????????.jsonl`(任意字符,不限十六进制)。 */
 export const SESSION_FILE_RE = /^[^/]+\/[^/]{8}-[^/]{4}-[^/]{4}-[^/]{4}-[^/]{12}\.jsonl$/u;
 
+/** 显式传入单个文件时的文件名判据(同 SESSION_FILE_RE 的文件名部分)。 */
+export const SESSION_NAME_RE = /^[^/]{8}-[^/]{4}-[^/]{4}-[^/]{4}-[^/]{12}\.jsonl$/u;
+
 export const SIDECHAIN_KEY = 'claude.sidechain_line';
