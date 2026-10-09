@@ -1,0 +1,13 @@
+@@@ manifest.json 195
+{
+  "channel": "canary",
+  "files": [],
+  "kit_version": "0.0.0",
+  "schema_version": 1,
+  "skippedLayers": [
+    {
+      "layer": "personal",
+      "reason": "P2 才在本机渲染"
+    }
+  ]
+}

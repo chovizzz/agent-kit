@@ -1,0 +1,536 @@
+@@@ claude/home/.claude/agents/diff-reviewer.md 173
+---
+name: diff-reviewer
+description: 只读评审者
+tools: Read, Grep, Glob, Bash
+---
+<!-- 生成文件,勿手改;源:agent-kit-core@0.0.0 -->
+
+你是只读的评审者。
+@@@ claude/home/.claude/rules/agent-kit/org.md 227
+<!-- 生成文件,勿手改;源:agent-kit-core@0.0.0 -->
+## agent-kit 规则(org 层)
+
+### [should] 示例规则
+
+**做**: 做某件具体的事。
+
+**为什么**: 因为某个原因。
+
+**怎么验**: 用某种方式验证。
+@@@ claude/home/.claude/rules/agent-kit/team.md 228
+<!-- 生成文件,勿手改;源:agent-kit-core@0.0.0 -->
+## agent-kit 规则(team 层)
+
+### [should] 示例规则
+
+**做**: 做某件具体的事。
+
+**为什么**: 因为某个原因。
+
+**怎么验**: 用某种方式验证。
+@@@ claude/home/.claude/skills/my-skill/SKILL.md 126
+---
+name: my-skill
+description: 示例技能。
+---
+<!-- 生成文件,勿手改;源:agent-kit-core@0.0.0 -->
+
+技能正文。
+@@@ claude/project/.claude/rules/agent-kit/project.md 231
+<!-- 生成文件,勿手改;源:agent-kit-core@0.0.0 -->
+## agent-kit 规则(project 层)
+
+### [should] 示例规则
+
+**做**: 做某件具体的事。
+
+**为什么**: 因为某个原因。
+
+**怎么验**: 用某种方式验证。
+@@@ claude/project/AGENTS.md 313
+<!-- agent-kit:begin id=agent-kit-rules sha256=df71aededcf43f1bd3e41cd0a34a1fda380a7514848f7eadaaf85d1382f6a6ba -->
+## agent-kit 规则(project 层)
+
+### [should] 示例规则
+
+**做**: 做某件具体的事。
+
+**为什么**: 因为某个原因。
+
+**怎么验**: 用某种方式验证。
+<!-- agent-kit:end -->
+@@@ codex/home/.agents/skills/my-skill/SKILL.md 126
+---
+name: my-skill
+description: 示例技能。
+---
+<!-- 生成文件,勿手改;源:agent-kit-core@0.0.0 -->
+
+技能正文。
+@@@ codex/home/.codex/AGENTS.md 481
+<!-- agent-kit:begin id=agent-kit-rules sha256=94cc344fb251660323a830e62796e6914432a41bef1cff7ec260bd35a4271d68 -->
+## agent-kit 规则(org 层)
+
+### [should] 示例规则
+
+**做**: 做某件具体的事。
+
+**为什么**: 因为某个原因。
+
+**怎么验**: 用某种方式验证。
+
+## agent-kit 规则(team 层)
+
+### [should] 示例规则
+
+**做**: 做某件具体的事。
+
+**为什么**: 因为某个原因。
+
+**怎么验**: 用某种方式验证。
+<!-- agent-kit:end -->
+@@@ codex/home/.codex/agents/diff-reviewer.toml 187
+# 生成文件,勿手改;源:agent-kit-core@0.0.0
+name = "diff-reviewer"
+description = "只读评审者"
+sandbox_mode = "read-only"
+developer_instructions = "你是只读的评审者。"
+@@@ codex/project/AGENTS.md 313
+<!-- agent-kit:begin id=agent-kit-rules sha256=df71aededcf43f1bd3e41cd0a34a1fda380a7514848f7eadaaf85d1382f6a6ba -->
+## agent-kit 规则(project 层)
+
+### [should] 示例规则
+
+**做**: 做某件具体的事。
+
+**为什么**: 因为某个原因。
+
+**怎么验**: 用某种方式验证。
+<!-- agent-kit:end -->
+@@@ kimi/home/.agents/skills/my-skill/SKILL.md 126
+---
+name: my-skill
+description: 示例技能。
+---
+<!-- 生成文件,勿手改;源:agent-kit-core@0.0.0 -->
+
+技能正文。
+@@@ kimi/home/.kimi-code/AGENTS.md 481
+<!-- agent-kit:begin id=agent-kit-rules sha256=94cc344fb251660323a830e62796e6914432a41bef1cff7ec260bd35a4271d68 -->
+## agent-kit 规则(org 层)
+
+### [should] 示例规则
+
+**做**: 做某件具体的事。
+
+**为什么**: 因为某个原因。
+
+**怎么验**: 用某种方式验证。
+
+## agent-kit 规则(team 层)
+
+### [should] 示例规则
+
+**做**: 做某件具体的事。
+
+**为什么**: 因为某个原因。
+
+**怎么验**: 用某种方式验证。
+<!-- agent-kit:end -->
+@@@ kimi/home/.kimi-code/agents/diff-reviewer.md 186
+---
+name: diff-reviewer
+description: 只读评审者
+tools:
+  - Read
+  - Grep
+  - Glob
+  - Bash
+---
+<!-- 生成文件,勿手改;源:agent-kit-core@0.0.0 -->
+
+你是只读的评审者。
+@@@ kimi/project/AGENTS.md 313
+<!-- agent-kit:begin id=agent-kit-rules sha256=df71aededcf43f1bd3e41cd0a34a1fda380a7514848f7eadaaf85d1382f6a6ba -->
+## agent-kit 规则(project 层)
+
+### [should] 示例规则
+
+**做**: 做某件具体的事。
+
+**为什么**: 因为某个原因。
+
+**怎么验**: 用某种方式验证。
+<!-- agent-kit:end -->
+@@@ manifest.json 7506
+{
+  "channel": "canary",
+  "files": [
+    {
+      "agent": "claude",
+      "atoms": [],
+      "confidence": "documented",
+      "mode": "owned",
+      "path": "claude/home/.claude/agents/diff-reviewer.md",
+      "sha256": "8c6762811850592ec7a83452faa05bfdb9ee4eeaf836485234b282081dfdd627",
+      "sourceRefs": [
+        "agent:diff-reviewer"
+      ],
+      "target": "home"
+    },
+    {
+      "agent": "claude",
+      "atoms": [
+        {
+          "id": "org-rule",
+          "layer": "org"
+        }
+      ],
+      "confidence": "assumed",
+      "mode": "owned",
+      "path": "claude/home/.claude/rules/agent-kit/org.md",
+      "sha256": "cdf6798c8d9f6d9c903512468390ac0ba94e3d2de8a7c268c9e0cac1dcda6d32",
+      "sourceRefs": [],
+      "target": "home"
+    },
+    {
+      "agent": "claude",
+      "atoms": [
+        {
+          "id": "team-rule",
+          "layer": "team"
+        }
+      ],
+      "confidence": "assumed",
+      "mode": "owned",
+      "path": "claude/home/.claude/rules/agent-kit/team.md",
+      "sha256": "53067c229d2f9fc33e25d10059689c93d50fe7c396fab2faab09c695e615a0ba",
+      "sourceRefs": [],
+      "target": "home"
+    },
+    {
+      "agent": "claude",
+      "atoms": [],
+      "confidence": "documented",
+      "mode": "owned",
+      "path": "claude/home/.claude/skills/my-skill/SKILL.md",
+      "sha256": "9be67ed542d341f3fb67f8da349b639a45a2127f5e53c53751032dd181505772",
+      "sourceRefs": [
+        "skill:my-skill"
+      ],
+      "target": "home"
+    },
+    {
+      "agent": "claude",
+      "atoms": [
+        {
+          "id": "project-rule",
+          "layer": "project"
+        }
+      ],
+      "conditional": "P-Q1",
+      "confidence": "documented",
+      "mode": "owned",
+      "path": "claude/project/.claude/rules/agent-kit/project.md",
+      "sha256": "ab1452bc1ae020d3367fafd7ab37d056169edf7165902b892ce6a1f2b62e1612",
+      "sourceRefs": [],
+      "target": "project"
+    },
+    {
+      "agent": "claude",
+      "atoms": [
+        {
+          "id": "project-rule",
+          "layer": "project"
+        }
+      ],
+      "confidence": "documented",
+      "mode": "managed-block",
+      "path": "claude/project/AGENTS.md",
+      "sha256": "b4a9148029221ef3d6e969518cdee82ba6dc5c37bd60922971fd2a9d77edd3c0",
+      "sourceRefs": [],
+      "target": "project"
+    },
+    {
+      "agent": "codex",
+      "atoms": [],
+      "confidence": "documented",
+      "mode": "owned",
+      "path": "codex/home/.agents/skills/my-skill/SKILL.md",
+      "sha256": "9be67ed542d341f3fb67f8da349b639a45a2127f5e53c53751032dd181505772",
+      "sourceRefs": [
+        "skill:my-skill"
+      ],
+      "target": "home"
+    },
+    {
+      "agent": "codex",
+      "atoms": [
+        {
+          "id": "org-rule",
+          "layer": "org"
+        },
+        {
+          "id": "team-rule",
+          "layer": "team"
+        }
+      ],
+      "confidence": "documented",
+      "mode": "managed-block",
+      "path": "codex/home/.codex/AGENTS.md",
+      "sha256": "151c5ffebe77b8344d7f0805a87c9ce2a7985cd86851ad2df5b8aba2ba3b18b5",
+      "sourceRefs": [],
+      "target": "home"
+    },
+    {
+      "agent": "codex",
+      "atoms": [],
+      "confidence": "documented",
+      "mode": "owned",
+      "path": "codex/home/.codex/agents/diff-reviewer.toml",
+      "sha256": "65953d591a629d8fccf44e450917687f41dae5a798b2da4192d4c1534511b381",
+      "sourceRefs": [
+        "agent:diff-reviewer"
+      ],
+      "target": "home"
+    },
+    {
+      "agent": "codex",
+      "atoms": [
+        {
+          "id": "project-rule",
+          "layer": "project"
+        }
+      ],
+      "confidence": "documented",
+      "mode": "managed-block",
+      "path": "codex/project/AGENTS.md",
+      "sha256": "b4a9148029221ef3d6e969518cdee82ba6dc5c37bd60922971fd2a9d77edd3c0",
+      "sourceRefs": [],
+      "target": "project"
+    },
+    {
+      "agent": "kimi",
+      "atoms": [],
+      "confidence": "documented",
+      "mode": "owned",
+      "path": "kimi/home/.agents/skills/my-skill/SKILL.md",
+      "sha256": "9be67ed542d341f3fb67f8da349b639a45a2127f5e53c53751032dd181505772",
+      "sourceRefs": [
+        "skill:my-skill"
+      ],
+      "target": "home"
+    },
+    {
+      "agent": "kimi",
+      "atoms": [
+        {
+          "id": "org-rule",
+          "layer": "org"
+        },
+        {
+          "id": "team-rule",
+          "layer": "team"
+        }
+      ],
+      "confidence": "documented",
+      "mode": "managed-block",
+      "path": "kimi/home/.kimi-code/AGENTS.md",
+      "sha256": "151c5ffebe77b8344d7f0805a87c9ce2a7985cd86851ad2df5b8aba2ba3b18b5",
+      "sourceRefs": [],
+      "target": "home"
+    },
+    {
+      "agent": "kimi",
+      "atoms": [],
+      "confidence": "documented",
+      "mode": "owned",
+      "path": "kimi/home/.kimi-code/agents/diff-reviewer.md",
+      "sha256": "5994539a47559c59755823a9f9ce5ebba3339087dab1a82f8d958096277dd163",
+      "sourceRefs": [
+        "agent:diff-reviewer"
+      ],
+      "target": "home"
+    },
+    {
+      "agent": "kimi",
+      "atoms": [
+        {
+          "id": "project-rule",
+          "layer": "project"
+        }
+      ],
+      "confidence": "documented",
+      "mode": "managed-block",
+      "path": "kimi/project/AGENTS.md",
+      "sha256": "b4a9148029221ef3d6e969518cdee82ba6dc5c37bd60922971fd2a9d77edd3c0",
+      "sourceRefs": [],
+      "target": "project"
+    },
+    {
+      "agent": "opencode",
+      "atoms": [
+        {
+          "id": "org-rule",
+          "layer": "org"
+        },
+        {
+          "id": "team-rule",
+          "layer": "team"
+        }
+      ],
+      "confidence": "assumed",
+      "mode": "managed-block",
+      "path": "opencode/home/.config/opencode/AGENTS.md",
+      "sha256": "151c5ffebe77b8344d7f0805a87c9ce2a7985cd86851ad2df5b8aba2ba3b18b5",
+      "sourceRefs": [],
+      "target": "home"
+    },
+    {
+      "agent": "opencode",
+      "atoms": [
+        {
+          "id": "project-rule",
+          "layer": "project"
+        }
+      ],
+      "confidence": "assumed",
+      "mode": "managed-block",
+      "path": "opencode/project/AGENTS.md",
+      "sha256": "b4a9148029221ef3d6e969518cdee82ba6dc5c37bd60922971fd2a9d77edd3c0",
+      "sourceRefs": [],
+      "target": "project"
+    },
+    {
+      "agent": "pi",
+      "atoms": [],
+      "confidence": "documented",
+      "mode": "owned",
+      "path": "pi/home/.agents/skills/my-skill/SKILL.md",
+      "sha256": "9be67ed542d341f3fb67f8da349b639a45a2127f5e53c53751032dd181505772",
+      "sourceRefs": [
+        "skill:my-skill"
+      ],
+      "target": "home"
+    },
+    {
+      "agent": "pi",
+      "atoms": [
+        {
+          "id": "org-rule",
+          "layer": "org"
+        },
+        {
+          "id": "team-rule",
+          "layer": "team"
+        }
+      ],
+      "confidence": "documented",
+      "mode": "managed-block",
+      "path": "pi/home/.pi/agent/AGENTS.md",
+      "sha256": "151c5ffebe77b8344d7f0805a87c9ce2a7985cd86851ad2df5b8aba2ba3b18b5",
+      "sourceRefs": [],
+      "target": "home"
+    },
+    {
+      "agent": "pi",
+      "atoms": [
+        {
+          "id": "project-rule",
+          "layer": "project"
+        }
+      ],
+      "confidence": "documented",
+      "mode": "managed-block",
+      "path": "pi/project/AGENTS.md",
+      "sha256": "b4a9148029221ef3d6e969518cdee82ba6dc5c37bd60922971fd2a9d77edd3c0",
+      "sourceRefs": [],
+      "target": "project"
+    }
+  ],
+  "kit_version": "0.0.0",
+  "schema_version": 1,
+  "skippedLayers": [
+    {
+      "layer": "personal",
+      "reason": "P2 才在本机渲染"
+    }
+  ]
+}
+@@@ opencode/home/.config/opencode/AGENTS.md 481
+<!-- agent-kit:begin id=agent-kit-rules sha256=94cc344fb251660323a830e62796e6914432a41bef1cff7ec260bd35a4271d68 -->
+## agent-kit 规则(org 层)
+
+### [should] 示例规则
+
+**做**: 做某件具体的事。
+
+**为什么**: 因为某个原因。
+
+**怎么验**: 用某种方式验证。
+
+## agent-kit 规则(team 层)
+
+### [should] 示例规则
+
+**做**: 做某件具体的事。
+
+**为什么**: 因为某个原因。
+
+**怎么验**: 用某种方式验证。
+<!-- agent-kit:end -->
+@@@ opencode/project/AGENTS.md 313
+<!-- agent-kit:begin id=agent-kit-rules sha256=df71aededcf43f1bd3e41cd0a34a1fda380a7514848f7eadaaf85d1382f6a6ba -->
+## agent-kit 规则(project 层)
+
+### [should] 示例规则
+
+**做**: 做某件具体的事。
+
+**为什么**: 因为某个原因。
+
+**怎么验**: 用某种方式验证。
+<!-- agent-kit:end -->
+@@@ pi/home/.agents/skills/my-skill/SKILL.md 126
+---
+name: my-skill
+description: 示例技能。
+---
+<!-- 生成文件,勿手改;源:agent-kit-core@0.0.0 -->
+
+技能正文。
+@@@ pi/home/.pi/agent/AGENTS.md 481
+<!-- agent-kit:begin id=agent-kit-rules sha256=94cc344fb251660323a830e62796e6914432a41bef1cff7ec260bd35a4271d68 -->
+## agent-kit 规则(org 层)
+
+### [should] 示例规则
+
+**做**: 做某件具体的事。
+
+**为什么**: 因为某个原因。
+
+**怎么验**: 用某种方式验证。
+
+## agent-kit 规则(team 层)
+
+### [should] 示例规则
+
+**做**: 做某件具体的事。
+
+**为什么**: 因为某个原因。
+
+**怎么验**: 用某种方式验证。
+<!-- agent-kit:end -->
+@@@ pi/project/AGENTS.md 313
+<!-- agent-kit:begin id=agent-kit-rules sha256=df71aededcf43f1bd3e41cd0a34a1fda380a7514848f7eadaaf85d1382f6a6ba -->
+## agent-kit 规则(project 层)
+
+### [should] 示例规则
+
+**做**: 做某件具体的事。
+
+**为什么**: 因为某个原因。
+
+**怎么验**: 用某种方式验证。
+<!-- agent-kit:end -->

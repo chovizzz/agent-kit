@@ -1116,3 +1116,48 @@ P0 先把 schema 冻在这里,P1 的块直接消费,避免打 tag 之后再改�
 - 块外内容(含 BOM、foreign-id 块)原样保留;块体被手改会被检测为 `drifted`,`onDrift` 必须由调用方显式选择(拒绝或覆盖)。形似标记但格式不严格的行一律判 corrupt 并拒绝,不追加。
 - manifest 的 `sha` 对**最终落盘内容**(含独占头)计算。
 - golden 更新:`pnpm run golden:update`(即 `vitest run test/golden -u`);更新模式的写根收窄到 golden 目录。该开关读的是 vitest 的非公开字段,升级 vitest 后需复核。
+
+## 11. `build` 命令(B19a)
+
+`agent-kit [--root <dir>] [--overlay <path>] build [--dry-run] [--report]`:读仓库、合并、渲染、检查预算,把结果写进 `<repo>/out/`。不碰 `out/` 与 `.state/` 之外的任何路径,不读真实 HOME。
+
+**流程与退出码**(每一步失败即停,停在写盘之前时 `out/` 保持原样):
+
+| 步骤                                                                                       | 失败时                                    | 退出码 |
+| ------------------------------------------------------------------------------------------ | ----------------------------------------- | ------ |
+| 参数解析(未知 flag、位置参数)                                                              | 打印用法                                  | 2      |
+| 读 `kit.toml`(缺/语法错/校验失败);读 `--overlay`(读不到/校验失败)                          | 打印诊断                                  | 1      |
+| `lintRepo`(error)                                                                          | 打印诊断                                  | 1      |
+| lint 的脱敏复扫自身出错                                                                    | fail-closed                               | 3      |
+| `mergeAtoms`(error)                                                                        | 打印诊断                                  | 1      |
+| `renderAll`(只含 `kit.toml` 里 `enabled` 的 agent;覆盖层 `enabled_agents` 只取交集,不放大) | fail-closed                               | 3      |
+| `computeBudget` 且 `budgetFailed`(`enforce=block` 且有非 `assumed` 目标超限)               | 打印诊断                                  | 1      |
+| 写盘(写出口拒绝、`out/` 是符号链接、IO 错误)                                               | fail-closed                               | 3      |
+| 全部通过(`enforce=warn` 下超限只告警)                                                      | 打印各目标预算行与 `build: 已写 N 个文件` | 0      |
+
+不再是命令桩,任何路径都不退 64。lint 步骤带真实 `Redactor`(`createRedactor`,敏感词/内部域名取自 `--overlay`),所以 `ATOM_EVIDENCE_NOT_SCANNED` 告警在 `build` 里不出现。
+
+**写盘顺序**(全部经 `safe-fs`,写入根只有 `<repo>/out/`;`--report` 另写 `<repo>/.state/reports/build.json`):
+
+1. `lstat out/`:是符号链接或不是目录 → 退出 3(否则 realpath 会把写入根悄悄换成仓库外的目录)。
+2. 读上一次的 `out/manifest.json`(必须是普通文件、过 `ManifestSchema`、每个 `path` 过 `OutRelPathSchema`)。不可信则**不据此清理**,打印 `warn BUILD_PREVIOUS_MANIFEST_UNTRUSTED`。
+3. 删掉旧 manifest 登记过的文件、`manifest.json`,以及因此变空的目录。**不在 manifest 里的文件(含 `out/tmp/`)一律不动**,写完后以 `warn BUILD_UNMANAGED_FILE out/<path>` 列出。
+4. 写新文件,**最后**写 `out/manifest.json`。manifest 存在 = 这一轮写完了;中途失败(退出 3)时 manifest 缺失,下次 build 因读不到旧 manifest 而不清理孤儿,只告警。
+5. 文件权限 0644、目录 0755;内容与 manifest 都经 `canonicalText` / `canonicalJson`。
+
+`--dry-run`:不调用任何 `safe-fs` 写函数(不建 `out/`、不建 `.state/`),打印 `would write out/<path> (<字节> 字节, sha256=…)`、`would remove out/<path>`(旧 manifest 里有而新结果没有的)与 `would write out/manifest.json`。预算阻断(退出 1)时同样不列清单。`--report` 与 `--dry-run` 同用时只打印报告,不写 `.state/reports/build.json`。
+
+**out/ 布局**:`out/<agent>/<home|project>/<relPath>` + `out/manifest.json`。`home` 只是路径记号,不展开为真实 HOME。`out/` 入 git。
+
+**manifest 形状**:就是 `ManifestSchema`(`schema_version: 1`、`kit_version`、`channel`、`files[]`、`skippedLayers[]`),由渲染核心的 `buildManifest` 生成(它拒绝未知原子、`coreEligible=false` 的原子与路径碰撞):
+
+- `files[].path` = `<agent>/<target>/<relPath>`,按 UTF-8 字节序;`sha256` 对最终落盘内容(含独占头)的 UTF-8 字节;`atoms[]` = `{ id, layer }`(按 id 字节序;技能/子代理文件为空,来源在 `sourceRefs`);`confidence` / `conditional` 原样来自 `OutFile`。
+- `skippedLayers` 恒含 `{ layer: 'personal', reason: 'P2 才在本机渲染' }`(与适配器 `PERSONAL_SKIP` 同文;即使这次没有 personal 原子)。personal 原子仍出现在合并结果里(`coreEligible=false`),但不出现在 `out/` 任何文件和 manifest 的 `atoms` 里。
+- `channel`:`--overlay` 的 `channel`,缺省 `canary`。
+- 契约是 strict 的:`bytes` 与 `sideEffects` **不在** manifest 里。每个文件的字节数、渲染报告(`sideEffects` / `dropped` / `shadowChecks` / `pendingProbes` / `skippedLayers`)与预算统计只进 `--report` 写出的 `.state/reports/build.json`(同样无时间戳、无绝对路径)。
+
+**确定性(A1)**:`out/` 内容只取决于仓库内容、`kit.toml` 与覆盖层;不含时间戳、绝对路径、用户名,排序一律字节序。换 `TZ` / `LANG` / `--root` / cwd 后树哈希不变。
+
+**golden**:`test/build/golden/<用例>/tree.txt`(out/ 整树的单文件快照)。`pnpm run golden:update` 只覆盖 `test/golden`;build 的快照用 `vitest run test/build -u` 更新。
+
+**空仓库**:没有任何规则/技能/子代理时 `out/` 只有 `manifest.json`(`files: []`),打印 `warn BUILD_EMPTY_OUTPUT`,退出 0。
