@@ -3,6 +3,7 @@
 //  - 绝不把"未执行"当"通过":退出码 4 单列;
 //  - 子进程一律用白名单 env(默认不带真实 HOME)。
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
@@ -131,7 +132,8 @@ export function makeCtx(flags) {
   const tmpBase = path.resolve(
     process.env.KIT_TMP && process.env.KIT_TMP !== ''
       ? process.env.KIT_TMP
-      : path.join(root, '.state', 'accept-tmp'),
+      : // 默认建在仓库**外**:子进程的假 HOME 在这里面,而产品的路径守卫拒绝「仓库根是 HOME 的上级」。
+        path.join(fs.realpathSync(os.tmpdir()), 'agent-kit-accept'),
   );
   return { root, cli, tmpBase, node: process.execPath, flags };
 }
