@@ -206,10 +206,10 @@ A2 的 12 格矩阵(`limit_source` × `enforce` × 超/不超;退出码 / 是否
     `overfit_risk`/`generality` 取 `low|medium|high`;`Attest.member` 必须是 `@handle`;`ReplayReport` 要求 `ci_run_url` 与 `self_reported:true` 二选一;
     `Attest` 在设计示例之外多一个 `run_id`(设计说文件名带 `run_id`,载荷里也要有,CI 才能比对)。
 12. **阈值探针写回结构(plan-P0 §7)**:`BudgetTarget` 增加可选 `probed_value` / `probed_agent_version` / `probed_at`;`limit_source=probed` 时三者必填。
-  **P1 落地(2026-10-09)**:`agent-kit probe` 实装——干跑打印各目标实测 bytes/lines;`--write` 产出
-  kit.toml 目标补丁(limit_source=probed + 三元组),**不直接写文件系统**;`documented` 目标永不改写;
-  缺 `--agent-version` 的目标按 USAGE 拒绝(宁可报错不编造被测版本)。render 报告的 `pendingProbes`
-  (有效性探针 P-Q*)由 probe 汇总列出,仍不作为事实;真实 agent 观察属主代理真实环境项。
+    **P1 落地(2026-10-09)**:`agent-kit probe` 实装——干跑打印各目标实测 bytes/lines;`--write` 产出
+    kit.toml 目标补丁(limit_source=probed + 三元组),**不直接写文件系统**;`documented` 目标永不改写;
+    缺 `--agent-version` 的目标按 USAGE 拒绝(宁可报错不编造被测版本)。render 报告的 `pendingProbes`
+    (有效性探针 P-Q*)由 probe 汇总列出,仍不作为事实;真实 agent 观察属主代理真实环境项。
 13. **`ResolvedAtom`/`MergeResult` 在 B01 定稿**(plan-P0 B07 依赖「B05 的合并结果类型已在 B01 定」)。
 14. **`Hop.result` 取值**:`ok | skipped:cooldown | skipped:same-vendor | error:<码>`;**不含** `skipped:known-unavailable`(Q-N16 未决,等设计者)。
 15. **adapters 骨架桩**:`adapters/<agent>/index.ts`(`export const adapter: Adapter`)与 `managed-targets.json` 由 B01 预建,B06 的注册表静态 import 它们;

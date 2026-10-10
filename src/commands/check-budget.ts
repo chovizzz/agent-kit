@@ -96,7 +96,11 @@ export interface BudgetInputs {
 export async function prepareBudgetInputs(
   repoRoot: string,
   stdout: (t: string) => void,
-): Promise<{ inputs?: BudgetInputs; diagnostics: Diagnostic[]; failure?: 'config' | 'repo' | 'render' }> {
+): Promise<{
+  inputs?: BudgetInputs;
+  diagnostics: Diagnostic[];
+  failure?: 'config' | 'repo' | 'render';
+}> {
   const loaded = loadConfig(repoRoot);
   if (loaded.config === undefined) return { diagnostics: loaded.diagnostics, failure: 'config' };
   const config = loaded.config;

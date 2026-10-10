@@ -27,10 +27,7 @@ limit_source = "assumed"
 `;
 
 const atomFile = (id: string): string =>
-  GOOD_ATOM.replace('id: good-atom', `id: ${id}`).replace(
-    'owner: you',
-    OWNER_LINE,
-  );
+  GOOD_ATOM.replace('id: good-atom', `id: ${id}`).replace('owner: you', OWNER_LINE);
 
 async function makeKitRepo(extra: Record<string, string> = {}): Promise<string> {
   const { root } = await makeRepo({
@@ -59,11 +56,7 @@ describe('probe(P1-01,contracts #12)', () => {
   it('--write:assumed 目标产补丁(三元组齐全),documented 目标跳过', async () => {
     const root = await makeKitRepo();
     const { ctx, out } = cmdCtx(root);
-    ctx.argv = [
-      '--write',
-      '--agent-version',
-      'codex=0.161.0',
-    ];
+    ctx.argv = ['--write', '--agent-version', 'codex=0.161.0'];
     const code = await probe.run(ctx);
     expect(code).toBe(ExitCode.OK);
     const joined = out.join('');

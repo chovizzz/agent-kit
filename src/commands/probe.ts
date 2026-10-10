@@ -117,9 +117,7 @@ export const command: CommandDef = {
         ctx.stdout(
           `${t.agent}: measured bytes=${measured} lines=${t.lines} ` +
             `limit_source=${t.limit_source} max_bytes=${t.max_bytes ?? '-'} max_lines=${t.max_lines ?? '-'}` +
-            (t.limit_source === 'documented'
-              ? '(documented:官方值,探针不改写)'
-              : ''),
+            (t.limit_source === 'documented' ? '(documented:官方值,探针不改写)' : ''),
         );
         continue;
       }
