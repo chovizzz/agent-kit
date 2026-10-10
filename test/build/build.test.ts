@@ -5,6 +5,7 @@ import { lintRepo } from '../../src/atoms/lint.js';
 import { buildDeps } from '../../src/build/pipeline.js';
 import { lintDeps } from '../../src/commands/lint-cmd.js';
 import { ExitCode } from '../../src/contracts/exit-codes.js';
+import { KIT_VERSION } from '../../src/contracts/meta.js';
 import { ManifestSchema } from '../../src/contracts/render.js';
 import type { Manifest } from '../../src/contracts/render.js';
 import { exists, readDir, readText } from '../../src/io/read-fs.js';
@@ -124,7 +125,8 @@ describe('manifest', () => {
       [...paths].sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b))),
     );
     expect((await runBuild(sb, root)).out).not.toContain('BUILD_UNMANAGED_FILE');
-    expect(m.kit_version).toBe('0.0.0');
+    // 版本取自被构建的仓库 kit.toml(该 fixture 用仓库自身的 kit.toml,故断言与 KIT_VERSION 一致)
+    expect(m.kit_version).toBe(KIT_VERSION);
     expect(m.channel).toBe('canary');
     // 技能 / 子代理文件没有规则来源:atoms 为空、sourceRefs 非空
     const skill = m.files.find((f) => f.path === 'claude/home/.claude/skills/my-skill/SKILL.md');

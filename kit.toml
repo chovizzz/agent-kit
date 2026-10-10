@@ -2,7 +2,7 @@
 
 [kit]
 name = "agent-kit"
-version = "0.0.0"
+version = "0.1.0"
 
 [agents]
 # 渲染目标;openclaw 默认不渲染(设计 §4.2)

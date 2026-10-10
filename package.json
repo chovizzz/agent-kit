@@ -1,7 +1,6 @@
 {
-  "name": "agent-kit",
-  "version": "0.0.0",
-  "private": true,
+  "name": "@chovizzz/agent-kit",
+  "version": "0.1.0",
   "description": "Rules, skills and subagent definitions for coding agents: one neutral source, rendered per agent.",
   "license": "UNLICENSED",
   "type": "module",
@@ -19,7 +18,8 @@
     "golden:update": "vitest run test/golden -u",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "check:publish": "node scripts/check-publish.mjs"
   },
   "dependencies": {
     "smol-toml": "1.9.0",
@@ -34,5 +34,14 @@
     "typescript-eslint": "8.71.1",
     "vite": "8.3.3",
     "vitest": "5.0.3"
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   }
 }

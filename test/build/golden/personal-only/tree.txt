@@ -2,7 +2,7 @@
 {
   "channel": "canary",
   "files": [],
-  "kit_version": "0.0.0",
+  "kit_version": "0.1.0",
   "schema_version": 1,
   "skippedLayers": [
     {
