@@ -9,7 +9,8 @@ version = "0.0.0"
 enabled = ["claude", "codex", "pi", "kimi", "opencode"]
 
 [budget]
-# P0:真实仓库只告警;block 仅由 fixture 开启(Q-N2)。limit_source=assumed 的目标永远只告警。
+# P1(决策 ② 落地):schema 缺省已改为 block(只作用于 documented/probed;assumed 恒只告警)。
+# 真实仓库在阈值探针(probe)定稿前显式保持 warn。
 enforce = "warn"
 atom_max_bytes = 600
 threshold_percent = 90

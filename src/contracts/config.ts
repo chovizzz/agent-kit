@@ -39,8 +39,9 @@ export const BudgetTargetSchema = z
 export type BudgetTarget = z.infer<typeof BudgetTargetSchema>;
 
 export const BudgetConfigSchema = z.strictObject({
-  /** P0 真实仓库为 warn;block 只由 fixture 开启(决策 ② + Q-N2) */
-  enforce: EnforceSchema.default('warn'),
+  /** P1 落地决策 ②:缺省 = block。assumed 目标恒只告警(与 enforce 无关,见 BudgetTargetSchema 注),
+   *  因此缺省 block 实际只作用于 documented/probed 目标。真实仓库 kit.toml 显式写 warn(在探针定稿前不阻断)。 */
+  enforce: EnforceSchema.default('block'),
   /** 单个原子正文字节上限 */
   atom_max_bytes: z.number().int().positive().default(600),
   /** 「一进一出」触发阈值,占 max 的百分比;比较符以 docs/contracts.md 为准 */

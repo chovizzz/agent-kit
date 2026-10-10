@@ -137,6 +137,8 @@ zod 校验失败统一映射为 `SCHEMA_INVALID`(`zodIssuesToDiagnostics`);各�
 - **阻断规则**:`blocking = (level==='over') && (enforce==='block') && (limit_source !== 'assumed')`。
   `assumed` 目标不论 `enforce` 都只告警(设计 §3.6 硬规则)。blocking 的诊断 severity 为 `error`,否则为 `warn`;`check` 在存在 `error` 时退出 1。
 - 决策 ②:真实仓库 `kit.toml` 的 `enforce = "warn"`;`block` 只由 fixture 开启;P1 把默认值改为 `block`(documented/probed 目标)。
+  **P1 落地(2026-10-09)**:`BudgetConfigSchema.enforce` 缺省改为 `block`(assumed 目标恒只告警的 carve-out 不变,
+  故缺省阻断实际只作用于 documented/probed);真实仓库 `kit.toml` 显式保持 `warn`,阈值探针(probe)定稿后再收紧。
 
 - **实现与上述口径的已知偏离(如实记录,B21/B5)**:
   1. 除 `conditional` 非空外,**纯技能/子代理文件**(有 `sourceRefs`、不含规则原子)也**不计入**预算(`countsTowardBudget`):技能/子代理按需加载、不常驻,这是实现里加的口径,各 agent 是否真如此未逐家核实。

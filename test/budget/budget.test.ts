@@ -127,6 +127,37 @@ describe('阈值边界:over 严格大于,near 用 ≥ 90%', () => {
   });
 });
 
+describe('决策 ② P1 落地:enforce 缺省 = block(只作用于 documented/probed;assumed 恒 warn)', () => {
+  it('缺省(不传 enforce):documented 目标超限 → error 且 budgetFailed=true', () => {
+    const r = computeBudget({
+      outputs: [out('codex', 'a.md', ascii(150))],
+      config: codexCfg(), // codexCfg 不设顶层 enforce,走 schema 缺省
+    });
+    const d = r.diagnostics.find((x) => x.code === 'BUDGET_OVER_LIMIT');
+    expect(d?.severity).toBe('error');
+    expect(budgetFailed(r)).toBe(true);
+  });
+
+  it('缺省(不传 enforce):assumed 目标超限 → 仍只 warn,不阻断', () => {
+    const r = computeBudget({
+      outputs: [out('pi', 'a.md', ascii(150))],
+      config: cfg({ pi: { max_bytes: 100, limit_source: 'assumed' } }),
+    });
+    const d = r.diagnostics.find((x) => x.code === 'BUDGET_OVER_LIMIT');
+    expect(d?.severity).toBe('warn');
+    expect(budgetFailed(r)).toBe(false);
+  });
+
+  it('显式 enforce=warn:documented 目标超限仍只 warn(真实仓库 kit.toml 的现状不变)', () => {
+    const r = computeBudget({
+      outputs: [out('codex', 'a.md', ascii(150))],
+      config: codexCfg({}, { enforce: 'warn' }),
+    });
+    const d = r.diagnostics.find((x) => x.code === 'BUDGET_OVER_LIMIT');
+    expect(d?.severity).toBe('warn');
+    expect(budgetFailed(r)).toBe(false);
+  });
+});
 describe('按目标求和', () => {
   it('同一 agent 的多个文件相加(home + project),别的 agent 不混入', () => {
     const r = computeBudget({
@@ -372,11 +403,17 @@ describe('单原子上限与项目层预算', () => {
       out('claude', 'a.md', ascii(10), { atoms: { 'big-one': 700 } }),
       out('codex', 'b.md', ascii(10), { atoms: { 'big-one': 650, 'small-one': 100 } }),
     ];
+    // 决策 ② P1:缺省 = block。covered() 的 claude/codex 是 documented 目标 → 原子超限即 error。
     const w = computeBudget({ outputs, config: covered() });
     expect(w.diagnostics.map((d) => [d.code, d.severity])).toEqual([
-      ['BUDGET_ATOM_TOO_LARGE', 'warn'],
+      ['BUDGET_ATOM_TOO_LARGE', 'error'],
     ]);
     expect(w.diagnostics[0]?.message).toContain('700');
+    expect(budgetFailed(w)).toBe(true);
+    // 显式 enforce=warn:同一原子只 warn(真实仓库 kit.toml 的现状)。
+    const warnCfg = computeBudget({ outputs, config: covered({ enforce: 'warn' }) });
+    expect(warnCfg.diagnostics[0]?.severity).toBe('warn');
+    expect(budgetFailed(warnCfg)).toBe(false);
     const b = computeBudget({ outputs, config: covered({ enforce: 'block' }) });
     expect(b.diagnostics[0]?.severity).toBe('error');
     expect(budgetFailed(b)).toBe(true);
@@ -440,7 +477,8 @@ describe('统计表(check --report)', () => {
       max_bytes: null,
       limit_source: 'probed',
       status: 'over',
-      blocking: false,
+      // 决策 ② P1:probed 目标在缺省 enforce(block)下超限即 blocking。
+      blocking: true,
       deduped_atom_ids: ['shared-one'],
     });
     expect(stats.totals).toEqual({ target_bytes: 10, distinct_atoms: 2, distinct_atom_bytes: 10 });
