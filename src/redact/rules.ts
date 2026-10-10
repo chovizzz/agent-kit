@@ -527,7 +527,7 @@ const telegramBot = simpleRegexRule(
 // 「值是不是引用」判据(B09c)
 //
 // 脱敏是信任边界:判据是**白名单**,不匹配任何一种引用形态就当口令脱敏。引用形态必须是**整词**
-// (不是前缀),并且不能同时是一个像样的口令:带数字的标识符段、混合大小写 + 数字的 `$xxx` 都不算引用。
+// (不是前缀),并且不能同时是一个像样的口令——带数字的标识符段、混合大小写 + 数字的 `$xxx` 都不算引用。
 // ---------------------------------------------------------------------------
 
 const MASK = /^[*xX•#._-]{4,}$/;
@@ -723,7 +723,9 @@ export function looksNonSecret(v: string): boolean {
 const isShellOp = (op: string): boolean => op === '=' || op === ':=';
 
 const KW =
-  '(?:password|passwd|passphrase|pwd|secret|token|api[_-]?key|apikey|access[_-]?key|auth[_-]?key|private[_-]?key|credentials?)';
+  // B09d-P1(§7 缺口收敛):补 db_pass/pw 已有、passcode/requirepass 与四个高频中文键名。
+  // 中文只收四个高频词(密码/口令/密钥/令牌),且规则要求键名后紧跟操作符,误杀面有限。
+  '(?:password|passwd|passphrase|pwd|secret|token|api[_-]?key|apikey|access[_-]?key|auth[_-]?key|private[_-]?key|credentials?|db[_-]?pass(?:word)?|passcode|requirepass|密码|口令|密钥|令牌)';
 /** 键名后缀(`_prod` `-v2` 或 key/id/value…)与引号 / 空白的上限:对齐排版的 `db_password      = …` 也要认。 */
 const SFX = '(?:[_-][A-Za-z0-9_-]{1,40}|(?:key|id|value|secret|token|hash))?';
 const SP = '[ \\t]{0,32}';

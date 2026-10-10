@@ -245,7 +245,7 @@ B09c 之后仍然存在、**没有种子**的行为(多数是多脱敏方向;标
 …`);`cred_authz` / `cred_cookie` 是整行贪婪规则,不参与原视图补扫,值里字面 `
 ` 之后的部分不会脱敏。
 - 漏:转义引号包裹的三引号 / 双引号拼接(`"""…"""`);多行三引号值;YAML 块标量(`password: |` 下一行);Helm / HCL heredoc。
-- 漏:`KW` 没有的键名:`DB_PASS` `pw` `passcode` `requirepass`、中文键名(密码 / 口令 / 密钥 / 令牌);没有运算符的写法(`.netrc` 的 `password 值`、Dockerfile `ENV X 值`、SQL `IDENTIFIED BY '值'`);`{"name":"DB_PASSWORD","value":"…"}` 名值对、XML `<add key=… value=…/>`、`<password>…</password>`;`-p值` / `sshpass -p`、`curl -u user:值`、`.pgpass`;`setPassword("…")` 调用形式。
+- ~~漏:`KW` 没有的键名:`DB_PASS` `pw` `passcode` `requirepass`、中文键名(密码 / 口令 / 密钥 / 令牌)~~(**B09d-P1 已收**:`db[_-]?pass(?:word)?`(连同已有 `pwd` 覆盖 `DB_PASS` 大小写不敏感)、`passcode`、`requirepass`、密码 / 口令 / 密钥 / 令牌 进 `KW`;中文只收四个高频词且规则要求键名后紧跟操作符);没有运算符的写法(`.netrc` 的 `password 值`、Dockerfile `ENV X 值`、SQL `IDENTIFIED BY '值'`);`{"name":"DB_PASSWORD","value":"…"}` 名值对、XML `<add key=… value=…/>`、`<password>…</password>`;`-p值` / `sshpass -p`、`curl -u user:值`、`.pgpass`;`setPassword("…")` 调用形式。
 - 漏:`${NAME}` / `$HOME` 之后的路径后缀、`os.getenv("X", "…")` 之外的更长的默认值链。
 - 误脱敏(多脱敏方向,丢失可读性但不泄漏):源码里取值类动词以外的调用(键名等号后接 `hash(pw)` 一类)、yaml 里键名冒号后接 `$UPPER_ENV`(`$` 在非 shell 语境是字面字符)、带数字的 `config.db2.password` 路径段。
 - 漏(opus 对抗评审实测,未修):引号段不是短前缀的拼接(`NAME="长一点的段"值`);`${NAME:-$(echo 值)}` 默认值链;带 `f` / `b` 前缀的字符串(`f"值"`);markdown 行内代码把键名和值隔开(`` `键名=` 值 ``);反引号内首字符是空白;YAML 锚点 / 标签(`password: &pw 值`、`!!str 值`);类型标注里带 `=` 的(`Annotated[str, Field(min_length=8)] = "值"`);输入里本来就带合法占位符字面量、其后接空白 / 制表符再接值(`NAME=[[REDACTED:credential]] 值`,正常两遍流程不会产出这种形状);纯大写字母的口令(`HUNTERXYZABC`)冒充环境变量名(默认值字面量、`$UPPER`)。

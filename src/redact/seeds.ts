@@ -232,7 +232,7 @@ export function buildSeeds(seed: number = SEED): Seed[] {
       ['prefix_extra_0'],
     ),
   );
-  // 真实形态的高熵密钥:类型由前缀规则决定(prio 80 > 熵 20),所以前缀规则被禁用时输出会变
+  // 真实形态的高熵密钥——类型由前缀规则决定(prio 80 > 熵 20),所以前缀规则被禁用时输出会变
   {
     const sk = `sk-proj-${g.entropic(B64URL, 48)}`;
     const ghp = `ghp_${g.entropic(ALNUM, 36)}`;
