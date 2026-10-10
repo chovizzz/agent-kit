@@ -29,8 +29,8 @@
 
 ## Phase P1-C(新功能主体)
 
-- ☐ **探针 `probe`**:预算阈值实测写回(`BudgetTarget.probed_value/probed_agent_version/probed_at`,
-  contracts #12);桩退出 64 → 真实现
+- ✅ **探针 `probe`**(`d12a32a`):干跑测量 + `--write` 产 kit.toml 补丁(不落盘);
+  documented 不改写、缺版本 USAGE 拒绝;pendingProbes 只列不断言。有效性探针(跑真实 agent 观察 P-Q*)仍待主代理真实环境项
 - ☐ **反思器 `reflect`**:`Proposal.reflector.vendor` 必填、`judge.vendor ≠ reflector.vendor`、
   `skipped:same-vendor` 记账(contracts #18);含外部内容的会话只进结构化计数(#8)
 - ☐ **`attest` / `promote` / `retire`**:按 contracts §对应节;依赖 reflect
