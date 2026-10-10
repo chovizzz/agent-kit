@@ -38,10 +38,13 @@
 
 ## Phase P1-D(发布与治理,⏸ 等用户凭据/授权)
 
-- ⏸ **npm 发布**:需要 npm 账号/otp 与包名定稿(`agent-kit` 是否占用)
+- ◐ **npm 发布**:包定名 `@chovizzz/agent-kit@0.1.0`,`scripts/check-publish.mjs` 自检 + `.github/workflows/release.yml`(tag `v*` 触发,`npm publish --provenance`,用 `secrets.NPM_TOKEN`);
+  **待办:①在 GitHub 仓库加 `NPM_TOKEN` secret(npm token 须对 `@chovizzz` scope 有发布权;`chovizzz` 若还不是 npm org 需先建);②确认 CI 全绿;③推 tag `v0.1.0` 触发首发**
 - ⏸ **远端分支保护 + CODEOWNERS**:需要 repo admin(geoly/chovizzz 两远端的策略要分别定)
 - ⏸ **签名提交**:需要本机签名密钥决策(ssh 签名可用现有 ssh-key,`git config gpg.format ssh` + GitHub 上传公钥)
-- ☐ CI 观察:`.github/workflows/ci.yml` 在 origin 的红点逐个看懂(release-checklist §3 末条)
+- ◐ CI 观察:`.github/workflows/ci.yml` 在 origin 的红点——已定位两处真红(见下),现验证中
+  - probe 那两次失败:`format:check`(已提交的 probe.ts/check-budget.ts/contracts.md 未过 prettier;`b312e95` 修复)
+  - 教训:门禁用 `pnpm run x >/dev/null 2>&1 && echo ok` 或 `pnpm run x | tail -1` 会被管道吞掉退出码——**必须单独跑并读退出码**
 
 ## 排期建议(串行优先,避免同文件并行)
 
