@@ -758,7 +758,9 @@ perl -pe 'chomp if eof' pi.jsonl | jq -nRc "$P_PI"                  # 末行无�
 - **D4 跨文件重复(Claude resume、Pi fork)。** P0 按文件计。P1 的 `sessions_total`、`fired` 汇总需要去重键(Claude `uuid`,Pi 条目 `id`),需要定是 reader 输出、还是 collector 汇总时做。
   **已定(P1,2026-10-09)**:三层取舍——①**去重发生在 attest 聚合层**(不在 reader、不在 collector:逐文件口径是 C9 明文承诺,A6 依赖它,不动);②**去重键随 Signal 携带**:Signal 增加可选 `event_key` = 加盐 sha256(agent + 源事件 id;Claude `uuid`、Pi 条目 `id`),在 pipeline 组装处计算(那里同时拿得到 reader 元组与 salt),盐与 `session_ref` 同源,防止 uuid 明文入库;③**实现与 attest 块绑定**(P1-C):`sessions_total`/`fired` 汇总按 `event_key` 去重,无 `event_key` 的 agent(kimi/codex 无跨文件重复问题)照旧按会话计数。契约变更(SignalSchema 加可选字段)随 attest 块一并落地并同步 oracle/文档。
 - **D5 Pi 分支。** 本文:计全部条目 + `branch_count` 报非活动链条目数。备选 A:只计活动链(被放弃分支上执行过的工具不算);备选 B:本文口径之外另报活动链三项计数(`Counts` 要加字段)。本机零分支样本,无法用真实数据比较。
+  **owner 已拍板 A 现行口径(2026-10-09)**:计全部条目 + `branch_count` 报非活动链;不改计数语义。真实 fork 样本采集仍列为 P1 观察项。
 - **D6 Claude 的两类边界行。** (a) 带 `sessionKind` 的后台会话 user 行(本机 6 行)按规则计为用户消息;(b) 斜杠命令(`<command-name>…`)计为用户消息。若设计要的是「人敲的自然语言」,这两类要另外排除,口径会改。
+  **owner 已拍板 A 现行口径(2026-10-09)**:两类边界行均计为用户消息,维持机器可判的稳定口径;不做「自然语言」启发式。
 
 ### 8.2 未核实(没有一手来源,不补全)
 

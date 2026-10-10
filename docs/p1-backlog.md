@@ -25,7 +25,7 @@
   (推荐 spec 方案 A);codex reader 按会话内是否出现 `CommandExecution` 判定;oracle 与 A6 Codex 部分同步
 - ✅ **D3 `maxEventBytes` 定值**:按 spec C8 本机实测(最大单行 4.0MB)定默认值;`oversized_lines` 口径验证
 - ◐ **D4 跨文件去重**:决策已定(attest 聚合层去重;Signal 加可选加盐 `event_key`;实现随 P1-C attest 块)
-- ⏸ **D5/D6**:需要 owner 拍板口径(设计者决策,非工程阻塞);D5 另需真实 Pi fork 样本先行采集
+- ✅ **D5/D6**:owner 拍板维持现行口径 A(全条目 + branch_count;两类边界行均计用户消息),spec 已记录
 
 ## Phase P1-C(新功能主体)
 
