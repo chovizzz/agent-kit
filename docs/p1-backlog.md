@@ -12,11 +12,12 @@
 
 ## Phase P1-A(契约已写死的低成本项,可立即开工)
 
-- ☐ **决策 ②:预算 `enforce` 默认收紧**——`documented`/`probed` 目标默认 `block`(assumed 仍恒 warn);
+- ✅ **决策 ②:预算 `enforce` 默认收紧**(`358f968`)——`documented`/`probed` 目标默认 `block`(assumed 仍恒 warn);
   kit.toml 注释、`src/budget`、`test/budget`、contracts 决策 ② 同步。fixture 矩阵(A2)需加 block 默认格
-- ☐ **D2:`agent_version` 的 `unknown` 入契约**——`AgentVersionSourceSchema` 加 `unknown`(spec §8.1 D2 备选),
+- ✅ **D2:`agent_version` 的 `unknown` 入契约**(`1c09d06`)——`AgentVersionSourceSchema` 加 `unknown`(spec §8.1 D2 备选),
   消除 `collector_fallback` 的双词口径;reader/oracle/schema/test 五处同步
-- ☐ **脱敏 §7 残余缺口清理**:按 `docs/redaction.md` §3.2/§7 列表逐条收敛,变异自检计数随之更新
+- ◐ **脱敏 §7 残余缺口清理**:键名词表族已收(`c3034d0`:db_pass/passcode/requirepass/中文键名);
+  其余族(多行 heredoc/三引号、模板默认值链、`cred_*` pass2 残留探测器、对抗评审清单)待逐族排块
 
 ## Phase P1-B(设计决策 + 实现,按依赖序)
 
