@@ -82,38 +82,48 @@ function targetLine(t: BudgetReport['targets'][number]): string {
  * 退出码:合并/配置有 error 或有 blocking 目标 → 1;渲染/读取失败 → 3;否则 0
  * (`warn` 与 `assumed` 目标超限只告警)。`--report` 另写 `.state/reports/budget.json` 并把统计表打到 stdout。
  */
-export const run: CheckStep = async (ctx, opts) => {
-  const io = ctx.io;
-  const loaded = loadConfig(io.repoRoot);
-  const emit = (ds: readonly Diagnostic[]): void => {
-    for (const d of ds) ctx.stdout(`${formatDiagnostic(d)}\n`);
-  };
-  if (loaded.config === undefined) {
-    emit(loaded.diagnostics);
-    return ExitCode.CHECK_FAILED;
-  }
-  const config = loaded.config;
+export interface BudgetInputs {
+  config: KitConfig;
+  rendered: RenderOutput;
+  /** mergeCounts(merged) 的结果,供 check 的汇总行使用 */
+  counts: { core: number; personal: number };
+}
 
-  // lint 的诊断由 lint-cmd 输出并决定退出码;这里只取成功解析的原子/技能/子代理来算预算。
+/**
+ * 装载 kit.toml + lint + 合并 + 渲染(check 与 probe 共用的前半段)。
+ * 失败时返回 diagnostics(severity=error);调用方负责输出与退出码。
+ */
+export async function prepareBudgetInputs(
+  repoRoot: string,
+  stdout: (t: string) => void,
+): Promise<{ inputs?: BudgetInputs; diagnostics: Diagnostic[]; failure?: 'config' | 'repo' | 'render' }> {
+  const loaded = loadConfig(repoRoot);
+  if (loaded.config === undefined) return { diagnostics: loaded.diagnostics, failure: 'config' };
+  const config = loaded.config;
   let lint;
   try {
-    lint = await lintRepo(io.repoRoot);
+    lint = await lintRepo(repoRoot);
   } catch (e) {
-    ctx.stderr(`agent-kit check (budget): 读取仓库失败:${(e as Error).message}\n`);
-    return ExitCode.FAIL_CLOSED;
+    return {
+      failure: 'repo',
+      diagnostics: [
+        {
+          code: 'PROBE_REPO_READ_FAILED',
+          severity: 'error',
+          path: 'kit.toml',
+          message: `读取仓库失败:${(e as Error).message}`,
+        },
+      ],
+    };
   }
-
   const merged = mergeAtoms(lint.atoms);
-  emit(merged.diagnostics);
   if (hasErrors(merged.diagnostics)) {
-    ctx.stdout('budget: 合并失败,未计算预算\n');
-    return ExitCode.CHECK_FAILED;
+    stdout('budget: 合并失败,未计算预算\n');
+    return { diagnostics: merged.diagnostics };
   }
-
-  let rendered: RenderOutput;
   try {
     const render = budgetDeps.render ?? defaultRender;
-    rendered = render(
+    const rendered = render(
       {
         resolved: merged.atoms,
         skills: lint.skills,
@@ -124,12 +134,44 @@ export const run: CheckStep = async (ctx, opts) => {
       },
       config.agents.enabled,
     );
+    return {
+      inputs: { config, rendered, counts: mergeCounts(merged) },
+      diagnostics: merged.diagnostics,
+    };
   } catch (e) {
     const code = e instanceof RenderCoreError ? `${e.code}: ` : '';
-    ctx.stderr(`agent-kit check (budget): 渲染失败:${code}${(e as Error).message}\n`);
-    return ExitCode.FAIL_CLOSED;
+    return {
+      failure: 'render',
+      diagnostics: [
+        {
+          code: 'PROBE_RENDER_FAILED',
+          severity: 'error',
+          path: 'kit.toml',
+          message: `渲染失败:${code}${(e as Error).message}`,
+        },
+      ],
+    };
   }
+}
 
+export const run: CheckStep = async (ctx, opts) => {
+  const io = ctx.io;
+  const emit = (ds: readonly Diagnostic[]): void => {
+    for (const d of ds) ctx.stdout(`${formatDiagnostic(d)}\n`);
+  };
+  const prepared = await prepareBudgetInputs(io.repoRoot, ctx.stdout);
+  emit(prepared.diagnostics);
+  if (prepared.inputs === undefined) {
+    if (prepared.failure === 'repo' || prepared.failure === 'render') {
+      // 原语义:读仓库/渲染失败走 stderr 的 fail-closed 文案(测试钉住「渲染失败」字样)。
+      ctx.stderr(
+        `agent-kit check (budget): ${prepared.failure === 'repo' ? '读取仓库' : '渲染'}失败\n`,
+      );
+      return ExitCode.FAIL_CLOSED;
+    }
+    return ExitCode.CHECK_FAILED;
+  }
+  const { config, rendered } = prepared.inputs;
   const report = computeBudget({
     outputs: rendered.files,
     config: config.budget,
@@ -137,9 +179,8 @@ export const run: CheckStep = async (ctx, opts) => {
   });
   for (const t of report.targets) ctx.stdout(`${targetLine(t)}\n`);
   emit(report.diagnostics);
-  const counts = mergeCounts(merged);
   ctx.stdout(
-    `budget: ${report.targets.length} 个目标, ${counts.core} 个原子可入 core 输出, ${counts.personal} 个 personal 原子不入(enforce=${report.enforce})\n`,
+    `budget: ${report.targets.length} 个目标, ${prepared.inputs.counts.core} 个原子可入 core 输出, ${prepared.inputs.counts.personal} 个 personal 原子不入(enforce=${report.enforce})\n`,
   );
 
   if (opts.report) {
