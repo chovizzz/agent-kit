@@ -1627,6 +1627,128 @@ export function buildSeeds(seed: number = SEED): Seed[] {
     }
   }
 
+  // ---- B09d:多层转义引号 / 模板展开与 zod 链式构造的引用形态(窄放行)----
+  // 独立的 PRNG;口令同 B09c。每条「真值藏在新放行形态里」的种子都必须仍被脱敏
+  {
+    const gd = makeGen(mulberry32((seed ^ 0xb09d) >>> 0));
+    const pw = (): string => 'K' + gd.entropic(ALNUM, 10, 3.0);
+    const PWK = ['pass', 'word'].join('');
+    const TK = ['to', 'ken'].join('');
+    const TKU = TK.toUpperCase();
+    const cred = 'credential';
+    const BS = '\\';
+    const tpl = '$' + '{';
+    add(
+      // 模板展开:`${X:-真值}` 的 `:-` 之后是默认值,不是成员链
+      make(
+        'b09d.tpl.default_value',
+        'plain',
+        'recognized',
+        [`export ${TKU}=`, R(`${tpl}X:-${pw()}`, cred), '}'],
+        ['cred_assign', 'ref_template_strict', 'ref_boundary'],
+      ),
+      // 展开式里夹着长字面量:引号字面量另外判
+      make(
+        'b09d.tpl.quoted_in_expr',
+        'plain',
+        'recognized',
+        [`${TK} = ${tpl}x ?? '`, R(pw(), cred), "'}"],
+        ['cred_assign', 'ref_trailing_literal'],
+      ),
+      make(
+        'b09d.tpl.concat_in_expr',
+        'plain',
+        'recognized',
+        [`${TK} = ${tpl}a + '`, R(pw(), cred), "'}"],
+        ['cred_assign', 'ref_trailing_literal'],
+      ),
+      make(
+        'b09d.tpl.digit_member',
+        'plain',
+        'recognized',
+        [`export ${TKU}=`, R(`${tpl}a.${pw()}`, cred), '}'],
+        ['cred_assign', 'ref_template_strict', 'ref_boundary'],
+      ),
+      // zod 链:参数里的真值 / 默认值字面量
+      make(
+        'b09d.zod.arg_value',
+        'plain',
+        'recognized',
+        [`${PWK}: `, R(`z.string().max(${pw()}`, cred), '),'],
+        ['cred_assign', 'ref_zod_strict', 'ref_tail_punct'],
+      ),
+      make(
+        'b09d.zod.nested_arg_value',
+        'plain',
+        'recognized',
+        [`${PWK}: `, R(`z.array(z.string().min(${pw()}`, cred), ')),'],
+        ['cred_assign', 'ref_zod_strict', 'ref_tail_punct'],
+      ),
+      make(
+        'b09d.zod.default_literal',
+        'plain',
+        'recognized',
+        [`${PWK}: z.string().default("`, R(pw(), cred), '"),'],
+        ['cred_assign', 'ref_trailing_literal'],
+      ),
+      // 多层转义引号:任意层数的反斜杠转义引号都等价于普通引号
+      make(
+        'b09d.esc.json_in_json',
+        'plain',
+        'recognized',
+        [`${BS}"${PWK}${BS}": ${BS}"`, R(pw(), cred), `${BS}"`],
+        ['cred_assign'],
+      ),
+      make(
+        'b09d.esc.layer2_assign',
+        'plain',
+        'recognized',
+        [
+          `p = (raw) => { const u = new URL(raw); u.${PWK} = ${BS.repeat(3)}"`,
+          R(pw(), cred),
+          `${BS.repeat(3)}"; u.username = p`,
+        ],
+        ['cred_assign'],
+      ),
+      make(
+        'b09d.esc.layer3_json',
+        'plain',
+        'recognized',
+        [
+          `${BS.repeat(7)}"${PWK}${BS.repeat(7)}": ${BS.repeat(7)}"`,
+          R(pw(), cred),
+          `${BS.repeat(7)}"`,
+        ],
+        ['cred_assign'],
+      ),
+      make(
+        'b09d.esc.single_quote',
+        'plain',
+        'recognized',
+        [`${PWK} = ${BS}'`, R(pw(), cred), `${BS}'`],
+        ['cred_assign'],
+      ),
+    );
+    // 引用形态:一个字符都不许动
+    for (const [k, text] of [
+      ['tpl_member_chain', `${TK} = ${tpl}seed?.input ?? ''}\\n`],
+      ['tpl_index', `export ${TKU}=${tpl}seeds[0]?.input ?? ''}`],
+      ['zod_chain', `${PWK}_prefixes: z.array(z.string().min(1)).default([]),`],
+      ['zod_plain', `${TK}: z.string().length(8)`],
+    ] as const) {
+      add(unchanged(`b09d.ref.${k}`, 'benign', 'benign', text));
+    }
+    // 第一遍的输出被 JSON 再转义一层、紧跟字符串收尾引号:第二遍(`--check`)不得把收尾引号当成下一个引号段
+    add(
+      unchanged(
+        'b09d.legit.json_line_end',
+        'legit_placeholder',
+        'legit_placeholder',
+        `{"excerpt":"u.${PWK} = ${BS.repeat(7)}"[[REDACTED:credential]]${BS.repeat(7)}"","index":3}`,
+      ),
+    );
+  }
+
   // ---- 做不到的形态(只报告,不计入召回) ----
   const hex32 = g.pick(HEXL, 32);
   const lower36 = (() => {
