@@ -613,6 +613,41 @@ const LEGACY_CALL_CHAIN = /^[A-Za-z_$][\w$.]*\(.*\)[;,]?$/;
 const LEGACY_CODE_SHAPE =
   /^[A-Za-z_$][\w$.]*\(|^[A-Za-z_$][\w$.]*(?:\[\]|<[^>]*>)?[)\];,:]+$|^[A-Za-z_$][\w$.]*(?:\[\]|<[^>]*>)[)\];,:]*$|^[A-Za-z_$][\w$.]*<[^>]*$|[({[]$/;
 
+/**
+ * 模板串里的变量展开(B09d):`${seed?.input` `${seeds[0]?.input}` `${a.b}`。只认**标识符 / 成员链 / 数字下标**:
+ * 标识符只含字母下划线(带数字的段更像口令);不认任何运算符(`:-` `+` `|` `?? 'x'` 之后的部分本来就不在这个词里)、
+ * 引号、括号调用。`${X:-口令}` `${'口令'}` `${a + 'x'}` 因此都不是引用。收尾的 `}` 可有可无(词可能停在空白处)。
+ */
+const TEMPLATE_EXPR = /^\$\{[A-Za-z_][A-Za-z_]*(?:\??\.[A-Za-z_][A-Za-z_]*|\??\[\d{1,3}\])*\}?$/;
+/** 旧的宽松放行(B09c 及之前):任何以 `${` 开头的词。只为变异自检保留。 */
+const LEGACY_TEMPLATE = /^\$\{/;
+
+/**
+ * zod / 类型声明里的链式构造(B09d):`z.array(z.string().min(1)).default([])`。整词必须是
+ * `z.<构造>(<参数>)(.<方法>(<参数>))*`,构造与方法名取封闭集合,参数只能是 数字 / `[]` / `{}` / true|false|null|undefined /
+ * 纯小写词 / 纯大写常量名 / 嵌套的同类链(深度 ≤ 3)。参数里出现数字夹字母、混合大小写、引号(引号本来就会截断这个词)
+ * 都不认:`z.string().max(Zk9fQx…)` 仍是口令。
+ */
+const ZOD_CTOR =
+  '(?:array|string|number|boolean|object|enum|literal|union|record|unknown|any|date|bigint|tuple|map|set|strictObject|looseObject|nativeEnum|lazy|optional|nullable|int|uuid|email|url|never|null|undefined)';
+const ZOD_METHOD =
+  '(?:min|max|length|default|optional|nullable|nullish|int|positive|negative|nonnegative|nonempty|trim|lowercase|uppercase|email|url|uuid|describe|array|or|and)';
+const ZOD_ATOM =
+  '(?:\\d{1,6}|\\[\\]|\\{\\}|true|false|null|undefined|[a-z][a-z_]{0,31}|[A-Z][A-Z_]{0,31})';
+function zodChain(arg: string): string {
+  const args = `(?:${arg}(?:,${arg})*)?`;
+  return `z\\.${ZOD_CTOR}\\(${args}\\)(?:\\.${ZOD_METHOD}\\(${args}\\))*`;
+}
+/** 链的最后一个调用没闭合(`z.string().default(`:后面是引号,词被引号截断):参数里的字面量由「引用之后的默认值字面量」另外判。 */
+function zodChainOpen(arg: string): string {
+  const args = `(?:${arg}(?:,${arg})*)?`;
+  return `z\\.${ZOD_CTOR}(?:\\(${args}\\)(?:\\.${ZOD_METHOD}\\(${args}\\))*\\.${ZOD_METHOD})?\\(`;
+}
+const ZOD_ARG = `(?:${ZOD_ATOM}|${zodChain(`(?:${ZOD_ATOM}|${zodChain(ZOD_ATOM)})`)})`;
+const ZOD_CHAIN = new RegExp(`^(?=.{1,200}$)(?:${zodChain(ZOD_ARG)}|${zodChainOpen(ZOD_ARG)})$`);
+/** 旧的宽松放行:`z.xxx(` 开头的任何词。只为变异自检保留。 */
+const LEGACY_ZOD = /^z\.[A-Za-z]+\(/;
+
 /** 引用核:去掉尾部标点之后剩下的部分是不是一种引用形态。 */
 function refCore(s: string, shell: boolean): boolean {
   if (s === '') return true;
@@ -645,6 +680,8 @@ export const STAGE_REF_TAIL = 'ref_tail_punct';
 export const STAGE_REF_BOUNDARY = 'ref_boundary';
 export const STAGE_REF_FLAG = 'ref_flag_strict';
 export const STAGE_PLACEHOLDER = 'placeholder_boundary';
+export const STAGE_REF_TEMPLATE = 'ref_template_strict';
+export const STAGE_REF_ZOD = 'ref_zod_strict';
 
 /**
  * 判一个无引号值。尾部标点先剥掉再判:候选 c1=去 `;,:`、c2=再去 `)]}`、c3=再去 `({[`,
@@ -663,7 +700,13 @@ export function judgeValue(
   let e3 = e2;
   while (e3 > 0 && ';,:\\)]}({['.includes(v[e3 - 1] as string)) e3--;
   const cands = new Set<string>([v, v.slice(0, e1), v.slice(0, e2), v.slice(0, e3)]);
-  for (const c of cands) if (refCore(c, shell)) return { secret: false, coreLen: e3 };
+  for (const c of cands) {
+    if (refCore(c, shell)) return { secret: false, coreLen: e3 };
+    if (disabled.has(STAGE_REF_TEMPLATE) ? LEGACY_TEMPLATE.test(c) : TEMPLATE_EXPR.test(c))
+      return { secret: false, coreLen: e3 };
+    if (disabled.has(STAGE_REF_ZOD) ? LEGACY_ZOD.test(c) : ZOD_CHAIN.test(c))
+      return { secret: false, coreLen: e3 };
+  }
   if (disabled.has(STAGE_REF_TAIL) && (LEGACY_CODE_SHAPE.test(v) || LEGACY_CALL_CHAIN.test(v)))
     return { secret: false, coreLen: e3 };
   if (disabled.has(STAGE_REF_BOUNDARY) && LEGACY_NON_SECRET_START.test(v))
@@ -691,7 +734,7 @@ const SP = '[ \\t]{0,32}';
  * 值之前的空白允许 `key = value`;被拒绝的匹配不再吞掉后文(见 scan 里的 lastIndex 回退)。
  */
 const CRED_ASSIGN_RE = new RegExp(
-  `${KW}${SFX}["']?${SP}(:=|=>|:|=)${SP}(?:\\\\*"((?:[^"\\\\\\r\\n]|(?=(\\\\+))\\3(?!"))*)(?:\\\\*")?|'([^'\\r\\n]{8,})'?|([^\\s"'\`]+))`,
+  `${KW}${SFX}(?:\\\\*["'])?${SP}(:=|=>|:|=)${SP}(?:\\\\*"((?:[^"\\\\\\r\\n]|(?=(\\\\+))\\3(?!"))*)(?:\\\\*")?|'([^'\\r\\n]{8,})'?|(?!\\\\+')([^\\s"'\`]+)|\\\\+'((?:[^'\\\\\\r\\n]|(?=(\\\\+))\\7(?!'))*)(?:\\\\+')?)`,
   'gid',
 );
 
@@ -1026,6 +1069,8 @@ function trailingLiterals(
 ): Array<[number, number]> {
   const out: Array<[number, number]> = [];
   const opensCall = /[(,]\\*$/.test(val) || (/\[$/.test(val) && ENV_ACCESS.test(core));
+  // 模板展开 `${…` 在词里没有闭合:展开式里的字面量(`${a + '口令'}`)另外判,到配平的 `}` 为止
+  const opensTemplate = val.startsWith('${') && !val.includes('}');
   let tail = text.slice(valEnd, valEnd + TRAILING_WINDOW);
   // 原视图补扫:转义的 `\n` `\r` 是语句边界
   if (origView) {
@@ -1033,12 +1078,19 @@ function trailingLiterals(
     if (cut) tail = tail.slice(0, cut.index);
   }
   // 只在「值是取环境变量 / 调用 / 命令替换」或后面紧跟默认值运算符时扫:整条语句里的字面量都看(三元、`??` `or` 都算)
-  if (!opensCall && !DEFAULT_OP.test(tail) && !/^\$\(/.test(val) && !ENV_ACCESS.test(core))
+  if (
+    !opensCall &&
+    !opensTemplate &&
+    !DEFAULT_OP.test(tail) &&
+    !/^\$\(/.test(val) &&
+    !ENV_ACCESS.test(core)
+  )
     return out;
   let depth = opensCall ? 1 : 0;
   for (let i = 0; i < tail.length && out.length < 16; i++) {
     const c = tail[i] as string;
     if (c === '\n' || c === '\r' || c === ';') break;
+    if (opensTemplate && c === '}') break;
     if (c === '(') depth++;
     else if (c === ')') {
       depth--;
@@ -1140,7 +1192,11 @@ const credAssign: Rule = {
         trail(h, shell, v);
         return false;
       }
-      if (h.val.length < 8) return false; // 不足 8 个字符的口令不脱敏(最小长度契约);引用的默认值字面量上面已判
+      if (h.val.length < 8) {
+        // 不足 8 个字符的口令不脱敏(最小长度契约);但模板展开 `${a` 之后的字面量(`${a + '口令'}`)仍要判
+        if (h.gi === 5 && h.val.startsWith('${')) trail(h, shell, v);
+        return false;
+      }
       if (placeholderGap(text, env, h.keyStart, h.op[1], h.vr[0]) === 'occupied') return false;
       push(h.vr[0], h.gi === 5 ? h.vr[0] + v.coreLen : h.vr[1]);
       trail(h, shell, v);
@@ -1157,7 +1213,7 @@ const credAssign: Rule = {
       }
       const ind = (m as RegExpExecArray & { indices: Array<[number, number] | undefined> }).indices;
       const op = ind[1] as [number, number];
-      const gi = m[2] !== undefined ? 2 : m[4] !== undefined ? 4 : 5;
+      const gi = m[2] !== undefined ? 2 : m[4] !== undefined ? 4 : m[6] !== undefined ? 6 : 5;
       const vr = ind[gi] as [number, number];
       const val = m[gi] as string;
       // 被放行的匹配不能把后面的文本一起吞掉(里面可能还有真值赋值):从操作符之后继续
@@ -1215,7 +1271,7 @@ const credAssign: Rule = {
  * 分组:1=`:=` `=>` `=`,2=`:`(无标注),3=标注之后的 `=`。标注 `: str =` 的类型部分有长度上限、不含引号。
  */
 const EXT_HEAD_RE = new RegExp(
-  `${KW}${SFX}["']?${SP}(?:(:=|=>|=)|(:)(?:${SP}[A-Za-z_][\\w.\\[\\], |?]{0,40}?${SP}(=)(?!=))?)${SP}`,
+  `${KW}${SFX}(?:\\\\*["'])?${SP}(?:(:=|=>|=)|(:)(?:${SP}[A-Za-z_][\\w.\\[\\], |?]{0,40}?${SP}(=)(?!=))?)${SP}`,
   'gid',
 );
 const WORD_STOP = /[\s|&;<>(),\]}`]/;
@@ -1227,16 +1283,29 @@ function eolWithin(text: string, from: number): number {
   return i === -1 ? from + w.length : from + i;
 }
 
+/**
+ * 从 from 起找 delim(若干反斜杠 + 引号):命中位置前面不能再有反斜杠,
+ * 否则它只是更长的转义串(三个反斜杠加引号)的尾巴,不是「这一层」的引号。
+ */
+function indexOfExactQuote(text: string, delim: string, from: number): number {
+  for (let i = text.indexOf(delim, from); i !== -1; i = text.indexOf(delim, i + 1)) {
+    if (i === 0 || text.charCodeAt(i - 1) !== 92) return i;
+  }
+  return -1;
+}
+
 /** 无引号 + 引号段拼接成的一个词(shell 语义)。返回词的终点、拼接后的内容、段数。 */
 function readGluedWord(
   text: string,
   p: number,
   eol: number,
   quoteFirstNeedsQuote = false,
-): { end: number; content: string; segs: number } {
+): { end: number; content: string; segs: number; firstEnd: number; firstEmpty: boolean } {
   let q = p;
   let content = '';
   let segs = 0;
+  let firstEnd = p;
+  let firstEmpty = false;
   /** q 处:若是(带转义反斜杠的)引号,返回 [反斜杠数, 引号字符] */
   const quoteAt = (at: number): [number, string] | null => {
     let b = 0;
@@ -1244,19 +1313,27 @@ function readGluedWord(
     const qc = text[at + b];
     return qc === '"' || qc === "'" ? [b, qc] : null;
   };
+  /** 词里第一个引号的转义深度:同一个视图里,词内的引号必须同深度(JSON 字符串的收尾引号、别层的引号不是拼接) */
+  let layer = -1;
   while (q < eol) {
     const c = text[q] as string;
     const qa = quoteAt(q);
     if (qa) {
       const [bs, qc] = qa;
+      if (layer === -1) layer = bs;
+      else if (bs !== layer) break;
       const delim = '\\'.repeat(bs) + qc;
-      const close = text.indexOf(delim, q + delim.length);
+      const close = indexOfExactQuote(text, delim, q + delim.length);
       const e = close === -1 || close >= eol ? eol : close;
       // 引号没有闭合:多半是 JSON 字符串 / 源码字符串的收尾引号,不算词的一段,词到此为止
       if (e === eol) break;
       content += text.slice(q + delim.length, e);
       segs++;
       q = e + delim.length;
+      if (segs === 1) {
+        firstEnd = q;
+        firstEmpty = content === '';
+      }
       // 以引号段开头的词:紧跟的必须还是引号段(`"ab""口令"`),否则多半是源码里字符串字面量的收尾引号
       // 例外:引号段是短的无空白前缀(`"ab"口令`),shell 里同样是一个词
       if (
@@ -1275,7 +1352,7 @@ function readGluedWord(
       segs++;
     }
   }
-  return { end: Math.min(q, eol), content, segs };
+  return { end: Math.min(q, eol), content, segs, firstEnd, firstEmpty };
 }
 
 const credAssignExt: Rule = {
@@ -1331,7 +1408,11 @@ const credAssignExt: Rule = {
         continue;
       }
       // 同行三引号值(TOML / Python)
-      if (text.startsWith("'''", p) || text.startsWith('"""', p)) {
+      // 三个引号中间不能是被剥掉的占位符:第二遍剥掉占位符后,`"值"` + `""` 会拼出一个原文里不存在的 `"""`
+      if (
+        (text.startsWith("'''", p) || text.startsWith('"""', p)) &&
+        !env.rawSlice(p, p + 3).includes('[[REDACTED')
+      ) {
         const close = text.indexOf(text.slice(p, p + 3), p + 3);
         const e = close === -1 || close > eol ? eol : close;
         const inner = text.slice(p + 3, e);
@@ -1375,7 +1456,10 @@ const credAssignExt: Rule = {
           quotedNameRef(text, m.index, opEnd, [], false) !== null;
         if (!nameQuote) {
           const w = readGluedWord(text, p, eol, c === '"' || c === "'" || c === '\\');
-          if (w.segs >= 2 && w.content.length >= 8 && judge(w.content) && free(p)) {
+          // 第一段是空引号对、而原文里它中间有占位符(第二遍看到的是第一遍的输出):值的位置已经被占了,
+          // 后面的引号段是别的东西,不是这个值的延续
+          const emptied = w.firstEmpty && env.rawSlice(p, w.firstEnd).includes('[[REDACTED');
+          if (!emptied && w.segs >= 2 && w.content.length >= 8 && judge(w.content) && free(p)) {
             push(p, w.end);
             continue;
           }
@@ -1855,4 +1939,6 @@ export const STAGE_IDS = [
   STAGE_REF_FLAG,
   STAGE_PLACEHOLDER,
   STAGE_TRAILING,
+  STAGE_REF_TEMPLATE,
+  STAGE_REF_ZOD,
 ] as const;
