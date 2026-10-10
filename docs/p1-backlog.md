@@ -1,0 +1,53 @@
+# P1 待办与排期
+
+> 依据:`docs/release-checklist.md` §4(不在 P0 的)、`docs/reader-counting-spec.md` §8.1(D1–D6 待设计者定)、
+> `docs/contracts.md` 决策 ②/§11、`docs/redaction.md` §3.2/§7 残余缺口。
+> 状态标记:☐ 未开始 | ◐ 进行中 | ✅ 完成 | ⏸ 等外部(凭据/决策/时机)。
+
+## Phase P0-close(前置,不属 P1 但挡 tag)
+
+- ☐ A6-pi 基线刷新:等本会话静默 ≥60 分钟,按 `ops/accept-p0.sh --only A6` 的报错行数更新
+  `inventory/reader-samples.txt` 第 5 个 pi 条目(基线追平真实文件的合法增长,断言本身不变),重跑 A6 转 PASS
+- ☐ 全量 `ops/accept-p0.sh` 15/15 → 按 `release-checklist.md` §3 核对 → 打 tag `p0-accept`
+
+## Phase P1-A(契约已写死的低成本项,可立即开工)
+
+- ☐ **决策 ②:预算 `enforce` 默认收紧**——`documented`/`probed` 目标默认 `block`(assumed 仍恒 warn);
+  kit.toml 注释、`src/budget`、`test/budget`、contracts 决策 ② 同步。fixture 矩阵(A2)需加 block 默认格
+- ☐ **D2:`agent_version` 的 `unknown` 入契约**——`AgentVersionSourceSchema` 加 `unknown`(spec §8.1 D2 备选),
+  消除 `collector_fallback` 的双词口径;reader/oracle/schema/test 五处同步
+- ☐ **脱敏 §7 残余缺口清理**:按 `docs/redaction.md` §3.2/§7 列表逐条收敛,变异自检计数随之更新
+
+## Phase P1-B(设计决策 + 实现,按依赖序)
+
+- ☐ **D1 适用性标记**(契约变更):`CollectReport` 加 `tool_failures_scope: "full" | "codex_pre_0149_limited"`
+  (推荐 spec 方案 A);codex reader 按会话内是否出现 `CommandExecution` 判定;oracle 与 A6 Codex 部分同步
+- ☐ **D3 `maxEventBytes` 定值**:按 spec C8 本机实测(最大单行 4.0MB)定默认值;`oversized_lines` 口径验证
+- ☐ **D4 跨文件去重**:去重键(Claude `uuid` / Pi 条目 `id`)在 collector 汇总层实现(spec 倾向),
+  `sessions_total`/`fired` P1 汇总口径落地
+- ☐ **D5/D6**:Pi 分支与 Claude 边界行——需要真实样本(Pi fork 会话、Claude 后台/斜杠行)先行采集再定口径,
+  采集脚本按 spec §5 规则写
+
+## Phase P1-C(新功能主体)
+
+- ☐ **探针 `probe`**:预算阈值实测写回(`BudgetTarget.probed_value/probed_agent_version/probed_at`,
+  contracts #12);桩退出 64 → 真实现
+- ☐ **反思器 `reflect`**:`Proposal.reflector.vendor` 必填、`judge.vendor ≠ reflector.vendor`、
+  `skipped:same-vendor` 记账(contracts #18);含外部内容的会话只进结构化计数(#8)
+- ☐ **`attest` / `promote` / `retire`**:按 contracts §对应节;依赖 reflect
+- ☐ **`sync` 写全局 + `doctor`**(P2 表内但同批):真实 HOME 受管路径写入,依赖 B17 守卫面
+
+## Phase P1-D(发布与治理,⏸ 等用户凭据/授权)
+
+- ⏸ **npm 发布**:需要 npm 账号/otp 与包名定稿(`agent-kit` 是否占用)
+- ⏸ **远端分支保护 + CODEOWNERS**:需要 repo admin(geoly/chovizzz 两远端的策略要分别定)
+- ⏸ **签名提交**:需要本机签名密钥决策(ssh 签名可用现有 ssh-key,`git config gpg.format ssh` + GitHub 上传公钥)
+- ☐ CI 观察:`.github/workflows/ci.yml` 在 origin 的红点逐个看懂(release-checklist §3 末条)
+
+## 排期建议(串行优先,避免同文件并行)
+
+1. **P0-close**(等时机)→ 2. **P1-A** 三件(本仓内,无外部依赖)→ 3. **P1-B** 按 D1→D3→D4→D5/D6
+   → 4. **P1-C** probe → reflect → attest/promote/retire → sync/doctor → 5. **P1-D** 随凭据到位随时插入。
+
+> 每块沿用 P0 纪律:块边界不动 `docs/block-boundaries.md` 之外的文件;全量门禁 + A1–A15 逐块回跑;
+> 契约变更必须同步 contracts.md 编号条款与 oracle,不得只改实现。
