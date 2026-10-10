@@ -754,6 +754,7 @@ perl -pe 'chomp if eof' pi.jsonl | jq -nRc "$P_PI"                  # 末行无�
   **已落地(P1,2026-10-09)**:采纳备选——`unknown` 入契约,语义二分:CLI 版本兜底成功 = `collector_fallback`
   (计入 `agent_version_fallback_ratio`),连 CLI 版本都没有 = `unknown`(不计入该比率)。
 - **D3 超长行。** 本文要求计数不因 `maxEventBytes` 改变(C8)。若 reader 做不到,需定:要么 reader 必须整行分类后再丢文本,要么 A6 样本限定 `oversized_lines==0`。本机行长最大值约 1.3 MB(Claude)、2.5 MB(Kimi)、4.0 MB(Pi)。`maxEventBytes` 的默认值与定值责任人也要定(B10b 的参数),§5 规则 4 的样本筛选依赖它。
+  **已定(P1,2026-10-09)**:默认 `DEFAULT_MAX_EVENT_BYTES = 8 MiB`(`src/signals/base-reader.ts`,定值责任人 = 设计者,记录于此)。依据:覆盖本机实测最大 4.0 MB 并留一倍余量;远低于单行硬上限 64 MiB。reader 已满足 C8 的第一种形态(超长行仍整行分类、只截断 text,计数不变——`test/signals/base-reader.test.ts` 双取值对照钉住),因此 §5 规则 4 的样本筛选按本文原样执行,不额外收紧。
 - **D4 跨文件重复(Claude resume、Pi fork)。** P0 按文件计。P1 的 `sessions_total`、`fired` 汇总需要去重键(Claude `uuid`,Pi 条目 `id`),需要定是 reader 输出、还是 collector 汇总时做。
 - **D5 Pi 分支。** 本文:计全部条目 + `branch_count` 报非活动链条目数。备选 A:只计活动链(被放弃分支上执行过的工具不算);备选 B:本文口径之外另报活动链三项计数(`Counts` 要加字段)。本机零分支样本,无法用真实数据比较。
 - **D6 Claude 的两类边界行。** (a) 带 `sessionKind` 的后台会话 user 行(本机 6 行)按规则计为用户消息;(b) 斜杠命令(`<command-name>…`)计为用户消息。若设计要的是「人敲的自然语言」,这两类要另外排除,口径会改。
