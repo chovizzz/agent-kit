@@ -63,6 +63,21 @@ export async function collect(input: CollectInput): Promise<CollectOutput> {
     }
   }
 
+  // D1(方案 A):codex 报告带 tool_failures 适用性标记。任一会话版本 < 0.149 或版本未知
+  // (不能证明可见性)→ limited;全部 >= 0.149 → full。比较用数值元组,不引 semver 依赖。
+  const toolFailuresScope = (() => {
+    if (input.reader.agent !== 'codex') return undefined;
+    const parse = (v: string | undefined): [number, number, number] | null => {
+      const m = /^([0-9]+)\.([0-9]+)\.([0-9]+)/.exec(v ?? '');
+      return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+    };
+    const limited = processed.some((r) => {
+      const t = parse(r.version?.version);
+      return t === null || t < [0, 149, 0];
+    });
+    return limited ? ('codex_pre_0149_limited' as const) : ('full' as const);
+  })();
+
   const report = CollectReportSchema.parse({
     agent: input.reader.agent,
     sessions_read: processed.length,
@@ -73,6 +88,7 @@ export async function collect(input: CollectInput): Promise<CollectOutput> {
     unknown_event_types: unknown,
     oversized_lines: oversized,
     agent_version_fallback_ratio: processed.length === 0 ? 0 : fallback / processed.length,
+    ...(toolFailuresScope !== undefined ? { tool_failures_scope: toolFailuresScope } : {}),
   } satisfies CollectReport);
 
   const write = input.dry ? undefined : await writeSignals(input.io, input.reader.agent, signals);

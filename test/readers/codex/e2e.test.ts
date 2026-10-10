@@ -134,4 +134,32 @@ describe('collect 端到端(codex)', () => {
     expect(rows.length).toBeGreaterThan(0);
     for (const x of rows) expect(x.agent_version_source).toBe('unknown');
   });
+
+  it('D1:tool_failures_scope——全 >=0.149 → full;含旧版/无版本会话 → codex_pre_0149_limited', async () => {
+    // 用例 1:单一 0.161.0 会话 → full
+    {
+      const w = await newWork('cx-d1-full-');
+      const b = new LineBuilder().meta({ cli_version: '0.161.0' });
+      b.userItem('x');
+      await writeRollout(w.io, w.sessions, b, { id: 'd1full' });
+      const r = await run(w, ['--allow-project', 'proj-a']);
+      expect(r.code, r.err).toBe(0);
+      const o = JSON.parse(r.out) as { report: { tool_failures_scope?: string } };
+      expect(o.report.tool_failures_scope).toBe('full');
+    }
+    // 用例 2:0.148.1 + 无版本两个会话 → limited(任一不能证明可见性即受限)
+    {
+      const w = await newWork('cx-d1-lim-');
+      const old = new LineBuilder().meta({ cli_version: '0.148.1' });
+      old.userItem('x');
+      await writeRollout(w.io, w.sessions, old, { id: 'd1old' });
+      const nover = new LineBuilder().meta({});
+      nover.userItem('y');
+      await writeRollout(w.io, w.sessions, nover, { id: 'd1nover' });
+      const r = await run(w, ['--allow-project', 'proj-a']);
+      expect(r.code, r.err).toBe(0);
+      const o = JSON.parse(r.out) as { report: { tool_failures_scope?: string } };
+      expect(o.report.tool_failures_scope).toBe('codex_pre_0149_limited');
+    }
+  });
 });

@@ -54,6 +54,14 @@ export const CollectReportSchema = z.strictObject({
   unknown_event_types: z.record(z.string(), z.number().int().nonnegative()),
   oversized_lines: z.number().int().nonnegative().optional(),
   agent_version_fallback_ratio: z.number().min(0).max(1),
+  /**
+   * D1 落地(P1,方案 A):codex 的 `tool_failures` 是下界口径——只数 5 种工具类 item 上
+   * 结构化的 `status === "failed"`,0.149 之前的 shell 失败不可见。该标记声明本次报告的
+   * 适用性:`full` = 全部会话 cli_version >= 0.149;`codex_pre_0149_limited` = 任一会话
+   * 版本更老或版本未知(取不到就不能证明可见性,按受限口径归档)。仅 codex 报告携带;
+   * 其他 agent 的 `tool_failures` 恒为全量,不带此字段。
+   */
+  tool_failures_scope: z.enum(['full', 'codex_pre_0149_limited']).optional(),
   input_sha256: Sha256Schema.optional(),
 });
 export type CollectReport = z.infer<typeof CollectReportSchema>;
