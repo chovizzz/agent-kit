@@ -1,6 +1,7 @@
 /**
  * agent_version 兜底(docs/reader-counting-spec.md §3)。
- * 一次运行内每个 agent 只取一次 CLI 版本;取不到 → 字面量 "unknown" + collector_fallback。
+ * 一次运行内每个 agent 只取一次 CLI 版本;取到 → collector_fallback;连 CLI 版本都没有 →
+ * 字面量 "unknown" + source=unknown(D2 落地,P1)。
  * P0 不起子进程(src/io/exec.ts 白名单只有 git),版本由 `--cli-version` 显式传入;
  * 自动执行 `<cli> --version` 需要扩白名单,列为待主代理接线。
  */
@@ -17,7 +18,7 @@ export function parseCliVersion(output: string): string | undefined {
 
 export interface ResolvedVersion {
   version: string;
-  source: 'session_meta' | 'collector_fallback';
+  source: 'session_meta' | 'collector_fallback' | 'unknown';
 }
 
 export function resolveAgentVersion(
@@ -27,5 +28,8 @@ export function resolveAgentVersion(
   if (fromSession !== null && fromSession !== '') {
     return { version: fromSession, source: 'session_meta' };
   }
-  return { version: fallback ?? UNKNOWN_VERSION, source: 'collector_fallback' };
+  if (fallback === undefined || fallback === '') {
+    return { version: UNKNOWN_VERSION, source: 'unknown' };
+  }
+  return { version: fallback, source: 'collector_fallback' };
 }

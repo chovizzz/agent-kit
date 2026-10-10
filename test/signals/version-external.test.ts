@@ -25,7 +25,7 @@ describe('CLI 版本解析(口径 §3)', () => {
     });
     expect(resolveAgentVersion(null, undefined)).toEqual({
       version: UNKNOWN_VERSION,
-      source: 'collector_fallback',
+      source: 'unknown',
     });
   });
 });

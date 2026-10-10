@@ -127,7 +127,11 @@ describe('collect 端到端(codex)', () => {
     await writeRollout(w.io, w.sessions, b, { id: 'nov' });
     const r = await run(w, ['--allow-project', 'proj-a']);
     expect(r.code, r.err).toBe(0);
+    // D2 落地:连 CLI 版本都没有 → source=unknown,不再计入 agent_version_fallback_ratio(那是 CLI 兜底成功率)。
     const o = JSON.parse(r.out) as { report: { agent_version_fallback_ratio: number } };
-    expect(o.report.agent_version_fallback_ratio).toBe(1);
+    expect(o.report.agent_version_fallback_ratio).toBe(0);
+    const rows = await stateSignals(w);
+    expect(rows.length).toBeGreaterThan(0);
+    for (const x of rows) expect(x.agent_version_source).toBe('unknown');
   });
 });

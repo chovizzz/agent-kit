@@ -14,7 +14,8 @@ export const SignalTypeSchema = z.enum([
 ]);
 export type SignalType = z.infer<typeof SignalTypeSchema>;
 
-export const AgentVersionSourceSchema = z.enum(['session_meta', 'collector_fallback']);
+// D2 落地(P1):`unknown` = 连 CLI 版本兜底都取不到;`collector_fallback` = 用 CLI 版本兜底成功。
+export const AgentVersionSourceSchema = z.enum(['session_meta', 'collector_fallback', 'unknown']);
 
 export const MAX_EXCERPT_CHARS = 300;
 

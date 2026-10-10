@@ -750,6 +750,8 @@ perl -pe 'chomp if eof' pi.jsonl | jq -nRc "$P_PI"                  # 末行无�
 
 - **D1 Codex `tool_failures` 无跨版本稳定字段。** 本文取「结构化 `status=="failed"`」。代价:0.149 之前(约 74% 的有工具调用的会话)shell 失败不可见。若要让报告层能区分「0 次失败」与「看不见失败」,需要在 `Counts` 或 `CollectReport` 加一个适用性标记(例如按 `cli_version >= 0.149` 或会话内是否出现过 `CommandExecution` 事件判定),这是契约变更。备选:A 接受(推荐;A6 Codex 样本强制含 `CommandExecution` 失败,汇报里标「受限口径」,适用性标记留给 P1);B 对 0.142.x 追加文本启发式 `Process exited with code N`(只覆盖 0.142.x,0.147.x 仍是盲区,且文本格式无保证);C P0 不验 Codex 的 `tool_failures`(等同缩小 reader 范围,需改 D §10 验收 6)。
 - **D2 `agent_version` 取不到时的取值。** 本文用 `"unknown"` + `collector_fallback`。备选:给 `AgentVersionSourceSchema` 加 `unknown`(改契约)。
+  **已落地(P1,2026-10-09)**:采纳备选——`unknown` 入契约,语义二分:CLI 版本兜底成功 = `collector_fallback`
+  (计入 `agent_version_fallback_ratio`),连 CLI 版本都没有 = `unknown`(不计入该比率)。
 - **D3 超长行。** 本文要求计数不因 `maxEventBytes` 改变(C8)。若 reader 做不到,需定:要么 reader 必须整行分类后再丢文本,要么 A6 样本限定 `oversized_lines==0`。本机行长最大值约 1.3 MB(Claude)、2.5 MB(Kimi)、4.0 MB(Pi)。`maxEventBytes` 的默认值与定值责任人也要定(B10b 的参数),§5 规则 4 的样本筛选依赖它。
 - **D4 跨文件重复(Claude resume、Pi fork)。** P0 按文件计。P1 的 `sessions_total`、`fired` 汇总需要去重键(Claude `uuid`,Pi 条目 `id`),需要定是 reader 输出、还是 collector 汇总时做。
 - **D5 Pi 分支。** 本文:计全部条目 + `branch_count` 报非活动链条目数。备选 A:只计活动链(被放弃分支上执行过的工具不算);备选 B:本文口径之外另报活动链三项计数(`Counts` 要加字段)。本机零分支样本,无法用真实数据比较。
