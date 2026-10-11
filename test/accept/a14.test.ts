@@ -36,7 +36,8 @@ const name = rest.join(' ');
 const ent = table.find(([n]) => n === name);
 if (!ent) process.exit(2);
 if (ent[1] === 'P0') process.exit(mode === 'p0-stub' && name === 'build' ? 64 : mode === 'p0-notrun' && name === 'check' ? 4 : 2);
-if (mode === 'p1-implemented' && name === 'probe') process.exit(0);
+// probe 已实装(a14 的 IMPLEMENTED_LATER_PHASE):正常模式下必须非桩、非 4。
+if (name === 'probe') process.exit(mode === 'p1-stub-regression' ? 64 : 0);
 if (mode === 'silent-stub' && name === 'sync') process.exit(64);
 process.stderr.write('未实现 — ' + ent[1] + ' 才实现\\n');
 process.exit(64);
@@ -117,11 +118,13 @@ describe('A14 交付物齐全', () => {
     expect(r.status, r.stdout).toBe(1);
     expect(r.stdout).toContain('probe(应为 P1');
   });
-  it('P1 命令居然已"实现"(退出 0)/ 桩没说明阶段 => 1', async () => {
-    expect(a14(await setup('p1-implemented')).status).toBe(1);
-    const r = a14(await setup('silent-stub'));
+  it('已实装的 P1 命令仍以桩退出 64 => 1;桩没说明阶段 => 1', async () => {
+    const r = a14(await setup('p1-stub-regression'));
     expect(r.status).toBe(1);
-    expect(r.stdout).toContain('没有说明 P2');
+    expect(r.stdout).toContain('已实装却仍以桩退出 64');
+    const r2 = a14(await setup('silent-stub'));
+    expect(r2.status).toBe(1);
+    expect(r2.stdout).toContain('没有说明 P2');
   });
   it('P0 命令仍是桩 => 4(半成品不得判通过)', async () => {
     const r = a14(await setup('p0-stub'));

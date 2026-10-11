@@ -29,6 +29,9 @@ export const COMMAND_PHASES = [
   ['doctor', 'P2'],
 ];
 
+/** P1/P2 里已经实装、不再是桩的命令(新增一块实装时在这里登记,否则会被"桩应退出 64"误判)。 */
+export const IMPLEMENTED_LATER_PHASE = new Set(['probe']);
+
 export const DELIVERABLES = [
   'kit.toml',
   'ops/zero-write-check.sh',
@@ -115,6 +118,12 @@ async function a14(argv) {
         else if (r.status === EXIT_STUB) R.notRun(`${name}: [P0] 命令仍是桩(退出 64),交付物不齐`);
         else if (r.status === 4) R.notRun(`${name}: [P0] 命令自报未执行(退出 4)`);
         else R.pass(`${name}: [P0] 不是命令桩(空仓库下退出 ${r.status})`);
+      } else if (IMPLEMENTED_LATER_PHASE.has(name)) {
+        // 已实装的不再是桩:空仓库下必须正常结束且不得自报未执行(与 P0 同一判据)。
+        if (r.spawnFailed || r.status === null) R.notRun(`${name}: 未能正常结束`);
+        else if (r.status === EXIT_STUB) R.fail(`${name}: [${phase}] 已实装却仍以桩退出 64`);
+        else if (r.status === 4) R.notRun(`${name}: [${phase}] 命令自报未执行(退出 4)`);
+        else R.pass(`${name}: [${phase}] 已实装(空仓库下退出 ${r.status})`);
       } else if (r.status !== EXIT_STUB)
         R.fail(`${name}: [${phase}] 命令桩应退出 64,实际 ${r.status}`);
       else if (!r.stderr.includes(phase)) R.fail(`${name}: 桩的 stderr 没有说明 ${phase} 才实现`);

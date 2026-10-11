@@ -71,6 +71,8 @@ export const PUBLIC_DOC_HOSTS = [
   'pkg.go.dev',
   'developer.mozilla.org',
   'www.npmjs.com',
+  // 公开 npm registry 地址(发布工作流与 package.json 的 publishConfig);不是个人数据面。
+  'registry.npmjs.org',
 ];
 
 async function loadScanner(ctx, allowHosts = []) {
