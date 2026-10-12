@@ -35,6 +35,8 @@ export interface CollectOutput {
   samples: string[];
   dropReasons: Partial<Record<RedactFailReason, number>>;
   readErrors: number;
+  /** read_error 的异常类名计数(只类名,不含 message / 路径) */
+  readErrorClasses: Record<string, number>;
   write: WriteResult | undefined;
 }
 
@@ -84,6 +86,13 @@ export async function collect(input: CollectInput): Promise<CollectOutput> {
     return limited ? ('codex_pre_0149_limited' as const) : ('full' as const);
   })();
 
+  const readErrorClasses: Record<string, number> = Object.create(null) as Record<string, number>;
+  for (const r of results) {
+    if (r.status !== 'read_error') continue;
+    const k = r.errorClass ?? 'Error';
+    readErrorClasses[k] = (readErrorClasses[k] ?? 0) + 1;
+  }
+
   const report = CollectReportSchema.parse({
     agent: input.reader.agent,
     sessions_read: processed.length,
@@ -112,6 +121,7 @@ export async function collect(input: CollectInput): Promise<CollectOutput> {
       : [],
     dropReasons,
     readErrors: results.filter((r) => r.status === 'read_error').length,
+    readErrorClasses,
     write,
   };
 }

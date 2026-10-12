@@ -16,6 +16,7 @@ import { DEFAULT_READERS } from '../signals/readers.js';
 import type { ReaderRegistry } from '../signals/readers.js';
 import { loadSalt, SaltError, SignalStoreError } from '../signals/state-store.js';
 import { parseCliVersion } from '../signals/version.js';
+import { parseDecimalUint } from './args.js';
 import type { CommandContext, CommandDef } from './types.js';
 
 /**
@@ -36,15 +37,7 @@ interface Parsed {
   error: string | undefined;
 }
 
-/**
- * 只接受十进制非负整数字面量(`/^[0-9]+$/`):拒绝 `0x10`、`1e3`、`+5`、`-1`、带空白、空串;
- * 超出安全整数范围(会被 Number 悄悄变成不精确值或 Infinity)也拒绝。非法返回 undefined。
- */
-export function parseDecimalUint(raw: string): number | undefined {
-  if (!/^[0-9]+$/.test(raw)) return undefined;
-  const n = Number(raw);
-  return Number.isSafeInteger(n) ? n : undefined;
-}
+export { parseDecimalUint };
 
 function parseArgs(argv: readonly string[]): Parsed {
   const out: Parsed = {
@@ -265,7 +258,9 @@ export function createSignalsCollectCommand(deps: SignalsCollectDeps): CommandDe
         return ExitCode.FAIL_CLOSED;
       }
       if (out.readErrors > 0) {
-        ctx.stderr(`SESSION_READ_FAILED count=${out.readErrors}\n`);
+        ctx.stderr(
+          `SESSION_READ_FAILED count=${out.readErrors} classes=${JSON.stringify(out.readErrorClasses)}\n`,
+        );
         return ExitCode.CHECK_FAILED;
       }
       return ExitCode.OK;

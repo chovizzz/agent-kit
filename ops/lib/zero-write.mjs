@@ -154,9 +154,11 @@ export function parseArgs(argv) {
         o.twoRounds = true;
         break;
       case '--settle-ms': {
-        const n = Number(take());
-        if (!Number.isInteger(n) || n < 0 || n > 600_000)
-          throw new UsageError('--settle-ms 需要 0..600000 的整数');
+        // 只收十进制非负整数(与 src/commands/args.ts 的 parseDecimalUint 同规则):空串 / 0x / 1e3 / 符号 / 小数一律拒
+        const raw = take();
+        const n = /^[0-9]+$/.test(raw) ? Number(raw) : NaN;
+        if (!Number.isSafeInteger(n) || n > 600_000)
+          throw new UsageError('--settle-ms 需要 0..600000 的十进制整数');
         o.settleMs = n;
         break;
       }

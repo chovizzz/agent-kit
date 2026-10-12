@@ -25,13 +25,17 @@ import type { RedactFailReason, Redactor } from '../contracts/redact.js';
 import type { ExcludePolicy, ProjectDecision } from './exclude.js';
 import { isExternalToolName } from './external-content.js';
 import { projectKeyFor, sessionRefFor, sigIdFor } from './ids.js';
-import { neutralizePlaceholderMarkers } from '../redact/placeholder.js';
+import {
+  neutralizePlaceholderMarkers,
+  PLACEHOLDER_NEUTRALIZED,
+  PLACEHOLDER_OPEN,
+} from '../redact/placeholder.js';
 import { resolveAgentVersion } from './version.js';
 import type { ResolvedVersion } from './version.js';
 
 /** 内存里保留的事件文本上限(字符)。 */
 export const TEXT_WINDOW = 4096;
-export const PLACEHOLDER_OPEN = '[[REDACTED:';
+export { PLACEHOLDER_OPEN };
 
 export interface PipelineDeps {
   redactor: Redactor;
@@ -143,15 +147,18 @@ export function cutExcerpt(text: string, max = MAX_EXCERPT_CHARS): string {
   const chars = Array.from(text);
   if (chars.length <= max) return text;
   let cut = chars.slice(0, max).join('');
-  // 切点落在标记自身中间(`[[RED`):先退掉这段前缀
-  for (let k = Math.min(PLACEHOLDER_OPEN.length - 1, cut.length); k >= 1; k--) {
-    if (cut.endsWith(PLACEHOLDER_OPEN.slice(0, k))) {
-      cut = cut.slice(0, -k);
-      break;
+  // 合法标记 `[[REDACTED:` 与中性化标记 `[[ REDACTED:` 两种前缀各处理一遍
+  for (const marker of [PLACEHOLDER_OPEN, PLACEHOLDER_NEUTRALIZED]) {
+    // 切点落在标记自身中间(`[[RED`):先退掉这段前缀
+    for (let k = Math.min(marker.length - 1, cut.length); k >= 1; k--) {
+      if (cut.endsWith(marker.slice(0, k))) {
+        cut = cut.slice(0, -k);
+        break;
+      }
     }
+    const open = cut.lastIndexOf(marker);
+    if (open !== -1 && cut.indexOf(']]', open) === -1) cut = cut.slice(0, open);
   }
-  const open = cut.lastIndexOf(PLACEHOLDER_OPEN);
-  if (open !== -1 && cut.indexOf(']]', open) === -1) cut = cut.slice(0, open);
   return cut;
 }
 
