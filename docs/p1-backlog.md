@@ -6,9 +6,9 @@
 
 ## Phase P0-close(前置,不属 P1 但挡 tag)
 
-- ☐ A6-pi 基线刷新:等本会话静默 ≥60 分钟,按 `ops/accept-p0.sh --only A6` 的报错行数更新
+- ✅ A6-pi 基线刷新(2026-10-11:pi 样本追平 1844 行;另一个 claude 样本被自动清理,按选样规则换第 5 个;A6 60/60):等本会话静默 ≥60 分钟,按 `ops/accept-p0.sh --only A6` 的报错行数更新
   `inventory/reader-samples.txt` 第 5 个 pi 条目(基线追平真实文件的合法增长,断言本身不变),重跑 A6 转 PASS
-- ☐ 全量 `ops/accept-p0.sh` 15/15 → 按 `release-checklist.md` §3 核对 → 打 tag `p0-accept`
+- ✅ 全量 `ops/accept-p0.sh` 15/15(2026-10-11,A13 标记绑定 593ebc7)→ tag `p0-accept` → 按 `release-checklist.md` §3 核对 → 打 tag `p0-accept`
 
 ## Phase P1-A(契约已写死的低成本项,可立即开工)
 
