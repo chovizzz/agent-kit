@@ -46,6 +46,10 @@
   - probe 那两次失败:`format:check`(已提交的 probe.ts/check-budget.ts/contracts.md 未过 prettier;`b312e95` 修复)
   - 教训:门禁用 `pnpm run x >/dev/null 2>&1 && echo ok` 或 `pnpm run x | tail -1` 会被管道吞掉退出码——**必须单独跑并读退出码**
 
+## 已定:`KIT_TMP` 是 `out/` 上级时不收紧
+
+2026-10-12 用户决定「不收紧」。现有测试和验收脚本合法地把仓库建在 `KIT_TMP` 之下,收紧会让它们变红;写入范围由 `findWriteRootEscape`(realpath + 身份比较)兜住逃逸。残余:校验与 fs 调用之间的竞态(需要 `O_NOFOLLOW`/`openat`),已写进 contracts。
+
 ## A7 是时点复算(会随用户个人文件变化而红)
 
 2026-10-12 全量验收时 A7 红:`~/.claude/CLAUDE.md`(字节/行数/哈希/各节)与 `guard-agent-model.sh` 的大小自 2026-10-09 起被用户改过,命令复算结果与 inventory 里的 10-09 数值不等(B15-001/002/003/004/005/009/010/011/012/049)。这不是代码回归,是清单本身是快照。P1 要么给 A7 加「刷新基线」流程(重跑 `inventory/commands.sh` 并连带更新 `inventory/*.md` 里引用的数值与 [#B15-xxx] 标注),要么把 A7 改成只验「命令可复现 + 不变项」。**不要为了让它变绿而改期望值,除非同时更新引用它们的文档。**
