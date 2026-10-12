@@ -15,6 +15,8 @@ import {
   hexCandidates,
   unescapeView,
 } from './decode.js';
+import { shannon } from './entropy.js';
+import { NEUTRAL_MARKER_SOURCE } from './placeholder.js';
 import { buildRules } from './rules.js';
 import type { Candidate } from './decode.js';
 import { Deadline, MAX_PLACEHOLDER_TYPE, RedactError } from './types.js';
@@ -33,12 +35,25 @@ import type { View } from './view.js';
 
 export { MAX_PLACEHOLDER_TYPE };
 
+/**
+ * 凭据赋值的残留探测器:关键词 + 紧邻的 `:`/`=` + 引号包裹的 >=20 位纯字母数字串,且同时含大写、小写、数字、
+ * 熵 >= 3.5。刻意比 `cred_assign` 窄得多(键名与运算符之间最多 1 个空白、值里没有任何符号),所以只可能在
+ * pass1 漏掉时命中;不 import rules.ts,不受规则禁用影响。
+ */
+const PROBE_CRED_RE =
+  /(?<![A-Za-z0-9_])(?:password|passwd|pwd|secret|token|api[_-]?key|private[_-]?key|credential)["']?[ \t]?[:=][ \t]?(["'])([A-Za-z0-9]{20,})\1/gi;
+const probeCredOk = (m: RegExpExecArray): boolean => {
+  const v = m[2] as string;
+  return /[a-z]/.test(v) && /[A-Z]/.test(v) && /[0-9]/.test(v) && shannon(v) >= 3.5;
+};
+
 const PROBES: ReadonlyArray<readonly [string, RegExp]> = [
   ['sk', /(?<![A-Za-z0-9])sk-(?=[A-Za-z_-]{0,200}[0-9])[A-Za-z0-9_-]{20,}/gi],
   ['soh', /(?<![A-Za-z0-9])soh_(?=[A-Za-z_]{0,100}[0-9])[A-Za-z0-9_]{16,}/gi],
   ['ghp', /(?<![A-Za-z0-9])gh[pousr]_[A-Za-z0-9]{30,}/gi],
   ['aws', /(?<![A-Za-z0-9])A[KS]IA[0-9A-Z]{16}/g],
   ['slack', /(?<![A-Za-z0-9])xox[abeprs]-[A-Za-z0-9-]{10,}/gi],
+  ['cred', PROBE_CRED_RE],
   ['pem', /-----BEGIN (?:[A-Z0-9]+ ){0,4}PRIVATE KEY-----\s{0,4}[A-Za-z0-9+/]{32,}/g],
 ];
 
@@ -46,7 +61,7 @@ const PROBES: ReadonlyArray<readonly [string, RegExp]> = [
 const ESC_WS_START = /^\\+[nrt]/;
 
 const PLACEHOLDER_STRIP = new RegExp(
-  PLACEHOLDER_SOURCE.replace('[a-z_]+', `[a-z_]{1,${MAX_PLACEHOLDER_TYPE}}`),
+  `${PLACEHOLDER_SOURCE.replace('[a-z_]+', `[a-z_]{1,${MAX_PLACEHOLDER_TYPE}}`)}|${NEUTRAL_MARKER_SOURCE}`,
   'g',
 );
 
@@ -60,6 +75,8 @@ export const STAGES = {
   jsonWs: 'view_json_ws',
   origUnion: 'view_orig_union',
   escTail: 'span_escape_tail',
+  neutralMarker: 'placeholder_neutral_marker',
+  rawExactMarker: 'placeholder_raw_exact',
 } as const;
 
 interface ScanCtx {
@@ -102,12 +119,12 @@ export class Engine {
     const out: Span[] = [];
     const base = this.disabled.has(STAGES.normalize) ? identityView(text) : buildView(text);
     const ws = this.disabled.has(STAGES.jsonWs) ? base : jsonWhitespaceView(base);
-    const stripped = this.stripPlaceholders(ws);
+    const stripped = this.stripPlaceholders(ws, text);
     this.scanView(stripped, text, depth, ctx, out);
     // JSON 转义空白(`\t` `\n` `\r`)在口令里也可能是字面字符:ws 视图会把值从那里截断。
     // 值类规则在原视图上再跑一遍取并集(多脱敏是安全的方向);pass2 / --check 走同一条路径。
     if (ws !== base && !this.disabled.has(STAGES.origUnion)) {
-      this.runRules(this.stripPlaceholders(base), text, false, ctx, out, true);
+      this.runRules(this.stripPlaceholders(base, text), text, false, ctx, out, true);
     }
     return out;
   }
@@ -119,7 +136,7 @@ export class Engine {
   probe(text: string, deadline: Deadline): Span[] {
     deadline.check();
     const base = buildView(text);
-    const stripped = this.stripPlaceholders(base);
+    const stripped = this.stripPlaceholders(base, text);
     const joined = deriveRemoving(stripped, compactRanges(stripped.text));
     const out: Span[] = [];
     for (const v of [stripped, joined]) {
@@ -131,6 +148,7 @@ export class Engine {
             re.lastIndex++;
             continue;
           }
+          if (re === PROBE_CRED_RE && !probeCredOk(m)) continue;
           const [a, b] = mapSpan(v, m.index, m.index + m[0].length);
           out.push({ start: a, end: b, type: 'residual', rule: `probe_${id}`, prio: 1 });
         }
@@ -139,8 +157,17 @@ export class Engine {
     return out;
   }
 
-  private stripPlaceholders(base: View): View {
-    if (!/\[\[redacted/i.test(base.text)) return base;
+  /**
+   * 剥掉视图里的占位符(合法占位符 + 中性化标记)。两个限定:
+   *  - 视图里「看起来像」不算:原文对应的区间必须逐字节就是这个标记(全角括号 / 同形字 / `\\u005b` 转义等经归一化
+   *    或解码才变成标记的写法,拿不到豁免,当普通文本扫);
+   *  - 中性化标记(`[[ REDACTED:<类型>]]`,类型位限封闭集合)与合法占位符同样处理,这样 `signals collect` 拆开标记之后
+   *    与 `redact --stdin` 看到的是同一种视图。
+   */
+  private stripPlaceholders(base: View, root: string): View {
+    if (!/\[\[ ?redacted/i.test(base.text)) return base;
+    const neutralOn = !this.disabled.has(STAGES.neutralMarker);
+    const exact = !this.disabled.has(STAGES.rawExactMarker);
     const ranges: Array<[number, number]> = [];
     PLACEHOLDER_STRIP.lastIndex = 0;
     for (
@@ -148,6 +175,11 @@ export class Engine {
       m !== null;
       m = PLACEHOLDER_STRIP.exec(base.text)
     ) {
+      if (m[0].charAt(2) === ' ' && !neutralOn) continue;
+      if (exact) {
+        const [a, b] = mapSpan(base, m.index, m.index + m[0].length);
+        if (root.slice(a, b) !== m[0]) continue;
+      }
       ranges.push([m.index, m.index + m[0].length]);
     }
     return deriveRemoving(base, ranges);
@@ -176,7 +208,7 @@ export class Engine {
         ctx.budget -= u.text.length;
         if (ctx.budget < 0) throw new RedactError('error', '解码体量超限');
         // 转义解码后的文本可能还有下一层(双重编码),所以整体递归一次
-        this.scanView(this.stripPlaceholders(u), root, depth + 1, ctx, out);
+        this.scanView(this.stripPlaceholders(u, root), root, depth + 1, ctx, out);
       }
     }
   }
@@ -219,9 +251,14 @@ export class Engine {
         (s, e) => {
           if (e <= s) return;
           if (valueOnly && ESC_WS_START.test(text.slice(s, s + 64))) return;
-          const [a, b0] = mapSpan(view, s, e);
-          const b = this.disabled.has(STAGES.escTail) ? b0 : trimEscapeTail(root, a, b0);
-          if (b <= a) return;
+          const [a0, b0] = mapSpan(view, s, e);
+          const b = this.disabled.has(STAGES.escTail) ? b0 : trimEscapeTail(root, a0, b0);
+          if (b <= a0) return;
+          // 值紧贴着(被剥掉的)中性化标记:区间把标记一起吞掉,输出里不留拆开的残片(摘录在标记中间被截断时,
+          // 残片会让第二遍报残留、整条信号被丢)
+          const a = this.disabled.has(STAGES.neutralMarker)
+            ? a0
+            : extendOverNeutralMarker(root, a0);
           out.push({ start: a, end: b, type: rule.type, rule: rule.id, prio: rule.prio });
         },
         env,
@@ -276,6 +313,14 @@ function trimEscapeTail(root: string, a: number, b: number): number {
   if (k === b) return b;
   const next = root[b];
   return next === 'n' || next === 'r' || next === 't' ? k : b;
+}
+
+const NEUTRAL_TAIL = new RegExp(`${NEUTRAL_MARKER_SOURCE}$`);
+
+/** 区间起点前紧挨着一个中性化标记(原文逐字节)时,返回标记的起点;否则原样返回。 */
+function extendOverNeutralMarker(root: string, a: number): number {
+  const m = NEUTRAL_TAIL.exec(root.slice(Math.max(0, a - 40), a));
+  return m ? a - m[0].length : a;
 }
 
 function pickTop(spans: readonly Span[]): Span {

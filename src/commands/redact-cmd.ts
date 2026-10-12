@@ -4,6 +4,7 @@ import { OverlaySchema } from '../contracts/config.js';
 import type { Overlay } from '../contracts/config.js';
 import { readText } from '../io/read-fs.js';
 import { chunkForCheck } from '../redact/chunk.js';
+import { neutralizePlaceholderMarkers } from '../redact/placeholder.js';
 import { createRedactor } from '../redact/redactor.js';
 import type { RedactorInput } from '../redact/redactor.js';
 import { runSelftest } from '../redact/selftest.js';
@@ -169,7 +170,9 @@ export function createRedactCommand(deps: RedactCommandDeps): CommandDef {
         return code;
       }
 
-      const res = redactor.apply(text);
+      // 与 `signals collect` 的 makeExcerpt 同一步预处理:原文里的占位符标记先拆开,当普通文本扫描
+      // (--check 不拆:它复扫的是 collect 的输出,里面的合法占位符须按占位符看,与 collect 末尾的 pass2 同视图)
+      const res = redactor.apply(neutralizePlaceholderMarkers(text));
       if (!res.ok) {
         ctx.stderr(`REDACT_FAIL_CLOSED reason=${res.reason}\n`);
         return ExitCode.FAIL_CLOSED;

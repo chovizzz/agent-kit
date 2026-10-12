@@ -1225,3 +1225,10 @@ P0 先把 schema 冻在这里,P1 的块直接消费,避免打 tag 之后再改�
 - **脱敏值区间不吞转义**:`src/redact/engine.ts` 在映射回原文坐标后,把区间尾部紧随 `n` `r` `t` 的反斜杠串留在区间外(转义引号不收缩)(阶段 `span_escape_tail`),避免输出出现 `占位符next` 式的行粘连。仅影响值类规则的区间终点,契约字段不变。
 - **占位符后缀**(阶段 `placeholder_tight_head`):原视图补扫里,值紧贴占位符、且转义换行前的短头部只是闭合的短括号实参时,不再整值判为口令;`redact --selftest --mutate` 的规则/阶段总数由 76 变为 78。
 - 已知缺口追加:`gap.neutral_ph_call`(见 `docs/redaction.md` §7)。
+
+## 15. 订正(P1-A.3)
+
+- **`redact --stdin` 预处理:** 应用路径先调用共享函数 `neutralizePlaceholderMarkers`(`src/redact/placeholder.ts`)拆开输入里的占位符标记,与 `signals collect` 的 `makeExcerpt` 同语义;`--check` 不拆。输入中原有的占位符在输出里变成 `[[ REDACTED:…]]`。契约 `Redactor` 接口不变。
+- **占位符剥离更严:** 引擎只剥原文逐字节如此的占位符(全角 / 同形字 / `\u` 转义写成的不再豁免),并把 `[[ REDACTED:<已知类型>]]` 在视图里同样剥掉(但不占位,不豁免紧邻的值);`PH_WHOLE` 引用判据已删。
+- 阶段增加四个(`placeholder_neutral_marker` `placeholder_raw_exact` `multiline_block` `ref_default_chain`),`redact --selftest --mutate` 的规则 / 阶段总数 78 → 82;pass2 增加残留探测器 `probe_cred`(不计入变异自检)。
+- 已知缺口:移除 `gap.neutral_ph_call`(已收);追加 `gap.bare_literal_assert` `gap.neutral_open_type` `gap.call_then_quoted` `gap.triple_escaped_quotes` `gap.yaml_anchor_block` `gap.template_default_call`(见 `docs/redaction.md` §3.4、§7)。
