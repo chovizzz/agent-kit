@@ -7,6 +7,7 @@ export interface AtomOpts {
   overrides?: string[];
   disables?: string[];
   path?: string;
+  status?: Atom['fm']['status'];
 }
 
 /** 合成原子(不经文件系统);must 自带 verifier,满足 schema 的 must 约束。 */
@@ -20,7 +21,7 @@ export function atom(id: string, layer: Layer, opts: AtomOpts = {}): Atom {
       strength,
       kind: 'practice',
       volatility: 'stable',
-      status: 'advisory',
+      status: opts.status ?? 'advisory',
       owner: '@o',
       created: '2026-10-01',
       review_by: '2027-01-01',

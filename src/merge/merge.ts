@@ -8,6 +8,9 @@
  *  3. 同一 id 出现多次且没有声明 overrides → MERGE_DUPLICATE_ID(同层重复永远报错,没有「就近」可言)
  *  4. 语义矛盾由裁判出建议性报告,不在这里处理
  *  5. personal 原子留在结果里,但 coreEligible=false(渲染器必须跳过);它的 overrides / disables 在 core 视图里只记录、不剔除(B2)
+ *  6. 只采纳 status 为 active / advisory 的声明者发出的 overrides / disables(GD-1 根因):proposed / deprecated / retired
+ *     声明者的边照常做全部校验(诊断、环检测不变),但不剔除目标、不记 replaced、不进 overridden。同 id 的替换件若是这类
+ *     声明者,它自己也不进结果(否则两份同 id 原子一起幸存,渲染层按 id 索引会被后者盖住);等它转 active / advisory 才接管。
  * 其它防御性诊断:MERGE_TARGET_MISSING(目标不存在)、MERGE_OVERRIDE_DIRECTION(上层去覆盖下层)、MERGE_OVERRIDE_CYCLE(overrides / disables 互相成环)。
  *
  * 语义说明:
@@ -45,6 +48,11 @@ interface Edge {
   to: Atom;
   kind: 'overrides' | 'disables';
 }
+
+/** 只有这些 status 的声明者发出的边会被采纳(GD-1)。 */
+export const EDGE_ADOPTING_STATUSES: readonly Atom['fm']['status'][] = ['active', 'advisory'];
+
+const adoptsEdges = (a: Atom): boolean => EDGE_ADOPTING_STATUSES.includes(a.fm.status);
 
 const rank = (a: Atom): number => LAYER_RANK[a.fm.layer];
 const key = (a: Atom): string => `${a.fm.layer}/${a.fm.id}`;
@@ -176,13 +184,15 @@ export function mergeAtoms(input: readonly Atom[], opts: MergeOptions = {}): Mer
   // 环上原子的一切替换/关闭边都作废(带 error 的原子不得行使替换权),交人工处理
   const live = edges.filter((e) => !cyclic.has(e.from));
 
+  // GD-1:status 不是 active / advisory 的声明者,边只校验不应用(不剔除、不记 replaced、不进 overridden)
+  const adopted = live.filter((e) => adoptsEdges(e.from));
   // B2:core 视图里 personal 的边不剔除任何原子(它们仍进 overridden / replaced,诊断照常)
   const removed = new Set<Atom>(
-    live.filter((e) => view === 'preview' || isCoreEligible(e.from.fm.layer)).map((e) => e.to),
+    adopted.filter((e) => view === 'preview' || isCoreEligible(e.from.fm.layer)).map((e) => e.to),
   );
   const replacedBy = new Map<Atom, string[]>();
   const overridden: OverrideRecord[] = [];
-  for (const e of live) {
+  for (const e of adopted) {
     if (e.kind === 'overrides') {
       replacedBy.set(e.from, [...(replacedBy.get(e.from) ?? []), e.to.fm.id]);
     }
@@ -192,7 +202,20 @@ export function mergeAtoms(input: readonly Atom[], opts: MergeOptions = {}): Mer
 
   // B2:core 视图下,personal 用同 id 覆盖时两者都活着;渲染层按 id 建索引(后者覆盖前者),personal 会盖住 team 原子并触发
   // OUT_PERSONAL_LEAK。所以 core 视图里与别的幸存原子同 id 的 personal 原子不进 atoms(边仍记在 overridden,preview 视图照旧保留)。
-  const survivors = atoms.filter((a) => !removed.has(a));
+  const survivorsAll = atoms.filter((a) => !removed.has(a));
+  // GD-1:同 id 的 overrides 因声明者 status 不合格而没被采纳,且被指向的上层原子仍在 → 声明者不进结果
+  const inertReplacements = new Set<Atom>(
+    live
+      .filter(
+        (e) =>
+          e.kind === 'overrides' &&
+          e.from.fm.id === e.to.fm.id &&
+          !adoptsEdges(e.from) &&
+          !removed.has(e.to),
+      )
+      .map((e) => e.from),
+  );
+  const survivors = survivorsAll.filter((a) => !inertReplacements.has(a));
   const survivingIds = new Set(
     survivors.filter((a) => isCoreEligible(a.fm.layer)).map((a) => a.fm.id),
   );

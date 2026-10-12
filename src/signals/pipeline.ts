@@ -15,6 +15,7 @@ import type {
   Counts,
   NormEvent,
   SessionMeta,
+  SessionRead,
   SessionRef,
   TraceReader,
 } from '../contracts/reader.js';
@@ -160,10 +161,16 @@ export async function processSession(
     dropReasons: {},
   };
 
-  const read = reader.read(ref, {
-    salt: deps.salt,
-    ...(deps.maxEventBytes !== undefined ? { maxEventBytes: deps.maxEventBytes } : {}),
-  });
+  let read: SessionRead;
+  try {
+    read = reader.read(ref, {
+      salt: deps.salt,
+      ...(deps.maxEventBytes !== undefined ? { maxEventBytes: deps.maxEventBytes } : {}),
+    });
+  } catch {
+    // reader 同步抛错(参数越界、内部不变量):按读取失败处理,不输出任何半成品,也不回显异常内容
+    return { ...base, status: 'read_error', eventsSeen: 0, signals: [] };
+  }
 
   let decision: ProjectDecision | undefined;
   let sessionExternal = false;

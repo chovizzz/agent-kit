@@ -7,6 +7,7 @@ import { CollectReportSchema } from '../contracts/signal.js';
 import type { CollectReport, Signal } from '../contracts/signal.js';
 import type { RedactFailReason } from '../contracts/redact.js';
 import type { IoContext } from '../io/paths.js';
+import { MAX_LINE_BYTES } from '../io/read-fs.js';
 import { processSession } from './pipeline.js';
 import type { PipelineDeps, SessionResult } from './pipeline.js';
 import { writeSignals } from './state-store.js';
@@ -38,6 +39,11 @@ export interface CollectOutput {
 }
 
 export async function collect(input: CollectInput): Promise<CollectOutput> {
+  // 配置错误在库入口就拒绝,不让它被逐会话的 read_error 吞成「每个会话都读失败」
+  const mx = input.maxEventBytes;
+  if (mx !== undefined && (!Number.isInteger(mx) || mx <= 0 || mx > MAX_LINE_BYTES)) {
+    throw new RangeError(`maxEventBytes 须为 1..${MAX_LINE_BYTES} 的整数`);
+  }
   const refs = await input.reader.discover(input.source);
   const results: SessionResult[] = [];
   for (const ref of [...refs].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))) {

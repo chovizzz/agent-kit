@@ -5,7 +5,7 @@ import { AgentIdSchema } from '../contracts/common.js';
 import type { AgentId } from '../contracts/common.js';
 import { ExitCode } from '../contracts/exit-codes.js';
 import { canonicalJson } from '../io/canonical-json.js';
-import { readText } from '../io/read-fs.js';
+import { MAX_LINE_BYTES, readText } from '../io/read-fs.js';
 import { WriteDeniedError } from '../io/safe-fs.js';
 import { createRedactor } from '../redact/redactor.js';
 import { DEFAULT_MAX_EVENT_BYTES } from '../signals/base-reader.js';
@@ -93,6 +93,8 @@ function parseArgs(argv: readonly string[]): Parsed {
     if (mx !== undefined) {
       const n = Number(mx);
       if (!Number.isInteger(n) || n <= 0) out.error = '--max-event-bytes 需要正整数';
+      else if (n > MAX_LINE_BYTES)
+        out.error = `--max-event-bytes 不得超过单行硬上限 ${MAX_LINE_BYTES}`;
       else out.maxEventBytes = n;
       continue;
     }
@@ -132,7 +134,10 @@ export function createSignalsCollectCommand(deps: SignalsCollectDeps): CommandDe
           '(可重复)只处理 cwd 匹配的项目。名字=cwd 的目录名精确相等;P0 默认拒绝运行,须给它或带 exclude_dirs 的 --overlay',
       },
       { name: '--cli-version <版本>', description: 'agent_version 兜底(会话里取不到时用)' },
-      { name: '--max-event-bytes <n>', description: '单行超过此字节数时丢事件 text(计数不变)' },
+      {
+        name: '--max-event-bytes <n>',
+        description: '单行超过此字节数时丢事件 text(计数不变);上限 64MiB(读行硬上限)',
+      },
       { name: '--timeout-ms <n>', description: '脱敏每条每遍的时间预算,默认 250' },
     ],
     async run(ctx: CommandContext): Promise<number> {

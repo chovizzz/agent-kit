@@ -29,7 +29,8 @@ export function setOpenObserver(fn: Observer | undefined): Observer | undefined 
 
 /**
  * 逐行流式读取(去 `\n` / `\r\n`,保留空行)。大文件不会被整体读入内存。
- * 已知局限:行内裸 `\r` 会被 readline 当成行分隔(口径 C2 只认 `\n`);合法 JSONL 里不会出现裸 CR。
+ * 行分隔符只认 `\n`(口径 C2):底层是 read-fs.readLines 的按字节读取,**不用 node:readline**,
+ * 所以行内裸 `\r`、U+2028/U+2029 都不会把一行切开;单行超过 MAX_LINE_BYTES(64MiB)时产出 TOO_LONG_LINE 占位。
  */
 export function openReadonlyLines(path: string): AsyncGenerator<string, void, undefined> {
   observer?.({ path, flags: 'O_RDONLY', purpose: 'lines' });

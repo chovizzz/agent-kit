@@ -14,7 +14,7 @@ import { mergeCounts } from '../merge/report.js';
 import { createRedactor } from '../redact/index.js';
 import { RenderCoreError, renderAll } from '../render/core.js';
 import { createRegistry, defaultRegistry } from '../render/registry.js';
-import { buildManifest } from './manifest.js';
+import { assertUniqueAtomIds, buildManifest } from './manifest.js';
 
 /** 测试注入点;缺省 = 在已启用 agent 的默认注册表上跑 renderAll。 */
 export interface BuildDeps {
@@ -87,6 +87,13 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineOutcome
   const diagnostics: Diagnostic[] = [...lint.diagnostics, ...merge.diagnostics];
   if (hasErrors(merge.diagnostics)) {
     return { kind: 'check_failed', diagnostics, notes: ['合并失败,未渲染、未写 out/'] };
+  }
+
+  // 渲染前先拦重复 id:渲染层按 id 建索引,重复会在 manifest 之前就「后者覆盖」
+  try {
+    assertUniqueAtomIds(merge.atoms);
+  } catch (e) {
+    return { kind: 'fail_closed', message: (e as Error).message };
   }
 
   const channel: ChannelName = overlay?.channel ?? 'canary';
