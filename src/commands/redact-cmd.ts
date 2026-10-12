@@ -8,6 +8,7 @@ import { neutralizePlaceholderMarkers } from '../redact/placeholder.js';
 import { createRedactor } from '../redact/redactor.js';
 import type { RedactorInput } from '../redact/redactor.js';
 import { runSelftest } from '../redact/selftest.js';
+import { parseDecimalUint } from './args.js';
 import type { CommandContext, CommandDef } from './types.js';
 
 /** `--stdin` 单次最多读多少字节;超过一律 fail-closed(不是截断后继续)。 */
@@ -78,8 +79,8 @@ function parseArgs(argv: readonly string[]): Parsed {
       }
       const t = value('--timeout-ms');
       if (t !== undefined) {
-        const n = Number(t);
-        if (!Number.isInteger(n) || n <= 0) out.error = '--timeout-ms 需要正整数';
+        const n = parseDecimalUint(t);
+        if (n === undefined || n <= 0) out.error = '--timeout-ms 需要十进制正整数';
         else out.timeoutMs = n;
         continue;
       }

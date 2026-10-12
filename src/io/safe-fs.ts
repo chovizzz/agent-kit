@@ -11,6 +11,7 @@
 import * as fs from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
+import { findWriteRootEscape } from './paths.js';
 import type { IoContext } from './paths.js';
 
 export class WriteDeniedError extends Error {
@@ -60,6 +61,9 @@ export function assertWritable(ctx: IoContext, target: string, opts: AssertOptio
   if (ctx.writeRoots.length === 0) {
     throw new WriteDeniedError('没有任何允许写入的根目录(KIT_WRITE_ROOTS 为空)');
   }
+  // 每次写入都重新按 realpath 判定写入根:状态目录 / 写入根的链接事后被改指向,下一次写入即被拒
+  const escape = findWriteRootEscape(ctx);
+  if (escape !== undefined) throw new WriteDeniedError(`写入被拒绝:${escape}`);
   const abs = path.resolve(ctx.repoRoot, target);
   const real = realResolve(abs);
   const ok = ctx.writeRoots.some((root) =>
@@ -88,6 +92,15 @@ function assertCopySource(ctx: IoContext, from: string): string {
   const bases = [ctx.repoRoot, ...ctx.writeRoots];
   if (!bases.some((b) => within(realResolve(b), real, false))) {
     throw new WriteDeniedError(`复制来源不在仓库或写入根内:${abs}`);
+  }
+  // 仓库内的一个名字可能是仓库外 inode 的硬链接(如指向 ~/.ssh 的文件):读它等于吸进外部内容
+  try {
+    const st = fs.lstatSync(real);
+    if (st.isFile() && st.nlink > 1) {
+      throw new WriteDeniedError(`复制来源是硬链接(nlink=${st.nlink}):${abs}`);
+    }
+  } catch (e) {
+    if (e instanceof WriteDeniedError) throw e;
   }
   return abs;
 }
@@ -150,6 +163,10 @@ export async function chmod(ctx: IoContext, target: string, mode: number): Promi
  * 测试用它拿工作目录:parent 取 `ctx.tmpDir ?? <stateDir>/test-tmp`。
  */
 export async function mkdtemp(ctx: IoContext, parent: string, prefix: string): Promise<string> {
+  // prefix 只是文件名前缀:带路径分隔符或 `..` 会让 mkdtemp 跳出已校验的 parent
+  if (/[\\/]/.test(prefix) || prefix.includes('..')) {
+    throw new WriteDeniedError(`mkdtemp 的 prefix 不得含路径分隔符或 '..':${prefix}`);
+  }
   const abs = assertWritable(ctx, parent, { allowRoot: true });
   await fsp.mkdir(abs, { recursive: true, mode: 0o700 });
   return fsp.mkdtemp(path.join(abs, prefix));
