@@ -136,6 +136,46 @@ function assertNotUnderOut(p: string, outDir: string, what: string): void {
   }
 }
 
+/**
+ * KIT_STATE_DIR 不得等于或是 out/ 的上级(含仓库根与仓库的上级):它是默认写入根,
+ * 一旦覆盖 out/ 的上级,写入根就扩大到整棵仓库(src/、kit.toml 都可写),形同取消写出口。
+ * 字面、真实路径、文件身份(dev,ino)各比一遍,与 assertNotUnderOut 同一思路;大小写不敏感。
+ * KIT_TMP 不在此列:测试与 CI 把仓库建在 KIT_TMP 之下是现有的合法用法(其是否也应收紧待主代理定夺)。
+ */
+function assertNotAncestorOfOut(p: string, outDir: string, what: string): void {
+  const bad = (): never => {
+    throw new PathsError(`${what} 不得是 out/ 的上级(含仓库根),否则写入根会扩大到 out/ 之外:${p}`);
+  };
+  const norm = (x: string): string => x.normalize('NFC').toLowerCase();
+  const above = (a: string, b: string): boolean => isAncestorOrEqual(norm(a), norm(b));
+  if (above(p, outDir)) bad();
+  const realP = realResolve(p, what);
+  let realOut: string | undefined;
+  try {
+    realOut = realResolve(outDir, 'out/');
+  } catch {
+    realOut = undefined;
+  }
+  if (above(realP, outDir)) bad();
+  if (realOut !== undefined && above(realP, realOut)) bad();
+  const ident = (x: string): string | undefined => {
+    try {
+      const st = statSync(x);
+      return `${st.dev}:${st.ino}`;
+    } catch {
+      return undefined;
+    }
+  };
+  const pId = ident(realP) ?? ident(p);
+  if (pId !== undefined) {
+    for (let cur = realOut ?? outDir; ; cur = path.dirname(cur)) {
+      if (ident(cur) === pId) bad();
+      const parent = path.dirname(cur);
+      if (parent === cur) break;
+    }
+  }
+}
+
 function assertNotHomeOrAncestor(p: string, home: string, what: string): void {
   if (p === path.parse(p).root) throw new PathsError(`${what} 不得是文件系统根 /`);
   if (isAncestorOrEqual(p, home)) {
@@ -185,6 +225,7 @@ export function createIoContext(opts: CreateIoContextOptions = {}): IoContext {
   const stateRaw = env['KIT_STATE_DIR'];
   const stateDir = stateRaw ? path.resolve(repoRoot, stateRaw) : path.join(repoRoot, '.state');
   assertNotUnderOut(stateDir, outDir, 'KIT_STATE_DIR');
+  assertNotAncestorOfOut(stateDir, outDir, 'KIT_STATE_DIR');
   if (!isAncestorOrEqual(repoRoot, stateDir) && !(tmpDir && isAncestorOrEqual(tmpDir, stateDir))) {
     throw new PathsError(`KIT_STATE_DIR 必须在仓库或 KIT_TMP 之内:${stateDir}`);
   }

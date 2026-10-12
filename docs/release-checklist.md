@@ -30,6 +30,7 @@ ops/accept-p0.sh                 # 汇总 A1–A15;任何 4(未执行)按失败
 - [ ] 上面 A1–A15 全部为 PASS(A13 为「已做」),没有任何 4
 - [ ] `git status --porcelain` 为空(过滤 `.state/`、`out/` 之外)
 - [ ] `out/` 已随源码重新生成并提交(A15 会核对它与重新构建的结果一致)
+- [ ] retire / promote 类 PR 的描述写明「本 PR 使哪些被压住 / 生效的原子重新出现在或退出 `out/`」(见 `docs/contracts.md` §12.3),并与重新生成的 `out/` 对得上
 - [ ] `docs/deps.md` 与 `package.json` 一致(直接依赖逐个有理由)
 - [ ] 若改了 `.github/workflows/ci.yml` 里的 action:SHA 与 `docs/deps.md` 的表同步
 - [ ] 远端 CI 推上去后观察一次(P0 不要求跑通,但要看懂每个红点)

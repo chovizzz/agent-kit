@@ -60,7 +60,8 @@ export function checkG2(atoms: readonly AtomChange[]): Diagnostic[] {
       }
     }
     // 基线还是 proposed 的原子(尚未生效、不渲染)可以改结构字段,否则写错 paths 的 proposed 原子既改不了也删不掉;
-    // 边(overrides/disables)不论状态一律锁定(merge 不看声明者 status)。缺省与 [] 视为相同。
+    // 边(overrides/disables)不论状态一律锁定(merge 只采纳 active/advisory 声明者的边,
+    // 但 proposed 原子的边会在晋升后生效,删边又会让被压掉的原子复活)。缺省与 [] 视为相同。
     const baseProposed = statusOf(a.base) === 'proposed';
     const norm = (v: unknown): unknown => (v === undefined ? [] : v);
     const locked = keys.filter((k) => {

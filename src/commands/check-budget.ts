@@ -12,6 +12,7 @@ import type { RenderInput, RenderOutput } from '../contracts/render.js';
 import { canonicalJson } from '../io/canonical-json.js';
 import { existsSync, readTextSync } from '../io/read-fs.js';
 import { mkdirp, writeFile } from '../io/safe-fs.js';
+import { findDuplicateAtomIds } from '../build/manifest.js';
 import { mergeAtoms } from '../merge/merge.js';
 import { mergeCounts } from '../merge/report.js';
 import { RenderCoreError, renderAll } from '../render/core.js';
@@ -99,7 +100,7 @@ export async function prepareBudgetInputs(
 ): Promise<{
   inputs?: BudgetInputs;
   diagnostics: Diagnostic[];
-  failure?: 'config' | 'repo' | 'render';
+  failure?: 'config' | 'repo' | 'render' | 'duplicate';
 }> {
   const loaded = loadConfig(repoRoot);
   if (loaded.config === undefined) return { diagnostics: loaded.diagnostics, failure: 'config' };
@@ -124,6 +125,22 @@ export async function prepareBudgetInputs(
   if (hasErrors(merged.diagnostics)) {
     stdout('budget: 合并失败,未计算预算\n');
     return { diagnostics: merged.diagnostics };
+  }
+  // 与 build 管线一致:渲染前先拦重复 id(合并无 error 时 id 唯一;不唯一说明合并不变量被破坏,不做「后者覆盖」)
+  const dups = findDuplicateAtomIds(merged.atoms);
+  if (dups.length > 0) {
+    return {
+      failure: 'duplicate',
+      diagnostics: [
+        ...merged.diagnostics,
+        {
+          code: 'BUILD_MANIFEST_DUPLICATE_ATOM_ID',
+          severity: 'error',
+          path: 'rules',
+          message: `合并结果含重复原子 id(不允许后者覆盖):${dups.map((d) => `${d.id}(${d.layers.join('、')})`).join('; ')}`,
+        },
+      ],
+    };
   }
   try {
     const render = budgetDeps.render ?? defaultRender;
@@ -166,6 +183,12 @@ export const run: CheckStep = async (ctx, opts) => {
   const prepared = await prepareBudgetInputs(io.repoRoot, ctx.stdout);
   emit(prepared.diagnostics);
   if (prepared.inputs === undefined) {
+    if (prepared.failure === 'duplicate') {
+      // 与 build 一致:重复 id 是 fail-closed(退出 3),不是普通的 check 失败
+      const d = prepared.diagnostics.find((x) => x.code === 'BUILD_MANIFEST_DUPLICATE_ATOM_ID');
+      ctx.stderr(`agent-kit check (budget): ${d?.message ?? '合并结果含重复原子 id'}\n`);
+      return ExitCode.FAIL_CLOSED;
+    }
     if (prepared.failure === 'repo' || prepared.failure === 'render') {
       // 原语义:读仓库/渲染失败走 stderr 的 fail-closed 文案(测试钉住「渲染失败」字样)。
       ctx.stderr(

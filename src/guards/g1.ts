@@ -22,15 +22,16 @@ export function checkG1(atoms: readonly AtomChange[]): Diagnostic[] {
         ),
       );
     }
-    // GD-1:merge 不看声明者的 status,边一合入就生效——proposed 原子带 disables/overrides 也能让 active 原子下线
+    // GD-1:merge 只采纳 active/advisory 声明者的边;proposed 原子的边此刻不生效,但等它晋升(kit:promotion)后会生效,
+    // 那时才让 active 原子下线,而晋升 PR 并不审视这些边——所以新增时就不许带
     const edges = declaredEdgeKeys(a.head.fm);
     if (edges.length > 0) {
       out.push(
         err(
           'GUARD_G1_NEW_ATOM_HAS_EDGES',
           a.change.path,
-          `新增原子不得声明 ${edges.join('/')}:合并时这些边立即生效(与声明者 status 无关),` +
-            '会绕过晋升/退役流程让既有原子从产物里消失',
+          `新增原子不得声明 ${edges.join('/')}:这些边在声明者晋升为 active/advisory 后才生效(proposed 期间被 merge 忽略),` +
+            '但生效时会绕过晋升/退役流程让既有原子从产物里消失',
         ),
       );
     }

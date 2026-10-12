@@ -117,7 +117,16 @@ describe('GD-1:声明者 status 决定边是否生效', () => {
         atom('same-id', 'team'),
         atom('same-id', 'project', { overrides: ['same-id'], status, path: 'p/same-id.md' }),
       ]);
-      expect(r.diagnostics, status).toEqual([]);
+      // 被丢弃的替换不能静默:给一条 warn(契约里没有 info 档),不是 error,放行语义不变
+      expect(r.diagnostics, status).toEqual([
+        {
+          code: 'MERGE_REPLACEMENT_INERT',
+          severity: 'warn',
+          path: 'p/same-id.md#/overrides',
+          message: expect.stringContaining(`status 为 ${status}`),
+        },
+      ]);
+      expect(hasErrors(r.diagnostics), status).toBe(false);
       expect(
         r.atoms.map((a) => `${a.layer}/${a.atom.fm.id}`),
         status,
@@ -130,6 +139,15 @@ describe('GD-1:声明者 status 决定边是否生效', () => {
       atom('same-id', 'project', { overrides: ['same-id'], path: 'p/same-id.md' }),
     ]);
     expect(ok.atoms.map((a) => a.layer)).toEqual(['project']);
+    expect(ok.diagnostics).toEqual([]); // 生效的替换不报
+  });
+
+  it('不同 id 的 overrides 不生效时不报 MERGE_REPLACEMENT_INERT(诊断只针对被丢弃的同 id 替换)', () => {
+    const r = mergeAtoms([
+      atom('soft', 'team'),
+      atom('better', 'project', { overrides: ['soft'], status: 'proposed' }),
+    ]);
+    expect(codes(r)).not.toContain('MERGE_REPLACEMENT_INERT');
   });
 
   it('G1/G2/B2 不回归:personal 的边在 core 视图仍不生效(无论 status);结果满足 schema', () => {

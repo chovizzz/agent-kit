@@ -11,6 +11,7 @@
  *  6. 只采纳 status 为 active / advisory 的声明者发出的 overrides / disables(GD-1 根因):proposed / deprecated / retired
  *     声明者的边照常做全部校验(诊断、环检测不变),但不剔除目标、不记 replaced、不进 overridden。同 id 的替换件若是这类
  *     声明者,它自己也不进结果(否则两份同 id 原子一起幸存,渲染层按 id 索引会被后者盖住);等它转 active / advisory 才接管。
+ *     这种被丢弃的同 id 替换给一条 warn 级 MERGE_REPLACEMENT_INERT(不是 error,不改变放行/拒绝)。
  * 其它防御性诊断:MERGE_TARGET_MISSING(目标不存在)、MERGE_OVERRIDE_DIRECTION(上层去覆盖下层)、MERGE_OVERRIDE_CYCLE(overrides / disables 互相成环)。
  *
  * 语义说明:
@@ -204,17 +205,25 @@ export function mergeAtoms(input: readonly Atom[], opts: MergeOptions = {}): Mer
   // OUT_PERSONAL_LEAK。所以 core 视图里与别的幸存原子同 id 的 personal 原子不进 atoms(边仍记在 overridden,preview 视图照旧保留)。
   const survivorsAll = atoms.filter((a) => !removed.has(a));
   // GD-1:同 id 的 overrides 因声明者 status 不合格而没被采纳,且被指向的上层原子仍在 → 声明者不进结果
-  const inertReplacements = new Set<Atom>(
-    live
-      .filter(
-        (e) =>
-          e.kind === 'overrides' &&
-          e.from.fm.id === e.to.fm.id &&
-          !adoptsEdges(e.from) &&
-          !removed.has(e.to),
-      )
-      .map((e) => e.from),
+  const inertEdges = live.filter(
+    (e) =>
+      e.kind === 'overrides' &&
+      e.from.fm.id === e.to.fm.id &&
+      !adoptsEdges(e.from) &&
+      !removed.has(e.to),
   );
+  const inertReplacements = new Set<Atom>(inertEdges.map((e) => e.from));
+  // 被丢弃的同 id 替换不能静默:warn 级提示(契约的 severity 只有 error / warn,没有 info),不影响放行/拒绝
+  for (const e of inertEdges) {
+    diagnostics.push({
+      code: 'MERGE_REPLACEMENT_INERT',
+      severity: 'warn',
+      path: `${e.from.sourcePath}#/overrides`,
+      message:
+        `原子「${e.from.fm.id}」的同 id 替换因声明者 status 为 ${e.from.fm.status} 未生效` +
+        `(${e.to.fm.layer} 层原子保持有效;晋升为 active / advisory 后才接管)`,
+    });
+  }
   const survivors = survivorsAll.filter((a) => !inertReplacements.has(a));
   const survivingIds = new Set(
     survivors.filter((a) => isCoreEligible(a.fm.layer)).map((a) => a.fm.id),

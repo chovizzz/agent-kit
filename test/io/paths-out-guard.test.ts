@@ -117,3 +117,43 @@ describe('KIT_STATE_DIR / KIT_TMP 不得在 out/ 之下', () => {
     expect(mk({ KIT_STATE_DIR: 's' }).stateDir).toBe(path.join(root, 's'));
   });
 });
+
+/** 清理项 6:状态目录不得是 out/ 的上级(含仓库根),否则写入根会扩大到 out/ 之外的整棵树。KIT_TMP 另论(见下方对照)。 */
+describe('KIT_STATE_DIR 不得是 out/ 的上级', () => {
+  const UP_MSG = /不得是 out\/ 的上级/;
+
+  it('KIT_STATE_DIR 等于仓库根(含 `.`、绝对路径)或其上级 → 拒;写入根里不会出现仓库根', async () => {
+    const { dir, root, mk } = await repoIn('pg-up-');
+    for (const bad of ['.', './', root, path.join(root, 'sub', '..')]) {
+      expect(() => mk({ KIT_STATE_DIR: bad }), `state ${bad}`).toThrow(UP_MSG);
+    }
+    // KIT_TMP 是仓库的上级时,state 取 KIT_TMP 本身也不行
+    expect(() => mk({ KIT_TMP: dir, KIT_STATE_DIR: dir })).toThrow(UP_MSG);
+  });
+
+  it('KIT_TMP 不受此规则约束(仓库建在 KIT_TMP 之下是现有合法用法):接受,但写入根随之含仓库;列待主代理定夺', async () => {
+    const { dir, root, mk } = await repoIn('pg-up-tmp-');
+    const c = mk({ KIT_TMP: dir });
+    expect(c.tmpDir).toBe(dir);
+    expect(c.writeRoots).toContain(dir);
+    expect(c.writeRoots).not.toContain(root); // 写入根是 KIT_TMP 本身(其内含仓库)
+  });
+
+  it('经符号链接 / 大小写变体到达仓库根也拒', async () => {
+    const { dir, w, root, mk } = await repoIn('pg-up-link-');
+    await safe.symlink(w, root, path.join(dir, 'root-alias'));
+    expect(() => mk({ KIT_STATE_DIR: path.join(dir, 'root-alias') })).toThrow(UP_MSG);
+    expect(() => mk({ KIT_STATE_DIR: root.toUpperCase() })).toThrow(UP_MSG);
+  });
+
+  it('正向对照:仓库内的兄弟目录、.state、与 out 同名前缀的目录、仓库外的 KIT_TMP 照常接受', async () => {
+    const { dir, root, mk } = await repoIn('pg-up-ok-');
+    for (const ok of ['.state', 'state', 'out2', 'out-x', 'a/b']) {
+      expect(mk({ KIT_STATE_DIR: ok }).stateDir, ok).toBe(path.join(root, ok));
+    }
+    const scratch = path.join(dir, 'scratch');
+    const c = mk({ KIT_TMP: scratch, KIT_STATE_DIR: path.join(scratch, 'st') });
+    expect(c.tmpDir).toBe(scratch);
+    expect(c.writeRoots).not.toContain(root);
+  });
+});

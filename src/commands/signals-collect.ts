@@ -11,6 +11,7 @@ import { createRedactor } from '../redact/redactor.js';
 import { DEFAULT_MAX_EVENT_BYTES } from '../signals/base-reader.js';
 import { collect } from '../signals/collect.js';
 import { createExcludePolicy, ExcludeConfigError, hasProtection } from '../signals/exclude.js';
+import { PipelineFailClosedError } from '../signals/pipeline.js';
 import { DEFAULT_READERS } from '../signals/readers.js';
 import type { ReaderRegistry } from '../signals/readers.js';
 import { loadSalt, SaltError, SignalStoreError } from '../signals/state-store.js';
@@ -33,6 +34,16 @@ interface Parsed {
   maxEventBytes: number;
   timeoutMs: number | undefined;
   error: string | undefined;
+}
+
+/**
+ * 只接受十进制非负整数字面量(`/^[0-9]+$/`):拒绝 `0x10`、`1e3`、`+5`、`-1`、带空白、空串;
+ * 超出安全整数范围(会被 Number 悄悄变成不精确值或 Infinity)也拒绝。非法返回 undefined。
+ */
+export function parseDecimalUint(raw: string): number | undefined {
+  if (!/^[0-9]+$/.test(raw)) return undefined;
+  const n = Number(raw);
+  return Number.isSafeInteger(n) ? n : undefined;
 }
 
 function parseArgs(argv: readonly string[]): Parsed {
@@ -91,8 +102,8 @@ function parseArgs(argv: readonly string[]): Parsed {
     }
     const mx = value('--max-event-bytes');
     if (mx !== undefined) {
-      const n = Number(mx);
-      if (!Number.isInteger(n) || n <= 0) out.error = '--max-event-bytes 需要正整数';
+      const n = parseDecimalUint(mx);
+      if (n === undefined || n <= 0) out.error = '--max-event-bytes 需要十进制正整数';
       else if (n > MAX_LINE_BYTES)
         out.error = `--max-event-bytes 不得超过单行硬上限 ${MAX_LINE_BYTES}`;
       else out.maxEventBytes = n;
@@ -100,8 +111,8 @@ function parseArgs(argv: readonly string[]): Parsed {
     }
     const t = value('--timeout-ms');
     if (t !== undefined) {
-      const n = Number(t);
-      if (!Number.isInteger(n) || n <= 0) out.error = '--timeout-ms 需要正整数';
+      const n = parseDecimalUint(t);
+      if (n === undefined || n <= 0) out.error = '--timeout-ms 需要十进制正整数';
       else out.timeoutMs = n;
       continue;
     }
@@ -217,6 +228,11 @@ export function createSignalsCollectCommand(deps: SignalsCollectDeps): CommandDe
       } catch (e) {
         if (e instanceof WriteDeniedError || e instanceof SignalStoreError) {
           ctx.stderr(`REDACT_FAIL_CLOSED reason=${e.code}\n`);
+          return ExitCode.FAIL_CLOSED;
+        }
+        if (e instanceof PipelineFailClosedError) {
+          // 排除判定 / 脱敏 / 信号校验抛错:无法证明安全,fail-closed;只报阶段与类名,不带异常内容
+          ctx.stderr(`REDACT_FAIL_CLOSED reason=pipeline_${e.stage} class=${e.errorClass}\n`);
           return ExitCode.FAIL_CLOSED;
         }
         // 文件系统层面读不到 source 属于用法问题;其余(含 Signal 校验失败等内部不变量破坏)按 fail-closed
