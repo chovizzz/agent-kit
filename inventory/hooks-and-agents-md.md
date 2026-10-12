@@ -1,6 +1,6 @@
 # hooks 与 AGENTS.md 盘点(B15)
 
-- 时点:2026-10-09T01:47:53Z(UTC)。
+- 时点:2026-10-12T10:11:05Z(UTC)。
 - 范围:`~/.claude/settings.json` 中的 `hooks` 字段,只记事件名、matcher、脚本路径与脚本字节数;脚本内容与该文件其它字段**均未读取或记录**。另记 `~/AGENTS.md` 与 `~/workspace/AGENTS.md` 的大小与 sha256。
 
 ## hooks 清单
@@ -11,7 +11,7 @@
 | ---------- | ------- | -------------------------------------- | ---------- | --------------------------- |
 | PreToolUse | Bash    | `~/.claude/hooks/guard-bash.sh`        | 4994       | [#B15-049]、映射 [#B15-059] |
 | PreToolUse | Write   | `~/.claude/hooks/guard-write.sh`       | 2794       | [#B15-049]、映射 [#B15-059] |
-| PreToolUse | Agent   | `~/.claude/hooks/guard-agent-model.sh` | 14355      | [#B15-049]、映射 [#B15-059] |
+| PreToolUse | Agent   | `~/.claude/hooks/guard-agent-model.sh` | 15138      | [#B15-049]、映射 [#B15-059] |
 
 - 脚本路径 [#B15-048] 在 `settings.json` 中写作 `$HOME/.claude/hooks/...`,此处统一写为 `~/`。
 - 字节数顺序与路径顺序一致 [#B15-049];路径与 matcher 的一一对应由 [#B15-059] 独立给出。
