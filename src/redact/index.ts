@@ -5,3 +5,9 @@ export { buildSeeds, SELFTEST_CONFIG, SELFTEST_INTERNAL_DOMAINS, SEED } from './
 export type { Seed, SeedCategory, SeedTier } from './seeds.js';
 export { runSelftest, runMutation, evaluateSeed, selftestRedactor } from './selftest.js';
 export { PREFIX_TABLE, STAGE_IDS } from './rules.js';
+export {
+  neutralizePlaceholderMarkers,
+  PLACEHOLDER_OPEN,
+  PLACEHOLDER_NEUTRALIZED,
+  KNOWN_PLACEHOLDER_TYPES,
+} from './placeholder.js';

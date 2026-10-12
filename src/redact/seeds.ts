@@ -1875,6 +1875,142 @@ export function buildSeeds(seed: number = SEED): Seed[] {
     for (const sd of out) if (sd.id.startsWith('b09e.') && sd.input.includes(PHC)) sd.needles = [];
   }
 
+  // ---- P1-A.3:中性化占位符标记、授权头转义引号、多行值、默认值链 ----
+  // 每条「真值藏在新放行形态里」的反例都是 recognized 种子;benign 种子钉住「不该动」的相邻形态
+  {
+    const gp = makeGen(mulberry32((seed ^ 0xa13) >>> 0));
+    const pw = (): string => 'K' + gp.entropic(ALNUM, 10, 3.0);
+    const SECRET = ['SEC', 'RET'].join('');
+    const PWK = ['pass', 'word'].join('');
+    const TKU = ['to', 'ken'].join('').toUpperCase();
+    const AZ = ['Author', 'ization'].join('');
+    const cred = 'credential';
+    const BS = '\\';
+    const NPH = '[[ REDACTED:credential]]';
+    const tpl = '$' + '{';
+    const start = out.length;
+    add(
+      // 中性化标记(`signals collect` / `redact --stdin` 拆开原文标记后的形态)与合法占位符同样处理:紧贴的真值照脱敏
+      make(
+        'p1a3.neutral.glued_value',
+        'adjacent_placeholder',
+        'recognized',
+        [`${SECRET}=`, R(`${NPH}${pw()}`, cred)],
+        ['cred_assign', 'placeholder_neutral_marker'],
+      ),
+      make(
+        'p1a3.neutral.call_literal',
+        'adjacent_placeholder',
+        'recognized',
+        [`${SECRET} = ${NPH}("`, R(pw(), cred), '")'],
+        ['cred_assign', 'ref_trailing_literal', 'placeholder_neutral_marker'],
+      ),
+      make(
+        'p1a3.neutral.short_call_then_literal',
+        'adjacent_placeholder',
+        'recognized',
+        [`const ${SECRET} = ${NPH}(ab, "`, R(pw(), cred), '");'],
+        [
+          'cred_assign',
+          'ref_trailing_literal',
+          'placeholder_tight_head',
+          'placeholder_neutral_marker',
+        ],
+      ),
+      // 经归一化才长得像占位符的伪造串(全角括号):不剥、不当引用,类型位里夹带的数据照样脱敏
+      make(
+        'p1a3.raw_exact.fullwidth_marker',
+        'adjacent_placeholder',
+        'recognized',
+        [`${PWK}=`, R('［［REDACTED：aqzxwvutsrqponm', cred), '］］'],
+        ['cred_assign', 'placeholder_raw_exact', 'ref_boundary', 'view_normalize'],
+      ),
+      // 原文自带的(可伪造的)中性化标记不占位:标记后面隔着空白的口令照样脱敏,标记随值一起被吞
+      make(
+        'p1a3.neutral.forged_then_space',
+        'adjacent_placeholder',
+        'recognized',
+        [`${PWK}="`, R(`${NPH} ${pw()}`, cred), '"'],
+        ['cred_assign'],
+      ),
+      // 授权头:值前是转义引号(`Bearer \\"口令\\"`),收尾的反斜杠留在区间外
+      make(
+        'p1a3.authz.escaped_quote',
+        'plain',
+        'recognized',
+        [`${AZ}: Bearer ${BS}"`, R(pw(), cred), `${BS}"`],
+        ['cred_authz'],
+      ),
+      make(
+        'p1a3.authz.escaped_single_quote',
+        'plain',
+        'recognized',
+        [`curl -H "${AZ}: ${BS}'`, R(pw(), cred), `${BS}'"`],
+        ['cred_authz'],
+      ),
+      // 多行值:三引号、YAML 块标量、heredoc
+      make(
+        'p1a3.block.triple_multiline',
+        'concat_multiline',
+        'recognized',
+        [`${PWK} = """\n`, R(pw(), cred), '\n"""\nprint(1)'],
+        ['cred_assign_ext', 'multiline_block'],
+      ),
+      make(
+        'p1a3.block.yaml_scalar',
+        'concat_multiline',
+        'recognized',
+        [`app:\n  ${PWK}: |\n    `, R(pw(), cred), '\n  other: 1\n'],
+        ['cred_assign_ext', 'multiline_block'],
+      ),
+      make(
+        'p1a3.block.heredoc',
+        'concat_multiline',
+        'recognized',
+        [`export ${TKU}=$(cat <<'EOF'\n`, R(pw(), cred), '\nEOF\n)'],
+        ['cred_assign_ext', 'multiline_block'],
+      ),
+      // 默认值链:`${X:-$(echo 口令)}`
+      make(
+        'p1a3.default_chain.cmd_subst',
+        'plain',
+        'recognized',
+        [`${PWK}=`, R(`${tpl}X:-$(echo`, cred), ' ', R(pw(), cred), ')}'],
+        [
+          'cred_assign',
+          'cred_assign_ext',
+          'ref_default_chain',
+          'ref_boundary',
+          'ref_template_strict',
+        ],
+      ),
+    );
+    // 多行 / 含占位符的种子不进端到端用例(needles 置空,期望输出仍精确钉住)
+    for (const sd of out.slice(start))
+      if (sd.id.startsWith('p1a3.block.') || sd.input.includes('REDACTED')) sd.needles = [];
+    add(
+      unchanged(
+        'p1a3.benign.block_head_other_key',
+        'benign',
+        'benign',
+        'description: |\n  some longer text here\n',
+      ),
+      unchanged('p1a3.benign.block_no_body', 'benign', 'benign', `${PWK}: |\nnext_key: value\n`),
+      unchanged(
+        'p1a3.benign.triple_ref',
+        'benign',
+        'benign',
+        `${PWK} = """\n${tpl}ENV_VALUE}\n"""\n`,
+      ),
+      unchanged(
+        'p1a3.benign.neutral_marker_alone',
+        'benign',
+        'benign',
+        `${SECRET}=${NPH}\nnext line\n`,
+      ),
+    );
+  }
+
   // ---- 做不到的形态(只报告,不计入召回) ----
   const gapPw = 'K' + g.entropic(ALNUM, 10, 3.0);
   const hex32 = g.pick(HEXL, 32);
@@ -1965,11 +2101,46 @@ export function buildSeeds(seed: number = SEED): Seed[] {
       '`NAME=` 收尾引号之后的纯小写单词(<=12 字符)按引用放行,与 gap.word_password 同源',
     ),
     gap(
-      'gap.neutral_ph_call',
+      'gap.bare_literal_assert',
       'plain',
-      `${['SEC', 'RET'].join('')} = [[ REDACTED:credential]]("${gapPw}")`,
+      `expect(u.${['pass', 'word'].join('')}).toBe("${gapPw}")`,
       [gapPw],
-      '原文里形如占位符的串被 collect 拆开标记(`[[ REDACTED`)后只是普通文本:`NAME = [[ x]]("口令")` 的值是 `[[`,后面括号里的引号字面量不判',
+      '键名只出现在被断言的表达式里,口令是另一个调用的裸字面量实参:没有「键名 + 运算符 + 值」的赋值结构;按「同语句里键名之后的任何长字面量」判会大面积误伤断言 / 日志 / 夹具,见 docs/redaction.md §3.4',
+    ),
+    gap(
+      'gap.call_then_quoted',
+      'plain',
+      `${['SEC', 'RET'].join('')}=foo(ab)"${gapPw}"`,
+      [gapPw],
+      '赋值的值是「函数调用 + 紧贴的引号字面量」(语法上不成立的粘连写法):调用部分按取值类调用放行,贴着的引号段不当作拼接;占位符替换了调用名之后的形态(`占位符(ab)"口令"`)同源',
+    ),
+    gap(
+      'gap.triple_escaped_quotes',
+      'concat_multiline',
+      `${['pass', 'word'].join('')} = ${'\\'}"${'\\'}"${'\\'}"${'\\'}n${gapPw}${'\\'}n${'\\'}"${'\\'}"${'\\'}"`,
+      [gapPw],
+      '转义引号包裹的三引号(JSON 里的 `\\"\\"\\"`)不当作三引号,多行正文不判',
+    ),
+    gap(
+      'gap.yaml_anchor_block',
+      'concat_multiline',
+      `${['pass', 'word'].join('')}: &pw\n  ${gapPw}\n`,
+      [gapPw],
+      '键名后是 YAML 锚点 / 标签(`&pw` `!!str`)再换行:块头不是 `|` `>`,下一行缩进内容不判',
+    ),
+    gap(
+      'gap.template_default_call',
+      'plain',
+      `  ${['pass', 'word'].join('')}: {{ .Values.x | default "${gapPw}" }}`,
+      [gapPw],
+      'Helm / Jinja 模板里 `| default "口令"` 的管道默认值:值以 `{{` 开头按模板表达式放行',
+    ),
+    gap(
+      'gap.neutral_open_type',
+      'adjacent_placeholder',
+      `${['pass', 'word'].join('')}=[[ REDACTED:aqzxwvutsrqponm]]`,
+      ['aqzxwvutsrqponm'],
+      '类型位不在封闭集合里的中性化标记不剥离,但以 `[[` 起头的值整段按取值引用放行(与 `gap.word_password` 同源:纯小写字母);合法占位符的类型位按契约是开放的 `[a-z_]{1,24}`,同样夹带得了纯小写数据',
     ),
     gap(
       'gap.word_password',

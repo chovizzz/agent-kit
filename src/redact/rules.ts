@@ -11,6 +11,7 @@
 import { PLACEHOLDER_SOURCE } from '../contracts/redact.js';
 import { shannon } from './entropy.js';
 import { buildView, safeLower } from './view.js';
+import { NEUTRAL_MARKER_SOURCE } from './placeholder.js';
 import { MAX_PLACEHOLDER_TYPE } from './types.js';
 import type { ResolvedConfig, Rule, ScanEnv } from './types.js';
 
@@ -431,6 +432,8 @@ function simpleRegexRule(
   re: RegExp,
   validate?: (m: RegExpExecArray, env: ScanEnv) => boolean,
   valueClass = false,
+  /** 调整要脱敏的区间(参数:匹配、值组区间 [start,end),文本);默认整个值组 */
+  adjustSpan?: (m: RegExpExecArray, g: Range, text: string) => Range,
 ): Rule {
   return {
     id,
@@ -442,7 +445,8 @@ function simpleRegexRule(
     scan(text, _lower, push, env) {
       eachMatch(re, text, env, (m) => {
         if (validate && !validate(m, env)) return;
-        const g = re.hasIndices ? groupSpan(m) : null;
+        const g0 = re.hasIndices ? groupSpan(m) : null;
+        const g = g0 && adjustSpan ? adjustSpan(m, g0, text) : g0;
         if (g) push(g[0], g[1]);
         else push(m.index, m.index + m[0].length);
       });
@@ -531,9 +535,12 @@ const telegramBot = simpleRegexRule(
 // ---------------------------------------------------------------------------
 
 const MASK = /^[*xX•#._-]{4,}$/;
+/** YAML 块标量的头(`|` `>-` `|2`):值在下面的缩进行里,头本身不是口令 */
+const BLOCK_HEAD_REF = /^[|>][+-]?\d?$/;
 const LITERAL = /^(?:none|null|undefined|true|false|nil)$/i;
 const PLAIN_WORD = /^[a-z][a-z-]{0,11}$/;
-const PH_WHOLE = /^\[\[REDACTED:[a-z_]{1,24}\]\]$/;
+// 注:不再把「整个值就是占位符」当引用——合法占位符在视图里早已被剥掉,走到这里的只可能是归一化 / 解码后才
+// 长得像占位符的伪造串(全角括号、同形字),放行等于给类型位夹带数据开后门
 /** 名字段:UPPER_SNAKE(可带数字),或只含字母 / 下划线(不带数字——带数字的段更像口令)。 */
 const NAME = '(?:[A-Z]+|[A-Z][A-Z0-9]*_[A-Z0-9_]*|[A-Za-z_]+)';
 /** 环境变量名风格的大写名:纯大写字母,或带下划线的 UPPER_SNAKE。大写 + 数字而没有下划线的(`ABC123XYZ9`)更像口令,不算。 */
@@ -653,8 +660,8 @@ function refCore(s: string, shell: boolean): boolean {
   if (s === '') return true;
   return (
     MASK.test(s) ||
+    BLOCK_HEAD_REF.test(s) ||
     LITERAL.test(s) ||
-    PH_WHOLE.test(s) ||
     PLAIN_WORD.test(s) ||
     varRef(s, shell) ||
     ENV_ACCESS.test(s) ||
@@ -743,10 +750,18 @@ const CRED_ASSIGN_RE = new RegExp(
 /** 引用式候选:`NAME=` 之后紧跟一个(可带转义反斜杠的)引号;键名与 `=` 之间不许有引号。是否真的是引用由 quotedNameRef 判。 */
 const NAME_EQ_QUOTE_RE = new RegExp(`${KW}${SFX}=(\\\\*["'])`, 'gi');
 
+// 注意:只认**合法占位符**(pass1 自己产出的形态)。中性化标记(原文自带、可伪造)在视图里被剥掉,
+// 但不参与「值的位置已被占位符占住」的判定——否则标记后面隔着空白的口令会拿到豁免(伪造写法)
 const PLACEHOLDER_RE = new RegExp(
   PLACEHOLDER_SOURCE.replace('[a-z_]+', `[a-z_]{1,${MAX_PLACEHOLDER_TYPE}}`),
   'g',
 );
+const NEUTRAL_RE = new RegExp(`${NEUTRAL_MARKER_SOURCE}$`);
+/** 原文片段里有没有占位符(合法占位符) */
+const hasPlaceholder = (raw: string): boolean => {
+  PLACEHOLDER_RE.lastIndex = 0;
+  return PLACEHOLDER_RE.test(raw);
+};
 
 /** `$VAR` / `${VAR}`(可带路径后缀)。**不是**任意以 `$` 开头的串:`$Up3r…` 这类可能是口令本身。 */
 const VAR_REF = /^\$(?:\{[A-Za-z_]\w*\}|[A-Za-z_]\w*)(?:[\\/][\w.@+~\\/-]*)?$/;
@@ -1017,7 +1032,7 @@ function placeholderGap(
   _keyStart: number,
   opEnd: number,
   anchor: number,
-): 'none' | 'tight' | 'occupied' {
+): 'none' | 'tight' | 'neutral' | 'occupied' {
   if (anchor < opEnd) return 'none';
   const raw = env.rawSlice(opEnd - 1, anchor + 1);
   if (!raw.includes('[[')) return 'none';
@@ -1026,7 +1041,12 @@ function placeholderGap(
   for (let m = PLACEHOLDER_RE.exec(raw); m !== null; m = PLACEHOLDER_RE.exec(raw)) {
     lastEnd = m.index + m[0].length;
   }
-  if (lastEnd === -1) return 'none';
+  // 中性化标记(原文自带、可伪造)不占位:紧贴它的值照常判,只是调用实参里的字面量也要看('neutral')
+  if (lastEnd === -1) {
+    return !env.disabled.has('placeholder_neutral_marker') && NEUTRAL_RE.test(raw.slice(0, -1))
+      ? 'neutral'
+      : 'none';
+  }
   const gap = raw.slice(lastEnd, raw.length - 1);
   if (env.disabled.has(STAGE_PLACEHOLDER)) {
     // 旧判据(B09b):间隔多于一个字符一律 occupied
@@ -1216,7 +1236,9 @@ const credAssign: Rule = {
           h.gi === 5 &&
           (h.val.startsWith('${') ||
             (!env.disabled.has(STAGE_PH_SUFFIX) &&
-              placeholderGap(text, env, h.keyStart, h.op[1], h.vr[0]) === 'tight'))
+              ['tight', 'neutral'].includes(
+                placeholderGap(text, env, h.keyStart, h.op[1], h.vr[0]),
+              )))
         )
           trail(h, shell, v);
         return false;
@@ -1389,6 +1411,8 @@ const credAssignExt: Rule = {
   scan(text, _lower, push, env) {
     const re = EXT_HEAD_RE;
     re.lastIndex = 0;
+    // 已经逐行判过的块正文末尾:块头嵌在正文里(重复的 `X=<<EOF`、递增缩进的块头)不再重复扫,保持线性
+    let blockEnd = 0;
     for (let m = re.exec(text); m !== null; m = re.exec(text)) {
       env.deadline.tick();
       if (m[0].length === 0) {
@@ -1414,6 +1438,26 @@ const credAssignExt: Rule = {
       const free = (anchor: number): boolean =>
         placeholderGap(text, env, m.index, opEnd, anchor) !== 'occupied';
 
+      // 块值:YAML 块标量 / heredoc(正文逐行判)
+      // (原视图补扫里换行还是转义字符,eol 是人为截的:块 / 多行三引号只在 JSON 空白视图与真换行文本上判)
+      if (!env.disabled.has(STAGE_BLOCK) && !env.origView && p >= blockEnd) {
+        const blk = blockBody(text, m.index, p, eol, opText);
+        if (blk) {
+          blockEnd = blk[1];
+          for (const [a, b] of bodyLineRanges(text, blk[0], blk[1])) {
+            if (b - a >= 8 && judge(text.slice(a, b))) push(a, b);
+          }
+          continue;
+        }
+      }
+      // 模板默认值链里的命令替换 / 嵌套展开
+      if (!env.disabled.has(STAGE_DEFAULT_CHAIN)) {
+        // 值的第一个词里(不跨空白)出现的 `${`:值不以 `$` 开头(`a${X:-$(echo 口令)}`)也要看
+        const w = /^\S{0,64}/.exec(text.slice(p, p + 64))?.[0] ?? '';
+        const k = w.indexOf('${');
+        if (k !== -1)
+          for (const [a, b] of templateDefaultWords(text, p + k, env.disabled)) push(a, b);
+      }
       // 反引号值(JS 模板串 / Go 原始字符串)
       if (c === '`') {
         const close = text.indexOf('`', p + 1);
@@ -1435,9 +1479,25 @@ const credAssignExt: Rule = {
       // 三个引号中间不能是被剥掉的占位符:第二遍剥掉占位符后,`"值"` + `""` 会拼出一个原文里不存在的 `"""`
       if (
         (text.startsWith("'''", p) || text.startsWith('"""', p)) &&
-        !env.rawSlice(p, p + 3).includes('[[REDACTED')
+        !hasPlaceholder(env.rawSlice(p, p + 3))
       ) {
         const close = text.indexOf(text.slice(p, p + 3), p + 3);
+        // 多行三引号:开引号后面是行尾才算(源码里 `"""` 后面跟着别的东西的多半是字符串字面量的一部分);正文逐行判,
+        // 收尾三引号在上限之内就到收尾为止,否则到上限为止
+        const openerRest = text.slice(p + 3, eol).trim() === '';
+        if (openerRest && !env.origView && !env.disabled.has(STAGE_BLOCK)) {
+          // 没有收尾的三引号(摘录被截断)时只看上限之内的行:已看到的行照脱敏
+          const bodyEnd =
+            close !== -1 && close - p <= BLOCK_MAX_CHARS
+              ? close
+              : Math.min(text.length, p + BLOCK_MAX_CHARS);
+          let first = true;
+          for (const [a, b] of bodyLineRanges(text, p + 3, bodyEnd)) {
+            if (b - a >= 8 && judge(text.slice(a, b)) && (!first || free(a))) push(a, b);
+            first = false;
+          }
+          continue;
+        }
         const e = close === -1 || close > eol ? eol : close;
         const inner = text.slice(p + 3, e);
         if (inner.length >= 8 && judge(inner) && free(p + 3)) push(p + 3, e);
@@ -1482,7 +1542,7 @@ const credAssignExt: Rule = {
           const w = readGluedWord(text, p, eol, c === '"' || c === "'" || c === '\\');
           // 第一段是空引号对、而原文里它中间有占位符(第二遍看到的是第一遍的输出):值的位置已经被占了,
           // 后面的引号段是别的东西,不是这个值的延续
-          const emptied = w.firstEmpty && env.rawSlice(p, w.firstEnd).includes('[[REDACTED');
+          const emptied = w.firstEmpty && hasPlaceholder(env.rawSlice(p, w.firstEnd));
           if (!emptied && w.segs >= 2 && w.content.length >= 8 && judge(w.content) && free(p)) {
             push(p, w.end);
             continue;
@@ -1505,6 +1565,135 @@ const credAssignExt: Rule = {
     }
   },
 };
+
+// ---------------------------------------------------------------------------
+// 多行值(P1-A.3):三引号、YAML 块标量、heredoc;`${X:-$(echo 值)}` 默认值链
+// ---------------------------------------------------------------------------
+
+export const STAGE_BLOCK = 'multiline_block';
+export const STAGE_DEFAULT_CHAIN = 'ref_default_chain';
+/** 多行值正文的上限:超过就不再往下看(只脱敏已看到的行,不会放过已看到的行) */
+const BLOCK_MAX_CHARS = 4096;
+const BLOCK_MAX_LINES = 40;
+
+/** [from, to) 里每个非空行去首尾空白后的区间(最多 BLOCK_MAX_LINES 行) */
+function bodyLineRanges(text: string, from: number, to: number): Range[] {
+  const out: Range[] = [];
+  let i = from;
+  while (i < to && out.length < BLOCK_MAX_LINES) {
+    let e = text.indexOf('\n', i);
+    if (e === -1 || e > to) e = to;
+    let a = i;
+    let b = e;
+    while (a < b && /\s/.test(text[a] as string)) a++;
+    while (b > a && /\s/.test(text[b - 1] as string)) b--;
+    if (b > a) out.push([a, b]);
+    i = e + 1;
+  }
+  return out;
+}
+
+const BLOCK_SCALAR_HEAD = /^[|>][+-]?\d?[ \t]*(?:#.*)?$/;
+const HEREDOC_HEAD =
+  /^(?:\$\(\s*cat\s+)?<<-?[ \t]*(["']?)([A-Za-z_]\w{0,31})\1(?:[ \t]*[)|&;>].*)?[ \t]*$/;
+
+/**
+ * 键名之后的值是「块」:YAML 块标量(`password: |` 下一行起缩进更深的行)、heredoc(`<<EOF` 到 `EOF` 行)。
+ * 返回正文 [from, to)(必须找到结束位置:缩进回退 / 终止符 / 文本结束);没找到终止符的 heredoc 不脱敏整段,
+ * 只取上限内已看到的行(多脱敏的方向)。不是块返回 null。
+ */
+function blockBody(
+  text: string,
+  keyStart: number,
+  p: number,
+  eol: number,
+  opText: string,
+): Range | null {
+  const head = text.slice(p, eol);
+  const bodyStart = eol + 1;
+  if (opText === ':' && BLOCK_SCALAR_HEAD.test(head)) {
+    const ls = text.lastIndexOf('\n', keyStart - 1) + 1;
+    let keyIndent = 0;
+    while (ls + keyIndent < text.length && /[ \t]/.test(text[ls + keyIndent] as string))
+      keyIndent++;
+    let i = bodyStart;
+    let end = bodyStart;
+    while (i < text.length && i - bodyStart < BLOCK_MAX_CHARS) {
+      let e = text.indexOf('\n', i);
+      if (e === -1) e = text.length;
+      const line = text.slice(i, e);
+      if (line.trim() !== '') {
+        let ind = 0;
+        while (ind < line.length && /[ \t]/.test(line[ind] as string)) ind++;
+        if (ind <= keyIndent) break;
+      }
+      end = e;
+      i = e + 1;
+    }
+    return end > bodyStart ? [bodyStart, end] : null;
+  }
+  const hd = HEREDOC_HEAD.exec(head);
+  if (hd) {
+    const tag = hd[2] as string;
+    let i = bodyStart;
+    let end = bodyStart;
+    while (i < text.length && i - bodyStart < BLOCK_MAX_CHARS) {
+      let e = text.indexOf('\n', i);
+      if (e === -1) e = text.length;
+      if (text.slice(i, e).trim() === tag) break;
+      end = e;
+      i = e + 1;
+    }
+    return end > bodyStart ? [bodyStart, end] : null;
+  }
+  return null;
+}
+
+/**
+ * `${NAME:-默认}` 的默认部分里还套着命令替换 / 嵌套展开(`${X:-$(echo 值)}`、`${X:-${Y:-值}}`):
+ * 简单默认值(`${X:-值}`)已由 cred_assign 覆盖,这里只补「默认部分含 `$(` 或 `${`」的形态。
+ * 返回默认部分里的候选词区间(长度 >= 8、不是引用词 / 环境变量名)。
+ */
+function templateDefaultWords(text: string, p: number, disabled: ReadonlySet<string>): Range[] {
+  if (text[p] !== '$' || text[p + 1] !== '{') return [];
+  const win = text.slice(p, p + TRAILING_WINDOW);
+  let depth = 0;
+  let close = -1;
+  for (let i = 1; i < win.length; i++) {
+    const c = win[i] as string;
+    if (c === '\n' || c === '\r') break;
+    if (c === '{') depth++;
+    else if (c === '}') {
+      depth--;
+      if (depth === 0) {
+        close = i;
+        break;
+      }
+    }
+  }
+  // 展开式没配平(行尾 / 窗口内没有收尾):到行尾的窗口也看,多脱敏的方向
+  const inner = win.slice(2, close === -1 ? win.length : close);
+  const head = /^[A-Za-z_]\w*(?::?[-=+?])/.exec(inner);
+  if (!head) return [];
+  const rest = inner.slice(head[0].length);
+  if (!rest.includes('$(') && !rest.includes('${')) return [];
+  const base = p + 2 + head[0].length;
+  const out: Range[] = [];
+  const TOKEN = /[^\s()'"`;|&<>{}$,\\]+/g;
+  for (let m = TOKEN.exec(rest); m !== null; m = TOKEN.exec(rest)) {
+    let tok = m[0];
+    let off = m.index;
+    // 嵌套展开的头 `Y:-` 不是值的一部分
+    const nested = /^[A-Za-z_]\w*:?[-=+?]/.exec(tok);
+    if (nested && rest[m.index - 1] === '{') {
+      tok = tok.slice(nested[0].length);
+      off += nested[0].length;
+    }
+    if (tok.length >= 8 && !ENV_NAME.test(tok) && !isReferenceWord(tok, disabled))
+      out.push([base + off, base + off + tok.length]);
+  }
+  return out;
+}
 
 const CRED_CLI_FLAG_RE =
   /--(?:[A-Za-z0-9_-]{1,24}[-_])?(password|passwd|passphrase|token|secret|api-key|apikey|access-token|auth-token|client-secret|private-key)(?:=|[ \t]{1,8})(?:"([^"\r\n]{4,})"?|'([^'\r\n]{4,})'?|([^\s"'`-][^\s"'`]{3,}))/dgi;
@@ -1561,7 +1750,7 @@ const credBearer = simpleRegexRule(
   70,
   false,
   ['bearer'],
-  /bearer[ \t]{1,8}([A-Za-z0-9._~+/=-]{16,})/dgi,
+  /bearer[ \t]{1,8}(?:\\*["'])?([A-Za-z0-9._~+/=-]{16,})/dgi,
   (m) => {
     const v = m[1] as string;
     return hasDigitAndLetter(v).digit || shannon(v) >= 4.0;
@@ -1593,11 +1782,21 @@ const credAuthz = simpleRegexRule(
   70,
   false,
   ['authorization'],
-  /authorization["']?[ \t]{0,8}[:=][ \t]{0,8}["']?(?:(?:bearer|basic|token|digest|negotiate|aws4-hmac-sha256)[ \t]+)?(?![ \t])((?:=(?:"[^"\r\n]*"|'[^'\r\n]*')|[^\r\n"']){8,})/dgi,
+  /authorization["']?[ \t]{0,8}[:=][ \t]{0,8}["']?(?:(?:bearer|basic|token|digest|negotiate|aws4-hmac-sha256)[ \t]+)?(?:\\+["'](?=[^\r\n"'\\])|["'](?=[A-Za-z0-9_+/=.~-]))?(?![ \t])((?:=(?:"[^"\r\n]*"|'[^'\r\n]*')|[^\r\n"']){8,})/dgi,
   (m, env) => {
     // 值被 JSON 转义的引号(`\\"`)截断时,末尾会剩下孤立的反斜杠:去掉再判(`Bearer \\` 只是一个scheme)
     const v = (m[1] as string).replace(/\\+$/, '');
     return v.length >= 8 && judgeValue(v, true, env.disabled).secret && !AUTH_SCHEME_ONLY.test(v);
+  },
+  false,
+  // 值前有转义的开引号(`Bearer \\"口令\\"`)时,收尾的 `\\"` 的反斜杠留在区间外:否则输出里的 JSON 转义被吞掉
+  (_m, g, text) => {
+    const q = text[g[0] - 1];
+    if ((q !== '"' && q !== "'") || text[g[0] - 2] !== '\\') return g;
+    let e = g[1];
+    const lim = g[0] + 1;
+    while (e > lim && text.charCodeAt(e - 1) === 92) e--;
+    return [g[0], e];
   },
 );
 
@@ -1959,6 +2158,8 @@ export const STAGE_IDS = [
   'view_json_ws',
   'view_orig_union',
   'span_escape_tail',
+  'placeholder_neutral_marker',
+  'placeholder_raw_exact',
   STAGE_PH_SUFFIX,
   STAGE_REF_TAIL,
   STAGE_REF_BOUNDARY,
@@ -1967,4 +2168,6 @@ export const STAGE_IDS = [
   STAGE_TRAILING,
   STAGE_REF_TEMPLATE,
   STAGE_REF_ZOD,
+  STAGE_BLOCK,
+  STAGE_DEFAULT_CHAIN,
 ] as const;
