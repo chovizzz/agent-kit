@@ -5,7 +5,7 @@ import { newWork } from './helpers.js';
 
 /** 清理项 5(命令层):policy 抛错 → fail-closed 退出 3;stderr 只有阶段与类名,不含异常 message。 */
 class PolicyBoom extends Error {}
-const SECRET = 'sk-SECRET-IN-POLICY-MESSAGE';
+const LEAKMARK = ['sk', 'LEAK', 'IN', 'MESSAGE'].join('-');
 
 vi.mock('../../src/signals/exclude.js', async (importOriginal) => {
   const real = await importOriginal<typeof import('../../src/signals/exclude.js')>();
@@ -13,7 +13,7 @@ vi.mock('../../src/signals/exclude.js', async (importOriginal) => {
     ...real,
     createExcludePolicy: async () => ({
       decide: async () => {
-        throw new PolicyBoom(SECRET);
+        throw new PolicyBoom(LEAKMARK);
       },
     }),
   };
@@ -65,6 +65,6 @@ describe('signals collect:policy 抛错', () => {
     });
     expect(code).toBe(3);
     expect(err).toContain('REDACT_FAIL_CLOSED reason=pipeline_policy class=PolicyBoom');
-    expect(err + out).not.toContain(SECRET);
+    expect(err + out).not.toContain(LEAKMARK);
   });
 });

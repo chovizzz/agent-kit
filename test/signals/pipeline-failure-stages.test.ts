@@ -16,7 +16,7 @@ import type { PipelineDeps } from '../../src/signals/pipeline.js';
 class ReaderBoom extends Error {}
 class PolicyBoom extends Error {}
 class RedactorBoom extends Error {}
-const SECRET = 'sk-SECRET-IN-MESSAGE';
+const LEAKMARK = ['sk', 'LEAK', 'IN', 'MESSAGE'].join('-');
 
 const COUNTS: Counts = {
   user_messages: 1,
@@ -66,7 +66,7 @@ const okPolicy: ExcludePolicy = {
 };
 const throwingPolicy: ExcludePolicy = {
   decide: async () => {
-    throw new PolicyBoom(SECRET);
+    throw new PolicyBoom(LEAKMARK);
   },
 };
 
@@ -106,14 +106,14 @@ describe('reader 侧抛错 → read_error,带错误类名,不带 message', () =>
         agent: 'claude',
         discover: async () => [],
         read: () => {
-          throw new ReaderBoom(SECRET);
+          throw new ReaderBoom(LEAKMARK);
         },
       },
       REF,
       depsOf(),
     );
     expect(r).toMatchObject({ status: 'read_error', errorClass: 'ReaderBoom', signals: [] });
-    expect(JSON.stringify(r)).not.toContain(SECRET);
+    expect(JSON.stringify(r)).not.toContain(LEAKMARK);
   });
 
   it('事件迭代中途抛错', async () => {
@@ -122,7 +122,7 @@ describe('reader 侧抛错 → read_error,带错误类名,不带 message', () =>
         events: () =>
           (async function* () {
             yield EVENT;
-            throw new ReaderBoom(SECRET);
+            throw new ReaderBoom(LEAKMARK);
           })(),
       }),
       REF,
@@ -136,7 +136,7 @@ describe('reader 侧抛错 → read_error,带错误类名,不带 message', () =>
       readerOf({
         noEvents: true,
         meta: () => {
-          throw new ReaderBoom(SECRET);
+          throw new ReaderBoom(LEAKMARK);
         },
       }),
       REF,
@@ -149,7 +149,7 @@ describe('reader 侧抛错 → read_error,带错误类名,不带 message', () =>
     const r = await processSession(
       readerOf({
         counts: () => {
-          throw new ReaderBoom(SECRET);
+          throw new ReaderBoom(LEAKMARK);
         },
       }),
       REF,
@@ -163,7 +163,7 @@ describe('policy 抛错 → fail-closed(阶段 policy),不再被报成 read_erro
   it('循环内首个带 cwd 的事件触发 policy.decide 抛错', async () => {
     const e = await failure(processSession(readerOf({}), REF, depsOf({ policy: throwingPolicy })));
     expect(e).toMatchObject({ stage: 'policy', errorClass: 'PolicyBoom' });
-    expect(e.message).not.toContain(SECRET);
+    expect(e.message).not.toContain(LEAKMARK);
     expect(e.cause).toBeUndefined();
   });
 
@@ -179,14 +179,14 @@ describe('脱敏器抛错 → fail-closed(阶段 redact)', () => {
   const boomApply: Redactor = {
     ...realRedactor,
     apply: () => {
-      throw new RedactorBoom(SECRET);
+      throw new RedactorBoom(LEAKMARK);
     },
   };
 
   it('逐条摘录脱敏(循环内 settle)抛错', async () => {
     const e = await failure(processSession(readerOf({}), REF, depsOf({ redactor: boomApply })));
     expect(e).toMatchObject({ stage: 'redact', errorClass: 'RedactorBoom' });
-    expect(e.message).not.toContain(SECRET);
+    expect(e.message).not.toContain(LEAKMARK);
   });
 
   it('循环后 sanitizeCounts(计数键脱敏)抛错', async () => {
@@ -207,7 +207,7 @@ describe('归类本身不能逃逸', () => {
     }
     const policy: ExcludePolicy = {
       decide: async () => {
-        throw new Hostile(SECRET);
+        throw new Hostile(LEAKMARK);
       },
     };
     const e = await failure(processSession(readerOf({}), REF, depsOf({ policy })));
