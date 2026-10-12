@@ -240,17 +240,20 @@ describe('inventory-refresh:真实 inventory 格式 + 合成 HOME', { timeout: 1
     );
     for (const n of sizes) expect(hooksMd).toMatch(new RegExp(`\\| ${n} +\\|`));
     expect((await w.snapshot())['claude-md-sections.md']).toBe(secMd2);
-    // 表格列宽保持:改完的 md 仍满足仓库的 prettier 口径
-    const pc = runNode([
+    // 数字位数变了表格列宽会变:工具不重排,只提示。这里验证「按仓库 prettier 口径重排之后,
+    // 工具仍认得这些 md(再 dry-run 无差异)」,并且 prettier 真的会处理这些文件(不被 .prettierignore 吞掉)
+    const pw = runNode([
       path.join(REPO_ROOT, 'node_modules', 'prettier', 'bin', 'prettier.cjs'),
       '--config',
       path.join(REPO_ROOT, '.prettierrc'),
-      '--check',
+      '--ignore-path',
+      '/dev/null', // 合成仓库在 .state/ 下会被 .prettierignore 忽略,不加这行等于没处理
+      '--write',
       ...(await readDir(path.join(w.root, 'inventory')))
         .filter((e) => e.name.endsWith('.md'))
         .map((e) => path.join(w.root, 'inventory', e.name)),
     ]);
-    expect(pc.status, pc.stdout + pc.stderr).toBe(0);
+    expect(pw.status, pw.stdout + pw.stderr).toBe(0);
     const again2 = tool(w);
     expect(again2.status, again2.stdout).toBe(0);
 

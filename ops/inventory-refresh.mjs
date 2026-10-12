@@ -140,6 +140,10 @@ async function cli(argv) {
   applyWrites(root, writes, { backupDir, rename });
   out('[REFRESH] 已写入:');
   for (const s of fileStats(plan)) out(`  inventory/${s.file}  变更 ${s.lines} 行`);
+  if (fileStats(plan).some((s) => s.file.endsWith('.md')))
+    out(
+      '[REFRESH] 提示 数字位数变了会改变表格列宽,请跑 pnpm exec prettier --check inventory(不过就 --write)后再提交',
+    );
 
   // 再跑一遍 A7(同一 root / home),确认回绿
   const a7 = run(
