@@ -172,7 +172,10 @@ describe('脱敏端到端(A3/A6:种子秘密 0 命中)', () => {
     expect(leaked(rows.map((x) => x.excerpt_redacted).join('\n'))).toEqual([]); // 解码后同样零命中
     expect(leaked(r.out)).toEqual([]);
     // 全部摘录二次复扫干净
-    const redactor = createRedactor({ sensitive_words: ['张三科技', 'Acme Corp', '北极星计划'] });
+    const redactor = createRedactor({
+      sensitive_words: ['张三科技', 'Acme Corp', '北极星计划'],
+      timeout_ms: 5000, // 默认 50ms 在重载机器上会把「超时」误判成「不干净」
+    });
     for (const row of rows)
       expect(redactor.pass2(row.excerpt_redacted).clean, row.sig_id).toBe(true);
     // 摘录 ≤300 码点

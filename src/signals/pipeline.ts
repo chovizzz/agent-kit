@@ -25,13 +25,13 @@ import type { RedactFailReason, Redactor } from '../contracts/redact.js';
 import type { ExcludePolicy, ProjectDecision } from './exclude.js';
 import { isExternalToolName } from './external-content.js';
 import { projectKeyFor, sessionRefFor, sigIdFor } from './ids.js';
+import { neutralizePlaceholderMarkers } from '../redact/placeholder.js';
 import { resolveAgentVersion } from './version.js';
 import type { ResolvedVersion } from './version.js';
 
 /** 内存里保留的事件文本上限(字符)。 */
 export const TEXT_WINDOW = 4096;
 export const PLACEHOLDER_OPEN = '[[REDACTED:';
-const PLACEHOLDER_NEUTRALIZED = '[[ REDACTED:';
 
 export interface PipelineDeps {
   redactor: Redactor;
@@ -171,7 +171,7 @@ export function makeExcerpt(
   }
   // 原文里形如占位符的串(`[[REDACTED:xxx]]`)会被两遍扫描先剥掉再扫,等于给「藏在类型名里」的内容开了后门;
   // 进脱敏前先拆开标记,让它当普通文本被扫描(合法占位符只由第一遍产生)
-  src = src.replaceAll(PLACEHOLDER_OPEN, PLACEHOLDER_NEUTRALIZED);
+  src = neutralizePlaceholderMarkers(src);
   const r = redactor.apply(src);
   if (!r.ok) return { ok: false, reason: r.reason };
   const excerpt = cutExcerpt(r.text);
