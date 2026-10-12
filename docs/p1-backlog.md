@@ -46,6 +46,10 @@
   - probe 那两次失败:`format:check`(已提交的 probe.ts/check-budget.ts/contracts.md 未过 prettier;`b312e95` 修复)
   - 教训:门禁用 `pnpm run x >/dev/null 2>&1 && echo ok` 或 `pnpm run x | tail -1` 会被管道吞掉退出码——**必须单独跑并读退出码**
 
+## 已知偶发红(待复测)
+
+- `test/build/determinism.test.ts`、`test/build/write.test.ts` 在机器重载时偶发红(build 退出 1、或 out/ 缺文件):2026-10-11 夜里 A12 在干净克隆里连红两次后转绿;重载循环 1/6 复现一次,基线 ac816ef 与 39a4ffd 各 12 次均 0 红。未查到根因,怀疑是负载下的时间预算(单位:CHECK_FAILED=1)。**脱敏缺口块收尾、机器空闲后在干净克隆里重测;复现时先抓 build 的 stdout 诊断再下结论**。同时发现:多个 vitest 进程同时跑同一仓库会互相踩 `.state/`(`test/signals/collect.test.ts` 红),并行验收时不要在同一树里开多个 vitest。
+
 ## 排期建议(串行优先,避免同文件并行)
 
 1. **P0-close**(等时机)→ 2. **P1-A** 三件(本仓内,无外部依赖)→ 3. **P1-B** 按 D1→D3→D4→D5/D6
