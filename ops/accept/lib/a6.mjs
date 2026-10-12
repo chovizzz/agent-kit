@@ -124,6 +124,34 @@ export function readSignals(stateDir) {
   return out;
 }
 
+/**
+ * 信号文件按行解析后,把所有字符串值(含键)用换行连接成一份文本,供 `redact --stdin --check` 复扫。
+ * 为什么不直接扫序列化后的 JSONL:裸值规则(`password = p`)在序列化文本里会越过 JSON 结构性的引号一路吞到下一个空白,
+ * 把 `p","next":…` 整段当作口令值(该字符串以 `password = p` 结尾时必现),这是序列化伪影而不是漏脱敏。
+ * 解码后换行结束裸值,和 collect 在字符串字段上做脱敏的视图一致;不能解析的行退回整行原文(更严)。
+ */
+export function decodedStrings(text) {
+  const out = [];
+  const walk = (v) => {
+    if (typeof v === 'string') out.push(v);
+    else if (Array.isArray(v)) v.forEach(walk);
+    else if (v && typeof v === 'object')
+      for (const [k, x] of Object.entries(v)) {
+        out.push(k);
+        walk(x);
+      }
+  };
+  for (const l of text.split('\n')) {
+    if (!l.trim()) continue;
+    try {
+      walk(JSON.parse(l));
+    } catch {
+      out.push(l);
+    }
+  }
+  return out.join('\n') + '\n';
+}
+
 /** 独立于 reader 的版本对照(jq):claude 行内 .version;codex session_meta.payload.cli_version;pi/kimi 无。 */
 export function oracleVersion(agent, file) {
   const prog = {
@@ -369,7 +397,7 @@ async function a6(argv) {
           ctx.node,
           [ctx.cli, '--root', ctx.root, 'redact', '--stdin', '--check', '--timeout-ms', '5000'],
           {
-            input: fs.readFileSync(file, 'utf8'),
+            input: decodedStrings(fs.readFileSync(file, 'utf8')),
             cwd: ctx.root,
             env: cleanEnv({ HOME: homeDir, KIT_TMP: sbx.kit }),
           },

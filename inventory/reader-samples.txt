@@ -10,12 +10,14 @@
 #   pi:tool_calls 无正例 -> 第 5 个替换为合格候选第 7 个
 #   codex:tool_failures 无正例 -> 第 5 个替换为合格候选第 51 个;随后 CommandExecution 无正例 -> 第 5 个替换为合格候选第 753 个(该样本同时满足 tool_failures>0)
 # 超长行注记(C8/D3,未定 maxEventBytes,未据此剔除):claude 样本 1 最长行约 0.76 MB;codex 样本 5 最长行约 2.26 MB(字节,LC_ALL=C awk)
+# 更新记录:2026-10-11 pi 样本 18f8193e48262350 为仍在被追加的活会话,行数 805 -> 1844(同一文件,文件已停止写入);其余 19 个不变
+# 更新记录:2026-10-11 claude 样本 a879a3d9a616bb9c 的会话文件已被 Claude Code 自动清理(不存在);按同一选样规则重算,第 5 个换为 74b9995ec87ac4d7(2767 行),claude 行按完整路径字典序重排;其余 4 个哈希与行数不变
 # 选样日期 2026-10-08;候选集合随时间变化,复算以哈希与行数比对
 claude	75cef9ff0e456441	3435
-claude	a879a3d9a616bb9c	3018
 claude	410a0b1b5534b151	138
 claude	25191f72b22f3391	85
 claude	a327f091571814d1	3347
+claude	74b9995ec87ac4d7	2767
 codex	5ce5f385fe53d605	996
 codex	f7008ed18db82be3	348
 codex	af3e6f632b1352dd	833
@@ -25,7 +27,7 @@ pi	04c49dbb89530bbe	12
 pi	922196e00b6c3be3	12
 pi	270431e245faec19	12
 pi	5241f385eb1006f4	12
-pi	18f8193e48262350	805
+pi	18f8193e48262350	1844
 kimi	ec0559e33b12c7a1	1156
 kimi	9270f7c8a7460b6c	172
 kimi	c80cf159ea0dfe24	1864
