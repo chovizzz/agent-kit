@@ -43,9 +43,44 @@ export interface PipelineDeps {
 
 export type SessionStatus = 'processed' | 'excluded' | 'read_error';
 
+/** fail-closed 的阶段:policy = 排除判定;redact = 脱敏(摘录 / 计数键);schema = 信号落地前的契约校验。 */
+export type PipelineStage = 'policy' | 'redact' | 'schema';
+
+const CLASS_NAME_RE = /^[A-Za-z0-9_$]{1,64}$/;
+
+/** 只取错误的类名(异常 message / cause 可能带会话内容,一律不保留);类名不规整时退回 `Error`。 */
+export function errorClassOf(e: unknown): string {
+  try {
+    // 仓库禁止 `.constructor` 语法(constructor.constructor 可造出 Function);这里只读类名字符串,不调用它
+    const ctor: unknown =
+      e instanceof Error ? Reflect.get(Object.getPrototypeOf(e), 'constructor') : undefined;
+    const n = typeof ctor === 'function' ? ctor.name : '';
+    return CLASS_NAME_RE.test(n) ? n : 'Error';
+  } catch {
+    // 异常对象自己的 getter / Proxy 抛错:取类名失败不能让归类本身逃逸,否则 fail-closed 会降级成 read_error
+    return 'Error';
+  }
+}
+
+/**
+ * 管线里「无法证明安全」的失败(排除判定、脱敏、信号校验抛错):整次运行 fail-closed,不是某个会话的读取失败。
+ * 只带阶段与原异常的类名;message 固定,不挂 cause(原异常的 message 可能含会话内容 / 路径)。
+ */
+export class PipelineFailClosedError extends Error {
+  readonly stage: PipelineStage;
+  readonly errorClass: string;
+  constructor(stage: PipelineStage, errorClass: string) {
+    super(`signals 管线 fail-closed:阶段 ${stage},原异常类 ${errorClass}`);
+    this.stage = stage;
+    this.errorClass = errorClass;
+  }
+}
+
 export interface SessionResult {
   status: SessionStatus;
   sessionRef: string;
+  /** read_error 时:reader 侧抛出的异常类名(不含 message) */
+  errorClass?: string;
   excludeReason?: ProjectDecision['reason'];
   eventsSeen: number;
   counts?: Counts;
@@ -167,9 +202,15 @@ export async function processSession(
       salt: deps.salt,
       ...(deps.maxEventBytes !== undefined ? { maxEventBytes: deps.maxEventBytes } : {}),
     });
-  } catch {
-    // reader 同步抛错(参数越界、内部不变量):按读取失败处理,不输出任何半成品,也不回显异常内容
-    return { ...base, status: 'read_error', eventsSeen: 0, signals: [] };
+  } catch (e) {
+    // reader 同步抛错(参数越界、内部不变量):按读取失败处理,不输出任何半成品,也不回显异常内容(只留类名)
+    return {
+      ...base,
+      status: 'read_error',
+      errorClass: errorClassOf(e),
+      eventsSeen: 0,
+      signals: [],
+    };
   }
 
   let decision: ProjectDecision | undefined;
@@ -177,6 +218,17 @@ export async function processSession(
   const candidates: Candidate[] = [];
   let index = 0;
   let settled = 0;
+  /**
+   * 非 reader 侧的阶段(policy / redact / schema)抛错 = 无法证明安全 → 就地包成 PipelineFailClosedError(只留阶段与类名);
+   * 其余抛错(事件迭代、reader.meta()/counts())留给外层 catch,归为该会话的 read_error。
+   */
+  const inStage = async <T>(st: PipelineStage, fn: () => Promise<T> | T): Promise<T> => {
+    try {
+      return await fn();
+    } catch (e) {
+      throw new PipelineFailClosedError(st, errorClassOf(e));
+    }
+  };
   /** 排除判定通过后,把已暂存的候选依次脱敏(原文随即丢弃) */
   const settle = (): void => {
     for (; settled < candidates.length; settled++) {
@@ -193,7 +245,7 @@ export async function processSession(
       if (decision === undefined) {
         const cwd = read.meta().cwd_hint;
         if (cwd !== null) {
-          decision = await deps.policy.decide(cwd);
+          decision = await inStage('policy', () => deps.policy.decide(cwd));
           if (decision.action === 'skip') {
             return {
               ...base,
@@ -214,57 +266,68 @@ export async function processSession(
           truncated: text !== undefined && text.length > TEXT_WINDOW,
         });
       }
-      if (decision !== undefined) settle();
+      if (decision !== undefined) await inStage('redact', settle);
     }
-  } catch {
-    // 会话文件读取中途失败(被删除、权限):不输出任何半成品
-    return { ...base, status: 'read_error', eventsSeen: 0, signals: [] };
-  }
 
-  const meta = read.meta();
-  const counts = sanitizeCounts(deps.redactor, read.counts());
-  decision ??= await deps.policy.decide(meta.cwd_hint);
-  if (decision.action === 'skip') {
+    const meta = read.meta();
+    const rawCounts = read.counts();
+    const counts = await inStage('redact', () => sanitizeCounts(deps.redactor, rawCounts));
+    decision ??= await inStage('policy', () => deps.policy.decide(meta.cwd_hint));
+    if (decision.action === 'skip') {
+      return {
+        ...base,
+        status: 'excluded',
+        eventsSeen: 0,
+        ...(decision.reason !== undefined ? { excludeReason: decision.reason } : {}),
+      };
+    }
+    const resolved = decision;
+
+    const version = resolveAgentVersion(meta.agent_version, deps.fallbackVersion);
+    const external = sessionExternal || meta.external_content;
+    const projectKey = projectKeyFor(deps.salt, resolved.projectRoot ?? '');
+    const agent: AgentId = reader.agent;
+
+    await inStage('redact', settle);
+    for (const c of candidates) {
+      // 外部内容会话:摘录一律置空,且脱敏失败不计(那条信号本来就不带任何文本)
+      const ex: ExcerptResult = external
+        ? { ok: true, excerpt: '' }
+        : (c.result ?? { ok: true, excerpt: '' });
+      if (!ex.ok) {
+        base.dropped++;
+        base.dropReasons[ex.reason] = (base.dropReasons[ex.reason] ?? 0) + 1;
+        continue;
+      }
+      const sig = await inStage('schema', () =>
+        SignalSchema.parse({
+          sig_id: sigIdFor(deps.salt, sessionRef, c.index),
+          agent,
+          agent_version: version.version,
+          agent_version_source: version.source,
+          session_ref: sessionRef,
+          project_key: projectKey,
+          ts: c.ts,
+          type: 'event',
+          excerpt_redacted: ex.excerpt,
+          external_content: external,
+          confidence: 1,
+          loaded_rule_ids: [],
+        } satisfies Signal),
+      );
+      base.signals.push(sig);
+    }
+    return { ...base, counts, meta, version };
+  } catch (e) {
+    candidates.length = 0; // 纵深防御:失败路径上不再持有任何暂存原文
+    if (e instanceof PipelineFailClosedError) throw e;
+    // 会话文件读取中途失败(被删除、权限)、reader 的 meta()/counts() 抛错:不输出任何半成品
     return {
       ...base,
-      status: 'excluded',
+      status: 'read_error',
+      errorClass: errorClassOf(e),
       eventsSeen: 0,
-      ...(decision.reason !== undefined ? { excludeReason: decision.reason } : {}),
+      signals: [],
     };
   }
-
-  const version = resolveAgentVersion(meta.agent_version, deps.fallbackVersion);
-  const external = sessionExternal || meta.external_content;
-  const projectKey = projectKeyFor(deps.salt, decision.projectRoot ?? '');
-  const agent: AgentId = reader.agent;
-
-  settle();
-  for (const c of candidates) {
-    // 外部内容会话:摘录一律置空,且脱敏失败不计(那条信号本来就不带任何文本)
-    const ex: ExcerptResult = external
-      ? { ok: true, excerpt: '' }
-      : (c.result ?? { ok: true, excerpt: '' });
-    if (!ex.ok) {
-      base.dropped++;
-      base.dropReasons[ex.reason] = (base.dropReasons[ex.reason] ?? 0) + 1;
-      continue;
-    }
-    base.signals.push(
-      SignalSchema.parse({
-        sig_id: sigIdFor(deps.salt, sessionRef, c.index),
-        agent,
-        agent_version: version.version,
-        agent_version_source: version.source,
-        session_ref: sessionRef,
-        project_key: projectKey,
-        ts: c.ts,
-        type: 'event',
-        excerpt_redacted: ex.excerpt,
-        external_content: external,
-        confidence: 1,
-        loaded_rule_ids: [],
-      } satisfies Signal),
-    );
-  }
-  return { ...base, counts, meta, version };
 }

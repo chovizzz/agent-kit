@@ -111,6 +111,18 @@ describe('GD-1:新增原子不得带 disables/overrides', () => {
     }
   });
 
+  it('文案与 merge 行为一致:边在声明者晋升为 active/advisory 后才生效,不再写「与 status 无关」', async () => {
+    const s = await scenario(
+      { ...COMMON_FILES },
+      { [ATOM_PATH]: atom({ status: 'proposed', extraLines: ['overrides: [other-atom]'] }) },
+    );
+    const d = s.result.diagnostics.find((x) => x.code === 'GUARD_G1_NEW_ATOM_HAS_EDGES');
+    expect(d).toBeDefined();
+    expect(d?.message).toContain('active/advisory');
+    expect(d?.message).not.toContain('与声明者 status 无关');
+    expect(d?.message).not.toContain('立即生效');
+  });
+
   it('对照:空数组 / 不带边的 proposed 新原子 → 绿', async () => {
     for (const extra of [[], ['disables: []']]) {
       const s = await scenario(
