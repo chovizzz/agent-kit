@@ -1749,7 +1749,134 @@ export function buildSeeds(seed: number = SEED): Seed[] {
     );
   }
 
+  // ---- B09e:真实会话样本上两遍不一致的形状(转义换行的反斜杠、占位符后缀)----
+  // 独立的 PRNG;口令同 B09c。每条「真值藏在新放行形态里」的种子都必须仍被脱敏
+  {
+    const ge = makeGen(mulberry32((seed ^ 0xb09e) >>> 0));
+    const pw = (): string => 'K' + ge.entropic(ALNUM, 10, 3.0);
+    const SECRET = ['SEC', 'RET'].join('');
+    const TK = ['to', 'ken'].join('');
+    const cred = 'credential';
+    const BS = '\\';
+    const NL = `${BS}n`;
+    const PHC = placeholder(cred);
+    const tpl = '$' + '{';
+    const AZ = ['Author', 'ization'].join('');
+    add(
+      // 值区间不许吞掉转义换行的反斜杠:否则输出是 `占位符n  if (…`,两行粘连
+      make(
+        'b09e.esc_tail.authz_backtick',
+        'plain',
+        'recognized',
+        [
+          `}));${NL}  // 无 token 会带 \`${AZ}: Bearer `,
+          R(`${pw()}\``, cred),
+          `${NL}  if (req.headers.${AZ.toLowerCase()} !== \`Bearer ${tpl}secret}\`) {${NL}  return`,
+        ],
+        ['cred_authz', 'span_escape_tail', 'view_json_ws'],
+      ),
+      make(
+        'b09e.esc_tail.shell_ref_word',
+        'plain',
+        'recognized',
+        [
+          `v=$(grep '^MY_SERVICE_API_${TK.toUpperCase()}_VALUE='`,
+          R('/tmp/x/.env | cut -d= -f2)', cred),
+          `${NL}next line`,
+        ],
+        ['cred_assign', 'span_escape_tail', 'view_json_ws'],
+      ),
+      make(
+        'b09e.esc_tail.layer2_authz',
+        'plain',
+        'recognized',
+        [`x${BS.repeat(2)}n${AZ}: Bearer `, R(pw(), cred), `${BS.repeat(2)}nnext`],
+        ['cred_authz', 'span_escape_tail', 'view_json_ws'],
+      ),
+      // 占位符后缀:第一遍替换了调用名之后剩下的闭合短括号实参,不是口令(输入里已有合法占位符,第一遍不得改动它)
+      make(
+        'b09e.ph_suffix.short_call_args',
+        'plain',
+        'recognized',
+        [
+          `const ${SECRET} = ${PHC}(ab);${NL}const z = 1;${NL}export ${TK.toUpperCase()}=`,
+          R(pw(), cred),
+        ],
+        ['cred_assign', 'placeholder_tight_head', 'view_json_ws'],
+      ),
+      // 反面:占位符旁边的真值必须仍被脱敏
+      make(
+        'b09e.ph_suffix.long_literal_double',
+        'plain',
+        'recognized',
+        [`const ${SECRET} = ${PHC}("`, R(pw(), cred), `");${NL}const z = 1;`],
+        ['cred_assign', 'ref_trailing_literal'],
+      ),
+      make(
+        'b09e.ph_suffix.long_literal_single',
+        'plain',
+        'recognized',
+        [`const ${SECRET} = ${PHC}('`, R(pw(), cred), `');${NL}const z = 1;`],
+        ['cred_assign', 'ref_trailing_literal'],
+      ),
+      make(
+        'b09e.ph_suffix.bare_long_arg',
+        'plain',
+        'recognized',
+        [`const ${SECRET} = ${PHC}`, R(`(${pw()}`, cred), `);${NL}const z = 1;`],
+        ['cred_assign', 'view_json_ws'],
+      ),
+      make(
+        'b09e.ph_suffix.short_then_literal',
+        'plain',
+        'recognized',
+        [`const ${SECRET} = ${PHC}(ab, "`, R(pw(), cred), `");${NL}const z = 1;`],
+        ['cred_assign', 'ref_trailing_literal', 'placeholder_tight_head'],
+      ),
+      make(
+        'b09e.ph_suffix.two_groups',
+        'plain',
+        'recognized',
+        [`const ${SECRET} = ${PHC}(ab)("`, R(pw(), cred), `");${NL}const z = 1;`],
+        ['cred_assign', 'ref_trailing_literal', 'placeholder_tight_head'],
+      ),
+      // 短头部不是闭合括号实参:仍按值整体脱敏(含转义换行之后的后半段)
+      make(
+        'b09e.ph_suffix.short_head_then_value',
+        'plain',
+        'recognized',
+        [`${TK}=${PHC}`, R(`Kx8q2${NL}${pw()}`, cred)],
+        ['cred_assign', 'view_orig_union'],
+      ),
+      make(
+        'b09e.ph_suffix.glued_value',
+        'plain',
+        'recognized',
+        [`const ${SECRET} = ${PHC}`, R(`(ab)${pw()}`, cred), `;${NL}const z = 1;`],
+        ['cred_assign', 'view_json_ws'],
+      ),
+      make(
+        'b09e.authz.default_expansion',
+        'plain',
+        'recognized',
+        [`${AZ}: Bearer `, R(`${tpl}X:-${pw()}}`, cred), `${NL}next`],
+        ['cred_authz', 'ref_template_strict', 'ref_boundary', 'span_escape_tail', 'view_json_ws'],
+      ),
+      make(
+        'b09e.authz.glued_to_placeholder',
+        'plain',
+        'recognized',
+        [`${AZ}: Bearer ${PHC}`, R(pw(), cred), `${NL}next`],
+        ['cred_authz', 'span_escape_tail', 'view_json_ws'],
+      ),
+    );
+    // 输入里本身带合法占位符形态的种子:`signals collect` 进脱敏前会把原文里的占位符标记拆开(防伪造),
+    // 端到端对这类输入不适用;needles 置空,避免 recognizedSeeds() 把它们选进端到端用例(期望输出仍精确钉住)
+    for (const sd of out) if (sd.id.startsWith('b09e.') && sd.input.includes(PHC)) sd.needles = [];
+  }
+
   // ---- 做不到的形态(只报告,不计入召回) ----
+  const gapPw = 'K' + g.entropic(ALNUM, 10, 3.0);
   const hex32 = g.pick(HEXL, 32);
   const lower36 = (() => {
     for (let k = 0; k < 5000; k++) {
@@ -1836,6 +1963,13 @@ export function buildSeeds(seed: number = SEED): Seed[] {
       "cfg = '^" + FPW + "=' 'correcthorse'",
       ['correcthorse'],
       '`NAME=` 收尾引号之后的纯小写单词(<=12 字符)按引用放行,与 gap.word_password 同源',
+    ),
+    gap(
+      'gap.neutral_ph_call',
+      'plain',
+      `${['SEC', 'RET'].join('')} = [[ REDACTED:credential]]("${gapPw}")`,
+      [gapPw],
+      '原文里形如占位符的串被 collect 拆开标记(`[[ REDACTED`)后只是普通文本:`NAME = [[ x]]("口令")` 的值是 `[[`,后面括号里的引号字面量不判',
     ),
     gap(
       'gap.word_password',

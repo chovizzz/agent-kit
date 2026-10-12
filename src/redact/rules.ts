@@ -1129,13 +1129,22 @@ function trailingLiterals(
 
 const ESC_NL = /\\+[nr]/;
 
-function cutAtEscNewline(h: AssignHit): AssignHit | null {
+export const STAGE_PH_SUFFIX = 'placeholder_tight_head';
+/** 闭合的短括号实参:括号内是简单字符(无引号 / 空白),其后只许 `;` `,`;整体不足 8 个字符才会走到这里 */
+const PH_CALL_TAIL = /^\([\w.$-]{0,5}\)[;,]*$/;
+
+function cutAtEscNewline(h: AssignHit, tight = false): AssignHit | null {
   const m = ESC_NL.exec(h.val);
   if (!m) return h;
   // 值本身以转义换行开头:交给引擎的「起点是转义空白就丢弃」;截断点之前不足 8 个字符:整值脱敏(fail-closed)
   if (m.index === 0) return null;
-  // 引用 / 标点残片(`{` `)`):那是「值为空」,后面是下一行;像口令的短头部(`Kx8q2\nLm9pQz`):整值脱敏
-  if (m.index < 8) return judgeValue(h.val.slice(0, m.index), true).secret ? h : null;
+  // 值紧贴占位符、且短头部整体只是一对闭合的短括号实参(`占位符(ab);\n…`):那是第一遍只替换了调用名之后剩下的尾巴,
+  // 不是值的开头,当作「值为空」(ws 视图里它因不足 8 个字符同样放行)。其它形状的短头部(`占位符Kx8q2\n…`)照旧整值脱敏
+  const head = h.val.slice(0, m.index);
+  if (m.index < 8) {
+    if (tight && PH_CALL_TAIL.test(head)) return null;
+    return judgeValue(head, true).secret ? h : null;
+  }
   return { ...h, val: h.val.slice(0, m.index), vr: [h.vr[0], h.vr[0] + m.index] };
 }
 
@@ -1186,7 +1195,13 @@ const credAssign: Rule = {
     };
     const decide = (h0: AssignHit): boolean => {
       // 原视图补扫里,无引号值在转义的 `\n` `\r` 处仍是边界(与真换行同口径;`\t` 则不是),否则会吞掉下一行
-      const h = env.origView && h0.gi === 5 ? cutAtEscNewline(h0) : h0;
+      const tight =
+        env.origView &&
+        h0.gi === 5 &&
+        !env.disabled.has(STAGE_PH_SUFFIX) &&
+        ESC_NL.test(h0.val) &&
+        placeholderGap(text, env, h0.keyStart, h0.op[1], h0.vr[0]) === 'tight';
+      const h = env.origView && h0.gi === 5 ? cutAtEscNewline(h0, tight) : h0;
       if (h === null) return false;
       const shell = isShellOp(h.opText);
       const v = judgeValue(h.val, shell, env.disabled);
@@ -1196,7 +1211,14 @@ const credAssign: Rule = {
       }
       if (h.val.length < 8) {
         // 不足 8 个字符的口令不脱敏(最小长度契约);但模板展开 `${a` 之后的字面量(`${a + '口令'}`)仍要判
-        if (h.gi === 5 && h.val.startsWith('${')) trail(h, shell, v);
+        // 值紧贴占位符(`占位符(ab, "口令")`:第一遍只替换了调用名):调用实参里的字面量同样要判
+        if (
+          h.gi === 5 &&
+          (h.val.startsWith('${') ||
+            (!env.disabled.has(STAGE_PH_SUFFIX) &&
+              placeholderGap(text, env, h.keyStart, h.op[1], h.vr[0]) === 'tight'))
+        )
+          trail(h, shell, v);
         return false;
       }
       if (placeholderGap(text, env, h.keyStart, h.op[1], h.vr[0]) === 'occupied') return false;
@@ -1936,6 +1958,8 @@ export const STAGE_IDS = [
   'decode_escape',
   'view_json_ws',
   'view_orig_union',
+  'span_escape_tail',
+  STAGE_PH_SUFFIX,
   STAGE_REF_TAIL,
   STAGE_REF_BOUNDARY,
   STAGE_REF_FLAG,
