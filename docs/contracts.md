@@ -1217,3 +1217,9 @@ P0 先把 schema 冻在这里,P1 的块直接消费,避免打 tag 之后再改�
 - **R8**:Claude reader 取 `version` 时跳过侧链行,§7.5 探针不跳过;首个带 `version` 的行恰是内联侧链行时两边版本可能不同。已知差异,未改。
 - **单行硬上限 64 MiB(R3)**:超限的行记 `oversized_lines` 与 `unknown_event_types["<line-too-large>"]`,不使整个会话失败。
 - **空白/BOM(R2)**:每一行按 jq 的空白集判空白、去行首一个 BOM(详见口径 C2 补充)。
+
+## 14. 订正(B09e)
+
+- **脱敏值区间不吞转义**:`src/redact/engine.ts` 在映射回原文坐标后,把区间尾部紧随 `n` `r` `t` 的反斜杠串留在区间外(转义引号不收缩)(阶段 `span_escape_tail`),避免输出出现 `占位符next` 式的行粘连。仅影响值类规则的区间终点,契约字段不变。
+- **占位符后缀**(阶段 `placeholder_tight_head`):原视图补扫里,值紧贴占位符、且转义换行前的短头部只是闭合的短括号实参时,不再整值判为口令;`redact --selftest --mutate` 的规则/阶段总数由 76 变为 78。
+- 已知缺口追加:`gap.neutral_ph_call`(见 `docs/redaction.md` §7)。

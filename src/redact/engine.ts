@@ -59,6 +59,7 @@ export const STAGES = {
   escape: 'decode_escape',
   jsonWs: 'view_json_ws',
   origUnion: 'view_orig_union',
+  escTail: 'span_escape_tail',
 } as const;
 
 interface ScanCtx {
@@ -218,7 +219,9 @@ export class Engine {
         (s, e) => {
           if (e <= s) return;
           if (valueOnly && ESC_WS_START.test(text.slice(s, s + 64))) return;
-          const [a, b] = mapSpan(view, s, e);
+          const [a, b0] = mapSpan(view, s, e);
+          const b = this.disabled.has(STAGES.escTail) ? b0 : trimEscapeTail(root, a, b0);
+          if (b <= a) return;
           out.push({ start: a, end: b, type: rule.type, rule: rule.id, prio: rule.prio });
         },
         env,
@@ -257,6 +260,22 @@ export class Engine {
       }
     }
   }
+}
+
+/**
+ * 值的区间不许吞掉紧随其后的 JSON 转义换行的反斜杠(`\\n` `\\r` `\\t`)。
+ * ws 视图把转义空白的反斜杠换成空格,值类规则会把这个空格当成值的一部分;区间连反斜杠一起替换成占位符,
+ * 输出就成了 `[[..]]next`:转义丢了,上下两行粘成一行,第二遍把后一行当成值(两遍不一致)。
+ * 只收缩换行 / 回车 / 制表符,**不收缩引号**:转义引号的反斜杠被吞掉后,后面的引号字面量会让第二遍
+ * 在残留位置再次命中(fail-closed);保留反斜杠反而让 `Bearer 伪值\\"口令\\"` 一类写法的口令失去锚点而漏掉。
+ * 代价:口令真以反斜杠结尾且后面紧跟 n / r / t 时多留 1 个字符。
+ */
+function trimEscapeTail(root: string, a: number, b: number): number {
+  let k = b;
+  while (k > a && root.charCodeAt(k - 1) === 92) k--;
+  if (k === b) return b;
+  const next = root[b];
+  return next === 'n' || next === 'r' || next === 't' ? k : b;
 }
 
 function pickTop(spans: readonly Span[]): Span {
