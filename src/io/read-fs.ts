@@ -71,6 +71,10 @@ export function lstatSync(path: string): fs.Stats {
   return fs.lstatSync(path);
 }
 
+export function statSync(path: string): fs.Stats {
+  return fs.statSync(path);
+}
+
 export function realpathSync(path: string): string {
   return fs.realpathSync(path);
 }

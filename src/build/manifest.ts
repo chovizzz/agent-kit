@@ -22,6 +22,32 @@ export function mergeSkippedLayers(report: RenderReport): Manifest['skippedLayer
   return [...seen.entries()].sort((a, b) => byteCompare(a[0], b[0])).map(([, v]) => v);
 }
 
+/** resolved 里出现重复原子 id:合并不变量被破坏(merge 无 error 时 id 唯一)。不做「后者覆盖」,一律拒绝。 */
+export class ManifestDuplicateAtomError extends Error {
+  readonly code = 'BUILD_MANIFEST_DUPLICATE_ATOM_ID';
+}
+
+/** 返回重复的原子 id 及其所在层(按 id 字节序),无重复返回空数组。 */
+export function findDuplicateAtomIds(
+  resolved: readonly ResolvedAtom[],
+): { id: string; layers: string[] }[] {
+  const seen = new Map<string, string[]>();
+  for (const r of resolved) seen.set(r.atom.fm.id, [...(seen.get(r.atom.fm.id) ?? []), r.layer]);
+  return [...seen.entries()]
+    .filter(([, layers]) => layers.length > 1)
+    .sort((a, b) => byteCompare(a[0], b[0]))
+    .map(([id, layers]) => ({ id, layers }));
+}
+
+export function assertUniqueAtomIds(resolved: readonly ResolvedAtom[]): void {
+  const dups = findDuplicateAtomIds(resolved);
+  if (dups.length > 0) {
+    throw new ManifestDuplicateAtomError(
+      `合并结果含重复原子 id(不允许后者覆盖):${dups.map((d) => `${d.id}(${d.layers.join('、')})`).join('; ')}`,
+    );
+  }
+}
+
 export interface ManifestInput {
   files: readonly OutFile[];
   resolved: readonly ResolvedAtom[];
@@ -31,6 +57,7 @@ export interface ManifestInput {
 }
 
 export function buildManifest(input: ManifestInput): Manifest {
+  assertUniqueAtomIds(input.resolved);
   return renderBuildManifest(input.files, input.resolved, {
     kitVersion: input.kitVersion,
     channel: input.channel,

@@ -9,7 +9,7 @@
  */
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { existsSync } from './read-fs.js';
+import { existsSync, lstatSync, realpathSync, statSync } from './read-fs.js';
 
 export interface IoContext {
   /** 仓库根(绝对路径):--root > 自 cwd 向上找 kit.toml > cwd */
@@ -58,6 +58,84 @@ function isAncestorOrEqual(ancestor: string, p: string): boolean {
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
+/**
+ * 只读版「最深已存在祖先 realpath + 剩余段」(与 safe-fs 的校验同一思路):目标不存在时仍能得到
+ * 它落盘后的真实位置。悬空/不可解析的符号链接无法判断落点,抛 PathsError(fail-closed)。
+ */
+function realResolve(abs: string, what: string): string {
+  const rest: string[] = [];
+  let cur = abs;
+  for (;;) {
+    let exists = true;
+    try {
+      lstatSync(cur);
+    } catch {
+      exists = false;
+    }
+    if (exists) {
+      let real: string;
+      try {
+        real = realpathSync(cur);
+      } catch {
+        throw new PathsError(
+          `${what} 经过悬空或不可解析的符号链接,无法判断是否位于 out/ 之下:${abs}`,
+        );
+      }
+      return rest.length === 0 ? real : path.join(real, ...rest.reverse());
+    }
+    const parent = path.dirname(cur);
+    if (parent === cur) return abs;
+    rest.push(path.basename(cur));
+    cur = parent;
+  }
+}
+
+/**
+ * KIT_STATE_DIR / KIT_TMP 不得等于或位于 out/ 之下:build 只许写 out/,状态与临时文件落进去会污染交付物。
+ * 字面路径和解析后的真实路径(out 是链接、上级是链接、目标经链接指进 out/)各比一遍,任一命中即拒。
+ * out/ 自身无法解析(悬空链接)时只能比字面路径,build 写入时 safe-fs 仍会拒绝悬空链接。
+ */
+function assertNotUnderOut(p: string, outDir: string, what: string): void {
+  const bad = (): never => {
+    throw new PathsError(`${what} 不得位于 out/ 之下(按真实路径判断):${p}`);
+  };
+  // macOS 默认大小写不敏感,JS realpath 不规范化大小写:比较时统一小写,宁可多拒(OUT/x 等价于 out/x)
+  const norm = (x: string): string => x.normalize('NFC').toLowerCase();
+  const under = (a: string, b: string): boolean => isAncestorOrEqual(norm(a), norm(b));
+  if (under(outDir, p)) bad();
+  const realP = realResolve(p, what);
+  let realOut: string | undefined;
+  try {
+    realOut = realResolve(outDir, 'out/');
+  } catch {
+    realOut = undefined;
+  }
+  if (realOut !== undefined && under(realOut, realP)) bad();
+  if (under(outDir, realP)) bad();
+  // 同一目录的另一种写法(firmlink、Unicode NFD)字符串比较认不出:再按文件身份(dev,ino)比一遍
+  const ident = (x: string): string | undefined => {
+    try {
+      const st = statSync(x);
+      return `${st.dev}:${st.ino}`;
+    } catch {
+      return undefined;
+    }
+  };
+  const outId = ident(outDir);
+  const repoId = ident(path.dirname(outDir));
+  let child: string | undefined;
+  for (let cur = realP; ; cur = path.dirname(cur)) {
+    const id = ident(cur);
+    if (id !== undefined) {
+      if (outId !== undefined && id === outId) bad();
+      if (id === repoId && child !== undefined && norm(child) === 'out') bad();
+    }
+    const parent = path.dirname(cur);
+    if (parent === cur) break;
+    child = path.basename(cur);
+  }
+}
+
 function assertNotHomeOrAncestor(p: string, home: string, what: string): void {
   if (p === path.parse(p).root) throw new PathsError(`${what} 不得是文件系统根 /`);
   if (isAncestorOrEqual(p, home)) {
@@ -101,10 +179,12 @@ export function createIoContext(opts: CreateIoContextOptions = {}): IoContext {
   const tmpRaw = env['KIT_TMP'];
   const tmpDir = tmpRaw ? path.resolve(tmpRaw) : undefined;
   if (tmpDir !== undefined) assertNotHomeOrAncestor(tmpDir, home, 'KIT_TMP');
+  if (tmpDir !== undefined) assertNotUnderOut(tmpDir, outDir, 'KIT_TMP');
 
   // P0:state 只能在仓库内或 KIT_TMP 内;~/.local/state/<kit>/ 留到 P2(Q-N13),届时改这里。
   const stateRaw = env['KIT_STATE_DIR'];
   const stateDir = stateRaw ? path.resolve(repoRoot, stateRaw) : path.join(repoRoot, '.state');
+  assertNotUnderOut(stateDir, outDir, 'KIT_STATE_DIR');
   if (!isAncestorOrEqual(repoRoot, stateDir) && !(tmpDir && isAncestorOrEqual(tmpDir, stateDir))) {
     throw new PathsError(`KIT_STATE_DIR 必须在仓库或 KIT_TMP 之内:${stateDir}`);
   }

@@ -62,6 +62,7 @@ zod 校验失败统一映射为 `SCHEMA_INVALID`(`zodIssuesToDiagnostics`);各�
 - 合并结果(`MergeResult`)里 `personal` 原子**照常出现**,但 `coreEligible=false`(P0 恒为 `layer==='personal'` 时 false)。
 - 渲染器**只消费 `coreEligible=true` 的原子**;P0 对 personal 层输出为空,并在渲染报告 `skippedLayers` 里写
   `{ layer: 'personal', reason: 'P2 才在本机渲染' }`。真实渲染留 P2。
+- `buildManifest` 对 `resolved` 里重复的原子 id 抛 `ManifestDuplicateAtomError`(build 退出 3,渲染前也先拦),不做「后者覆盖」;merge 无 error 时 id 本就唯一。
 - `out/manifest.json`(`Manifest`)记录每个输出文件的来源原子 `{ id, layer }`;A15 脚本逐文件核对不存在 `layer=personal` 的来源。
 - 预算口径里 personal 份额在 P0 为 0,并在报告说明。
 - **personal 的 `overrides` / `disables` 不影响 core 输出**(B21/B2):`mergeAtoms` 默认 `view: 'core'`,personal 层发出的边照常做全部校验(`MERGE_MUST_LOCKED` / `MERGE_TARGET_MISSING` / `MERGE_OVERRIDE_DIRECTION` / `MERGE_OVERRIDE_CYCLE` 仍是 error,会阻断 build),
@@ -103,7 +104,7 @@ zod 校验失败统一映射为 `SCHEMA_INVALID`(`zodIssuesToDiagnostics`);各�
 | 只读出口            | `src/io/read-fs.ts`(不导出任何写 API;读真实会话目录靠 `--source` 显式传入)                                                                                                                                                                                                                                                                        |
 | 唯一子进程          | `src/io/exec.ts`:无 shell;**二进制白名单(P0 只有 `git`)**;env 键白名单 `GIT_*`/`HOME`/`LANG`/`LC_*`/`TZ`,默认只有 `PATH` 加 `GIT_CONFIG_GLOBAL=/dev/null`、`GIT_CONFIG_NOSYSTEM=1`(HOME 缺失时 git 会经 passwd 回退读真实 `~/.gitconfig`,所以默认屏蔽;调用方可覆盖)、**不继承 HOME**;显式传 `HOME` 时其值必须在 `KIT_TMP` 内。加二进制 = 契约变更 |
 | 写入根              | 默认 = `<repo>/out/`、`<state>`(默认 `<repo>/.state/`)、`$KIT_TMP`(若设)。`KIT_WRITE_ROOTS`(`path.delimiter` 分隔的绝对路径)**只能收窄**:每项必须落在默认根之内,越界、相对路径、`/`、HOME 及其上级一律 `PathsError`(退出 3)                                                                                                                       |
-| state 位置          | P0 只能在仓库内或 `KIT_TMP` 内(`KIT_STATE_DIR` 可改);`~/.local/state/<kit>/` 留到 P2(Q-N13),届时只改 `paths.ts`                                                                                                                                                                                                                                   |
+| state 位置          | P0 只能在仓库内或 `KIT_TMP` 内(`KIT_STATE_DIR` 可改);`KIT_STATE_DIR` / `KIT_TMP` 不得等于或位于 `out/` 之下,字面路径与解析后的真实路径(含 `out` 或上级是符号链接、悬空链接)各判一遍,大小写不敏感比较,违者 `PathsError`(退出 3);`~/.local/state/<kit>/` 留到 P2(Q-N13),届时只改 `paths.ts`                                                         |
 | 相对路径            | 写出口按 **repoRoot** 解析相对路径,不按 cwd                                                                                                                                                                                                                                                                                                       |
 | `~`                 | P0 **不展开** `~/.config/<kit>`;覆盖层只经 `--overlay <path>`;`out/<agent>/home/…` 的 `home` 只是路径记号,任何代码不得把它展开成真实 HOME                                                                                                                                                                                                         |
 | 复制来源            | `copyFile` 的来源限定在仓库或写入根内,不能把仓库外的内容(如 `~/.ssh`)吸进 `out/`                                                                                                                                                                                                                                                                  |
@@ -1205,7 +1206,7 @@ P0 先把 schema 冻在这里,P1 的块直接消费,避免打 tag 之后再改�
 
 ### 12.3 状态守卫 G1–G4 的语义订正
 
-- **GD-1(边)**:`merge` 不看声明者的 status,`disables`/`overrides` 一合入就生效。守卫层的处置(`src/merge/**` 不在本块范围):G1 拒绝**新增**原子声明非空 `disables`/`overrides`(`GUARD_G1_NEW_ATOM_HAS_EDGES`);G2 拒绝**已有**原子对这两个字段的任何增、删、改(`GUARD_G2_FIELD_LOCKED`;删边会让被压掉的原子复活);`kit:retire` 不放开(退役靠改 status 即可)。**后果**:P0 里新边只能在守卫之外由人引入。**根治(待主代理)**:`src/merge/merge.ts` 只采纳 status 为 active/advisory 的声明者发出的边。另注意:retired/proposed 原子身上的存量边仍然生效,删掉持边原子会让目标恢复,这一步只受 G4 约束。
+- **GD-1(边)**:~~`merge` 不看声明者的 status~~ 已订正:`merge` 只采纳 status 为 `active`/`advisory` 的声明者发出的 `disables`/`overrides`;`proposed`/`deprecated`/`retired` 声明者的边照常校验(诊断与环检测不变),但不剔除目标、不记 `replaced`、不进 `overridden`;同 id 的替换件若属此类,自身也不进结果(上层原子胜出)。注意:render/lint 不按 status 过滤,这类原子的正文仍会渲染,只是边不生效;把替换者改成 `retired` 会让被它压掉的原子复活进 `out/`。以下为引入该修复前的守卫层处置(仍然有效):守卫层的处置(`src/merge/**` 不在本块范围):G1 拒绝**新增**原子声明非空 `disables`/`overrides`(`GUARD_G1_NEW_ATOM_HAS_EDGES`);G2 拒绝**已有**原子对这两个字段的任何增、删、改(`GUARD_G2_FIELD_LOCKED`;删边会让被压掉的原子复活);`kit:retire` 不放开(退役靠改 status 即可)。**后果**:P0 里新边只能在守卫之外由人引入。**根治(待主代理)**:`src/merge/merge.ts` 只采纳 status 为 active/advisory 的声明者发出的边。(历史说明:修复前 retired/proposed 原子身上的存量边仍然生效;现已不生效。删掉持边原子会让目标恢复,这一步只受 G4 约束。)
 - **GD-2(治理字段)**:内容 PR 不得改已有原子的 `status`、`id`、`layer`、`strength`、`applies_to`、`paths`、`overrides`、`disables`,`review_by` 不得延长或改写(只允许提前)。`id` 被锁是因为边按 id 解析;要改这些字段,新建新 id 的原子并走退役。例外:基线 status 仍是 `proposed`(尚未生效)的原子可以改 `id/layer/strength/applies_to/paths`,否则写错的 proposed 原子既改不了也删不掉;`overrides/disables` 不论状态一律锁定(缺省与 `[]` 视为相同)。`owner`/`volatility` 不锁。**策略层说明**:内容 PR 仍可改 active 原子的正文、`verifier`、`evidence`、`signature`——守卫不约束正文,这是已接受的策略选择,靠人工评审。
 - **GD-3(stable tag)**:只认**注解** `stable-*` tag,且其提交须是基线的**严格**祖先(指向基线本身的不算)。**已知缺口**:没有签名/创建者校验(tagger 可伪造,CODEOWNERS 的 handle 与 tagger 邮箱也无映射,故不做该匹配);任何能在本地打注解 tag 的人都能在基线祖先上补 tag。**P1 CI 必须使用服务端受保护 tag 或 `verify-tag` 验签,不得信任仓库内可写的 tag。**
 - 发版说明:仓库里存量的轻量 `stable-*` tag 现在被忽略,原本能通过的删除会变红(收紧方向)。
@@ -1215,7 +1216,7 @@ P0 先把 schema 冻在这里,P1 的块直接消费,避免打 tag 之后再改�
 
 - **agent_version 形状(R1)**:只接受版本号形状(`X.Y.Z[-+后缀]`,总长 ≤ 64);其余值当取不到,走 `collector_fallback`。四家共用基类校验。
 - **R8**:Claude reader 取 `version` 时跳过侧链行,§7.5 探针不跳过;首个带 `version` 的行恰是内联侧链行时两边版本可能不同。已知差异,未改。
-- **单行硬上限 64 MiB(R3)**:超限的行记 `oversized_lines` 与 `unknown_event_types["<line-too-large>"]`,不使整个会话失败。
+- **单行硬上限 64 MiB(R3)**:超限的行记 `oversized_lines` 与 `unknown_event_types["<line-too-large>"]`,不使整个会话失败。`--max-event-bytes` 的上限等于该硬上限:超过时参数解析阶段报 USAGE(退出 2);`collect()` 库入口同样拒绝越界值(RangeError);reader 的 `read()` 同步抛错按该会话 `read_error` 处理(退出 1 + `SESSION_READ_FAILED`),不使进程崩溃。
 - **空白/BOM(R2)**:每一行按 jq 的空白集判空白、去行首一个 BOM(详见口径 C2 补充)。
 
 ## 14. 订正(B09e)
