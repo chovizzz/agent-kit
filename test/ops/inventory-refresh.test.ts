@@ -125,7 +125,9 @@ async function fakeHome(w: World, extra: number): Promise<void> {
 }
 
 async function copyRealInventory(w: World): Promise<void> {
-  const src = path.join(REPO_ROOT, 'inventory');
+  // 冻结的 2026-10-09 盘点副本:测试不能读活的 inventory/(它会被真实 HOME 的 --apply 刷新,
+  // 刷新后断言里的旧哈希就不成立了)。来源 = 提交 387788f 的 inventory/。
+  const src = path.join(REPO_ROOT, 'test', 'fixtures', 'inventory-20261009');
   for (const e of await readDir(src)) {
     if (e.name === 'commands.sh' || e.name.endsWith('.md'))
       await w.inv(e.name, await readText(path.join(src, e.name)));
