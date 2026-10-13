@@ -14,7 +14,9 @@ import {
   CountsSchema,
   DiagnosticSchema,
   HitSchema,
+  JudgeRecordSchema,
   KitConfigSchema,
+  LifecycleRecordSchema,
   ManifestSchema,
   MergeResultSchema,
   NeutralAgentSchema,
@@ -54,4 +56,6 @@ export const SCHEMAS: Readonly<Record<string, ZodType>> = {
   SessionStat: SessionStatSchema,
   ReflectorOutput: ReflectorOutputSchema,
   ReflectRunReport: ReflectRunReportSchema,
+  LifecycleRecord: LifecycleRecordSchema,
+  JudgeRecord: JudgeRecordSchema,
 };

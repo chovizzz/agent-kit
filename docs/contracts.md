@@ -249,6 +249,8 @@ A2 的 12 格矩阵(`limit_source` × `enforce` × 超/不超;退出码 / 是否
 29. **R5 追加的两个可选配置字段(覆盖层 `reflect`)**:`reflect.backends[].allow_unverified`(boolean,缺省视为 false;为 true 时命令层把**该槽位**所用 CLI 二进制的绝对路径加入后端的 `allowUnverified` 清单,放行 `verified:false` 的参数集真跑;**逐槽位生效**,同一个二进制被另一个没写的槽位使用时仍被拒;core 与 `kit.toml` 不得默认放行,只能由用户在覆盖层显式写)与 `reflect.team_project_keys`(字符串列表,缺省空;值取信号里的 `project_key`;**白名单**:缺省时所有项目一律按 personal 层处理(fail-closed),只有列在这里的项目才可能进团队层)。`runReflect` 的 `personalProjectKeys` 是**黑名单**(`has(k)` 为真 → 降为 personal),命令层传入补集视图 `has(k) = !team.has(k)`;该视图只支持 `has()`,其余成员访问即抛错(防止将来有人迭代它得到悄悄放行的空集)。两项都只追加、旧覆盖层仍有效;`KitConfig`(core)里出现它们仍被拒。
 30. **命令层的外发同意是三道门**:`--run-llm`、`--allow-egress`、覆盖层 `reflect.egress = true`(缺覆盖层按 false),缺任何一道退出 2、零构造零调用零写入(§17)。干跑路径不构造后端。
 
+31. **L0 追加(attest / promote / retire 生命周期,全部只追加可选字段或新 schema)**:见 §18。
+
 ## 9. 标识符与哈希约定(Q-N7 的默认处理)
 
 本机随机盐 `.state/salt`(32 字节随机数的十六进制,权限 0600,**不入仓**)。跨机器聚合不依赖这些哈希(attest 只用计数)。
@@ -1888,3 +1890,280 @@ A16–A19 直接 import / 运行 `dist/`;dist 比 src 旧会按「未执行(4)�
    - pi:无可归因的全局写入。
 6. 本次未测:noProjectSettings、noUserRouting 三者都保持 `unresolved`;noProjectContext 在 claude/codex 保持 `unresolved`,pi 沿用原先的 `claimed`(§16① 的 cwd 在仓库树内问题仍在)。claude 与 pi 的 noMcp 沿用 `claimed`。
 7. **证据范围**:`noTools=verified` 的判据是合成提示下 CLI 回复 `NOTOOLS`(未保存工具注册清单/调用轨迹),且 codex 的结论是在「MCP 连接失败」的环境下得出——**未测**「用户配置了可连通且提供工具的 MCP」这一组合。升级 CLI 或环境里有可用 MCP 时须重测。
+
+## 18. attest / promote / retire 生命周期契约(L0)
+
+本节只追加:`JudgeRecord.rule_sha256?`、`Signal.event_key?`、`Attest.method?`、`KitConfig.lifecycle?` 都是可选字段(缺省仍合法,旧文件/旧 kit.toml 照常通过),`LifecycleRecord` 是新 schema。命令本身(attest / promote / retire)在后续块实现,下面的命令面与退出码是**草案**,以实现块落地时的订正为准。
+
+### 18.1 字段与格式
+
+- `JudgeRecord.rule_sha256?`:64 位小写十六进制。评审时规则文本的哈希(`status` / `review_by` 先归一化)。契约只管形状;「必填且与当前文本一致」是晋升判据(L1+)。
+- `Signal.event_key?`:跨文件去重键(D4,加盐 sha256 的产物)。契约只约束:非空、≤128 字符、仅 `[A-Za-z0-9_.:-]`(spec 未给格式,此为保守取值)。
+- `Attest.method?`:枚举,目前只有 `signature_proxy_v1`(按原子签名匹配信号的代理口径)。
+- `KitConfig.lifecycle?`(`kit.toml` 的 `[lifecycle]`):`canary_window_days`(≥14,默认 14)、`min_members`(≥2,默认 2)、`min_non_owner_members`(≥1 且 ≤ `min_members`,默认 1)、`min_exposure_sessions`(≥10,默认 10)、`max_harmful`(只能是 0)、`no_exposure_windows`(≥2,默认 2)。每项的下界就是默认值:core 只能调严。**覆盖层(`Overlay`)不接受 `lifecycle`**(strict,出现即错),所以覆盖层无法放宽。
+- `LifecycleRecord`(`lifecycle/<rule-id>/<recorded_at>-<run_id>.json`,只增目录,兼作 id 墓碑):`schema_version`、`rule_id`、`kind=retire`、`reason`(`manual|expired|superseded|no_exposure|harmful|rejected`)、`from_status`/`to_status`(只允许 `advisory→deprecated`、`active→deprecated`、`deprecated→retired`、`proposed→retired`)、`by?`(仅 `superseded`,且必填)、`rule_sha256`、`attest_digests`、`kit_version`、`run_id`、`recorded_at`、`owner`(`@handle`)、`note?`(≤200 字,拒控制/格式/私用/未分配字符)。`rejected` 只配 `proposed→retired`;`no_exposure`/`harmful` 只配退到 `deprecated`。
+
+### 18.2 命令面(草案)
+
+```
+agent-kit attest  --rule <id> --member @handle --window-start YYYY-MM-DD --window-end YYYY-MM-DD
+                  [--channel canary|stable] [--agent <id>]… [--write] [--json]
+agent-kit promote --run <run_id> [--write] [--json]
+agent-kit promote --rule <id> --to advisory|active [--today YYYY-MM-DD] [--write] [--json]
+agent-kit retire  --rule <id> --to deprecated|retired --reason <码> [--by <id>] [--today YYYY-MM-DD] [--write] [--json]
+```
+
+沿用 reflect 的约定:默认干跑;`--write` 只写 `.state/<命令>/<id>/`(补丁、报告、PR 描述),不写 `rules/`;stdout 只含计数、枚举、id、哈希(`--json` 为 canonical JSON、键集合固定);stderr 只含稳定码 `<CMD>_USAGE|CHECK_FAILED|NOT_RUN|FAIL_CLOSED reason=<码>`;数字参数用十进制非负整数;三条命令零网络,`--run-llm` / `--allow-egress` 出现即退出 2。
+
+| 码  | attest                                                             | promote                                                                      | retire                                 |
+| --- | ------------------------------------------------------------------ | ---------------------------------------------------------------------------- | -------------------------------------- |
+| 0   | 干跑完成 / 已写出                                                  | 干跑完成 / 已写出 / 已是目标状态 / 同 id 已存在且一致                        | 同左                                   |
+| 1   | 规则不可计数(状态不是 advisory/active)                             | 任一判据不过(采纳检查、judge 未决、阈值不达、模拟 G3 红、工作树与 HEAD 不同) | 理由证据不满足、方向不允许、模拟 G3 红 |
+| 2   | 缺参数、member 不在成员表、窗口反了、`--run-llm` 出现、personal 层 | 同左;`--run` 与 `--rule` 同给或都不给                                        | 同左;`superseded` 缺 `--by`            |
+| 3   | 信号库损坏、写出口拒绝、同 id 目录已存在且不一致、未知异常         | 同左;脱敏扫描异常;状态损坏                                                   | 同左                                   |
+| 4   | 信号库缺窗口内数据、`signature.type=path`(暂无数据源)              | 采纳时信号库找不到证据信号;`judge_pending:cooldown`                          | `no_exposure` 但窗口内没有任何 attest  |
+
+多结果合并走 `combineExitCodes`(3 > 2 > 1 > 4 > 64 > 0)。
+
+### 18.3 示例
+
+`JudgeRecord` 带 `rule_sha256`(不带该字段的旧记录同样合法,见 §10.8 / §10.9 的 `Proposal` 示例)。
+
+<!-- example:valid schema=JudgeRecord -->
+
+```json
+{
+  "hops": [{ "hop": "codex", "vendor": "openai", "model": "example-model-id", "result": "ok" }],
+  "provider": "openai",
+  "vendor": "openai",
+  "verdict": "accept",
+  "overfit_risk": "low",
+  "injection_suspected": false,
+  "conflicts": [],
+  "rule_sha256": "0000000000000000000000000000000000000000000000000000000000000007"
+}
+```
+
+字段缺省仍合法(向后兼容)。
+
+<!-- example:valid schema=JudgeRecord -->
+
+```json
+{
+  "hops": [{ "hop": "codex", "vendor": "openai", "model": "example-model-id", "result": "ok" }],
+  "provider": "openai",
+  "vendor": "openai",
+  "verdict": "accept",
+  "overfit_risk": "low",
+  "injection_suspected": false,
+  "conflicts": []
+}
+```
+
+错误示例:`rule_sha256` 不是 64 位小写十六进制。
+
+<!-- example:invalid schema=JudgeRecord -->
+
+```json
+{
+  "hops": [{ "hop": "codex", "vendor": "openai", "model": "example-model-id", "result": "ok" }],
+  "provider": "openai",
+  "vendor": "openai",
+  "verdict": "accept",
+  "overfit_risk": "low",
+  "injection_suspected": false,
+  "conflicts": [],
+  "rule_sha256": "ABC"
+}
+```
+
+`Signal` 带 `event_key`。
+
+<!-- example:valid schema=Signal -->
+
+```json
+{
+  "sig_id": "sig_0123456789abcdef",
+  "agent": "claude",
+  "agent_version": "2.1.280",
+  "agent_version_source": "session_meta",
+  "session_ref": "s_0123456789abcdef",
+  "project_key": "p_fedcba9876543210",
+  "ts": "2026-10-12T00:00:00Z",
+  "type": "event",
+  "excerpt_redacted": "",
+  "external_content": false,
+  "confidence": 1,
+  "loaded_rule_ids": [],
+  "event_key": "ek_0123456789abcdef0123456789abcdef"
+}
+```
+
+错误示例:`event_key` 含空格与斜杠。
+
+<!-- example:invalid schema=Signal -->
+
+```json
+{
+  "sig_id": "sig_0123456789abcdef",
+  "agent": "claude",
+  "agent_version": "2.1.280",
+  "agent_version_source": "session_meta",
+  "session_ref": "s_0123456789abcdef",
+  "project_key": "p_fedcba9876543210",
+  "ts": "2026-10-12T00:00:00Z",
+  "type": "event",
+  "excerpt_redacted": "",
+  "external_content": false,
+  "confidence": 1,
+  "loaded_rule_ids": [],
+  "event_key": "bad key/with space"
+}
+```
+
+`Attest` 带 `method`(§10 里不带 `method` 的 `Attest` 示例仍合法)。
+
+<!-- example:valid schema=Attest -->
+
+```json
+{
+  "schema_version": 1,
+  "rule_id": "negative-assertion-needs-positive-control",
+  "rule_sha256": "0000000000000000000000000000000000000000000000000000000000000005",
+  "channel": "canary",
+  "member": "@handle",
+  "window_start": "2026-10-09",
+  "window_end": "2026-10-23",
+  "kit_version": "0.0.0",
+  "collector_versions": { "claude": "2.1.280" },
+  "sessions_total": 41,
+  "exposure_sessions": 12,
+  "exposure_projects": 3,
+  "fired": 12,
+  "harmful": 0,
+  "recurrence": 0,
+  "signal_ids_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000006",
+  "method": "signature_proxy_v1",
+  "run_id": "run-0001"
+}
+```
+
+错误示例:`method` 不是已知枚举值。
+
+<!-- example:invalid schema=Attest -->
+
+```json
+{
+  "schema_version": 1,
+  "rule_id": "negative-assertion-needs-positive-control",
+  "rule_sha256": "0000000000000000000000000000000000000000000000000000000000000005",
+  "channel": "canary",
+  "member": "@handle",
+  "window_start": "2026-10-09",
+  "window_end": "2026-10-23",
+  "kit_version": "0.0.0",
+  "collector_versions": {},
+  "sessions_total": 41,
+  "exposure_sessions": 12,
+  "exposure_projects": 3,
+  "fired": 12,
+  "harmful": 0,
+  "recurrence": 0,
+  "signal_ids_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000006",
+  "method": "signature_proxy_v2",
+  "run_id": "run-0001"
+}
+```
+
+`KitConfig` 带 `lifecycle`(不带该段的 §10.3 示例仍合法)。
+
+<!-- example:valid schema=KitConfig -->
+
+```json
+{
+  "kit": { "name": "agent-kit", "version": "0.0.0" },
+  "agents": { "enabled": ["claude"] },
+  "budget": {},
+  "channels": {},
+  "lifecycle": {
+    "canary_window_days": 21,
+    "min_members": 3,
+    "min_non_owner_members": 2,
+    "min_exposure_sessions": 10,
+    "max_harmful": 0,
+    "no_exposure_windows": 2
+  }
+}
+```
+
+错误示例:`canary_window_days` 低于下界 14(只能调严,不能调松)。
+
+<!-- example:invalid schema=KitConfig -->
+
+```json
+{
+  "kit": { "name": "agent-kit", "version": "0.0.0" },
+  "agents": { "enabled": ["claude"] },
+  "budget": {},
+  "channels": {},
+  "lifecycle": { "canary_window_days": 7 }
+}
+```
+
+错误示例:覆盖层不接受 `lifecycle`。
+
+<!-- example:invalid schema=Overlay -->
+
+```json
+{ "lifecycle": { "canary_window_days": 14 } }
+```
+
+<!-- example:valid schema=Overlay -->
+
+```json
+{ "channel": "canary" }
+```
+
+`LifecycleRecord`。
+
+<!-- example:valid schema=LifecycleRecord -->
+
+```json
+{
+  "schema_version": 1,
+  "rule_id": "negative-assertion-needs-positive-control",
+  "kind": "retire",
+  "reason": "superseded",
+  "from_status": "active",
+  "to_status": "deprecated",
+  "by": "positive-control-for-negative-assertions",
+  "rule_sha256": "0000000000000000000000000000000000000000000000000000000000000005",
+  "attest_digests": [],
+  "kit_version": "0.1.0",
+  "run_id": "run-20261013T000000Z-0a1b2c",
+  "recorded_at": "2026-10-13",
+  "owner": "@handle",
+  "note": "replaced by a sharper rule"
+}
+```
+
+错误示例:`rejected` 理由配了 `active→deprecated`。
+
+<!-- example:invalid schema=LifecycleRecord -->
+
+```json
+{
+  "schema_version": 1,
+  "rule_id": "negative-assertion-needs-positive-control",
+  "kind": "retire",
+  "reason": "rejected",
+  "from_status": "active",
+  "to_status": "deprecated",
+  "rule_sha256": "0000000000000000000000000000000000000000000000000000000000000005",
+  "attest_digests": [],
+  "kit_version": "0.1.0",
+  "run_id": "run-0001",
+  "recorded_at": "2026-10-13",
+  "owner": "@handle"
+}
+```

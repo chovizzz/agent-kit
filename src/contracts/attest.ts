@@ -8,6 +8,10 @@ import {
 } from './common.js';
 import { ChannelNameSchema } from './config.js';
 
+export const ATTEST_METHODS = ['signature_proxy_v1'] as const;
+export const AttestMethodSchema = z.enum(ATTEST_METHODS);
+export type AttestMethod = z.infer<typeof AttestMethodSchema>;
+
 /** `attest/<rule-id>/<member>-<window_end>-<run_id>.json`(设计 §6.6)。只增不改。 */
 export const AttestSchema = z
   .strictObject({
@@ -30,6 +34,11 @@ export const AttestSchema = z
     recurrence: z.number().int().nonnegative(),
     /** `sha256:` + 排序后 sig_id 列表的哈希,供本人复核 */
     signal_ids_digest: z.string().regex(/^sha256:[0-9a-f]{64}$/),
+    /**
+     * L0 追加(⑤A):计数口径。缺省 = 旧文件/未声明口径;`signature_proxy_v1` = 按原子签名匹配信号的代理口径
+     * (曝光与命中无法区分)。日后换口径时用新枚举值,聚合器据此不混算。
+     */
+    method: AttestMethodSchema.optional(),
     /** 同一窗口重跑用不同 run_id,聚合时取最新一份;本字段与文件名里的 run_id 一致(由 CI 比对) */
     run_id: RunIdSchema,
   })

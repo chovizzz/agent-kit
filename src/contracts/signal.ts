@@ -34,6 +34,10 @@ export type SignalEventKind = z.infer<typeof SignalEventKindSchema>;
 export const TOOL_NAME_RE = /^[A-Za-z0-9_.:()<>+-]{1,96}$/;
 export const ToolNameSchema = z.string().regex(TOOL_NAME_RE);
 
+/** L0 追加(D4):去重键字符集与长度。 */
+export const EVENT_KEY_RE = /^[A-Za-z0-9_.:-]{1,128}$/;
+export const EventKeySchema = z.string().regex(EVENT_KEY_RE);
+
 /** 设计 §6.2 的信号结构。 */
 export const SignalSchema = z.strictObject({
   /** 稳定哈希(同一输入同一值);不含原文 */
@@ -59,6 +63,12 @@ export const SignalSchema = z.strictObject({
   /** 会话内事件序号,与 `sigIdFor` 用的序号相同 */
   event_index: z.number().int().nonnegative().optional(),
   tool_name: ToolNameSchema.optional(),
+  /**
+   * L0 追加(D4,`docs/reader-counting-spec.md` §8.1):跨文件去重键,= 加盐 sha256(agent + 源事件 id)。
+   * 可选:无跨文件重复的 agent(kimi/codex)与旧信号都没有它。契约层只约束字符集与长度
+   * (非空、≤128、`[A-Za-z0-9_.:-]`),不规定编码;原文 uuid 不得入库由 pipeline 负责。
+   */
+  event_key: EventKeySchema.optional(),
 });
 export type Signal = z.infer<typeof SignalSchema>;
 

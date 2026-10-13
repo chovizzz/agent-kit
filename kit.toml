@@ -40,6 +40,16 @@ max_bytes = 16384
 hard_limit = "unknown"
 limit_source = "assumed"
 
+# 晋升/退役判据阈值(L0 追加,④A 保守默认)。每项的 schema 下界就是这里的值:只能调严,不能调松。
+# 覆盖层(kit.overlay.toml)不接受本段。
+[lifecycle]
+canary_window_days = 14
+min_members = 2
+min_non_owner_members = 1
+min_exposure_sessions = 10
+max_harmful = 0
+no_exposure_windows = 2
+
 # 渠道成员表按渠道登记(设计 §5.3)。P0 只做 schema 校验,不使用。
 [channels.canary.members]
 

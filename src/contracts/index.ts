@@ -17,5 +17,6 @@ export * from './proposal.js';
 export * from './vendor.js';
 export * from './reflect.js';
 export * from './attest.js';
+export * from './lifecycle.js';
 export * from './case.js';
 export * from './report.js';

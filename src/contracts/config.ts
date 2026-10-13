@@ -145,6 +145,33 @@ export const ReflectOverlaySchema = ReflectCoreConfigSchema.extend({
 });
 export type ReflectOverlay = z.infer<typeof ReflectOverlaySchema>;
 
+/**
+ * L0 追加(④A):晋升/退役判据的阈值段。只放在 core(`kit.toml` 的 `[lifecycle]`),**覆盖层不接受该段**
+ * (`OverlaySchema` 是 strict,出现即错),所以个人/渠道配置不可能放宽它。
+ * 每个字段的下界就是保守默认值:core 只能调严,不能调松(调松要改契约)。
+ * 缺省不出现;出现时才套默认值。
+ */
+export const LifecycleCoreConfigSchema = z
+  .strictObject({
+    /** advisory→active:canary 窗口累计天数下界 */
+    canary_window_days: z.number().int().min(14).default(14),
+    /** advisory→active:有效 attest 的不同成员数下界 */
+    min_members: z.number().int().min(2).default(2),
+    /** 其中不是原子 owner 的成员数下界(⑥A 的本机结构检查) */
+    min_non_owner_members: z.number().int().min(1).default(1),
+    /** 窗口内 `exposure_sessions` 合计下界 */
+    min_exposure_sessions: z.number().int().min(10).default(10),
+    /** 有效 attest 里 `harmful` 的合计上限;只允许 0(固定,写出来是为了让 kit.toml 自述) */
+    max_harmful: z.literal(0).default(0),
+    /** `no_exposure` 退役理由要看的最近 canary 窗口数 K */
+    no_exposure_windows: z.number().int().min(2).default(2),
+  })
+  .refine((c) => c.min_non_owner_members <= c.min_members, {
+    path: ['min_non_owner_members'],
+    message: 'min_non_owner_members 不得大于 min_members',
+  });
+export type LifecycleCoreConfig = z.infer<typeof LifecycleCoreConfigSchema>;
+
 /** `kit.toml`(core 仓库根)。 */
 export const KitConfigSchema = z.strictObject({
   kit: z.strictObject({
@@ -165,6 +192,8 @@ export const KitConfigSchema = z.strictObject({
   provider: z.record(z.string(), z.unknown()).optional(),
   /** R0 追加(#27):缺省不出现;出现时才套默认值 */
   reflect: ReflectCoreConfigSchema.optional(),
+  /** L0 追加(④A):缺省不出现;出现时才套默认值 */
+  lifecycle: LifecycleCoreConfigSchema.optional(),
 });
 export type KitConfig = z.infer<typeof KitConfigSchema>;
 

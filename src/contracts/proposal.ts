@@ -45,6 +45,11 @@ export const JudgeRecordSchema = z
     overfit_risk: z.enum(['low', 'medium', 'high']),
     injection_suspected: z.boolean(),
     conflicts: z.array(z.string()),
+    /**
+     * L0 追加(⑨A):评审时规则文本的哈希(`Atom.sha256` 先把 `status` / `review_by` 归一化掉再算)。
+     * 可选:旧记录没有它仍合法;晋升判据(L1+)要求必填且与当前文本一致,这里只管形状。
+     */
+    rule_sha256: Sha256Schema.optional(),
   })
   .superRefine((j, ctx) => {
     j.hops.forEach((h, i) => {
