@@ -1,3 +1,4 @@
+import * as path from 'node:path';
 import { runSync } from '../io/exec.js';
 import type { IoContext } from '../io/paths.js';
 import type { Change, ChangeKind, GuardGit } from './types.js';
@@ -30,6 +31,9 @@ export function createGuardGit(
     GIT_CONFIG_COUNT: '0',
     GIT_OPTIONAL_LOCKS: '0',
     GIT_TERMINAL_PROMPT: '0',
+    // 只在 cwd 自己里找仓库,不向上爬:被检目录不是 git 仓库时必须报错(退出 2),不能静默落到外层仓库
+    // (实测:工作树内的测试仓库删掉 .git 后,git 命令落到外层工作树并往它提交)。
+    GIT_CEILING_DIRECTORIES: path.dirname(path.resolve(cwd ?? ctx.repoRoot)),
     ...extraEnv,
   };
   const git = (args: readonly string[]) =>
