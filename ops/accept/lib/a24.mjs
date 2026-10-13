@@ -149,7 +149,7 @@ export const MUTATIONS = [
       },
     ],
     tests: [T_CRITERIA],
-    redTitles: ['C5_JUDGE'],
+    redTitles: ['C5 独有'],
   },
   {
     id: 'L9',
