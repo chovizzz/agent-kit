@@ -10,6 +10,7 @@ import type { GuardOptions, GuardResult } from './types.js';
 
 export { createGuardGit, GitError } from './git.js';
 export { parseLabel, pendingCriteria, GUARD_LABELS } from './labels.js';
+export { lifecycleCriteria, normalizedRuleSha256 } from './criteria.js';
 export type * from './types.js';
 
 export class RefError extends Error {
@@ -40,7 +41,7 @@ export function runGuards(opts: GuardOptions): GuardResult {
   const { atoms } = collected;
 
   if (label === 'kit:promotion' || label === 'kit:retire') {
-    diagnostics.push(...checkG3(label, changes, atoms, opts.criteria));
+    diagnostics.push(...checkG3(label, changes, atoms, opts.criteria, { git, baseOid, headOid }));
   } else if (label === 'kit:attest') {
     diagnostics.push(...checkAttestScope(changes));
   } else {

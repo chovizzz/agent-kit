@@ -37,15 +37,28 @@ describe('labels', () => {
       ['advisory', 'deprecated'],
       ['active', 'deprecated'],
       ['deprecated', 'retired'],
+      ['proposed', 'retired'], // L2:③A 被否决提案的出口
     ]);
   });
 
   it('判据桩一律不通过(不是静默放行)', () => {
+    const never = (): never => {
+      throw new Error('桩不应读树');
+    };
     const d = pendingCriteria({
-      label: 'kit:promotion',
-      path: 'rules/a/b.md',
-      from: 'proposed',
-      to: 'advisory',
+      transition: {
+        label: 'kit:promotion',
+        path: 'rules/a/b.md',
+        from: 'proposed',
+        to: 'advisory',
+      },
+      headView: never,
+      baseView: never,
+      listHead: never,
+      listBase: never,
+      git: undefined as never,
+      baseOid: '',
+      headOid: '',
     });
     expect(d).toHaveLength(1);
     expect(d[0]?.severity).toBe('error');

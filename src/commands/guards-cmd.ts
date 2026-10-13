@@ -1,11 +1,18 @@
 import { ExitCode } from '../contracts/exit-codes.js';
 import { hasErrors, type Diagnostic } from '../contracts/diagnostics.js';
-import { createGuardGit, GitError, parseLabel, RefError, runGuards } from '../guards/index.js';
+import {
+  createGuardGit,
+  GitError,
+  lifecycleCriteria,
+  parseLabel,
+  RefError,
+  runGuards,
+} from '../guards/index.js';
 import type { CriteriaChecker } from '../guards/index.js';
 import type { CheckStep } from './types.js';
 
 export const guardsDeps = {
-  /** P1 把真实的 G3 判据检查器(attest/reports)接进来;缺省 = 桩(晋升/退役 PR 在 P0 一律不通过) */
+  /** 测试注入点;缺省 = 真判据 lifecycleCriteria(L2:晋升/退役 PR 按 T1–T6 判据机械检查) */
   criteria: undefined as CriteriaChecker | undefined,
 };
 
@@ -32,7 +39,7 @@ export const run: CheckStep = async (ctx, opts) => {
       base: opts.base,
       head: opts.head,
       label: parsed.label,
-      ...(guardsDeps.criteria ? { criteria: guardsDeps.criteria } : {}),
+      criteria: guardsDeps.criteria ?? lifecycleCriteria,
     });
     for (const d of res.diagnostics) ctx.stdout(`${fmt(d)}\n`);
     const errors = res.diagnostics.filter((d) => d.severity === 'error').length;

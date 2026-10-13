@@ -62,11 +62,13 @@ describe('check --guards(guards-cmd 子 runner)', () => {
     expect(r.out).toContain('1 error');
   });
 
-  it('--label kit:promotion:合法方向但判据桩 → 1(P0 的晋升 PR 永远红);注入检查器后 → 0', async () => {
+  it('--label kit:promotion:合法方向但缺判据证据 → 1(L2 起是真判据,不再是桩);注入检查器后 → 0', async () => {
     const repo = await setup('proposed', 'advisory');
-    const stub = await exec(repo, { label: 'kit:promotion' });
-    expect(stub.code).toBe(1);
-    expect(stub.out).toContain('GUARD_G3_CRITERIA_NOT_IMPLEMENTED');
+    const real = await exec(repo, { label: 'kit:promotion' });
+    expect(real.code).toBe(1);
+    expect(real.out).not.toContain('GUARD_G3_CRITERIA_NOT_IMPLEMENTED');
+    // 夹具原子没有 origin=proposal/…:真判据按 PROPOSAL_MISSING 拒绝
+    expect(real.out).toContain('GUARD_G3_PROPOSAL_MISSING');
     guardsDeps.criteria = PASS;
     const ok = await exec(repo, { label: 'kit:promotion' });
     expect(ok.code).toBe(0);
