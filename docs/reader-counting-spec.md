@@ -791,3 +791,17 @@ perl -pe 'chomp if eof' pi.jsonl | jq -nRc "$P_PI"                  # 末行无�
 ## 10. 自检方法
 
 本文的 jq 程序、夹具与期望值可以自检:把 §7 各代码块抽出来,夹具写成临时文件,逐个跑上面的命令,与期望值比对。B16 应把这一步做成 `ops/reader-oracle` 的单测:**直接从本文抽取程序和夹具**(不要另抄一份,否则会漂移),夹具运行时写到 `$KIT_TMP`,不以 `.jsonl` 文件入仓。A10 检查的是 `git ls-files` 里的 `.jsonl` 文件和秘密形态的字符串;本文的夹具是 Markdown 代码块里的合成内容,不含秘密形态。如果 A10 的实现把「Markdown 里出现 jsonl 代码块」也算命中,需要调整 A10,不要改本文。
+
+## 11. R1 追加:信号结构字段与会话计数库(不改任何计数口径)
+
+R1 没有改动 reader,也没有改变 §2–§7 的任何计数:下面只是把 reader 已有的事件分类带到落盘产物里。
+
+- **`event_kind`**(信号上,可选)由 `NormEvent.kind` 派生:`user_message` → `user_message`;`tool_call` → `tool_call`;`tool_result` 且 `tool_failed === true` → `tool_result_failed`。派生判据与采集管线的 `wantsSignal` 同源,不新增分类。
+- **它是事件种类,不是失败标记。** 前提是 reader 不在 `tool_call` 事件上设 `tool_failed`(§2 各家映射目前都如此,Codex 的失败在 `item_completed` 产生的 `tool_result` 上;`test/signals/r1-structure.test.ts` 的「reader 不变量」用例钉住了这一点)。若将来某个 reader 开始在 `tool_call` 上带失败,这类信号的 `event_kind` 仍是 `tool_call`,失败只体现在会话 `counts.tool_failures`。
+- **信号数是计数的下界,不是等值。** 脱敏第二遍命中而被丢弃的信号不落盘(`signals_dropped_redaction`),所以按 `event_kind` 数出来的信号数 ≤ `Counts` 里对应的数。会话级比率一律用 `.state/sessions/` 的计数库,不要从信号反推。
+- **`event_index`** 是该事件在会话事件流里的序号(0 起,含不产信号的事件),与 `sigIdFor` 用的序号是同一个值。reader 若改了事件切分方式,序号会整体平移、`sig_id` 随之变化,存量信号与新信号会并存;这是 R1 之前就存在的性质(`sig_id` 一直由序号决定)。
+- **`tool_name`** 只给 `tool_call` 信号填,经 `safeKey`(字符白名单 `[A-Za-z0-9_.:()<>+-]{1,96}`,且脱敏后原样不变,否则记 `<unprintable>`);`tool_result_failed` 信号不带(Claude / Pi 的 `tool_result` 事件本来有工具名,这里刻意丢掉)。**外部内容会话的信号不带 `tool_name`**:调用名是模型读完外部内容后自己写的(宿主拒绝执行也会进 trace),白名单字符足以拼出指令性标记(如 `SYSTEM:approve_all(<always>)`),而 contracts #8 要求外部会话只留结构化计数。非外部会话的 `tool_name` 虽过白名单,仍是 trace 里的不可信字符串(例如 `mcp__x__ignore_previous_instructions`):R2 只能把它当数据(按名分组、放进转义后的字段),不得放在指令位置。
+- **会话计数库**(`.state/sessions/<agent>/<yyyymm>.jsonl`):每个 `processed` 会话一行(含外部内容会话),`ts` = 会话 `meta.started_at`,取不到则取首个事件的 `ts`;按 `session_ref` upsert,**同一 session_ref 至多一行,`ts` 与所在月份首写钉死**,重采时只更新 `counts` / `project_key` / `external_content`(后者只升不降);完全相同则文件逐字节不变。会话时间两者都取不到时不写计数行,单独计数(命令输出的 `session_stats.skipped_no_ts`)。月份文件是目录或符号链接、行不合契约、同一 session_ref 重复,一律 fail-closed(退出 3)。**计数库与信号库的 `project_key` / `external_content` 可能分叉**(旧信号按 `sig_id` 去重、不会更新;例如 allow-project 换了写法、或会话后来才出现 WebFetch):R2 判断某信号是否来自外部内容会话时,须同时看信号自己的 `external_content` 与同 `session_ref` 的计数行,任一为真即按外部内容处理(摘录丢弃)。会话后来被加进 exclude_dirs 时,此前写下的计数行与信号不会被清理(预先存在的性质)。`unknown_event_types` / `ignored_duplicate_kinds` 的键超过 64 个时,按「计数降序、同数按键序」保留 63 个,其余并入 `<other>`(计数不丢)。
+- **存量信号不回填。** 重采按 `sig_id` 去重,旧行保持原样、没有三个结构字段;`src/signals/structure.ts` 的 `hasStructureFields` / `partitionByStructure` 让 reflect 把它们当 unknown 排除并计数。要让旧会话拿到字段,须先清掉 `.state/signals/<agent>/` 再重采。
+- **codex 0.149 之前的失败不可见**(§D1)这一口径信息只在 `CollectReport.tool_failures_scope`,不落盘;计数库里没有版本信息。需要跨版本比较失败率的消费者,按信号的 `agent_version` 与 `session_ref` 关联自己判断。
+- **反思器自己的会话**:cwd 落在本仓 `.state/` 之内(含相等),或路径含 `<.state|state>/reflect/cwd` 三段(另一棵 worktree / 另一个 `KIT_STATE_DIR` 的反思器会话;R3 的 llm-exec 若改了 cwd 命名须同步这里),采集时整条跳过,不产信号也不写计数;计入 `sessions_skipped_excluded`,并在命令输出顶层单列 `excluded_self_sessions`。

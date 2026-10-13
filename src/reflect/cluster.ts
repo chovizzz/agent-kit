@@ -61,7 +61,7 @@ export function buildClusters(cls: Classification, opts: ClusterOptions = {}): C
   // 2) 失败后重试:按工具名;证据只取重试调用(失败结果的摘录永不进提示,只计数)
   const byTool = new Map<string, Classification['retryPairs']>();
   for (const p of cls.retryPairs) {
-    const tool = p.failure.tool_name as string;
+    const tool = p.tool;
     byTool.set(tool, [...(byTool.get(tool) ?? []), p]);
   }
   for (const [tool, pairs] of [...byTool.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {

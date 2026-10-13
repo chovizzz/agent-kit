@@ -9,17 +9,13 @@
 import * as path from 'node:path';
 import { AGENT_IDS, type AgentId } from '../contracts/common.js';
 import type { Redactor } from '../contracts/redact.js';
-import { SignalSchema, type Signal } from '../contracts/signal.js';
+import { SignalSchema } from '../contracts/signal.js';
 import type { IoContext } from '../io/paths.js';
 import { exists, readDir, readLines, TOO_LONG_LINE } from '../io/read-fs.js';
+import { hasStructureFields } from '../signals/structure.js';
 import { SignalStoreError } from '../signals/state-store.js';
 import { hasInvisible } from './text.js';
 import type { LoadedSignal, LoadResult, LoadStats } from './types.js';
-
-/** 与 R1 将提供的同名函数等价(合并时由主代理统一):信号是否带分类所需的结构字段。 */
-export function hasStructureFields(s: Signal): s is LoadedSignal {
-  return s.event_kind !== undefined && s.event_index !== undefined;
-}
 
 export interface LoadOptions {
   /** 只要 ts ≥ 该日期(YYYY-MM-DD,UTC 0 点)的信号 */

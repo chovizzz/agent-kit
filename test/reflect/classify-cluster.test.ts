@@ -58,45 +58,64 @@ describe('reflect/classify', () => {
     expect(c.retryPairs).toEqual([]);
   });
 
-  it('tool_fail_retry:窗口内同名工具重试成对;被用户消息截断则不算;其它工具不算', () => {
-    const base = (extra: ReturnType<typeof sig>[]) =>
-      classifySignals(extra.map(asLoaded)).retryPairs.length;
-    const f = sig({
-      project: 'A',
-      session: 'A1',
-      index: 2,
-      kind: 'tool_result_failed',
-      tool: 'Bash',
-    });
-    const retry = sig({
-      project: 'A',
-      session: 'A1',
-      index: 4,
-      kind: 'tool_call',
-      tool: 'Bash',
-      text: 'ls',
-    });
-    expect(base([f, retry])).toBe(1);
+  it('tool_fail_retry(真实形状:失败信号无 tool_name,工具取自前驱 tool_call)', () => {
+    const pairs = (...xs: ReturnType<typeof sig>[]) => classifySignals(xs.map(asLoaded)).retryPairs;
+    const call = (index: number, tool: string, extra: object = {}) =>
+      sig({ project: 'A', session: 'A1', index, kind: 'tool_call', tool, text: 'cmd', ...extra });
+    const fail = (index: number) =>
+      sig({ project: 'A', session: 'A1', index, kind: 'tool_result_failed' });
+    // 正向对照:前驱 → 失败 → 同名重试
+    const ok = pairs(call(1, 'Bash'), fail(2), call(3, 'Bash'));
+    expect(ok).toHaveLength(1);
+    expect(ok[0]?.tool).toBe('Bash');
+    expect(ok[0]?.failure.event_index).toBe(2);
+    expect(ok[0]?.retry.event_index).toBe(3);
+    // 乱序输入结果相同(按 event_index 排序)
+    const shuffled = pairs(fail(2), call(3, 'Bash'), call(1, 'Bash'));
+    expect(shuffled).toHaveLength(1);
+    expect([shuffled[0]?.failure.event_index, shuffled[0]?.retry.event_index]).toEqual([2, 3]);
+    // 前驱取"最近的"那条 tool_call:Read(1) Bash(2) 失败(3) → 工具是 Bash,Read 的重试不算
+    const nearest = pairs(call(1, 'Read'), call(2, 'Bash'), fail(3), call(4, 'Read'));
+    expect(nearest).toEqual([]);
+    expect(pairs(call(1, 'Read'), call(2, 'Bash'), fail(3), call(4, 'Bash'))[0]?.tool).toBe('Bash');
+    // 前驱缺失 → 不配对
+    expect(pairs(fail(2), call(3, 'Bash'))).toEqual([]);
+    // 前驱与失败之间隔着 user_message → 不配对
+    const um = sig({ project: 'A', session: 'A1', index: 2, text: '好的' });
+    expect(pairs(call(1, 'Bash'), um, fail(3), call(4, 'Bash'))).toEqual([]);
+    // 重试被下一条用户消息截断 → 不配对
     const cut = sig({ project: 'A', session: 'A1', index: 3, text: '好的' });
-    expect(base([f, cut, retry])).toBe(0);
-    const other = sig({
+    expect(pairs(call(1, 'Bash'), fail(2), cut, call(4, 'Bash'))).toEqual([]);
+    // 其它工具 / 太远 → 不配对
+    expect(pairs(call(1, 'Bash'), fail(2), call(3, 'Read'))).toEqual([]);
+    expect(pairs(call(1, 'Bash'), fail(2), call(20, 'Bash'))).toEqual([]);
+    // 前驱离失败太远(窗口外) → 不配对
+    expect(pairs(call(1, 'Bash'), fail(30), call(31, 'Bash'))).toEqual([]);
+    // 前驱没有 tool_name(外部内容会话不带) → 不配对
+    const noName = sig({
       project: 'A',
       session: 'A1',
-      index: 4,
+      index: 1,
       kind: 'tool_call',
-      tool: 'Read',
-      text: 'x',
+      external: true,
     });
-    expect(base([f, other])).toBe(0);
-    const far = sig({
-      project: 'A',
-      session: 'A1',
-      index: 20,
-      kind: 'tool_call',
-      tool: 'Bash',
-      text: 'x',
-    });
-    expect(base([f, far])).toBe(0);
+    expect(pairs(noName, fail(2), call(3, 'Bash'))).toEqual([]);
+    // 会话里有外部内容信号 → 整个会话不配对
+    const ext = sig({ project: 'A', session: 'A1', index: 9, kind: 'tool_call', external: true });
+    expect(pairs(call(1, 'Bash'), fail(2), call(3, 'Bash'), ext)).toEqual([]);
+  });
+
+  it('失败信号带 tool_name 违反一致性(R1):装载时按 structure_unknown 排除并计数', async () => {
+    const w = await newWork('rl-badtool-');
+    await putSignals(w.io, [
+      sig({ project: 'A', session: 'A1', index: 1, kind: 'tool_call', tool: 'Bash', text: 'cmd' }),
+      sig({ project: 'A', session: 'A1', index: 2, kind: 'tool_result_failed', badTool: 'Bash' }),
+      sig({ project: 'A', session: 'A1', index: 3, kind: 'tool_call', tool: 'Bash', text: 'cmd' }),
+    ]);
+    const r = await loadSignals(w.io, testRedactor());
+    expect(r.stats.structure_unknown).toBe(1);
+    expect(r.signals).toHaveLength(2); // 正向对照:另两条正常
+    expect(classifySignals(r.signals).retryPairs).toEqual([]); // 没有失败信号 → 没有配对
   });
 });
 

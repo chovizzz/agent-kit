@@ -10,7 +10,12 @@ import { WriteDeniedError } from '../io/safe-fs.js';
 import { createRedactor } from '../redact/redactor.js';
 import { DEFAULT_MAX_EVENT_BYTES } from '../signals/base-reader.js';
 import { collect } from '../signals/collect.js';
-import { createExcludePolicy, ExcludeConfigError, hasProtection } from '../signals/exclude.js';
+import {
+  createExcludePolicy,
+  ExcludeConfigError,
+  hasProtection,
+  withSelfExclusion,
+} from '../signals/exclude.js';
 import { PipelineFailClosedError } from '../signals/pipeline.js';
 import { DEFAULT_READERS } from '../signals/readers.js';
 import type { ReaderRegistry } from '../signals/readers.js';
@@ -171,7 +176,11 @@ export function createSignalsCollectCommand(deps: SignalsCollectDeps): CommandDe
       }
       let policy;
       try {
-        policy = await createExcludePolicy({ excludeDirs, allowProjects: args.allowProjects });
+        // 先判「会话在本仓 .state/ 之下」(反思器自己的会话),再交给用户策略;不影响上面的默认拒绝判定
+        policy = withSelfExclusion(
+          await createExcludePolicy({ excludeDirs, allowProjects: args.allowProjects }),
+          ctx.io.stateDir,
+        );
       } catch (e) {
         if (e instanceof ExcludeConfigError) {
           ctx.stderr(`agent-kit signals collect: ${e.message}\n`);
@@ -243,10 +252,21 @@ export function createSignalsCollectCommand(deps: SignalsCollectDeps): CommandDe
           report: out.report,
           sessions: out.sessions,
           samples: out.samples,
+          excluded_self_sessions: out.excludedSelfSessions,
           salt: salt.persisted ? 'persisted' : 'ephemeral',
           dry: args.dry,
           ...(out.write
             ? { written: out.write.written, deduplicated: out.write.deduplicated }
+            : {}),
+          ...(out.statWrite
+            ? {
+                session_stats: {
+                  written: out.statWrite.written,
+                  updated: out.statWrite.updated,
+                  unchanged: out.statWrite.unchanged,
+                  skipped_no_ts: out.statsSkippedNoTs,
+                },
+              }
             : {}),
         }),
       );

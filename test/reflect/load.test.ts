@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { hasStructureFields, loadSignals } from '../../src/reflect/load.js';
+import { loadSignals } from '../../src/reflect/load.js';
+import { hasStructureFields } from '../../src/signals/structure.js';
 import { SignalStoreError } from '../../src/signals/state-store.js';
 import {
   CANARY_EXT,
@@ -30,7 +31,7 @@ describe('reflect/load', () => {
     expect(r.stats.external_excerpt_forced).toBe(1);
     expect(r.stats.failed_excerpt_dropped).toBe(2);
     expect(r.stats.structure_unknown).toBe(1);
-    expect(r.stats.loaded).toBe(9);
+    expect(r.stats.loaded).toBe(11);
     // 外部信号本身保留(只留结构)
     const ext = r.signals.find((s) => s.external_content);
     expect(ext?.excerpt_redacted).toBe('');

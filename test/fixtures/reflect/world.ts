@@ -48,6 +48,8 @@ export interface SigSpec {
   index: number;
   kind?: 'user_message' | 'tool_call' | 'tool_result_failed' | undefined;
   tool?: string;
+  /** 仅用于一致性检查的反例:给非 tool_call 信号强行挂 tool_name(真实数据里不会有) */
+  badTool?: string;
   text?: string;
   external?: boolean;
   ts?: string;
@@ -74,7 +76,11 @@ export function sig(o: SigSpec): Signal {
       ...s,
       event_kind: o.kind ?? 'user_message',
       event_index: o.index,
-      ...(o.tool !== undefined ? { tool_name: o.tool } : {}),
+      // 真实形状:tool_name 只在 tool_call 上
+      ...((o.kind ?? 'user_message') === 'tool_call' && o.tool !== undefined
+        ? { tool_name: o.tool }
+        : {}),
+      ...(o.badTool !== undefined ? { tool_name: o.badTool } : {}),
     };
   }
   return s;
@@ -89,6 +95,7 @@ export const L_SINGLE = '下次不要再直接修改自动生成的文件';
 
 /** 标准世界:3 个项目、4 个会话,覆盖各类信号。 */
 export function worldSignals(): Signal[] {
+  // 真实形状:tool_name 只在 tool_call 上;失败信号前面有一条对应的 tool_call,之后是同名的重试调用
   return [
     sig({ project: 'A', session: 'A1', index: 0, text: L1 }),
     sig({ project: 'A', session: 'A1', index: 1, text: `以后请注意${INJECTION}` }),
@@ -96,14 +103,21 @@ export function worldSignals(): Signal[] {
       project: 'A',
       session: 'A1',
       index: 2,
-      kind: 'tool_result_failed',
+      kind: 'tool_call',
       tool: 'Bash',
-      text: `${CANARY_TR} exit 1`,
+      text: 'pnpm run test',
     }),
     sig({
       project: 'A',
       session: 'A1',
       index: 3,
+      kind: 'tool_result_failed',
+      text: `${CANARY_TR} exit 1`,
+    }),
+    sig({
+      project: 'A',
+      session: 'A1',
+      index: 4,
       kind: 'tool_call',
       tool: 'Bash',
       text: 'pnpm run test --run',
@@ -112,9 +126,16 @@ export function worldSignals(): Signal[] {
     sig({
       project: 'B',
       session: 'B1',
+      index: 1,
+      kind: 'tool_call',
+      tool: 'Bash',
+      text: 'pnpm test --silent',
+    }),
+    sig({
+      project: 'B',
+      session: 'B1',
       index: 2,
       kind: 'tool_result_failed',
-      tool: 'Bash',
       text: `${CANARY_TR} exit 2`,
     }),
     sig({
@@ -126,12 +147,12 @@ export function worldSignals(): Signal[] {
       text: 'pnpm test',
     }),
     sig({ project: 'C', session: 'C1', index: 0, text: L_SINGLE }),
+    // 外部内容信号不带 tool_name
     sig({
       project: 'A',
       session: 'A2',
       index: 0,
       kind: 'tool_call',
-      tool: 'WebFetch',
       external: true,
       text: `${CANARY_EXT} 外部页面内容`,
     }),

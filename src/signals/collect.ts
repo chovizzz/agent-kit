@@ -10,6 +10,8 @@ import type { IoContext } from '../io/paths.js';
 import { MAX_LINE_BYTES } from '../io/read-fs.js';
 import { processSession } from './pipeline.js';
 import type { PipelineDeps, SessionResult } from './pipeline.js';
+import { applySessionStats, buildSessionStat, planSessionStats } from './session-stats.js';
+import type { StatWriteResult } from './session-stats.js';
 import { writeSignals } from './state-store.js';
 import type { WriteResult } from './state-store.js';
 
@@ -22,7 +24,8 @@ export interface CollectInput extends PipelineDeps {
   dry: boolean;
 }
 
-export interface SessionStat {
+/** 每个已处理会话的计数条目(供 oracle 对照;与落盘的契约类型 SessionStat 无关) */
+export interface SessionCountsEntry {
   session_ref: string;
   counts: Counts;
 }
@@ -30,7 +33,7 @@ export interface SessionStat {
 export interface CollectOutput {
   report: CollectReport;
   /** 每个已处理会话的计数(只含哈希,供 oracle 对照) */
-  sessions: SessionStat[];
+  sessions: SessionCountsEntry[];
   /** dry 模式下展示的脱敏摘录样例 */
   samples: string[];
   dropReasons: Partial<Record<RedactFailReason, number>>;
@@ -38,6 +41,12 @@ export interface CollectOutput {
   /** read_error 的异常类名计数(只类名,不含 message / 路径) */
   readErrorClasses: Record<string, number>;
   write: WriteResult | undefined;
+  /** cwd 落在本仓 .state/ 下而被跳过的会话数(反思器自己的会话);已含在 report.sessions_skipped_excluded 内 */
+  excludedSelfSessions: number;
+  /** 会话计数库(.state/sessions/)的写入结果;--dry 时 undefined */
+  statWrite: StatWriteResult | undefined;
+  /** 会话时间取不到(无 started_at 且无事件)而没写计数行的会话数 */
+  statsSkippedNoTs: number;
 }
 
 export async function collect(input: CollectInput): Promise<CollectOutput> {
@@ -106,7 +115,16 @@ export async function collect(input: CollectInput): Promise<CollectOutput> {
     ...(toolFailuresScope !== undefined ? { tool_failures_scope: toolFailuresScope } : {}),
   } satisfies CollectReport);
 
+  // 每个 processed 会话(含外部内容会话)一行计数,只含计数。先在内存里规划并校验计数库(带病则此处 fail-closed,
+  // 信号库一行都还没写),再写信号,最后落计数库。
+  const stats = processed.flatMap((r) => {
+    const st = buildSessionStat(r);
+    return st ? [st] : [];
+  });
+  // dry 也做 plan(只读、不 apply),这样坏库在 dry 下同样暴露
+  const plan = await planSessionStats(input.io, input.reader.agent, stats);
   const write = input.dry ? undefined : await writeSignals(input.io, input.reader.agent, signals);
+  const statWrite = input.dry ? undefined : await applySessionStats(input.io, plan);
 
   return {
     report,
@@ -123,5 +141,8 @@ export async function collect(input: CollectInput): Promise<CollectOutput> {
     readErrors: results.filter((r) => r.status === 'read_error').length,
     readErrorClasses,
     write,
+    excludedSelfSessions: results.filter((r) => r.excludeReason === 'self_state').length,
+    statWrite,
+    statsSkippedNoTs: processed.length - stats.length,
   };
 }

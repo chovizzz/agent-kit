@@ -2,7 +2,9 @@
  * 确定性分类(非 LLM)。只看结构字段与用户消息摘录,不看 Signal.type(P0 恒为 event)。
  *
  *  - explicit_lesson:用户消息里含明确的「以后/记住/不要再…」祈使句式,且不是疑问句。
- *  - tool_fail_retry:同一会话内,某工具的失败结果之后不久(≤ RETRY_WINDOW_EVENTS 个事件)又调用了同名工具。
+ *  - tool_fail_retry:同一会话内,某工具的失败结果之后不久(≤ RETRY_WINDOW_EVENTS 个事件、下一条用户消息之前)又调用了同名工具。
+ *    失败信号本身没有 tool_name(R1:tool_name 只在 tool_call 上),工具取自它前面最近的 tool_call(两者之间不隔 user_message)。
+ *    外部内容会话不配对。
  *  - user_correction:**保持关闭**(没有标注集前误判率未知,设计 §6.1)。
  *
  * 召回/误判取舍:句式表偏窄(宁可漏,不可把闲聊当教训);漏掉的由「显式教训」的下一次出现补上。
@@ -68,6 +70,8 @@ export function isExplicitLesson(excerpt: string): boolean {
 export interface ToolRetryPair {
   failure: LoadedSignal;
   retry: LoadedSignal;
+  /** 失败所属的工具:同会话里它前面最近的 tool_call 的 tool_name(真实数据里失败信号本身没有 tool_name) */
+  tool: string;
 }
 
 export interface Classification {
@@ -99,11 +103,29 @@ export function classifySignals(
     list.push(s);
     bySession.set(s.session_ref, list);
   }
+  // 会话里只要有外部内容信号,整个会话都不做重试配对(外部内容会话不带 tool_name,且不可信)
+  const externalSessions = new Set(
+    signals.filter((s) => s.external_content).map((s) => s.session_ref),
+  );
   const retryPairs: ToolRetryPair[] = [];
-  for (const list of bySession.values()) {
+  for (const [session, list] of bySession) {
+    if (externalSessions.has(session)) continue;
     const ordered = [...list].sort((a, b) => a.event_index - b.event_index);
-    for (const f of ordered) {
-      if (f.event_kind !== 'tool_result_failed' || f.tool_name === undefined) continue;
+    for (const [i, f] of ordered.entries()) {
+      if (f.event_kind !== 'tool_result_failed') continue;
+      // 失败信号没有 tool_name:工具取自它前面最近的 tool_call;两者之间不能隔着 user_message,且在窗口内
+      let pred: LoadedSignal | undefined;
+      for (let k = i - 1; k >= 0; k--) {
+        const c = ordered[k] as LoadedSignal;
+        if (c.event_kind === 'user_message') break;
+        if (c.event_kind === 'tool_call') {
+          pred = c;
+          break;
+        }
+      }
+      if (pred === undefined || pred.tool_name === undefined) continue;
+      if (f.event_index - pred.event_index > window) continue;
+      const tool = pred.tool_name;
       // 窗口在下一条用户消息处截断:用户插话之后的同名调用不算「失败后的重试」
       const cut = ordered.find(
         (c) => c.event_kind === 'user_message' && c.event_index > f.event_index,
@@ -112,11 +134,11 @@ export function classifySignals(
       const retry = ordered.find(
         (c) =>
           c.event_kind === 'tool_call' &&
-          c.tool_name === f.tool_name &&
+          c.tool_name === tool &&
           c.event_index > f.event_index &&
           c.event_index <= limit,
       );
-      if (retry !== undefined) retryPairs.push({ failure: f, retry });
+      if (retry !== undefined) retryPairs.push({ failure: f, retry, tool });
     }
   }
   return { lessons, weakLessonIds, retryPairs };
