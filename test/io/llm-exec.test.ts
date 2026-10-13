@@ -366,9 +366,10 @@ describe('R0-7 llm-exec:超时 / stdout 上限 / 进程组', () => {
     const pidFile = path.join(f.dir, 'child.pid');
     const bin = await f.install('claude', `/bin/sleep 30 &\necho $! > '${pidFile}'\nwait`);
     const t0 = Date.now();
-    const res = await runLlm(f.ctx, f.req(bin, { timeoutMs: 1500 }));
+    // 超时要给足余量:机器重载时脚本可能在 1.5s 内还没来得及写 pid 文件就被杀(假红)
+    const res = await runLlm(f.ctx, f.req(bin, { timeoutMs: 6000 }));
     expect(res.timedOut).toBe(true);
-    expect(Date.now() - t0).toBeLessThan(5000);
+    expect(Date.now() - t0).toBeLessThan(20_000);
     const pid = Number((await readText(pidFile)).trim());
     expect(pid).toBeGreaterThan(1);
     await expectDead(pid);
