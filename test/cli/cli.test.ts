@@ -67,6 +67,8 @@ const IMPLEMENTED_COMMANDS = new Set([
   // promote:`--run`(采纳,L3)与 `--rule --to`(晋升,L4)都已实装。
   // 不带参数的 promote 是用法错误(2),所以不能再放进上面的「桩 → 64」循环。
   'promote',
+  // retire:L6 已实装;无参数是用法错误(2)。
+  'retire',
 ]);
 
 describe('命令桩:每个命令退出 64 并说明原因(绝不静默成功)', () => {
@@ -89,6 +91,15 @@ describe('命令桩:每个命令退出 64 并说明原因(绝不静默成功)', 
     expect((await run(['promote', '--run', 'run-20200101T000000Z-ffffff'])).code).toBe(
       ExitCode.USAGE,
     );
+  });
+
+  it('retire:已实装(不再是 64);无参数 → 2(用法);规则不存在 → 1', async () => {
+    const none = await run(['retire']);
+    expect(none.code).toBe(ExitCode.USAGE);
+    expect(none.err).toBe('RETIRE_USAGE reason=rule_required\n');
+    const r = await run(['retire', '--rule', 'x', '--to', 'deprecated', '--reason', 'manual']);
+    expect(r.code).toBe(ExitCode.CHECK_FAILED);
+    expect(r.err).toBe('RETIRE_CHECK_FAILED reason=RULE_NOT_FOUND\n');
   });
 
   it('inventory 的提示说明「P1 才进 CLI」', async () => {

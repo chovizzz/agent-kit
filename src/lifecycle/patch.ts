@@ -9,6 +9,11 @@
  */
 import { gitBlobOid } from '../reflect/stage.js';
 
+/** 路径逐段检查:不许有空段、`.`、`..`(字符白名单挡不住 `a/../x`)。 */
+function hasBadSegment(filePath: string): boolean {
+  return filePath.split('/').some((seg) => seg === '' || seg === '.' || seg === '..');
+}
+
 export class PatchError extends Error {
   constructor(readonly code: string) {
     super(code);
@@ -61,7 +66,9 @@ const CONTEXT = 3;
  * `oldText` 必须就是 HEAD 里的 blob 原文(index 行用它的 git blob oid)。两侧行数必须相等。
  */
 export function buildModifyPatch(filePath: string, oldText: string, newText: string): string {
-  if (!/^[a-z0-9][a-z0-9/._-]*$/.test(filePath)) throw new PatchError('PATCH_PATH_UNSAFE');
+  if (!/^[a-z0-9][a-z0-9/._-]*$/.test(filePath) || hasBadSegment(filePath)) {
+    throw new PatchError('PATCH_PATH_UNSAFE');
+  }
   if (oldText === newText) throw new PatchError('PATCH_EMPTY');
   if (newText.includes('\r') || oldText.includes('\r')) throw new PatchError('PATCH_CR');
   if (!oldText.endsWith('\n') || !newText.endsWith('\n')) {
@@ -108,4 +115,27 @@ export function buildModifyPatch(filePath: string, oldText: string, newText: str
     }
   }
   return parts.join('');
+}
+
+/**
+ * 新增文件补丁(L6:retire 的 `lifecycle/<rule-id>/<recorded_at>-<run_id>.json`)。`git apply --check --whitespace=error` 可直接用。
+ * 保守取向同上:内容必须非空、以 LF 结尾、不含 CR、行尾无空白,路径必须过安全正则;否则 `PatchError`。
+ */
+export function buildAddFilePatch(filePath: string, content: string): string {
+  if (!/^[A-Za-z0-9][A-Za-z0-9/._-]*$/.test(filePath) || hasBadSegment(filePath)) {
+    throw new PatchError('PATCH_PATH_UNSAFE');
+  }
+  if (content === '' || !content.endsWith('\n')) throw new PatchError('PATCH_NO_FINAL_NEWLINE');
+  if (content.includes('\r')) throw new PatchError('PATCH_CR');
+  const lines = content.slice(0, -1).split('\n');
+  for (const l of lines) if (/[ \t]$/.test(l)) throw new PatchError('PATCH_TRAILING_WHITESPACE');
+  return [
+    `diff --git a/${filePath} b/${filePath}\n`,
+    'new file mode 100644\n',
+    `index 0000000..${gitBlobOid(content).slice(0, 12)}\n`,
+    '--- /dev/null\n',
+    `+++ b/${filePath}\n`,
+    `@@ -0,0 +1,${lines.length} @@\n`,
+    ...lines.map((l) => `+${l}\n`),
+  ].join('');
 }

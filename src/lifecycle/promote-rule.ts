@@ -162,7 +162,7 @@ export function nextReviewBy(created: string, volatility: string, today: string)
 }
 
 /** 工作树文件必须是普通文件(非符号链接 / 硬链接)且与 HEAD blob 逐字节相同。 */
-async function worktreeMatches(
+export async function worktreeMatches(
   io: IoContext,
   rulePath: string,
   headText: string,
@@ -193,7 +193,7 @@ function toTarget(a: {
   };
 }
 
-function loadConfig(git: GuardGit, headOid: string): KitConfig {
+export function loadConfig(git: GuardGit, headOid: string): KitConfig {
   const text = git.textAt(headOid, 'kit.toml');
   if (text === undefined)
     throw new PromoteError(ExitCode.FAIL_CLOSED, 'FAIL_CLOSED', 'CONFIG_UNREADABLE');

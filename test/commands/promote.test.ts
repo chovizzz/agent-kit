@@ -145,6 +145,32 @@ async function guards(w: World, base: string, head: string) {
   return { code, out: out.join(''), err: err.join('') };
 }
 
+describe('产物目录多出条目', () => {
+  it('promote --write:已有产物目录里多出文件 → 退出 3 PROMOTE_RUN_EXISTS', async () => {
+    const w = await world();
+    const a = await promote(w, [...TO_ADV, '--write', '--json']);
+    const dir = path.join(w.state, 'promote', (JSON.parse(a.out) as { promo_id: string }).promo_id);
+    await safe.writeFile(w.io, path.join(dir, 'extra.json'), '{}\n', { mode: 0o600 });
+    const b = await promote(w, [...TO_ADV, '--write']);
+    expect(b.code).toBe(ExitCode.FAIL_CLOSED);
+    expect(b.err).toBe('PROMOTE_FAIL_CLOSED reason=PROMOTE_RUN_EXISTS\n');
+  });
+});
+
+describe('墓碑参与晋升的 C7', () => {
+  it('id 在 lifecycle/<id>/ 下有记录(墓碑)→ 晋升被 C7:ID_TOMBSTONED 拒,不写;无墓碑时同一世界通过', async () => {
+    const ok = await world();
+    expect((await promote(ok, TO_ADV)).code).toBe(0);
+    const w = await world({
+      extra: { [`lifecycle/${ID}/2026-10-09-run-20261009T000000Z-bbbbbb.json`]: '{}\n' },
+    });
+    const r = await promote(w, [...TO_ADV, '--write']);
+    expect(r.code).toBe(ExitCode.CHECK_FAILED);
+    expect(r.out).toContain('fail C7:ID_TOMBSTONED');
+    expect(await promoDirs(w)).toEqual([]);
+  });
+});
+
 describe('T1 proposed→advisory', () => {
   it('干跑:退出 0、只算不写(前后快照相同)、JSON 键集合固定', async () => {
     const w = await world();

@@ -20,7 +20,6 @@
  *   多结果合并走 `combineExitCodes`。
  * - stdout 只含计数、枚举、id、哈希(`--json` 为 canonical JSON);stderr 只含稳定码 `PROMOTE_* reason=<码>`。
  */
-import * as path from 'node:path';
 import { parse as parseToml } from 'smol-toml';
 import { IsoDateSchema, KebabIdSchema, RunIdSchema } from '../contracts/common.js';
 import { OverlaySchema } from '../contracts/config.js';
@@ -29,8 +28,8 @@ import { ExitCode } from '../contracts/exit-codes.js';
 import type { Redactor } from '../contracts/redact.js';
 import { canonicalJson } from '../io/canonical-json.js';
 import type { IoContext } from '../io/paths.js';
-import { exists, lstat, readText } from '../io/read-fs.js';
-import { chmod, mkdirp, rename, writeFile, WriteDeniedError } from '../io/safe-fs.js';
+import { readText } from '../io/read-fs.js';
+import { WriteDeniedError } from '../io/safe-fs.js';
 import { createGuardGit, GitError } from '../guards/git.js';
 import type { GuardGit } from '../guards/types.js';
 import { JudgeRunNotFoundError } from '../judge/store.js';
@@ -40,6 +39,7 @@ import { PROMOTE_HINT_SIGNATURE, PromoteError, planPromotion } from '../lifecycl
 import type { PromoteTarget } from '../lifecycle/promote-rule.js';
 import { createRedactor } from '../redact/redactor.js';
 import { SignalStoreError } from '../signals/state-store.js';
+import { StateOutError, writeStateOut } from './state-out.js';
 import { combineExitCodes } from './types.js';
 import type { CommandContext, CommandDef } from './types.js';
 
@@ -164,68 +164,22 @@ async function readOverlay(ctx: CommandContext): Promise<Overlay | undefined> {
   }
 }
 
-async function assertRealDir(dir: string): Promise<void> {
-  if (!(await exists(dir))) return;
-  const st = await lstat(dir);
-  if (st.isSymbolicLink() || !st.isDirectory()) {
-    throw new Exit(ExitCode.FAIL_CLOSED, 'FAIL_CLOSED', 'state_dir_unsafe');
-  }
-}
-
-async function assertRegularFile(file: string): Promise<void> {
-  const st = await lstat(file);
-  if (st.isSymbolicLink() || !st.isFile() || st.nlink > 1) {
-    throw new Exit(ExitCode.FAIL_CLOSED, 'FAIL_CLOSED', 'state_file_unsafe');
-  }
-}
-
-async function put(io: IoContext, file: string, content: string): Promise<void> {
-  await mkdirp(io, path.dirname(file), 0o700);
-  await chmod(io, path.dirname(file), 0o700);
-  await writeFile(io, file, content, { mode: 0o600 });
-  await chmod(io, file, 0o600);
-}
-
-const OUT_FILES = ['promote.patch', 'pr-body.md', 'report.json'] as const;
-
-/** 写 `.state/promote/<promo_id>/`;返回 wrote / existing。 */
 async function writeOut(
   io: IoContext,
   plan: { promoId: string; patch: string; prBody: string; report: string },
 ): Promise<{ wrote: boolean; existing: boolean }> {
-  const content: Record<(typeof OUT_FILES)[number], string> = {
-    'promote.patch': plan.patch,
-    'pr-body.md': plan.prBody,
-    'report.json': plan.report,
-  };
-  const root = path.join(io.stateDir, 'promote');
-  const dir = path.join(root, plan.promoId);
-  await assertRealDir(root);
-  if (await exists(dir)) {
-    await assertRealDir(dir);
-    // 内容一致还不够:已有产物的权限被放宽(补丁里有提案与证据)也要拒,不能静默报「已存在」
-    if (((await lstat(dir)).mode & 0o777) !== 0o700) {
-      throw new Exit(ExitCode.FAIL_CLOSED, 'FAIL_CLOSED', 'state_perm_unsafe');
-    }
-    for (const n of OUT_FILES) {
-      if (!(await exists(path.join(dir, n)))) {
-        throw new Exit(ExitCode.FAIL_CLOSED, 'FAIL_CLOSED', 'PROMOTE_RUN_EXISTS');
-      }
-      await assertRegularFile(path.join(dir, n));
-      if (((await lstat(path.join(dir, n))).mode & 0o777) !== 0o600) {
-        throw new Exit(ExitCode.FAIL_CLOSED, 'FAIL_CLOSED', 'state_perm_unsafe');
-      }
-      if ((await readText(path.join(dir, n))) !== content[n]) {
-        throw new Exit(ExitCode.FAIL_CLOSED, 'FAIL_CLOSED', 'PROMOTE_RUN_EXISTS');
-      }
-    }
-    return { wrote: false, existing: true };
+  try {
+    return await writeStateOut(
+      io,
+      'promote',
+      plan.promoId,
+      { 'promote.patch': plan.patch, 'pr-body.md': plan.prBody, 'report.json': plan.report },
+      'PROMOTE_RUN_EXISTS',
+    );
+  } catch (e) {
+    if (e instanceof StateOutError) throw new Exit(ExitCode.FAIL_CLOSED, 'FAIL_CLOSED', e.reason);
+    throw e;
   }
-  const tmp = path.join(root, `.tmp-${plan.promoId}`);
-  if (await exists(tmp)) throw new Exit(ExitCode.FAIL_CLOSED, 'FAIL_CLOSED', 'tmp_exists');
-  for (const n of OUT_FILES) await put(io, path.join(tmp, n), content[n]);
-  await rename(io, tmp, dir);
-  return { wrote: true, existing: false };
 }
 
 export function createPromoteCommand(deps: PromoteCommandDeps = {}): CommandDef {

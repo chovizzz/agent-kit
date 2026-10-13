@@ -13,6 +13,7 @@ import { command as checkCommand } from '../../src/commands/check.js';
 import { createJudgeCommand } from '../../src/commands/judge.js';
 import { createPromoteCommand, command as promoteDefault } from '../../src/commands/promote.js';
 import { createReflectCommand } from '../../src/commands/reflect.js';
+import { createRetireCommand } from '../../src/commands/retire.js';
 import { command as signalsCollect } from '../../src/commands/signals-collect.js';
 import { main } from '../../src/cli.js';
 import { ExitCode } from '../../src/contracts/exit-codes.js';
@@ -513,6 +514,47 @@ describe('promote --run:逐条判据与退出码', () => {
     const r = await promote(s.w, ['--run', RUN_ID]);
     expect(r.code).toBe(ExitCode.CHECK_FAILED);
     expect(r.out).toContain('drop C7:ID_TOMBSTONED=1');
+  });
+});
+
+describe('promote --run:墓碑端到端(retire → 删文件 → 采纳同 id)', () => {
+  it('原子经 retire(rejected)退役、再被 G4 流程删除后,lifecycle 记录留存;采纳同 id 提案被 C7 以 ID_TOMBSTONED 拒', async () => {
+    const s = await stagedRun();
+    await judgeIt(s);
+    const { w } = s;
+    const text = await readText(path.join(s.dir, RULE));
+    await w.repo.commit({ [RULE]: text }, 'add proposed atom');
+    // 正向对照:原子在仓库里时,采纳报 ID_EXISTS_IN_REPO(不是墓碑)
+    const before = await promote(w, ['--run', RUN_ID]);
+    expect(before.out).toContain('drop C7:ID_EXISTS_IN_REPO=1');
+    expect(before.out).not.toContain('ID_TOMBSTONED');
+
+    const c = ctxFor(w, [
+      '--rule',
+      'run-lint-before-commit',
+      '--to',
+      'retired',
+      '--reason',
+      'rejected',
+      '--write',
+      '--json',
+    ]);
+    const code = await createRetireCommand({ now: CLOCK, gitEnv: w.repo.gitEnv }).run(c.ctx);
+    expect(code, c.err.join('') + c.out.join('')).toBe(0);
+    const id = (JSON.parse(c.out.join('')) as { retire_id: string }).retire_id;
+    const patchPath = path.join(w.state, 'retire', id, 'retire.patch');
+    w.repo.git(['apply', '--check', '--whitespace=error', patchPath]);
+    w.repo.git(['apply', '--whitespace=error', patchPath]);
+    await w.repo.commit({}, 'retire');
+    // 模拟 G4 流程:retired 原子文件被删除,lifecycle 记录留存
+    await w.repo.commit({ [RULE]: null }, 'delete retired atom');
+    expect(await exists(path.join(w.repo.dir, RULE))).toBe(false);
+    expect(await exists(path.join(w.repo.dir, 'lifecycle', 'run-lint-before-commit'))).toBe(true);
+
+    const r = await promote(w, ['--run', RUN_ID]);
+    expect(r.code).toBe(ExitCode.CHECK_FAILED);
+    expect(r.out).toContain('drop C7:ID_TOMBSTONED=1');
+    expect(r.out).not.toContain('ID_EXISTS_IN_REPO');
   });
 });
 
