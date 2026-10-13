@@ -125,7 +125,7 @@ zod 校验失败统一映射为 `SCHEMA_INVALID`(`zodIssuesToDiagnostics`);各�
 - **限制**:超时 1..600000ms(SIGKILL 整个进程组,正常退出后也杀遗留组员);stdout ≤32KiB(超出即杀并标 `stdoutTruncated`,调用方须视为失败);stderr 只留 4KiB;`LlmSpawnBudget(max≤10)` 在每次 spawn 前消耗,耗尽 `IO_LLM_SPAWN_LIMIT`。被拒的请求不消耗预算,失败的 spawn 消耗。
 - **eslint**:`child_process` 只许 `src/io/exec.ts`、`src/io/llm-exec.ts`;`llm-exec`(import / export-from / 动态 import)只许 `src/reflect/backends/**` 与 `test/io/llm-exec*.test.ts`、`test/reflect/backends/**`。命令层(`src/commands/{reflect,judge}.ts`)与 judge **经依赖注入**拿后端,不直接 import。放行走 `restrictions({allowLlm})` 生成(flat config 同名规则整条替换,不能另写局部 override)。**R3 须加传递依赖测试**:非 backends 的 `src/reflect/**` 不得经任何路径 import 到 llm-exec,backends 文件不得 re-export `runLlm`。
 - **二进制**:名字叫 `claude` 却实际指向 `sh/bash/env/python…` 的符号链接拒;动态 import 来源含 `%` 一律拒(防 `%2D` 绕开路径匹配);测试放行只给 `test/io/llm-exec.test.ts` 与 `test/reflect/backends/**`。
-- **R3 传参要求**:codex 每次显式传 `-m` 与 `-c model_provider=…`(用户 `~/.codex/config.toml` 可改默认 provider);claude 带 `--strict-mcp-config`、codex 带 `-c mcp_servers="{}"` 等无工具参数——各 CLI 的无工具/无会话落盘参数在 R6 实测前一律「未核实」,拿不准 fail-closed。
+- **R3 传参要求**:codex 每次显式传 `-m` 与 `-c model_provider=…`(用户 `~/.codex/config.toml` 可改默认 provider);claude 带 `--strict-mcp-config`、codex 带 `-c mcp_servers={}`(**不带引号**,见 §17.6)等无工具参数——R6 实测结论见 §17.6,未覆盖项仍「未核实」,拿不准 fail-closed。
 
 ### 5.1 lint 护栏的范围与已知洞(A9)
 
@@ -1867,3 +1867,24 @@ LLM CLI 用真实 HOME 的登录态并写它自己的全局文件,`llm-exec` 只
 | A20 | 变异抽检(与 A13 同构的人工完成项,标记 `.state/accept/a20.done` 绑 HEAD);`a20.mjs --run --set a20 --write-marker` 可自动做,清单见 `ops/accept/a20-mutation.md`                   |
 
 A16–A19 直接 import / 运行 `dist/`;dist 比 src 旧会按「未执行(4)」处理。`--with-p0` 先调用 `accept-p0.sh` 做 A1–A15 回归。
+
+### 17.6 R6 真实环境实测结论(2026-10-13,合成提示,回复 `NOTOOLS` 表示零工具成立)
+
+参数集的 `claims` 与新增只读字段 `globalWrites` 已按下表更新;**`verified` 整体门三者都仍为 `false`**(noProjectContext / noProjectSettings / noUserRouting 本次未测,仍 `unresolved`),用户放行仍靠 `allow_unverified`,gate 语义不变。`FlagClaim` 增 `verified`(实测成立)与 `not_met`(实测不成立)。
+
+| CLI    | 参数(模型/provider 由调用方给)                                                                                                                                                                            | noTools  | noMcp   | noSession | inputViaStdin |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------- | --------- | ------------- |
+| claude | `-p --model <m> --tools "" --strict-mcp-config --no-session-persistence`                                                                                                                                  | verified | claimed | verified  | verified      |
+| codex  | `exec -m <m> -c model_provider=… -c mcp_servers={} -s read-only --skip-git-repo-check --ephemeral` + `--disable {shell_tool,unified_exec,js_repl,code_mode,view_image,multi_agent,apps,plugins,memories}` | verified | not_met | not_met   | verified      |
+| pi     | `-p --no-session --no-context-files --no-skills --no-extensions --provider <p> --model <m> --no-tools`(取代旧的 `--tools read`)                                                                           | verified | claimed | verified  | verified      |
+
+1. **codex 的 `-c mcp_servers` 必须写 `mcp_servers={}`**:原写法 `mcp_servers="{}"` 在 codex-cli 0.161 直接报错(`invalid type: string "{}", expected a map`)。测试断言参数里不得再出现带引号的形式。`model_reasoning_effort` 不在 `build()` 的参数里(现有语义不变):R6 人工实测时另传,当前后端接口未提供该入口。
+2. **codex 仅靠只读沙箱 + 空 MCP 仍会执行 shell**(read-only 下 `echo` 照跑)。加上九个 `--disable` 后回 `NOTOOLS`;**是组合有效,不知道哪几项起决定作用**,codex 升级后须重测这组 `--disable`(新版本可能改名/新增工具特性)。
+3. **codex 的 MCP 仍会尝试连接**:`mcp_servers={}` 没有阻止它去连 `localhost:8000` 的 MCP(连接报错,不影响结果),所以 noMcp 标 `not_met`,不得当作「已隔离」。
+4. **codex 的 `--ephemeral` 只是不存会话文件**,仍写 sqlite,noSession 标 `not_met`。
+5. **R6 观察到的全局写入**(`globalWrites`;单次实测所见,不保证每次发生、清单不保证穷尽;`llm-exec` 与参数都挡不住,A5 零写入验收不覆盖真跑,见 §12.4/§17.4):
+   - claude:`~/.claude.json`、`~/.claude/backups/` 新备份、`~/.claude/plugins/.last_inuse_sweep`、`~/.claude/plugins/synced` 与 `~/.claude/skills/synced` 下同步文件、`~/.claude/session-env` 启动脚本。
+   - codex:`~/.codex/` 下 `state_5`、`goals_1`、`queue_1`、`logs_2` 四个 sqlite 及其 `-shm`/`-wal`。
+   - pi:无可归因的全局写入。
+6. 本次未测:noProjectSettings、noUserRouting 三者都保持 `unresolved`;noProjectContext 在 claude/codex 保持 `unresolved`,pi 沿用原先的 `claimed`(§16① 的 cwd 在仓库树内问题仍在)。claude 与 pi 的 noMcp 沿用 `claimed`。
+7. **证据范围**:`noTools=verified` 的判据是合成提示下 CLI 回复 `NOTOOLS`(未保存工具注册清单/调用轨迹),且 codex 的结论是在「MCP 连接失败」的环境下得出——**未测**「用户配置了可连通且提供工具的 MCP」这一组合。升级 CLI 或环境里有可用 MCP 时须重测。

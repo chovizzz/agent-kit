@@ -24,6 +24,7 @@ describe('R3 加固:不可变性与内部类型不外泄', () => {
     for (const a of [CLAUDE_ARGS, CODEX_ARGS, PI_ARGS, ...listCliArgSets()]) {
       expect(Object.isFrozen(a)).toBe(true);
       expect(Object.isFrozen(a.claims)).toBe(true);
+      expect(Object.isFrozen(a.globalWrites)).toBe(true);
       expect(() => {
         (a as { verified: boolean }).verified = true;
       }).toThrow(TypeError);

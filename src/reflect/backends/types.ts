@@ -4,12 +4,16 @@ import type { LlmSpawnBudget } from '../../io/llm-exec.js';
 /** 一次运行共享的 spawn 预算(类型别名;命令层经 `createSpawnBudget` 构造,不 import llm-exec)。 */
 export type SpawnBudget = LlmSpawnBudget;
 
-/** 「某条无工具/无会话/无上下文」声明的核实状态。R6 之前只有 `unresolved`(没写法)或 `claimed`(写了但没实测)。 */
-export type FlagClaim = 'claimed' | 'unresolved';
+/**
+ * 「某条无工具/无会话/无上下文」声明的核实状态。
+ * - `unresolved`:没写法;`claimed`:写了但没实测;
+ * - `verified`:R6 真实环境实测成立;`not_met`:R6 实测**不成立**(已知做不到)。
+ */
+export type FlagClaim = 'claimed' | 'unresolved' | 'verified' | 'not_met';
 
 /**
- * 一个 CLI 的参数集。`verified:false` = 没有在真实环境实测过,默认拒绝真跑
- * (见 `CliBackendOptions.allowUnverified`)。`claims` 逐项说明想达到的隔离效果与现状,供 R6 逐项核对。
+ * 一个 CLI 的参数集。`verified:false` = 整体隔离要求尚未全部核实/满足(R6 已逐项实测部分,
+ * 见 `claims`),默认拒绝真跑(见 `BackendDeps.allowUnverified`)。`claims` 逐项说明想达到的隔离效果与现状,供 R6 逐项核对。
  */
 export interface CliArgSet {
   readonly cli: 'claude' | 'codex' | 'pi';
@@ -30,6 +34,8 @@ export interface CliArgSet {
   };
   /** 是否必须配置 provider(claude 不接受;codex 缺省 openai;pi 必填) */
   readonly provider: 'forbidden' | 'optional' | 'required';
+  /** R6 在该版本/环境下观察到的全局写入(参数挡不住;不保证每次发生、清单不保证穷尽;A5 零写入验收不覆盖真跑)。深冻结。 */
+  readonly globalWrites: readonly string[];
   build(binding: { readonly provider?: string | undefined; readonly model: string }): string[];
 }
 
@@ -58,5 +64,6 @@ export interface BackendDeps {
 /** 参数集是进程级常量:深冻结,防止运行期改写 `verified` / `build` / `claims`。 */
 export function deepFreezeArgSet(a: CliArgSet): CliArgSet {
   Object.freeze(a.claims);
+  Object.freeze(a.globalWrites);
   return Object.freeze(a);
 }

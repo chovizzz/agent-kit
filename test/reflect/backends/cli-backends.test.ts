@@ -22,6 +22,18 @@ import {
   fixture,
 } from './_fixture.js';
 
+const CODEX_DISABLE_FEATURES = [
+  'shell_tool',
+  'unified_exec',
+  'js_repl',
+  'code_mode',
+  'view_image',
+  'multi_agent',
+  'apps',
+  'plugins',
+  'memories',
+] as const;
+const CODEX_DISABLES = CODEX_DISABLE_FEATURES.flatMap((f) => ['--disable', f]);
 const lines = (s: string | undefined) => (s ?? '').split('\n').slice(0, -1);
 const bySlot = (list: readonly LlmBackend[], slot: string): LlmBackend => {
   const b = list.find((x) => x.slot === slot);
@@ -57,11 +69,12 @@ describe('R3 适配器 happy path 与参数集', () => {
         '-c',
         'model_provider="openai"',
         '-c',
-        'mcp_servers="{}"',
+        'mcp_servers={}',
         '-s',
         'read-only',
         '--skip-git-repo-check',
         '--ephemeral',
+        ...CODEX_DISABLES,
       ],
     },
     {
@@ -78,8 +91,7 @@ describe('R3 适配器 happy path 与参数集', () => {
         'zai',
         '--model',
         'glm-test-1',
-        '--tools',
-        'read',
+        '--no-tools',
       ],
     },
   ] as const;
@@ -121,7 +133,13 @@ describe('R3 适配器 happy path 与参数集', () => {
     expect(a).toContain('-m');
     expect(a[a.indexOf('-m') + 1]).toBe('m');
     expect(a).toContain('model_provider="openai"');
-    expect(a).toContain('mcp_servers="{}"');
+    expect(a).toContain('mcp_servers={}');
+    expect(a).not.toContain('mcp_servers="{}"'); // R6:带引号的写法在 codex 0.161 报错,防回退
+    expect(a.some((x) => x.startsWith('mcp_servers=') && x.includes('"'))).toBe(false);
+    expect(a.slice(-CODEX_DISABLES.length)).toEqual([...CODEX_DISABLES]);
+    for (const f of CODEX_DISABLE_FEATURES) {
+      expect(a[a.indexOf(f) - 1]).toBe('--disable');
+    }
     expect(a[a.indexOf('-s') + 1]).toBe('read-only');
     expect(a).toContain('--skip-git-repo-check');
     expect(CODEX_ARGS.build({ model: 'm', provider: 'azure' })).toContain('model_provider="azure"');
@@ -134,6 +152,9 @@ describe('R3 适配器 happy path 与参数集', () => {
     for (const f of ['--no-session', '--no-context-files', '--no-skills', '--no-extensions']) {
       expect(a).toContain(f);
     }
+    expect(a).toContain('--no-tools'); // R6:取代 --tools read
+    expect(a).not.toContain('--tools');
+    expect(a).not.toContain('read');
   });
 
   it('三个参数集全部 verified:false,且逐项声明了核实状态(noTools 等至少一项 unresolved)', () => {
@@ -144,8 +165,42 @@ describe('R3 适配器 happy path 与参数集', () => {
       expect(s.basis.length).toBeGreaterThan(10);
       expect(Object.values(s.claims).some((v) => v === 'unresolved')).toBe(true);
     }
-    expect(PI_ARGS.claims.noTools).toBe('unresolved');
-    expect(CODEX_ARGS.claims.noTools).toBe('unresolved');
+  });
+
+  it('R6 claims 新值:noTools 三者 verified;codex 的 noMcp/noSession 为 not_met;未测项保持 unresolved', () => {
+    for (const s of [CLAUDE_ARGS, CODEX_ARGS, PI_ARGS]) {
+      expect(s.claims.noTools).toBe('verified');
+      expect(s.claims.inputViaStdin).toBe('verified');
+    }
+    expect(CLAUDE_ARGS.claims.noSession).toBe('verified');
+    expect(PI_ARGS.claims.noSession).toBe('verified');
+    expect(CODEX_ARGS.claims.noMcp).toBe('not_met');
+    expect(CODEX_ARGS.claims.noSession).toBe('not_met');
+    for (const s of [CLAUDE_ARGS, CODEX_ARGS]) {
+      expect(s.claims.noProjectContext).toBe('unresolved');
+    }
+    for (const s of [CLAUDE_ARGS, CODEX_ARGS, PI_ARGS]) {
+      expect(s.claims.noProjectSettings).toBe('unresolved');
+      expect(s.claims.noUserRouting).toBe('unresolved');
+    }
+  });
+
+  it('claims 里每个 verified / not_met 项,basis 里有对应的 `<项>=<状态>` 说明与 R6 日期', () => {
+    for (const s of listCliArgSets()) {
+      expect(s.basis).toContain('2026-10-13');
+      for (const [k, v] of Object.entries(s.claims)) {
+        if (v === 'verified' || v === 'not_met') expect(s.basis).toContain(`${k}=${v}`);
+      }
+    }
+  });
+
+  it('globalWrites 清单:claude/codex 含 R6 记录的路径、pi 为空,且数组已冻结', () => {
+    expect(CLAUDE_ARGS.globalWrites.some((w) => w.includes('~/.claude.json'))).toBe(true);
+    for (const n of ['state_5', 'goals_1', 'queue_1', 'logs_2']) {
+      expect(CODEX_ARGS.globalWrites.some((w) => w.includes(n))).toBe(true);
+    }
+    expect(PI_ARGS.globalWrites).toEqual([]);
+    for (const s of listCliArgSets()) expect(Object.isFrozen(s.globalWrites)).toBe(true);
   });
 });
 
