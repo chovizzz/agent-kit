@@ -31,9 +31,47 @@
 
 - ✅ **探针 `probe`**(`d12a32a`):干跑测量 + `--write` 产 kit.toml 补丁(不落盘);
   documented 不改写、缺版本 USAGE 拒绝;pendingProbes 只列不断言。有效性探针(跑真实 agent 观察 P-Q*)仍待主代理真实环境项
-- ☐ **反思器 `reflect`**:`Proposal.reflector.vendor` 必填、`judge.vendor ≠ reflector.vendor`、
-  `skipped:same-vendor` 记账(contracts #18);含外部内容的会话只进结构化计数(#8)
-- ☐ **`attest` / `promote` / `retire`**:按 contracts §对应节;依赖 reflect
+- ✅ **反思器 `reflect` + 裁判 `judge`**(实现:stub 验证;**真实后端未验证**——所有 CLI 参数集仍是 `verified:false`,
+  默认拒绝真跑,需覆盖层 `allow_unverified` 显式放行,R6 实测前不要在真实数据上跑):`Proposal.reflector.vendor` 必填、
+  `judge.vendor ≠ reflector.vendor`、`skipped:same-vendor` 记账(contracts #18);含外部内容的会话只进结构化计数(#8);
+  命令面与退出码见 contracts §17;验收 `ops/accept-p1.sh`(A16–A20)。
+- ☐ **`attest` / `promote` / `retire`**:按 contracts §对应节;依赖 reflect。
+  **注意**:G3 判据(`promote`)不能信任 judge 的 `injection_suspected=false`——要在本地对提案/原子文本再跑一遍
+  reflect 的话术检测(`scanDangerousPhrases` + 不可见字符),judge 的结论只作输入,不作放行依据
+
+## Phase P1-C 之后的待办(R5 汇报时登记)
+
+- ☐ **R6 真实环境 spike**(主代理、需用户当场同意):①各 CLI 的无工具 / 无会话 / 无上下文参数逐项核实
+  (`claude`/`codex`/`pi` 的 `claims` 全是 `claimed`/`unresolved`);②`llm-exec` 的固定 cwd 在仓库 git 树内
+  (`<repo>/.state/reflect/cwd`),CLI 向上找项目根时可能读到仓库的 CLAUDE.md / AGENTS.md / `.claude/settings.json`
+  (contracts §16①),需实测或允许 `KIT_STATE_DIR` 指向仓库外;③每个 CLI 真跑实际写了哪些全局文件(会话日志、history),列清单
+- ☐ **暂存区过期 / gc**:`.state/reflect/<run_id>/` 现在只增不减(`loadUsedProposalIds` / `loadStagedAtoms` 会随之变慢,
+  且已用编号永不释放);需要 `reflect --gc` 或过期策略,并保证不删还在被 judge / 人工 apply 使用的 run
+- ☐ **契约层不可见字符补全**:`HIDDEN_CHARS_RE` 漏 Unicode tag 字符(U+E0000 段)、bidi U+061C(ALM)、变体选择符
+  (U+FE00–FE0F、U+E0100 段)、Hangul 填充(U+3164、U+115F/1160、U+FFA0)等;`hidden_chars_in_output` 目前只是纵深防御
+  (A16 里没有夹具能走到它,因为 schema 的零宽检查先拦下)
+- ☐ **reader 原型键问题**:事件类型名为 `constructor` / `__proto__` / `toString` 时,按普通对象做计数键会碰到原型链
+  (`unknown_event_types` 之类);reader 与 `safeKey` 要改用 `Object.create(null)` / `Map` 或前缀转义,并加用例
+- ☐ **单厂商时 `no_cross_vendor` 退出 0 的提示**:`judge` 在只有同厂商 / 未配置时退出 0(决策 ⑩A),且「未配置」与「单厂商」
+  都落成 `no_cross_vendor`,用户看不出是配置问题;需要在 stdout/stderr 区分(`not_configured` vs `same_vendor_only`),
+  并考虑 `--strict` 退出 4
+- ☐ **`LlmBackend` 扩 `cli` / `provider` 字段**:现在命令层要靠覆盖层反查 `backendCli`(只能对默认接线做到,
+  注入的后端拿不到);扩接口后 `reflector.backend` 才能从后端自己拿
+- ☐ **CI 校验**:要求 `reflector.backend` 必填(CI 才能用 provider/model 重算 `deriveVendor`),并拒收 `reflector.stub: true`
+  的提案(contracts #24)
+- ☐ **`IoContext.hostEnv`**:命令层不能读 `process.env`(eslint:只许 `src/io/paths.js`),真实 CLI 路径下 `reflect`/`judge`
+  只能用 `IoContext.execPath`(= PATH)和 `getRealHome()` 拼子进程环境;应由 `paths.ts` 提供受控的 `hostEnv`
+  (contracts §12.4 ④),并把 `CommandContext.env` 正式加进 `src/commands/types.ts`(目前经 `EnvCommandContext` 交叉类型传入)
+- ☐ **`team_project_keys` 填什么**:值是信号里的 `project_key`(加盐哈希 `p_…`),但 CLI 没有任何地方把它列给用户;
+  `reflect` 干跑(或 `signals collect --dry`)应列出各 `project_key` 的会话数/信号数(只有 id 与计数),用户才填得出白名单
+- ☐ **A20 在共用工作树里原地变异**:同一棵树里别的进程(build / test)会读到变异后的源码;更稳的做法是在临时 worktree 里做变异。
+  现已缓解:不恢复 mtime(变异窗口内构建的 dist 会被 `freshDist` 判陈旧)、结束后自动重建 dist、SIGINT/SIGTERM 先还原、
+  `--write-marker` 要求工作树干净、遗留 `.mut-bak` 时拒绝继续;SIGKILL 仍可能留下变异源码(靠 `.mut-bak` 检测发现)
+- ☐ **R2 接口**:`runReflect` 的 `personalProjectKeys` 是黑名单,命令层靠补集代理对象把白名单 `team_project_keys` 接进去
+  (只支持 `has()`);R2 应直接提供 `teamProjectKeys` 白名单参数
+- ☐ **`kit:reflector` 标签不禁止修改既有文件**:A17 的 N1 钉住了现状——反思器 PR 改已有 active 原子的**正文**不被
+  路径守卫 / G1 / G2 拒(G2 只锁治理字段,契约 GD-2 已接受);`reflect` 自己只产生新增文件,但 CI 侧对 `kit:reflector`
+  应加「只许新增」判据
 - ☐ **`sync` 写全局 + `doctor`**(P2 表内但同批):真实 HOME 受管路径写入,依赖 B17 守卫面
 
 ## Phase P1-D(发布与治理,⏸ 等用户凭据/授权)

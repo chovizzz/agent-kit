@@ -193,7 +193,7 @@ A2 的 12 格矩阵(`limit_source` × `enforce` × 超/不超;退出码 / 是否
 | `redact`                                              | P0     | `src/commands/redact-cmd.ts`      | `--selftest` / `--stdin`(B09)                                         |
 | `signals collect`                                     | P0     | `src/commands/signals-collect.ts` | `--source <路径> --dry`(B10b)                                         |
 | `inventory`                                           | P1(桩) | `src/commands/inventory.ts`       | 见 §4.1                                                               |
-| `probe` `reflect` `judge` `attest` `promote` `retire` | P1     | 各一个文件                        | 桩(`judge` 为 R0 新注册的桩,`src/commands/judge.ts`;`probe` 已实装)   |
+| `probe` `reflect` `judge` `attest` `promote` `retire` | P1     | 各一个文件                        | `probe` `reflect` `judge` 已实装(`reflect`/`judge` 见 §17);其余仍是桩 |
 | `sync` `doctor`                                       | P2     | 各一个文件                        | 桩                                                                    |
 
 - 全局选项(由 `cli.ts` 取走,命令不用管):`--root <dir>`、`--overlay <path>`、`-h/--help`、`-v/--version`。
@@ -246,6 +246,8 @@ A2 的 12 格矩阵(`limit_source` × `enforce` × 超/不超;退出码 / 是否
 26. **厂商表(R0)**:`src/contracts/vendor.ts` 冻结常量。`deriveVendor({backend, provider?, model?}, overrides?)`:claude→anthropic;codex 默认 provider 或 `openai`→openai,其它 provider 按模型族;pi 按模型族(第一方 provider 与模型族矛盾→unknown);推导不出→`unknown`。模型族按**整 token 相等**(`deepseekfoo` 不是 deepseek),`o<数字>` 为 openai;模型串含空白/非 ASCII 一律 unknown;路径段命中的厂商互相矛盾→unknown。`isCrossVendor(a,b)`:任一方 unknown、空、非规范形(`^[a-z][a-z0-9-]{0,31}$`),或**不是内置厂商**(覆盖层追加的家族可能把真实厂商的模型标成「新厂商」,不能当证据)→false(无法证明就不放行,不做归一化)。后端固定厂商(claude→anthropic、codex 默认 provider→openai)时,若给出的模型串明确属于另一厂商,推导为 unknown(配置与后端矛盾)。覆盖层 `vendor_overrides` 只能**追加新模型族 token**,不得覆盖内置族、不得映射到内置厂商或 `unknown`,违者 `CFG_VENDOR_OVERRIDE_DENIED`。**用户不能声明厂商**(绑定里没有 vendor 字段)。
 27. **reflect 配置与输出契约(R0)**:`KitConfig.reflect`(仅 `max_proposals≤5 / max_calls≤3 默认 1 / timeout_ms`)与 `Overlay.reflect`(另含 `reset_tz` 默认 `UTC`、`backends:[{slot,cli,provider?,model?}]`、`vendor_overrides`、`egress` 默认 false),全部可选,旧 kit.toml 仍有效;core 不写死任何私人账号/渠道,未配置的槽位运行时记 `error:not_configured`。`ReflectorOutputSchema`(`makeReflectorOutputSchema({atomMaxBytes,maxProposals})`)全层 strictObject,`op` 只能 `add`,`signature.type` 不含 `always`,pattern 过 `checkPatternSafety`(旗标 `u`;拒回溯引用、lookaround、重复量词修饰的含量词/`|` 分组、`?`/有界量词也算分组内量词、未限界量词 >3、重复量词 >6、无任何字面量字符;使用方须限制被匹配串 ≤4KiB,并对 pattern 本身再过脱敏第二遍);`ReflectRunReportSchema` 只含计数与哈希。id 是否与仓库/暂存区冲突、证据别名是否为输入子集,schema 判不了,由校验器/合并器判。
 28. **受控 LLM 出口(R0)**:见 §5.2。
+29. **R5 追加的两个可选配置字段(覆盖层 `reflect`)**:`reflect.backends[].allow_unverified`(boolean,缺省视为 false;为 true 时命令层把**该槽位**所用 CLI 二进制的绝对路径加入后端的 `allowUnverified` 清单,放行 `verified:false` 的参数集真跑;**逐槽位生效**,同一个二进制被另一个没写的槽位使用时仍被拒;core 与 `kit.toml` 不得默认放行,只能由用户在覆盖层显式写)与 `reflect.team_project_keys`(字符串列表,缺省空;值取信号里的 `project_key`;**白名单**:缺省时所有项目一律按 personal 层处理(fail-closed),只有列在这里的项目才可能进团队层)。`runReflect` 的 `personalProjectKeys` 是**黑名单**(`has(k)` 为真 → 降为 personal),命令层传入补集视图 `has(k) = !team.has(k)`;该视图只支持 `has()`,其余成员访问即抛错(防止将来有人迭代它得到悄悄放行的空集)。两项都只追加、旧覆盖层仍有效;`KitConfig`(core)里出现它们仍被拒。
+30. **命令层的外发同意是三道门**:`--run-llm`、`--allow-egress`、覆盖层 `reflect.egress = true`(缺覆盖层按 false),缺任何一道退出 2、零构造零调用零写入(§17)。干跑路径不构造后端。
 
 ## 9. 标识符与哈希约定(Q-N7 的默认处理)
 
@@ -1629,6 +1631,46 @@ Signal 追加的可选字段(旧信号没有这些字段同样合法)。
 }
 ```
 
+R5 追加字段(#29):`allow_unverified` 与 `team_project_keys`。
+
+<!-- example:valid schema=Overlay -->
+
+```json
+{
+  "reflect": {
+    "egress": true,
+    "team_project_keys": ["p_0123456789abcdef", "p_fedcba9876543210"],
+    "backends": [
+      {
+        "slot": "codex",
+        "cli": "codex",
+        "model": "gpt-5.6-example",
+        "allow_unverified": true
+      }
+    ]
+  }
+}
+```
+
+错误示例(#29):`allow_unverified` 不是布尔、`team_project_keys` 含空串。
+
+<!-- example:invalid schema=Overlay -->
+
+```json
+{
+  "reflect": {
+    "team_project_keys": [""],
+    "backends": [
+      {
+        "slot": "codex",
+        "cli": "codex",
+        "allow_unverified": "yes"
+      }
+    ]
+  }
+}
+```
+
 错误示例:`max_proposals>5`、绑定里自己声明 `vendor`、覆盖内置模型族。
 
 <!-- example:invalid schema=Overlay -->
@@ -1772,3 +1814,56 @@ Signal 追加的可选字段(旧信号没有这些字段同样合法)。
 - **render 是否按 status 过滤 proposed 原子**:§12.3 说不过滤,其它记录说不渲染——两说不一致,**待主代理**确认(暂存方案不受影响)。
 - **opus 对抗评审(非 Codex)后仍未处理,列待主代理 / R3**:①`llm-exec` 的固定 cwd 在 `<repo>/.state/reflect/cwd`,仍在仓库 git 树内——claude/codex 向上找 git 根时可能读到仓库的 CLAUDE.md / AGENTS.md / `.claude/settings.json`(hooks 可执行命令)。R0 受 `writeRoots` 限制放不到仓库外;R3 须靠 CLI 参数(忽略项目设置)并在 R6 实测,或由主代理允许 `KIT_STATE_DIR` 指向仓库外;②`LlmSpawnBudget` 由调用方创建,没有进程级全局上限,并发调用共用同一个 cwd(一方收尾清目录会删另一方文件)——R3 须单例化预算并串行化;③`HOME` / `XDG_*` 本身可改 CLI 的配置来源,`filterLlmEnv` 未断言其不在仓库内;④`reflector.backend` 缺省时 CI 无从重算厂商——P1 CI 须要求必填;⑤`applies_to` 目前允许 LLM 填 `all`(作用范围应由合并器决定);提案 `id` 与已有原子重名(add 变覆盖)由合并器拒;⑥`o<数字>` 之外的真实模型(`gemma`、`chatglm`、`codex-mini` 等)不在内置族表,推导为 unknown(fail-closed)。
 - **既有 `judge` 比较未收紧(待主代理)**:现有 superRefine 对 `judge.vendor` / 跳的 vendor 用精确字符串比较(大小写、空白可绕),且 `vendor:"unknown"` 不被拒;`reflector.vendor` 为 `unknown` 时也不拦。收紧会改变已有字段的取值集合,按 §1 不在 R0 内做;`judge_attempts` 已按归一化比较。CI 另须用 `reflector.backend` 重算厂商。
+
+## 17. `reflect` / `judge` 命令面与验收(R5)
+
+### 17.1 CLI 形状
+
+```
+agent-kit reflect [--agent <id>]… [--since YYYY-MM-DD] [--max-proposals N(1..5)]
+                  [--run-llm --allow-egress] [--backend <slot>] [--max-calls N(1..3,默认 1)]
+                  [--timeout-ms N(1000..600000)] [--owner @handle] [--show-prompt] [--json]
+agent-kit judge   --run <run_id> [--run-llm --allow-egress] [--max-calls N(1..10,默认 5)]
+```
+
+- **默认干跑**:装载/分类/聚类/构造提示并打印计划(聚类数、证据数、提示字节数与 sha256、预算状态、将用的后端槽位与 CLI);**不构造后端、不调用后端、不写任何文件**。`--show-prompt` 只在干跑下把提示打到 stdout(不落盘),与 `--json`、`--run-llm` 互斥(退出 2)。干跑不要求 `--owner`(占位 `@dry-run`,不落盘)。
+- **真跑(三道门)**:`--run-llm` + `--allow-egress` + 覆盖层 `reflect.egress = true`(#30);`reflect` 另需 `--owner @handle`。后端经 `buildBackends`(覆盖层 `reflect.backends` → 固定兜底链槽位),只返回已绑定的槽位;`reflect` 已绑定多个槽位时必须 `--backend <slot>` 指定(不自动挑选,摘录会发给所选厂商);真跑前 stderr 打一行 `REFLECT_EGRESS slot=… vendor=…`。所有 CLI 参数集仍是 `verified:false`,没有 `allow_unverified`(#29)就不 spawn(R6 实测前)。
+- 所有数字参数只收十进制非负整数(`parseDecimalUint`):`0x10`、`1e3`、`+5`、`-1`、带空白、小数一律退出 2。
+- `run_id` 形如 `run-<UTC 时间戳>-<6 位十六进制>`(`RunIdSchema` 格式),时钟与随机源可注入。
+- 预算:`prepareBudgetInputs` + `computeBudget`;任一目标 `level != ok` 即「预算已满」。真跑遇到预算已满**不调用后端**(摘录不白发),stderr `REFLECT_BUDGET_FULL`,退出 1、不写任何文件;干跑只在摘要里标 `budget: full`。预算算不出来:干跑标 `budget: unknown` 仍退 0;真跑 fail-closed 退 3。
+- 上限(`max_calls` / `max_proposals` / `timeout_ms`)优先级:命令行 > 覆盖层 `[reflect]` 里**显式写的值**(schema 默认值不算) > `kit.toml` 的 `[reflect]` > 内置默认(1 / 5 / 180000)。
+- stdout:人类可读摘要;`--json` 为 canonical JSON(键集合固定),**只含计数、枚举、id、哈希**,绝不含摘录/提示/任何文本。stderr 只含稳定码(`REFLECT_USAGE|NOT_RUN|FAIL_CLOSED reason=<码>`)或用法提示(用法错可能回显用户自己输入的参数名/值,如 `未知参数:--x`),不带异常消息、不带任何信号/提示/LLM 文本。
+
+### 17.2 退出码
+
+| 码  | `reflect`                                                                                                                     | `judge`                                                              |
+| --- | ----------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| 0   | 干跑完成;真跑已暂存/无提案(含全是与已有规则重复)                                                                              | 完成(含 `judge_pending = no_cross_vendor`)                           |
+| 1   | 输出被拒(schema/话术/回显/守卫模拟红灯),整批不暂存;或真跑时预算已满(未调用后端)                                               | 有 `reject` / `injection_suspected` / 没评上且出现过评审输出校验失败 |
+| 2   | 用法错(含缺 `--allow-egress`、覆盖层未同意外发、缺 `--owner`、多槽位未指定 `--backend`、`--show-prompt` 互斥、覆盖层读取失败) | 同左(`--run` 不存在也是 2)                                           |
+| 3   | `ReflectFailClosedError`(提示复扫残留、厂商 unknown…)、`SignalStoreError`、写出口拒绝、预算算不出来(真跑)、**任何未知异常**   | 状态损坏、提示复扫残留、厂商不可证明、写出口拒绝、未知异常           |
+| 4   | 没有已配置/可用的后端、后端报错/限流/超时、`ReflectCallLimitError`(批数 > `--max-calls`,调用前中止)                           | 后端不可用/全部冷却/超出 `--max-calls`                               |
+
+多个结果合并走 `combineExitCodes`(优先级 3 > 2 > 1 > 4 > 64 > 0)。
+
+### 17.3 R1 订正(三句)
+
+- 会话计数库(`.state/sessions/<agent>/<yyyymm>.jsonl`)按 `session_ref` **upsert**,`ts` 在首次写入时**钉死**(之后同一会话的重采不改它)。
+- **外部内容会话**的信号不带 `tool_name`(摘录为 `''`,计数仍进计数库)。
+- 取不到会话时间的会话**不写计数行**(`signals collect` 报告的 `session_stats.skipped_no_ts` 计数)。
+
+### 17.4 真跑不在 A5 零写入覆盖范围内
+
+LLM CLI 用真实 HOME 的登录态并写它自己的全局文件,`llm-exec` 只管 env/cwd/超时/输出/次数(§12.4)。A5 与 A19 的零写入只对**干跑与 stub 路径**成立;A19 里的真跑只用来证明"假 codex 经 kit 确实可达"(正向对照),发生在最终快照之后。真跑前后的受管路径快照与「每个 CLI 实际写了哪些全局文件」清单属 R6。
+
+### 17.5 验收 `ops/accept-p1.sh`(A16–A20;A1–A15 仍是 `ops/accept-p0.sh`,语义不变)
+
+| 项  | 内容                                                                                                                                                                            |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A16 | `validateReflectorOutput` 夹具矩阵:合法 8 条全过;非法 32 条按**具体原因码**被拒(未知字段 / `status:'active'` / `op:'edit'` / 超长 / 坏 pattern / `[[REDACTED` / 证据别名越界 …) |
+| A17 | 合成 git 仓库,`kit:reflector` 标签:改 `hooks/` 等禁区、改已有 active 原子的治理字段、新增 active / 带边原子、删 active 原子,均被路径守卫 / G1 / G2 / G4 按精确码拒绝            |
+| A18 | `runJudge` + stub 后端:同厂商的跳不调用、记 `skipped:same-vendor`;全链失败 `judge_attempts` 记满 5 跳且不含 `ok`(读盘核对)                                                      |
+| A19 | 假 HOME + `node --permission` + 金丝雀假 codex + 树哈希前后对比 + 真实 HOME 受管路径快照;含五个正向对照(快照能报差异、`--permission` 真拒写、金丝雀直接执行可见、kit 真跑可达)  |
+| A20 | 变异抽检(与 A13 同构的人工完成项,标记 `.state/accept/a20.done` 绑 HEAD);`a20.mjs --run --set a20 --write-marker` 可自动做,清单见 `ops/accept/a20-mutation.md`                   |
+
+A16–A19 直接 import / 运行 `dist/`;dist 比 src 旧会按「未执行(4)」处理。`--with-p0` 先调用 `accept-p0.sh` 做 A1–A15 回归。

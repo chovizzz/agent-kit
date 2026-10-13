@@ -18,7 +18,12 @@ import {
 } from '../judge/helpers.js';
 import type { Stubs } from '../judge/helpers.js';
 
-const make = (s: Stubs) => createJudgeCommand({ createBackends: () => s.backends, redactor });
+const make = (s: Stubs) =>
+  createJudgeCommand({
+    createBackends: () => s.backends,
+    redactor,
+    requireOverlayEgress: false,
+  });
 const LIVE = ['--run', RUN_ID, '--run-llm', '--allow-egress'];
 
 describe('judge 命令:用法与干跑', () => {
@@ -73,13 +78,13 @@ describe('judge 命令:用法与干跑', () => {
     expect(await make(makeStubs()).run(ctx)).toBe(ExitCode.USAGE);
   });
 
-  it('默认 command 没有注入后端:真跑 → 4 并提示,不写;干跑 → 0', async () => {
+  it('默认 command(R5 接线):覆盖层未同意外发 → 真跑 2(零写入);干跑 → 0 且不构造后端', async () => {
     const w = await newWork();
     await writeProposal(w);
     const before = await snapshot(w.runDir);
     const live = cmdCtx(w, LIVE);
-    expect(await command.run(live.ctx)).toBe(ExitCode.NOT_RUN);
-    expect(live.err.join('')).toContain('没有可用的评审后端');
+    expect(await command.run(live.ctx)).toBe(ExitCode.USAGE);
+    expect(live.err.join('')).toContain('reflect.egress');
     expect(await snapshot(w.runDir)).toEqual(before);
     const dry = cmdCtx(w, ['--run', RUN_ID]);
     expect(await command.run(dry.ctx)).toBe(ExitCode.OK);
@@ -165,7 +170,11 @@ describe('judge 命令:退出码', () => {
     const w = await newWork();
     await writeProposal(w);
     const bad = new StubBackend('codex', 'unknown', 'mystery');
-    const cmd = createJudgeCommand({ createBackends: () => ({ codex: bad }), redactor });
+    const cmd = createJudgeCommand({
+      createBackends: () => ({ codex: bad }),
+      redactor,
+      requireOverlayEgress: false,
+    });
     expect(await cmd.run(cmdCtx(w, LIVE).ctx)).toBe(ExitCode.FAIL_CLOSED);
     expect(bad.calls).toHaveLength(0);
     expect(await cmd.run(cmdCtx(w, ['--run', RUN_ID]).ctx)).toBe(ExitCode.FAIL_CLOSED); // 干跑同判
@@ -225,6 +234,7 @@ describe('judge 命令:退出码', () => {
         },
       }),
       redactor,
+      requireOverlayEgress: false,
     });
     expect(await cmd.run(cmdCtx(w, LIVE).ctx)).toBe(ExitCode.FAIL_CLOSED);
     expect(wrong.totalCalls()).toBe(0);

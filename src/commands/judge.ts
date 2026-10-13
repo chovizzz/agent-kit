@@ -4,20 +4,19 @@
  *
  * - 默认干跑:读提案、建提示、列出每跳计划;**不调用后端、不写任何文件**。
  * - 真跑须同时给 `--run-llm` 与 `--allow-egress`(提案摘录会离开本机);缺后者退出 2。
- * - 后端经依赖注入(`createJudgeCommand(deps)`);默认的 `command` 没有注入后端:真跑时退出 4 并提示。
- *   本文件不得 import `src/reflect/backends/**`(生产工厂由命令接线块提供)。
+ * - 后端经依赖注入(`createJudgeCommand(deps)`)。默认的 `command`(R5 接线)用与 reflect 同一套 `buildCliBackends`
+ *   (覆盖层 `reflect.backends` → `buildBackends`),**只在 `--run-llm --allow-egress` 时构造**,干跑不构造;
+ *   覆盖层须 `reflect.egress = true`,否则退出 2。没有已配置的槽位 → 真跑退出 4 并提示。
+ *   本文件不 import llm-exec 与 `src/reflect/backends/**`(经 ./reflect.js 的接线辅助)。
  * - 读写只经 read-fs/safe-fs;写入限 `.state/reflect/<run_id>/proposals/` 下的 judge/judge_attempts。
  * - 退出码:0 完成(含 pending=no_cross_vendor);1 有提案 reject / injection_suspected / 没评上且出现过评审输出校验不通过;
  *   2 用法错(含 run 不存在);3 状态损坏、提示复扫残留、厂商不可证明、写出口拒绝;
  *   4 后端不可用/全部冷却/超出 --max-calls。
  */
-import { parse as parseToml } from 'smol-toml';
-import { OverlaySchema } from '../contracts/config.js';
 import type { Overlay } from '../contracts/config.js';
 import type { Redactor } from '../contracts/redact.js';
 import { ExitCode } from '../contracts/exit-codes.js';
 import { canonicalJson } from '../io/canonical-json.js';
-import { readText } from '../io/read-fs.js';
 import { WriteDeniedError } from '../io/safe-fs.js';
 import {
   JudgeFailClosedError,
@@ -29,6 +28,8 @@ import type { JudgeBackends, JudgeReport, ProposalOutcome } from '../judge/run.j
 import { JudgeRunNotFoundError } from '../judge/store.js';
 import { createRedactor } from '../redact/redactor.js';
 import { parseDecimalUint } from './args.js';
+import { buildCliBackends, loadOverlay, overlayAllowsEgress } from './reflect.js';
+import type { EnvCommandContext } from './reflect.js';
 import { combineExitCodes } from './types.js';
 import type { CommandContext, CommandDef } from './types.js';
 
@@ -41,9 +42,15 @@ export const DEFAULT_JUDGE_REDACT_TIMEOUT_MS = 250;
 export interface JudgeCommandDeps {
   /**
    * 后端工厂:返回「兜底链槽位 → 后端」。必须无副作用(干跑也会调用它来列计划,但不得 complete)。
+   * `mode.live` = 用户同时给了 `--run-llm --allow-egress`;默认接线的工厂只在 live 时构造后端。
    * 缺省 = 没有任何可用后端。
    */
-  createBackends?(ctx: CommandContext): Promise<JudgeBackends> | JudgeBackends;
+  createBackends?(
+    ctx: CommandContext,
+    mode: { live: boolean; maxCalls: number; overlay: Overlay | undefined },
+  ): Promise<JudgeBackends> | JudgeBackends;
+  /** 真跑要求覆盖层 `reflect.egress = true`。缺省 = 要求;只有注入进程内假后端的测试才传 false */
+  requireOverlayEgress?: boolean;
   /** 测试注入;缺省按覆盖层建真实 Redactor */
   redactor?: Pick<Redactor, 'pass2'>;
 }
@@ -182,17 +189,22 @@ export function createJudgeCommand(deps: JudgeCommandDeps = {}): CommandDef {
         return ExitCode.USAGE;
       }
 
+      const live = args.runLlm && args.allowEgress;
+      const loadedOverlay = await loadOverlay(ctx);
+      if (!loadedOverlay.ok) {
+        ctx.stderr('agent-kit judge: 覆盖层读取或校验失败\n'); // 不回显覆盖层内容
+        return ExitCode.USAGE;
+      }
+      const overlay = loadedOverlay.overlay;
+      if (live && deps.requireOverlayEgress !== false && !overlayAllowsEgress(overlay)) {
+        ctx.stderr(
+          'agent-kit judge: 覆盖层未同意外发(reflect.egress = true 才允许提案摘录离开本机);未调用、未写入\n',
+        );
+        return ExitCode.USAGE;
+      }
+
       let redactor = deps.redactor;
       if (redactor === undefined) {
-        let overlay: Overlay | undefined;
-        if (ctx.overlayPath !== undefined) {
-          try {
-            overlay = OverlaySchema.parse(parseToml(await readText(ctx.overlayPath)));
-          } catch {
-            ctx.stderr('agent-kit judge: 覆盖层读取或校验失败\n'); // 不回显覆盖层内容
-            return ExitCode.USAGE;
-          }
-        }
         try {
           redactor = createRedactor(
             {
@@ -209,7 +221,8 @@ export function createJudgeCommand(deps: JudgeCommandDeps = {}): CommandDef {
 
       let backends: JudgeBackends;
       try {
-        backends = (await deps.createBackends?.(ctx)) ?? {};
+        backends =
+          (await deps.createBackends?.(ctx, { live, maxCalls: args.maxCalls, overlay })) ?? {};
       } catch {
         ctx.stderr('JUDGE_FAIL_CLOSED reason=internal\n');
         return ExitCode.FAIL_CLOSED;
@@ -276,4 +289,18 @@ export function createJudgeCommand(deps: JudgeCommandDeps = {}): CommandDef {
   return def;
 }
 
-export const command: CommandDef = createJudgeCommand();
+/** 默认接线:只在 live(--run-llm --allow-egress)时按覆盖层构造真实 CLI 后端;干跑返回 {}(不构造)。 */
+function defaultCreateBackends(
+  ctx: CommandContext,
+  mode: { live: boolean; maxCalls: number; overlay: Overlay | undefined },
+): JudgeBackends {
+  if (!mode.live) return {};
+  return buildCliBackends({
+    ctx: ctx as EnvCommandContext,
+    overlay: mode.overlay,
+    now: () => new Date(),
+    maxSpawns: mode.maxCalls,
+  });
+}
+
+export const command: CommandDef = createJudgeCommand({ createBackends: defaultCreateBackends });

@@ -11,10 +11,11 @@ import { command as probe } from './commands/probe.js';
 import { command as promote } from './commands/promote.js';
 import { command as redact } from './commands/redact-cmd.js';
 import { command as reflect } from './commands/reflect.js';
+import type { EnvCommandContext } from './commands/reflect.js';
 import { command as retire } from './commands/retire.js';
 import { command as signalsCollect } from './commands/signals-collect.js';
 import { command as sync } from './commands/sync.js';
-import type { CommandContext, CommandDef } from './commands/types.js';
+import type { CommandDef } from './commands/types.js';
 
 /**
  * 命令注册表。**只有 B01 改本文件**:后续块替换 src/commands/<x>.ts 的内容,
@@ -180,12 +181,14 @@ export async function main(argv: readonly string[], env: MainEnv = {}): Promise<
     }
     throw e;
   }
-  const ctx: CommandContext = {
+  // 宿主环境只在入口处经 main(argv, env) 注入;命令层不读 process.env(reflect/judge 的后端接线用它)
+  const ctx: EnvCommandContext = {
     argv: resolved.args,
     io,
     overlayPath: flags.overlay,
     stdout,
     stderr,
+    ...(env.env !== undefined ? { env: env.env } : {}),
   };
   return resolved.def.run(ctx);
 }

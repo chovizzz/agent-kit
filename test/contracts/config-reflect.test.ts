@@ -31,6 +31,7 @@ describe('R0-5 reflect 配置', () => {
       backends: [],
       vendor_overrides: {},
       egress: false,
+      team_project_keys: [],
     });
     expect(ReflectCoreConfigSchema.parse({})).toEqual({
       max_proposals: 5,
