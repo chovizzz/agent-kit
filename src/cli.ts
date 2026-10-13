@@ -6,6 +6,7 @@ import { command as build } from './commands/build.js';
 import { command as check } from './commands/check.js';
 import { command as doctor } from './commands/doctor.js';
 import { command as inventory } from './commands/inventory.js';
+import { command as judge } from './commands/judge.js';
 import { command as probe } from './commands/probe.js';
 import { command as promote } from './commands/promote.js';
 import { command as redact } from './commands/redact-cmd.js';
@@ -27,6 +28,7 @@ export const COMMANDS: readonly CommandDef[] = [
   inventory,
   probe,
   reflect,
+  judge,
   attest,
   promote,
   retire,

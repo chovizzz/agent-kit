@@ -5,7 +5,9 @@ import tseslint from 'typescript-eslint';
  * A9 / A5 的静态护栏:
  *  - 文件系统:`node:fs` 系列只许出现在 src/io/safe-fs.ts(写)与 src/io/read-fs.ts(读)。
  *  - HOME / 环境变量 / cwd:`node:os`、`process.env`、`process.cwd` 只许出现在 src/io/paths.ts。
- *  - 子进程:`child_process` 只许出现在 src/io/exec.ts。
+ *  - 子进程:`child_process` 只许出现在 src/io/exec.ts(git 白名单)与 src/io/llm-exec.ts(受控 LLM 出口,R0)。
+ *  - LLM 出口:除 src/reflect/backends/** 外,任何文件不得 import / re-export / 动态 import `llm-exec`
+ *    (命令层、reflect 干跑路径、judge 都经依赖注入拿后端);测试里只有 llm-exec / backends 的测试可以。
  *  - 另外禁网络模块与全局 fetch(A8 的运行期垫片是主判据,这里是便宜的第二道)、eval、动态 import、require。
  * 范围:cli.ts、src/、adapters/、test/、vitest.config.ts。ops/ 下的验收工具脚本(B17/B18)不在此列,
  * 它们本来就要读真实 HOME 做快照。
@@ -25,14 +27,15 @@ const withNodePrefix = (names) => names.flatMap((n) => [n, `node:${n}`]);
 
 const MESSAGES = {
   fs: '文件系统只经 src/io/safe-fs.ts(写)与 src/io/read-fs.ts(读)。',
-  cp: '子进程只经 src/io/exec.ts(runSync)。',
+  cp: '子进程只经 src/io/exec.ts(runSync,git)与 src/io/llm-exec.ts(runLlm,受控 LLM 出口)。',
+  llm: 'LLM 出口 src/io/llm-exec.ts 只许 src/reflect/backends/** 引用;其余代码经依赖注入拿后端。',
   env: 'HOME/环境/cwd 只经 src/io/paths.ts 的 IoContext。',
   net: 'P0 运行期零网络(A8)。',
   loader: '不得用 module/createRequire 绕开导入限制。',
 };
 
 /**
- * @param {{ allowFs?: boolean; allowCp?: boolean; allowEnv?: boolean }} allow
+ * @param {{ allowFs?: boolean; allowCp?: boolean; allowEnv?: boolean; allowLlm?: boolean }} allow
  */
 function restrictions(allow = {}) {
   /** @type {{name: string; message: string}[]} */
@@ -51,12 +54,26 @@ function restrictions(allow = {}) {
   add(NODE_MODULES_LOADER, MESSAGES.loader, false);
 
   const dynamicRe = `^(node:)?(${dynamicBanned.map((n) => n.replace('/', '\\/')).join('|')})$`;
+  /** llm-exec 的各种写法:`../io/llm-exec.js`、`./llm-exec`、`src/io/llm-exec.ts` */
+  const LLM_EXEC_GROUP = ['**/llm-exec', '**/llm-exec.js', '**/llm-exec.ts', '**/llm-exec.*'];
 
   /** @type {{selector: string; message: string}[]} */
   const syntax = [
+    ...(allow.allowLlm
+      ? []
+      : [
+          {
+            selector: 'ImportExpression[source.value=/llm-exec/]',
+            message: `动态 import 也不得绕开 LLM 出口限制。${MESSAGES.llm}`,
+          },
+        ]),
     {
       selector: `ImportExpression[source.value=/${dynamicRe}/]`,
       message: '动态 import 也不得绕开 io 出口。',
+    },
+    {
+      selector: 'ImportExpression[source.value=/%/]',
+      message: '动态 import 的来源不得含 % 编码(可借 %2D 之类绕开路径匹配)。',
     },
     {
       selector: 'ImportExpression[source.value=/^(data|http|https|file):/]',
@@ -124,6 +141,7 @@ function restrictions(allow = {}) {
             group: ['**/ops/**', 'ops/**'],
             message: 'ops/ 是验收工具脚本,不属于产品代码;src/ adapters/ test/ 不得 import 它。',
           },
+          ...(allow.allowLlm ? [] : [{ group: LLM_EXEC_GROUP, message: MESSAGES.llm }]),
         ],
       },
     ],
@@ -165,6 +183,17 @@ export default tseslint.config(
   { files: ['src/io/safe-fs.ts', 'src/io/read-fs.ts'], rules: restrictions({ allowFs: true }) },
   { files: ['src/io/paths.ts'], rules: restrictions({ allowEnv: true }) },
   { files: ['src/io/exec.ts'], rules: restrictions({ allowCp: true }) },
+  // R0:受控 LLM 出口。llm-exec.ts 自己可用 child_process;能引用它的只有 reflect 后端目录与它们的测试。
+  // 注意:flat config 里后面的同名规则会**整条替换**前面的,所以放行必须走 restrictions({...}) 生成,不能另写一块只含局部规则的 override。
+  { files: ['src/io/llm-exec.ts'], rules: restrictions({ allowCp: true }) },
+  {
+    files: [
+      `src/reflect/backends/**/*.${EXT}`,
+      'test/io/llm-exec.test.ts',
+      `test/reflect/backends/**/*.${EXT}`,
+    ],
+    rules: restrictions({ allowLlm: true }),
+  },
   {
     // 本机口径:vitest 配置文件里允许 console 以外的一切照旧;eqeqeq 全局
     rules: { eqeqeq: ['error', 'always'] },

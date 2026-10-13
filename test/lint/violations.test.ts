@@ -21,6 +21,9 @@ const EXPECTED: Readonly<Record<string, { rule: string; message: string }>> = {
   'global-this-process.ts': { rule: 'no-restricted-syntax', message: 'globalThis' },
   'import-ops.ts': { rule: 'no-restricted-imports', message: 'ops/' },
   'inspector-import.ts': { rule: 'no-restricted-imports', message: 'node:inspector' },
+  'llm-exec-import.ts': { rule: 'no-restricted-imports', message: 'llm-exec' },
+  'llm-exec-dynamic-import.ts': { rule: 'no-restricted-syntax', message: 'LLM 出口' },
+  'llm-exec-reexport.ts': { rule: 'no-restricted-imports', message: 'llm-exec' },
   'network-fetch.ts': { rule: 'no-restricted-globals', message: 'fetch' },
   'os-homedir-import.ts': { rule: 'no-restricted-imports', message: 'node:os' },
   'process-alias.ts': { rule: 'no-restricted-syntax', message: 'process.<成员>' },
@@ -89,10 +92,52 @@ describe('lint 正向对照:同样的代码放到被授权的文件里不报错'
     expect((await lintAs(ENV, 'src/cli.ts')).length).toBeGreaterThan(0);
   });
 
-  it('child_process 只在 exec.ts 放行', async () => {
+  it('child_process 只在 exec.ts 与 llm-exec.ts 放行', async () => {
     expect(await lintAs(CP, 'src/io/exec.ts')).toEqual([]);
+    expect(await lintAs(CP, 'src/io/llm-exec.ts')).toEqual([]);
+    expect((await lintAs(CP, 'src/reflect/backends/claude.ts')).length).toBeGreaterThan(0);
+    expect((await lintAs(CP, 'src/io/read-fs.ts')).length).toBeGreaterThan(0);
     expect((await lintAs(CP, 'src/io/safe-fs.ts')).length).toBeGreaterThan(0);
     expect((await lintAs(CP, 'src/commands/build.ts')).length).toBeGreaterThan(0);
+  });
+
+  it('llm-exec 只许 reflect 后端目录与相关测试引用(含 re-export 与动态 import)', async () => {
+    const IMP = "import { runLlm } from '../../io/llm-exec.js';\nexport const r = runLlm;\n";
+    const REX = "export { runLlm } from '../io/llm-exec.js';\n";
+    const PCT = "export const l = () => import('../io/llm%2Dexec.js');\n";
+    const DYN = "export const l = () => import('../io/llm-exec.js');\n";
+    for (const code of [IMP, REX, DYN]) {
+      // 放行位置
+      expect(await lintAs(code, 'src/reflect/backends/claude.ts')).toEqual([]);
+      expect(await lintAs(code, 'test/io/llm-exec.test.ts')).toEqual([]);
+      expect(await lintAs(code, 'test/reflect/backends/claude.test.ts')).toEqual([]);
+      // 其余一律拒
+      for (const where of [
+        'src/reflect/run.ts',
+        'src/reflect/prompt/v1.ts',
+        'src/reflect/load.ts',
+        'src/judge/judge.ts',
+        'src/commands/reflect.ts',
+        'src/commands/judge.ts',
+        'src/io/exec.ts',
+        'src/cli.ts',
+        'test/reflect/run.test.ts',
+        'test/commands/probe.test.ts',
+        'adapters/claude/x.ts',
+      ]) {
+        expect((await lintAs(code, where)).length, `${where}: ${code.trim()}`).toBeGreaterThan(0);
+      }
+    }
+    // %2D 编码绕法:任何位置都拒(含放行位置)
+    for (const where of ['src/reflect/backends/claude.ts', 'src/reflect/run.ts']) {
+      expect((await lintAs(PCT, where)).length, where).toBeGreaterThan(0);
+    }
+    // 放行 glob 只给具体测试文件
+    expect((await lintAs(IMP, 'test/io/llm-exec-evil.test.ts')).length).toBeGreaterThan(0);
+    // 放行位置仍然不能碰 child_process / fs
+    expect((await lintAs(CP, 'src/reflect/backends/claude.ts')).length).toBeGreaterThan(0);
+    expect((await lintAs(FS, 'src/reflect/backends/claude.ts')).length).toBeGreaterThan(0);
+    expect((await lintAs(ENV, 'src/reflect/backends/claude.ts')).length).toBeGreaterThan(0);
   });
 
   it('process.stdout / process.argv / process.exitCode 这类无害用法不被误杀', async () => {

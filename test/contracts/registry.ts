@@ -6,6 +6,9 @@ import {
   JudgeOutputSchema,
   ProposalSchema,
   ReplayReportSchema,
+  ReflectRunReportSchema,
+  ReflectorOutputSchema,
+  SessionStatSchema,
   AtomFrontmatterSchema,
   BudgetReportSchema,
   CountsSchema,
@@ -48,4 +51,7 @@ export const SCHEMAS: Readonly<Record<string, ZodType>> = {
   Attest: AttestSchema,
   Case: CaseSchema,
   ReplayReport: ReplayReportSchema,
+  SessionStat: SessionStatSchema,
+  ReflectorOutput: ReflectorOutputSchema,
+  ReflectRunReport: ReflectRunReportSchema,
 };

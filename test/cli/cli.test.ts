@@ -42,6 +42,7 @@ describe('命令表', () => {
       'inventory',
       'probe',
       'reflect',
+      'judge',
       'attest',
       'promote',
       'retire',
