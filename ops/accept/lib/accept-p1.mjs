@@ -1,5 +1,5 @@
-// P1 验收总入口(A16–A20)与 A16–A19 共用的小工具。A1–A15 由 ops/accept-p0.sh 负责,语义不变;
-// `--with-p0` 会在 A16–A20 之前先调用它做回归。A20 与 A13 同构:人工完成项,按标记文件判定。
+// P1 验收总入口(A16–A24)与 A16–A19、A21–A23 共用的小工具。A1–A15 由 ops/accept-p0.sh 负责,语义不变;
+// `--with-p0` 会在 A16–A24 之前先调用它做回归。A20、A24 与 A13 同构:人工完成项,按标记文件判定。
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -14,6 +14,7 @@ import {
   DEFAULT_ROOT,
 } from './common.mjs';
 import { a20Status } from './a20.mjs';
+import { a24Status } from './a24.mjs';
 
 export const ITEMS = [
   {
@@ -32,7 +33,35 @@ export const ITEMS = [
     title: 'reflect/judge 干跑零写入(假 HOME + node --permission + 快照 + 金丝雀)',
     script: 'a19.mjs',
   },
-  { id: 'A20', title: '变异抽检(6 处关键逻辑变异必须变红)', manual: true, doc: 'a20-mutation.md' },
+  {
+    id: 'A20',
+    title: '变异抽检(6 处关键逻辑变异必须变红)',
+    manual: true,
+    doc: 'a20-mutation.md',
+    status: a20Status,
+  },
+  {
+    id: 'A21',
+    title: '采纳检查 C1–C9 夹具矩阵(合法全过、非法逐条按精确原因码被拒)',
+    script: 'a21.mjs',
+  },
+  {
+    id: 'A22',
+    title: 'attest/promote/retire 零网络(import 图)+ 零写入(干跑快照 + 假 HOME + 金丝雀)',
+    script: 'a22.mjs',
+  },
+  {
+    id: 'A23',
+    title: '生命周期端到端(reflect→judge→采纳→advisory→active→deprecated→retired→G4 删除→墓碑)',
+    script: 'a23.mjs',
+  },
+  {
+    id: 'A24',
+    title: '生命周期变异抽检(9 处关键逻辑变异必须变红)',
+    manual: true,
+    doc: 'a24-mutation.md',
+    status: a24Status,
+  },
 ];
 
 const STATUS_NAME = {
@@ -85,6 +114,9 @@ export function freshDist(ctx) {
       walkBak(abs);
     }
   }
+  // 验收脚本自己也会被 A24 的自检变异改到(ops/accept/lib/*.mjs):遗留备份同样拒绝继续
+  const opsDir = path.join(ctx.root, 'ops');
+  if (fs.existsSync(opsDir)) walkBak(opsDir);
   const rootCli = path.join(ctx.root, 'cli.ts');
   if (fs.existsSync(rootCli) && fs.statSync(rootCli).mtimeMs > newest) {
     newest = fs.statSync(rootCli).mtimeMs;
@@ -111,7 +143,7 @@ export async function importDist(ctx, rel) {
 export function listLines(root) {
   return ITEMS.map((it) => {
     if (it.manual) {
-      const s = a20Status(root);
+      const s = it.status(root);
       return `${it.id.padEnd(4)} 【人工完成项】${it.title}  状态:${s.state === 'done' ? '已做' : '未做'}(${s.detail})  清单:ops/accept/${it.doc}`;
     }
     return `${it.id.padEnd(4)} ${it.title}  ops/accept/lib/${it.script}`;
@@ -138,8 +170,8 @@ async function p1Main(argv) {
   if (flags.help) {
     process.stdout.write(
       '用法:ops/accept-p1.sh [--list] [--only A16,A19] [--with-p0] [--root <仓库根>] [--cli <dist/cli.js>]\n' +
-        '无参:依次运行 A16–A20(A20 为人工完成项,按标记文件判定)。--with-p0 先跑 ops/accept-p0.sh(A1–A15 回归)。\n' +
-        '前置:pnpm run build(A16–A19 用 dist;dist 比 src 旧会按"未执行"处理)。任何 4(未执行)都按失败汇总。\n' +
+        '无参:依次运行 A16–A24(A20、A24 为人工完成项,按标记文件判定)。--with-p0 先跑 ops/accept-p0.sh(A1–A15 回归)。\n' +
+        '前置:pnpm run build(A16–A19、A21–A23 用 dist;dist 比 src 旧会按"未执行"处理)。任何 4(未执行)都按失败汇总。\n' +
         '退出码:0 全部通过 | 1 有违规 | 2 用法错 | 3 清单被拒 | 4 有未执行/人工项未完成 | 5 待人工归因\n',
     );
     return EXIT.OK;
@@ -164,7 +196,7 @@ async function p1Main(argv) {
   }
   for (const it of ITEMS.filter((i) => only.includes(i.id))) {
     if (it.manual) {
-      const s = a20Status(root);
+      const s = it.status(root);
       results.push({ id: it.id, code: s.state === 'done' ? 0 : 4, note: `人工完成项:${s.detail}` });
       process.stdout.write(
         `\n=== ${it.id} ${it.title}\n[${it.id}] ${s.state === 'done' ? 'PASS' : 'NOT-RUN'} 人工完成项:${s.detail}\n`,

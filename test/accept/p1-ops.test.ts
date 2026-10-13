@@ -1,5 +1,5 @@
 /**
- * A16–A20 验收脚本自身的测试(脚本的纯函数部分;脚本对 dist 的实跑由 ops/accept-p1.sh 负责):
+ * A16–A20 验收脚本自身的测试(A21–A24 见 p1-lifecycle-ops.test.ts)(脚本的纯函数部分;脚本对 dist 的实跑由 ops/accept-p1.sh 负责):
  *  - A16 矩阵夹具对 **src** 同样成立(合法全过、非法按原因码拒);脚本的"逐条核对原因码"逻辑真的会报错;
  *  - A19 的快照比对对真实写入报差异、对无变化报空(探测本身有效);
  *  - A20 的标记文件状态机与"替换必须恰好匹配 1 次";
@@ -11,7 +11,7 @@ import { createRedactor } from '../../src/redact/index.js';
 import { makeReflectorOutputSchema } from '../../src/contracts/reflect.js';
 import { validateReflectorOutput } from '../../src/reflect/validate.js';
 import { exists } from '../../src/io/read-fs.js';
-import { mkdirp, writeFile } from '../../src/io/safe-fs.js';
+import { mkdirp, remove, writeFile } from '../../src/io/safe-fs.js';
 import { callLib, commitAll, evalLib, guardRealHome, makeFx, SAFE_PATH } from './helpers.js';
 import { spawnSync } from 'node:child_process'; // eslint-disable-line no-restricted-imports -- 与 helpers.ts 同理:验收脚本的黑盒测试必须起子进程
 import { REPO_ROOT } from './helpers.js';
@@ -212,6 +212,11 @@ describe('freshDist(A16–A19 的前置检查)', () => {
     }
     await fx.put('src/b.ts.mut-bak', 'x\n');
     expect(call().why).toContain('没还原');
+    // ops/ 下(验收脚本被 A24 自检变异时)遗留的备份同样拒绝继续(先清掉 src 里的备份,正向对照:此时是 ok)
+    await remove(fx.ctx, path.join(fx.root, 'src/b.ts.mut-bak'));
+    expect(call().ok).toBe(true);
+    await fx.put('ops/accept/lib/a21.mjs.mut-bak', 'x\n');
+    expect(call().why).toContain('没还原');
     expect(
       callLib('accept-p1.mjs', 'freshDist', [[{ root: fx.root, cli: '/nonexistent/cli.js' }]])[0],
     ).toMatchObject({ ok: false });
@@ -306,14 +311,26 @@ describe('ops/accept-p1.sh 入口', () => {
     return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
   };
 
-  it('--list 列出 A16–A20,A20 标为人工完成项并显示状态', async () => {
+  it('--list 列出 A16–A24,A20 与 A24 标为人工完成项并显示状态', async () => {
     const fx = await makeFx('p1entry-');
     const r = run(['--list', '--root', fx.root], fx.env());
     expect(r.status).toBe(0);
     const lines = r.stdout.trim().split('\n');
-    expect(lines.map((l) => l.split(/\s+/)[0])).toEqual(['A16', 'A17', 'A18', 'A19', 'A20']);
-    expect(lines[4]).toContain('【人工完成项】');
-    expect(lines[4]).toContain('状态:未做');
+    expect(lines.map((l) => l.split(/\s+/)[0])).toEqual([
+      'A16',
+      'A17',
+      'A18',
+      'A19',
+      'A20',
+      'A21',
+      'A22',
+      'A23',
+      'A24',
+    ]);
+    for (const i of [4, 8]) {
+      expect(lines[i]).toContain('【人工完成项】');
+      expect(lines[i]).toContain('状态:未做');
+    }
   });
 
   it('--only 未知编号 → 2;--only A20 没有标记 → 4(未执行,不是通过);标记有效 → 0', async () => {
@@ -337,10 +354,10 @@ describe('ops/accept-p1.sh 入口', () => {
     expect(ok.stdout).toContain('通过 1/1');
   });
 
-  it('每个脚本型项目(A16–A19)都指向一个真实存在的 lib 文件', async () => {
+  it('每个脚本型项目(A16–A19、A21–A23)都指向一个真实存在的 lib 文件', async () => {
     const lines = callLib('accept-p1.mjs', 'listLines', [['/nonexistent-root']])[0] as string[];
-    expect(lines).toHaveLength(5);
-    for (const l of lines.slice(0, 4)) {
+    expect(lines).toHaveLength(9);
+    for (const l of [...lines.slice(0, 4), ...lines.slice(5, 8)]) {
       const m = /ops\/accept\/lib\/(\S+)$/.exec(l);
       expect(m, l).not.toBeNull();
       expect(

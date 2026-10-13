@@ -1858,17 +1858,21 @@ agent-kit judge   --run <run_id> [--run-llm --allow-egress] [--max-calls N(1..10
 
 LLM CLI 用真实 HOME 的登录态并写它自己的全局文件,`llm-exec` 只管 env/cwd/超时/输出/次数(§12.4)。A5 与 A19 的零写入只对**干跑与 stub 路径**成立;A19 里的真跑只用来证明"假 codex 经 kit 确实可达"(正向对照),发生在最终快照之后。真跑前后的受管路径快照与「每个 CLI 实际写了哪些全局文件」清单属 R6。
 
-### 17.5 验收 `ops/accept-p1.sh`(A16–A20;A1–A15 仍是 `ops/accept-p0.sh`,语义不变)
+### 17.5 验收 `ops/accept-p1.sh`(A16–A24;A1–A15 仍是 `ops/accept-p0.sh`,语义不变)
 
-| 项  | 内容                                                                                                                                                                            |
-| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A16 | `validateReflectorOutput` 夹具矩阵:合法 8 条全过;非法 32 条按**具体原因码**被拒(未知字段 / `status:'active'` / `op:'edit'` / 超长 / 坏 pattern / `[[REDACTED` / 证据别名越界 …) |
-| A17 | 合成 git 仓库,`kit:reflector` 标签:改 `hooks/` 等禁区、改已有 active 原子的治理字段、新增 active / 带边原子、删 active 原子,均被路径守卫 / G1 / G2 / G4 按精确码拒绝            |
-| A18 | `runJudge` + stub 后端:同厂商的跳不调用、记 `skipped:same-vendor`;全链失败 `judge_attempts` 记满 5 跳且不含 `ok`(读盘核对)                                                      |
-| A19 | 假 HOME + `node --permission` + 金丝雀假 codex + 树哈希前后对比 + 真实 HOME 受管路径快照;含五个正向对照(快照能报差异、`--permission` 真拒写、金丝雀直接执行可见、kit 真跑可达)  |
-| A20 | 变异抽检(与 A13 同构的人工完成项,标记 `.state/accept/a20.done` 绑 HEAD);`a20.mjs --run --set a20 --write-marker` 可自动做,清单见 `ops/accept/a20-mutation.md`                   |
+| 项  | 内容                                                                                                                                                                                                                                                                                                                             |
+| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A16 | `validateReflectorOutput` 夹具矩阵:合法 8 条全过;非法 32 条按**具体原因码**被拒(未知字段 / `status:'active'` / `op:'edit'` / 超长 / 坏 pattern / `[[REDACTED` / 证据别名越界 …)                                                                                                                                                  |
+| A17 | 合成 git 仓库,`kit:reflector` 标签:改 `hooks/` 等禁区、改已有 active 原子的治理字段、新增 active / 带边原子、删 active 原子,均被路径守卫 / G1 / G2 / G4 按精确码拒绝                                                                                                                                                             |
+| A18 | `runJudge` + stub 后端:同厂商的跳不调用、记 `skipped:same-vendor`;全链失败 `judge_attempts` 记满 5 跳且不含 `ok`(读盘核对)                                                                                                                                                                                                       |
+| A19 | 假 HOME + `node --permission` + 金丝雀假 codex + 树哈希前后对比 + 真实 HOME 受管路径快照;含五个正向对照(快照能报差异、`--permission` 真拒写、金丝雀直接执行可见、kit 真跑可达)                                                                                                                                                   |
+| A20 | 变异抽检(与 A13 同构的人工完成项,标记 `.state/accept/a20.done` 绑 HEAD);`a20.mjs --run --set a20 --write-marker` 可自动做,清单见 `ops/accept/a20-mutation.md`                                                                                                                                                                    |
+| A21 | `src/lifecycle/checks.ts` 的 C1–C9 夹具矩阵:合法 23 条全过;非法 124 条按**精确原因码**(`reasons` 数组整体相等 + 字段路径)被拒;checks.js 里出现的每个原因码都必须有夹具(新增原因码没补夹具 → 红)                                                                                                                                  |
+| A22 | `attest` / `promote` / `retire` 零网络 + 零写入:import 传递闭包不含 `llm-exec` / `reflect/backends/**`、`child_process` 只在 `exec.ts`(白名单恰为 `['git']`);合成仓库 + 假 HOME + `node --permission` 干跑,树哈希前后一致、金丝雀二进制未被调用、真实 HOME 受管路径无差异;`--write` 只落 `.state/<命令>/`                        |
+| A23 | 端到端(合成仓库、进程内 stub):reflect→judge→`promote --run`→advisory→(attest 夹具)→active→`retire` deprecated→(stable tag)retired→G4 删除→再采纳同 id 被 C7 墓碑拒;每步 `git apply --check --whitespace=error` + 真 `check --guards --label <对应 label>`;含反向对照(无 attest 被拒、无 tag 不能退役 / 删除、拿走墓碑后不再被拒) |
+| A24 | 生命周期变异抽检(人工完成项,标记 `.state/accept/a24.done` 绑 HEAD):核心 9 处 L1–L9 + 验收脚本自检 X1–X2;`a24.mjs --run --set a24 --write-marker`,清单见 `ops/accept/a24-mutation.md`                                                                                                                                             |
 
-A16–A19 直接 import / 运行 `dist/`;dist 比 src 旧会按「未执行(4)」处理。`--with-p0` 先调用 `accept-p0.sh` 做 A1–A15 回归。
+A16–A19、A21–A23 直接 import / 运行 `dist/`;dist 比 src 旧会按「未执行(4)」处理。A19 / A22 的真实 HOME 受管路径快照有差异时退出 5(待人工归因),汇总按未通过处理;它是「提示 + 归因」而不是硬判据(多半是别的进程在写)。`--with-p0` 先调用 `accept-p0.sh` 做 A1–A15 回归。
 
 ### 17.6 R6 真实环境实测结论(2026-10-13,合成提示,回复 `NOTOOLS` 表示零工具成立)
 
@@ -1891,41 +1895,100 @@ A16–A19 直接 import / 运行 `dist/`;dist 比 src 旧会按「未执行(4)�
 6. 本次未测:noProjectSettings、noUserRouting 三者都保持 `unresolved`;noProjectContext 在 claude/codex 保持 `unresolved`,pi 沿用原先的 `claimed`(§16① 的 cwd 在仓库树内问题仍在)。claude 与 pi 的 noMcp 沿用 `claimed`。
 7. **证据范围**:`noTools=verified` 的判据是合成提示下 CLI 回复 `NOTOOLS`(未保存工具注册清单/调用轨迹),且 codex 的结论是在「MCP 连接失败」的环境下得出——**未测**「用户配置了可连通且提供工具的 MCP」这一组合。升级 CLI 或环境里有可用 MCP 时须重测。
 
-## 18. attest / promote / retire 生命周期契约(L0)
+## 18. attest / promote / retire 生命周期契约(L0 追加字段;L1–L7 实装后订正)
 
-本节只追加:`JudgeRecord.rule_sha256?`、`Signal.event_key?`、`Attest.method?`、`KitConfig.lifecycle?` 都是可选字段(缺省仍合法,旧文件/旧 kit.toml 照常通过),`LifecycleRecord` 是新 schema。命令本身(attest / promote / retire)在后续块实现,下面的命令面与退出码是**草案**,以实现块落地时的订正为准。
+本节的字段追加(`JudgeRecord.rule_sha256?`、`Signal.event_key?`、`Attest.method?`、`KitConfig.lifecycle?`、新 schema `LifecycleRecord`)都是可选/新增,缺省仍合法,旧文件与旧 `kit.toml` 照常通过。三条命令 `attest` / `promote` / `retire` 已全部实装(`src/commands/{attest,promote,retire}.ts`、`src/lifecycle/**`、真判据 `src/guards/criteria.ts`),下面的命令面、退出码与稳定码**以代码为准**(L7 逐条核对过)。
+
+**状态机与分工**:契约里没有 `attested` 状态,状态只有 `proposed / advisory / active / deprecated / retired`。三条命令不改仓库:它们在本机生成「PR 的补丁」,人 `git apply` 后提 PR;CI 的 G3 用同一份判据(`lifecycleCriteria`)再验一遍。
+
+| 转移                                 | 命令                                                | PR 标签         | 机械证据(本机生成前先跑,CI 复核)                                                         |
+| ------------------------------------ | --------------------------------------------------- | --------------- | ---------------------------------------------------------------------------------------- |
+| 暂存 → `proposed`(入库)              | `promote --run <run_id>`                            | `kit:reflector` | C1–C9(§18.4)                                                                             |
+| `proposed → advisory`                | `promote --rule <id> --to advisory`                 | `kit:promotion` | judge 记录存在且 accept、本地重扫干净、跨厂商可证、`rule_sha256` 与当前规则一致、层=team |
+| `advisory → active`                  | `promote --rule <id> --to active`                   | `kit:promotion` | 上一行全部 + `signature` 存在 + canary attest 达到 `[lifecycle]` 阈值 + 预算不超         |
+| `advisory\|active → deprecated`      | `retire --rule <id> --to deprecated --reason <码>`  | `kit:retire`    | 理由码对应的证据(§18.5)                                                                  |
+| `deprecated → retired`               | `retire --rule <id> --to retired --reason <码>`     | `kit:retire`    | deprecated 已出现在某个基线**严格祖先**的 stable tag 里(`COOLDOWN_NOT_MET` 否则)         |
+| `proposed → retired`(被否决提案出口) | `retire --rule <id> --to retired --reason rejected` | `kit:retire`    | 基线 `status=proposed`                                                                   |
+| `retired →` 删文件                   | 内容 PR(不是三条命令的职责)                         | (无)            | G4:retired 已在基线的严格祖先 stable tag 里                                              |
+
+- 恢复不是转移:`deprecated/retired` 不回流,要恢复就建**新 id** 的原子(`supersedes: [旧 id]`)重走 T0→active。
+- 一个 PR 只能有一个标签;`kit:promotion` 不能顺带退役(预算 ≥90% 时的配对退役必须先单独合一个 `kit:retire` PR)。
+- 四眼(PR 作者 ≠ 审批人)、受保护 tag、签名提交仍是 P1-D 的缺口(GD-3,§12.3);本机只做结构检查(attest 成员里至少一名不是 owner)。
 
 ### 18.1 字段与格式
 
-- `JudgeRecord.rule_sha256?`:64 位小写十六进制。评审时规则文本的哈希(`status` / `review_by` 先归一化)。契约只管形状;「必填且与当前文本一致」是晋升判据(L1+)。
-- `Signal.event_key?`:跨文件去重键(D4,加盐 sha256 的产物)。契约只约束:非空、≤128 字符、仅 `[A-Za-z0-9_.:-]`(spec 未给格式,此为保守取值)。
+- `JudgeRecord.rule_sha256?`:64 位小写十六进制。评审时规则文本的哈希:先把 frontmatter 顶层的 `status:` 与 `review_by:` 两行的**值**换成占位符,再对 `canonicalText(全文)` 取 sha256(`src/lifecycle/checks.ts` 的 `ruleSha256`;C6、G3 判据、attest 三处是同一个实现)。`judge` 命令写入;晋升时必填且必须与当前文本一致。两行之外的任何改动(含这两行行尾追加注释)都会改哈希;`status`/`review_by` 不是恰好各一行、块标量、流式写法一律 `RULE_TEXT_UNHASHABLE`(fail-closed)。
+- `Signal.event_key?`:跨文件去重键(D4,加盐 sha256 的产物)。契约只约束:非空、≤128 字符、仅 `[A-Za-z0-9_.:-]`。
 - `Attest.method?`:枚举,目前只有 `signature_proxy_v1`(按原子签名匹配信号的代理口径)。
-- `KitConfig.lifecycle?`(`kit.toml` 的 `[lifecycle]`):`canary_window_days`(≥14,默认 14)、`min_members`(≥2,默认 2)、`min_non_owner_members`(≥1 且 ≤ `min_members`,默认 1)、`min_exposure_sessions`(≥10,默认 10)、`max_harmful`(只能是 0)、`no_exposure_windows`(≥2,默认 2)。每项的下界就是默认值:core 只能调严。**覆盖层(`Overlay`)不接受 `lifecycle`**(strict,出现即错),所以覆盖层无法放宽。
-- `LifecycleRecord`(`lifecycle/<rule-id>/<recorded_at>-<run_id>.json`,只增目录,兼作 id 墓碑):`schema_version`、`rule_id`、`kind=retire`、`reason`(`manual|expired|superseded|no_exposure|harmful|rejected`)、`from_status`/`to_status`(只允许 `advisory→deprecated`、`active→deprecated`、`deprecated→retired`、`proposed→retired`)、`by?`(仅 `superseded`,且必填)、`rule_sha256`、`attest_digests`、`kit_version`、`run_id`、`recorded_at`、`owner`(`@handle`)、`note?`(≤200 字,拒控制/格式/私用/未分配字符)。`rejected` 只配 `proposed→retired`;`no_exposure`/`harmful` 只配退到 `deprecated`。
+- `KitConfig.lifecycle?`(`kit.toml` 的 `[lifecycle]`):`canary_window_days`(≥14,默认 14)、`min_members`(≥2,默认 2)、`min_non_owner_members`(≥1 且 ≤ `min_members`,默认 1)、`min_exposure_sessions`(≥10,默认 10)、`max_harmful`(只能是 0)、`no_exposure_windows`(≥2,默认 2)。每项的下界就是默认值:core 只能调严。**覆盖层(`Overlay`)不接受 `lifecycle`**(strict,出现即错),所以覆盖层无法放宽;G3 读的是**基线**的 `kit.toml`,PR 改了它也放不宽。
+- `LifecycleRecord`(`lifecycle/<rule-id>/<recorded_at>-<run_id>.json`,只增目录,兼作 id 墓碑):`schema_version`、`rule_id`、`kind=retire`、`reason`(`manual|expired|superseded|no_exposure|harmful|rejected`)、`from_status`/`to_status`(只允许 `advisory→deprecated`、`active→deprecated`、`deprecated→retired`、`proposed→retired`)、`by?`(仅 `superseded`,且必填)、`rule_sha256`、`attest_digests`、`kit_version`、`run_id`、`recorded_at`、`owner`(`@handle`)、`note?`(≤200 字,拒控制/格式/私用/未分配字符)。`rejected` 只配 `proposed→retired`;`no_exposure`/`harmful` 只配退到 `deprecated`。`lifecycle/` 在 `G3_ADD_ONLY_DIRS` 与反思器禁区里。
 
-### 18.2 命令面(草案)
+### 18.2 命令面
 
 ```
 agent-kit attest  --rule <id> --member @handle --window-start YYYY-MM-DD --window-end YYYY-MM-DD
                   [--channel canary|stable] [--agent <id>]… [--write] [--json]
 agent-kit promote --run <run_id> [--write] [--json]
 agent-kit promote --rule <id> --to advisory|active [--today YYYY-MM-DD] [--write] [--json]
-agent-kit retire  --rule <id> --to deprecated|retired --reason <码> [--by <id>] [--today YYYY-MM-DD] [--write] [--json]
+agent-kit retire  --rule <id> --to deprecated|retired --reason manual|expired|superseded|no_exposure|harmful|rejected
+                  [--by <id>] [--today YYYY-MM-DD] [--write] [--json]
 ```
 
-沿用 reflect 的约定:默认干跑;`--write` 只写 `.state/<命令>/<id>/`(补丁、报告、PR 描述),不写 `rules/`;stdout 只含计数、枚举、id、哈希(`--json` 为 canonical JSON、键集合固定);stderr 只含稳定码 `<CMD>_USAGE|CHECK_FAILED|NOT_RUN|FAIL_CLOSED reason=<码>`;数字参数用十进制非负整数;三条命令零网络,`--run-llm` / `--allow-egress` 出现即退出 2。
+- **零网络**:三条命令的源码 import 闭包不含 `src/io/llm-exec.ts` 与 `src/reflect/backends/**`,唯一子进程是 `git`(经 `exec.ts`,白名单恰为 `['git']`;`attest` 不起任何子进程)。`--run-llm` / `--allow-egress` 出现即退出 2。A22 静态+动态地验证这一点。
+- **默认干跑**:只算、只打印;`--write` 才写,且只写 `.state/<命令>/<id>/`(目录 0700、文件 0600,先写 `.tmp-<id>` 再整体 rename,一律经 safe-fs),**不写 `rules/` / `attest/` / `lifecycle/`**——落到仓库靠人 `git apply` + PR。产物:`attest` → `.state/attest/<run_id>/{attest.patch, report.json}`;`promote` → `.state/promote/<promo_id>/{promote.patch, pr-body.md, report.json}`;`retire` → `.state/retire/<retire_id>/{retire.patch, pr-body.md, report.json}`。
+- **补丁**:`promote --rule` 只改 `status:` 一行(`--to active` 再改 `review_by:` 一行),`retire` 改 `status:` 一行并新增 `lifecycle/<rule-id>/<recorded_at>-<run_id>.json`,`attest` 只新增一个 `attest/<rule-id>/…json`;`index` 行写 HEAD 的 blob oid,必须能通过 `git apply --check --whitespace=error`。`promote --run` 用**当前**(已含 judge 记录的)提案与规则文件重新生成补丁,暂存区里 judge 之前生成的 `apply.patch` 作废(PR 描述里写明以 `promote.patch` 为准)。
+- **前置**:`promote --rule` / `retire` 要求工作树里该规则文件与 HEAD 同路径 blob 逐字节相同,否则 `PROMOTE_WORKTREE_DIRTY`(补丁以 HEAD 为基线)。判据在内存里叠加新文本构造 head 视图后调用**真 `checkG3`**(`lifecycleCriteria`),再补跑 C1/C1b/C3(治理版)/C5/C6/C7/C8;红则不产出;`out/` 进出清单与预算由对 base / head 两份原子集各做一次 merge + render 算出(不写 `out/`)。
+- **幂等**:`promo_id` / `retire_id` / `run_id`(retire)由输入内容决定(规则 id、方向、HEAD blob oid、attest 文件哈希;`promote` 另含目标 `review_by`,`retire` 另含理由、`--by`、`--today`,`retire_id` 还并入 `out/` 清单与 kit 版本),同输入同补丁同 id;目录已存在且文件逐字节一致 → 退出 0 不重写;不一致或多出/缺文件 → 退出 3 `PROMOTE_RUN_EXISTS` / `RETIRE_RUN_EXISTS`(`attest` 为 `run_exists`)。`retire` 的 `run_id` 是确定性的(形如 `run-<today>T000000Z-<输入哈希前 6 位>`),不是随机。
+- **输出**:stdout 只含计数、枚举、id、哈希(`--json` 为 canonical JSON、键集合固定);`pr-body.md` 与 `report.json` 同样不含摘录、正文、提示;stderr 只含稳定码 `<CMD>_USAGE|CHECK_FAILED|NOT_RUN|FAIL_CLOSED reason=<码>`,不回显异常消息与任何原子/提案文本。判据红时 stdout 另列 `fail <检查>:<原因码>` 行(`--json` 为 `failures` 数组)。
+- 数字参数用十进制非负整数;日期一律 `IsoDateSchema`(真实日历日);时钟与随机源可注入;`--today` 缺省取时钟的 UTC 日期。
+- 层:personal 层 P1 没有消费者,三条命令一律退出 2 `PERSONAL_LAYER_P2`;org 层(`ORG_LAYER_NOT_PROMOTABLE`,无 `origin=proposal`)与其它层(`LAYER_NOT_PROMOTABLE`)同样退出 2。
 
-| 码  | attest                                                             | promote                                                                      | retire                                 |
-| --- | ------------------------------------------------------------------ | ---------------------------------------------------------------------------- | -------------------------------------- |
-| 0   | 干跑完成 / 已写出                                                  | 干跑完成 / 已写出 / 已是目标状态 / 同 id 已存在且一致                        | 同左                                   |
-| 1   | 规则不可计数(状态不是 advisory/active)                             | 任一判据不过(采纳检查、judge 未决、阈值不达、模拟 G3 红、工作树与 HEAD 不同) | 理由证据不满足、方向不允许、模拟 G3 红 |
-| 2   | 缺参数、member 不在成员表、窗口反了、`--run-llm` 出现、personal 层 | 同左;`--run` 与 `--rule` 同给或都不给                                        | 同左;`superseded` 缺 `--by`            |
-| 3   | 信号库损坏、写出口拒绝、同 id 目录已存在且不一致、未知异常         | 同左;脱敏扫描异常;状态损坏                                                   | 同左                                   |
-| 4   | 信号库缺窗口内数据、`signature.type=path`(暂无数据源)              | 采纳时信号库找不到证据信号;`judge_pending:cooldown`                          | `no_exposure` 但窗口内没有任何 attest  |
+### 18.3 退出码
 
-多结果合并走 `combineExitCodes`(3 > 2 > 1 > 4 > 64 > 0)。
+| 码  | attest                                                                                       | promote                                                                                                                                                                           | retire                                                                                                          |
+| --- | -------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| 0   | 干跑完成 / 已写出 / 同 run_id 已存在且一致                                                   | 干跑完成 / 已写出 / 已是目标状态(`already=1`)/ 同 id 已存在且一致                                                                                                                 | 同左                                                                                                            |
+| 1   | 规则不可计数(状态不是 advisory/active、无签名、签名不安全)                                   | `--run`:有提案被丢(`proposals_dropped`,任一 C1–C9 不过)或运行里没有提案(`empty_run`);`--rule`:规则/提案找不到、工作树与 HEAD 不同、方向不允许、无 signature、模拟 G3 红、预算阻断 | 规则找不到、工作树与 HEAD 不同、方向 / 理由配对不允许、理由证据不满足、冷却未满足、模拟 G3 红、预算阻断         |
+| 2   | 缺参数、member 不在成员表、窗口反了、规则不存在、personal 层、`--run-llm` / `--allow-egress` | 用法错(含 `--run` 与 `--rule` 同给或都不给)、`--run` 的 run 不存在、personal / org / 其它层、`--run-llm` / `--allow-egress`                                                       | 用法错(含 `superseded` 缺 `--by`、`--by` 配了别的理由)、personal / org / 其它层、`--run-llm` / `--allow-egress` |
+| 3   | 信号库损坏、配置读取失败、写出口拒绝、同 run_id 目录已存在且不一致、补丁自检不过、未知异常   | fail-closed:暂存状态损坏、信号库损坏、脱敏扫描异常、git 不可用、HEAD 不可解析、配置不可读、`OUT_DIFF_*`、写出口拒绝、`PROMOTE_RUN_EXISTS`、补丁自检不过                           | fail-closed:git 不可用、配置不可读、`OUT_DIFF_*`、`RECORD_INVALID`、写出口拒绝、`RETIRE_RUN_EXISTS`             |
+| 4   | 窗口内没有任何信号/会话数据(`no_window_data`)、`signature.type=path` 无数据源                | `--run`:证据信号在本机信号库里找不到(无法核对)且没有硬失败;`--rule`:`judge_pending:cooldown`(稍后重跑 judge)                                                                      | `no_exposure` 但没有任何计入口径的 attest(`NO_ATTEST_IN_WINDOW`)                                                |
 
-### 18.3 示例
+多结果合并走 `combineExitCodes`(3 > 2 > 1 > 4 > 64 > 0)。`promote --run` 一批里既有 personal 又有 team 提案时,team 照常写出、整体退 2(是否改为整批不写,见 `docs/p1-backlog.md` 遗留项⑨)。
+
+### 18.4 稳定码
+
+`reason=` 后面只会是下列枚举(或 `OUT_DIFF_` / `PATCH_` 前缀 + 我方枚举)。判据红时 `fail` 行与 `--run` 的 `dropped_by_reason` 键形如 `<检查>:<原因码>`(`C1`–`C9`、`G3`、`RAW`)。
+
+- **通用(promote --rule / retire)**:`PROMOTE_WORKTREE_DIRTY`、`RULE_NOT_FOUND`、`RULE_AMBIGUOUS`、`ATOM_UNREADABLE`、`ATOM_INVALID`、`PROPOSAL_MISSING`、`PROPOSAL_INVALID`(仅 promote)、`DIRECTION_NOT_ALLOWED`、`PERSONAL_LAYER_P2`、`ORG_LAYER_NOT_PROMOTABLE`、`LAYER_NOT_PROMOTABLE`、`HEAD_UNRESOLVED`、`CONFIG_UNREADABLE`、`BUDGET_BLOCKED`、`PATCH_RESULT_INVALID`、`criteria_failed`(模拟 G3 / C 检查红,逐条原因在 `fail` 行)。
+- **`OUT_DIFF_*`**(退出 3,`out/` 进出清单算不出):`OUT_DIFF_MERGE_FAILED`、`OUT_DIFF_RENDER_FAILED`、`OUT_DIFF_ATOM_UNPARSABLE`。
+- **`PATCH_*`**(补丁生成器拒绝构造不安全补丁,退出 1):`PATCH_BOM`、`PATCH_CR`、`PATCH_EMPTY`、`PATCH_FRONTMATTER_UNCLOSED`、`PATCH_LINE_COUNT_CHANGED`、`PATCH_NO_FINAL_NEWLINE`、`PATCH_NO_FRONTMATTER`、`PATCH_PATH_UNSAFE`、`PATCH_REVIEW_BY_LINE_COUNT`、`PATCH_TRAILING_WHITESPACE`、`PATCH_VALUE_UNSAFE`。
+- **promote --rule 独有**:`SIGNATURE_MISSING`(升 active 但原子无 `signature`;stderr 另带 `hint=` 提示先走内容 PR 补 signature 并重跑 judge,再晋升)、`REVIEW_BY_UNREACHABLE`(T2 新 `review_by` 不晚于今天:受 lint 的 `created+180d`(volatile 为 `created+30d`)上限约束)、`judge_pending:cooldown`(退出 4)。
+- **retire 独有**:`REASON_DIRECTION_MISMATCH`(理由与方向不配)、`REASON_NOT_EXPIRED`、`REASON_BY_INVALID`、`REASON_NO_EXPOSURE_UNMET`、`REASON_NOT_HARMFUL`、`COOLDOWN_NOT_MET`、`RULE_HASH_UNCOMPUTABLE`、`RECORD_INVALID`、`NO_ATTEST_IN_WINDOW`(退出 4)。证据码来自 L2 判据,其余判据红统一 `criteria_failed`。
+- **幂等 / 写出**:`PROMOTE_RUN_EXISTS`、`RETIRE_RUN_EXISTS`、`tmp_exists`、`state_dir_unsafe`、`state_file_unsafe`、`state_perm_unsafe`(均退出 3)。
+- **promote --run**:`run_not_found`(2)、`state_invalid`、`signal_store`、`redactor_init`、`git_failed`(3)、`proposals_dropped`(1)、`unverifiable`(4)、`empty_run`(1)。被丢提案按 `<检查>:<原因码>` 或 `RAW:<REDACTION_RESIDUAL|HIDDEN_CHARS|DANGEROUS_PHRASE|PROPOSAL_PATH_EXISTS>` 计数;fail-closed 的整批码:`REDACTION_SCAN_ERROR`、`SIGNAL_LOOKUP_ERROR`、`CHECK_INTERNAL_ERROR`、`FS_SYMLINK`、`FS_NOT_REGULAR`、`FS_HARDLINK`、`RUN_ID_INVALID`、`INPUT_MISSING`、`STATE_DIR_UNSAFE`、`PATCH_SELF_CHECK`。
+- **attest(小写蛇形)**:用法 `missing:--rule` / `missing:--member` / `missing:--window-start` / `missing:--window-end`、`bad_member`、`bad_window_start`、`bad_window_end`、`window_reversed`、`bad_channel`、`bad_agent`、`unknown_arg`、`no_egress_flags`、`overlay_unreadable`、`member_not_in_channel`、`rule_not_found`、`PERSONAL_LAYER_P2`;检查 `rule_not_countable`、`signature_missing`、`signature_unsafe`(1);`signature_path_unsupported`、`no_window_data`(4);`state_dir_unsafe`、`state_file_unsafe`、`config`、`signal_store_schema`、`signal_store`、`patch_unsafe`、`patch_scope`、`run_exists`、`tmp_exists`(3)。
+
+**C1–C9 采纳检查**(`src/lifecycle/checks.ts`,纯函数,采纳 / 晋升 / CI 三处共用;原因码不回显被扫描的文本):C1 本地重扫注入(judge 的 `injection_suspected=false` 只记录、不作放行依据)与 C1b 不可见字符补全集;C2 证据摘录与本机信号库逐字节相等(仅提案人本机,CI 只做原子↔提案一一对应);C3 固定字段(`status=proposed`、`strength=should`、`verifier=none`、无边、`origin`、`review_by`、owner,**无覆盖参数**;晋升用另一个函数 `checkC3Governance`);C4 层规则(`team_project_keys` 白名单、≥2 项目、≥2 会话);C5 评审记录(跨厂商可证、非 stub、最后一跳 ok、`provider`=最后一跳槽位、厂商可由模型串复算);C6 规则文本与评审绑定(`rule_sha256`);C7 id 与去重(仓库 / 暂存区 / 退役记录墓碑 / 近重复);C8 脱敏复扫;C9 路径与补丁安全。晋升 / 退役的 G3 判据见 `src/guards/criteria.ts` 头部注释(`GUARD_G3_*` 全表)。
+
+### 18.5 退役理由码
+
+| 理由          | 机械证据(不满足 → 退出 1)                                           | 允许的方向             |
+| ------------- | ------------------------------------------------------------------- | ---------------------- |
+| `manual`      | 无,只靠 PR 审批                                                     | → deprecated / retired |
+| `expired`     | `review_by < --today`                                               | → deprecated / retired |
+| `superseded`  | `--by` 指向的原子存在、`status=active`、其 `supersedes` 含本 id     | → deprecated / retired |
+| `no_exposure` | 最近 `no_exposure_windows` 个 canary 窗口的有效 attest 曝光合计为 0 | → deprecated           |
+| `harmful`     | 任一计入口径的 attest 的 `harmful > 0`                              | → deprecated           |
+| `rejected`    | 基线 `status=proposed`                                              | proposed → retired     |
+
+记录兼作 id 墓碑:原子文件被 G4 删掉后,`lifecycle/<rule-id>/` 仍在,C7 据此拒绝重用旧 id(`ID_TOMBSTONED`)。长期未命中只能提示、不自动退役。
+
+### 18.6 验收与已知边界
+
+- 验收 A21–A24(`ops/accept-p1.sh`,见 §17.5 表;A23 端到端只走了 `manual` 一条理由,`expired` / `superseded` / `no_exposure` / `harmful` / `rejected` 的证据路径由 A21 之外的 `test/guards/criteria.test.ts` 与 `test/commands/retire.test.ts` 逐条覆盖):A21 = C1–C9 夹具矩阵;A22 = 三条命令零网络(import 图)+ 零写入(干跑快照);A23 = 端到端 reflect→judge→采纳→advisory→active→deprecated→retired→G4 删除→墓碑;A24 = 变异抽检(人工完成项)。A5 的命令清单已含三条命令的干跑(合成仓库上,包装脚本比对前后树哈希)。
+- 已知边界与遗留项统一登记在 `docs/p1-backlog.md`「attest / promote / retire 遗留项」;包括:无密码学保护的 judge / lifecycle / attest 文件(靠 CODEOWNERS 与 P1-D 四眼)、stable tag 可伪造(GD-3)、窗口日期与 `recorded_at` 是作者可写数据、`event_key` 目前是历史链哈希、`harmful` / `recurrence` 在真实信号库恒为 0。
+
+### 18.7 示例
 
 `JudgeRecord` 带 `rule_sha256`(不带该字段的旧记录同样合法,见 §10.8 / §10.9 的 `Proposal` 示例)。
 

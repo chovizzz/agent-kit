@@ -3,8 +3,7 @@
  * 端到端:collect → reflect(stub)→ judge(stub 跨厂商)→ promote --run --write → git apply --check/apply
  * → `check --guards --label kit:reflector` 绿,且应用后的提案含 judge 记录。
  *
- * ⚠️ 现状缺口(见汇报):judge 命令目前**不写** `rule_sha256`(契约字段已有,写入方未接),所以真实流水线里
- * 每个评审过的提案都会因 C6:RULE_SHA256_MISSING 被丢。这里 `withRuleHash` 模拟「judge 补上该字段」之后的状态。
+ * judge 命令自己写 `rule_sha256`(⑨A,b5736a3 起);`withRuleHash` / `stripRuleHash` 只用来造「哈希缺失 / 对不上」的反例。
  */
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';

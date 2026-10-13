@@ -24,7 +24,7 @@
 - ✅ **D1 适用性标记**(契约变更):`CollectReport` 加 `tool_failures_scope: "full" | "codex_pre_0149_limited"`
   (推荐 spec 方案 A);codex reader 按会话内是否出现 `CommandExecution` 判定;oracle 与 A6 Codex 部分同步
 - ✅ **D3 `maxEventBytes` 定值**:按 spec C8 本机实测(最大单行 4.0MB)定默认值;`oversized_lines` 口径验证
-- ◐ **D4 跨文件去重**:决策已定(attest 聚合层去重;Signal 加可选加盐 `event_key`;实现随 P1-C attest 块)
+- ✅ **D4 跨文件去重**:attest 聚合层去重,Signal 加可选 `event_key`(L5 实装;键的来源见下节遗留项⑤)
 - ✅ **D5/D6**:owner 拍板维持现行口径 A(全条目 + branch_count;两类边界行均计用户消息),spec 已记录
 
 ## Phase P1-C(新功能主体)
@@ -34,10 +34,36 @@
 - ✅ **反思器 `reflect` + 裁判 `judge`**(实现:stub 验证;**真实后端未验证**——所有 CLI 参数集仍是 `verified:false`,
   默认拒绝真跑,需覆盖层 `allow_unverified` 显式放行,R6 实测前不要在真实数据上跑):`Proposal.reflector.vendor` 必填、
   `judge.vendor ≠ reflector.vendor`、`skipped:same-vendor` 记账(contracts #18);含外部内容的会话只进结构化计数(#8);
-  命令面与退出码见 contracts §17;验收 `ops/accept-p1.sh`(A16–A20)。
-- ☐ **`attest` / `promote` / `retire`**:按 contracts §对应节;依赖 reflect。
-  **注意**:G3 判据(`promote`)不能信任 judge 的 `injection_suspected=false`——要在本地对提案/原子文本再跑一遍
-  reflect 的话术检测(`scanDangerousPhrases` + 不可见字符),judge 的结论只作输入,不作放行依据
+  命令面与退出码见 contracts §17;验收 `ops/accept-p1.sh`(A16–A20;生命周期部分 A21–A24 见下)。
+- ✅ **`attest` / `promote` / `retire`**(L0–L7,2026-10-13):三条命令全部实装,命令面 / 退出码 / 稳定码见 contracts §18;
+  纯本地零网络、默认干跑、`--write` 只写 `.state/<命令>/`;G3 真判据(`lifecycleCriteria`,T1–T6)、采纳检查 C1–C9
+  (`src/lifecycle/checks.ts`,采纳 / 晋升 / CI 共用)、`lifecycle/` 只增目录兼作 id 墓碑、`proposed→retired` 被否决提案出口均已落地。
+  验收 A21–A24(`ops/accept-p1.sh`;A24 为人工完成项,标记 `.state/accept/a24.done` 绑 HEAD,清单 `ops/accept/a24-mutation.md`);
+  A5 的命令清单已含三条命令(合成仓库上的干跑)。
+  G3 判据不信任 judge 的 `injection_suspected=false`:本地重扫话术与不可见字符(C1 / C1b),judge 结论只作输入。
+  **遗留项见下节「attest / promote / retire 遗留项」。**
+
+## attest / promote / retire 遗留项(L7 登记)
+
+- ☐ ① **反思器危险话术检测会被散落的否定词豁免**(`src/reflect/validate.ts` 的极性表):命中的话术所在子句里,只要话术**之前**出现任何否定词(哪怕不相邻、
+  并不修饰该话术),就按护栏类提及放行(`guardrail_mention`)。攻击者在话术前撒一个否定词即可绕过 reflect 的本地校验与 C1 重扫(C1 复用同一个 `scanDangerousPhrases`);
+  需要把极性判断收窄到紧邻话术的位置,并加对抗夹具
+- ☐ ② **`SAFE_PATH_RE` 在 `src/reflect/stage.ts` 与 `src/lifecycle/checks.ts` 各复刻一份**:应从 stage.ts 导出、checks.ts 引用,去掉重复(两处改一处就会分叉)
+- ☐ ③ **retire 靠 L2 诊断文案挑 `attest_digests`**:`lifecycle/retire.ts` 对每个候选单独探测、按判据返回的诊断剔除无效项;
+  应由 `src/guards/criteria.ts` 导出「计入口径的有效 attest 集合」纯函数,或给「digest 无效」单独稳定码,不要靠文案
+- ☐ ④ **`harmful` / `recurrence` 在真实信号库里恒为 0**:信号流水线没有纠正 / 回滚类信号,所以 `harmful` 判据(`THRESHOLD_HARMFUL`、`harmful` 退役理由)
+  现在只在合成数据上可达;要等信号流水线开始产出这类信号
+- ☐ ⑤ **`event_key` 是历史链哈希**:`NormEvent` 没有源事件 id,现在的键是 `sha256(salt ‖ agent ‖ chain)`,`chain' = sha256(chain ‖ ts ‖ kind ‖ toolName ‖ 文本哈希)`
+  (`src/signals/pipeline.ts`);reader 带上源事件 id 后应换成「加盐源 id」(D4 的原意),并保持对旧键的兼容
+- ☐ ⑥ **`retire` 的 `run_id` 是确定性的**(同输入同记录,为幂等):若要真随机的 run_id,就得放弃 `RETIRE_RUN_EXISTS` 的幂等判定;当前取舍是保幂等
+- ☐ ⑦ **无签名的 advisory 原子要两步晋升**:先走内容 PR 补 `signature` 并重跑 judge(`rule_sha256` 会变),再 `promote --to active`;命令只给 `SIGNATURE_MISSING` 与提示,不自动化
+- ☐ ⑧ **org 层现有 3 个原子没有 `origin=proposal`,不能走晋升**(`ORG_LAYER_NOT_PROMOTABLE`);它们的状态变更需要另一条路径(或给它们补提案出身),否则永远是 proposed
+- ☐ ⑨ **`promote --run` 里 personal + team 混合的退出码语义**:现在 team 提案照常写出、整体退 2;是否改为「整批不写」待定
+- ☐ ⑩ **`test/ops/inventory-refresh.test.ts` 在全量高负载下总是超时红、单跑绿**(单跑约 30s):应加大该用例的超时(本块未改,只登记)
+- ☐ ⑪ **T2 的 `review_by` 受 lint 上限约束**:`promote --to active` 的新 `review_by` = `min(今天 + 90/30, created + 180/30)`,老原子(created 很久以前)可能 `REVIEW_BY_UNREACHABLE`;
+  需要一条「复审后延期」的合法路径(改 lint 上限的语义,或允许 `review_by` 随复审重置)
+- ☐ ⑫ **P1-D:四眼 / 受保护 tag / 签名缺口(GD-3)**:PR 作者 ≠ 审批人只能靠远端分支保护 + CODEOWNERS;stable tag 本地可伪造(`COOLDOWN_NOT_MET` 与 G4 都依赖它);
+  attest / judge / lifecycle 文件无签名;窗口日期、`recorded_at`、「转为 advisory 的日期」(取提交者日期)都是作者可写数据。三条命令在 P1-D 落地前不能提供硬的权限边界
 
 ## Phase P1-C 之后的待办(R5 汇报时登记)
 
@@ -64,7 +90,7 @@
   (contracts §12.4 ④),并把 `CommandContext.env` 正式加进 `src/commands/types.ts`(目前经 `EnvCommandContext` 交叉类型传入)
 - ☐ **`team_project_keys` 填什么**:值是信号里的 `project_key`(加盐哈希 `p_…`),但 CLI 没有任何地方把它列给用户;
   `reflect` 干跑(或 `signals collect --dry`)应列出各 `project_key` 的会话数/信号数(只有 id 与计数),用户才填得出白名单
-- ☐ **A20 在共用工作树里原地变异**:同一棵树里别的进程(build / test)会读到变异后的源码;更稳的做法是在临时 worktree 里做变异。
+- ☐ **A20 / A24 在共用工作树里原地变异**(A24 同构:cp 备份 + cp 还原,还原后恢复 mtime,变异窗口里不构建 dist):同一棵树里别的进程(build / test)会读到变异后的源码;更稳的做法是在临时 worktree 里做变异。
   现已缓解:不恢复 mtime(变异窗口内构建的 dist 会被 `freshDist` 判陈旧)、结束后自动重建 dist、SIGINT/SIGTERM 先还原、
   `--write-marker` 要求工作树干净、遗留 `.mut-bak` 时拒绝继续;SIGKILL 仍可能留下变异源码(靠 `.mut-bak` 检测发现)
 - ☐ **R2 接口**:`runReflect` 的 `personalProjectKeys` 是黑名单,命令层靠补集代理对象把白名单 `team_project_keys` 接进去
