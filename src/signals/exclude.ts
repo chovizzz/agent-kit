@@ -56,7 +56,7 @@ export interface ProjectDecision {
   action: 'process' | 'skip';
   /** process 时:project_key 哈希所用的项目根(允许路径命中则为该路径,否则为 cwd 本身) */
   projectRoot?: string;
-  reason?: 'excluded' | 'not_allowed' | 'unknown_project';
+  reason?: 'excluded' | 'not_allowed' | 'unknown_project' | 'self_state';
 }
 
 export interface ExcludePolicy {
@@ -112,6 +112,52 @@ export async function createExcludePolicy(input: ExcludeInput): Promise<ExcludeP
       if (hit) return { action: 'process', projectRoot: hit.real };
       if (allowNames.has(fold(path.basename(cwd)))) return { action: 'process', projectRoot: cwd };
       return { action: 'skip', reason: 'not_allowed' };
+    },
+  };
+}
+
+/**
+ * 排除反思器自己的会话(R1):会话 cwd 落在本仓 `.state/` 之内(含相等)→ 跳过,reason=`self_state`。
+ * 反思器的 LLM 子进程以 `.state/reflect/cwd/` 为工作目录,它的会话日志若被回采会形成「反思自己」的回路。
+ *
+ * - 在用户策略**之前**判定(自身会话优先计入 self_state,而不是 not_allowed / excluded);
+ * - 与 exclude_dirs 同一套比较:最长已存在前缀的 realpath(穿透符号链接)、`path.resolve` 折叠 `..`、
+ *   去尾斜杠、不区分大小写;目录已被删除也能认出;
+ * - 另有兜底:路径含 `.state/reflect/cwd` 三段(见 hasReflectorCwdSegments)。
+ * - cwd 为 null / 空 / 相对路径不在此判(交给内层策略按 unknown_project 跳过)。
+ * - 不区分大小写在大小写敏感文件系统上会多排除一个仅大小写不同的兄弟目录,方向是保守的。
+ */
+/**
+ * 兜底:路径里含 `<.state|state>/reflect/cwd` 这三段(按段边界,前缀不限)也算反思器会话。
+ * 采集与反思若用了不同的 KIT_STATE_DIR / 不同 worktree,按 stateDir 判定会认不出旧的反思器会话
+ * (`KIT_STATE_DIR=$KIT_TMP/state` 的布局父目录叫 `state`,所以两种名字都认)。
+ * 只认完整的三段,所以 `/work/reflect/cwd` 之类的普通项目不受影响;`/x/state/reflect/cwd` 会被多排除,方向保守。
+ * 入参已 canonical + fold。
+ */
+function hasReflectorCwdSegments(foldedCwd: string): boolean {
+  const seg = foldedCwd.split('/');
+  for (let i = 0; i + 2 < seg.length; i++) {
+    if (
+      (seg[i] === '.state' || seg[i] === 'state') &&
+      seg[i + 1] === 'reflect' &&
+      seg[i + 2] === 'cwd'
+    )
+      return true;
+  }
+  return false;
+}
+
+export function withSelfExclusion(inner: ExcludePolicy, stateDir: string): ExcludePolicy {
+  let stateCanon: Promise<string> | undefined;
+  const state = (): Promise<string> => (stateCanon ??= canonical(stateDir).then(fold));
+  return {
+    async decide(cwdHint) {
+      if (cwdHint !== null && cwdHint !== '' && path.isAbsolute(cwdHint)) {
+        const cwd = fold(await canonical(cwdHint));
+        if (within(await state(), cwd) || hasReflectorCwdSegments(cwd))
+          return { action: 'skip', reason: 'self_state' };
+      }
+      return inner.decide(cwdHint);
     },
   };
 }

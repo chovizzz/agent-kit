@@ -20,7 +20,7 @@ import type {
   TraceReader,
 } from '../contracts/reader.js';
 import { MAX_EXCERPT_CHARS, SignalSchema } from '../contracts/signal.js';
-import type { Signal } from '../contracts/signal.js';
+import type { Signal, SignalEventKind } from '../contracts/signal.js';
 import type { RedactFailReason, Redactor } from '../contracts/redact.js';
 import type { ExcludePolicy, ProjectDecision } from './exclude.js';
 import { isExternalToolName } from './external-content.js';
@@ -90,6 +90,12 @@ export interface SessionResult {
   counts?: Counts;
   meta?: SessionMeta;
   version?: ResolvedVersion;
+  /** 项目哈希(与信号的 project_key 同值);processed 时有 */
+  projectKey?: string;
+  /** 会话是否含外部内容(逐事件 / meta / 工具名兜底的并集);processed 时有 */
+  external?: boolean;
+  /** 会话时间:meta.started_at,取不到则首个事件的 ts,都没有则 undefined(此时不写计数行,见 buildSessionStat) */
+  sessionTs?: string;
   /** 已脱敏且通过复扫的信号 */
   signals: Signal[];
   dropped: number;
@@ -99,6 +105,12 @@ export interface SessionResult {
 interface Candidate {
   index: number;
   ts: string;
+  /** 由 reader 事件种类派生(不新增分类逻辑):wantsSignal 的三种命中 */
+  eventKind: SignalEventKind;
+  /** tool_call 的原始工具名(截断到 2×上限,仅用于 safeKey 判定;从不落盘) */
+  rawToolName: string | undefined;
+  /** 排除判定通过后(settle)才由 rawToolName 经 safeKey 算出;rawToolName 随即清空 */
+  toolName?: string;
   /** 排除判定前暂存的原文窗口;判定通过后立刻脱敏并清空,内存里只留 ≤300 字的结果 */
   text: string | undefined;
   truncated: boolean;
@@ -109,6 +121,23 @@ function wantsSignal(ev: NormEvent): boolean {
   if (ev.kind === 'user_message' || ev.kind === 'tool_call') return true;
   return ev.kind === 'tool_result' && ev.tool_failed === true;
 }
+
+/**
+ * 信号的 event_kind:与 wantsSignal 同一个判据派生,不另设分类。
+ * 注意它是**事件种类**:四个 reader 目前都只在 tool_result 事件上设 tool_failed(tool_call 从不带),
+ * 所以 tool_result_failed 信号数与 counts.tool_failures 一一对应(脱敏丢弃的信号除外)。
+ * 若将来某个 reader 在 tool_call 上带失败,这类信号 event_kind 仍是 tool_call,失败只体现在 counts 里。
+ */
+function eventKindOf(ev: NormEvent): SignalEventKind {
+  return ev.kind === 'user_message'
+    ? 'user_message'
+    : ev.kind === 'tool_call'
+      ? 'tool_call'
+      : 'tool_result_failed';
+}
+
+/** 原始工具名只取前 192 码元参与判定:超过 96 本来就判 <unprintable>,不必保留更长的串。 */
+const TOOL_NAME_WINDOW = 192;
 
 const SAFE_KEY_RE = /^[A-Za-z0-9_.:()<>+-]{1,96}$/;
 export const UNPRINTABLE_KEY = '<unprintable>';
@@ -225,6 +254,7 @@ export async function processSession(
   const candidates: Candidate[] = [];
   let index = 0;
   let settled = 0;
+  let firstEventTs: string | undefined;
   /**
    * 非 reader 侧的阶段(policy / redact / schema)抛错 = 无法证明安全 → 就地包成 PipelineFailClosedError(只留阶段与类名);
    * 其余抛错(事件迭代、reader.meta()/counts())留给外层 catch,归为该会话的 read_error。
@@ -237,11 +267,22 @@ export async function processSession(
     }
   };
   /** 排除判定通过后,把已暂存的候选依次脱敏(原文随即丢弃) */
+  const toolNames = new Map<string, string>();
   const settle = (): void => {
     for (; settled < candidates.length; settled++) {
       const c = candidates[settled] as Candidate;
       c.result = makeExcerpt(deps.redactor, c.text, c.truncated);
       c.text = undefined;
+      // 工具名同样只在排除判定通过后才处理:字符白名单 + 脱敏后不变,否则 <unprintable>
+      if (c.rawToolName !== undefined) {
+        let v = toolNames.get(c.rawToolName);
+        if (v === undefined) {
+          v = safeKey(deps.redactor, c.rawToolName);
+          toolNames.set(c.rawToolName, v);
+        }
+        c.toolName = v;
+        c.rawToolName = undefined;
+      }
     }
   };
 
@@ -249,6 +290,7 @@ export async function processSession(
     for await (const ev of read.events) {
       const i = index++;
       base.eventsSeen++;
+      firstEventTs ??= ev.ts;
       if (decision === undefined) {
         const cwd = read.meta().cwd_hint;
         if (cwd !== null) {
@@ -269,6 +311,11 @@ export async function processSession(
         candidates.push({
           index: i,
           ts: ev.ts,
+          eventKind: eventKindOf(ev),
+          rawToolName:
+            ev.kind === 'tool_call' && ev.tool_name !== undefined && ev.tool_name !== ''
+              ? ev.tool_name.slice(0, TOOL_NAME_WINDOW)
+              : undefined,
           text: text === undefined ? undefined : text.slice(0, TEXT_WINDOW),
           truncated: text !== undefined && text.length > TEXT_WINDOW,
         });
@@ -320,11 +367,26 @@ export async function processSession(
           external_content: external,
           confidence: 1,
           loaded_rule_ids: [],
+          event_kind: c.eventKind,
+          // 与 sigIdFor 用的序号是同一个 c.index(会话事件流内的位置,含不产信号的事件)
+          event_index: c.index,
+          // 外部内容会话不落 tool_name:调用名是模型读完外部内容之后自己写的,宿主拒绝执行也照样进 trace,
+          // 白名单字符足以拼出指令性标记(如 SYSTEM:xxx),而 contracts #8 要求外部会话只留结构化计数
+          ...(c.toolName !== undefined && !external ? { tool_name: c.toolName } : {}),
         } satisfies Signal),
       );
       base.signals.push(sig);
     }
-    return { ...base, counts, meta, version };
+    const sessionTs = meta.started_at ?? firstEventTs;
+    return {
+      ...base,
+      counts,
+      meta,
+      version,
+      projectKey,
+      external,
+      ...(sessionTs !== undefined ? { sessionTs } : {}),
+    };
   } catch (e) {
     candidates.length = 0; // 纵深防御:失败路径上不再持有任何暂存原文
     if (e instanceof PipelineFailClosedError) throw e;
