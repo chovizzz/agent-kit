@@ -64,6 +64,9 @@ const IMPLEMENTED_COMMANDS = new Set([
   'judge',
   'reflect',
   'attest',
+  // promote:`--run`(采纳,L3)已实装;`--rule --to`(晋升,L4)仍未实装,按下面的专门用例断言退出 64。
+  // 不带参数的 promote 现在是用法错误(2),所以不能再放进上面的「桩 → 64」循环。
+  'promote',
 ]);
 
 describe('命令桩:每个命令退出 64 并说明原因(绝不静默成功)', () => {
@@ -76,6 +79,17 @@ describe('命令桩:每个命令退出 64 并说明原因(绝不静默成功)', 
       expect(r.out).toBe('');
     });
   }
+
+  it('promote:--rule --to(L4)仍是未实装 → 64;无参数 → 2(用法);--run 已实装', async () => {
+    const r = await run(['promote', '--rule', 'x', '--to', 'advisory']);
+    expect(r.code).toBe(ExitCode.NOT_IMPLEMENTED);
+    expect(r.out).toBe('');
+    expect(r.err).toBe('PROMOTE_NOT_IMPLEMENTED reason=rule_mode_not_implemented\n');
+    expect((await run(['promote'])).code).toBe(ExitCode.USAGE);
+    expect((await run(['promote', '--run', 'run-20200101T000000Z-ffffff'])).code).toBe(
+      ExitCode.USAGE,
+    );
+  });
 
   it('inventory 的提示说明「P1 才进 CLI」', async () => {
     expect((await run(['inventory'])).err).toContain('P1 才进 CLI');
