@@ -3,7 +3,12 @@
  * 读 `.state/reflect/<run_id>/`,逐条提案跑 C1–C9,全过的团队层提案用**当前**(已含 judge 记录的)提案与规则文件
  * 重新生成补丁 `promote.patch`——暂存区里 judge 之前生成的 `apply.patch` 作废。
  *
- * `promote --rule <id> --to advisory|active`(L4,晋升)本块**未实装**:参数合法时退出 64(`PROMOTE_NOT_IMPLEMENTED`)。
+ * `promote --rule <id> --to advisory|active [--today YYYY-MM-DD] [--write] [--json]`(L4,晋升 T1/T2):
+ * 在内存里构造 head 视图并调用真 `checkG3`(+ C1/C1b/C3 治理版/C5/C6/C7/C8),全绿才生成只改 `status:`(T2 再加 `review_by:`)的补丁
+ * 与 `out/` 进出清单;红则不写。实现见 `lifecycle/promote-rule.ts`。退出码:0 完成 / 已是目标状态(`already=1`)/ 已存在且一致;
+ * 1 判据不过(含工作树与 HEAD 不同 `PROMOTE_WORKTREE_DIRTY`、规则/提案找不到、方向不允许、无 signature `SIGNATURE_MISSING`、模拟 G3 红、预算阻断);
+ * 2 用法(含 personal `PERSONAL_LAYER_P2` / org `ORG_LAYER_NOT_PROMOTABLE` / project 层);3 fail-closed(git 不可用、配置/out 清单算不出、
+ * 写出口拒绝、`PROMOTE_RUN_EXISTS`);4 `judge_pending:cooldown`。产物 `.state/promote/<promo_id>/{promote.patch,pr-body.md,report.json}`。
  *
  * - **纯本地、零网络**:不 import llm-exec / backends(也不经 commands/reflect.ts 传递引入);`--run-llm` / `--allow-egress` 出现即退出 2。
  * - **默认干跑**:只算、只打印;`--write` 才写,且只写 `.state/promote/<promo_id>/{promote.patch, pr-body.md, report.json}`
@@ -17,7 +22,7 @@
  */
 import * as path from 'node:path';
 import { parse as parseToml } from 'smol-toml';
-import { IsoDateSchema, RunIdSchema } from '../contracts/common.js';
+import { IsoDateSchema, KebabIdSchema, RunIdSchema } from '../contracts/common.js';
 import { OverlaySchema } from '../contracts/config.js';
 import type { Overlay } from '../contracts/config.js';
 import { ExitCode } from '../contracts/exit-codes.js';
@@ -26,10 +31,13 @@ import { canonicalJson } from '../io/canonical-json.js';
 import type { IoContext } from '../io/paths.js';
 import { exists, lstat, readText } from '../io/read-fs.js';
 import { chmod, mkdirp, rename, writeFile, WriteDeniedError } from '../io/safe-fs.js';
+import { createGuardGit, GitError } from '../guards/git.js';
+import type { GuardGit } from '../guards/types.js';
 import { JudgeRunNotFoundError } from '../judge/store.js';
 import { JudgeStateError } from '../judge/errors.js';
 import { AdoptFailClosedError, planAdoption } from '../lifecycle/adopt.js';
-import type { AdoptPlan } from '../lifecycle/adopt.js';
+import { PROMOTE_HINT_SIGNATURE, PromoteError, planPromotion } from '../lifecycle/promote-rule.js';
+import type { PromoteTarget } from '../lifecycle/promote-rule.js';
 import { createRedactor } from '../redact/redactor.js';
 import { SignalStoreError } from '../signals/state-store.js';
 import { combineExitCodes } from './types.js';
@@ -41,6 +49,12 @@ export const PROMOTE_REDACT_TIMEOUT_MS = 5000;
 export interface PromoteCommandDeps {
   /** 测试注入;缺省按覆盖层建真实 Redactor */
   redactor?: Pick<Redactor, 'pass2'>;
+  /** 测试注入;`--today` 缺省取它的 UTC 日期 */
+  now?(): Date;
+  /** 测试注入;缺省 = 以仓库根为 cwd 的只读 git(`createGuardGit`) */
+  git?: GuardGit;
+  /** 测试注入:传给 git 子进程的额外环境 */
+  gitEnv?: Readonly<Record<string, string>>;
 }
 
 interface Parsed {
@@ -121,7 +135,8 @@ function parseArgs(argv: readonly string[]): Parsed {
       if (out.to !== undefined || out.today !== undefined) out.error = 'to_today_need_rule';
       else if (!RunIdSchema.safeParse(out.run).success) out.error = 'bad_run_id';
     } else {
-      if (out.to !== 'advisory' && out.to !== 'active') out.error = 'bad_to';
+      if (!KebabIdSchema.safeParse(out.rule).success) out.error = 'bad_rule_id';
+      else if (out.to !== 'advisory' && out.to !== 'active') out.error = 'bad_to';
       else if (out.today !== undefined && !IsoDateSchema.safeParse(out.today).success)
         out.error = 'bad_today';
     }
@@ -176,7 +191,7 @@ const OUT_FILES = ['promote.patch', 'pr-body.md', 'report.json'] as const;
 /** 写 `.state/promote/<promo_id>/`;返回 wrote / existing。 */
 async function writeOut(
   io: IoContext,
-  plan: AdoptPlan,
+  plan: { promoId: string; patch: string; prBody: string; report: string },
 ): Promise<{ wrote: boolean; existing: boolean }> {
   const content: Record<(typeof OUT_FILES)[number], string> = {
     'promote.patch': plan.patch,
@@ -214,23 +229,98 @@ async function writeOut(
 }
 
 export function createPromoteCommand(deps: PromoteCommandDeps = {}): CommandDef {
+  function makeRedactor(overlay: Overlay | undefined): Pick<Redactor, 'pass2'> {
+    if (deps.redactor !== undefined) return deps.redactor;
+    try {
+      return createRedactor(
+        {
+          sensitive_words: overlay?.sensitive_words ?? [],
+          timeout_ms: PROMOTE_REDACT_TIMEOUT_MS,
+        },
+        { internalDomains: overlay?.internal_domains ?? [] },
+      );
+    } catch {
+      throw new Exit(ExitCode.FAIL_CLOSED, 'FAIL_CLOSED', 'redactor_init');
+    }
+  }
+
+  /** 晋升(L4):`--rule <id> --to advisory|active`。 */
+  async function promoteRule(ctx: CommandContext, args: Parsed): Promise<number> {
+    const io = ctx.io;
+    const overlay = await readOverlay(ctx);
+    const redactor = makeRedactor(overlay);
+    const to = args.to as PromoteTarget;
+    const ruleId = args.rule as string;
+    const today = args.today ?? (deps.now ?? ((): Date => new Date()))().toISOString().slice(0, 10);
+    const git = deps.git ?? createGuardGit(io, io.repoRoot, deps.gitEnv);
+
+    let plan;
+    try {
+      plan = await planPromotion(io, { ruleId, to, today, git, redactor });
+    } catch (e) {
+      if (!(e instanceof PromoteError)) throw e;
+      const failures = [...e.codes];
+      if (args.json) {
+        ctx.stdout(canonicalJson({ ok: false, rule_id: ruleId, to, reason: e.reason, failures }));
+      } else {
+        ctx.stdout(
+          `${[`ok=false`, `rule_id=${ruleId}`, `to=${to}`, `reason=${e.reason}`, ...failures.map((f) => `fail ${f}`)].join('\n')}\n`,
+        );
+      }
+      ctx.stderr(`PROMOTE_${e.tag} reason=${e.reason}\n`);
+      if (failures.includes('G3:SIGNATURE_MISSING')) {
+        ctx.stderr(
+          `PROMOTE_CHECK_FAILED reason=SIGNATURE_MISSING hint=${PROMOTE_HINT_SIGNATURE}\n`,
+        );
+      }
+      return e.code;
+    }
+
+    if (plan.already) {
+      if (args.json) {
+        ctx.stdout(canonicalJson({ already: true, rule_id: plan.ruleId, status: plan.status }));
+      } else ctx.stdout(`already=1\nrule_id=${plan.ruleId}\nstatus=${plan.status}\n`);
+      return ExitCode.OK;
+    }
+
+    let wrote = false;
+    let existing = false;
+    if (args.write) ({ wrote, existing } = await writeOut(io, plan));
+    const ch = (name: string): { atomsIn: string[]; atomsOut: string[] } =>
+      plan.outDiff.channels.find((c) => c.channel === name) ?? { atomsIn: [], atomsOut: [] };
+    const summary = {
+      already: false,
+      rule_id: plan.ruleId,
+      from: plan.from,
+      to: plan.to,
+      dry: !args.write,
+      promo_id: plan.promoId,
+      review_by_new: plan.reviewBy,
+      rule_sha256: plan.ruleSha256,
+      patch_sha256: plan.patchSha256,
+      attest_files: plan.attestHashes.length,
+      out_canary_in: ch('canary').atomsIn.length,
+      out_canary_out: ch('canary').atomsOut.length,
+      out_stable_in: ch('stable').atomsIn.length,
+      out_stable_out: ch('stable').atomsOut.length,
+      wrote,
+      existing,
+    };
+    if (args.json) ctx.stdout(canonicalJson(summary));
+    else {
+      ctx.stdout(
+        `${Object.entries(summary)
+          .map(([k, v]) => `${k}=${v === null ? '-' : String(v)}`)
+          .join('\n')}\n`,
+      );
+    }
+    return ExitCode.OK;
+  }
+
   async function adopt(ctx: CommandContext, args: Parsed): Promise<number> {
     const io = ctx.io;
     const overlay = await readOverlay(ctx);
-    let redactor = deps.redactor;
-    if (redactor === undefined) {
-      try {
-        redactor = createRedactor(
-          {
-            sensitive_words: overlay?.sensitive_words ?? [],
-            timeout_ms: PROMOTE_REDACT_TIMEOUT_MS,
-          },
-          { internalDomains: overlay?.internal_domains ?? [] },
-        );
-      } catch {
-        throw new Exit(ExitCode.FAIL_CLOSED, 'FAIL_CLOSED', 'redactor_init');
-      }
-    }
+    const redactor = makeRedactor(overlay);
 
     const plan = await planAdoption(io, {
       runId: args.run as string,
@@ -292,7 +382,7 @@ export function createPromoteCommand(deps: PromoteCommandDeps = {}): CommandDef 
 
   const def: CommandDef = {
     name: 'promote',
-    summary: '生成晋升 PR(--run 采纳:重新生成含 judge 记录的补丁)',
+    summary: '生成晋升 PR(--run 采纳 / --rule --to 晋升)',
     phase: 'P1',
     ownerBlock: 'P1',
     flags: [
@@ -300,8 +390,15 @@ export function createPromoteCommand(deps: PromoteCommandDeps = {}): CommandDef 
         name: '--run <run_id>',
         description: '采纳:.state/reflect/<run_id>/ 下已评审的 reflect 运行',
       },
-      { name: '--rule <id> --to <advisory|active>', description: '晋升(L4,尚未实装,退出 64)' },
-      { name: '--today <YYYY-MM-DD>', description: '晋升模式用的日期(L4)' },
+      {
+        name: '--rule <id> --to <advisory|active>',
+        description:
+          '晋升(T1 proposed→advisory / T2 advisory→active):生成只改 status/review_by 的补丁',
+      },
+      {
+        name: '--today <YYYY-MM-DD>',
+        description: '晋升模式用的日期(T2 的 review_by 新值由它算出;缺省取时钟的 UTC 日期)',
+      },
       {
         name: '--write',
         description:
@@ -313,9 +410,7 @@ export function createPromoteCommand(deps: PromoteCommandDeps = {}): CommandDef 
       const args = parseArgs(ctx.argv);
       try {
         if (args.error !== undefined) throw new Exit(ExitCode.USAGE, 'USAGE', args.error);
-        if (args.rule !== undefined) {
-          throw new Exit(ExitCode.NOT_IMPLEMENTED, 'NOT_IMPLEMENTED', 'rule_mode_not_implemented');
-        }
+        if (args.rule !== undefined) return await promoteRule(ctx, args);
         return await adopt(ctx, args);
       } catch (e) {
         let x: Exit;
@@ -326,6 +421,8 @@ export function createPromoteCommand(deps: PromoteCommandDeps = {}): CommandDef 
           x = new Exit(ExitCode.FAIL_CLOSED, 'FAIL_CLOSED', 'state_invalid');
         else if (e instanceof AdoptFailClosedError)
           x = new Exit(ExitCode.FAIL_CLOSED, 'FAIL_CLOSED', e.code);
+        else if (e instanceof GitError)
+          x = new Exit(ExitCode.FAIL_CLOSED, 'FAIL_CLOSED', 'git_failed');
         else if (e instanceof SignalStoreError)
           x = new Exit(ExitCode.FAIL_CLOSED, 'FAIL_CLOSED', 'signal_store');
         else if (e instanceof WriteDeniedError)

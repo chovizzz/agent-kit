@@ -17,6 +17,7 @@ import { command as signalsCollect } from '../../src/commands/signals-collect.js
 import { main } from '../../src/cli.js';
 import { ExitCode } from '../../src/contracts/exit-codes.js';
 import { createIoContext } from '../../src/io/paths.js';
+import { EXEC_ALLOWLIST } from '../../src/io/exec.js';
 import { exists, lstat, readDir, readText } from '../../src/io/read-fs.js';
 import * as safe from '../../src/io/safe-fs.js';
 import { serializeProposal } from '../../src/judge/store.js';
@@ -656,7 +657,7 @@ describe('promote:命令面', () => {
     expect(missing.err).toBe('PROMOTE_USAGE reason=run_not_found\n');
   });
 
-  it('--rule --to 是 L4:参数合法时稳定返回 64(未实装),不读盘不写盘', async () => {
+  it('--rule --to 已实装(L4):规则不存在 → 1 RULE_NOT_FOUND,不写盘;详细用例见 promote.test.ts', async () => {
     const x = await w();
     const before = await snapshot(x.parent);
     for (const argv of [
@@ -664,9 +665,8 @@ describe('promote:命令面', () => {
       ['--rule', 'some-rule', '--to', 'active', '--today', '2026-10-12', '--write', '--json'],
     ]) {
       const r = await promote(x, argv);
-      expect(r.code).toBe(ExitCode.NOT_IMPLEMENTED);
-      expect(r.out).toBe('');
-      expect(r.err).toBe('PROMOTE_NOT_IMPLEMENTED reason=rule_mode_not_implemented\n');
+      expect(r.code).toBe(ExitCode.CHECK_FAILED);
+      expect(r.err).toBe('PROMOTE_CHECK_FAILED reason=RULE_NOT_FOUND\n');
     }
     expect(await snapshot(x.parent)).toBe(before);
   });
@@ -714,8 +714,12 @@ describe('零网络', () => {
         if (/llm-exec|reflect\/backends/.test(spec)) bad.push(`${rel} -> ${spec}`);
         if (
           /^(node:)?(net|tls|http|https|http2|dns|dgram|child_process|worker_threads)$/.test(spec)
-        )
-          bad.push(`${rel} -> ${spec}`);
+        ) {
+          // 唯一例外:src/io/exec.ts(L4 晋升经 guards/git.ts 读 HEAD;它的可执行白名单只有 git,见下方断言)
+          if (!(rel === 'src/io/exec.ts' && spec === 'node:child_process')) {
+            bad.push(`${rel} -> ${spec}`);
+          }
+        }
         if (spec.startsWith('.')) {
           const target = path.normalize(path.join(path.dirname(rel), spec)).replace(/\.js$/, '.ts');
           if (await exists(path.join(REPO_ROOT, target))) await walk(target);
@@ -726,6 +730,8 @@ describe('零网络', () => {
     await walk('src/lifecycle/adopt.ts');
     expect(seen.size).toBeGreaterThan(10); // 正向对照:闭包确实走了
     expect(bad).toEqual([]);
+    // exec.ts 的可执行白名单只有 git(改动它 = 契约变更);闭包里的子进程出口因此只能起 git
+    expect(EXEC_ALLOWLIST).toEqual(['git']);
   });
 
   it('默认导出的命令名是 promote', () => {
