@@ -19,6 +19,21 @@ export const AgentVersionSourceSchema = z.enum(['session_meta', 'collector_fallb
 
 export const MAX_EXCERPT_CHARS = 300;
 
+/**
+ * R0 追加(contracts #22):事件种类。`tool_result_failed` 的摘录永不进提示(设计 ⑥A),只计数。
+ * 只对 P1 之后重采的信号有值;旧信号缺字段,reflect 把它们当 unknown 排除(R1 决定)。
+ */
+export const SignalEventKindSchema = z.enum(['user_message', 'tool_call', 'tool_result_failed']);
+export type SignalEventKind = z.infer<typeof SignalEventKindSchema>;
+
+/**
+ * 工具名的契约层白名单:长度 1..96、字符 `[A-Za-z0-9_.:()<>+-]`(与 collector 的 safeKey 同形,
+ * 含字面量 `<unprintable>`)。**是否过脱敏、不可打印时改记 `<unprintable>` 由实现(safeKey)负责**,
+ * 契约层只拒绝明显越界的值(空白、控制字符、路径、超长)。
+ */
+export const TOOL_NAME_RE = /^[A-Za-z0-9_.:()<>+-]{1,96}$/;
+export const ToolNameSchema = z.string().regex(TOOL_NAME_RE);
+
 /** 设计 §6.2 的信号结构。 */
 export const SignalSchema = z.strictObject({
   /** 稳定哈希(同一输入同一值);不含原文 */
@@ -39,6 +54,11 @@ export const SignalSchema = z.strictObject({
   external_content: z.boolean(),
   confidence: z.number().min(0).max(1),
   loaded_rule_ids: z.array(z.string()),
+  /** R0 追加(#22),全部可选;`sig_id` 的算法不变(仍只由 session_ref 与事件序号决定)。 */
+  event_kind: SignalEventKindSchema.optional(),
+  /** 会话内事件序号,与 `sigIdFor` 用的序号相同 */
+  event_index: z.number().int().nonnegative().optional(),
+  tool_name: ToolNameSchema.optional(),
 });
 export type Signal = z.infer<typeof SignalSchema>;
 

@@ -104,6 +104,7 @@ zod 校验失败统一映射为 `SCHEMA_INVALID`(`zodIssuesToDiagnostics`);各�
 | 唯一读 HOME/env/cwd | `src/io/paths.ts`(`os.homedir()` / `process.env` / `process.cwd()` 只许出现在这里)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | 只读出口            | `src/io/read-fs.ts`(不导出任何写 API;读真实会话目录靠 `--source` 显式传入)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | 唯一子进程          | `src/io/exec.ts`:无 shell;**二进制白名单(P0 只有 `git`)**;env 键白名单 `GIT_*`/`HOME`/`LANG`/`LC_*`/`TZ`,默认只有 `PATH` 加 `GIT_CONFIG_GLOBAL=/dev/null`、`GIT_CONFIG_NOSYSTEM=1`(HOME 缺失时 git 会经 passwd 回退读真实 `~/.gitconfig`,所以默认屏蔽;调用方可覆盖)、**不继承 HOME**;显式传 `HOME` 时其值必须在 `KIT_TMP` 内。加二进制 = 契约变更                                                                                                                                                                                                                                                                                                                                                                                             |
+| 受控 LLM 出口       | `src/io/llm-exec.ts`(R0,#28,见 §5.2):与 `exec.ts` 分开;`allowEgress:true` 才可用;env 名字白名单;固定 cwd;超时/stdout 32KiB/spawn 次数上限;不经 shell。eslint:`child_process` 只许 `exec.ts` 与 `llm-exec.ts`;`llm-exec` 只许 `src/reflect/backends/**` 引用                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | 写入根              | 默认 = `<repo>/out/`、`<state>`(默认 `<repo>/.state/`)、`$KIT_TMP`(若设)。`KIT_WRITE_ROOTS`(`path.delimiter` 分隔的绝对路径)**只能收窄**:每项必须落在默认根之内,越界、相对路径、`/`、HOME 及其上级一律 `PathsError`(退出 3)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | state 位置          | P0 只能在仓库内或 `KIT_TMP` 内(`KIT_STATE_DIR` 可改);`KIT_STATE_DIR` / `KIT_TMP` 不得等于或位于 `out/` 之下,字面路径与解析后的真实路径(含 `out` 或上级是符号链接、悬空链接)各判一遍,大小写不敏感比较,违者 `PathsError`(退出 3);`~/.local/state/<kit>/` 留到 P2(Q-N13),届时只改 `paths.ts`                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | 写入根的真实位置    | 校验字面路径不够:`createIoContext` 与 safe-fs **每次写入**都对全部写入根按 realpath(含最长已存在前缀)再判一遍——真实位置必须位于真实的仓库根或 `KIT_TMP` 之内,且位于真实的 `out/`、state、`KIT_TMP` 之一之内(大小写精确比较 + 沿祖先链比 (dev,ino) 认出 NFD / firmlink / 大小写不敏感卷的同一目录)。违者 `PathsError`(退出 3)/ `WriteDeniedError`;悬空链接一律拒;`out/` 与 state 的最后一段本身是符号链接(哪怕指向仓库内)一律拒;`KIT_TMP`、写入根解析后落到 HOME 或其上级 / `/` 也拒。覆盖「链接在中间一段」「写入根或状态目录的链接事后改指向」「`out/` 或 state 本身是指向仓库外的链接」。已知残余:校验与 fs 调用之间的竞态(无 `openat`/`O_NOFOLLOW`)、仓库位于 `KIT_TMP` 之下时指向仓库的链接仍落在 `KIT_TMP` 内(与 `KIT_TMP` 范围同属未决) |
@@ -112,6 +113,19 @@ zod 校验失败统一映射为 `SCHEMA_INVALID`(`zodIssuesToDiagnostics`);各�
 | 复制来源            | `copyFile` 的来源限定在仓库或写入根内,不能把仓库外的内容(如 `~/.ssh`)吸进 `out/`;来源是硬链接(nlink>1)一律拒。`mkdtemp` 的 prefix 不得含路径分隔符或 `..`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | 测试临时目录        | `safe-fs.mkdtemp(ctx, ctx.tmpDir ?? <state>/test-tmp, prefix)`;测试不得自己 `import node:fs`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | 确定性序列化        | `canonicalJson`(键序、2 空格、LF、末尾换行,拒 undefined/NaN/环/非纯对象)、`canonicalText`(LF,末尾恰一个换行)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+
+### 5.2 受控 LLM 出口 `src/io/llm-exec.ts`(R0,#28)
+
+`runLlm(ctx, req)`(异步)。**契约变更**:这是 `exec.ts` 之外第二个子进程出口,用于 reflect / judge 调用第三方 LLM CLI(摘录会离开本机)。
+
+- **开关**:`req.allowEgress` 必须是布尔 `true`,否则 `IO_LLM_EGRESS_DENIED`,不 spawn、不消耗预算。命令层只在用户同时给 `--run-llm --allow-egress` 后置 true;**干跑路径不得 import 本模块**(eslint 强制,见下)。
+- **二进制**:只能是 `claude` / `codex` / `pi`(裸名按 `envSource.PATH` 的绝对项解析,或同名绝对路径);解析结果落在仓库内且不在 `KIT_TMP` 内 → 拒(防仓库里埋假 `claude`)。`shell:false`,参数数组,≤64 个、每个 ≤8KiB、无 NUL;提示走 stdin(≤64KiB)。
+- **env**:不继承。`LLM_ENV_ALLOW` 名字白名单(`PATH HOME USER LOGNAME LANG LC_* TZ TMPDIR XDG_*_HOME` 与代理变量)+ 固定 `NO_COLOR=1`;key/token/secret、`*_BASE_URL`、`CODEX_HOME`、`NODE_OPTIONS`、`LD_*`、`TERM` 等一律不传。唯一例外 `passEnv`:调用方在代码里写死、形如 `<NAME>_API_KEY` 的名字。本模块不读进程环境(只许 `paths.ts`),`envSource` 由调用方给,`filterLlmEnv()` 负责挑选(**待主代理**:`IoContext` 增可选 `hostEnv`,由 `paths.ts` 提供)。`HOME` 传**真实 HOME**(CLI 要读自己的登录态),必须绝对路径。
+- **cwd**:固定 `<state>/reflect/cwd/`(0700,调用方不能指定);运行前必须为空(否则 `IO_LLM_CWD_DENIED`,不替用户删),运行后清掉子进程留下的条目并计数(`cwdResidue`)。目的:CLI 自动发现不到 CLAUDE.md / AGENTS.md。
+- **限制**:超时 1..600000ms(SIGKILL 整个进程组,正常退出后也杀遗留组员);stdout ≤32KiB(超出即杀并标 `stdoutTruncated`,调用方须视为失败);stderr 只留 4KiB;`LlmSpawnBudget(max≤10)` 在每次 spawn 前消耗,耗尽 `IO_LLM_SPAWN_LIMIT`。被拒的请求不消耗预算,失败的 spawn 消耗。
+- **eslint**:`child_process` 只许 `src/io/exec.ts`、`src/io/llm-exec.ts`;`llm-exec`(import / export-from / 动态 import)只许 `src/reflect/backends/**` 与 `test/io/llm-exec*.test.ts`、`test/reflect/backends/**`。命令层(`src/commands/{reflect,judge}.ts`)与 judge **经依赖注入**拿后端,不直接 import。放行走 `restrictions({allowLlm})` 生成(flat config 同名规则整条替换,不能另写局部 override)。**R3 须加传递依赖测试**:非 backends 的 `src/reflect/**` 不得经任何路径 import 到 llm-exec,backends 文件不得 re-export `runLlm`。
+- **二进制**:名字叫 `claude` 却实际指向 `sh/bash/env/python…` 的符号链接拒;动态 import 来源含 `%` 一律拒(防 `%2D` 绕开路径匹配);测试放行只给 `test/io/llm-exec.test.ts` 与 `test/reflect/backends/**`。
+- **R3 传参要求**:codex 每次显式传 `-m` 与 `-c model_provider=…`(用户 `~/.codex/config.toml` 可改默认 provider);claude 带 `--strict-mcp-config`、codex 带 `-c mcp_servers="{}"` 等无工具参数——各 CLI 的无工具/无会话落盘参数在 R6 实测前一律「未核实」,拿不准 fail-closed。
 
 ### 5.1 lint 护栏的范围与已知洞(A9)
 
@@ -172,15 +186,15 @@ A2 的 12 格矩阵(`limit_source` × `enforce` × 超/不超;退出码 / 是否
 
 ## 7. 命令面(`src/cli.ts` 注册表;命令桩的形状)
 
-| 命令                                          | 阶段   | 文件                              | 备注                                                                  |
-| --------------------------------------------- | ------ | --------------------------------- | --------------------------------------------------------------------- |
-| `build`                                       | P0     | `src/commands/build.ts`           | 合并+渲染到 `out/`;**B01 之后无块的边界覆盖它**,由 B19 接线           |
-| `check`                                       | P0     | `src/commands/check.ts`           | 组合 `lint-cmd.ts`(B03)、`check-budget.ts`(B05)、`guards-cmd.ts`(B04) |
-| `redact`                                      | P0     | `src/commands/redact-cmd.ts`      | `--selftest` / `--stdin`(B09)                                         |
-| `signals collect`                             | P0     | `src/commands/signals-collect.ts` | `--source <路径> --dry`(B10b)                                         |
-| `inventory`                                   | P1(桩) | `src/commands/inventory.ts`       | 见 §4.1                                                               |
-| `probe` `reflect` `attest` `promote` `retire` | P1     | 各一个文件                        | 桩                                                                    |
-| `sync` `doctor`                               | P2     | 各一个文件                        | 桩                                                                    |
+| 命令                                                  | 阶段   | 文件                              | 备注                                                                  |
+| ----------------------------------------------------- | ------ | --------------------------------- | --------------------------------------------------------------------- |
+| `build`                                               | P0     | `src/commands/build.ts`           | 合并+渲染到 `out/`;**B01 之后无块的边界覆盖它**,由 B19 接线           |
+| `check`                                               | P0     | `src/commands/check.ts`           | 组合 `lint-cmd.ts`(B03)、`check-budget.ts`(B05)、`guards-cmd.ts`(B04) |
+| `redact`                                              | P0     | `src/commands/redact-cmd.ts`      | `--selftest` / `--stdin`(B09)                                         |
+| `signals collect`                                     | P0     | `src/commands/signals-collect.ts` | `--source <路径> --dry`(B10b)                                         |
+| `inventory`                                           | P1(桩) | `src/commands/inventory.ts`       | 见 §4.1                                                               |
+| `probe` `reflect` `judge` `attest` `promote` `retire` | P1     | 各一个文件                        | 桩(`judge` 为 R0 新注册的桩,`src/commands/judge.ts`;`probe` 已实装)   |
+| `sync` `doctor`                                       | P2     | 各一个文件                        | 桩                                                                    |
 
 - 全局选项(由 `cli.ts` 取走,命令不用管):`--root <dir>`、`--overlay <path>`、`-h/--help`、`-v/--version`。
 - `check` 的完整 flag 集合在 B01 定死:`--guards`、`--base <ref>`、`--head <ref>`、`--label <name>`、`--report`;解析后以 `CheckOptions`
@@ -224,6 +238,14 @@ A2 的 12 格矩阵(`limit_source` × `enforce` × 超/不超;退出码 / 是否
 19. **`oversized_lines`**:`Counts` / `CollectReport` 的可选计数,单行超 `maxEventBytes` 被丢弃时累加(B10b)。
 20. **Redactor 对「按名字读取变量」的处理(B09b)**:`NAME=` 之后跟的是引用(收尾引号 + 空白 / 终结符、占位符占了值的位置)而不是值时,`pass1` 不脱敏、`pass2` 不报残留;判据与取舍见 `docs/redaction.md` §3.1。接口 `Redactor` 本身不变;新增变异阶段 id `view_json_ws`(变异自检共 67 项)。
 21. **Redactor 值类规则的召回修复(B09c,订正第 20 条)**:`cred_assign` / `cred_cli_flag` / `cred_authz` / `cred_cookie` 不再按前缀 / 形状放行(标识符后紧贴 `; , ) :`、`X(y)`、`env.` `vault` `...` `<` `%` `$` 开头等),改为**引用形态整词白名单**,不匹配就当口令;无引号的值先剥尾部标点再判,只脱敏核心。新增 `cred_assign_ext` 规则(反引号 / 三引号 / 类型标注 / 引号拼接 / `passphrase` 短语)与原视图补扫(口令里的字面 `\t` `\n` 不再截断值)。接口 `Redactor` 本身不变;新增变异阶段 id `view_orig_union` `ref_tail_punct` `ref_boundary` `ref_flag_strict` `placeholder_boundary` `ref_trailing_literal` 与规则 id `cred_assign_ext`(变异自检共 74 项);判据、取舍与剩余缺口见 `docs/redaction.md` §3.2、§7。第 20 条里「值本身像引用」指 §3.2 的引用形态。
+
+22. **Signal 可选字段(R0)**:追加 `event_kind`(`user_message|tool_call|tool_result_failed`)、`event_index`(int≥0,与 `sigIdFor` 的序号相同)、`tool_name`(契约层只校验长度 1..96 与字符集 `[A-Za-z0-9_.:()<>+-]`,含字面量 `<unprintable>`;是否过脱敏由实现的 `safeKey` 负责)。全部可选,旧信号文件仍通过校验;`sig_id` 算法不变。存量行没有新字段,reflect 把它们当 unknown 排除或重采(R1 定)。
+23. **会话计数库(R0)**:`.state/sessions/<agent>/<yyyymm>.jsonl`(目录 0700、文件 0600),每行 `SessionStat {session_ref, project_key, ts, external_content, counts}`;`counts` = `Counts` 的字段,但 `unknown_event_types` / `ignored_duplicate_kinds` 的**键**限定为安全字符且 ≤64 个(这是唯一可能带会话文本的位置,实现须先过 `safeKey`)。**只有计数,没有任何文本**:这是 #8「外部内容会话只进结构化计数」的落点——外部内容会话的信号摘录为空,但计数仍进本库。
+24. **`Proposal.reflector` 可选字段(R0)**:`backend`(`claude|codex|pi`,CI 用它加 provider/model 重算 `deriveVendor()`,与 `vendor` 不一致即拒)、`prompt_id`、`prompt_sha256`、`input_digest`(`sha256:<hex>`)、`kit_version`(semver)、`stub`(只允许 `true`)。**`stub:true` 的提案 CI 必须拒收**(拒收逻辑属 CI 校验,不在 schema)。
+25. **`Proposal.judge_attempts`(R0)**:`JudgeHop[]`,**只在 `judge` 缺省时允许**;必须记满整条兜底链(5 跳,顺序 = `JUDGE_HOP_CHAIN`);不允许 `ok`;结果枚举复用 `HopResultSchema`;与反思器同厂商的跳必须 `skipped:same-vendor`,反之厂商不同的跳不得贴这个标签(比较前 trim+小写)。未配置槽位记 `error:not_configured` 并用哨兵 `vendor:"unknown", model:"-"`;预算耗尽未尝试的跳记 `error:budget_exhausted`。之后补跑成功,judge 模块写 `judge` 并删除本字段。现有 `judge` 的 superRefine 不变。
+26. **厂商表(R0)**:`src/contracts/vendor.ts` 冻结常量。`deriveVendor({backend, provider?, model?}, overrides?)`:claude→anthropic;codex 默认 provider 或 `openai`→openai,其它 provider 按模型族;pi 按模型族(第一方 provider 与模型族矛盾→unknown);推导不出→`unknown`。模型族按**整 token 相等**(`deepseekfoo` 不是 deepseek),`o<数字>` 为 openai;模型串含空白/非 ASCII 一律 unknown;路径段命中的厂商互相矛盾→unknown。`isCrossVendor(a,b)`:任一方 unknown、空、非规范形(`^[a-z][a-z0-9-]{0,31}$`),或**不是内置厂商**(覆盖层追加的家族可能把真实厂商的模型标成「新厂商」,不能当证据)→false(无法证明就不放行,不做归一化)。后端固定厂商(claude→anthropic、codex 默认 provider→openai)时,若给出的模型串明确属于另一厂商,推导为 unknown(配置与后端矛盾)。覆盖层 `vendor_overrides` 只能**追加新模型族 token**,不得覆盖内置族、不得映射到内置厂商或 `unknown`,违者 `CFG_VENDOR_OVERRIDE_DENIED`。**用户不能声明厂商**(绑定里没有 vendor 字段)。
+27. **reflect 配置与输出契约(R0)**:`KitConfig.reflect`(仅 `max_proposals≤5 / max_calls≤3 默认 1 / timeout_ms`)与 `Overlay.reflect`(另含 `reset_tz` 默认 `UTC`、`backends:[{slot,cli,provider?,model?}]`、`vendor_overrides`、`egress` 默认 false),全部可选,旧 kit.toml 仍有效;core 不写死任何私人账号/渠道,未配置的槽位运行时记 `error:not_configured`。`ReflectorOutputSchema`(`makeReflectorOutputSchema({atomMaxBytes,maxProposals})`)全层 strictObject,`op` 只能 `add`,`signature.type` 不含 `always`,pattern 过 `checkPatternSafety`(旗标 `u`;拒回溯引用、lookaround、重复量词修饰的含量词/`|` 分组、`?`/有界量词也算分组内量词、未限界量词 >3、重复量词 >6、无任何字面量字符;使用方须限制被匹配串 ≤4KiB,并对 pattern 本身再过脱敏第二遍);`ReflectRunReportSchema` 只含计数与哈希。id 是否与仓库/暂存区冲突、证据别名是否为输入子集,schema 判不了,由校验器/合并器判。
+28. **受控 LLM 出口(R0)**:见 §5.2。
 
 ## 9. 标识符与哈希约定(Q-N7 的默认处理)
 
@@ -1127,6 +1149,508 @@ P0 先把 schema 冻在这里,P1 的块直接消费,避免打 tag 之后再改�
 `reports/<case-id>/<rule_set_sha>-<run_id>.json`。`run_id` 限定为文件名安全字符 `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`。
 同一窗口重跑只新增文件;聚合取同 `(rule_id, member, window_start, window_end)` 里 `run_id` 最新的一份。
 
+### 10.9 R0 追加的示例(#22–#28)
+
+Signal 追加的可选字段(旧信号没有这些字段同样合法)。
+
+<!-- example:valid schema=Signal -->
+
+```json
+{
+  "sig_id": "sig_0123456789abcdef",
+  "agent": "claude",
+  "agent_version": "2.1.280",
+  "agent_version_source": "session_meta",
+  "session_ref": "s_0123456789abcdef",
+  "project_key": "p_fedcba9876543210",
+  "ts": "2026-10-12T00:00:00Z",
+  "type": "event",
+  "excerpt_redacted": "",
+  "external_content": false,
+  "confidence": 1,
+  "loaded_rule_ids": [],
+  "event_kind": "tool_call",
+  "event_index": 7,
+  "tool_name": "Bash"
+}
+```
+
+错误示例:未知事件种类、负序号、含空白的工具名。
+
+<!-- example:invalid schema=Signal -->
+
+```json
+{
+  "sig_id": "sig_0123456789abcdef",
+  "agent": "claude",
+  "agent_version": "2.1.280",
+  "agent_version_source": "session_meta",
+  "session_ref": "s_0123456789abcdef",
+  "project_key": "p_fedcba9876543210",
+  "ts": "2026-10-12T00:00:00Z",
+  "type": "event",
+  "excerpt_redacted": "",
+  "external_content": false,
+  "confidence": 1,
+  "loaded_rule_ids": [],
+  "event_kind": "assistant_message",
+  "event_index": -1,
+  "tool_name": "rm -rf /"
+}
+```
+
+会话计数库的一行(只有计数,没有文本)。
+
+<!-- example:valid schema=SessionStat -->
+
+```json
+{
+  "session_ref": "s_0123456789abcdef",
+  "project_key": "p_fedcba9876543210",
+  "ts": "2026-10-12T00:00:00Z",
+  "external_content": true,
+  "counts": {
+    "user_messages": 3,
+    "tool_calls": 5,
+    "tool_failures": 1,
+    "unknown_event_types": {
+      "weird.type": 2
+    }
+  }
+}
+```
+
+错误示例:计数键带文本、多出文本字段。
+
+<!-- example:invalid schema=SessionStat -->
+
+```json
+{
+  "session_ref": "s_0123456789abcdef",
+  "project_key": "p_fedcba9876543210",
+  "ts": "2026-10-12T00:00:00Z",
+  "external_content": true,
+  "counts": {
+    "user_messages": 3,
+    "tool_calls": 5,
+    "tool_failures": 1,
+    "unknown_event_types": {
+      "has some text": 2
+    }
+  },
+  "excerpt_redacted": "x"
+}
+```
+
+全链都没成功的提案:无 `judge`,用 `judge_attempts` 记满整条链(同厂商的跳记 `skipped:same-vendor`,未配置槽位用哨兵 `unknown` / `-`)。`stub:true` 的提案 CI 必须拒收(此处仅为展示字段)。
+
+<!-- example:valid schema=Proposal -->
+
+```json
+{
+  "id": "2026-10-12-001",
+  "op": "add",
+  "targets": ["a-rule"],
+  "layer": "personal",
+  "rationale": "r",
+  "evidence": [
+    {
+      "sig": "sig_0123456789abcdef",
+      "project_key": "p_fedcba9876543210",
+      "excerpt": "e"
+    }
+  ],
+  "budget_delta_bytes": 10,
+  "paired_retirements": [],
+  "cases": [],
+  "reflector": {
+    "provider": "anthropic",
+    "vendor": "anthropic",
+    "model": "example-model-id",
+    "run_id": "run-0001",
+    "backend": "claude",
+    "prompt_id": "reflect-v1",
+    "prompt_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "input_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "kit_version": "0.1.0",
+    "stub": true
+  },
+  "judge_attempts": [
+    {
+      "hop": "codex",
+      "vendor": "anthropic",
+      "model": "example-model-id",
+      "result": "skipped:same-vendor"
+    },
+    {
+      "hop": "maas-deepseek",
+      "vendor": "unknown",
+      "model": "-",
+      "result": "error:not_configured"
+    },
+    {
+      "hop": "glm",
+      "vendor": "zhipu",
+      "model": "example-model-id",
+      "result": "skipped:cooldown"
+    },
+    {
+      "hop": "kimi",
+      "vendor": "moonshot",
+      "model": "example-model-id",
+      "result": "error:403"
+    },
+    {
+      "hop": "official-deepseek",
+      "vendor": "deepseek",
+      "model": "example-model-id",
+      "result": "error:402"
+    }
+  ]
+}
+```
+
+错误示例:`judge_attempts` 没记满整条兜底链。
+
+<!-- example:invalid schema=Proposal -->
+
+```json
+{
+  "id": "2026-10-12-001",
+  "op": "add",
+  "targets": ["a-rule"],
+  "layer": "personal",
+  "rationale": "r",
+  "evidence": [
+    {
+      "sig": "sig_0123456789abcdef",
+      "project_key": "p_fedcba9876543210",
+      "excerpt": "e"
+    }
+  ],
+  "budget_delta_bytes": 10,
+  "paired_retirements": [],
+  "cases": [],
+  "reflector": {
+    "provider": "anthropic",
+    "vendor": "anthropic",
+    "model": "example-model-id",
+    "run_id": "run-0001",
+    "backend": "claude",
+    "prompt_id": "reflect-v1",
+    "prompt_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "input_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "kit_version": "0.1.0",
+    "stub": true
+  },
+  "judge_attempts": [
+    {
+      "hop": "codex",
+      "vendor": "anthropic",
+      "model": "example-model-id",
+      "result": "skipped:same-vendor"
+    },
+    {
+      "hop": "maas-deepseek",
+      "vendor": "unknown",
+      "model": "-",
+      "result": "error:not_configured"
+    }
+  ]
+}
+```
+
+错误示例:`judge` 与 `judge_attempts` 同时出现。
+
+<!-- example:invalid schema=Proposal -->
+
+```json
+{
+  "id": "2026-10-12-001",
+  "op": "add",
+  "targets": ["a-rule"],
+  "layer": "personal",
+  "rationale": "r",
+  "evidence": [
+    {
+      "sig": "sig_0123456789abcdef",
+      "project_key": "p_fedcba9876543210",
+      "excerpt": "e"
+    }
+  ],
+  "budget_delta_bytes": 10,
+  "paired_retirements": [],
+  "cases": [],
+  "reflector": {
+    "provider": "anthropic",
+    "vendor": "anthropic",
+    "model": "example-model-id",
+    "run_id": "run-0001",
+    "backend": "claude",
+    "prompt_id": "reflect-v1",
+    "prompt_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "input_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "kit_version": "0.1.0",
+    "stub": true
+  },
+  "judge": {
+    "hops": [
+      {
+        "hop": "codex",
+        "vendor": "openai",
+        "model": "m",
+        "result": "ok"
+      }
+    ],
+    "provider": "codex",
+    "vendor": "openai",
+    "verdict": "accept",
+    "overfit_risk": "low",
+    "injection_suspected": false,
+    "conflicts": []
+  },
+  "judge_attempts": [
+    {
+      "hop": "codex",
+      "vendor": "anthropic",
+      "model": "example-model-id",
+      "result": "skipped:same-vendor"
+    },
+    {
+      "hop": "maas-deepseek",
+      "vendor": "unknown",
+      "model": "-",
+      "result": "error:not_configured"
+    },
+    {
+      "hop": "glm",
+      "vendor": "zhipu",
+      "model": "example-model-id",
+      "result": "skipped:cooldown"
+    },
+    {
+      "hop": "kimi",
+      "vendor": "moonshot",
+      "model": "example-model-id",
+      "result": "error:403"
+    },
+    {
+      "hop": "official-deepseek",
+      "vendor": "deepseek",
+      "model": "example-model-id",
+      "result": "error:402"
+    }
+  ]
+}
+```
+
+反思器的 LLM 输出(唯一合法形状)。
+
+<!-- example:valid schema=ReflectorOutput -->
+
+```json
+{
+  "proposals": [
+    {
+      "op": "add",
+      "id": "negative-assertion-needs-positive-control",
+      "title": "负向断言要配正向控制组",
+      "do": "在 not.toContain 旁边断言一个必然存在的对照值。",
+      "why": "否则前提失效时断言静默变空。",
+      "verify": "变异后至少一条断言变红。",
+      "kind": "practice",
+      "volatility": "stable",
+      "applies_to": ["claude"],
+      "signature": {
+        "type": "phrase",
+        "pattern": "not\\.toContain"
+      },
+      "evidence": ["e1", "e2"],
+      "rationale": "两个项目三次出现同类假绿"
+    }
+  ],
+  "observations": [
+    {
+      "kind": "retire",
+      "target_id": "old-rule",
+      "note": "已被取代"
+    }
+  ]
+}
+```
+
+错误示例:带 `status` / `strength`(由合并器决定,不交给 LLM)。
+
+<!-- example:invalid schema=ReflectorOutput -->
+
+```json
+{
+  "proposals": [
+    {
+      "op": "add",
+      "id": "negative-assertion-needs-positive-control",
+      "title": "负向断言要配正向控制组",
+      "do": "在 not.toContain 旁边断言一个必然存在的对照值。",
+      "why": "否则前提失效时断言静默变空。",
+      "verify": "变异后至少一条断言变红。",
+      "kind": "practice",
+      "volatility": "stable",
+      "applies_to": ["claude"],
+      "signature": {
+        "type": "phrase",
+        "pattern": "not\\.toContain"
+      },
+      "evidence": ["e1", "e2"],
+      "rationale": "两个项目三次出现同类假绿",
+      "status": "active",
+      "strength": "must"
+    }
+  ]
+}
+```
+
+错误示例:`op` 不是 `add`、pattern 含嵌套量词(ReDoS)。
+
+<!-- example:invalid schema=ReflectorOutput -->
+
+```json
+{
+  "proposals": [
+    {
+      "op": "retire",
+      "id": "negative-assertion-needs-positive-control",
+      "title": "负向断言要配正向控制组",
+      "do": "在 not.toContain 旁边断言一个必然存在的对照值。",
+      "why": "否则前提失效时断言静默变空。",
+      "verify": "变异后至少一条断言变红。",
+      "kind": "practice",
+      "volatility": "stable",
+      "applies_to": ["claude"],
+      "signature": {
+        "type": "phrase",
+        "pattern": "(a+)+$"
+      },
+      "evidence": ["e1", "e2"],
+      "rationale": "两个项目三次出现同类假绿"
+    }
+  ]
+}
+```
+
+运行报告(只含计数与哈希)。
+
+<!-- example:valid schema=ReflectRunReport -->
+
+```json
+{
+  "run_id": "run-20261012-01",
+  "mode": "dry",
+  "signals_loaded": 10,
+  "signals_dropped": {
+    "schema": 1,
+    "residual": 0,
+    "external_excerpt_forced": 2
+  },
+  "clusters": 3,
+  "evidence_sent": 7,
+  "prompt_bytes": 4096,
+  "prompt_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "input_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "backend": {
+    "slot": "codex",
+    "vendor": "openai",
+    "model": "example-model-id"
+  },
+  "calls_made": 0,
+  "calls_limit": 1,
+  "outcome": "not_run",
+  "rejected": {},
+  "staged": [],
+  "observations_n": 0
+}
+```
+
+错误示例:干跑却有调用/暂存,且夹带文本字段。
+
+<!-- example:invalid schema=ReflectRunReport -->
+
+```json
+{
+  "run_id": "run-20261012-01",
+  "mode": "dry",
+  "signals_loaded": 10,
+  "signals_dropped": {
+    "schema": 1,
+    "residual": 0,
+    "external_excerpt_forced": 2
+  },
+  "clusters": 3,
+  "evidence_sent": 7,
+  "prompt_bytes": 4096,
+  "prompt_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "input_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "backend": {
+    "slot": "codex",
+    "vendor": "openai",
+    "model": "example-model-id"
+  },
+  "calls_made": 1,
+  "calls_limit": 1,
+  "outcome": "not_run",
+  "rejected": {},
+  "staged": ["2026-10-12-001"],
+  "observations_n": 0,
+  "prompt": "text"
+}
+```
+
+覆盖层的 `reflect` 段。
+
+<!-- example:valid schema=Overlay -->
+
+```json
+{
+  "reflect": {
+    "reset_tz": "Asia/Shanghai",
+    "max_calls": 2,
+    "backends": [
+      {
+        "slot": "glm",
+        "cli": "pi",
+        "provider": "zai",
+        "model": "glm-5.3-flash"
+      }
+    ],
+    "vendor_overrides": {
+      "mistral": "mistral-ai"
+    },
+    "egress": false
+  }
+}
+```
+
+错误示例:`max_proposals>5`、绑定里自己声明 `vendor`、覆盖内置模型族。
+
+<!-- example:invalid schema=Overlay -->
+
+```json
+{
+  "reflect": {
+    "max_proposals": 9,
+    "backends": [
+      {
+        "slot": "glm",
+        "cli": "pi",
+        "vendor": "openai"
+      }
+    ],
+    "vendor_overrides": {
+      "claude": "openai"
+    }
+  }
+}
+```
+
 ## 9. 渲染核心须知(B06 → B07 / B08)
 
 - 渲染器**不要自己加独占头**:`owned` 文件头由渲染核心(`src/render/core.ts`)统一加;`.json` 不加头,改记入 `sideEffects`。
@@ -1215,6 +1739,11 @@ P0 先把 schema 冻在这里,P1 的块直接消费,避免打 tag 之后再改�
 - GD-4(`.kit/rules/` 子模块被 lint 读到而守卫看不到)、GD-5(merge-base 契约未强制,只会假阳性)、GD-6(晋升 PR 不能同时补 `signature`,须先走内容 PR 补)延后;GD-6 的两步流程以此处为准。
 - **评审清单(retire / promote 类 PR)**:PR 描述必须写明「本 PR 使哪些被压住 / 生效的原子重新出现在、或退出 `out/`」。原因:`merge` 只采纳 `active`/`advisory` 声明者的边,而 render / lint 不按 status 过滤——把一个持有 `overrides`/`disables` 的原子改成 `retired`(或把 `proposed` 晋升为 `active`)会让它压住的原子复活进 `out/`(或反过来让既有原子从 `out/` 消失)。评审者对照 `out/` 的重新生成结果核对这份清单;同 id 的替换因声明者 status 不合格而被丢弃时,`merge` 会给 `MERGE_REPLACEMENT_INERT`(warn)。
 
+### 12.4 真跑(`--run-llm --allow-egress`)不在 A5 零写入覆盖范围内(R0,如实记录)
+
+- LLM CLI 用**真实 HOME** 里的登录态,并会写它自己的全局文件(会话日志、history、缓存);`llm-exec` 只管 env/cwd/超时/输出/次数,**不能**阻止这些写入,A5 零写入验收对真跑不成立。真跑前后的受管路径快照与「每个 CLI 实际写了哪些全局文件」清单属 R6(主代理、需用户当场同意)。干跑与 stub 路径零调用零写入,仍在 A5 覆盖内。
+- 残余:①`ANTHROPIC_BASE_URL` 等写在 CLI 自己的 `settings.json` 里时能把请求导向别家,`deriveVendor` 看不到,只能靠 R3 每次显式传 provider/model 与 R6 实测;②子进程若 `setsid` 脱离进程组则杀不到;③校验与 spawn 之间的路径竞态;④`envSource` 的来源(宿主环境)目前没有受控的 `IoContext` 字段(待主代理)。
+
 ## 13. reader 已知差异(B21 记录;口径正文见 `docs/reader-counting-spec.md` §8.3)
 
 - **agent_version 形状(R1)**:只接受版本号形状(`X.Y.Z[-+后缀]`,总长 ≤ 64);其余值当取不到,走 `collector_fallback`。四家共用基类校验。
@@ -1234,3 +1763,12 @@ P0 先把 schema 冻在这里,P1 的块直接消费,避免打 tag 之后再改�
 - **占位符剥离更严:** 引擎只剥原文逐字节如此的占位符(全角 / 同形字 / `\u` 转义写成的不再豁免),并把 `[[ REDACTED:<已知类型>]]` 在视图里同样剥掉(但不占位,不豁免紧邻的值);`PH_WHOLE` 引用判据已删。
 - 阶段增加四个(`placeholder_neutral_marker` `placeholder_raw_exact` `multiline_block` `ref_default_chain`),`redact --selftest --mutate` 的规则 / 阶段总数 78 → 82;pass2 增加残留探测器 `probe_cred`(不计入变异自检)。
 - 已知缺口:移除 `gap.neutral_ph_call`(已收);追加 `gap.bare_literal_assert` `gap.neutral_open_type` `gap.call_then_quoted` `gap.triple_escaped_quotes` `gap.yaml_anchor_block` `gap.template_default_call`(见 `docs/redaction.md` §3.4、§7)。
+
+## 16. 订正与待 R4(R0)
+
+- **摘录机械复制**:提案/原子证据里的 `excerpt` 由合并器从信号的 `excerpt_redacted` 原样复制,不引用 sig_id 代替、不采用 LLM 改写过的文本(与 #11 一致);外部内容信号的摘录为 `''`。
+- **冷却标记**位置为 `.state/llm-cooldown/<slot>-<YYYYMMDD>`(日期按 `reflect.reset_tz`),不是设计稿里的 `~/.local/state/…`(P1 不写全局,Q-N13);reflect 不读用户的私人限流标记文件。
+- **`judge.provider` 与最后一跳的关系**:设计要求最后一跳的 provider 等于 `judge.provider`,schema **不收紧**;**待 R4** 在 judge 模块校验。
+- **render 是否按 status 过滤 proposed 原子**:§12.3 说不过滤,其它记录说不渲染——两说不一致,**待主代理**确认(暂存方案不受影响)。
+- **opus 对抗评审(非 Codex)后仍未处理,列待主代理 / R3**:①`llm-exec` 的固定 cwd 在 `<repo>/.state/reflect/cwd`,仍在仓库 git 树内——claude/codex 向上找 git 根时可能读到仓库的 CLAUDE.md / AGENTS.md / `.claude/settings.json`(hooks 可执行命令)。R0 受 `writeRoots` 限制放不到仓库外;R3 须靠 CLI 参数(忽略项目设置)并在 R6 实测,或由主代理允许 `KIT_STATE_DIR` 指向仓库外;②`LlmSpawnBudget` 由调用方创建,没有进程级全局上限,并发调用共用同一个 cwd(一方收尾清目录会删另一方文件)——R3 须单例化预算并串行化;③`HOME` / `XDG_*` 本身可改 CLI 的配置来源,`filterLlmEnv` 未断言其不在仓库内;④`reflector.backend` 缺省时 CI 无从重算厂商——P1 CI 须要求必填;⑤`applies_to` 目前允许 LLM 填 `all`(作用范围应由合并器决定);提案 `id` 与已有原子重名(add 变覆盖)由合并器拒;⑥`o<数字>` 之外的真实模型(`gemma`、`chatglm`、`codex-mini` 等)不在内置族表,推导为 unknown(fail-closed)。
+- **既有 `judge` 比较未收紧(待主代理)**:现有 superRefine 对 `judge.vendor` / 跳的 vendor 用精确字符串比较(大小写、空白可绕),且 `vendor:"unknown"` 不被拒;`reflector.vendor` 为 `unknown` 时也不拦。收紧会改变已有字段的取值集合,按 §1 不在 R0 内做;`judge_attempts` 已按归一化比较。CI 另须用 `reflector.backend` 重算厂商。

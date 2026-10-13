@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import { AgentIdSchema, IsoDateSchema, IsoTimestampSchema, RenderAgentIdSchema } from './common.js';
 import { ModelTierSchema } from './agent-def.js';
+import { JudgeHopIdSchema } from './proposal.js';
+import { VendorOverrideDeniedError, assertVendorOverrides } from './vendor.js';
 
 export const LimitSourceSchema = z.enum(['documented', 'probed', 'assumed']);
 export type LimitSource = z.infer<typeof LimitSourceSchema>;
@@ -65,6 +67,74 @@ export const ChannelSchema = z.strictObject({
   members: z.record(z.string().min(1), MemberSchema).default({}),
 });
 
+/**
+ * R0 追加(#27):反思器配置。全部可选且有默认值,旧 kit.toml / 覆盖层仍有效。
+ * core(kit.toml)只能放与账号/渠道无关的通用上限;各后端槽位绑定、厂商覆盖、egress 只能在覆盖层。
+ */
+export const ReflectCoreConfigSchema = z.strictObject({
+  /** 每批提案数上限(设计 §6.4 规定 ≤5) */
+  max_proposals: z.number().int().min(1).max(5).default(5),
+  /** 一次运行允许的 LLM 调用(spawn)次数;默认 1,上限 3 */
+  max_calls: z.number().int().min(1).max(3).default(1),
+  timeout_ms: z.number().int().min(1000).max(600_000).default(180_000),
+});
+export type ReflectCoreConfig = z.infer<typeof ReflectCoreConfigSchema>;
+
+/** 进 argv 的 provider/model 字符集:不得以 `-` 开头(防被当成 flag)。 */
+const ARG_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}$/;
+
+/**
+ * 后端槽位绑定。槽位 id 沿用 `JUDGE_HOP_CHAIN` 的固定枚举;没配置的槽位运行时记 `error:not_configured`。
+ * **没有 vendor 字段**:厂商由 `deriveVendor()` 推导,用户不能自己声明(contracts #26)。
+ */
+export const ReflectBackendBindingSchema = z.strictObject({
+  slot: JudgeHopIdSchema,
+  cli: z.enum(['claude', 'codex', 'pi']),
+  provider: z.string().regex(ARG_ID_RE).optional(),
+  model: z.string().regex(ARG_ID_RE).optional(),
+});
+export type ReflectBackendBinding = z.infer<typeof ReflectBackendBindingSchema>;
+
+function isIanaTimeZone(tz: string): boolean {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export const ReflectOverlaySchema = ReflectCoreConfigSchema.extend({
+  /** 冷却标记按该时区的日期换算(决策 ⑪A:默认 UTC,用户在覆盖层设自己的重置时区) */
+  reset_tz: z
+    .string()
+    .min(1)
+    .max(64)
+    .refine(isIanaTimeZone, { message: 'reset_tz 不是有效的 IANA 时区' })
+    .default('UTC'),
+  backends: z
+    .array(ReflectBackendBindingSchema)
+    .default([])
+    .refine((a) => new Set(a.map((b) => b.slot)).size === a.length, {
+      message: 'backends 里 slot 不得重复',
+    }),
+  /** 模型族 token → 新厂商 id。只能追加,不能覆盖内置家族(违者 CFG_VENDOR_OVERRIDE_DENIED) */
+  vendor_overrides: z
+    .record(z.string(), z.string())
+    .default({})
+    .superRefine((o, ctx) => {
+      try {
+        assertVendorOverrides(o);
+      } catch (e) {
+        if (!(e instanceof VendorOverrideDeniedError)) throw e;
+        ctx.addIssue({ code: 'custom', message: e.message });
+      }
+    }),
+  /** 摘录能否离开本机(决策 ③A:每次运行还要 `--allow-egress`);默认 false */
+  egress: z.boolean().default(false),
+});
+export type ReflectOverlay = z.infer<typeof ReflectOverlaySchema>;
+
 /** `kit.toml`(core 仓库根)。 */
 export const KitConfigSchema = z.strictObject({
   kit: z.strictObject({
@@ -83,6 +153,8 @@ export const KitConfigSchema = z.strictObject({
   }),
   /** provider 约束:P1(裁判链)才使用,P0 原样保留不解释 */
   provider: z.record(z.string(), z.unknown()).optional(),
+  /** R0 追加(#27):缺省不出现;出现时才套默认值 */
+  reflect: ReflectCoreConfigSchema.optional(),
 });
 export type KitConfig = z.infer<typeof KitConfigSchema>;
 
@@ -101,5 +173,7 @@ export const OverlaySchema = z.strictObject({
   enabled_agents: z.array(AgentIdSchema).optional(),
   /** 其会话整条跳过(不只是脱敏)的项目目录 */
   exclude_dirs: z.array(z.string().min(1)).optional(),
+  /** R0 追加(#27) */
+  reflect: ReflectOverlaySchema.optional(),
 });
 export type Overlay = z.infer<typeof OverlaySchema>;

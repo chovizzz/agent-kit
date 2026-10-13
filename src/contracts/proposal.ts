@@ -1,5 +1,10 @@
 import { z } from 'zod';
-import { KebabIdSchema, MAX_EVIDENCE_EXCERPT_CHARS, codePointLength } from './common.js';
+import {
+  KebabIdSchema,
+  MAX_EVIDENCE_EXCERPT_CHARS,
+  Sha256Schema,
+  codePointLength,
+} from './common.js';
 import { LayerSchema } from './atom.js';
 
 /**
@@ -85,6 +90,11 @@ export const ProposalEvidenceSchema = z.strictObject({
   }),
 });
 
+/** 厂商 id 比较前归一化(大小写、首尾空白不能用来绕过同厂商检查) */
+function normVendor(v: string): string {
+  return v.trim().toLowerCase();
+}
+
 export const ProposalSchema = z
   .strictObject({
     /** `YYYY-MM-DD-NNN` */
@@ -106,11 +116,96 @@ export const ProposalSchema = z
       vendor: z.string().min(1),
       model: z.string().min(1),
       run_id: z.string().min(1),
+      /**
+       * R0 追加(#24),以下全部可选。`backend` = 实际调用的 CLI;CI 用它(加 provider、model)重算
+       * `deriveVendor()`,与 `vendor` 不一致就拒——否则手改 yaml 的 `vendor` 就能绕过 contracts #18。
+       */
+      backend: z.enum(['claude', 'codex', 'pi']).optional(),
+      /** 提示模板 id,如 `reflect-v1` */
+      prompt_id: z
+        .string()
+        .regex(/^[a-z0-9][a-z0-9._-]{0,63}$/)
+        .optional(),
+      /** 提示模板原文(不含数据)的哈希 */
+      prompt_sha256: Sha256Schema.optional(),
+      /** 规范化后输入 JSON 的哈希,`sha256:<hex>` */
+      input_digest: z
+        .string()
+        .regex(/^sha256:[0-9a-f]{64}$/)
+        .optional(),
+      /** 产出该提案的 reflect 所属 kit 版本(semver) */
+      kit_version: z
+        .string()
+        .regex(/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/)
+        .optional(),
+      /**
+       * 由假 LLM(stub)产出的提案。只允许 `true`(`false` 与缺省同义,所以不收)。
+       * **CI 必须拒收 stub=true 的提案**:它只用于本机测试,不得进入合并流程(拒收逻辑属于 CI 校验,不在本 schema)。
+       */
+      stub: z.literal(true).optional(),
     }),
     /** 由运行裁判的一方写入;裁判运行前缺省 */
     judge: JudgeRecordSchema.optional(),
+    /**
+     * R0 追加(#25):裁判链上每一跳的记账。**只在 `judge` 缺省时允许**——
+     * `JudgeRecord` 要求最后一跳 ok,全链都跳过或失败时没处记账,由本字段承接。
+     * 不允许 `ok`(成功的一跳应写进 `judge`);必须**记满整条兜底链**(hop 顺序 = JUDGE_HOP_CHAIN):
+     * 没配置的槽位记 `error:not_configured` 并用哨兵 `vendor:"unknown", model:"-"`,预算耗尽未尝试的跳记
+     * `error:budget_exhausted`——只要求前缀的话,「有一家能评却没去评」会被藏掉;
+     * 之后补跑成功时,judge 模块必须写 `judge` 并删除本字段;
+     * 与反思器同厂商的跳必须是 `skipped:same-vendor`,反之亦然(不能给不同厂商的跳贴这个标签)。
+     */
+    judge_attempts: z.array(JudgeHopSchema).min(1).optional(),
   })
   .superRefine((p, ctx) => {
+    if (p.judge_attempts) {
+      if (p.judge) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['judge_attempts'],
+          message: 'judge 已存在时不得同时有 judge_attempts(成功的一跳属于 judge.hops)',
+        });
+      }
+      if (p.judge_attempts.length !== JUDGE_HOP_CHAIN.length) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['judge_attempts'],
+          message: `judge_attempts 必须记满整条兜底链(${JUDGE_HOP_CHAIN.length} 跳),实际 ${p.judge_attempts.length}`,
+        });
+      }
+      const mine = normVendor(p.reflector.vendor);
+      p.judge_attempts.forEach((h, i) => {
+        if (h.hop !== JUDGE_HOP_CHAIN[i]) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['judge_attempts', i, 'hop'],
+            message: `judge_attempts 必须是兜底链 ${JUDGE_HOP_CHAIN.join('→')} 的前缀,第 ${i + 1} 跳应为 ${JUDGE_HOP_CHAIN[i]}`,
+          });
+        }
+        if (h.result === 'ok') {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['judge_attempts', i, 'result'],
+            message: 'judge_attempts 不记 ok(成功的一跳应写进 judge)',
+          });
+        }
+        const same = normVendor(h.vendor) === mine;
+        if (same && h.result !== 'skipped:same-vendor') {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['judge_attempts', i, 'result'],
+            message: '与反思器同厂商的跳必须记为 skipped:same-vendor',
+          });
+        }
+        if (!same && h.result === 'skipped:same-vendor') {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['judge_attempts', i, 'result'],
+            message: '厂商不同的跳不得记为 skipped:same-vendor',
+          });
+        }
+      });
+    }
     if (!p.judge) return;
     if (p.judge.vendor === p.reflector.vendor) {
       ctx.addIssue({
