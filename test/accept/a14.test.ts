@@ -12,6 +12,7 @@ const PHASES: [string, string][] = [
   ['inventory', 'P1'],
   ['probe', 'P1'],
   ['reflect', 'P1'],
+  ['judge', 'P1'],
   ['attest', 'P1'],
   ['promote', 'P1'],
   ['retire', 'P1'],
@@ -36,8 +37,8 @@ const name = rest.join(' ');
 const ent = table.find(([n]) => n === name);
 if (!ent) process.exit(2);
 if (ent[1] === 'P0') process.exit(mode === 'p0-stub' && name === 'build' ? 64 : mode === 'p0-notrun' && name === 'check' ? 4 : 2);
-// probe 已实装(a14 的 IMPLEMENTED_LATER_PHASE):正常模式下必须非桩、非 4。
-if (name === 'probe') process.exit(mode === 'p1-stub-regression' ? 64 : 0);
+// probe / reflect / judge 已实装(a14 的 IMPLEMENTED_LATER_PHASE):正常模式下必须非桩、非 4。
+if (['probe', 'reflect', 'judge'].includes(name)) process.exit(mode === 'p1-stub-regression' ? 64 : 0);
 if (mode === 'silent-stub' && name === 'sync') process.exit(64);
 process.stderr.write('未实现 — ' + ent[1] + ' 才实现\\n');
 process.exit(64);
@@ -103,7 +104,7 @@ describe('A14 交付物齐全', () => {
   it('文件齐全、帮助标记正确、P0 命令不是桩、P1/P2 桩退出 64 并说明阶段 => 0(正向控制)', async () => {
     const r = a14(await setup('ok'));
     expect(r.status, r.stdout).toBe(0);
-    expect(r.stdout).toContain('12 个命令都在 --help 里');
+    expect(r.stdout).toContain('13 个命令都在 --help 里');
   });
   it('缺一个交付物文件 / 缺一个 aN 脚本 => 1', async () => {
     const r1 = a14(await setup('ok', ['inventory/commands.sh']));

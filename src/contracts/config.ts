@@ -92,6 +92,11 @@ export const ReflectBackendBindingSchema = z.strictObject({
   cli: z.enum(['claude', 'codex', 'pi']),
   provider: z.string().regex(ARG_ID_RE).optional(),
   model: z.string().regex(ARG_ID_RE).optional(),
+  /**
+   * R5 追加(#29):为 true 时,命令层把该槽位 CLI 二进制的绝对路径加入后端的 `allowUnverified` 清单
+   * (放行 `verified:false` 的参数集真跑)。缺省/false = 不放行。**只能由用户在覆盖层显式写**,core 不得默认放行。
+   */
+  allow_unverified: z.boolean().optional(),
 });
 export type ReflectBackendBinding = z.infer<typeof ReflectBackendBindingSchema>;
 
@@ -132,6 +137,11 @@ export const ReflectOverlaySchema = ReflectCoreConfigSchema.extend({
     }),
   /** 摘录能否离开本机(决策 ③A:每次运行还要 `--allow-egress`);默认 false */
   egress: z.boolean().default(false),
+  /**
+   * R5 追加(#29):允许进团队层的项目 key 白名单(取值 = 信号里的 `project_key`)。
+   * 缺省为空 = 所有项目一律按 personal 层处理(fail-closed);只有列在这里的项目才可能进团队层。
+   */
+  team_project_keys: z.array(z.string().min(1).max(256)).default([]),
 });
 export type ReflectOverlay = z.infer<typeof ReflectOverlaySchema>;
 

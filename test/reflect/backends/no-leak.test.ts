@@ -137,11 +137,18 @@ describe('R3 不泄漏 runLlm(传递依赖与 re-export)', () => {
     expect(Object.keys(indexMod)).not.toContain('serialized');
   });
 
-  it('allowUnverified 只出现在 backends/ 里(不被命令层/配置/环境读到)', async () => {
+  it('allowUnverified 只出现在 backends/ 与唯一的接线点 src/commands/reflect.ts 里(judge 等其它文件读不到)', async () => {
+    // R5:覆盖层 `reflect.backends[].allow_unverified` 由命令层逐槽位接线进 BackendDeps.allowUnverified。
+    // 接线点只有这一个文件;它必须只从覆盖层的 allow_unverified 字段取值,不读环境变量 / 命令行 flag。
+    const WIRING = path.join(SRC, 'commands', 'reflect.ts');
     for (const f of await walk(SRC)) {
-      if (f.startsWith(BACKENDS)) continue;
+      if (f.startsWith(BACKENDS) || f === WIRING) continue;
       expect(stripComments(await readText(f)), f).not.toContain('allowUnverified');
     }
+    const wiring = stripComments(await readText(WIRING));
+    expect(wiring).toContain('allowUnverified');
+    expect(wiring).toContain('allow_unverified');
+    expect(wiring).not.toMatch(/--allow-unverified|ALLOW_UNVERIFIED|process\.env/);
     // 正向控制
     expect(stripComments(await readText(path.join(BACKENDS, 'cli-common.ts')))).toContain(
       'allowUnverified',
