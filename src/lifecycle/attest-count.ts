@@ -26,9 +26,9 @@ import { SESSION_STAT_DIR, SessionStatSchema } from '../contracts/session-stat.j
 import type { SessionStat } from '../contracts/session-stat.js';
 import { SignalSchema } from '../contracts/signal.js';
 import type { Signal } from '../contracts/signal.js';
-import { canonicalText } from '../io/canonical-text.js';
 import type { IoContext } from '../io/paths.js';
 import { gitBlobOid } from '../reflect/stage.js';
+import { ruleSha256 } from './checks.js';
 import { exists, readDir, readLines, TOO_LONG_LINE } from '../io/read-fs.js';
 import { patternQuantifiersOk } from '../reflect/validate.js';
 import { SignalStoreError } from '../signals/state-store.js';
@@ -257,24 +257,10 @@ export function signalIdsDigest(sortedIds: readonly string[]): string {
 }
 
 /**
- * Attest.rule_sha256:规范化源文本哈希。把 frontmatter 里的 `status:` / `review_by:` 行归一化为占位后,
- * 对 canonicalText(整个文件)取 sha256。口径目前只在本文件定义;L1 的 C6 哈希函数合并后须统一到同一处。
+ * Attest.rule_sha256:与 L1 的 C6(`ruleSha256`)、L2 的晋升判据**同一口径**——三处共用 `checks.ts` 里的唯一实现,
+ * 否则 judge 写入的哈希、attest 里的哈希、CI 重算的哈希会彼此对不上。无法归一化(status/review_by 不是恰好各一行等)时抛 RuleHashError。
  */
-export function normalizedRuleSha256(source: string): string {
-  const text = source.replace(/^﻿/, '').replace(/\r\n?/g, '\n');
-  const lines = text.split('\n');
-  let end = -1;
-  if (lines[0] === '---') end = lines.indexOf('---', 1);
-  const out = lines.map((l, i) => {
-    if (end === -1 || i === 0 || i >= end) return l;
-    if (/^status:/.test(l)) return 'status: <normalized>';
-    if (/^review_by:/.test(l)) return 'review_by: <normalized>';
-    return l;
-  });
-  return createHash('sha256')
-    .update(canonicalText(out.join('\n')))
-    .digest('hex');
-}
+export const normalizedRuleSha256 = ruleSha256;
 
 async function* jsonlRows(file: string, what: string): AsyncGenerator<unknown, void, undefined> {
   for await (const line of readLines(file, MAX_LINE_BYTES)) {

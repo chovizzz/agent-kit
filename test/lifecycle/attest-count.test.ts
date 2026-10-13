@@ -274,8 +274,8 @@ describe('signalIdsDigest / normalizedRuleSha256', () => {
     expect(h).toMatch(/^[0-9a-f]{64}$/);
   });
   it('只归一化 frontmatter 里的行,正文里长得像 status: 的行不动', () => {
-    const a = `---\nid: r\nstatus: advisory\n---\nstatus: one\n`;
-    const b = `---\nid: r\nstatus: advisory\n---\nstatus: two\n`;
+    const a = `---\nid: r\nstatus: advisory\nreview_by: 2027-01-01\n---\nstatus: one\n`;
+    const b = `---\nid: r\nstatus: advisory\nreview_by: 2027-01-01\n---\nstatus: two\n`;
     expect(normalizedRuleSha256(a)).not.toBe(normalizedRuleSha256(b));
   });
 });

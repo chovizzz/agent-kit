@@ -63,6 +63,7 @@ const IMPLEMENTED_COMMANDS = new Set([
   'probe',
   'judge',
   'reflect',
+  'attest',
 ]);
 
 describe('命令桩:每个命令退出 64 并说明原因(绝不静默成功)', () => {

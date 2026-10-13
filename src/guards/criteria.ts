@@ -13,7 +13,7 @@ import { LifecycleRecordSchema, lifecycleFileName } from '../contracts/lifecycle
 import type { LifecycleRecord } from '../contracts/lifecycle.js';
 import { ProposalSchema, type Proposal } from '../contracts/proposal.js';
 import { deriveVendor, isCrossVendor } from '../contracts/vendor.js';
-import { canonicalText } from '../io/canonical-text.js';
+import { ruleSha256 } from '../lifecycle/checks.js';
 import { createRedactor } from '../redact/redactor.js';
 import { scanDangerousPhrases } from '../reflect/validate.js';
 import { hasInvisible } from '../reflect/text.js';
@@ -63,32 +63,15 @@ const sha256Hex = (s: string): string => createHash('sha256').update(s, 'utf8').
 const dayNum = (iso: string): number => Math.floor(Date.parse(`${iso}T00:00:00Z`) / ISO_DAY_MS);
 
 /**
- * 规则文本哈希:`status` / `review_by` 两行先归一化成占位值,再对 canonicalText 取 sha256(hex,64 位小写)。
- * 这样晋升 PR 自己改 status/review_by 不会改变哈希;其余任何改动(正文、证据、签名…)都会。
- * 两行必须各恰好出现一次且归一后确为占位值(排除引号键、折叠标量等写法);否则返回 undefined(调用方 fail-closed)。
+ * 规则文本哈希:与 L1 的 C6(`ruleSha256`)、attest 的 `normalizedRuleSha256` 是**同一个实现**(`lifecycle/checks.ts`),
+ * 三处口径不一致会让 judge 写入的哈希在 CI 重算时对不上。无法归一化时返回 undefined(调用方 fail-closed)。
  */
 export function normalizedRuleSha256(source: string): string | undefined {
-  const lines = canonicalText(source.replace(/^﻿/, '')).split('\n');
-  if (lines[0] !== '---') return undefined;
-  const end = lines.indexOf('---', 1);
-  if (end < 0) return undefined;
-  let nStatus = 0;
-  let nReview = 0;
-  for (let i = 1; i < end; i++) {
-    const l = lines[i]!;
-    if (/^status:/.test(l)) {
-      lines[i] = 'status: _';
-      nStatus++;
-    } else if (/^review_by:/.test(l)) {
-      lines[i] = 'review_by: _';
-      nReview++;
-    }
+  try {
+    return ruleSha256(source);
+  } catch {
+    return undefined;
   }
-  if (nStatus !== 1 || nReview !== 1) return undefined;
-  const text = lines.join('\n');
-  const v = viewAtom(text, 'normalized');
-  if (!v.ok || v.fm['status'] !== '_' || v.fm['review_by'] !== '_') return undefined;
-  return sha256Hex(text);
 }
 
 interface Lifecycle {
