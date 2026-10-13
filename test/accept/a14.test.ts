@@ -37,8 +37,8 @@ const name = rest.join(' ');
 const ent = table.find(([n]) => n === name);
 if (!ent) process.exit(2);
 if (ent[1] === 'P0') process.exit(mode === 'p0-stub' && name === 'build' ? 64 : mode === 'p0-notrun' && name === 'check' ? 4 : 2);
-// probe / reflect / judge 已实装(a14 的 IMPLEMENTED_LATER_PHASE):正常模式下必须非桩、非 4。
-if (['probe', 'reflect', 'judge'].includes(name)) process.exit(mode === 'p1-stub-regression' ? 64 : 0);
+// probe / reflect / judge / attest / promote / retire 已实装(a14 的 IMPLEMENTED_LATER_PHASE):正常模式下必须非桩、非 4。
+if (['probe', 'reflect', 'judge', 'attest', 'promote', 'retire'].includes(name)) process.exit(mode === 'p1-stub-regression' ? 64 : 0);
 if (mode === 'silent-stub' && name === 'sync') process.exit(64);
 process.stderr.write('未实现 — ' + ent[1] + ' 才实现\\n');
 process.exit(64);

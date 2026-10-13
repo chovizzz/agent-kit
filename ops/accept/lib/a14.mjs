@@ -31,7 +31,14 @@ export const COMMAND_PHASES = [
 ];
 
 /** P1/P2 里已经实装、不再是桩的命令(新增一块实装时在这里登记,否则会被"桩应退出 64"误判)。 */
-export const IMPLEMENTED_LATER_PHASE = new Set(['probe', 'reflect', 'judge']);
+export const IMPLEMENTED_LATER_PHASE = new Set([
+  'probe',
+  'reflect',
+  'judge',
+  'attest',
+  'promote',
+  'retire',
+]);
 
 export const DELIVERABLES = [
   'kit.toml',

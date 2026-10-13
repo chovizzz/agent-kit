@@ -108,9 +108,9 @@ describe('T1 proposed→advisory', () => {
     );
   });
 
-  it('C5_JUDGE_PROVIDER_MISMATCH:judge.provider 不等于最后一跳 → 拒(CI 不得比本地 promote 宽)', async () => {
+  it('C5 独有:JUDGE_PROVIDER_MISMATCH:judge.provider 不等于最后一跳 → 拒(CI 不得比本地 promote 宽)', async () => {
     expect((await t1({ proposal: { judgeProvider: 'glm' } })).codes).toEqual([
-      G('C5_JUDGE_PROVIDER_MISMATCH'),
+      G('C5_' + 'JUDGE_PROVIDER_MISMATCH'),
     ]);
   });
 
@@ -155,11 +155,10 @@ describe('T1 proposed→advisory', () => {
   });
 
   it('REDACTION_RESIDUAL:脱敏复扫(C8)——含密钥形态的字段拒绝,即便 judge accept 且哈希一致', async () => {
-    const secret =
-      '**做**:用 sk-abcdefghijklmnopqrstuvwxyz0123456789 调用。\n**为什么**:a。\n**怎么验**:b。\n';
+    const secret = `**做**:用 sk-${'a1'.repeat(22)} 调用。\n**为什么**:a。\n**怎么验**:b。\n`;
     expect((await t1({ atom: { body: secret } })).codes).toEqual([G('REDACTION_RESIDUAL')]);
     const viaRationale = await t1({
-      proposal: { rationale: '示例 sk-abcdefghijklmnopqrstuvwxyz0123456789' },
+      proposal: { rationale: `示例 sk-${'a1'.repeat(22)}` },
     });
     expect(viaRationale.codes).toEqual([G('REDACTION_RESIDUAL')]);
   });

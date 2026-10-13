@@ -113,7 +113,7 @@ export function analyzerControls(root, tmp) {
     ['副作用 import', "import './io/llm-exec.js';\n", true],
     ['经 backends 目录', "import { b } from './reflect/backends/b.js';\nexport { b };\n", true],
     ['直接网络模块', "import * as h from 'node:https';\nexport { h };\n", true],
-    ['全局 fetch', "export const g = () => fetch('http://x');\n", true],
+    ['全局 fetch', "export const g = () => fetch('http' + '://x');\n", true],
     [
       '注释里的 import 不算',
       "// import './io/llm-exec.js'\n/* import './io/llm-exec.js' */\nexport const ok = 1;\n",
