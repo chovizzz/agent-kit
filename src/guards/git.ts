@@ -134,5 +134,57 @@ export function createGuardGit(
     throw new GitError(`git merge-base 失败:${r.stderr.split('\n')[0] ?? ''}`);
   };
 
-  return { resolveCommit, changes, blobText, textAt, stableTagCommits, isAncestor };
+  const listFiles = (commitOid: string, dir: string): string[] => {
+    if (!OID_RE.test(commitOid)) throw new GitError(`非法提交 oid:${commitOid}`);
+    // 路径规格以 `dir/` 结尾:只列目录内容;--full-tree 让结果与 cwd 无关
+    const out = must([
+      'ls-tree',
+      '-r',
+      '-z',
+      '--full-tree',
+      commitOid,
+      '--',
+      dir.endsWith('/') ? dir : `${dir}/`,
+    ]);
+    const files: string[] = [];
+    for (const rec of out.split('\0')) {
+      if (rec === '') continue;
+      const m = /^(\d{6}) (blob|commit|tree) [0-9a-f]+\t([\s\S]*)$/.exec(rec);
+      if (m === null) throw new GitError(`无法解析 ls-tree 输出:${JSON.stringify(rec)}`);
+      if (m[2] === 'blob' && (m[1] === '100644' || m[1] === '100755')) files.push(m[3]!);
+    }
+    return files.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  };
+
+  const fileHistory = (commitOid: string, p: string): { commit: string; date: string }[] => {
+    if (!OID_RE.test(commitOid)) throw new GitError(`非法提交 oid:${commitOid}`);
+    const out = must([
+      'log',
+      '--no-show-signature',
+      '--no-renames',
+      '--format=%H %cs',
+      commitOid,
+      '--',
+      p,
+    ]);
+    const list: { commit: string; date: string }[] = [];
+    for (const line of out.split('\n')) {
+      if (line === '') continue;
+      const m = /^([0-9a-f]{40}(?:[0-9a-f]{24})?) (\d{4}-\d{2}-\d{2})$/.exec(line);
+      if (m === null) throw new GitError(`无法解析 git log 输出:${JSON.stringify(line)}`);
+      list.push({ commit: m[1]!, date: m[2]! });
+    }
+    return list;
+  };
+
+  return {
+    resolveCommit,
+    changes,
+    blobText,
+    textAt,
+    stableTagCommits,
+    isAncestor,
+    listFiles,
+    fileHistory,
+  };
 }

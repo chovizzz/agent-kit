@@ -40,23 +40,24 @@ export const ALLOWED_TRANSITIONS: Readonly<
     ['proposed', 'advisory'],
     ['advisory', 'active'],
   ],
-  // advisory→deprecated 是回滚(设计第三轮 5)
+  // advisory→deprecated 是回滚(设计第三轮 5);proposed→retired 是被否决提案的出口(L2,决策 ③A)
   'kit:retire': [
     ['advisory', 'deprecated'],
     ['active', 'deprecated'],
     ['deprecated', 'retired'],
+    ['proposed', 'retired'],
   ],
 };
 
 /**
- * G3 判据检查的 P0 桩:attest/reports 校验是 P1 的事,所以这里**不静默通过**,而是一律判不通过。
- * 含义:P0 的 CLI 上,晋升/退役 PR 永远红(结构检查的诊断仍会一并列出);P1 把真实检查器注入 `GuardOptions.criteria`。
+ * G3 判据的 fail-closed 默认:库层调用方没有注入检查器时**不静默通过**,一律判不通过。
+ * 真判据是 `lifecycleCriteria`(criteria.ts),由 `check --guards` 命令层注入(L2);库层调用方(promote/retire 的内存模拟)显式传入。
  */
 export const pendingCriteria: CriteriaChecker = (t) => [
   {
     code: 'GUARD_G3_CRITERIA_NOT_IMPLEMENTED',
     severity: 'error',
-    path: t.path,
-    message: `转移 ${t.from}→${t.to} 的判据检查(attest/reports)是 P1 能力,P0 视为不通过`,
+    path: t.transition.path,
+    message: `转移 ${t.transition.from}→${t.transition.to} 的判据检查未接入,视为不通过(真判据见 lifecycleCriteria)`,
   },
 ];

@@ -28,6 +28,10 @@ export interface GuardGit {
   /** 本地 `stable-*` tag 指向的提交 oid(已剥离注解 tag;非提交的 tag 忽略) */
   stableTagCommits(): string[];
   isAncestor(ancestorOid: string, descendantOid: string): boolean;
+  /** L2:<commit> 树里 `dir/` 之下的全部**普通文件**路径(符号链接/子模块不列),字节序;目录不存在返回 [] */
+  listFiles(commitOid: string, dir: string): string[];
+  /** L2:从 <commit> 往回、改动过 `path` 的提交(新→旧),带提交者日期 YYYY-MM-DD;不跟随重命名 */
+  fileHistory(commitOid: string, path: string): { commit: string; date: string }[];
 }
 
 /** 受限 YAML 解析后的 frontmatter 视图 + 归一化正文。 */
@@ -43,14 +47,39 @@ export interface AtomChange {
 
 export type GuardLabel = 'kit:promotion' | 'kit:retire' | 'kit:attest' | 'kit:reflector';
 
-/** G3 判据检查接口(P1 实装:attest/reports 校验)。返回空数组 = 通过。 */
+/** 一次状态转移(G3 已确认方向在白名单内)。 */
 export interface TransitionInput {
   label: 'kit:promotion' | 'kit:retire';
   path: string;
   from: string;
   to: string;
 }
-export type CriteriaChecker = (t: TransitionInput) => Diagnostic[];
+
+/**
+ * G3 判据检查接口(L2 起)。判据能读基线/头部两棵树里的任意文本(原子、attest/、reports/、proposals/、lifecycle/、kit.toml)
+ * 以及 git(stable tag、提交历史)。返回空数组 = 通过。
+ */
+export interface CriteriaInput {
+  transition: TransitionInput;
+  /** 头部提交里 `path` 处的文本;不存在(或不是 blob)返回 undefined */
+  headView(path: string): string | undefined;
+  /** 基线提交里 `path` 处的文本 */
+  baseView(path: string): string | undefined;
+  /** 头部/基线提交里 `dir/` 之下的普通文件路径 */
+  listHead(dir: string): string[];
+  listBase(dir: string): string[];
+  git: GuardGit;
+  baseOid: string;
+  headOid: string;
+}
+export type CriteriaChecker = (i: CriteriaInput) => Diagnostic[];
+
+/** checkG3 构造 CriteriaInput 所需的运行环境。 */
+export interface G3Env {
+  git: GuardGit;
+  baseOid: string;
+  headOid: string;
+}
 
 export interface GuardOptions {
   git: GuardGit;
