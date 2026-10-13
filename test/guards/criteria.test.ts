@@ -102,8 +102,15 @@ describe('T1 proposed→advisory', () => {
   });
 
   it('NOT_CROSS_VENDOR:裁判厂商不可证明不同(非内置厂商)→ 拒', async () => {
-    expect((await t1({ proposal: { judgeVendor: 'acme' } })).codes).toEqual([
-      G('NOT_CROSS_VENDOR'),
+    // 自报的评审厂商 acme 既不跨厂商,也无法由最后一跳模型串复算(C5 独有的 JUDGE_VENDOR_UNPROVEN)
+    expect([...(await t1({ proposal: { judgeVendor: 'acme' } })).codes].sort()).toEqual(
+      [G('NOT_CROSS_VENDOR'), G('C5_JUDGE_VENDOR_UNPROVEN')].sort(),
+    );
+  });
+
+  it('C5_JUDGE_PROVIDER_MISMATCH:judge.provider 不等于最后一跳 → 拒(CI 不得比本地 promote 宽)', async () => {
+    expect((await t1({ proposal: { judgeProvider: 'glm' } })).codes).toEqual([
+      G('C5_JUDGE_PROVIDER_MISMATCH'),
     ]);
   });
 

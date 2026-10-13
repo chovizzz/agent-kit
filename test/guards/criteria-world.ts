@@ -65,6 +65,7 @@ export interface ProposalOpts {
   verdict?: 'accept' | 'revise' | 'reject';
   injection?: boolean;
   judgeVendor?: string;
+  judgeProvider?: string;
   lastHopVendor?: string;
   hash?: string | null; // null = 缺省
   backend?: string | null;
@@ -107,11 +108,11 @@ export function proposalYaml(atom: string, o: ProposalOpts = {}): string {
         {
           hop: 'codex',
           vendor: o.lastHopVendor ?? judgeVendor,
-          model: 'gpt-x',
+          model: 'gpt-6.1-sol',
           result: 'ok',
         },
       ],
-      provider: 'openai',
+      provider: o.judgeProvider ?? 'codex',
       vendor: judgeVendor,
       verdict: o.verdict ?? 'accept',
       overfit_risk: 'low',

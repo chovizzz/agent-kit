@@ -13,7 +13,7 @@ import { LifecycleRecordSchema, lifecycleFileName } from '../contracts/lifecycle
 import type { LifecycleRecord } from '../contracts/lifecycle.js';
 import { ProposalSchema, type Proposal } from '../contracts/proposal.js';
 import { deriveVendor, isCrossVendor } from '../contracts/vendor.js';
-import { ruleSha256 } from '../lifecycle/checks.js';
+import { checkC5, ruleSha256 } from '../lifecycle/checks.js';
 import { createRedactor } from '../redact/redactor.js';
 import { scanDangerousPhrases } from '../reflect/validate.js';
 import { hasInvisible } from '../reflect/text.js';
@@ -367,6 +367,13 @@ function rescan(a: AtomCtx, p: Proposal): Diagnostic[] {
   return out;
 }
 
+const C5_EXTRA_REASONS: ReadonlySet<string> = new Set([
+  'JUDGE_PROVIDER_MISMATCH',
+  'JUDGE_LAST_HOP_NOT_OK',
+  'JUDGE_VENDOR_UNPROVEN',
+  'VENDOR_OVERRIDES_INVALID',
+]);
+
 function judgeChecks(a: AtomCtx, pr: Proposal): Diagnostic[] {
   const out: Diagnostic[] = [];
   const j = pr.judge;
@@ -397,6 +404,14 @@ function judgeChecks(a: AtomCtx, pr: Proposal): Diagnostic[] {
   }
   if (a.ruleSha === undefined) {
     out.push(e('RULE_HASH_UNCOMPUTABLE', a.path, '无法计算归一化后的规则哈希'));
+  }
+  // 与本地 promote 同一口径:CI 不得比本地宽。上面已覆盖的 C5 原因不重复输出,只补 C5 独有的几条:
+  // judge.provider 必须等于最后一跳、最后一跳 result 必须 ok、评审厂商必须能由最后一跳模型串复算(自报 vendor 不可信)。
+  const c5 = checkC5({ proposal: pr });
+  for (const reason of c5.reasons) {
+    if (C5_EXTRA_REASONS.has(reason)) {
+      out.push(e(`C5_${reason}`, a.path, `C5 评审记录检查未过:${reason}`));
+    }
   }
   const r = pr.reflector;
   if (r.stub === true) out.push(e('REFLECTOR_STUB', a.path, '假 LLM(stub)产出的提案不得晋升'));
