@@ -124,7 +124,7 @@ async function stagedRun(team = true): Promise<Staged> {
   return { w: world, dir: stageDir(w.io, RUN_ID) };
 }
 
-/** judge(stub 跨厂商)→ 再补 rule_sha256(模拟 judge 写入方接好之后的状态)。 */
+/** judge(stub 跨厂商):真 judge 命令自己写 rule_sha256(⑨A);opts.hash===false 时再删掉它,模拟旧版 judge 留下的记录。 */
 async function judgeIt(s: Staged, opts: { hash?: boolean } = {}): Promise<void> {
   const stubs = makeStubs({ codex: () => ({ ok: true, text: outputText() }) }, ['codex', 'kimi']);
   const judge = createJudgeCommand({
@@ -135,7 +135,16 @@ async function judgeIt(s: Staged, opts: { hash?: boolean } = {}): Promise<void> 
   const jc = ctxFor(s.w, []);
   jc.ctx.argv = ['--run', RUN_ID, '--run-llm', '--allow-egress'];
   expect(await judge.run(jc.ctx), jc.err.join('')).toBe(ExitCode.OK);
-  if (opts.hash !== false) await withRuleHash(s);
+  if (opts.hash === false) await stripRuleHash(s);
+}
+
+async function stripRuleHash(s: Staged): Promise<void> {
+  const file = path.join(s.dir, PROPOSAL);
+  const obj = parseYaml(await readText(file)) as Record<string, unknown> & {
+    judge: Record<string, unknown>;
+  };
+  delete obj.judge['rule_sha256'];
+  await safe.writeFile(s.w.io, file, serializeProposal(obj));
 }
 
 async function withRuleHash(s: Staged, hash?: string): Promise<void> {
@@ -370,7 +379,16 @@ describe('promote --run:逐条判据与退出码', () => {
     expect(await exists(path.join(s.w.state, 'promote'))).toBe(false);
   });
 
-  it('C6:judge 记录没有 rule_sha256(judge 写入方尚未接好的现状)→ 丢弃 C6:RULE_SHA256_MISSING', async () => {
+  it('真 judge 命令写入 rule_sha256,且等于评审时规则文本的归一化哈希(⑨A 接线)', async () => {
+    const s = await stagedRun();
+    await judgeIt(s);
+    const obj = parseYaml(await readText(path.join(s.dir, PROPOSAL))) as {
+      judge: Record<string, unknown>;
+    };
+    expect(obj.judge['rule_sha256']).toBe(ruleSha256(await readText(path.join(s.dir, RULE))));
+  });
+
+  it('C6:旧版 judge 留下的记录没有 rule_sha256 → 丢弃 C6:RULE_SHA256_MISSING', async () => {
     const s = await stagedRun();
     await judgeIt(s, { hash: false });
     const r = await promote(s.w, ['--run', RUN_ID]);

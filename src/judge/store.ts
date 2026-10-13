@@ -31,6 +31,8 @@ export interface LoadedProposal {
   /** 读取时的文件原文;写回前重读比对,被改过就中止 */
   readonly text: string;
   readonly proposal: Proposal;
+  /** 规则文件原文(供 judge 写入 rule_sha256:评审结论绑定评审时的规则文本,契约 ⑨A) */
+  readonly ruleText: string;
   /** yaml 解析出的原始对象(保持键序),更新时在它上面改 */
   readonly raw: Record<string, unknown>;
   /** 规则文件解析出的评审输入(do/why/verify/signature) */
@@ -118,6 +120,7 @@ export async function loadRun(io: IoContext, runId: string): Promise<LoadedPropo
       file,
       text,
       proposal,
+      ruleText: src,
       raw: { ...(y.value as Record<string, unknown>) },
       rule: {
         do: body.do,

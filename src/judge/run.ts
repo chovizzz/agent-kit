@@ -13,6 +13,7 @@ import type { Redactor } from '../contracts/redact.js';
 import { deriveVendor, isCrossVendor } from '../contracts/vendor.js';
 import type { IoContext } from '../io/paths.js';
 import { assertWritable } from '../io/safe-fs.js';
+import { ruleSha256 } from '../lifecycle/checks.js';
 import type { LlmBackend } from '../reflect/backend-iface.js';
 import { JudgeProviderMismatchError, JudgeStateError } from './errors.js';
 import { parseJudgeOutput } from './output.js';
@@ -362,6 +363,8 @@ export async function runJudge(deps: JudgeDeps, opts: JudgeOptions): Promise<Jud
         injection_suspected: value.injection_suspected,
         // 评审给的 conflicts 只保留「确实存在的原子 id」:自由文本不得经此落进提案文件
         conflicts: value.conflicts.filter((c) => known.has(c)),
+        // 评审结论绑定评审时的规则文本(⑨A):后续规则被改,promote/CI 的 C6 会对不上
+        rule_sha256: ruleSha256(loaded.ruleText),
       };
       assertJudgeProvider(record.provider, hop);
       const next = applyJudgeFields(loaded.raw, { judge: record });
