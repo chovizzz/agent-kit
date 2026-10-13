@@ -10,6 +10,7 @@
  *  - 外部内容会话:摘录一律为空串(只保留结构化信息);
  *  - 只为 user_message、tool_call、失败的 tool_result 产出信号(P0 不分类,type 恒为 'event')。
  */
+import { createHash } from 'node:crypto';
 import type { AgentId } from '../contracts/common.js';
 import type {
   Counts,
@@ -114,7 +115,35 @@ interface Candidate {
   /** 排除判定前暂存的原文窗口;判定通过后立刻脱敏并清空,内存里只留 ≤300 字的结果 */
   text: string | undefined;
   truncated: boolean;
+  /** D4:跨文件去重键(仅 claude / pi 带);由事件指纹 + 同指纹出现序号加盐哈希而来,不含原文 */
+  eventKey?: string;
   result?: ExcerptResult;
+}
+
+/** 会有「同一事件出现在多个会话文件」的 agent(Claude resume、Pi fork);其余 agent 不产出 event_key。 */
+const EVENT_KEY_AGENTS: ReadonlySet<AgentId> = new Set<AgentId>(['claude', 'pi']);
+
+/**
+ * D4 去重键(docs/reader-counting-spec.md §8.1):`ek_` + 16 位十六进制(与 sig_id 同形;更长的十六进制串会被 A6 的脱敏复扫判成高熵)。
+ * NormEvent 目前不携带源事件 id(Claude uuid / Pi 条目 id),所以用「历史链」代替:
+ * 链 = 本会话里此前所有产信号事件的指纹依次哈希(指纹 = 事件时间 + 种类 + 工具名 + 文本窗口的 sha256),
+ * 键 = 加盐 sha256(agent + 链)的前缀。resume / fork 复制出来的前缀事件历史完全相同,所以得到同一个键;
+ * 两个各自独立的会话即使在同一秒做了同样的事,历史不同,键也不同。盐与 session_ref 同源,原文不会入库。
+ * 代价:复制时丢了前缀里的某个事件 → 链从此分叉,不再去重(偏向多计,不会少计)。
+ */
+function eventKeyFor(salt: string, agent: AgentId, chain: string): string {
+  const h = createHash('sha256').update([salt, 'event', agent, chain].join('\0')).digest('hex');
+  return `ek_${h.slice(0, 16)}`;
+}
+
+/** 链的推进:chain' = sha256(chain ‖ 指纹)。 */
+function nextChain(
+  chain: string,
+  parts: { ts: string; kind: SignalEventKind; toolName: string | undefined; textHash: string },
+): string {
+  return createHash('sha256')
+    .update([chain, parts.ts, parts.kind, parts.toolName ?? '', parts.textHash].join('\0'))
+    .digest('hex');
 }
 
 function wantsSignal(ev: NormEvent): boolean {
@@ -252,6 +281,7 @@ export async function processSession(
   let decision: ProjectDecision | undefined;
   let sessionExternal = false;
   const candidates: Candidate[] = [];
+  let eventChain = '';
   let index = 0;
   let settled = 0;
   let firstEventTs: string | undefined;
@@ -308,6 +338,19 @@ export async function processSession(
       if (ev.external_content === true || isExternalToolName(ev.tool_name)) sessionExternal = true;
       if (wantsSignal(ev)) {
         const text = ev.text;
+        let eventKey: string | undefined;
+        if (EVENT_KEY_AGENTS.has(reader.agent)) {
+          const textHash = createHash('sha256')
+            .update(text === undefined ? '' : text.slice(0, TEXT_WINDOW))
+            .digest('hex');
+          eventChain = nextChain(eventChain, {
+            ts: ev.ts,
+            kind: eventKindOf(ev),
+            toolName: ev.tool_name,
+            textHash,
+          });
+          eventKey = eventKeyFor(deps.salt, reader.agent, eventChain);
+        }
         candidates.push({
           index: i,
           ts: ev.ts,
@@ -318,6 +361,7 @@ export async function processSession(
               : undefined,
           text: text === undefined ? undefined : text.slice(0, TEXT_WINDOW),
           truncated: text !== undefined && text.length > TEXT_WINDOW,
+          ...(eventKey !== undefined ? { eventKey } : {}),
         });
       }
       if (decision !== undefined) await inStage('redact', settle);
@@ -370,6 +414,7 @@ export async function processSession(
           event_kind: c.eventKind,
           // 与 sigIdFor 用的序号是同一个 c.index(会话事件流内的位置,含不产信号的事件)
           event_index: c.index,
+          ...(c.eventKey !== undefined ? { event_key: c.eventKey } : {}),
           // 外部内容会话不落 tool_name:调用名是模型读完外部内容之后自己写的,宿主拒绝执行也照样进 trace,
           // 白名单字符足以拼出指令性标记(如 SYSTEM:xxx),而 contracts #8 要求外部会话只留结构化计数
           ...(c.toolName !== undefined && !external ? { tool_name: c.toolName } : {}),
