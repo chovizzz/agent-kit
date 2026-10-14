@@ -70,6 +70,8 @@ const IMPLEMENTED_COMMANDS = new Set([
   'promote',
   // retire:L6 已实装;无参数是用法错误(2)。
   'retire',
+  // sync:S4 已实装(默认干跑;无 payload → 4);行为测试在 test/sync/**。
+  'sync',
 ]);
 
 describe('命令桩:每个命令退出 64 并说明原因(绝不静默成功)', () => {
