@@ -45,3 +45,29 @@ export const MAX_TITLE_CHARS = 60;
 export const MAX_EVIDENCE_EXCERPT_CHARS = 300;
 export const MAX_SKILL_DESCRIPTION_CHARS = 1024;
 export const DEFAULT_ATOM_MAX_BYTES = 600;
+
+/** 版本号:`X.Y.Z` 或带预发布段 `X.Y.Z-rc.0`;不接受构建元数据(`+build`)、前导 `v`、前导零。 */
+const SEMVER_NUM = '(0|[1-9]\\d*)';
+const SEMVER_PRE_ID = '(0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*)';
+/** 严格 SemVer 2.0 的核心 + 预发布(数字段无前导零,预发布标识符非空且数字标识符无前导零) */
+export const SEMVER_SOURCE = `${SEMVER_NUM}\\.${SEMVER_NUM}\\.${SEMVER_NUM}(-${SEMVER_PRE_ID}(\\.${SEMVER_PRE_ID})*)?`;
+export const SEMVER_RE = new RegExp(`^${SEMVER_SOURCE}$`);
+export const SemverSchema = z.string().regex(SEMVER_RE).max(64);
+
+/**
+ * 相对路径:正斜杠、不以 `/` 或 `~` 开头、无 NUL、无反斜杠、无 `.` / `..` / 空段(因此不带末尾斜杠)、≤512 字符。
+ * 用于 HOME 相对的受管路径与包内相对路径;任何代码都不得借它拼出 HOME 之外的位置。
+ */
+export const RelPathSchema = z
+  .string()
+  .min(1)
+  .max(512)
+  .refine(
+    (p) =>
+      !p.startsWith('/') &&
+      !p.startsWith('~') &&
+      !p.includes('\\') &&
+      !p.includes('\0') &&
+      !p.split('/').some((s) => s === '..' || s === '.' || s === ''),
+    { message: '必须是正斜杠相对路径,且不含 ~ 开头、.. 或空段' },
+  );

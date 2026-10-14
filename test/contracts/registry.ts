@@ -27,6 +27,12 @@ import {
   SessionMetaSchema,
   SignalSchema,
   SkillFrontmatterSchema,
+  SyncLedgerSchema,
+  SyncTxnSchema,
+  UpdateStateSchema,
+  UserConfigSchema,
+  PayloadManifestSchema,
+  PayloadIntegritySchema,
 } from '../../src/contracts/index.js';
 
 /** docs/contracts.md 里 `schema=<名字>` 对应的 zod schema。新增契约时在这里登记。 */
@@ -58,4 +64,10 @@ export const SCHEMAS: Readonly<Record<string, ZodType>> = {
   ReflectRunReport: ReflectRunReportSchema,
   LifecycleRecord: LifecycleRecordSchema,
   JudgeRecord: JudgeRecordSchema,
+  SyncLedger: SyncLedgerSchema,
+  SyncTxn: SyncTxnSchema,
+  UpdateState: UpdateStateSchema,
+  UserConfig: UserConfigSchema,
+  PayloadManifest: PayloadManifestSchema,
+  PayloadIntegrity: PayloadIntegritySchema,
 };

@@ -195,6 +195,7 @@ A2 的 12 格矩阵(`limit_source` × `enforce` × 超/不超;退出码 / 是否
 | `inventory`                                           | P1(桩) | `src/commands/inventory.ts`       | 见 §4.1                                                               |
 | `probe` `reflect` `judge` `attest` `promote` `retire` | P1     | 各一个文件                        | `probe` `reflect` `judge` 已实装(`reflect`/`judge` 见 §17);其余仍是桩 |
 | `sync` `doctor`                                       | P2     | 各一个文件                        | 桩                                                                    |
+| `update`                                              | P2     | `src/commands/update.ts`          | 桩(S0 注册,契约见 §19.4)                                              |
 
 - 全局选项(由 `cli.ts` 取走,命令不用管):`--root <dir>`、`--overlay <path>`、`-h/--help`、`-v/--version`。
 - `check` 的完整 flag 集合在 B01 定死:`--guards`、`--base <ref>`、`--head <ref>`、`--label <name>`、`--report`;解析后以 `CheckOptions`
@@ -2228,5 +2229,760 @@ agent-kit retire  --rule <id> --to deprecated|retired --reason manual|expired|su
   "run_id": "run-0001",
   "recorded_at": "2026-10-13",
   "owner": "@handle"
+}
+```
+
+## 19. sync / doctor / update 命令面与自动更新契约(S0,契约先行;S1–S9 实装后订正)
+
+本节先定死三条命令的命令面、退出码、稳定码、文件位置与授权边界,实现在后续块(S1–S8)。`sync`、`doctor` 目前仍是命令桩(退出 64),`update` 是新注册的命令桩。设计依据:`sync-doctor-update-design.md` §0–§6、§8;用户 2026-10-14 对 16 条决策的拍板(14 条按设计稿推荐,**② 改 B、⑭ 改 B**)。新增 schema 全部 `strictObject`,只追加;`contracts-v1` 既有编号不重排。
+
+通用约定(沿用 §17 / §18):
+
+- **默认干跑**,`--write` 才写。stdout 只含计数、枚举、id、哈希前缀、写死的受管相对路径;`--json` 为 canonical JSON、键集合固定。stderr 只含稳定码 `<CMD>_USAGE|CHECK_FAILED|NOT_RUN|FAIL_CLOSED reason=<码>`,不回显异常消息、文件内容、绝对路径、用户名。
+- 数字参数用 `parseDecimalUint`(十进制非负整数,拒绝 `0x10`、`1e3`、`+5`、`-1`、空白)。
+- 退出码沿用 §2,多结果用 `combineExitCodes`(3 > 2 > 1 > 4 > 64 > 0)。
+
+### 19.1 决策取值对契约的影响
+
+| 决策                 | 取值                                            | 落在契约的哪里                                                                                                                      |
+| -------------------- | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| ① payload 分发       | npm 包带预渲染 payload                          | `PayloadManifest` / `PayloadIntegrity`;`sync` 只从包内 payload 装,不在本机渲染                                                      |
+| ② 规则是否自动生效   | **B**:`auto_sync` 默认 `"safe"`                 | `UserConfig.update.auto_sync` 取值 `off \| safe`(没有全自动档);条件见 §19.6;`KIT_AUTO_SYNC=0` 或配置 `off` 恒关闭                   |
+| ③ CLI 本体自动安装   | 默认开                                          | `update.auto_install` 缺省 `true`                                                                                                   |
+| ④ 安装机制           | `versions/<v>/` + `current` 软链 + 启动器       | `~/.local/share/agent-kit/`;exec 白名单条款见 §19.7                                                                                 |
+| ⑤ 冷却期             | 24h                                             | `update.cooldown_hours` 缺省 24,范围 1..720;用 registry 的 `time[<v>]`,不用本机时钟                                                 |
+| ⑥ 检查时机           | 交互式命令启动时,24h 节流,后台进程              | 不检查:`check` / `build`、`CI=true`、stdout 非 TTY、`KIT_AUTO_UPDATE=0`、`update.auto_install=false`、`KIT_LAUNCHED` 已设           |
+| ⑧ sync 范围          | 只做 home 目标;默认 claude / codex / pi         | `DEFAULT_SYNC_AGENTS`;`--agent kimi\|opencode` 显式指定;project 目标 v1 不处理                                                      |
+| ⑨ personal 层        | v1 不渲染                                       | 报告写 `skippedLayers: personal`;`PayloadManifest.skippedLayers`                                                                    |
+| ⑩ 路径中间有符号链接 | 拒绝                                            | `SYNC_PATH_SYMLINK`(退出 3,整次不写)                                                                                                |
+| ⑪ 与 skills-hub 同名 | 拒绝,不碰点开头条目,不写对方清单                | `SYNC_TARGET_FOREIGN`                                                                                                               |
+| ⑫ 漂移               | 保留、跳过、退出 1;`--overwrite-drifted` 才覆盖 | `SYNC_DRIFTED`;覆盖前先备份;`SyncTxnOp.overwrote_drifted`                                                                           |
+| ⑬ provenance         | 必须有,钉死 repo / workflow / tag ref           | `UPDATE_VERIFY_FAILED reason=provenance_missing\|provenance_identity\|bundle`                                                       |
+| ⑭ 镜像 registry      | **B**:允许;来源证明一律到 npmjs 取              | `update.registry` 可配;attestations / provenance 主机固定 `registry.npmjs.org`,不可配;取不到 → 不自动装(`attestations_unreachable`) |
+| ⑦ 首发前测更新       | `file://` 假 registry + rc 预发布               | 只经环境变量 `KIT_UPDATE_REGISTRY=file://…`,且路径必须在 `KIT_TMP` 内,否则 `UPDATE_USAGE reason=registry_fixture_outside_tmp`       |
+| ⑮ 首次真 HOME 同步   | 假 HOME 全过且用户当场同意后                    | 流程约束,不进 schema                                                                                                                |
+
+镜像规则(⑭B)的完整语义:packument 与 tarball 可取自 `update.registry`;但 ① tarball 的 sha512 必须等于 **npmjs** attestation 的 subject 摘要(镜像给的 `dist.integrity` 只作提示,不作依据);② provenance 的 repo / workflow / ref 钉死比对;③ 任一步从 npmjs 取不到 → 记 `attestations_unreachable`、不安装、退出 4,下一个窗口再试。镜像与 npmjs 版本不一致(镜像有、npmjs 无)按 `not_ready` 处理。
+
+### 19.2 `sync`
+
+```
+agent-kit sync [--agent <id>]… [--write] [--overwrite-drifted] [--json] [--home <dir>]
+               [--rollback <txn_id> | --resume | --uninstall | --adopt]
+```
+
+- **agent 集合**:缺省 `claude,codex,pi`。给了 `--agent`,集合恰为所列(可含 `kimi` / `opencode`;`openclaw` 或未知值 → `bad_agent`)。登记表条目的 `agents` 是各 agent 请求该路径的并集;按集合 A 计算的操作**不会删除**仍被 A 之外 agent 请求的条目,只把 A 从其 `agents` 里去掉。同一绝对路径(如 `.agents/skills/<name>/SKILL.md`)只写一次,各 agent 渲染出的 sha 不同 → `SYNC_SHARED_PATH_CONFLICT`。
+- **模式互斥**:`--rollback <txn_id>` / `--resume` / `--uninstall` / `--adopt` 至多一个(`mode_conflict`);`--rollback` 必须带 `txn-…` 形式的 id。`--overwrite-drifted` 需要 `--write`(`overwrite_requires_write`)。
+- **`--home <dir>`**:只接受真实 HOME 或 `KIT_TMP` 之内的目录,否则 `home_not_allowed`(退出 2)。
+- **干跑输出**:每行 `would <op> ~/<受管相对路径> sha256=<前 12 位> agents=<a,b>`,末行 `plan create=N update=N remove=N block_upsert=N block_remove=N skip_drifted=N refuse_foreign=N`,另有 `skippedLayers personal`。干跑不写任何文件,也不建 `~/.local/state`。`--write` 后行首换成 `did`。
+- **落点与识别**:以登记表(`~/.local/state/agent-kit/sync/ledger.json`,路径 + sha256)认定「我们写的」;独占头与托管块标记只作提示。owned 文件原子替换(同目录临时文件 → fsync → rename);托管块只改块体,块外字节不变;corrupt 块一律拒绝、绝不追加。
+- **事务**:预检(逐段 `lstat`,符号链接 / 硬链接 / 非常规文件 / corrupt 块 → 整次不写)→ 写 `txn/<id>.json` 与 `backups/<id>/` → 逐文件写 → 最后写 `ledger.json` → 删 txn 文件。残留 txn → `SYNC_TXN_INCOMPLETE`,用 `--rollback` 或 `--resume`。备份保留最近 `SYNC_BACKUPS_KEPT`(5)个事务。**`backups/<txn_id>/` 必须同时保存:被改文件的写前全文、txn 描述的副本(`txn.json`)、写前登记表全文(`ledger.before.json`;写前没有登记表则写「不存在」标记,`SyncTxn.ledger_sha256_before = null`)**;成功只删 active journal(`txn/<id>.json`),不删这份备份。`--rollback` 在「每个文件当前 sha 等于该事务写入后的 sha、登记表当前 sha 等于该事务写入后的 sha」时,按先文件、后登记表的顺序恢复(登记表同样 tmp + fsync + rename);任一前提不成立 → `SYNC_ROLLBACK_MISMATCH`,整次不写。
+- **幂等**:第二次 `--write` 计划为空,零操作、零 mtime 变化(按内容 sha 比,不看 mtime)。
+- **`--uninstall`**:同样受 agent 集合约束——只去掉所选 agent 的请求;一个条目的 `agents` 去掉后为空,才删除该登记过且未漂移的独占文件 / 托管块(`created_file=true` 且删块后只剩空白的文件一并删除);仍被其它 agent 请求的条目与文件原样保留。漂移而保留下来的条目**保留其登记信息**,不丢所有权。只有登记表的所有条目都已安全移除时才删登记表。不带 `--agent` 即默认集合 `claude,codex,pi`;全部 agent 的条目都装过时,用 `--agent` 列全才能卸干净。装 → 卸(同一 agent 集合)之后受管路径树哈希与装之前逐字节一致。
+- **`--adopt`**:登记表丢失时,只认领「内容 sha 等于某个已知 payload 版本里同路径文件 sha」的文件。
+- **永远不碰**:`~/.claude/CLAUDE.md`、`settings*.json`、hooks、`~/.codex/config.toml`、点开头的条目(`.social-hub-skills.json` 等)、登记表里没有的条目、`.json` 文件。
+- **启动提示**:交互式命令启动时,payload 与登记表有差异则 stderr 一行 `SYNC_PENDING add=N update=M remove=K`(退出码不受影响)。
+
+退出码:
+
+| 码  | 含义                                                                                           |
+| --- | ---------------------------------------------------------------------------------------------- |
+| 0   | 完成或无变更                                                                                   |
+| 1   | 有漂移被跳过、有外来冲突被跳过、owned 目录里有非登记条目(其余条目照常处理)                     |
+| 2   | 用法错误                                                                                       |
+| 3   | fail-closed:预检被拒、写出口拒绝、残留事务、登记表 / payload 损坏、回滚前提不成立;**整次不写** |
+| 4   | 未执行:没有 payload(未构建或包残缺)、sync 锁被占                                               |
+
+稳定码(`SYNC_<类别> reason=<码>`):
+
+- 用法(2):`mode_conflict`、`missing:--rollback`、`bad_txn_id`、`bad_agent`、`home_not_allowed`、`overwrite_requires_write`、`unknown_arg`。
+- 检查失败(1):`SYNC_DRIFTED`、`SYNC_TARGET_FOREIGN`、`SYNC_UNMANAGED_IN_OWNED_DIR`。
+- 未执行(4):`SYNC_NO_PAYLOAD`、`SYNC_LOCKED`。
+- fail-closed(3):`SYNC_TXN_INCOMPLETE`、`SYNC_PATH_SYMLINK`、`SYNC_PATH_HARDLINK`、`SYNC_PATH_NOT_REGULAR`、`SYNC_BLOCK_CORRUPT`、`SYNC_SHARED_PATH_CONFLICT`、`SYNC_LEDGER_INVALID`、`SYNC_PAYLOAD_INVALID`、`SYNC_ROLLBACK_MISMATCH`、`SYNC_WRITE_DENIED`。
+
+### 19.3 `doctor`
+
+```
+agent-kit doctor [--json] [--only <id>]… [--online]
+```
+
+**默认零写入、零网络**(进 A5 命令清单)。`--online` 只多读一次 registry,不写缓存,只影响 D12。输出只含 id、枚举、计数、版本号、sha 前缀与写死的受管相对路径。
+
+| id  | 检查                                                                                                    |
+| --- | ------------------------------------------------------------------------------------------------------- |
+| D01 | 运行时 node ≥ 22;启动器状态                                                                             |
+| D02 | 安装完整性:current 逐文件 sha 对照 `integrity.json`;`integrity.json` 自身对照外部锚点                   |
+| D03 | payload manifest 可解析、逐文件 sha 一致                                                                |
+| D04 | 登记表存在、可解析、无残留 txn                                                                          |
+| D05 | 每个登记条目:ok / drifted / missing / path_symlinked / hardlinked 计数                                  |
+| D06 | 托管块:intact / drifted / corrupt / missing 计数                                                        |
+| D07 | 待同步:会新增 / 更新 / 删除几项                                                                         |
+| D08 | 外来冲突计数与条目 id                                                                                   |
+| D09 | 遮蔽:`AGENTS.override.md`、`PI_CODING_AGENT_DIR`、claude 用户级 rules 加载(P-Q1 仍为 assumed)           |
+| D10 | 预算:按落盘后的整个文件算字节数,对照 `kit.toml`                                                         |
+| D11 | 探针:pendingProbes 个数;各 agent `tested_versions` 是否为空                                             |
+| D12 | 更新:开关、pin、上次检查时间与结果码、可用版本、锁、残留 staging、`max_seen_version`、registry 是否镜像 |
+| D13 | hook:套件目前不渲染 hook,恒 `n_a`                                                                       |
+| D14 | 状态目录权限:`~/.local/state/agent-kit` 为 0700、非链接、属主为当前用户                                 |
+| D15 | LLM 门:`egress` 取值、`allow_unverified` 槽位数、今日冷却标记数                                         |
+| D16 | 最近一次自动同步记录(`UpdateState.last_auto_sync`:outcome、原因码、计数)——② B 追加                      |
+
+退出码:0 = 只有 ok / warn / n_a;1 = 有任一 fail / drifted / corrupt / over;2 = 用法错误(`unknown_arg`、`bad_check_id`);3 = doctor 自身 fail-closed(`state_unreadable`、`state_dir_unsafe`);4 = 用了 `--online` 但网络不可用(`network_unavailable`,只影响 D12)。
+
+### 19.4 `update`
+
+```
+agent-kit update [--write] [--now] [--major] [--rollback] [--json]
+```
+
+- **默认干跑**:读一次 registry(只读网络请求),打印会装哪个版本、被哪条策略挡住;不写任何文件。`--write` 才安装 / 回滚。
+- `--now`:本次忽略冷却期,其余校验(sha512、provenance、防降级、同 major)照旧。`--major`:允许跨 major,需要 `--write`(`major_requires_write`)。`--rollback`:把 `current` 切回保留的上一版本并记入 `bad_versions`,需要 `--write`(`rollback_requires_write`);只能切到本地保留的版本。
+- 内部入口 `agent-kit __update --background`(后台 worker,S7 注册)不属于公开命令面;stdio 丢弃,日志只记稳定码。
+- 退出码:0 已最新 / 计划已打印 / 已安装;1 校验失败(`UPDATE_VERIFY_FAILED`)、防降级拒绝(`UPDATE_DOWNGRADE_REFUSED`);2 用法错误;3 fail-closed(状态目录不安全、写出口拒绝);4 未执行(网络不可用、`not_ready`、`attestations_unreachable`、锁被占)。
+- **S0 现状**:命令已注册,是桩,退出 64,stderr 说明「P2 才实现(块 S6/S7)」,stdout 为空。
+
+稳定码:`UPDATE_USAGE`(`mode_conflict`、`major_requires_write`、`rollback_requires_write`、`bad_registry`、`registry_fixture_outside_tmp`、`unknown_arg`)、`UPDATE_CHECK_FAILED reason=<timeout|dns|connect|tls|http_<码>|too_large|parse|proxy|not_ready|attestations_unreachable>`、`UPDATE_VERIFY_FAILED reason=<integrity|provenance_missing|provenance_identity|bundle|attestations_unreachable>`、`UPDATE_DOWNGRADE_REFUSED`、`UPDATE_MAJOR_AVAILABLE`、`UPDATE_CURRENT_BROKEN`、`UPDATE_NOT_READY`、`UPDATE_FAIL_CLOSED`、`SYNC_PENDING`、`AUTO_SYNC_DECLINED`。失败原因绝不合并成一个笼统的码,也不吞(Hub 的教训)。
+
+### 19.5 自动更新规则
+
+- **节流**:24h 一次(`UPDATE_CHECK_INTERVAL_HOURS`);时钟往回走视为该检查了。时钟只决定检查频率,任何安全判断都不依赖本机时钟。
+- **网络**:`GET <registry>/@chovizzz%2fagent-kit`,超时 5s、响应 ≤ 2MiB、不跟随跨主机重定向;主机白名单 = 配置的 registry 主机 + `registry.npmjs.org`。网络只经 `src/io/net.ts`。失败 TTY 下每天最多一行 `UPDATE_CHECK_FAILED reason=<码>`。
+- **冷却期的时间来源**:`age = 响应 Date 头 − time[<v>]`,**两者都取自 npmjs 的 packument 响应**(用镜像时也到 npmjs 取;镜像的 `time` 与 `Date` 不作依据),**不用本机时钟**。`Date` 头缺失 / 不可解析、`time[<v>]` 缺失、或 `age < 0`,一律按「未满冷却期」处理(`cooldown`,fail-closed 不安装)。本机时钟只用于检查节流。
+- **版本选择**:取 `dist-tags.<channel>`;只在同一 major 内自动升,跨 major 只提示 `UPDATE_MAJOR_AVAILABLE`;`pin`(`X.Y.Z` 或 `~X.Y[.Z]`,或 `KIT_UPDATE_PIN`)限定范围;发布未满 `cooldown_hours` 不自动装;`max_seen_version` 只增不减;`bad_versions` 里的版本不再自动安装。优先级:`KIT_AUTO_UPDATE=0` > 环境变量 > 配置文件 > 默认。
+- **npm 202 半可见期**:packument 已有新版本但 tarball 404 或缺 `dist.integrity` → `not_ready`,下一窗口再试,不算失败。
+- **安装**:staging 内校验 sha512 → provenance(见 ⑬ / ⑭)→ 解包(不跑 lifecycle 脚本)→ 对照包内 `integrity.json` 并把其 sha256 记为外部锚点 `installed.anchor` → 冒烟 → `rename` 切换 `current` → 只保留 `UPDATE_KEEP_VERSIONS`(2)个版本。任一校验失败 → 删 staging、记 `UPDATE_VERIFY_FAILED`、进 `bad_versions`、不重试同一版本。
+- **启动器**:`current` 有效且版本更高、major 相同 → 以 `KIT_LAUNCHED=1` 启动 `current/dist/cli.js`;有任何问题退回自身并 `UPDATE_CURRENT_BROKEN`(CLI 不会因更新坏掉而变砖)。
+- **锁**:`update/lock`(`O_EXCL`,pid + 开始时间,TTL 15 分钟);拿不到锁静默跳过并记 `skipped_locked`。pid 已不在 → 回收;pid 在但超 TTL → 只报不杀。
+- **遥测**:无。唯一对外请求是向 registry 拉 packument / attestations / tarball。
+- **文件位置**(HOME 相对):`.config/agent-kit/config.toml`(`UserConfig`,只读,sync / update 不写);`.local/state/agent-kit/sync/{ledger.json,txn/,backups/,lock}`;`.local/state/agent-kit/update/{state.json,lock,log}`;`.local/share/agent-kit/{versions/,current,staging/}`。目录 0700、文件 0600。
+
+### 19.6 `auto_sync = "safe"` 的机器可判条件(决策 ②B)
+
+自动同步只在更新安装成功之后、由同一 worker 评估,**一次评估一份 payload**。**执行不变量:先拿 sync 锁,再重新读取登记表、检查残留 txn、生成计划并逐条验证下表条件;写入前复核每个目标的内容指纹与路径安全属性,并确认被重扫的内容就是实际写入的内容(同一份内存字节)。**先判断后拿锁是不允许的。**以下全部成立才应用**,任一不成立 → 整次不应用,退回 `SYNC_PENDING` 提示,并把原因写进 `UpdateState.last_auto_sync`(`outcome=declined`,`reasons` 取 `AUTO_SYNC_DECLINE_REASONS`),stderr 一行 `AUTO_SYNC_DECLINED reason=<码>`。不存在「部分应用」。
+
+| 条件(须全部为真)                                                                                                                                 | 不成立时的原因码                   |
+| ------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------- |
+| `update.auto_sync = "safe"` 且 `KIT_AUTO_SYNC` 不是 `0`(否则根本不评估、不留记录)                                                                | (不评估)                           |
+| 登记表已存在且可解析——用户必须先手动跑过 `sync --write`;**自动同步永远不做首次安装**                                                             | `not_installed` / `ledger_invalid` |
+| 无残留 txn                                                                                                                                       | `txn_incomplete`                   |
+| 新 payload 与登记表的 `kit_version` 同一 major                                                                                                   | `major_changed`                    |
+| 计划中没有漂移条目                                                                                                                               | `drifted`                          |
+| 计划中没有外来冲突(`SYNC_TARGET_FOREIGN` / `SYNC_UNMANAGED_IN_OWNED_DIR`)                                                                        | `foreign_conflict`                 |
+| 没有共用路径冲突                                                                                                                                 | `shared_path_conflict`             |
+| payload 的 `files` 全部是 instructions 类(`kind ∈ rules \| skill \| subagent`);**只要存在一个 `executable` 条目就拒,不论是否在计划内**           | `executable_in_payload`            |
+| 计划中新建 / 更新的文件,其 `atoms` 里没有 `strength = must`(删除操作不受此限)                                                                    | `must_atom`                        |
+| 本地对新内容重扫干净:危险话术(`scanDangerousPhrases`)+ 不可见字符(C1 / C1b);**依赖先修好话术检测极性(backlog 遗留 ①),未修好前实现不得启用 safe** | `rescan_dirty`                     |
+| payload 的 `integrity.json` 逐文件核对通过,且其 sha256 等于安装时记下的外部锚点                                                                  | `integrity_unverified`             |
+| 计划涉及的 agent 都已出现在登记表条目的 `agents` 里(不自动扩大 agent 集合)                                                                       | `agent_set_expanded`               |
+| 计划操作数 ≤ `AUTO_SYNC_MAX_OPS`(20)                                                                                                             | `too_many_ops`                     |
+| 预检通过(无符号链接段、硬链接、非常规文件、corrupt 块)                                                                                           | `precheck_refused`                 |
+| 拿到 sync 锁                                                                                                                                     | `locked`                           |
+
+其它约束:只处理 `target=home`;使用与手动 `sync --write` 完全相同的事务与备份(可 `sync --rollback`);可执行类(hook、settings 等)**永远不自动应用**,将来即使渲染出来也要 `sync --write --allow-executable` 并在 TTY 确认;`doctor` D16 显示最近一次记录。
+
+### 19.7 写出口、lint 授权闸与 exec 白名单条款
+
+**`HOME_WRITE_TABLE`**(`src/contracts/sync.ts`,写死,12 条,按 path 字节序;`test/contracts/sync-update.test.ts` 断言它等于 `adapters/*/managed-targets.json` 的并集加两个本套件目录,多一条少一条都红):
+
+| 路径(HOME 相对)              | 类型 | 归属    | 声明的 adapter  |
+| ---------------------------- | ---- | ------- | --------------- |
+| `.agents/skills/`            | dir  | adapter | codex, kimi, pi |
+| `.claude/agents/`            | dir  | adapter | claude          |
+| `.claude/rules/agent-kit/`   | dir  | adapter | claude          |
+| `.claude/skills/`            | dir  | adapter | claude          |
+| `.codex/AGENTS.md`           | file | adapter | codex           |
+| `.codex/agents/`             | dir  | adapter | codex           |
+| `.config/opencode/AGENTS.md` | file | adapter | opencode        |
+| `.kimi-code/AGENTS.md`       | file | adapter | kimi            |
+| `.kimi-code/agents/`         | dir  | adapter | kimi            |
+| `.local/share/agent-kit/`    | dir  | kit     | —               |
+| `.local/state/agent-kit/`    | dir  | kit     | —               |
+| `.pi/agent/AGENTS.md`        | file | adapter | pi              |
+
+语义:`file` 条目要求路径相等;`dir` 条目本身不可写,只能写严格位于其内部、且在本次计划(`planScope`)里点名的文件(`isHomeWritePath`)。**adapter 的 `dir` 条目内部另禁点开头的路径段与 `.json` 结尾的文件**(只检查目录以下的段,`.claude/…` 等 HOME 根下的点目录不受影响;kit 状态目录的 `ledger.json` / `state.json` 不适用)。登记表 / 事务 / `PayloadFile(target=home)` 的路径在 schema 层就必须落在 adapter 条目内,因此上述禁写在 schema 层即成立。home-fs(S1)另加:路径任一中间段是符号链接即拒;`HOME` 必须是 `getRealHome()` 或 `KIT_TMP` 之内的 `--home`。`~/.config/agent-kit/` 是只读的用户配置,不在表内。
+
+**eslint 授权闸**(`eslint.config.js`,文件由 S1 / S6 / S7 才建,规则先就位;`test/lint/violations.test.ts` 与 `test/fixtures/lint-violations/*` 证明):
+
+| 出口                      | 谁能引用(import / export-from / 动态 import)                                                                                         | 其它                                                                                                    |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
+| `src/io/home-fs.ts`       | `src/sync/apply.ts`、`src/update/install.ts`、`test/io/home-fs*.test.ts`、`test/sync/apply*.test.ts`、`test/update/install*.test.ts` | 它自己可用 `node:fs`,不可用子进程 / 网络 / 环境                                                         |
+| `src/io/net.ts`           | `src/update/**`(`launcher.ts` 除外)、`src/commands/update.ts`、`test/io/net*.test.ts`、`test/update/**`                              | 只有它可以 import 网络模块、使用全局 `fetch`                                                            |
+| `src/update/launcher.ts`  | `cli.ts`、`src/cli.ts`、`src/update/**`、`src/commands/update.ts`、`test/update/**`                                                  | launcher.ts 自己不得引用 net / home-fs                                                                  |
+| `io/exec.ts` 的 `runSelf` | 仅 `src/update/launcher.ts` 与 `test/update/launcher*.test.ts`                                                                       | 命名导入、`import *`、`export … from`、对 `io/exec` 的动态 `import()` 都拦(静态导入 `runSync` 不受影响) |
+
+**exec 白名单条款(S7 才改 `src/io/exec.ts`,S0 不改)**:`EXEC_ALLOWLIST` 仍恰为 `['git']`,`runSync` 不变;S7 新增独立导出 `runSelf`,只能 spawn 当前 `process.execPath`,第一个参数必须是 `~/.local/share/agent-kit/current` 解析后的 `dist/cli.js`,环境只传 `KIT_LAUNCHED=1` 及既有白名单键,stdio 继承,不经 shell。它是 launcher 专用入口,不是通用二进制放行。
+
+### 19.8 schema 与常量清单
+
+`SyncLedger`、`SyncTxn`(`src/contracts/sync.ts`);`UserConfig`、`UpdateState`(`update.ts`);`PayloadManifest`、`PayloadIntegrity`(`payload.ts`);`DOCTOR_CHECK_IDS`(`doctor.ts`)。`SEMVER_RE` / `SemverSchema` / `RelPathSchema` 追加在 `common.ts`。`payload_sha256` = `canonicalJson(PayloadManifest)` 字节的 sha256。
+
+### 19.9 验收与未核实
+
+- S8 的 A25(sync 往返)、A26(doctor 与 sync 干跑进 A5)、A27(更新,假 registry)、A28(变异抽检)按设计稿 §6;A5 命令环境固定加 `KIT_AUTO_UPDATE=0`。
+- 未核实,实现前先测并回写本节:Node 25 `fetch` 是否走 `HTTPS_PROXY`;attestations 端点形状与 SLSA predicate 字段路径;运行时依赖 bundle 还是带 lockfile 安装;启动器多一层 spawn 的耗时;claude 用户级 `rules/agent-kit/` 是否加载(P-Q1);skills-hub 遇同名条目是否覆盖;pi 默认推理档位;镜像 registry 的 npmjs 响应的 `Date` 头在代理 / 缓存下是否可靠(冷却期的“当前时间”来源,见 §19.5)。
+
+### 19.10 示例
+
+`SyncLedger`:路径必须落在 `HOME_WRITE_TABLE` 的 adapter 条目内,`entries` 按 (path, block_id) 严格升序。
+
+<!-- example:valid schema=SyncLedger -->
+
+```json
+{
+  "schema_version": 1,
+  "kit_version": "0.1.0",
+  "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000001",
+  "entries": [
+    {
+      "path": ".agents/skills/commit-checklist/SKILL.md",
+      "kind": "owned",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000002",
+      "created_file": true,
+      "agents": ["codex", "pi"],
+      "txn": "txn-20261014T120000Z-a1b2c3"
+    },
+    {
+      "path": ".claude/skills/commit-checklist/SKILL.md",
+      "kind": "owned",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000002",
+      "created_file": true,
+      "agents": ["claude"],
+      "txn": "txn-20261014T120000Z-a1b2c3"
+    },
+    {
+      "path": ".codex/AGENTS.md",
+      "kind": "block",
+      "block_id": "agent-kit-rules",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000003",
+      "created_file": false,
+      "agents": ["codex"],
+      "txn": "txn-20261014T120000Z-a1b2c3"
+    }
+  ]
+}
+```
+
+错误示例:`.claude/CLAUDE.md` 不在写入表内(用户自己的文件,永远不可写)。
+
+<!-- example:invalid schema=SyncLedger -->
+
+```json
+{
+  "schema_version": 1,
+  "kit_version": "0.1.0",
+  "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000001",
+  "entries": [
+    {
+      "path": ".agents/skills/commit-checklist/SKILL.md",
+      "kind": "owned",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000002",
+      "created_file": true,
+      "agents": ["codex", "pi"],
+      "txn": "txn-20261014T120000Z-a1b2c3"
+    },
+    {
+      "path": ".claude/CLAUDE.md",
+      "kind": "owned",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000002",
+      "created_file": true,
+      "agents": ["claude"],
+      "txn": "txn-20261014T120000Z-a1b2c3"
+    },
+    {
+      "path": ".codex/AGENTS.md",
+      "kind": "block",
+      "block_id": "agent-kit-rules",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000003",
+      "created_file": false,
+      "agents": ["codex"],
+      "txn": "txn-20261014T120000Z-a1b2c3"
+    }
+  ]
+}
+```
+
+错误示例:`kind=block` 缺 `block_id`。
+
+<!-- example:invalid schema=SyncLedger -->
+
+```json
+{
+  "schema_version": 1,
+  "kit_version": "0.1.0",
+  "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000001",
+  "entries": [
+    {
+      "path": ".agents/skills/commit-checklist/SKILL.md",
+      "kind": "owned",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000002",
+      "created_file": true,
+      "agents": ["codex", "pi"],
+      "txn": "txn-20261014T120000Z-a1b2c3"
+    },
+    {
+      "path": ".claude/skills/commit-checklist/SKILL.md",
+      "kind": "owned",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000002",
+      "created_file": true,
+      "agents": ["claude"],
+      "txn": "txn-20261014T120000Z-a1b2c3"
+    },
+    {
+      "path": ".codex/AGENTS.md",
+      "kind": "block",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000003",
+      "created_file": false,
+      "agents": ["codex"],
+      "txn": "txn-20261014T120000Z-a1b2c3"
+    }
+  ]
+}
+```
+
+`SyncTxn`:`block_upsert` 的写前文件存在,所以必须备份;`create` 的写前是 `null`。
+
+<!-- example:valid schema=SyncTxn -->
+
+```json
+{
+  "schema_version": 1,
+  "txn_id": "txn-20261014T120000Z-a1b2c3",
+  "action": "sync",
+  "kit_version": "0.1.0",
+  "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000001",
+  "ledger_sha256_before": null,
+  "started_at": "2026-10-14T12:00:00Z",
+  "phase": "backed_up",
+  "ops": [
+    {
+      "op": "create",
+      "path": ".claude/skills/commit-checklist/SKILL.md",
+      "file_sha256_before": null,
+      "file_sha256_after": "0000000000000000000000000000000000000000000000000000000000000002",
+      "backup": false,
+      "agents": ["claude"]
+    },
+    {
+      "op": "block_upsert",
+      "path": ".codex/AGENTS.md",
+      "block_id": "agent-kit-rules",
+      "file_sha256_before": "0000000000000000000000000000000000000000000000000000000000000004",
+      "file_sha256_after": "0000000000000000000000000000000000000000000000000000000000000005",
+      "backup": true,
+      "overwrote_drifted": false,
+      "agents": ["codex"]
+    }
+  ]
+}
+```
+
+错误示例:写前文件存在却没有备份(回滚会无从恢复)。
+
+<!-- example:invalid schema=SyncTxn -->
+
+```json
+{
+  "schema_version": 1,
+  "txn_id": "txn-20261014T120000Z-a1b2c3",
+  "action": "sync",
+  "kit_version": "0.1.0",
+  "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000001",
+  "ledger_sha256_before": null,
+  "started_at": "2026-10-14T12:00:00Z",
+  "phase": "backed_up",
+  "ops": [
+    {
+      "op": "create",
+      "path": ".claude/skills/commit-checklist/SKILL.md",
+      "file_sha256_before": null,
+      "file_sha256_after": "0000000000000000000000000000000000000000000000000000000000000002",
+      "backup": false,
+      "agents": ["claude"]
+    },
+    {
+      "op": "block_upsert",
+      "path": ".codex/AGENTS.md",
+      "block_id": "agent-kit-rules",
+      "file_sha256_before": "0000000000000000000000000000000000000000000000000000000000000004",
+      "file_sha256_after": "0000000000000000000000000000000000000000000000000000000000000005",
+      "backup": false,
+      "overwrote_drifted": false,
+      "agents": ["codex"]
+    }
+  ]
+}
+```
+
+`UpdateState`:只有 `schema_version` 也合法(全新机器);`bad_versions` 缺省为空数组。
+
+<!-- example:valid schema=UpdateState -->
+
+```json
+{
+  "schema_version": 1
+}
+```
+
+<!-- example:valid schema=UpdateState -->
+
+```json
+{
+  "schema_version": 1,
+  "last_check_at": "2026-10-14T12:00:00Z",
+  "last_result": "cooldown",
+  "latest_seen": "0.2.1",
+  "latest_seen_published_at": "2026-10-14T08:00:00Z",
+  "max_seen_version": "0.2.1",
+  "installed": {
+    "version": "0.2.0",
+    "anchor": "0000000000000000000000000000000000000000000000000000000000000006",
+    "installed_at": "2026-10-10T09:00:00Z"
+  },
+  "bad_versions": ["0.1.9"],
+  "last_auto_sync": {
+    "at": "2026-10-12T09:30:00Z",
+    "outcome": "declined",
+    "reasons": ["drifted", "must_atom"],
+    "add": 1,
+    "update": 2,
+    "remove": 0
+  }
+}
+```
+
+错误示例:`last_result` 不是枚举值(网络原因必须归到具体的码,不允许一个笼统的 `network_error`)。
+
+<!-- example:invalid schema=UpdateState -->
+
+```json
+{
+  "schema_version": 1,
+  "last_result": "network_error"
+}
+```
+
+错误示例:`declined` 却没有给出原因。
+
+<!-- example:invalid schema=UpdateState -->
+
+```json
+{
+  "schema_version": 1,
+  "last_auto_sync": {
+    "at": "2026-10-12T09:30:00Z",
+    "outcome": "declined",
+    "reasons": [],
+    "add": 0,
+    "update": 0,
+    "remove": 0
+  }
+}
+```
+
+`UserConfig`(`~/.config/agent-kit/config.toml` 解析后的对象):整份缺省合法,缺省值 = `auto_install=true`、`auto_sync="safe"`、`channel="latest"`、`cooldown_hours=24`、`registry="https://registry.npmjs.org/"`、`pin` 不钉。
+
+<!-- example:valid schema=UserConfig -->
+
+```json
+{}
+```
+
+<!-- example:valid schema=UserConfig -->
+
+```json
+{
+  "update": {
+    "auto_install": true,
+    "auto_sync": "safe",
+    "channel": "latest",
+    "pin": "~0.2",
+    "cooldown_hours": 24,
+    "registry": "https://registry.npmmirror.com/"
+  }
+}
+```
+
+错误示例:`auto_sync` 只有 `off | safe`,没有「全自动」(决策 ②:不提供 C 档)。
+
+<!-- example:invalid schema=UserConfig -->
+
+```json
+{
+  "update": {
+    "auto_sync": "full"
+  }
+}
+```
+
+错误示例:registry 必须是 https。
+
+<!-- example:invalid schema=UserConfig -->
+
+```json
+{
+  "update": {
+    "registry": "http://registry.example.com/"
+  }
+}
+```
+
+错误示例:冷却期下限 1 小时(0 会撞上 npm 202 半可见期且没有投毒缓冲);要立刻装用 `update --now`。
+
+<!-- example:invalid schema=UserConfig -->
+
+```json
+{
+  "update": {
+    "cooldown_hours": 0
+  }
+}
+```
+
+`PayloadManifest`:`target=home` 的路径必须在写入表内;`files` 按 `<agent>/<target>/<path>` 升序;`atoms[].strength` 供 `auto_sync=safe` 判断「不含 must」。
+
+<!-- example:valid schema=PayloadManifest -->
+
+```json
+{
+  "schema_version": 1,
+  "kit_version": "0.1.0",
+  "channel": "stable",
+  "files": [
+    {
+      "agent": "claude",
+      "target": "home",
+      "path": ".claude/skills/commit-checklist/SKILL.md",
+      "mode": "owned",
+      "kind": "skill",
+      "confidence": "documented",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000002",
+      "bytes": 812,
+      "payload_path": "files/claude/home/.claude/skills/commit-checklist/SKILL.md",
+      "atoms": []
+    },
+    {
+      "agent": "codex",
+      "target": "home",
+      "path": ".agents/skills/commit-checklist/SKILL.md",
+      "mode": "owned",
+      "kind": "skill",
+      "confidence": "documented",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000002",
+      "bytes": 812,
+      "payload_path": "files/codex/home/.agents/skills/commit-checklist/SKILL.md",
+      "atoms": []
+    },
+    {
+      "agent": "codex",
+      "target": "home",
+      "path": ".codex/AGENTS.md",
+      "mode": "managed-block",
+      "block_id": "agent-kit-rules",
+      "kind": "rules",
+      "confidence": "documented",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000003",
+      "bytes": 420,
+      "payload_path": "files/codex/home/.codex/AGENTS.md",
+      "atoms": [
+        {
+          "id": "negative-assertion-needs-positive-control",
+          "layer": "org",
+          "strength": "should"
+        }
+      ]
+    }
+  ],
+  "migrations": [],
+  "skippedLayers": [
+    {
+      "layer": "personal",
+      "reason": "v1 不渲染 personal 层"
+    }
+  ]
+}
+```
+
+错误示例:`.claude/settings.json` 不在写入表内(settings 类文件永远不由 sync 写)。
+
+<!-- example:invalid schema=PayloadManifest -->
+
+```json
+{
+  "schema_version": 1,
+  "kit_version": "0.1.0",
+  "channel": "stable",
+  "files": [
+    {
+      "agent": "claude",
+      "target": "home",
+      "path": ".claude/settings.json",
+      "mode": "owned",
+      "kind": "skill",
+      "confidence": "documented",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000002",
+      "bytes": 812,
+      "payload_path": "files/claude/home/.claude/skills/commit-checklist/SKILL.md",
+      "atoms": []
+    },
+    {
+      "agent": "codex",
+      "target": "home",
+      "path": ".agents/skills/commit-checklist/SKILL.md",
+      "mode": "owned",
+      "kind": "skill",
+      "confidence": "documented",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000002",
+      "bytes": 812,
+      "payload_path": "files/codex/home/.agents/skills/commit-checklist/SKILL.md",
+      "atoms": []
+    },
+    {
+      "agent": "codex",
+      "target": "home",
+      "path": ".codex/AGENTS.md",
+      "mode": "managed-block",
+      "block_id": "agent-kit-rules",
+      "kind": "rules",
+      "confidence": "documented",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000003",
+      "bytes": 420,
+      "payload_path": "files/codex/home/.codex/AGENTS.md",
+      "atoms": [
+        {
+          "id": "negative-assertion-needs-positive-control",
+          "layer": "org",
+          "strength": "should"
+        }
+      ]
+    }
+  ],
+  "migrations": [],
+  "skippedLayers": [
+    {
+      "layer": "personal",
+      "reason": "v1 不渲染 personal 层"
+    }
+  ]
+}
+```
+
+错误示例:`mode=managed-block` 缺 `block_id`。
+
+<!-- example:invalid schema=PayloadManifest -->
+
+```json
+{
+  "schema_version": 1,
+  "kit_version": "0.1.0",
+  "channel": "stable",
+  "files": [
+    {
+      "agent": "claude",
+      "target": "home",
+      "path": ".claude/skills/commit-checklist/SKILL.md",
+      "mode": "owned",
+      "kind": "skill",
+      "confidence": "documented",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000002",
+      "bytes": 812,
+      "payload_path": "files/claude/home/.claude/skills/commit-checklist/SKILL.md",
+      "atoms": []
+    },
+    {
+      "agent": "codex",
+      "target": "home",
+      "path": ".agents/skills/commit-checklist/SKILL.md",
+      "mode": "owned",
+      "kind": "skill",
+      "confidence": "documented",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000002",
+      "bytes": 812,
+      "payload_path": "files/codex/home/.agents/skills/commit-checklist/SKILL.md",
+      "atoms": []
+    },
+    {
+      "agent": "codex",
+      "target": "home",
+      "path": ".codex/AGENTS.md",
+      "mode": "managed-block",
+      "kind": "rules",
+      "confidence": "documented",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000003",
+      "bytes": 420,
+      "payload_path": "files/codex/home/.codex/AGENTS.md",
+      "atoms": [
+        {
+          "id": "negative-assertion-needs-positive-control",
+          "layer": "org",
+          "strength": "should"
+        }
+      ]
+    }
+  ],
+  "migrations": [],
+  "skippedLayers": [
+    {
+      "layer": "personal",
+      "reason": "v1 不渲染 personal 层"
+    }
+  ]
+}
+```
+
+`PayloadIntegrity`(包根 `integrity.json`):逐文件哈希,按 path 严格升序,不含自身。
+
+<!-- example:valid schema=PayloadIntegrity -->
+
+```json
+{
+  "schema_version": 1,
+  "kit_version": "0.1.0",
+  "algorithm": "sha256",
+  "files": [
+    {
+      "path": "dist/cli.js",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000007",
+      "bytes": 1200
+    },
+    {
+      "path": "package.json",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000008",
+      "bytes": 900
+    },
+    {
+      "path": "payload/manifest.json",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000009",
+      "bytes": 2100
+    }
+  ]
+}
+```
+
+错误示例:顺序不是升序。
+
+<!-- example:invalid schema=PayloadIntegrity -->
+
+```json
+{
+  "schema_version": 1,
+  "kit_version": "0.1.0",
+  "algorithm": "sha256",
+  "files": [
+    {
+      "path": "package.json",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000008",
+      "bytes": 900
+    },
+    {
+      "path": "dist/cli.js",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000007",
+      "bytes": 1200
+    },
+    {
+      "path": "payload/manifest.json",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000009",
+      "bytes": 2100
+    }
+  ]
 }
 ```

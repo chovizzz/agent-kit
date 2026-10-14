@@ -16,6 +16,7 @@ import { command as retire } from './commands/retire.js';
 import { command as signalsCollect } from './commands/signals-collect.js';
 import { command as sync } from './commands/sync.js';
 import type { CommandDef } from './commands/types.js';
+import { command as update } from './commands/update.js';
 
 /**
  * 命令注册表。**只有 B01 改本文件**:后续块替换 src/commands/<x>.ts 的内容,
@@ -35,6 +36,7 @@ export const COMMANDS: readonly CommandDef[] = [
   retire,
   sync,
   doctor,
+  update,
 ];
 
 export interface MainEnv {
