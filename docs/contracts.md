@@ -2299,6 +2299,56 @@ agent-kit sync [--agent <id>]… [--write] [--overwrite-drifted] [--json] [--hom
 - 检查失败(1):`SYNC_DRIFTED`、`SYNC_TARGET_FOREIGN`、`SYNC_UNMANAGED_IN_OWNED_DIR`。
 - 未执行(4):`SYNC_NO_PAYLOAD`、`SYNC_LOCKED`。
 - fail-closed(3):`SYNC_TXN_INCOMPLETE`、`SYNC_PATH_SYMLINK`、`SYNC_PATH_HARDLINK`、`SYNC_PATH_NOT_REGULAR`、`SYNC_BLOCK_CORRUPT`、`SYNC_SHARED_PATH_CONFLICT`、`SYNC_LEDGER_INVALID`、`SYNC_PAYLOAD_INVALID`、`SYNC_ROLLBACK_MISMATCH`、`SYNC_WRITE_DENIED`。
+- fail-closed(3,S4 追加):`SYNC_MIGRATION_UNSUPPORTED`(v1 不执行 migrations,见 §19.2.1;命令层常量 `SYNC_MIGRATION_UNSUPPORTED`,尚未进 `SYNC_FAIL_CLOSED_REASONS`,待主代理在契约 schema 里补)。
+
+#### 19.2.1 S4 实装订正(sync 执行层与命令层)
+
+**S3 计划器的决策(实装时确认,写进契约):**
+
+- 用户删了登记过的文件:`sync` 会把它**重建**(登记表里有、磁盘上没有 → create),不当作「用户有意删除」。要彻底不要,用 `--uninstall`。
+- 登记表表头(`kit_version` / `payload_sha256`)**只在本次没有任何提示项**(漂移 / 孤儿 / 独占目录非登记文件 / 外来冲突)时刷新;有提示项时表头保持旧值,避免「已同步到新版」的假象。
+- 外来文件(磁盘上已有、登记表里没有)的内容**恰好等于** payload 也拒绝(`SYNC_TARGET_FOREIGN`),除非 `--adopt`;条目目录(如 `.agents/skills/<name>/`)已被别人占用、但目标文件不在,同样算外来。
+- 托管块目标:文件存在但还没有该 id 的块 = 正常首装(追加,`created_file=false`);块 `corrupt` 一律整次拒绝,不追加。
+
+**payload 与 migrations:**
+
+- payload 位置:包根(本模块往上第一个含 `package.json` 的目录)下的 `payload/manifest.json` + `payload/files/…` + `integrity.json`。环境变量 `KIT_PAYLOAD_DIR`(经 `ctx.env` 注入,命令层不读 `process.env`)指向「含 `payload/` 与 `integrity.json` 的目录」,**只在它严格位于 KIT_TMP 之内时生效**,否则忽略;仅测试夹具使用。
+- 使用前逐文件核对:`integrity.json` 必须存在且过 schema,必须列出 `payload/manifest.json` 与 manifest 声明的每个 `payload_path` 文件,sha256 与字节数一致,`kit_version` 与 manifest 一致;任一不满足 → `SYNC_PAYLOAD_INVALID`(退出 3)。`payload/` 目录整体不存在 → `SYNC_NO_PAYLOAD`(退出 4)。`--uninstall` / `--rollback` / `--resume` 不需要 payload。
+- **v1 不执行 migrations**:`payload.migrations` 非空时,`sync`(含 `--adopt`,不含 `--uninstall`)退出 3 `SYNC_MIGRATION_UNSUPPORTED`,整次不写,stdout 为空。`rename_block` 的语义留到 v2(需要先定:新旧块 id 同时存在时谁赢、漂移判定、回滚怎么记)。
+
+**命令输出:**
+
+- 干跑 / 写入行:`would|did <op> ~/<受管路径> sha256=<前12位> agents=<a,b>`,托管块操作末尾加 ` block=<id>`;整次被拒时行首为 `refused`;sha 取写后(create/update/block_upsert)或写前(remove/block_remove),跳过 / 拒绝类为 `-`。末尾 `plan create=… refuse_foreign=…`(契约字段)、`plan_other adopt=… orphan_keep=… unmanaged_keep=… refuse_all=…`、`skippedLayers personal`。
+- 路径只在落入 `HOME_WRITE_TABLE` 且为可见 ASCII 时原样输出,否则 `~/<path>`;独占目录里的非登记文件**不输出文件名**,只给 `unmanaged_keep ~/.claude/rules/agent-kit/ count=N`。
+- 写入成功后末行 `txn <id>`(只改登记表 / 无操作时没有)。`--json` 键集合固定:`mode, dry, status, exit, ops[{op,path,block_id,sha256_12,agents,code}], summary, ledger, skippedLayers, txn, files`;`--rollback` / `--resume` 各有自己的固定键集。
+
+**事务落盘布局(`~/.local/state/agent-kit/sync/`,目录 0700、文件 0600):**
+
+```
+ledger.json                     登记表(canonicalJson)
+lock                            {pid, started_at, nonce}
+txn/<id>.json                   active journal;存在 = 事务未收尾;phase: planned → backed_up → writing → ledger_written
+backups/<id>/txn.json           事务描述副本(成功后保留)
+backups/<id>/files/<HOME 相对路径>      被改文件的写前全文(写前不存在则无)
+backups/<id>/after/<HOME 相对路径>      写后全文(让 --resume 不依赖 payload)
+backups/<id>/modes.json         写前权限位
+backups/<id>/ledger.before.json | ledger.before.absent
+backups/<id>/ledger.after.json | ledger.after.delete | (都没有 = 登记表不变)
+backups/<id>/complete           备份写完的标记(缺失则 --resume 拒绝)
+```
+
+顺序:预检(计划器 `refuse-all` 则整次不写)→ `txn/<id>.json`(planned)→ `backups/<id>/**`(最后写 `complete`)→ phase=backed_up → phase=writing → 逐文件(路径升序;写前**复核当前 sha 等于 txn 记录的写前 sha**,不等 → `SYNC_WRITE_DENIED`,整次停止,journal 残留)→ `ledger.json`(写 / 删)→ phase=ledger_written → 删 journal → 修剪备份。只改登记表(`--adopt`、仅 agents 变化)时不开事务,单文件原子替换。
+
+- **文件权限**:更新已有文件保留其权限位;新建文件 0644;状态目录与状态文件 0700 / 0600。`modes.json` 让回滚重建被删文件时沿用原权限位。
+- **托管块操作的 txn shaBefore / shaAfter 是整文件 sha**(计划器给的是块体 sha;执行层先算出写后全文再填)。
+- **幂等运行不拿锁**:`--write` 先无锁规划,计划为空(无写操作、登记表不变)直接返回,零写入、零 mtime 变化(含目录项);有东西要写才拿锁,并在锁内重新读登记表 / 磁盘、重新规划。
+- **锁**:`sync/lock`,pid + 开始时间 + nonce;持锁进程还在 → 退出 4 `SYNC_LOCKED`(超过 15 分钟 TTL 也只报不杀);进程已不在或内容损坏 → 回收。⚠️ home-fs 目前没有 O_EXCL 创建原语,实现是「检查 → 原子写 → 复读核对 nonce」,窄化了竞态窗口但**不是严格互斥**;严格 O_EXCL 需要 home-fs 增加 `createExclusive`(待主代理)。
+- **`--resume`**:恰好一个残留 journal 且 `backups/<id>/complete` 在,才继续;每个文件当前 sha 必须等于写前或写后(写后的跳过),否则 `SYNC_TXN_INCOMPLETE`;写完后登记表、删 journal、修剪备份。不需要 payload。没有残留事务时是空操作(退出 0)。
+- **`--rollback <id>`**:id 是残留事务(放宽:每个文件当前 sha 等于写前**或**写后,写后的还原;登记表同理)或已收尾事务(严格:每个文件与登记表当前 sha 都等于该事务写入后的 sha)。任一前提不成立,或备份缺失 / 内容 sha 对不上 → `SYNC_ROLLBACK_MISMATCH`,整次不写。回滚本身是一个有 journal 与备份的事务(`action=rollback`,可再回滚);先文件后登记表。回滚残留事务成功后删除该事务的 journal。
+- **备份保留**:成功后只保留 id 最大(时间最新)的 `SYNC_BACKUPS_KEPT`(5)个 `backups/<id>/`;有 journal 的事务永不修剪。
+- **卸载时块的删除**:块的删除是追加的逆操作——块在文件尾、前面是追加时加的空行分隔时拿掉那一个分隔换行。原文以单个 `\n` 结尾(含空文件、`created_file` 文件)的文件**逐字节还原**;原文无结尾换行或以多个空行结尾的文件会差一个换行(已知残余;要精确还原用 `--rollback`)。
+- **sync 隐式创建的目录**:`home-fs` 写文件时隐式创建缺失的父目录;卸载 / 回滚删文件后,沿父目录向上 `removeDir` 空目录,止于 home-fs 的目录条目边界——能删的是严格位于条目内部的目录(如 `.claude/skills/<name>/`、`.agents/skills/<name>/`、`.claude/rules/agent-kit/paths/`)。**条目目录本身及其上级**(`.claude`、`.claude/skills`、`.claude/rules`、`.claude/rules/agent-kit`、`.codex`、`.codex/agents`、`.pi`、`.pi/agent`、`.agents`、`.agents/skills`、`.local/state/agent-kit/**` 等)home-fs 不允许删除,装 → 卸之后会留下**空目录**。条目目录可安全推定为 sync 所建:目录已存在而目标文件不在 → 计划器按外来拒绝,所以我们登记的文件所在的条目目录必为我们创建(用户后来往里放了文件则 `rmdir` 失败、原样保留)。
+- **「装 → 卸后受管路径树哈希逐字节一致」的判据**(S8 的 A25 同此):比较「文件集合(相对路径 + 权限位 + 内容 sha256)」,忽略状态目录 `.local/state/agent-kit/**`(含 `backups/`,它保存着可回滚的写前全文);目录只要求「新增的目录全是空目录」。即:不含空目录的文件树逐字节一致。
 
 ### 19.3 `doctor`
 
