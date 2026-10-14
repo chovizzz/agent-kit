@@ -1,0 +1,44 @@
+# 手动改 npm dist-tag(例如把 latest 指回某个版本,或把 rc 晋升为 latest)。
+# 只做 `npm dist-tag add`,不发布、不删版本。仅 workflow_dispatch(人触发),需要 `NPM_TOKEN`。
+name: dist-tag
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '要指向的版本(必须已存在于 npm),例如 0.0.0-stage 或 0.1.0'
+        required: true
+      tag:
+        description: 'dist-tag 名称,例如 latest 或 rc'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  dist-tag:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Validate inputs
+        env:
+          VERSION: ${{ inputs.version }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' || { echo "bad version"; exit 2; }
+          echo "$TAG" | grep -Eq '^[a-z][a-z0-9-]{0,30}$' || { echo "bad tag"; exit 2; }
+
+      - name: Set dist-tag
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VERSION: ${{ inputs.version }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          npm dist-tag add "@chovizzz/agent-kit@${VERSION}" "${TAG}"
+          npm dist-tag ls @chovizzz/agent-kit
