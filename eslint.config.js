@@ -8,6 +8,12 @@ import tseslint from 'typescript-eslint';
  *  - 子进程:`child_process` 只许出现在 src/io/exec.ts(git 白名单)与 src/io/llm-exec.ts(受控 LLM 出口,R0)。
  *  - LLM 出口:除 src/reflect/backends/** 外,任何文件不得 import / re-export / 动态 import `llm-exec`
  *    (命令层、reflect 干跑路径、judge 都经依赖注入拿后端);测试里只有 llm-exec / backends 的测试可以。
+ *  - S0(sync / doctor / update,contracts §19)预写的三道授权闸,对应文件 S1/S6/S7 才建,规则先就位:
+ *      · HOME 写出口 `src/io/home-fs.ts`:只许 `src/sync/apply.ts`、`src/update/install.ts` 及其测试引用;
+ *      · 网络出口 `src/io/net.ts`:只许 `src/update/**`(launcher 除外)、`src/commands/update.ts` 及其测试引用;
+ *        只有它自己可以 import 网络模块 / 用全局 fetch;
+ *      · 启动器 `src/update/launcher.ts`:只许 `cli.ts`、`src/cli.ts`、`src/update/**`、`src/commands/update.ts` 及其测试引用;
+ *        `io/exec.ts` 将新增的 `runSelf`(S7,唯一能 spawn process.execPath 的入口)只许 launcher.ts 引用。
  *  - 另外禁网络模块与全局 fetch(A8 的运行期垫片是主判据,这里是便宜的第二道)、eval、动态 import、require。
  * 范围:cli.ts、src/、adapters/、test/、vitest.config.ts。ops/ 下的验收工具脚本(B17/B18)不在此列,
  * 它们本来就要读真实 HOME 做快照。
@@ -29,13 +35,22 @@ const MESSAGES = {
   fs: '文件系统只经 src/io/safe-fs.ts(写)与 src/io/read-fs.ts(读)。',
   cp: '子进程只经 src/io/exec.ts(runSync,git)与 src/io/llm-exec.ts(runLlm,受控 LLM 出口)。',
   llm: 'LLM 出口 src/io/llm-exec.ts 只许 src/reflect/backends/** 引用;其余代码经依赖注入拿后端。',
+  homeFs:
+    'HOME 写出口 src/io/home-fs.ts 只许 src/sync/apply.ts 与 src/update/install.ts(及其测试)引用。',
+  netOut:
+    '网络出口 src/io/net.ts 只许 src/update/**(launcher.ts 除外)与 src/commands/update.ts(及其测试)引用。',
+  launcher:
+    '启动器 src/update/launcher.ts 只许 cli.ts / src/cli.ts / src/update/** / src/commands/update.ts(及其测试)引用。',
+  runSelf: 'runSelf(spawn process.execPath)只许 src/update/launcher.ts 引用。',
   env: 'HOME/环境/cwd 只经 src/io/paths.ts 的 IoContext。',
   net: 'P0 运行期零网络(A8)。',
   loader: '不得用 module/createRequire 绕开导入限制。',
 };
 
 /**
- * @param {{ allowFs?: boolean; allowCp?: boolean; allowEnv?: boolean; allowLlm?: boolean }} allow
+ * allowFs/allowCp/allowEnv/allowNet:该文件**自己**可以 import 对应的 node 模块(出口实现文件);
+ * allowLlm/allowHomeFs/allowNetOut/allowLauncher/allowRunSelf:该文件可以 import 对应出口模块(授权使用方)。
+ * @param {{ allowFs?: boolean; allowCp?: boolean; allowEnv?: boolean; allowNet?: boolean; allowLlm?: boolean; allowHomeFs?: boolean; allowNetOut?: boolean; allowLauncher?: boolean; allowRunSelf?: boolean }} allow
  */
 function restrictions(allow = {}) {
   /** @type {{name: string; message: string}[]} */
@@ -50,15 +65,56 @@ function restrictions(allow = {}) {
   add(NODE_MODULES_FS, MESSAGES.fs, allow.allowFs);
   add(NODE_MODULES_CP, MESSAGES.cp, allow.allowCp);
   add(NODE_MODULES_ENV, MESSAGES.env, allow.allowEnv);
-  add(NODE_MODULES_NET, MESSAGES.net, false);
+  add(NODE_MODULES_NET, MESSAGES.net, allow.allowNet);
   add(NODE_MODULES_LOADER, MESSAGES.loader, false);
 
   const dynamicRe = `^(node:)?(${dynamicBanned.map((n) => n.replace('/', '\\/')).join('|')})$`;
   /** llm-exec 的各种写法:`../io/llm-exec.js`、`./llm-exec`、`src/io/llm-exec.ts` */
   const LLM_EXEC_GROUP = ['**/llm-exec', '**/llm-exec.js', '**/llm-exec.ts', '**/llm-exec.*'];
 
+  /** S0 出口模块的各种写法(import / export-from / 动态 import 共用同一组文件名模式) */
+  const HOME_FS_GROUP = ['**/home-fs', '**/home-fs.*'];
+  const NET_OUT_GROUP = ['**/io/net', '**/io/net.*', './net', './net.*'];
+  const LAUNCHER_GROUP = ['**/launcher', '**/launcher.*'];
+  const EXEC_GROUP = ['**/io/exec', '**/io/exec.*', './exec', './exec.*'];
+
   /** @type {{selector: string; message: string}[]} */
   const syntax = [
+    ...(allow.allowHomeFs
+      ? []
+      : [
+          {
+            selector: 'ImportExpression[source.value=/home-fs/]',
+            message: `动态 import 也不得绕开 HOME 写出口限制。${MESSAGES.homeFs}`,
+          },
+        ]),
+    ...(allow.allowNetOut
+      ? []
+      : [
+          {
+            // 来源以 net / net.js / net.ts 结尾,且 net 前一个字符不是字母(不误伤 magnet 之类)
+            selector: 'ImportExpression[source.value=/(^|[^a-z])net(\\.js|\\.ts)?$/]',
+            message: `动态 import 也不得绕开网络出口限制。${MESSAGES.netOut}`,
+          },
+        ]),
+    ...(allow.allowRunSelf
+      ? []
+      : [
+          {
+            // 动态 import 整个 exec 模块可以绕过 importNames 限制;非 launcher 文件一律禁(静态命名导入 runSync 不受影响)。
+            // 前一字符不得是字母或连字符,所以不误伤 llm-exec(它有自己的闸)。
+            selector: 'ImportExpression[source.value=/(^|[^a-z-])exec(\\.js|\\.ts)?$/]',
+            message: `动态 import 也不得绕开 runSelf 限制。${MESSAGES.runSelf}`,
+          },
+        ]),
+    ...(allow.allowLauncher
+      ? []
+      : [
+          {
+            selector: 'ImportExpression[source.value=/launcher/]',
+            message: `动态 import 也不得绕开启动器限制。${MESSAGES.launcher}`,
+          },
+        ]),
     ...(allow.allowLlm
       ? []
       : [
@@ -142,18 +198,27 @@ function restrictions(allow = {}) {
             message: 'ops/ 是验收工具脚本,不属于产品代码;src/ adapters/ test/ 不得 import 它。',
           },
           ...(allow.allowLlm ? [] : [{ group: LLM_EXEC_GROUP, message: MESSAGES.llm }]),
+          ...(allow.allowHomeFs ? [] : [{ group: HOME_FS_GROUP, message: MESSAGES.homeFs }]),
+          ...(allow.allowNetOut ? [] : [{ group: NET_OUT_GROUP, message: MESSAGES.netOut }]),
+          ...(allow.allowLauncher ? [] : [{ group: LAUNCHER_GROUP, message: MESSAGES.launcher }]),
+          // importNames:命名导入、`import *`、`export {…} from` 都会被它拦下
+          ...(allow.allowRunSelf
+            ? []
+            : [{ group: EXEC_GROUP, importNames: ['runSelf'], message: MESSAGES.runSelf }]),
         ],
       },
     ],
     'no-restricted-syntax': ['error', ...syntax],
     'no-restricted-properties': ['error', ...props],
-    'no-restricted-globals': [
-      'error',
-      { name: 'fetch', message: MESSAGES.net },
-      { name: 'XMLHttpRequest', message: MESSAGES.net },
-      { name: 'WebSocket', message: MESSAGES.net },
-      { name: 'EventSource', message: MESSAGES.net },
-    ],
+    'no-restricted-globals': allow.allowNet
+      ? 'off'
+      : [
+          'error',
+          { name: 'fetch', message: MESSAGES.net },
+          { name: 'XMLHttpRequest', message: MESSAGES.net },
+          { name: 'WebSocket', message: MESSAGES.net },
+          { name: 'EventSource', message: MESSAGES.net },
+        ],
     'no-console': 'error',
   };
 }
@@ -194,6 +259,44 @@ export default tseslint.config(
     ],
     rules: restrictions({ allowLlm: true }),
   },
+  // S0:HOME 写出口。home-fs.ts 自己可用 fs(它是第三个写出口);能引用它的只有下面这几个文件与对应测试。
+  // 同样注意:每块都必须由 restrictions({...}) 生成完整规则,后面同名规则会整条替换前面的。
+  { files: ['src/io/home-fs.ts'], rules: restrictions({ allowFs: true }) },
+  { files: ['src/sync/apply.ts'], rules: restrictions({ allowHomeFs: true }) },
+  { files: ['test/io/home-fs*.test.ts'], rules: restrictions({ allowHomeFs: true }) },
+  { files: ['test/sync/apply*.test.ts'], rules: restrictions({ allowHomeFs: true }) },
+  // S0:网络出口。net.ts 自己可用网络模块与全局 fetch;使用方是 update 模块(launcher 除外)。
+  { files: ['src/io/net.ts'], rules: restrictions({ allowNet: true }) },
+  { files: ['test/io/net*.test.ts'], rules: restrictions({ allowNetOut: true }) },
+  {
+    files: [`src/update/**/*.${EXT}`],
+    rules: restrictions({ allowNetOut: true, allowLauncher: true }),
+  },
+  {
+    files: ['src/commands/update.ts'],
+    rules: restrictions({ allowNetOut: true, allowLauncher: true }),
+  },
+  {
+    // update 测试(安装器测试另可引用 home-fs;不能把 test/update/** 整体放开 home-fs)
+    files: [`test/update/**/*.${EXT}`],
+    rules: restrictions({ allowNetOut: true, allowLauncher: true }),
+  },
+  // S0:启动器。launcher.ts 本身不得引用 net.ts / home-fs(最小权限),只它能引用 runSelf。
+  // 以下三块排在上面 src/update/** 之后,对 launcher.ts / install.ts 的更窄(或更宽)规则整条覆盖。
+  { files: ['src/update/launcher.ts'], rules: restrictions({ allowRunSelf: true }) },
+  {
+    files: ['src/update/install.ts'],
+    rules: restrictions({ allowNetOut: true, allowLauncher: true, allowHomeFs: true }),
+  },
+  {
+    files: ['test/update/install*.test.ts'],
+    rules: restrictions({ allowNetOut: true, allowLauncher: true, allowHomeFs: true }),
+  },
+  {
+    files: ['test/update/launcher*.test.ts'],
+    rules: restrictions({ allowLauncher: true, allowRunSelf: true }),
+  },
+  { files: ['cli.ts', 'src/cli.ts'], rules: restrictions({ allowLauncher: true }) },
   {
     // 本机口径:vitest 配置文件里允许 console 以外的一切照旧;eqeqeq 全局
     rules: { eqeqeq: ['error', 'always'] },

@@ -20,3 +20,7 @@ export * from './attest.js';
 export * from './lifecycle.js';
 export * from './case.js';
 export * from './report.js';
+export * from './sync.js';
+export * from './payload.js';
+export * from './update.js';
+export * from './doctor.js';

@@ -48,6 +48,7 @@ describe('命令表', () => {
       'retire',
       'sync',
       'doctor',
+      'update',
     ]) {
       expect(names).toContain(n);
     }
