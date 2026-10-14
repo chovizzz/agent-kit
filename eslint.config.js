@@ -42,6 +42,7 @@ const MESSAGES = {
   launcher:
     '启动器 src/update/launcher.ts 只许 cli.ts / src/cli.ts / src/update/** / src/commands/update.ts(及其测试)引用。',
   runSelf: 'runSelf(spawn process.execPath)只许 src/update/launcher.ts 引用。',
+  sigstore: '`sigstore` 包(来源证明验签)只许 src/update/provenance.ts 引用。',
   env: 'HOME/环境/cwd 只经 src/io/paths.ts 的 IoContext。',
   net: 'P0 运行期零网络(A8)。',
   loader: '不得用 module/createRequire 绕开导入限制。',
@@ -50,7 +51,7 @@ const MESSAGES = {
 /**
  * allowFs/allowCp/allowEnv/allowNet:该文件**自己**可以 import 对应的 node 模块(出口实现文件);
  * allowLlm/allowHomeFs/allowNetOut/allowLauncher/allowRunSelf:该文件可以 import 对应出口模块(授权使用方)。
- * @param {{ allowFs?: boolean; allowCp?: boolean; allowEnv?: boolean; allowNet?: boolean; allowLlm?: boolean; allowHomeFs?: boolean; allowNetOut?: boolean; allowLauncher?: boolean; allowRunSelf?: boolean }} allow
+ * @param {{ allowFs?: boolean; allowCp?: boolean; allowEnv?: boolean; allowNet?: boolean; allowLlm?: boolean; allowHomeFs?: boolean; allowNetOut?: boolean; allowLauncher?: boolean; allowRunSelf?: boolean; allowSigstore?: boolean }} allow
  */
 function restrictions(allow = {}) {
   /** @type {{name: string; message: string}[]} */
@@ -105,6 +106,14 @@ function restrictions(allow = {}) {
             // 前一字符不得是字母或连字符,所以不误伤 llm-exec(它有自己的闸)。
             selector: 'ImportExpression[source.value=/(^|[^a-z-])exec(\\.js|\\.ts)?$/]',
             message: `动态 import 也不得绕开 runSelf 限制。${MESSAGES.runSelf}`,
+          },
+        ]),
+    ...(allow.allowSigstore
+      ? []
+      : [
+          {
+            selector: 'ImportExpression[source.value=/^@?sigstore(\\/|$)/]',
+            message: `动态 import 也不得绕开 sigstore 限制。${MESSAGES.sigstore}`,
           },
         ]),
     ...(allow.allowLauncher
@@ -198,6 +207,9 @@ function restrictions(allow = {}) {
             message: 'ops/ 是验收工具脚本,不属于产品代码;src/ adapters/ test/ 不得 import 它。',
           },
           ...(allow.allowLlm ? [] : [{ group: LLM_EXEC_GROUP, message: MESSAGES.llm }]),
+          ...(allow.allowSigstore
+            ? []
+            : [{ group: ['sigstore', 'sigstore/**', '@sigstore/**'], message: MESSAGES.sigstore }]),
           ...(allow.allowHomeFs ? [] : [{ group: HOME_FS_GROUP, message: MESSAGES.homeFs }]),
           ...(allow.allowNetOut ? [] : [{ group: NET_OUT_GROUP, message: MESSAGES.netOut }]),
           ...(allow.allowLauncher ? [] : [{ group: LAUNCHER_GROUP, message: MESSAGES.launcher }]),
@@ -284,6 +296,11 @@ export default tseslint.config(
   // S0:启动器。launcher.ts 本身不得引用 net.ts / home-fs(最小权限),只它能引用 runSelf。
   // 以下三块排在上面 src/update/** 之后,对 launcher.ts / install.ts 的更窄(或更宽)规则整条覆盖。
   { files: ['src/update/launcher.ts'], rules: restrictions({ allowRunSelf: true }) },
+  // S7a:来源证明验签。provenance.ts 是唯一可 import `sigstore` 的文件(其余权限同 src/update/**)。
+  {
+    files: ['src/update/provenance.ts'],
+    rules: restrictions({ allowNetOut: true, allowLauncher: true, allowSigstore: true }),
+  },
   {
     files: ['src/update/install.ts'],
     rules: restrictions({ allowNetOut: true, allowLauncher: true, allowHomeFs: true }),
