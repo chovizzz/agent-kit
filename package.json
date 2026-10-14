@@ -40,6 +40,10 @@
     "README.md",
     "LICENSE"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chovizzz/agent-kit.git"
+  },
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org/"
