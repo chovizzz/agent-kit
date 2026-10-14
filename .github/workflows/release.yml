@@ -55,7 +55,11 @@ jobs:
         run: pnpm run build
 
       - name: Test
-        run: pnpm run test
+        # 测试需要仓库外的 KIT_TMP(假二进制/临时仓库放这里);本机由人手设置,CI 在这里建
+        run: |
+          export KIT_TMP="$(mktemp -d "${RUNNER_TEMP}/kit-tmp.XXXXXX")"
+          chmod 700 "$KIT_TMP"
+          pnpm run test
 
       - name: Lint
         run: pnpm run lint

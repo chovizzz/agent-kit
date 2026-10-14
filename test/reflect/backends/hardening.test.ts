@@ -160,7 +160,10 @@ describe('R3 加固:环境快照', () => {
     const f = await fixture('hd-envcase-');
     const marker = f.rec('ran.marker');
     await f.install('claude', `echo ran > '${marker}'; printf x`);
-    const sneaky = path.join(REPO_ROOT.toLowerCase(), 'sub');
+    // 换一种大小写写法:macOS 路径本来混合大小写,取全小写;Linux CI 的路径本来就全小写,则取全大写
+    const flipped =
+      REPO_ROOT.toLowerCase() !== REPO_ROOT ? REPO_ROOT.toLowerCase() : REPO_ROOT.toUpperCase();
+    const sneaky = path.join(flipped, 'sub');
     expect(sneaky).not.toBe(path.join(REPO_ROOT, 'sub'));
     const envSource = { PATH: `${f.bin}:${SYS_PATH}`, HOME: sneaky };
     const be = bySlot(f.build({ backends: [CLAUDE_BINDING] }, { envSource }), 'codex');
