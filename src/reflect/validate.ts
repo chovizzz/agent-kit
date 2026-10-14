@@ -70,7 +70,11 @@ export const HARD_PHRASES: readonly PhraseRule[] = [
 
 /** 极性表:有否定词的子句放行(护栏类规则),否则按硬拒处理。 */
 export const POLARITY_PHRASES: readonly PhraseRule[] = [
-  { id: 'no-verify', re: /--?no-?verify|--no-gpg-sign|git\s+commit\s+(.*\s)?-n\b/ },
+  {
+    id: 'no-verify',
+    // 参数段用回溯受限的写法,不许跨过另一个 `git commit`(否则「不要 A 但请 A」会被一次匹配吞成一处)
+    re: /--?no-?verify|--no-gpg-sign|git\s+commit\s+(?:(?:(?!git\s+commit).)*?\s)?-n\b/,
+  },
   { id: 'skip-tests', re: /skip (the |all )?tests?|跳过(所有)?测试/ },
   {
     id: 'disable-hook',
@@ -78,7 +82,7 @@ export const POLARITY_PHRASES: readonly PhraseRule[] = [
   },
   {
     id: 'destructive',
-    re: /rm\s+(-rf|-fr|-r\s+-f|-f\s+-r)|push\b.*\s(--force|-f)\b|reset\s+--hard|git\s+clean\s+-f|drop\s+table/,
+    re: /rm\s+(-rf|-fr|-r\s+-f|-f\s+-r)|push\b(?:(?!push\b).)*?\s(--force|-f)\b|reset\s+--hard|git\s+clean\s+-f|drop\s+table/,
   },
   { id: 'lint-off', re: /eslint-disable|ts-ignore|ts-nocheck|husky=0|\.only\(|\.skip\(/ },
 ];
@@ -95,12 +99,62 @@ const SQUEEZED_POLARITY: readonly { id: string; needle: string }[] = [
   { id: 'disable-hook', needle: 'disablehook' },
 ];
 
+/**
+ * 否定词表。英文词用词边界(避免 `undo not`、`casino tests` 之类的子串误命中);
+ * `别` 前面是 区/分/特/辨/差/告/道/性/类/识/个/离/临/惜/送 时是词内字(区别、特别…),不算否定。
+ */
 const NEGATION_RE =
-  /不要|不得|不可|不许|不能|禁止|切勿|别(?!忘)|勿|never|do not|don'?t|must not|mustn'?t|avoid|without|no longer/;
-/** 「别忘了/不要忘记/don't forget」是双重否定,不算否定 */
+  /不要|不得|不可|不许|不能|禁止|切勿|(?<![区分特辨差告道性类识个离临惜送])别(?!忘)|勿|\bnever\b|\bdo not\b|\bdon['’]?t\b|\bmust not\b|\bmustn['’]?t\b|\bavoid\b|\bwithout\b|\bno longer\b/g;
+/** 「别忘了/不要忘记/don't forget」「不得不」是双重否定,不算否定 */
 const DOUBLE_NEG_RE =
-  /别忘了?|不要忘记?|不可忘记?|切勿忘记?|(never|don'?t|do not|avoid) (forget|forgetting)|别(犹豫|等)|不要(犹豫|等)|(do not|don'?t) (hesitate|wait)|without fail/g;
+  /别忘了?|不要忘记?|不可忘记?|切勿忘记?|不得不|不能不|不可不|不要不|(never|don['’]?t|do not|avoid) (forget|forgetting)|别(犹豫|等)|不要(犹豫|等)|(do not|don['’]?t) (hesitate|wait)|without fail/g;
 const CLAUSE_SPLIT_RE = /[.。;；!！?？,，、\n]/;
+/**
+ * 极性窗口(收窄后的规则,docs/p1-backlog.md 遗留项①):
+ * 命中话术所在子句里,取话术之前**最近的一个**否定词;否定词与话术之间的间隔串(gap)
+ * 必须**完全**由「修饰同一动作的轻量填充词」组成(使用/运行/执行/添加/直接/the/use/run/git…),
+ * 且长度 ≤ NEGATION_GAP_MAX 个字符;gap 里只要有任何别的东西(连词「但/然后/and」、别的动词
+ * 「担心/forget」、祈使「请/please」、名词「CI」…)就不算修饰,按未否定处理(fail-closed)。
+ * 否定词在话术之后、或隔了标点(子句已按标点切开)都不算。
+ */
+const NEGATION_GAP_MAX = 24;
+const GAP_FILLER_RE = new RegExp(
+  '^(?:' +
+    [
+      // 中文:使用/执行类动作词与加强语气的副词
+      '使用|采用|启用|运行|执行|添加|加上|加入|带上|带|用|加|去|再|要|做|绝对|永远|一律|直接|随意|随便|擅自|轻易|盲目|自行|任何|所有|该|这个|git|commit',
+      // 中文:有限的场景短语「在 提交/CI/生产… 时/中/里/下」(不用通配,免得「在意当下」之类混进来)
+      '在(?:提交|合并|发布|推送|生产|本地|任何情况|任何场景|所有场景|ci|流水线|仓库|分支)(?:中|里|时|下)?',
+      // 英文
+      'use|using|run|running|execute|executing|apply|applying|add|adding|include|including|enable|enabling|try|trying|attempt|ever|the|a|an|any|all|to|your|it|this|that|git|commit|with|flag|option|command|force|simply|just',
+    ].join('|') +
+    ')+$',
+);
+
+/** 命中文本内部(如 `push … --force`、`跳过…钩子` 的跨度)出现转折 / 并列 / 祈使词:否定词管不到后半句 */
+const INTERIOR_BREAK_RE =
+  /但|而是|然后|并且|请|也|或|(?:^|\s)(?:but|and|or|then|please|instead|also)(?:\s|$)/;
+/** 命中后紧跟「以外 / 之外 / except」:否定的是补集,话术本身是被要求的 */
+const COMPLEMENT_TAIL_RE = /以外|之外|除外|\bexcept\b|\bother than\b/;
+
+function negatesAt(clause: string, matchIndex: number, matched: string): boolean {
+  if (INTERIOR_BREAK_RE.test(matched)) return false;
+  if (COMPLEMENT_TAIL_RE.test(clause.slice(matchIndex))) return false;
+
+  const before = clause.slice(0, matchIndex).replace(DOUBLE_NEG_RE, ' ');
+  let last: RegExpExecArray | null = null;
+  const re = new RegExp(NEGATION_RE.source, 'g');
+  for (let m = re.exec(before); m !== null; m = re.exec(before)) last = m;
+  if (last === null) return false;
+  // 代码片段包装符(反引号、引号、「」)不算内容
+  const spaced = before
+    .slice(last.index + last[0].length)
+    .replace(/[`'"“”‘’「」『』*]/g, '')
+    .trim();
+  if (spaced === '') return true;
+  if (spaced.length > NEGATION_GAP_MAX) return false;
+  return GAP_FILLER_RE.test(spaced.replace(/\s+/g, ''));
+}
 
 export interface PhraseVerdict {
   /** 命中的硬拒/未被否定豁免的极性规则 id;空 = 通过 */
@@ -119,21 +173,24 @@ export function scanDangerousPhrases(text: string): PhraseVerdict {
   const clauses = norm.split(CLAUSE_SPLIT_RE);
   const polarityHit = (id: string, re: RegExp | undefined, needle: string | undefined): void => {
     let hit = false;
-    let negated = false;
-    for (const clause of clauses) {
-      const m = re?.exec(clause);
-      if (m !== null && m !== undefined) {
-        hit = true;
-        const before = clause.slice(0, m.index).replace(DOUBLE_NEG_RE, ' ');
-        if (NEGATION_RE.test(before)) negated = true;
-        else {
-          negated = false;
-          break;
+    let allNegated = true;
+    let hits = 0;
+    if (re !== undefined) {
+      const g = new RegExp(re.source, 'g');
+      for (const clause of clauses) {
+        for (let m = g.exec(clause); m !== null; m = g.exec(clause)) {
+          hit = true;
+          // 只统计其压缩形含该 needle 的命中:别的别名(--no-gpg-sign、remove hooks)不能抵消拆写
+          if (needle === undefined || squeeze(m[0]).includes(needle)) hits++;
+          if (!negatesAt(clause, m.index, m[0])) allNegated = false;
+          if (m[0] === '') g.lastIndex++;
         }
       }
     }
-    if (!hit && needle !== undefined && sq.includes(needle)) {
-      // 只在压缩形才能看到的拆写:无法定位子句,一律按未否定处理(fail-closed)
+    const negated = hit && allNegated;
+    if (needle !== undefined && sq.split(needle).length - 1 > hits) {
+      // 压缩形里的出现次数多于正常形命中次数 = 有只能在压缩形看到的拆写(`no_verify`):
+      // 无法定位子句,一律按未否定处理(fail-closed);即使旁边另有一处被否定的正常写法也一样
       blocked.add(id);
       return;
     }
