@@ -74,6 +74,10 @@ jobs:
         run: node scripts/check-publish.mjs --tag "${GITHUB_REF_NAME}"
 
       - name: Publish to npm
-        run: npm publish --provenance --access public
+        # 预发布版本(带 -rc/-next 等后缀)只进 rc 标签,绝不进 latest
+        run: |
+          VER="$(node -p "require('./package.json').version")"
+          case "$VER" in *-*) DIST_TAG=rc ;; *) DIST_TAG=latest ;; esac
+          npm publish --provenance --access public --tag "$DIST_TAG"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -1,8 +1,8 @@
-@@@ manifest.json 195
+@@@ manifest.json 200
 {
   "channel": "canary",
   "files": [],
-  "kit_version": "0.1.0",
+  "kit_version": "0.1.0-rc.0",
   "schema_version": 1,
   "skippedLayers": [
     {

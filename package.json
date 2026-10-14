@@ -1,6 +1,6 @@
 {
   "name": "@chovizzz/agent-kit",
-  "version": "0.1.0",
+  "version": "0.1.0-rc.0",
   "description": "Rules, skills and subagent definitions for coding agents: one neutral source, rendered per agent.",
   "license": "UNLICENSED",
   "type": "module",

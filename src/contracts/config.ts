@@ -176,7 +176,7 @@ export type LifecycleCoreConfig = z.infer<typeof LifecycleCoreConfigSchema>;
 export const KitConfigSchema = z.strictObject({
   kit: z.strictObject({
     name: z.string().min(1),
-    version: z.string().regex(/^\d+\.\d+\.\d+$/),
+    version: z.string().regex(/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/),
   }),
   agents: z.strictObject({
     /** 渲染目标;openclaw 默认不在内 */
