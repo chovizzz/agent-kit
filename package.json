@@ -37,6 +37,8 @@
   },
   "files": [
     "dist/",
+    "payload/",
+    "integrity.json",
     "README.md",
     "LICENSE"
   ],

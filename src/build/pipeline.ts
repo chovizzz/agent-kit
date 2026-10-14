@@ -35,6 +35,8 @@ export type PipelineOutcome =
       /** lint + 合并 + 预算的诊断(含 warn) */
       diagnostics: Diagnostic[];
       rendered: RenderOutput;
+      /** payload 判定 kind 要看技能的资源文件清单 */
+      skills: RenderInput['skills'];
       manifest: Manifest;
       merge: MergeResult;
       budget: BudgetReport;
@@ -139,6 +141,7 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineOutcome
     kind: 'ok',
     diagnostics,
     rendered,
+    skills: lint.skills,
     manifest,
     merge,
     budget,
