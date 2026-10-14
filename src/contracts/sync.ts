@@ -65,7 +65,10 @@ export function isHomeWritePath(rel: string, owner?: HomeWriteEntry['owner']): b
     // 只检查目录以下的路径段,所以 `.claude/…` 这种 HOME 根下的点目录不受影响;kit 自己的状态目录(含 ledger.json)不适用。
     if (e.owner === 'adapter') {
       const rest = rel.slice(e.path.length);
-      if (rest.split('/').some((seg) => seg.startsWith('.')) || rest.endsWith('.json'))
+      if (
+        rest.split('/').some((seg) => seg.startsWith('.')) ||
+        rest.toLowerCase().endsWith('.json')
+      )
         return false;
     }
     return true;

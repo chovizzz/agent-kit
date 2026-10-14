@@ -62,6 +62,12 @@ describe('HOME_WRITE_TABLE', () => {
     expect(new Set(ps).size).toBe(ps.length);
   });
 
+  it('isHomeWritePath:.json 判定不分大小写', () => {
+    expect(isHomeWritePath('.claude/skills/x/config.json')).toBe(false);
+    expect(isHomeWritePath('.claude/skills/x/config.JSON')).toBe(false);
+    expect(isHomeWritePath('.claude/skills/x/SKILL.md')).toBe(true); // 正向对照
+  });
+
   it('isHomeWritePath:表内文件放行,目录本身与表外一律拒', () => {
     expect(isHomeWritePath('.claude/skills/x/SKILL.md')).toBe(true);
     expect(isHomeWritePath('.agents/skills/x/SKILL.md', 'adapter')).toBe(true);

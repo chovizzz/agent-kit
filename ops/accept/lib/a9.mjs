@@ -14,7 +14,7 @@ import {
   vitestStep,
 } from './common.mjs';
 
-const ALLOWED = new Set(['src/io/safe-fs.ts', 'src/io/read-fs.ts']);
+const ALLOWED = new Set(['src/io/safe-fs.ts', 'src/io/read-fs.ts', 'src/io/home-fs.ts']);
 const FS_MOD = String.raw`(?:node:)?fs(?:\/promises)?`;
 const PATTERNS = [
   new RegExp(String.raw`\bfrom\s*['"\`]${FS_MOD}['"\`]`),
