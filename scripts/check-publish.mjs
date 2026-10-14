@@ -3,7 +3,7 @@
  * 发布前自检(P1-D:GitHub Actions → npm)。
  *
  * 只做**发布面**的检查,不重复 CI 已经跑过的 typecheck/test/lint:
- *   1. dist/ 存在且入口齐全(cli.js + src/ + adapters/);
+ *   1. dist/ 存在且入口齐全(打包产物 cli.js + main.js;构建期 tsc 产物目录在);
  *   2. 包内容白名单:只允许 package.json 声明的 `files`(dist/ payload/ integrity.json README.md LICENSE);
  *   3. 禁运形态扫描:会话原文(.jsonl)、.state/、绝对路径(/Users/…)、私钥块;
  *   4. 版本与 tag 一致(在 CI 里由 GITHUB_REF 提供;本地可传 --tag vX.Y.Z);
@@ -11,13 +11,19 @@
  *      manifest ↔ integrity ↔ 文件一致,payload 与重新构建的结果、与仓库 out/ 逐字节一致,
  *      不含 personal 来源,无绝对路径 / HOME 路径泄漏。每项违规带稳定原因码 PAYLOAD_*(见 src/build/payload-verify.ts)。
  *
+ *   6. 打包闸(S7b,scripts/lib/bundle-gate.mjs,原因码 BUNDLE_*):dependencies 必须为空;dist 里所有 import / require 说明符
+ *      只能是 node:* 或相对路径(AST 扫描);dist/THIRD_PARTY_LICENSES 覆盖产物里实际包含的全部第三方包;dist 无 node_modules 路径、
+ *      sourcemap / 产物里无绝对路径或 HOME 泄漏;integrity.json 覆盖 dist 全部文件;bin 入口是带 shebang 的薄入口。
+ *
  * 退出码:0 通过 | 1 有违规 | 2 用法错 | 4 未执行(缺 dist 等前置)。
  */
 import { existsSync, lstatSync, readFileSync, statSync } from 'node:fs';
 import * as path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
+import { checkBundle, readDist } from './lib/bundle-gate.mjs';
 import { packFileList } from './lib/pack.mjs';
+import { TSC_OUT } from './lib/paths.mjs';
 
 const EXIT = { ok: 0, violation: 1, usage: 2, notRun: 4 };
 
@@ -45,7 +51,7 @@ const violations = [];
 const pkg = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
 
 // 1) dist 齐全
-const required = ['dist/cli.js', 'dist/src', 'dist/adapters'];
+const required = ['dist/cli.js', 'dist/main.js', `${TSC_OUT}/src/build`];
 for (const rel of required) {
   if (!existsSync(path.join(root, rel))) violations.push(`缺 ${rel}(先 pnpm run build)`);
 }
@@ -110,11 +116,11 @@ if (tomlVersion !== pkg.version)
 
 // 3.8) payload 完整性闸(S2)
 {
-  const distBuild = path.join(root, 'dist/src/build');
+  const distBuild = path.join(root, TSC_OUT, 'src/build');
   const verifyUrl = pathToFileURL(path.join(distBuild, 'payload-verify.js')).href;
   const rebuildUrl = pathToFileURL(path.join(distBuild, 'payload-rebuild.js')).href;
   if (!existsSync(path.join(distBuild, 'payload-verify.js'))) {
-    console.error('check-publish: 缺 dist/src/build/payload-verify.js(先 pnpm run build)');
+    console.error('check-publish: 缺构建期 payload-verify.js(先 pnpm run build)');
     process.exit(EXIT.notRun);
   }
   const { verifyPayload } = await import(verifyUrl);
@@ -146,6 +152,27 @@ if (tomlVersion !== pkg.version)
   })) {
     violations.push(`${x.code}${x.path ? ` ${x.path}` : ''}: ${x.message}`);
   }
+}
+
+// 3.9) 打包闸(S7b):dependencies 为空 / 说明符 / 许可证 / sourcemap 泄漏 / integrity 覆盖 / 薄入口
+{
+  const { files, symlinks } = readDist(root);
+  let integrityPaths;
+  const integrityAbs = path.join(root, 'integrity.json');
+  // fail-closed:integrity.json 缺失 / 无法解析 / 形态不对,都不能让覆盖检查悄悄跳过
+  try {
+    integrityPaths = JSON.parse(readFileSync(integrityAbs, 'utf8')).files.map((f) => f.path);
+  } catch {
+    violations.push('BUNDLE_INTEGRITY_COVERAGE integrity.json 缺失或无法解析,无法核对 dist 覆盖');
+  }
+  for (const x of checkBundle({
+    pkg,
+    files,
+    symlinks,
+    ...(integrityPaths ? { integrityPaths } : {}),
+    ...(process.env.HOME ? { homeDir: process.env.HOME } : {}),
+  }))
+    violations.push(`${x.code}${x.path ? ` ${x.path}` : ''}: ${x.message}`);
 }
 
 // 4) 版本与 tag 一致

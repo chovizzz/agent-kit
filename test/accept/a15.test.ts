@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import * as path from 'node:path';
 import * as safe from '../../src/io/safe-fs.js';
-import { guardRealHome, makeFx, putOutside, REAL_CLI, REPO_ROOT, runScript } from './helpers.js';
+import { guardRealHome, makeFx, putOutside, REPO_ROOT, runScript } from './helpers.js';
 import type { Fx } from './helpers.js';
 
 guardRealHome();
@@ -55,7 +55,7 @@ function check(dir: string): string[] {
   const code = `
     import { pathToFileURL } from 'node:url';
     const lib = await import(${JSON.stringify(path.join(REPO_ROOT, 'ops/accept/lib/a15.mjs'))});
-    const { ManifestSchema } = await import(pathToFileURL(${JSON.stringify(path.dirname(REAL_CLI) + '/src/contracts/render.js')}).href);
+    const { ManifestSchema } = await import(pathToFileURL(${JSON.stringify(SCHEMA_SRC + '/contracts/render.js')}).href);
     process.stdout.write(JSON.stringify(lib.checkManifest(${JSON.stringify(dir)}, ManifestSchema)));
   `;
   return JSON.parse(callLibRaw(code)) as string[];
@@ -121,7 +121,8 @@ async function setup(mode: string): Promise<{ fx: Fx; cli: string }> {
   await fx.put('stub-mode.txt', mode + '\n');
   return { fx, cli: await putOutside(fx, 'stub-cli.mjs', STUB) };
 }
-const SCHEMA_SRC = path.join(path.dirname(REAL_CLI), 'src');
+// S7b 起 dist/ 是打包产物(没有 src/);契约 schema 取自 tsc 的构建期产物
+const SCHEMA_SRC = path.join(REPO_ROOT, 'node_modules', '.cache', 'agent-kit-tsc', 'src');
 const a15 = (s: { fx: Fx; cli: string }, extra: string[] = []) =>
   runScript(
     'a15-no-personal-in-out.sh',

@@ -3,7 +3,7 @@
   "compilerOptions": {
     "noEmit": false,
     "rootDir": ".",
-    "outDir": "dist",
+    "outDir": "node_modules/.cache/agent-kit-tsc",
     "sourceMap": false,
     "declaration": false
   },

@@ -152,9 +152,22 @@ export function sandbox(tmp) {
   return { home, kit };
 }
 
-/** CLI 编译产物里 src/ 的位置(dist/cli.js => dist/src)。 */
+/**
+ * CLI 编译产物里 src/ 的位置(dist/cli.js => dist/src)。
+ * S7b 起发布用的 dist/ 是打包产物、没有 src/;本仓库构建时 tsc 的逐文件产物在 node_modules/.cache/agent-kit-tsc,
+ * 所以 <cli 目录>/src 不存在时,退到 <cli 目录的上一级>/node_modules/.cache/agent-kit-tsc/src(找不到就仍返回 <cli 目录>/src)。
+ */
 export function distSrc(ctx) {
-  return path.join(path.dirname(ctx.cli), 'src');
+  const beside = path.join(path.dirname(ctx.cli), 'src');
+  if (fs.existsSync(beside)) return beside;
+  const tsc = path.join(
+    path.dirname(path.dirname(ctx.cli)),
+    'node_modules',
+    '.cache',
+    'agent-kit-tsc',
+    'src',
+  );
+  return fs.existsSync(tsc) ? tsc : beside;
 }
 
 export function rmTmp(dir) {

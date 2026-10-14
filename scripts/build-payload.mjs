@@ -2,8 +2,8 @@
 /**
  * 生成随 npm 包分发的 payload(S2):`payload/`(out 里 target=home 的文件原样 + manifest.json)与包根 `integrity.json`。
  *
- * 顺序:pnpm run build(tsc)→ node scripts/build-payload.mjs → node scripts/check-publish.mjs → npm publish。
- * integrity.json 覆盖「包内每个文件(不含自身)」,含 dist/,所以必须在 tsc 之后、打包之前生成;
+ * 顺序:pnpm run build(tsc 类型检查 + vite 打包 + THIRD_PARTY_LICENSES)→ node scripts/build-payload.mjs → node scripts/check-publish.mjs → npm publish。
+ * integrity.json 覆盖「包内每个文件(不含自身)」,含 dist/ 全部产物(打包后的 cli.js / chunks / THIRD_PARTY_LICENSES),所以必须在 build 之后、npm pack 之前生成;
  * 之后再改 dist 会被 check-publish 的 PAYLOAD_FILE_TAMPERED 拦下。
  *
  * payload/ 与 integrity.json 是构建产物,不进 git(.gitignore)。确定性:同输入两次运行字节相同。
@@ -14,11 +14,13 @@ import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import process from 'node:process';
 import { packFileList } from './lib/pack.mjs';
+import { TSC_OUT } from './lib/paths.mjs';
 
 const root = process.cwd();
-const distSrc = path.join(root, 'dist/src/build');
+// payload 的重建逻辑是构建期工具,不随包发布:来自 tsc 产物(tsconfig.build.json 的 outDir),不是打包后的 dist/
+const distSrc = path.join(root, TSC_OUT, 'src/build');
 if (!existsSync(path.join(distSrc, 'payload-rebuild.js'))) {
-  console.error('build-payload: 缺 dist(先 pnpm run build)');
+  console.error('build-payload: 缺构建产物(先 pnpm run build)');
   process.exit(4);
 }
 const { rebuildPayload } = await import(

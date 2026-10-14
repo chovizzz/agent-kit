@@ -51,7 +51,7 @@ jobs:
       - name: Typecheck
         run: pnpm run typecheck
 
-      - name: Build
+      - name: Build (tsc typecheck/emit + vite bundle into dist + THIRD_PARTY_LICENSES)
         run: pnpm run build
 
       - name: Test
