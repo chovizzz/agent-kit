@@ -9,6 +9,7 @@ import {
   EXIT,
   Reporter,
   cleanEnv,
+  distSrc,
   mkTmp,
   makeCtx,
   parseCommon,
@@ -136,7 +137,7 @@ export function interpretReport(exit, report) {
 
 /** 准备合成生命周期仓库 + 包装脚本,返回追加的命令行;CLI 不是本仓库构建的(没有 dist/src/lifecycle)时返回 [] 并说明。 */
 export async function lifecycleExtra(R, ctx, tmp) {
-  const distSrcDir = path.join(path.dirname(ctx.cli), 'src');
+  const distSrcDir = distSrc(ctx);
   if (!fs.existsSync(path.join(distSrcDir, 'lifecycle', 'checks.js'))) {
     R.info('未纳入 attest/promote/retire:--cli 旁边没有 dist/src/lifecycle(CLI 不是本仓库构建的)');
     return [];

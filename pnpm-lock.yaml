@@ -7,19 +7,6 @@ settings:
 importers:
 
   .:
-    dependencies:
-      sigstore:
-        specifier: 5.0.0
-        version: 5.0.0
-      smol-toml:
-        specifier: 1.9.0
-        version: 1.9.0
-      yaml:
-        specifier: 2.9.1
-        version: 2.9.1
-      zod:
-        specifier: 4.6.5
-        version: 4.6.5
     devDependencies:
       '@types/node':
         specifier: 22.20.5
@@ -30,6 +17,12 @@ importers:
       prettier:
         specifier: 3.9.9
         version: 3.9.9
+      sigstore:
+        specifier: 5.0.0
+        version: 5.0.0
+      smol-toml:
+        specifier: 1.9.0
+        version: 1.9.0
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -42,6 +35,12 @@ importers:
       vitest:
         specifier: 5.0.3
         version: 5.0.3(@types/node@22.20.5)(vite@8.3.3(@types/node@22.20.5)(yaml@2.9.1))
+      yaml:
+        specifier: 2.9.1
+        version: 2.9.1
+      zod:
+        specifier: 4.6.5
+        version: 4.6.5
 
 packages:
 
