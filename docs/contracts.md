@@ -2391,20 +2391,24 @@ agent-kit update [--write] [--now] [--major] [--rollback] [--json]
 - 退出码:0 已最新 / 计划已打印 / 已安装;1 校验失败(`UPDATE_VERIFY_FAILED`)、防降级拒绝(`UPDATE_DOWNGRADE_REFUSED`);2 用法错误;3 fail-closed(状态目录不安全、写出口拒绝);4 未执行(网络不可用、`not_ready`、`attestations_unreachable`、锁被占)。
 - **S0 现状**:命令已注册,是桩,退出 64,stderr 说明「P2 才实现(块 S6/S7)」,stdout 为空。
 
-稳定码:`UPDATE_USAGE`(`mode_conflict`、`major_requires_write`、`rollback_requires_write`、`bad_registry`、`registry_fixture_outside_tmp`、`unknown_arg`)、`UPDATE_CHECK_FAILED reason=<timeout|dns|connect|tls|http_<码>|too_large|parse|proxy|not_ready|attestations_unreachable>`、`UPDATE_VERIFY_FAILED reason=<integrity|provenance_missing|provenance_identity|bundle|attestations_unreachable>`、`UPDATE_DOWNGRADE_REFUSED`、`UPDATE_MAJOR_AVAILABLE`、`UPDATE_CURRENT_BROKEN`、`UPDATE_NOT_READY`、`UPDATE_FAIL_CLOSED`、`SYNC_PENDING`、`AUTO_SYNC_DECLINED`。失败原因绝不合并成一个笼统的码,也不吞(Hub 的教训)。
+稳定码:`UPDATE_USAGE`(`mode_conflict`、`major_requires_write`、`rollback_requires_write`、`bad_registry`、`registry_fixture_outside_tmp`、`unknown_arg`)、`UPDATE_CHECK_FAILED reason=<timeout|dns|connect|tls|http_<码>|too_large|parse|proxy|not_ready|attestations_unreachable>`、`UPDATE_VERIFY_FAILED reason=<integrity|provenance_missing|provenance_identity|bundle|attestations_unreachable|trust_root_stale|tuf_unreachable>`(后两者不进 `bad_versions`:问题在本地信任根 / TUF 网络,不在该版本;doctor 提示重装 bootstrap 或检查代理)、`UPDATE_DOWNGRADE_REFUSED`、`UPDATE_MAJOR_AVAILABLE`、`UPDATE_CURRENT_BROKEN`、`UPDATE_NOT_READY`、`UPDATE_FAIL_CLOSED`、`SYNC_PENDING`、`AUTO_SYNC_DECLINED`。失败原因绝不合并成一个笼统的码,也不吞(Hub 的教训)。
 
 ### 19.5 自动更新规则
 
 - **节流**:24h 一次(`UPDATE_CHECK_INTERVAL_HOURS`);时钟往回走视为该检查了。时钟只决定检查频率,任何安全判断都不依赖本机时钟。
-- **网络**:`GET <registry>/@chovizzz%2fagent-kit`,超时 5s、响应 ≤ 2MiB、不跟随跨主机重定向;主机白名单 = 配置的 registry 主机 + `registry.npmjs.org`。网络只经 `src/io/net.ts`。失败 TTY 下每天最多一行 `UPDATE_CHECK_FAILED reason=<码>`。
-- **冷却期的时间来源**:`age = 响应 Date 头 − time[<v>]`,**两者都取自 npmjs 的 packument 响应**(用镜像时也到 npmjs 取;镜像的 `time` 与 `Date` 不作依据),**不用本机时钟**。`Date` 头缺失 / 不可解析、`time[<v>]` 缺失、或 `age < 0`,一律按「未满冷却期」处理(`cooldown`,fail-closed 不安装)。本机时钟只用于检查节流。
-- **版本选择**:取 `dist-tags.<channel>`;只在同一 major 内自动升,跨 major 只提示 `UPDATE_MAJOR_AVAILABLE`;`pin`(`X.Y.Z` 或 `~X.Y[.Z]`,或 `KIT_UPDATE_PIN`)限定范围;发布未满 `cooldown_hours` 不自动装;`max_seen_version` 只增不减;`bad_versions` 里的版本不再自动安装。优先级:`KIT_AUTO_UPDATE=0` > 环境变量 > 配置文件 > 默认。
+- **网络**:`GET <registry>/@chovizzz%2fagent-kit`(请求头 `Accept: application/json`,取完整 packument 而非精简版,否则没有 `time`),超时 5s、响应 ≤ 2MiB、不跟随跨主机重定向;主机白名单 = 配置的 registry 主机 + `registry.npmjs.org`。网络只经 `src/io/net.ts`。失败 TTY 下每天最多一行 `UPDATE_CHECK_FAILED reason=<码>`。
+- **冷却期的时间来源**:`age = 响应 Date 头 − time[<v>]`,**两者都取自 npmjs 的 packument 响应**(用镜像时也到 npmjs 取;镜像的 `time` 与 `Date` 不作依据),**不用本机时钟**。冷却期起点取 `max(npmjs time[<v>], 已验签 SLSA bundle 的 Rekor integratedTime)`(决策 ㉔;integratedTime 由 Rekor 的 SET 背书,registry 一侧改不早它;没有 SET 背书时不取);`Date` 头缺失 / 不可解析、`time[<v>]` 缺失、或 `age < 0`,一律按「未满冷却期」处理(`cooldown`,fail-closed 不安装)。本机时钟只用于检查节流。
+- **版本选择**:取 `dist-tags.<channel>`(通道名:稳定 `latest`,预发布 **`rc`**——release.yml 把预发布发到 dist-tag `rc`,设计稿旧称 `next` 作废;`src/contracts/update.ts` 的 `UPDATE_CHANNELS` 仍写着 `next`,留给 S7c 一并订正);只在同一 major 内自动升,跨 major 只提示 `UPDATE_MAJOR_AVAILABLE`;`pin`(`X.Y.Z` 或 `~X.Y[.Z]`,或 `KIT_UPDATE_PIN`)限定范围;发布未满 `cooldown_hours` 不自动装;`max_seen_version` 只增不减;`bad_versions` 里的版本不再自动安装。优先级:`KIT_AUTO_UPDATE=0` > 环境变量 > 配置文件 > 默认。
 - **npm 202 半可见期**:packument 已有新版本但 tarball 404 或缺 `dist.integrity` → `not_ready`,下一窗口再试,不算失败。
 - **安装**:staging 内校验 sha512 → provenance(见 ⑬ / ⑭)→ 解包(不跑 lifecycle 脚本)→ 对照包内 `integrity.json` 并把其 sha256 记为外部锚点 `installed.anchor` → 冒烟 → `rename` 切换 `current` → 只保留 `UPDATE_KEEP_VERSIONS`(2)个版本。任一校验失败 → 删 staging、记 `UPDATE_VERIFY_FAILED`、进 `bad_versions`、不重试同一版本。
 - **启动器**:`current` 有效且版本更高、major 相同 → 以 `KIT_LAUNCHED=1` 启动 `current/dist/cli.js`;有任何问题退回自身并 `UPDATE_CURRENT_BROKEN`(CLI 不会因更新坏掉而变砖)。
 - **锁**:`update/lock`(`O_EXCL`,pid + 开始时间,TTL 15 分钟);拿不到锁静默跳过并记 `skipped_locked`。pid 已不在 → 回收;pid 在但超 TTL → 只报不杀。
 - **遥测**:无。唯一对外请求是向 registry 拉 packument / attestations / tarball。
 - **文件位置**(HOME 相对):`.config/agent-kit/config.toml`(`UserConfig`,只读,sync / update 不写);`.local/state/agent-kit/sync/{ledger.json,txn/,backups/,lock}`;`.local/state/agent-kit/update/{state.json,lock,log}`;`.local/share/agent-kit/{versions/,current,staging/}`。目录 0700、文件 0600。
+- **来源证明验签(S7a,`src/update/provenance.ts`;用户决定用官方完整 `sigstore` 包)**:`verifyProvenance` 只接受外层 predicateType = SLSA v1 且 `payloadType = application/vnd.in-toto+json` 的**恰好一条** bundle,对它验签(Fulcio 链 + Rekor SET / 包含证明 + DSSE),身份用 Fulcio 证书 SAN `https://github.com/chovizzz/agent-kit/.github/workflows/release.yml@refs/tags/v<version>` + issuer `https://token.actions.githubusercontent.com` 钉死;🔴 sigstore 的 `certificateIdentityURI` 是**未锚定正则**,所以传 `^<转义>$` 并对返回的 identity 再做精确相等复核。验签后,**同一份已验签 payload** 的 subject 名必须是 `pkg:npm/%40chovizzz/agent-kit@<v>`、`digest.sha512` 必须等于内存里 tarball 的 sha512,`predicate.buildDefinition.externalParameters.workflow.{repository,path,ref}` 必须与 SAN 一致。`timestampThreshold` 绝不传 0(完整 sigstore 不暴露该选项,另加自查:bundle 必须带时间戳证据)。原因码:`ok`、`provenance_missing`、`provenance_identity`、`bundle`、`integrity`、`trust_root_stale`、`tuf_unreachable`;subject 名不符(换版本重放)归 `provenance_identity`。
+- **sigstore 的缓存写入例外(只此一处)**:`provenance.ts` 内 sigstore / tuf-js 往 `tuf.cachePath` 写 TUF 元数据(root / timestamp / snapshot / targets / trusted_root),**不经 home-fs,范围仅限 `tuf.cachePath`**(安装器给 `~/.local/share/agent-kit/` 下的专用子目录,在 `HOME_WRITE_TABLE` 的 kit 条目内)。联网刷新时 tuf-js 另会在 `os.tmpdir()` 下建临时目录并在下载后删除;离线(`forceCache` 且缓存有效)零临时文件、零联网。其余路径(真实 HOME、默认缓存目录 `appdata`)不写,`test/update/provenance-tuf.test.ts` 断言。
+- **TUF / 代理 / 离线**:tuf-js 用全局 `fetch`,**不读 `HTTPS_PROXY`**,除非进程带 `--use-env-proxy`(Node ≥ 24.5;实测带与不带行为不同);只能走代理的网络里不带该开关,刷新失败 → `tuf_unreachable`(fail-closed,绝不降级成跳过验签)。联网刷新约 1.5s,`forceCache` 命中缓存约 25ms。sigstore 5 **不支持**直接传入 `trusted_root.json`,随包固定信任根不能作回退;唯一的可选回退是用户配置显式允许的 `fallbackToCache`(联网刷新失败后用仍在有效期内的缓存重试)。缓存元数据过期(timestamp 约 7 天)时 `forceCache` 仍会尝试联网续期。`sigstore` 的 engines 为 `^22.22.2 || ^24.15.0 || >=26.0.0`(本包 `>=22`),在更老的 Node 上行为未保证。S7b 打包进 dist 后 `dependencies` 清空。
+- **严格 tar 读取器(`src/update/tar.ts`)**:内存字节进、文件清单出;只接受 `package/` 下的普通文件与目录,拒绝符号链接 / 硬链接 / 设备 / FIFO / GNU 长名 / 全局 pax / 绝对路径 / `..` / `.` 段 / 空段 / 反斜杠 / 盘符 / NUL / 非 UTF-8 / 重复(含大小写与 Unicode 归一后折叠)/ 文件目录同名冲突;gzip 必须完整(截断、多余尾部、多成员、CRC / ISIZE 错均拒);限制单文件 / 总大小 / 条目数 / 路径长度 / 解压比;权限归一为 0644 / 0755。稳定码 `TAR_*`。
 
 ### 19.6 `auto_sync = "safe"` 的机器可判条件(决策 ②B)
 
@@ -2469,7 +2473,8 @@ agent-kit update [--write] [--now] [--major] [--rollback] [--json]
 ### 19.9 验收与未核实
 
 - S8 的 A25(sync 往返)、A26(doctor 与 sync 干跑进 A5)、A27(更新,假 registry)、A28(变异抽检)按设计稿 §6;A5 命令环境固定加 `KIT_AUTO_UPDATE=0`。
-- 未核实,实现前先测并回写本节:Node 25 `fetch` 是否走 `HTTPS_PROXY`;attestations 端点形状与 SLSA predicate 字段路径;运行时依赖 bundle 还是带 lockfile 安装;启动器多一层 spawn 的耗时;claude 用户级 `rules/agent-kit/` 是否加载(P-Q1);skills-hub 遇同名条目是否覆盖;pi 默认推理档位;镜像 registry 的 npmjs 响应的 `Date` 头在代理 / 缓存下是否可靠(冷却期的“当前时间”来源,见 §19.5)。
+- 已核实(S7 调研 / S7a):Node 全局 `fetch` 默认不走 `HTTPS_PROXY`,带 `--use-env-proxy` 才走(Node 25.2 实测);attestations 响应形状与 SLSA predicate 字段路径(`predicate.buildDefinition.externalParameters.workflow.{repository,path,ref}`)见 `test/update/fixtures/att-rc0.json`;运行时依赖打包进 dist(S7b)。
+- 未核实,实现前先测并回写本节:Rekor v2 / bundle v0.3 在 `timestampThreshold` 默认值下是否通过(目前无样本;`provenance.ts` 对「无 SET、只有 RFC3161」放行但不报 integratedTime);未知 tlog 与篡改 SET 都表现为 `TLOG_INCLUSION_PROMISE_ERROR`,目前统一归 `bundle`,只有证书链 / TUF 元数据层面的陈旧才归 `trust_root_stale`;启动器多一层 spawn 的耗时;claude 用户级 `rules/agent-kit/` 是否加载(P-Q1);skills-hub 遇同名条目是否覆盖;pi 默认推理档位;镜像 registry 的 npmjs 响应的 `Date` 头在代理 / 缓存下是否可靠(冷却期的“当前时间”来源,见 §19.5)。
 
 ### 19.10 示例
 

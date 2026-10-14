@@ -7,3 +7,5 @@ pnpm-lock.yaml
 test/golden/*/*/
 payload/
 integrity.json
+# 真实外部夹具(sigstore TUF 缓存 / npmjs attestations):保持逐字节原样
+test/update/fixtures/

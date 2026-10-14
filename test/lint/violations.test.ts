@@ -50,6 +50,9 @@ const EXPECTED: Readonly<Record<string, { rule: string; message: string }>> = {
   'run-self-namespace.ts': { rule: 'no-restricted-imports', message: 'runSelf' },
   'run-self-reexport.ts': { rule: 'no-restricted-imports', message: 'runSelf' },
   'run-self-dynamic-import.ts': { rule: 'no-restricted-syntax', message: 'runSelf' },
+  'sigstore-import.ts': { rule: 'no-restricted-imports', message: 'sigstore' },
+  'sigstore-scoped-import.ts': { rule: 'no-restricted-imports', message: 'sigstore' },
+  'sigstore-dynamic-import.ts': { rule: 'no-restricted-syntax', message: 'sigstore' },
 };
 
 const eslint = new ESLint({ cwd: REPO_ROOT, ignore: false });
