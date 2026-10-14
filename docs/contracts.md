@@ -2234,7 +2234,7 @@ agent-kit retire  --rule <id> --to deprecated|retired --reason manual|expired|su
 
 ## 19. sync / doctor / update 命令面与自动更新契约(S0,契约先行;S1–S9 实装后订正)
 
-本节先定死三条命令的命令面、退出码、稳定码、文件位置与授权边界,实现在后续块(S1–S8)。`sync`、`doctor` 目前仍是命令桩(退出 64),`update` 是新注册的命令桩。设计依据:`sync-doctor-update-design.md` §0–§6、§8;用户 2026-10-14 对 16 条决策的拍板(14 条按设计稿推荐,**② 改 B、⑭ 改 B**)。新增 schema 全部 `strictObject`,只追加;`contracts-v1` 既有编号不重排。
+本节先定死三条命令的命令面、退出码、稳定码、文件位置与授权边界,实现在后续块(S1–S8)。`doctor` 已由 S5 实装(§19.3),`update` 是新注册的命令桩。设计依据:`sync-doctor-update-design.md` §0–§6、§8;用户 2026-10-14 对 16 条决策的拍板(14 条按设计稿推荐,**② 改 B、⑭ 改 B**)。新增 schema 全部 `strictObject`,只追加;`contracts-v1` 既有编号不重排。
 
 通用约定(沿用 §17 / §18):
 
@@ -2353,31 +2353,37 @@ backups/<id>/complete           备份写完的标记(缺失则 --resume 拒绝)
 ### 19.3 `doctor`
 
 ```
-agent-kit doctor [--json] [--only <id>]… [--online]
+agent-kit doctor [--json] [--only <id>]… [--online] [--home <dir>]
 ```
 
-**默认零写入、零网络**(进 A5 命令清单)。`--online` 只多读一次 registry,不写缓存,只影响 D12。输出只含 id、枚举、计数、版本号、sha 前缀与写死的受管相对路径。
+**默认零写入、零网络**(进 A5 命令清单)。实现(S5):`src/doctor/{types,checks,collect}.ts` + `src/commands/doctor.ts`;检查是纯函数,探测层只用只读 API,不 import `src/io/net.ts` / home-fs / 子进程(静态闭包里的 `safe-fs` 仅经 S4 既有链 `payload-load → build/payload → render/out-layout` 进入,行为上零写入由快照测试证明)。`--home` 同 `sync`:只收真实 HOME 或 KIT_TMP 之内(否则退出 2 `home_not_allowed`)。
 
-| id  | 检查                                                                                                    |
-| --- | ------------------------------------------------------------------------------------------------------- |
-| D01 | 运行时 node ≥ 22;启动器状态                                                                             |
-| D02 | 安装完整性:current 逐文件 sha 对照 `integrity.json`;`integrity.json` 自身对照外部锚点                   |
-| D03 | payload manifest 可解析、逐文件 sha 一致                                                                |
-| D04 | 登记表存在、可解析、无残留 txn                                                                          |
-| D05 | 每个登记条目:ok / drifted / missing / path_symlinked / hardlinked 计数                                  |
-| D06 | 托管块:intact / drifted / corrupt / missing 计数                                                        |
-| D07 | 待同步:会新增 / 更新 / 删除几项                                                                         |
-| D08 | 外来冲突计数与条目 id                                                                                   |
-| D09 | 遮蔽:`AGENTS.override.md`、`PI_CODING_AGENT_DIR`、claude 用户级 rules 加载(P-Q1 仍为 assumed)           |
-| D10 | 预算:按落盘后的整个文件算字节数,对照 `kit.toml`                                                         |
-| D11 | 探针:pendingProbes 个数;各 agent `tested_versions` 是否为空                                             |
-| D12 | 更新:开关、pin、上次检查时间与结果码、可用版本、锁、残留 staging、`max_seen_version`、registry 是否镜像 |
-| D13 | hook:套件目前不渲染 hook,恒 `n_a`                                                                       |
-| D14 | 状态目录权限:`~/.local/state/agent-kit` 为 0700、非链接、属主为当前用户                                 |
-| D15 | LLM 门:`egress` 取值、`allow_unverified` 槽位数、今日冷却标记数                                         |
-| D16 | 最近一次自动同步记录(`UpdateState.last_auto_sync`:outcome、原因码、计数)——② B 追加                      |
+**`--online`(S5 订正)**:本块不实现联网。传了 `--online` 且选中 D12 时,D12 记 `n_a`(`online_unavailable`)、stderr 一行 `DOCTOR_ONLINE_UNAVAILABLE`、退出 4;S7c 之后再接「多读一次 registry、不写缓存」。不影响其它检查。
 
-退出码:0 = 只有 ok / warn / n_a;1 = 有任一 fail / drifted / corrupt / over;2 = 用法错误(`unknown_arg`、`bad_check_id`);3 = doctor 自身 fail-closed(`state_unreadable`、`state_dir_unsafe`);4 = 用了 `--online` 但网络不可用(`network_unavailable`,只影响 D12)。
+输出只含 id、枚举、计数、版本号、sha 前缀与写死的受管相对路径(`~/<HOME 写入表内路径>[#块id]`);不含文件内容、摘录、绝对路径、用户名。每个检查固定六个键 `id` / `status`(`ok | warn | fail | n_a`)/ `result`(该检查自己的枚举)/ `counts` / `facts` / `items`;`--json` 为 `{schema_version, summary, checks[]}` 的 canonical JSON(`checks` 恒 16 项、按 id 升序,`--only` 时只含所选)。终端另有一道泄漏闸:输出里若出现 HOME / KIT_TMP / 状态目录 / 仓库根的绝对路径,整份输出作废,退出 3 `DOCTOR_FAIL_CLOSED reason=output_leak`。
+
+| id  | 检查                                                                                                                                        | `result` 取值(括号内为 `status`)                                                                                                                                          |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| D01 | 运行时 node ≥ 22;启动器状态(bootstrap 版本 / current 版本 / 是否正在用 current;启动器未安装按 `not_installed`)                              | `ok`(ok)、`node_too_old`(fail)、`launcher_broken` / `current_unrecorded`(warn)                                                                                            |
+| D02 | 安装完整性:current 逐文件 sha 对照 `integrity.json`;`integrity.json` 自身对照 `state.json` 的外部锚点                                       | `no_current`(n_a)、`ok`、`extra_files`(warn)、`current_unsafe` / `integrity_missing` / `integrity_invalid` / `file_mismatch` / `anchor_missing` / `anchor_mismatch`(fail) |
+| D03 | payload manifest 可解析、逐文件 sha 一致                                                                                                    | `no_payload`(n_a)、`ok`、`payload_invalid`(fail)                                                                                                                          |
+| D04 | 登记表存在、可解析、无残留 txn                                                                                                              | `ok`、`not_installed`(warn)、`ledger_invalid` / `txn_residual`(fail)、`ledger_unreadable`(fail,退出 3)                                                                    |
+| D05 | 每个登记条目:ok / drifted / missing / path_symlinked / hardlinked 计数(另有 `not_regular`、`block_corrupt` 两个键)                          | `no_ledger`(n_a)、`ok`、`issues`(drifted / 链接 / 非常规 / 块损坏 → fail;只有 missing → warn)                                                                             |
+| D06 | 托管块:intact / drifted / corrupt / missing 计数(登记表块 ∪ payload 将装的块;后者只有 corrupt 才计)                                         | `no_blocks`(n_a)、`ok`、`issues`(drifted / corrupt → fail;missing → warn)                                                                                                 |
+| D07 | 待同步:会新增 / 更新 / 删除几项(默认同步集合 ∪ 登记表里出现过的 agent,经 `planSync`)                                                        | `no_payload`(n_a)、`in_sync`(ok)、`pending`(warn)、`blocked`(fail:计划整次被拒,`items` 为稳定码)                                                                          |
+| D08 | 外来冲突计数与条目 id(同一份计划)                                                                                                           | `not_evaluated`(n_a)、`ok`、`unmanaged_only`(warn)、`foreign`(fail)                                                                                                       |
+| D09 | 遮蔽:`AGENTS.override.md`、`PI_CODING_AGENT_DIR`、claude 用户级 rules 加载(P-Q1 仍为 assumed)                                               | `ok`、`shadowed` / `assumed`(warn;只有计划 / 登记表里有 `.claude/rules/agent-kit/` 文件时才 assumed)                                                                      |
+| D10 | 预算:按**落盘后的整个文件**(现有内容与 payload 托管块合并之后)算 codex / pi 字节数,对照 `kit.toml`                                          | `nothing_measured`(n_a)、`ok`、`warn`(超 `max_bytes` 或达到阈值)、`over`(fail:超过数字型 `hard_limit`)                                                                    |
+| D11 | 探针:payload 里带 `conditional` 的文件个数;各 agent `tested_versions` 是否为空                                                              | `ok`、`untested`(warn:在用的 agent 为空)、`pending_probes`(warn)                                                                                                          |
+| D12 | 更新:开关、pin、上次检查时间与结果码、可用版本、锁、残留 staging、`max_seen_version`、registry 是否镜像(只读 `state.json` 与 `config.toml`) | `no_state` / `online_unavailable`(n_a)、`ok`、`last_check_failed` / `staging_residue` / `update_available`(warn)、`state_unreadable`(fail,退出 3)                         |
+| D13 | hook:套件目前不渲染 hook,恒 `n_a`                                                                                                           | `no_hook_rendered`(n_a)                                                                                                                                                   |
+| D14 | 状态目录权限:`~/.local/state/agent-kit` 为 0700、非链接、属主为当前用户                                                                     | `absent`(n_a)、`ok`、`mode_not_0700` / `foreign_owner`(fail)、`link_or_not_dir`(fail,退出 3)                                                                              |
+| D15 | LLM 门:`egress` 取值、`allow_unverified` 槽位数、今日冷却标记数(只读覆盖层与 `.state/llm-cooldown/`,不清扫过期标记)                         | `no_overlay`(n_a)、`ok`、`egress_on` / `allow_unverified` / `overlay_invalid`(warn)                                                                                       |
+| D16 | 最近一次自动同步记录(`UpdateState.last_auto_sync`:outcome、原因码、计数)——② B 追加                                                          | `none`(n_a)、`applied`(ok)、`declined` / `failed`(warn)、`state_unreadable`(fail,退出 3)                                                                                  |
+
+D05 / D06 复用 S3 的 `preflightEntry` / `currentOf`,D07 / D08 直接用 `planSync` 的计划,不另写第二套漂移判定(`test/doctor/consistency.test.ts` 与卸载模式计划对拍)。
+
+退出码:0 = 只有 ok / warn / n_a;1 = 有任一 `status=fail`(drifted / corrupt / over 等),stderr 逐项 `DOCTOR_CHECK_FAILED check=<id> result=<码>`;2 = 用法错误(`DOCTOR_USAGE reason=unknown_arg|bad_check_id|home_not_allowed`);3 = doctor 自身 fail-closed(`DOCTOR_FAIL_CLOSED reason=state_unreadable|state_dir_unsafe|output_leak`:状态目录路径上有符号链接 / 不是目录 → `state_dir_unsafe`,此时 D04–D08、D12、D16 不读,记 `skipped_state_unsafe` 且仍退出 3,不因 `--only` 被放过;`state.json` / 登记表存在但读不了 → `state_unreadable`);4 = 用了 `--online`(`DOCTOR_ONLINE_UNAVAILABLE`,只影响 D12)。多项用 `combineExitCodes`(3 > 2 > 1 > 4 > 0)。
 
 ### 19.4 `update`
 
