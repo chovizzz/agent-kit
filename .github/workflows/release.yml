@@ -70,7 +70,10 @@ jobs:
       - name: agent-kit check
         run: node dist/cli.js check
 
-      - name: Publish preflight (package surface + tag/version match)
+      - name: Build payload (prerendered rules + integrity)
+        run: node scripts/build-payload.mjs
+
+      - name: Publish preflight (package surface + payload integrity + tag/version match)
         run: node scripts/check-publish.mjs --tag "${GITHUB_REF_NAME}"
 
       - name: Publish to npm

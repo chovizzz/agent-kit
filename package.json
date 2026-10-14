@@ -19,6 +19,7 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "build:payload": "node scripts/build-payload.mjs",
     "check:publish": "node scripts/check-publish.mjs"
   },
   "dependencies": {
