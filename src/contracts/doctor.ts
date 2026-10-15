@@ -28,6 +28,10 @@ export type DoctorCheckId = z.infer<typeof DoctorCheckIdSchema>;
 export const DOCTOR_STATUSES = ['ok', 'warn', 'fail', 'n_a'] as const;
 export const DoctorStatusSchema = z.enum(DOCTOR_STATUSES);
 
-export const DOCTOR_USAGE_REASONS = ['unknown_arg', 'bad_check_id'] as const;
-export const DOCTOR_FAIL_CLOSED_REASONS = ['state_unreadable', 'state_dir_unsafe'] as const;
+export const DOCTOR_USAGE_REASONS = ['unknown_arg', 'bad_check_id', 'home_not_allowed'] as const;
+export const DOCTOR_FAIL_CLOSED_REASONS = [
+  'state_unreadable',
+  'state_dir_unsafe',
+  'output_leak',
+] as const;
 export const DOCTOR_NOT_RUN_REASONS = ['network_unavailable'] as const;
