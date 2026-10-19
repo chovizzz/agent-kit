@@ -458,6 +458,7 @@ export function createSyncCommand(deps: SyncCommandDeps = {}): CommandDef {
         snapshot: g.snap,
         ledgerRead: g.ledgerRead,
         txnId,
+        lock,
       });
       return report(ctx, args, g.plan, true, res.txnId, res.files);
     } finally {

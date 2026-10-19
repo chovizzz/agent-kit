@@ -50,6 +50,7 @@ import { probePath } from '../sync/snapshot.js';
 import {
   markBad,
   markInstalled,
+  markNotified,
   parseUpdateState,
   recordCheck,
   serializeUpdateState,
@@ -70,6 +71,9 @@ export const UPDATE_LOCK_REL = `${UPDATE_STATE_DIR_REL}/lock`;
 const VERSIONS_REL = `${SHARE_REL}/versions`;
 const STAGING_REL = `${SHARE_REL}/staging`;
 const TUF_REL = `${SHARE_REL}/tuf`;
+/** 后台 worker 的受控 TMPDIR(tuf-js 联网刷新在 os.tmpdir() 下建临时目录) */
+export const UPDATE_TMP_REL = `${UPDATE_STATE_DIR_REL}/tmp`;
+export const UPDATE_LOG_REL = `${UPDATE_STATE_DIR_REL}/log`;
 const SENTINEL = '.rm-sentinel';
 
 export const UPDATE_LOCK_TTL_MS = UPDATE_LOCK_TTL_MINUTES * 60 * 1000;
@@ -94,10 +98,11 @@ export interface InstallDeps {
   /** 验签器(缺省用 sigstore);测试注入 */
   verifier?: ProvenanceVerifier;
   /**
-   * 冒烟的真执行钩子(S7c-B 接 `runSelf … --version`)。S7c-A 默认只做静态冒烟;
-   * 传入时在静态冒烟之后调用,返回 false / 抛错都算冒烟失败。参数是 staging 目录的绝对路径。
+   * 冒烟的真执行钩子(S7c-B:`src/update/launcher.ts` 的 `smokeCandidate`,经 runSelf 跑 `staging/st-<hex>/dist/cli.js --version`)。
+   * 默认只做静态冒烟;传入时在静态冒烟与读回复核之后、改名之前调用,返回 false / 抛错都算冒烟失败。
+   * 参数:HOME、staging 目录的绝对路径、目标版本。
    */
-  smoke?: (stagingAbs: string) => boolean | Promise<boolean>;
+  smoke?: (c: { home: string; stagingAbs: string; version: string }) => boolean | Promise<boolean>;
   /** 测试注入口:在命名点抛错,模拟崩溃 / IO 错误。产品代码不传。 */
   inject?: (point: string) => void | Promise<void>;
   onStage?: (stage: HomeFsStage) => void | Promise<void>;
@@ -308,6 +313,41 @@ export async function writeUpdateState(env: InstallEnv, state: UpdateState): Pro
     mode: STATE_FILE_MODE,
     dirMode: STATE_DIR_MODE,
   });
+}
+
+/**
+ * 后台 worker / 冒烟用的受控 TMPDIR:`~/.local/state/agent-kit/update/tmp`(0700)。spawn 之前创建并复核
+ * (链上无符号链接、是目录、属主是自己、权限不含 group/other 位);任何一步不满足返回 undefined(调用方不启动后台任务)。
+ */
+export async function ensureControlledTmp(env: InstallEnv): Promise<string | undefined> {
+  try {
+    if (await chainUnsafe(env.home, UPDATE_STATE_DIR_REL)) return undefined;
+    const ctx = mkCtx(env, [`${UPDATE_TMP_REL}/${SENTINEL}`]);
+    await mkdirp(ctx, UPDATE_TMP_REL, STATE_DIR_MODE);
+    const abs = path.join(env.home, ...UPDATE_TMP_REL.split('/'));
+    const st = await lstat(abs);
+    if (st.isSymbolicLink() || !st.isDirectory()) return undefined;
+    if ((st.mode & 0o077) !== 0) return undefined;
+    if (typeof process.getuid === 'function' && st.uid !== process.getuid()) return undefined;
+    return abs;
+  } catch {
+    return undefined;
+  }
+}
+
+/** worker 的稳定码日志(只此一行:最近一次结果;不含异常消息 / 路径)。写失败吞掉——日志不能影响更新本身。 */
+export async function writeWorkerLog(env: InstallEnv, code: string): Promise<void> {
+  if (!/^[a-z_]{1,40}$/.test(code)) return;
+  try {
+    if (await chainUnsafe(env.home, UPDATE_STATE_DIR_REL)) return;
+    const ctx = mkCtx(env, [UPDATE_LOG_REL]);
+    await writeFile(ctx, UPDATE_LOG_REL, `${nowOf(env).toISOString()} ${code}\n`, {
+      mode: STATE_FILE_MODE,
+      dirMode: STATE_DIR_MODE,
+    });
+  } catch {
+    // 尽力而为
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -750,7 +790,7 @@ export async function installVersion(env: InstallEnv, input: InstallInput): Prom
     if (env.deps.smoke !== undefined) {
       let smokeOk = false;
       try {
-        smokeOk = (await env.deps.smoke(stagingAbs)) === true;
+        smokeOk = (await env.deps.smoke({ home: env.home, stagingAbs, version })) === true;
       } catch {
         smokeOk = false;
       }
@@ -942,5 +982,28 @@ export async function rollbackInstalled(
     if (e instanceof UpdateLockError) return { ok: false, reason: 'lock_lost' };
     if (e instanceof HomeWriteDeniedError) return { ok: false, reason: 'write_denied' };
     return { ok: false, reason: 'io_error' };
+  }
+}
+
+/**
+ * 前台 TTY 提示过「自动同步被拒」之后,在锁内把 `last_notice_at` 记下(同一条记录只提示一次)。
+ * 拿不到锁 / 状态不可读 / 写失败一律吞掉:最坏是下次再提示一次。
+ */
+export async function markNoticeShown(env: InstallEnv): Promise<void> {
+  let lock: UpdateLock;
+  try {
+    lock = await acquireUpdateLock(env);
+  } catch {
+    return;
+  }
+  try {
+    const r = await readUpdateState(env.home);
+    if (r.kind !== 'ok') return;
+    await lock.assertHeld();
+    await writeUpdateState(env, markNotified(r.state, nowOf(env).getTime()));
+  } catch {
+    // 尽力而为
+  } finally {
+    await lock.release().catch(() => undefined);
   }
 }

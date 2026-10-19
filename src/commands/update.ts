@@ -21,12 +21,15 @@ import { KIT_VERSION } from '../contracts/meta.js';
 import {
   UPDATE_PIN_RE,
   UserConfigSchema,
+  type LastAutoSync,
   type UpdateConfig,
   type UpdateState,
 } from '../contracts/update.js';
+import { smokeCandidate } from '../update/launcher.js';
 import { canonicalJson } from '../io/canonical-json.js';
 import { NetError, type FetchLike } from '../io/net.js';
-import { getRealHome } from '../io/paths.js';
+import { RUN_SELF_ENV_PICK_RE } from '../io/exec.js';
+import { getRealHome, pickProcessEnv } from '../io/paths.js';
 import { resolveAllowedHome, probePath } from '../sync/snapshot.js';
 import {
   UpdateLockError,
@@ -59,6 +62,18 @@ export interface UpdateCommandDeps extends InstallDeps {
   source?: RegistrySource;
   /** 测试注入:真实 registry 的 fetch */
   fetch?: FetchLike;
+  /**
+   * 安装成功(current 已切换、状态已写)之后、**仍持 update 锁**时调用,返回要记进 `last_auto_sync` 的记录。
+   * 抛错或返回 undefined 都不影响已提交的安装结果,也不会 markBad。
+   */
+  afterInstall?: (info: {
+    ienv: InstallEnv;
+    version: string;
+    anchor: string;
+    autoSync: 'off' | 'safe';
+  }) => Promise<LastAutoSync | undefined>;
+  /** 锁内、重读状态之后的二次闸(后台 worker 用来在锁内再查一次节流);返回 false 则静默结束,不联网、不写 */
+  proceedInLock?: (state: UpdateState) => boolean;
 }
 
 interface Parsed {
@@ -190,7 +205,8 @@ export function createUpdateCommand(deps: UpdateCommandDeps = {}): CommandDef {
     ],
     async run(ctx: CommandContext): Promise<number> {
       const args = parseArgs(ctx.argv);
-      const env = (ctx as EnvCommandContext).env;
+      // 真实 CLI 入口 main(argv) 不注入 env:KIT_UPDATE_PIN / KIT_UPDATE_REGISTRY / KIT_AUTO_* 等要从进程环境里取(只取收窄的具名键)
+      const env = (ctx as EnvCommandContext).env ?? pickProcessEnv(RUN_SELF_ENV_PICK_RE);
       try {
         if (args.error !== undefined) throw new Exit(ExitCode.USAGE, 'USAGE', args.error);
         const homeReal = await resolveAllowedHome(
@@ -473,30 +489,39 @@ export function createUpdateCommand(deps: UpdateCommandDeps = {}): CommandDef {
     const state = await readState(ienv);
     const source = await openSource(ctx, ienv, settings);
 
-    let facts: Fetched;
-    try {
-      facts = await fetchFacts(source);
-    } catch (e) {
-      if (e instanceof Exit && args.write && !(await recordOnly(ctx, ienv, e.reason, {} as Plan))) {
-        throw new Exit(ExitCode.FAIL_CLOSED, 'FAIL_CLOSED', 'state_write_failed');
+    // 后台 worker(给了 proceedInLock)走「锁优先」:先拿锁、重读状态、查节流,之后才第一次访问 registry,
+    // 排队的两个 worker 不会各自先联网再抢锁;一切检查结果(含非安装)都在锁内记录。
+    if (deps.proceedInLock === undefined || !args.write) {
+      let facts: Fetched;
+      try {
+        facts = await fetchFacts(source);
+      } catch (e) {
+        if (
+          e instanceof Exit &&
+          args.write &&
+          !(await recordOnly(ctx, ienv, e.reason, {} as Plan))
+        ) {
+          throw new Exit(ExitCode.FAIL_CLOSED, 'FAIL_CLOSED', 'state_write_failed');
+        }
+        throw e;
       }
-      throw e;
-    }
-    const plan = decide(facts, state, settings, args, source.mirror);
-    const v = verdict(plan);
-    if (plan.outcome !== 'ok' || !args.write) {
-      emitPlan(ctx, args, settings, state, plan, false);
-      if (v.stderr !== undefined) ctx.stderr(`${v.stderr}\n`);
-      if (args.write && !(await recordOnly(ctx, ienv, resultOf(plan), plan))) {
-        return ExitCode.FAIL_CLOSED;
+      const plan = decide(facts, state, settings, args, source.mirror);
+      const v = verdict(plan);
+      if (plan.outcome !== 'ok' || !args.write) {
+        emitPlan(ctx, args, settings, state, plan, false);
+        if (v.stderr !== undefined) ctx.stderr(`${v.stderr}\n`);
+        if (args.write && !(await recordOnly(ctx, ienv, resultOf(plan), plan))) {
+          return ExitCode.FAIL_CLOSED;
+        }
+        return v.code;
       }
-      return v.code;
     }
 
     // --write 且策略放行:拿锁 → 重读状态 / packument → 重新决定 → 安装
     const lock = await lockOrExit(ienv);
     try {
       const state2 = await readState(ienv);
+      if (deps.proceedInLock !== undefined && !deps.proceedInLock(state2)) return ExitCode.OK;
       let facts2: Fetched;
       try {
         facts2 = await fetchFacts(source);
@@ -559,6 +584,27 @@ export function createUpdateCommand(deps: UpdateCommandDeps = {}): CommandDef {
         },
       });
       if (res.ok) {
+        if (deps.afterInstall !== undefined) {
+          let rec: LastAutoSync | undefined;
+          try {
+            rec = await deps.afterInstall({
+              ienv,
+              version: res.version,
+              anchor: res.anchor,
+              autoSync: settings.cfg.auto_sync,
+            });
+          } catch {
+            rec = undefined;
+          }
+          if (rec !== undefined) {
+            try {
+              await lock.assertHeld();
+              await writeUpdateState(ienv, { ...res.state, last_auto_sync: rec });
+            } catch {
+              // 自动同步的记录写不进去不改变安装结果
+            }
+          }
+        }
         emitPlan(ctx, args, settings, state2, { ...plan2, outcome: 'ok' }, true, {
           installed: res.version,
           anchor: res.anchor.slice(0, 12),
@@ -692,4 +738,4 @@ export function createUpdateCommand(deps: UpdateCommandDeps = {}): CommandDef {
   return def;
 }
 
-export const command: CommandDef = createUpdateCommand();
+export const command: CommandDef = createUpdateCommand({ smoke: (c) => smokeCandidate(c) });

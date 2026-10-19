@@ -5,7 +5,9 @@ import { KIT_VERSION } from '../contracts/meta.js';
 import { canonicalJson } from '../io/canonical-json.js';
 import {
   HOME_DENY,
+  HomeExistsError,
   HomeWriteDeniedError,
+  createExclusive,
   createHomeFsContext,
   removeDir,
   remove,
@@ -13,7 +15,7 @@ import {
   type HomeFsContext,
   type HomeFsStage,
 } from '../io/home-fs.js';
-import { readDir } from '../io/read-fs.js';
+import { lstat, readDir } from '../io/read-fs.js';
 import type { LoadedPayload } from './payload-load.js';
 import {
   BACKUPS_DIR_REL,
@@ -65,8 +67,6 @@ export interface ApplyDeps {
   randomHex?: (bytes: number) => string;
   pid?: number;
   isPidAlive?: (pid: number) => boolean;
-  /** 锁写入后复读前的等待毫秒数(缺省 25) */
-  lockSettleMs?: number;
   /** 测试注入口:在命名点抛错,模拟崩溃 / IO 错误。产品代码不传。 */
   inject?: (point: string) => void | Promise<void>;
   /** home-fs 原子写各阶段的注入口 */
@@ -128,6 +128,8 @@ interface LockDoc {
 }
 
 export interface LockHandle {
+  /** 提交点前复核:锁文件里的 nonce 仍是自己的;不是(陈旧锁回收竞态里被别人夺走)→ 抛 SYNC_LOCKED(lost),调用方不得继续写 */
+  assertHeld(): Promise<void>;
   release(): Promise<void>;
 }
 
@@ -163,24 +165,15 @@ async function readLock(
 }
 
 /**
- * 取 sync 锁:内容 = pid + 开始时间 + nonce,0600。持锁进程还在 → `SYNC_LOCKED`(超过 TTL 15 分钟也只报不杀);
- * 持锁进程已不在 / 内容损坏 → 回收。
- * ⚠️ home-fs 没有 O_EXCL 创建原语(只有原子替换):这里是「检查 → 写 → 复读核对 nonce」,窄化了竞态窗口但不是严格互斥;
- * 严格 O_EXCL 需要 home-fs 增加 createExclusive(见汇报「需要主代理处理」)。
+ * 取 sync 锁:`createExclusive`(O_CREAT|O_EXCL|O_NOFOLLOW,S7c-B 起与 update 锁同一原语),内容 = pid + 开始时间 + nonce,0600。
+ * 已存在时:持锁进程还在 → `SYNC_LOCKED`(超过 TTL 15 分钟也只报不杀);持锁进程已不在 / 内容损坏 → 回收(删除前复读确认仍是同一把)后重试一次。
+ * 空文件且创建不满 {@link SYNC_LOCK_PARTIAL_GRACE_MS}:正在写(O_EXCL 创建与写入之间的窗口),按被持有。
+ * 回收有残余竞态(两个回收者先后删除),由 release 的 nonce 复核与事务自身的预检兜底。
  */
+export const SYNC_LOCK_PARTIAL_GRACE_MS = 10_000;
+
 export async function acquireLock(env: ApplyEnv): Promise<LockHandle> {
   const alive = env.deps.isPidAlive ?? defaultAlive;
-  const cur = await readLock(env);
-  if (cur.state === 'ok' && alive(cur.doc.pid)) {
-    // 持锁进程还活着:超过 TTL 也只报不杀(detail 区分,供诊断;对外仍是 SYNC_LOCKED)
-    const age =
-      (env.deps.now ?? ((): Date => new Date()))().getTime() - Date.parse(cur.doc.started_at);
-    throw new ApplyError('SYNC_LOCKED', age > SYNC_LOCK_TTL_MS ? 'held_over_ttl' : 'held');
-  }
-  if (cur.state === 'bad') {
-    const p = await probePath(env.homeReal, LOCK_REL);
-    if (p.entry.kind !== 'file') throw new ApplyError('SYNC_PATH_NOT_REGULAR', 'lock');
-  }
   const now = env.deps.now ?? ((): Date => new Date());
   const doc: LockDoc = {
     pid: env.deps.pid ?? process.pid,
@@ -188,35 +181,65 @@ export async function acquireLock(env: ApplyEnv): Promise<LockHandle> {
     nonce: (env.deps.randomHex ?? defaultRandomHex)(8),
   };
   const ctx = mkCtx(env, [LOCK_REL]);
-  const dropIfOurs = async (): Promise<void> => {
+  for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const l = await readLock(env);
-      if (l.state === 'ok' && l.doc.nonce === doc.nonce)
-        await remove(mkCtx(env, [LOCK_REL]), LOCK_REL);
-    } catch {
-      // 尽力而为
-    }
-  };
-  try {
-    await writeState(ctx, LOCK_REL, canonicalJson(doc));
-    await new Promise<void>((r) => setTimeout(r, env.deps.lockSettleMs ?? 25));
-    const again = await readLock(env);
-    if (again.state !== 'ok' || again.doc.nonce !== doc.nonce) {
-      throw new ApplyError('SYNC_LOCKED', 'lost_race');
-    }
-  } catch (e) {
-    // 写入后任何一步失败:自己留下的锁必须撤掉(否则本进程之后永远 SYNC_LOCKED);别人的锁不动
-    await dropIfOurs();
-    throw e;
-  }
-  return {
-    async release(): Promise<void> {
-      const now2 = await readLock(env);
-      if (now2.state === 'ok' && now2.doc.nonce === doc.nonce) {
-        await remove(mkCtx(env, [LOCK_REL]), LOCK_REL);
+      await createExclusive(ctx, LOCK_REL, canonicalJson(doc), {
+        mode: STATE_FILE_MODE,
+        dirMode: STATE_DIR_MODE,
+      });
+      const mine = await readLock(env);
+      if (mine.state !== 'ok' || mine.doc.nonce !== doc.nonce) {
+        throw new ApplyError('SYNC_LOCKED', 'lost_race');
       }
-    },
-  };
+      return {
+        async assertHeld(): Promise<void> {
+          const cur = await readLock(env);
+          if (cur.state !== 'ok' || cur.doc.nonce !== doc.nonce) {
+            throw new ApplyError('SYNC_LOCKED', 'lost');
+          }
+        },
+        async release(): Promise<void> {
+          const now2 = await readLock(env);
+          if (now2.state === 'ok' && now2.doc.nonce === doc.nonce) {
+            await remove(mkCtx(env, [LOCK_REL]), LOCK_REL);
+          }
+        },
+      };
+    } catch (e) {
+      if (!(e instanceof HomeExistsError)) throw e;
+    }
+    const cur = await readLock(env);
+    if (cur.state === 'absent') continue;
+    if (cur.state === 'ok') {
+      if (alive(cur.doc.pid)) {
+        const age = now().getTime() - Date.parse(cur.doc.started_at);
+        throw new ApplyError('SYNC_LOCKED', age > SYNC_LOCK_TTL_MS ? 'held_over_ttl' : 'held');
+      }
+    } else {
+      const p = await probePath(env.homeReal, LOCK_REL);
+      if (p.entry.kind !== 'file') throw new ApplyError('SYNC_PATH_NOT_REGULAR', 'lock');
+      if (p.text === '') {
+        let mtimeMs = 0;
+        try {
+          mtimeMs = (await lstat(path.join(env.homeReal, ...LOCK_REL.split('/')))).mtimeMs;
+        } catch {
+          continue;
+        }
+        if (now().getTime() - mtimeMs < SYNC_LOCK_PARTIAL_GRACE_MS) {
+          throw new ApplyError('SYNC_LOCKED', 'held');
+        }
+      }
+    }
+    // 回收:删除前复读,确认还是刚才判定为陈旧的那把
+    const again = await readLock(env);
+    const same =
+      cur.state === 'ok'
+        ? again.state === 'ok' && again.doc.nonce === cur.doc.nonce
+        : again.state === 'bad';
+    if (!same) continue;
+    await remove(mkCtx(env, [LOCK_REL]), LOCK_REL);
+  }
+  throw new ApplyError('SYNC_LOCKED', 'lost_race');
 }
 
 // ---------------------------------------------------------------------------
@@ -331,6 +354,7 @@ async function writeEdits(
   edits: readonly FileEdit[],
   ledgerAfter: LedgerAfter,
   resumed: boolean,
+  lock?: LockHandle,
 ): Promise<void> {
   const id = doc.txn_id;
   const setPhase = async (phase: SyncTxn['phase']): Promise<void> => {
@@ -339,6 +363,7 @@ async function writeEdits(
   await setPhase('writing');
   for (const e of edits) {
     await inject(env, `before-write:${e.path}`);
+    await lock?.assertHeld();
     const cur = await currentSha(env, e.path);
     if (cur === e.afterSha) {
       if (e.afterText === null) await cleanupEmptyDirs(ctx, e.path);
@@ -359,6 +384,7 @@ async function writeEdits(
     await inject(env, `after-write:${e.path}`);
   }
   await inject(env, 'before-ledger');
+  await lock?.assertHeld();
   if (ledgerAfter.action === 'write') await writeState(ctx, LEDGER_REL, ledgerAfter.text as string);
   else if (ledgerAfter.action === 'delete') await remove(ctx, LEDGER_REL);
   await inject(env, 'after-ledger');
@@ -372,19 +398,22 @@ export interface TxnSpec {
   edits: readonly FileEdit[];
   ledgerBeforeText: string | null;
   ledgerAfter: LedgerAfter;
+  /** 已持有的 sync 锁:journal、每个文件、登记表提交前都复核仍持有 */
+  lock?: LockHandle;
 }
 
 /** 执行一个新事务(journal → 备份 → 逐文件写 → 登记表 → 删 journal → 修剪备份)。 */
 export async function executeTxn(env: ApplyEnv, spec: TxnSpec): Promise<void> {
   const id = spec.txn.txn_id;
   const ctx = mkCtx(env, backupScope(id, spec.edits));
+  await spec.lock?.assertHeld();
   await writeState(ctx, journalOf(id), canonicalJson(spec.txn));
   await inject(env, 'journal-written');
   await writeBackups(ctx, spec.txn, spec.edits, spec.ledgerBeforeText, spec.ledgerAfter);
   await inject(env, 'backup-written');
   const backedUp = { ...spec.txn, phase: 'backed_up' as const };
   await writeState(ctx, journalOf(id), canonicalJson(backedUp));
-  await writeEdits(env, ctx, backedUp, spec.edits, spec.ledgerAfter, false);
+  await writeEdits(env, ctx, backedUp, spec.edits, spec.ledgerAfter, false, spec.lock);
   await pruneBackups(env, id);
 }
 
@@ -438,6 +467,8 @@ export interface ApplyPlanInput {
   snapshot: SnapshotResult;
   ledgerRead: LedgerRead;
   txnId: string;
+  /** 已持有的 sync 锁(传了就在每个提交点前复核) */
+  lock?: LockHandle;
 }
 
 export interface ApplyResult {
@@ -489,7 +520,13 @@ export async function applyPlan(env: ApplyEnv, input: ApplyPlanInput): Promise<A
     startedAt: (env.deps.now ?? ((): Date => new Date()))().toISOString(),
     ops,
   });
-  await executeTxn(env, { txn, edits, ledgerBeforeText, ledgerAfter });
+  await executeTxn(env, {
+    txn,
+    edits,
+    ledgerBeforeText,
+    ledgerAfter,
+    ...(input.lock !== undefined ? { lock: input.lock } : {}),
+  });
   return { txnId: txn.txn_id, files: edits.length, ledger: ledgerAfter.action };
 }
 

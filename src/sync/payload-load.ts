@@ -30,6 +30,8 @@ export interface LoadedPayload {
   manifest: PayloadManifest;
   /** `canonicalJson(manifest)` 字节的 sha256(登记表头 / txn 的 payload_sha256) */
   manifestSha256: string;
+  /** 本次加载实际读到的包根 `integrity.json` 原始字节的 sha256(自动同步据此对外部锚点:读到的就是锚点认可的那份) */
+  integritySha256: string;
   /** `payload_path` → 文件文本(已通过 integrity 核对) */
   contents: ReadonlyMap<string, string>;
   /** `payload_path` → 计划器要的 sha(owned = 全文,managed-block = 块体);算不出为空串 */
@@ -151,6 +153,7 @@ export async function loadPayload(root: string | undefined): Promise<LoadedPaylo
   return {
     manifest,
     manifestSha256: sha256Of(canonicalJson(manifest)),
+    integritySha256: sha256Of(integrityBytes),
     contents,
     payloadSha,
   };
