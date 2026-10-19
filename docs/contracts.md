@@ -186,16 +186,16 @@ A2 的 12 格矩阵(`limit_source` × `enforce` × 超/不超;退出码 / 是否
 
 ## 7. 命令面(`src/cli.ts` 注册表;命令桩的形状)
 
-| 命令                                                  | 阶段   | 文件                              | 备注                                                                  |
-| ----------------------------------------------------- | ------ | --------------------------------- | --------------------------------------------------------------------- |
-| `build`                                               | P0     | `src/commands/build.ts`           | 合并+渲染到 `out/`;**B01 之后无块的边界覆盖它**,由 B19 接线           |
-| `check`                                               | P0     | `src/commands/check.ts`           | 组合 `lint-cmd.ts`(B03)、`check-budget.ts`(B05)、`guards-cmd.ts`(B04) |
-| `redact`                                              | P0     | `src/commands/redact-cmd.ts`      | `--selftest` / `--stdin`(B09)                                         |
-| `signals collect`                                     | P0     | `src/commands/signals-collect.ts` | `--source <路径> --dry`(B10b)                                         |
-| `inventory`                                           | P1(桩) | `src/commands/inventory.ts`       | 见 §4.1                                                               |
-| `probe` `reflect` `judge` `attest` `promote` `retire` | P1     | 各一个文件                        | `probe` `reflect` `judge` 已实装(`reflect`/`judge` 见 §17);其余仍是桩 |
-| `sync` `doctor`                                       | P2     | 各一个文件                        | 桩                                                                    |
-| `update`                                              | P2     | `src/commands/update.ts`          | 桩(S0 注册,契约见 §19.4)                                              |
+| 命令                                                  | 阶段   | 文件                              | 备注                                                                       |
+| ----------------------------------------------------- | ------ | --------------------------------- | -------------------------------------------------------------------------- |
+| `build`                                               | P0     | `src/commands/build.ts`           | 合并+渲染到 `out/`;**B01 之后无块的边界覆盖它**,由 B19 接线                |
+| `check`                                               | P0     | `src/commands/check.ts`           | 组合 `lint-cmd.ts`(B03)、`check-budget.ts`(B05)、`guards-cmd.ts`(B04)      |
+| `redact`                                              | P0     | `src/commands/redact-cmd.ts`      | `--selftest` / `--stdin`(B09)                                              |
+| `signals collect`                                     | P0     | `src/commands/signals-collect.ts` | `--source <路径> --dry`(B10b)                                              |
+| `inventory`                                           | P1(桩) | `src/commands/inventory.ts`       | 见 §4.1                                                                    |
+| `probe` `reflect` `judge` `attest` `promote` `retire` | P1     | 各一个文件                        | `probe` `reflect` `judge` 已实装(`reflect`/`judge` 见 §17);其余仍是桩      |
+| `sync` `doctor`                                       | P2     | 各一个文件                        | 已实装(S4 / S5,契约见 §19.2 / §19.3)                                       |
+| `update`                                              | P2     | `src/commands/update.ts`          | 已实装(S7c-A:检查 / 安装 / 回滚,契约见 §19.4;启动器与后台 worker 是 S7c-B) |
 
 - 全局选项(由 `cli.ts` 取走,命令不用管):`--root <dir>`、`--overlay <path>`、`-h/--help`、`-v/--version`。
 - `check` 的完整 flag 集合在 B01 定死:`--guards`、`--base <ref>`、`--head <ref>`、`--label <name>`、`--report`;解析后以 `CheckOptions`
@@ -2481,7 +2481,7 @@ agent-kit retire  --rule <id> --to deprecated|retired --reason manual|expired|su
 
 ## 19. sync / doctor / update 命令面与自动更新契约(S0,契约先行;S1–S9 实装后订正)
 
-本节先定死三条命令的命令面、退出码、稳定码、文件位置与授权边界,实现在后续块(S1–S8)。`doctor` 已由 S5 实装(§19.3),`update` 是新注册的命令桩。设计依据:`sync-doctor-update-design.md` §0–§6、§8;用户 2026-10-14 对 16 条决策的拍板(14 条按设计稿推荐,**② 改 B、⑭ 改 B**)。新增 schema 全部 `strictObject`,只追加;`contracts-v1` 既有编号不重排。
+本节先定死三条命令的命令面、退出码、稳定码、文件位置与授权边界,实现在后续块(S1–S8)。`sync` 已由 S4 实装(§19.2),`doctor` 已由 S5 实装(§19.3),`update` 的检查 / 安装 / 回滚本体已由 S7c-A 实装(§19.4,启动器与后台 worker 属 S7c-B)。设计依据:`sync-doctor-update-design.md` §0–§6、§8;用户 2026-10-14 对 16 条决策的拍板(14 条按设计稿推荐,**② 改 B、⑭ 改 B**)。新增 schema 全部 `strictObject`,只追加;`contracts-v1` 既有编号不重排。
 
 通用约定(沿用 §17 / §18):
 
@@ -2589,7 +2589,7 @@ backups/<id>/complete           备份写完的标记(缺失则 --resume 拒绝)
 - **文件权限**:更新已有文件保留其权限位;新建文件 0644;状态目录与状态文件 0700 / 0600。`modes.json` 让回滚重建被删文件时沿用原权限位。
 - **托管块操作的 txn shaBefore / shaAfter 是整文件 sha**(计划器给的是块体 sha;执行层先算出写后全文再填)。
 - **幂等运行不拿锁**:`--write` 先无锁规划,计划为空(无写操作、登记表不变)直接返回,零写入、零 mtime 变化(含目录项);有东西要写才拿锁,并在锁内重新读登记表 / 磁盘、重新规划。
-- **锁**:`sync/lock`,pid + 开始时间 + nonce;持锁进程还在 → 退出 4 `SYNC_LOCKED`(超过 15 分钟 TTL 也只报不杀);进程已不在或内容损坏 → 回收。⚠️ home-fs 目前没有 O_EXCL 创建原语,实现是「检查 → 原子写 → 复读核对 nonce」,窄化了竞态窗口但**不是严格互斥**;严格 O_EXCL 需要 home-fs 增加 `createExclusive`(待主代理)。
+- **锁**:`sync/lock`,pid + 开始时间 + nonce;持锁进程还在 → 退出 4 `SYNC_LOCKED`(超过 15 分钟 TTL 也只报不杀);进程已不在或内容损坏 → 回收。⚠️ sync 的锁仍是「检查 → 原子写 → 复读核对 nonce」,窄化了竞态窗口但**不是严格互斥**;home-fs 已于 S7c-A 增加 `createExclusive`(update 锁在用),sync 锁改接它是后续的小改动(待主代理排期)。
 - **`--resume`**:恰好一个残留 journal 且 `backups/<id>/complete` 在,才继续;每个文件当前 sha 必须等于写前或写后(写后的跳过),否则 `SYNC_TXN_INCOMPLETE`;写完后登记表、删 journal、修剪备份。不需要 payload。没有残留事务时是空操作(退出 0)。
 - **`--rollback <id>`**:id 是残留事务(放宽:每个文件当前 sha 等于写前**或**写后,写后的还原;登记表同理)或已收尾事务(严格:每个文件与登记表当前 sha 都等于该事务写入后的 sha)。任一前提不成立,或备份缺失 / 内容 sha 对不上 → `SYNC_ROLLBACK_MISMATCH`,整次不写。回滚本身是一个有 journal 与备份的事务(`action=rollback`,可再回滚);先文件后登记表。回滚残留事务成功后删除该事务的 journal。
 - **备份保留**:成功后只保留 id 最大(时间最新)的 `SYNC_BACKUPS_KEPT`(5)个 `backups/<id>/`;有 journal 的事务永不修剪。
@@ -2635,27 +2635,35 @@ D05 / D06 复用 S3 的 `preflightEntry` / `currentOf`,D07 / D08 直接用 `plan
 ### 19.4 `update`
 
 ```
-agent-kit update [--write] [--now] [--major] [--rollback] [--json]
+agent-kit update [--write] [--now] [--major] [--rollback] [--json] [--home <dir>]
 ```
 
-- **默认干跑**:读一次 registry(只读网络请求),打印会装哪个版本、被哪条策略挡住;不写任何文件。`--write` 才安装 / 回滚。
+- **默认干跑**:读一次 registry(只读网络请求),打印会装哪个版本、被哪条策略挡住;不写任何文件(不建状态目录、不记 `last_check_at`)。`--write` 才安装 / 回滚 / 记录检查结果。stdout 为 `current / channel / target / decision <码>[ detail=…][ remaining_hours=N]` 与 `would install <v>`(`--json` 为 canonical JSON,键固定:`mode, dry, channel, current, target, decision, detail, cooldown_remaining_hours` 及安装后的 `installed, anchor, gc_removed, gc_failed`);安装成功多一行 `installed <v>` 与锚点前 12 位。
+- `--home <dir>`(S7c-A 追加,与 `sync` / `doctor` 同):只接受真实 HOME 或 `KIT_TMP` 之内的目录,否则 `UPDATE_USAGE reason=home_not_allowed`;`config.toml` / 状态 / 安装目录 / TUF 缓存都在该 HOME 下。
 - `--now`:本次忽略冷却期,其余校验(sha512、provenance、防降级、同 major)照旧。`--major`:允许跨 major,需要 `--write`(`major_requires_write`)。`--rollback`:把 `current` 切回保留的上一版本并记入 `bad_versions`,需要 `--write`(`rollback_requires_write`);只能切到本地保留的版本。
-- 内部入口 `agent-kit __update --background`(后台 worker,S7 注册)不属于公开命令面;stdio 丢弃,日志只记稳定码。
-- 退出码:0 已最新 / 计划已打印 / 已安装;1 校验失败(`UPDATE_VERIFY_FAILED`)、防降级拒绝(`UPDATE_DOWNGRADE_REFUSED`);2 用法错误;3 fail-closed(状态目录不安全、写出口拒绝);4 未执行(网络不可用、`not_ready`、`attestations_unreachable`、锁被占)。
-- **S0 现状**:命令已注册,是桩,退出 64,stderr 说明「P2 才实现(块 S6/S7)」,stdout 为空。
+- 内部入口 `agent-kit __update --background`(后台 worker,S7c-B 注册)不属于公开命令面;stdio 丢弃,日志只记稳定码。
+- 退出码:0 已最新 / 计划已打印 / 已安装 / 被策略挡住(`cooldown`、`pinned`、`major_available`、`deprecated`);1 校验失败(`UPDATE_VERIFY_FAILED`)、防降级拒绝(`UPDATE_DOWNGRADE_REFUSED`);2 用法错误;3 fail-closed(状态目录不安全、状态 / 配置损坏、写出口拒绝、`current` 损坏);4 未执行(网络不可用 `UPDATE_CHECK_FAILED`、`UPDATE_NOT_READY`、`attestations_unreachable` / `trust_root_stale` / `tuf_unreachable`、锁被占 `UPDATE_NOT_RUN reason=locked`、没有可回滚版本 `UPDATE_NOT_RUN reason=no_previous|previous_missing`)。
+- **实装(S7c-A)**:`src/update/{install,registry}.ts` + `src/commands/update.ts`。配置读 `~/.config/agent-kit/config.toml`(只读,损坏 → 退出 3 `config_invalid`),环境 `KIT_UPDATE_REGISTRY` / `KIT_UPDATE_PIN` 优先(`KIT_UPDATE_PIN` 非法 → 退出 3 `bad_pin`)。`KIT_UPDATE_REGISTRY` 可为 https registry 或 `file://<KIT_TMP 内目录>` 夹具(布局见 `src/update/registry.ts` 文件头)。`--write` 且策略放行时:拿 `update/lock` → **锁内重读状态与 packument、重新做一次 `decideUpdate`**(含该版本仍存在、未 deprecate)→ 安装;非安装的 `--write` 只拿锁记一次 `recordCheck`(锁被占就不记)。
+- `--rollback --write`:零网络,锁内执行;`state.previous` 必须存在,`versions/<previous>` 必须通过**完整树校验**(`integrity.json` 的 sha256 等于 `previous.anchor`、`kit_version` 一致、树内无符号链接 / 特殊文件、文件集合与 `integrity.files` 严格相等、逐文件 sha256 + 字节数),否则不切(退出 3 `UPDATE_CURRENT_BROKEN` + `previous_invalid`)。成功后 `installed ← previous`、`previous` 清空、被回滚的版本进 `bad_versions`、`max_seen_version` 不降。回滚不做 gc(被回滚的版本留到下一次安装时清)。
 
-稳定码:`UPDATE_USAGE`(`mode_conflict`、`major_requires_write`、`rollback_requires_write`、`bad_registry`、`registry_fixture_outside_tmp`、`unknown_arg`)、`UPDATE_CHECK_FAILED reason=<timeout|dns|connect|tls|http_<码>|too_large|parse|proxy|not_ready|attestations_unreachable>`、`UPDATE_VERIFY_FAILED reason=<integrity|provenance_missing|provenance_identity|bundle|attestations_unreachable|trust_root_stale|tuf_unreachable>`(后两者不进 `bad_versions`:问题在本地信任根 / TUF 网络,不在该版本;doctor 提示重装 bootstrap 或检查代理)、`UPDATE_DOWNGRADE_REFUSED`、`UPDATE_MAJOR_AVAILABLE`、`UPDATE_CURRENT_BROKEN`、`UPDATE_NOT_READY`、`UPDATE_FAIL_CLOSED`、`SYNC_PENDING`、`AUTO_SYNC_DECLINED`。失败原因绝不合并成一个笼统的码,也不吞(Hub 的教训)。
+稳定码:`UPDATE_USAGE`(`mode_conflict`、`major_requires_write`、`rollback_requires_write`、`bad_registry`、`registry_fixture_outside_tmp`、`unknown_arg`)、`UPDATE_CHECK_FAILED reason=<timeout|dns|connect|tls|http_<码>|too_large|parse|proxy|not_ready|attestations_unreachable>`、`UPDATE_VERIFY_FAILED reason=<integrity|provenance_missing|provenance_identity|bundle|attestations_unreachable|trust_root_stale|tuf_unreachable>`(后两者不进 `bad_versions`:问题在本地信任根 / TUF 网络,不在该版本;doctor 提示重装 bootstrap 或检查代理)、`UPDATE_DOWNGRADE_REFUSED`、`UPDATE_MAJOR_AVAILABLE`、`UPDATE_CURRENT_BROKEN`、`UPDATE_NOT_READY`、`UPDATE_FAIL_CLOSED`、`UPDATE_NOT_RUN`(S7c-A 追加:`locked` / `locked_over_ttl` / `deprecated` / `no_previous` / `previous_missing`)、`SYNC_PENDING`、`AUTO_SYNC_DECLINED`。失败原因绝不合并成一个笼统的码,也不吞(Hub 的教训)。
+
+`UPDATE_USAGE` 另追加 `home_not_allowed`。`UPDATE_VERIFY_FAILED reason` 在原有取值之外追加(S7c-A):`trust_root_stale`、`tuf_unreachable`、`tar`(签名通过的 tarball 解包被严格 tar 读取器拒绝,`TAR_*` 细分只留在内部)、`package`(包内 `integrity.json` / `package.json` 与 tarball 不一致)、`smoke`、`host_denied`(镜像给的 tarball 地址不在允许主机内)、`bad_version`(干跑:目标已在 `bad_versions`)、`internal`(不认识的异常)。`last_result` 追加 `trust_root_stale`、`tuf_unreachable`、`deprecated`、`internal`、`rolled_back`。
+
+**进不进 `bad_versions`(S7c-A 订正,取代 §19.5「任一校验失败 → 进 bad_versions」的笼统写法)**:只在「已认证的证据表明这个版本本身坏了」时拉黑。进:`provenance_identity`、`bundle`(验签器报告签名 / 证明无效)、`tar`、`package`、`smoke`(验签已通过,内容不一致或装不起来)、非镜像下 tarball 摘要与 `dist.integrity` 或已验签 subject 不符(`integrity`)、`provenance_missing`(版本发布已满 24 小时仍没有 SLSA 条目)。**不进**:`attestations_unreachable`、`trust_root_stale`、`tuf_unreachable`、网络类、本机 IO 错误 / 写出口拒绝、**镜像模式下** tarball 与已验签 subject 不符(镜像可以给垃圾,不能借此冻结真版本)、不到 24 小时的 `provenance_missing`(npm 半可见期,按 `not_ready`)、`internal`(验签器抛 `TypeError` / `RangeError` / `ReferenceError`:更像我们或依赖的缺陷,而不是 bundle 残缺的证据)、`deprecated`。
 
 ### 19.5 自动更新规则
 
 - **节流**:24h 一次(`UPDATE_CHECK_INTERVAL_HOURS`);时钟往回走视为该检查了。时钟只决定检查频率,任何安全判断都不依赖本机时钟。
 - **网络**:`GET <registry>/@chovizzz%2fagent-kit`(请求头 `Accept: application/json`,取完整 packument 而非精简版,否则没有 `time`),超时 5s、响应 ≤ 2MiB、不跟随跨主机重定向;主机白名单 = 配置的 registry 主机 + `registry.npmjs.org`。网络只经 `src/io/net.ts`。失败 TTY 下每天最多一行 `UPDATE_CHECK_FAILED reason=<码>`。
 - **冷却期的时间来源**:`age = 响应 Date 头 − time[<v>]`,**两者都取自 npmjs 的 packument 响应**(用镜像时也到 npmjs 取;镜像的 `time` 与 `Date` 不作依据),**不用本机时钟**。冷却期起点取 `max(npmjs time[<v>], 已验签 SLSA bundle 的 Rekor integratedTime)`(决策 ㉔;integratedTime 由 Rekor 的 SET 背书,registry 一侧改不早它;没有 SET 背书时不取);`Date` 头缺失 / 不可解析、`time[<v>]` 缺失、或 `age < 0`,一律按「未满冷却期」处理(`cooldown`,fail-closed 不安装)。本机时钟只用于检查节流。
-- **版本选择**:取 `dist-tags.<channel>`(通道名:稳定 `latest`,预发布 **`rc`**——release.yml 把预发布发到 dist-tag `rc`,设计稿旧称 `next` 作废;`src/contracts/update.ts` 的 `UPDATE_CHANNELS` 仍写着 `next`,留给 S7c 一并订正);只在同一 major 内自动升,跨 major 只提示 `UPDATE_MAJOR_AVAILABLE`;`pin`(`X.Y.Z` 或 `~X.Y[.Z]`,或 `KIT_UPDATE_PIN`)限定范围;发布未满 `cooldown_hours` 不自动装;`max_seen_version` 只增不减;`bad_versions` 里的版本不再自动安装。优先级:`KIT_AUTO_UPDATE=0` > 环境变量 > 配置文件 > 默认。
+- **版本选择**:取 `dist-tags.<channel>`(通道名:稳定 `latest`,预发布 **`rc`**——release.yml 把预发布发到 dist-tag `rc`,设计稿旧称 `next` 作废;`UPDATE_CHANNELS` 已于 S7c-A 订正为 `['latest','rc']`,`policy.ts` 的 `channel` 类型同步);只在同一 major 内自动升,跨 major 只提示 `UPDATE_MAJOR_AVAILABLE`;`pin`(`X.Y.Z` 或 `~X.Y[.Z]`,或 `KIT_UPDATE_PIN`)限定范围;发布未满 `cooldown_hours` 不自动装;`max_seen_version` 只增不减;`bad_versions` 里的版本不再自动安装。优先级:`KIT_AUTO_UPDATE=0` > 环境变量 > 配置文件 > 默认。
 - **npm 202 半可见期**:packument 已有新版本但 tarball 404 或缺 `dist.integrity` → `not_ready`,下一窗口再试,不算失败。
-- **安装**:staging 内校验 sha512 → provenance(见 ⑬ / ⑭)→ 解包(不跑 lifecycle 脚本)→ 对照包内 `integrity.json` 并把其 sha256 记为外部锚点 `installed.anchor` → 冒烟 → `rename` 切换 `current` → 只保留 `UPDATE_KEEP_VERSIONS`(2)个版本。任一校验失败 → 删 staging、记 `UPDATE_VERIFY_FAILED`、进 `bad_versions`、不重试同一版本。
+- **安装**(S7c-A 实装,`src/update/install.ts`):下载 tarball 到内存 → sha512 对 `dist.integrity`(非镜像必须相等;镜像只作提示)→ 取 npmjs attestations,先做未验签的 `verifyTarballBinding` 预检(**仅用于早退**)→ `verifyProvenance`(同一份 attestations 文档、同一份内存字节;**它的返回值是唯一信任源**)→ 冷却起点补强:`max(npmjs time[v], Rekor integratedTime)`,`Date` 头 / `time[v]` 缺失或 `age < 0` 一律按未满冷却期,`--now` 整体豁免 → **验签通过之后**才 `readTgz` 解包 → 包内一致性:`integrity.json` 过 schema、解出的文件集合与 `integrity.files ∪ {integrity.json}` 严格相等(多 / 少都拒)、逐文件 sha256 与字节数、`kit_version` 与 `package.json` 的 `name` / `version` 等于目标、路径全是可见 ASCII;`integrity.json` 原始字节的 sha256 即外部锚点 `installed.anchor` → 经 home-fs 写入 `staging/<token>/`(目录 0700)并**读回复核** → 冒烟 → `renameDir` 成 `versions/<v>` → `switchCurrent` → 写 `state.json`(`markInstalled` + `recordCheck`)→ gc 只保留 `UPDATE_KEEP_VERSIONS`(2)个版本(`installed` 与 `previous`;`current` 指向的永不删;只清名字是合法 semver 的普通目录,清不掉不让安装失败)。不执行任何包内代码、不跑 lifecycle 脚本。失败一律删 staging,哪些进 `bad_versions` 见 §19.4。
+- **冒烟(S7c-A)**:静态——`package.json.bin` 指向 `dist/` 下的文件、该文件存在、权限 0755、以 `#!` 开头。`InstallDeps.smoke(stagingAbs)` 是给 S7c-B 接 `runSelf … --version` 真执行的注入口(返回 false / 抛错 → `smoke` 失败);S7c-A 没有 exec 白名单之外的执行。
+- **current 与状态的一致性**:先 `switchCurrent`、再写 `state.json`;写状态失败 → 把 `current` 切回切换前的版本(首次安装则撤掉链接),退出 3;连切回都失败 → `UPDATE_CURRENT_BROKEN` + `current_broken`。判据(供启动器 / doctor D02):`state.installed.version` 等于 `current` 解析出的版本目录名,且 `sha256(current/integrity.json)` 等于 `state.installed.anchor`;不满足就不要信 `current`。每个提交点(改名、切换、写状态)前都会复核锁文件里的 nonce 仍是自己的(`lock_lost`)。
 - **启动器**:`current` 有效且版本更高、major 相同 → 以 `KIT_LAUNCHED=1` 启动 `current/dist/cli.js`;有任何问题退回自身并 `UPDATE_CURRENT_BROKEN`(CLI 不会因更新坏掉而变砖)。
-- **锁**:`update/lock`(`O_EXCL`,pid + 开始时间,TTL 15 分钟);拿不到锁静默跳过并记 `skipped_locked`。pid 已不在 → 回收;pid 在但超 TTL → 只报不杀。
+- **锁**:`update/lock`(home-fs `createExclusive` = `O_CREAT|O_EXCL|O_NOFOLLOW`,内容 `{pid, started_at, nonce}`,0600,TTL 15 分钟);拿不到锁:`--write` 退出 4 `UPDATE_NOT_RUN reason=locked`(后台 worker 静默跳过并记 `skipped_locked`)。pid 已不在 → 回收(删除前复读确认仍是同一把);pid 在但超 TTL → 只报不杀(`locked_over_ttl`);内容损坏且创建不满 10 秒按「正在写」处理,超过则回收。已知残余:两个回收者先后删除的竞态靠提交点前的 nonce 复核兜底;pid 被无关长寿进程复用时,锁会一直报 `locked_over_ttl`,需要用户手工删 `update/lock`。
 - **遥测**:无。唯一对外请求是向 registry 拉 packument / attestations / tarball。
 - **文件位置**(HOME 相对):`.config/agent-kit/config.toml`(`UserConfig`,只读,sync / update 不写);`.local/state/agent-kit/sync/{ledger.json,txn/,backups/,lock}`;`.local/state/agent-kit/update/{state.json,lock,log}`;`.local/share/agent-kit/{versions/,current,staging/}`。目录 0700、文件 0600。
 - **来源证明验签(S7a,`src/update/provenance.ts`;用户决定用官方完整 `sigstore` 包)**:`verifyProvenance` 只接受外层 predicateType = SLSA v1 且 `payloadType = application/vnd.in-toto+json` 的**恰好一条** bundle,对它验签(Fulcio 链 + Rekor SET / 包含证明 + DSSE),身份用 Fulcio 证书 SAN `https://github.com/chovizzz/agent-kit/.github/workflows/release.yml@refs/tags/v<version>` + issuer `https://token.actions.githubusercontent.com` 钉死;🔴 sigstore 的 `certificateIdentityURI` 是**未锚定正则**,所以传 `^<转义>$` 并对返回的 identity 再做精确相等复核。验签后,**同一份已验签 payload** 的 subject 名必须是 `pkg:npm/%40chovizzz/agent-kit@<v>`、`digest.sha512` 必须等于内存里 tarball 的 sha512,`predicate.buildDefinition.externalParameters.workflow.{repository,path,ref}` 必须与 SAN 一致。`timestampThreshold` 绝不传 0(完整 sigstore 不暴露该选项,另加自查:bundle 必须带时间戳证据)。原因码:`ok`、`provenance_missing`、`provenance_identity`、`bundle`、`integrity`、`trust_root_stale`、`tuf_unreachable`;subject 名不符(换版本重放)归 `provenance_identity`。
@@ -2705,6 +2713,8 @@ agent-kit update [--write] [--now] [--major] [--rollback] [--json]
 | `.local/share/agent-kit/`    | dir  | kit     | —               |
 | `.local/state/agent-kit/`    | dir  | kit     | —               |
 | `.pi/agent/AGENTS.md`        | file | adapter | pi              |
+
+S7c-A 给 home-fs 追加三个原语(都走同一套「表内 + planScope + 逐段 lstat」校验):`createExclusive`(独占创建,已存在 → `HomeExistsError`,锁用)、`renameDir`(目录改名,目标须不存在,改名前后核对目录身份 dev:ino;残余:POSIX 目录 rename 会覆盖空的目标目录而 Node 无 no-replace 选项,故只在调用方持 update 锁时成立)、`switchCurrent(ctx, version | null)`(`current` 位置固定为 `.local/share/agent-kit/current`;目标由原语按 semver 拼成相对串 `versions/<version>`,调用方不能传路径;`versions/<version>` 须是真实目录、`versions` 与各上级不得是链接;临时符号链接 → rename 覆盖 → `readlink` 精确比对并核对 `realpath(current)` 严格位于 `realpath(versions)` 内;既有 `current` 必须是符号链接,是文件 / 目录则拒,指向别处的链接被覆盖即自愈)。
 
 语义:`file` 条目要求路径相等;`dir` 条目本身不可写,只能写严格位于其内部、且在本次计划(`planScope`)里点名的文件(`isHomeWritePath`)。**adapter 的 `dir` 条目内部另禁点开头的路径段与 `.json` 结尾的文件**(只检查目录以下的段,`.claude/…` 等 HOME 根下的点目录不受影响;kit 状态目录的 `ledger.json` / `state.json` 不适用)。登记表 / 事务 / `PayloadFile(target=home)` 的路径在 schema 层就必须落在 adapter 条目内,因此上述禁写在 schema 层即成立。home-fs(S1)另加:路径任一中间段是符号链接即拒;`HOME` 必须是 `getRealHome()` 或 `KIT_TMP` 之内的 `--home`。`~/.config/agent-kit/` 是只读的用户配置,不在表内。
 

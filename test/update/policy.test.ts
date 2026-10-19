@@ -181,8 +181,8 @@ const CASES: Case[] = [
   {
     name: '预发布之间的降级(rc.1 → rc.0)→ downgrade_refused',
     input: {
-      ...base({ installed: '0.2.0-rc.1', channel: 'next' }),
-      ...withNpmjs(view(['0.2.0-rc.0'], { next: '0.2.0-rc.0' }, { '0.2.0-rc.0': iso(99) })),
+      ...base({ installed: '0.2.0-rc.1', channel: 'rc' }),
+      ...withNpmjs(view(['0.2.0-rc.0'], { rc: '0.2.0-rc.0' }, { '0.2.0-rc.0': iso(99) })),
     },
     expect: { code: 'downgrade_refused' },
   },
@@ -197,12 +197,10 @@ const CASES: Case[] = [
     expect: { code: 'not_ready', detail: 'prerelease_on_latest' },
   },
   {
-    name: 'next 通道允许预发布',
+    name: 'rc 通道允许预发布',
     input: {
-      ...base({ channel: 'next' }),
-      ...withNpmjs(
-        view(['0.2.0', '0.3.0-rc.0'], { next: '0.3.0-rc.0' }, { '0.3.0-rc.0': iso(99) }),
-      ),
+      ...base({ channel: 'rc' }),
+      ...withNpmjs(view(['0.2.0', '0.3.0-rc.0'], { rc: '0.3.0-rc.0' }, { '0.3.0-rc.0': iso(99) })),
     },
     expect: { code: 'ok', version: '0.3.0-rc.0' },
   },
@@ -466,11 +464,11 @@ describe('评审补充:超大数字预发布与被归一化的非法日期', () 
   it('超大预发布数字参与防降级:候选更低 → downgrade_refused', () => {
     const v = view(
       ['1.0.0-rc.9007199254740992.1'],
-      { next: '1.0.0-rc.9007199254740992.1' },
+      { rc: '1.0.0-rc.9007199254740992.1' },
       { '1.0.0-rc.9007199254740992.1': iso(99) },
     );
     const d = decideUpdate({
-      ...base({ installed: '1.0.0-rc.9007199254740993.0', channel: 'next' }),
+      ...base({ installed: '1.0.0-rc.9007199254740993.0', channel: 'rc' }),
       ...withNpmjs(v),
     });
     expect(d.code).toBe('downgrade_refused');

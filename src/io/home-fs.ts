@@ -26,7 +26,7 @@ import * as fs from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { RelPathSchema } from '../contracts/common.js';
+import { RelPathSchema, SEMVER_RE } from '../contracts/common.js';
 import { HOME_WRITE_TABLE, isHomeWritePath } from '../contracts/sync.js';
 import { getRealHome } from './paths.js';
 
@@ -66,6 +66,10 @@ export const HOME_DENY = {
   STAT_FAILED: 'HOME_STAT_FAILED',
   /** 文件权限位含 rwx 之外的位(setuid 等)或不是整数 */
   BAD_MODE: 'HOME_BAD_MODE',
+  /** 目标应是符号链接(current)却是别的类型 */
+  NOT_SYMLINK: 'HOME_NOT_SYMLINK',
+  /** 版本号语法不合法(switchCurrent) */
+  BAD_VERSION: 'HOME_BAD_VERSION',
 } as const;
 
 export type HomeDenyCode = (typeof HOME_DENY)[keyof typeof HOME_DENY];
@@ -78,6 +82,17 @@ export class HomeWriteDeniedError extends Error {
     super(rel === undefined ? code : `${code} path=${JSON.stringify(rel.slice(0, 200))}`);
     this.name = 'HomeWriteDeniedError';
     this.code = code;
+    this.rel = rel;
+  }
+}
+
+/** 独占创建 / 目录改名的目标已存在(S7c;锁用它判断「被别人先拿了」)。 */
+export class HomeExistsError extends Error {
+  readonly code = 'EEXIST';
+  readonly rel: string;
+  constructor(rel: string) {
+    super(`EEXIST path=${JSON.stringify(rel.slice(0, 200))}`);
+    this.name = 'HomeExistsError';
     this.rel = rel;
   }
 }
@@ -334,7 +349,12 @@ function hasExactName(dir: string, name: string, rel: string): boolean {
   }
 }
 
-function inspect(ctx: HomeFsContext, rel: string, want: 'file' | 'dir'): Inspected {
+function inspect(
+  ctx: HomeFsContext,
+  rel: string,
+  want: 'file' | 'dir',
+  allowLeafSymlink = false,
+): Inspected {
   const state = stateOf(ctx);
   const home = resolveHome(ctx, state.env, state.homeIdent);
   const segments = rel.split('/');
@@ -353,9 +373,13 @@ function inspect(ctx: HomeFsContext, rel: string, want: 'file' | 'dir'): Inspect
     }
     const last = i === segments.length - 1;
     if (last) {
-      const bad = classifyLeaf(st, want);
-      if (bad !== undefined) throw new HomeWriteDeniedError(bad, rel);
-      leaf = st;
+      if (allowLeafSymlink && st.isSymbolicLink()) {
+        leaf = st; // 仅 switchCurrent 的 current 链接:调用方自己核对它是链接
+      } else {
+        const bad = classifyLeaf(st, want);
+        if (bad !== undefined) throw new HomeWriteDeniedError(bad, rel);
+        leaf = st;
+      }
     } else {
       if (st.isSymbolicLink()) throw new HomeWriteDeniedError(HOME_DENY.INTERMEDIATE_SYMLINK, rel);
       if (!st.isDirectory()) throw new HomeWriteDeniedError(HOME_DENY.NOT_DIRECTORY, rel);
@@ -630,4 +654,174 @@ export async function copyFile(ctx: HomeFsContext, fromRel: string, toRel: strin
     await fh.close();
   }
   await atomicWrite(ctx, toRel, to, bytes, srcMode, 0o755);
+}
+
+// ---------------------------------------------------------------------------
+// S7c-A 追加:独占创建(锁)、目录改名(staging → versions/<v>)、current 链接切换
+// ---------------------------------------------------------------------------
+
+/**
+ * 独占创建:O_CREAT|O_EXCL|O_NOFOLLOW 直接创建目标(表内、计划内的文件路径),已存在 → `HomeExistsError`。
+ * 不走「临时文件 + rename」:rename 会覆盖别人已经拿到的锁。代价是读者可能读到空文件 / 半写内容,
+ * 调用方(锁)要自己处理;写入中途失败时把自己刚建的文件删掉。缺失的父目录隐式创建(dirMode 缺省 0o755)。
+ */
+export async function createExclusive(
+  ctx: HomeFsContext,
+  rel: string,
+  data: string | Uint8Array,
+  opts: HomeWriteOptions = {},
+): Promise<void> {
+  const mode = opts.mode ?? 0o644;
+  const dirMode = opts.dirMode ?? 0o755;
+  assertMode(mode);
+  assertMode(dirMode);
+  const info = checkFile(ctx, rel);
+  if (info.leaf !== undefined) throw new HomeExistsError(rel);
+  await makeDirs(info, rel, info.segments.length - 1, dirMode);
+  let fh: fsp.FileHandle;
+  try {
+    fh = await fsp.open(
+      info.abs,
+      fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW,
+      mode,
+    );
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === 'EEXIST') throw new HomeExistsError(rel);
+    if (code === 'ELOOP') throw new HomeWriteDeniedError(HOME_DENY.TARGET_SYMLINK, rel);
+    throw e;
+  }
+  try {
+    await fh.writeFile(data);
+    await fh.chmod(mode);
+    await fh.sync();
+  } catch (e) {
+    await fh.close().catch(() => undefined);
+    await fsp.rm(info.abs, { force: true }).catch(() => undefined);
+    throw e;
+  }
+  await fh.close();
+  await syncDir(info.parentAbs);
+}
+
+/**
+ * 目录改名(staging/<id> → versions/<v>):两端都必须是 dir 条目内部的目录路径、且是计划目标的祖先;
+ * 来源须为真实目录(非链接),目标必须不存在(已存在 → `HomeExistsError`)。⚠️ 检查与 rename 之间有竞态窗口:POSIX 的目录 rename
+ * 会覆盖一个**空的**目标目录,Node 没有 no-replace 选项,所以「绝不覆盖」只对调用方串行化(update 锁)的场景成立。
+ * 改名前后核对目录身份(dev:ino):目标必须就是刚才校验过的那个来源目录。缺失的目标上级隐式创建(dirMode 缺省 0o700)。
+ */
+export async function renameDir(
+  ctx: HomeFsContext,
+  fromRel: string,
+  toRel: string,
+  dirMode = 0o700,
+): Promise<void> {
+  assertMode(dirMode);
+  const from = checkDir(ctx, fromRel);
+  const to = checkDir(ctx, toRel);
+  if (from.leaf === undefined) throw enoent();
+  if (to.leaf !== undefined) throw new HomeExistsError(toRel);
+  await makeDirs(to, toRel, to.segments.length - 1, dirMode);
+  const again = checkDir(ctx, fromRel);
+  if (
+    again.leaf === undefined ||
+    again.leaf.ino !== from.leaf.ino ||
+    again.leaf.dev !== from.leaf.dev
+  ) {
+    throw new HomeWriteDeniedError(HOME_DENY.PATH_ESCAPE, fromRel);
+  }
+  const dest = checkDir(ctx, toRel);
+  if (dest.leaf !== undefined) throw new HomeExistsError(toRel);
+  try {
+    await fsp.rename(again.abs, dest.abs);
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === 'ENOTEMPTY' || code === 'EEXIST') throw new HomeExistsError(toRel);
+    throw e;
+  }
+  const after = fs.lstatSync(dest.abs);
+  if (!after.isDirectory() || after.ino !== from.leaf.ino || after.dev !== from.leaf.dev) {
+    throw new HomeWriteDeniedError(HOME_DENY.PATH_ESCAPE, toRel);
+  }
+  await syncDir(dest.parentAbs);
+  if (from.parentAbs !== dest.parentAbs) await syncDir(from.parentAbs);
+}
+
+/** current 链接的 HOME 相对路径(固定,调用方不能指定别的链接位置)。 */
+export const CURRENT_LINK_REL = '.local/share/agent-kit/current';
+const VERSIONS_REL = '.local/share/agent-kit/versions';
+
+/**
+ * 原子切换 `current`:链接位置固定为 CURRENT_LINK_REL(须在 planScope 内),目标由本函数按版本号拼成相对串
+ * `versions/<version>`(调用方不能传路径);`version` 必须是合法 semver,`versions/<version>` 必须是真实目录
+ * (versions 本身与各上级不得是链接)。流程:同目录建临时符号链接 → 重验目标 → rename 覆盖 → 用 readlink 精确比对
+ * 链接串,并核对 realpath(current) 严格位于 realpath(versions) 之内;不符抛 PATH_ESCAPE(调用方负责回切)。
+ * 既有 `current` 必须是符号链接(含悬空 / 指向别处的:覆盖它即自愈),是普通文件 / 目录则拒。
+ * `version = null`:删除 current 链接(首次安装失败时回退用);不存在视为成功。
+ * 已知残余:校验与 rename 之间按路径执行,见文件头。
+ */
+export async function switchCurrent(ctx: HomeFsContext, version: string | null): Promise<void> {
+  assertFileInTable(CURRENT_LINK_REL);
+  assertFileInScope(ctx, CURRENT_LINK_REL);
+  const link = inspect(ctx, CURRENT_LINK_REL, 'file', true);
+  if (link.leaf !== undefined && !link.leaf.isSymbolicLink()) {
+    throw new HomeWriteDeniedError(HOME_DENY.NOT_SYMLINK, CURRENT_LINK_REL);
+  }
+  if (version === null) {
+    if (link.leaf === undefined) return;
+    await fsp.unlink(link.abs);
+    await syncDir(link.parentAbs);
+    return;
+  }
+  if (typeof version !== 'string' || !SEMVER_RE.test(version)) {
+    throw new HomeWriteDeniedError(HOME_DENY.BAD_VERSION, CURRENT_LINK_REL);
+  }
+  const targetRel = `${VERSIONS_REL}/${version}`;
+  assertDirInTable(targetRel);
+  const checkTarget = (): Inspected => {
+    const t = inspect(ctx, targetRel, 'dir');
+    if (t.leaf === undefined) throw enoent();
+    return t;
+  };
+  const target = checkTarget();
+  const linkText = `versions/${version}`;
+  let tmp = '';
+  for (let i = 0; ; i++) {
+    tmp = path.join(link.parentAbs, `.current.tmp-${randomBytes(6).toString('hex')}`);
+    try {
+      fs.symlinkSync(linkText, tmp);
+      break;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'EEXIST' || i >= 3) throw e;
+    }
+  }
+  try {
+    await ctx.onStage?.('pre-rename');
+    const t2 = checkTarget();
+    if (t2.leaf?.ino !== target.leaf?.ino || t2.leaf?.dev !== target.leaf?.dev) {
+      throw new HomeWriteDeniedError(HOME_DENY.PATH_ESCAPE, targetRel);
+    }
+    const l2 = inspect(ctx, CURRENT_LINK_REL, 'file', true);
+    if (l2.leaf !== undefined && !l2.leaf.isSymbolicLink()) {
+      throw new HomeWriteDeniedError(HOME_DENY.NOT_SYMLINK, CURRENT_LINK_REL);
+    }
+    await fsp.rename(tmp, l2.abs);
+  } catch (e) {
+    await fsp.rm(tmp, { force: true }).catch(() => undefined);
+    throw e;
+  }
+  await syncDir(link.parentAbs);
+  const verifiedText = fs.readlinkSync(link.abs);
+  const versionsReal = realpathOrUndefined(path.join(link.home, ...VERSIONS_REL.split('/')));
+  const currentReal = realpathOrUndefined(link.abs);
+  const targetReal = realpathOrUndefined(target.abs);
+  if (
+    verifiedText !== linkText ||
+    versionsReal === undefined ||
+    currentReal === undefined ||
+    currentReal !== targetReal ||
+    !strictlyInside(versionsReal, currentReal)
+  ) {
+    throw new HomeWriteDeniedError(HOME_DENY.PATH_ESCAPE, CURRENT_LINK_REL);
+  }
 }
