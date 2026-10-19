@@ -2232,6 +2232,253 @@ agent-kit retire  --rule <id> --to deprecated|retired --reason manual|expired|su
 }
 ```
 
+### 18.8 预测账与验收协议冻结的契约(K1,契约先行;K2–K6 实装后订正)
+
+设计依据:`rsi-borrow-design.md` §1.2、§1.6、§1.8、§2.2、§2.3、§2.5、§2.7;用户 2026-10-14 已定 ①B(晋升加严)、②A(无冻结记录一律不得晋升)、③A(judge 给不出合法预测 = 该跳无效)、④A(7 天 × 最多 4 块、不要求逐块连续)。**本节只定字段、常量、码表与兼容规则;本块(K1)不实现任何运行逻辑**,下列稳定码由 K2–K5 在各自模块里产出。新增字段全部可选且为 `strictObject`,缺省仍合法。
+
+**字段(`src/contracts/{proposal,attest,config}.ts`)**
+
+- `JudgeOutput.prediction?`:`{direction, ratio_lo, ratio_hi, confidence}` 四个值,LLM 只给这四个。
+- `JudgeRecord.prediction?`:`{schema_version:1, metric:"exposure_rate", status, direction?, ratio_lo?, ratio_hi?, confidence?, acceptance_sha256}`。`status` 由 kit 决定:`predicted`(四值必填且形状合法)、`baseline_insufficient`(引导窗口 `sessions_total < 20` 或 `exposure_sessions < 3`)、`not_measurable`(`path` 型或 `always` 型签名);后两者四值**必须缺省**(LLM 给了也丢弃)。`acceptance_sha256` 恒必填。
+- `JudgeRecord.acceptance?`:冻结的验收协议 `{schema_version:1, method:"signature_proxy_v1", rule_sha256, signature_sha256, guidance_until, baseline_sha256, judged_at_head, frozen_at, anchor_min, tile_days(≥7), max_tiles(2..8), sha256}`。`guidance_until` / `frozen_at` 是 ISO 时间戳,`anchor_min` 是 ISO 日期,`judged_at_head` 是 40 位小写 hex 的提交 oid,其余哈希为 64 位小写 hex。
+- `Proposal.reflector.guidance?`:`{since: ISO 日期|null, until: ISO 时间戳, baseline:{sessions_total, exposure_sessions, fired}}`(非负整数,只有计数)。
+- `Attest.acceptance_sha256?`:64 位小写 hex,该 attest 所遵守的冻结协议的 `sha256`。
+- `KitConfig.lifecycle.acceptance_tile_days`(整数 ≥7,默认 7)、`acceptance_max_tiles`(整数 2..8,默认 4)。**refine**:`ceil(canary_window_days / acceptance_tile_days) + STRICT_EXTRA_TILES ≤ acceptance_max_tiles`(默认 `2+1 ≤ 4` 成立;`canary_window_days=28, tile=7, max=4` 得 `5 > 4`,`kit.toml` 直接不合法,不会出现「加严后永远凑不够块」的规则)。缺省不出现时旧 `kit.toml` 照常通过。
+
+**常量**
+
+- `RATIO_GRID = [0, 0.1, 0.25, 0.5, 0.8, 1.25, 2, 4, "inf"]`。JSON / YAML 没有 Infinity,所以 +∞ 用字符串 `"inf"`(不用 `null`:`null` 与可选字段的「缺省」语义冲突)。**位置与跨度一律按网格下标比较,不做数值比较**;进哈希的规范形里数字是 JS 数字(`4` 不是 `4.0`),+∞ 恒为 `"inf"`。
+- `PREDICTION_CONFIDENCES = [0.5, 0.7, 0.9]`;`PREDICTION_DIRECTIONS = [down, flat, up]`(`flat` = r ∈ [0.8, 1.25]);`PREDICTION_STATUSES = [predicted, baseline_insufficient, not_measurable]`;`PREDICTION_METRICS = [exposure_rate]`;`PREDICTION_MAX_GRID_SPAN = 3`。
+- `STRICT_EXTRA_TILES = 1`、`CALIBRATION_MIN_N = 10`、`CALIBRATION_GAP = 0.20`(`src/contracts/config.ts`):**代码常量,不进 `kit.toml`、覆盖层改不了**,避免配置放宽校准口径。数值是初始常量,没有统计依据。
+
+**预测形状规则**(`validatePredictionShape`,纯函数,返回**全部**违反项;schema 层与后续块共用):`ratio_lo` / `ratio_hi` 必须是网格点;`ratio_lo` 不得为 `"inf"`;`lo < hi`(按下标);下标差 ≤ 3(锐度上限,防「永远报 [0,+inf] 必中」);方向一致:`down ⇒ lo < 0.8`、`up ⇒ hi > 1.25`、`flat ⇒` 闭区间 `[lo,hi]` 与 `[0.8,1.25]` 相交。原因码:`lo_off_grid`、`hi_off_grid`、`lo_inf`、`order`、`span`、`direction_down`、`direction_up`、`direction_flat`、`direction_unknown`(方向不在枚举也要报,不得整条放行)、`confidence_off_grid`(给了置信度才校验)。schema 层 `issue.path` 指向出错字段(`order` / `span` 同时涉及两端,约定记在 `ratio_hi`),消息形如 `prediction_invalid:<原因码>`。`direction=down` 只要求 `lo < 0.8`(设计 §1.2 的原文),所以 `[0.1, 1.25]` 这类跨越 flat 区的区间在形状层合法,不另加互斥约束。
+
+**schema 层不判、留给 G3(K4)的跨字段规则**(这样各有自己的稳定码,不会都塌成 `PROPOSAL_INVALID`):`prediction.acceptance_sha256 == acceptance.sha256`、`acceptance.sha256` 自哈希、`acceptance.rule_sha256 == judge.rule_sha256 == 当前原子哈希`、`signature_sha256` / `baseline_sha256` 与当前值相等、基线自洽(`exposure_sessions ≤ sessions_total`、`exposure_sessions ≤ fired`)、`guidance_until ≤ frozen_at`、git 锚点。
+
+**新稳定码**(**仓库没有集中登记点**:`criteria.ts` 头注释与 §18.4 是文字列表,没有注册表测试;K1 只在此登记,K4/K5 实现时再补 `criteria.ts` 头注释,K6 做一致性核对):
+
+| 码                                                                    | 级别                              | 产出方         | 含义                                                                                                                                              |
+| --------------------------------------------------------------------- | --------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `prediction_invalid`(细分见上「原因码」)                              | judge 该跳 `error:invalid_output` | K3 `output.ts` | 预测离网格、`lo ≥ hi`、跨度超限、方向矛盾、置信度不在枚举、`status=predicted` 缺字段、其余 status 带了值。不允许「verdict 收下、prediction 缺省」 |
+| `ACCEPTANCE_MISSING`                                                  | G3 T2 error                       | K4             | 提案无 `judge.acceptance`(旧 judge 记录),重跑 judge 补                                                                                            |
+| `ACCEPTANCE_HASH_MISMATCH`                                            | G3 T2 error                       | K4             | 自哈希、与 prediction / rule_sha256 / 签名 / 基线哈希对不上,或基线不自洽                                                                          |
+| `ACCEPTANCE_CLOCK_INCONSISTENT`                                       | G3 T2 error                       | K4             | `guidance_until > frozen_at`、`frozen_at` 晚于冻结提交日期、`judged_at_head` 不是冻结提交的祖先                                                   |
+| `ACCEPTANCE_CHANGED_AFTER_FREEZE` / `PREDICTION_CHANGED_AFTER_FREEZE` | G3 T2 error                       | K4             | 冻结提交之后 `judge.acceptance` / `judge.prediction` 被改                                                                                         |
+| `ACCEPTANCE_WEAKER_THAN_CORE`                                         | G3 T2 error                       | K4             | 冻结值(tile 天数、块数)弱于基线 `kit.toml` 的现值                                                                                                 |
+| `FREEZE_COMMIT_UNKNOWN` / `TEXT_SINCE_UNKNOWN`                        | G3 T2 error                       | K4             | 找不到冻结提交、冻结提交不是基线祖先、`rule_sha256` 首次入库提交查不出(与 `ADVISORY_SINCE_UNKNOWN` 同形,fail-closed)                              |
+| `GUARD_G3_THRESHOLD_TILES`                                            | G3 T2 error                       | K5a            | 有效验收块不足(消息写明是否因加严)                                                                                                                |
+| `JUDGE_OVERCONFIDENT` / `CALIBRATION_INSUFFICIENT`                    | G3 info                           | K5a            | 因 judge 过度自信而加严 / 样本不足、不加严                                                                                                        |
+| `CALIBRATION_UNAVAILABLE` / `CALIBRATION_ITEM_UNREADABLE`             | G3 T2 fail-closed(加严)           | K5a            | 全局计算失败 / 同键条目损坏,一律按「过度自信」加严                                                                                                |
+| `ATTEST_NOT_COUNTED`(既有码,新增原因)                                 | warn                              | K4             | attest 不对齐、早于 D0 / `textSince`、超出 `max_tiles`、`acceptance_sha256` 不符、早于冻结提交入库                                                |
+
+**前向不兼容规则(硬规则)**:所有 schema 都是 `strictObject`,所以**旧版 kit 读到带新字段的提案 / attest 会按未知键拒收**(`PROPOSAL_INVALID` 一类的 fail-closed,不是静默错误,但会卡人)。因此:**CI 与全部 canary 成员升到新版之前,带新字段的提案(含 `judge.prediction` / `judge.acceptance` / `reflector.guidance`)和带 `acceptance_sha256` 的 attest 不得入库**。机制是:产出方(新版 `reflect` / `judge` / `attest`)先于消费方(旧版 CI / 其他成员的 kit)升级时,消费方的 strictObject 校验会拒收这些文件。`schema_version` 将来升到 2 同理:旧读者的 `z.literal(1)` 会拒收。具体用哪个版本字段做可执行的准入校验(设计 §5 的 `min_kit_version`)待核,不在 K1。向后兼容方向不受影响:不带新字段的旧文件继续合法。
+
+**示例**。`JudgeRecord` 带 `prediction` 与 `acceptance`(`ratio_hi` 用 `"inf"`)。
+
+<!-- example:valid schema=JudgeRecord -->
+
+```json
+{
+  "hops": [{ "hop": "codex", "vendor": "openai", "model": "example-model-id", "result": "ok" }],
+  "provider": "openai",
+  "vendor": "openai",
+  "verdict": "accept",
+  "overfit_risk": "low",
+  "injection_suspected": false,
+  "conflicts": [],
+  "rule_sha256": "0000000000000000000000000000000000000000000000000000000000000007",
+  "prediction": {
+    "schema_version": 1,
+    "metric": "exposure_rate",
+    "status": "predicted",
+    "direction": "up",
+    "ratio_lo": 1.25,
+    "ratio_hi": "inf",
+    "confidence": 0.7,
+    "acceptance_sha256": "0000000000000000000000000000000000000000000000000000000000000009"
+  },
+  "acceptance": {
+    "schema_version": 1,
+    "method": "signature_proxy_v1",
+    "rule_sha256": "0000000000000000000000000000000000000000000000000000000000000007",
+    "signature_sha256": "0000000000000000000000000000000000000000000000000000000000000008",
+    "guidance_until": "2026-10-14T03:12:00Z",
+    "baseline_sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+    "judged_at_head": "0123456789abcdef0123456789abcdef01234567",
+    "frozen_at": "2026-10-14T05:40:00Z",
+    "anchor_min": "2026-10-15",
+    "tile_days": 7,
+    "max_tiles": 4,
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000009"
+  }
+}
+```
+
+`status` 不是 `predicted` 时四个预测值必须缺省。
+
+<!-- example:valid schema=JudgeRecord -->
+
+```json
+{
+  "hops": [{ "hop": "codex", "vendor": "openai", "model": "example-model-id", "result": "ok" }],
+  "provider": "openai",
+  "vendor": "openai",
+  "verdict": "accept",
+  "overfit_risk": "low",
+  "injection_suspected": false,
+  "conflicts": [],
+  "prediction": {
+    "schema_version": 1,
+    "metric": "exposure_rate",
+    "status": "baseline_insufficient",
+    "acceptance_sha256": "0000000000000000000000000000000000000000000000000000000000000009"
+  }
+}
+```
+
+错误示例:`ratio_lo` 与 `ratio_hi` 在网格上相差 4 格(超过锐度上限 3)。
+
+<!-- example:invalid schema=JudgeRecord -->
+
+```json
+{
+  "hops": [{ "hop": "codex", "vendor": "openai", "model": "example-model-id", "result": "ok" }],
+  "provider": "openai",
+  "vendor": "openai",
+  "verdict": "accept",
+  "overfit_risk": "low",
+  "injection_suspected": false,
+  "conflicts": [],
+  "prediction": {
+    "schema_version": 1,
+    "metric": "exposure_rate",
+    "status": "predicted",
+    "direction": "down",
+    "ratio_lo": 0,
+    "ratio_hi": 0.8,
+    "confidence": 0.9,
+    "acceptance_sha256": "0000000000000000000000000000000000000000000000000000000000000009"
+  }
+}
+```
+
+`JudgeOutput` 带 `prediction`。
+
+<!-- example:valid schema=JudgeOutput -->
+
+```json
+{
+  "verdict": "accept",
+  "overfit_risk": "low",
+  "generality": "high",
+  "volatile": false,
+  "conflicts": [],
+  "injection_suspected": false,
+  "notes": "ok",
+  "prediction": { "direction": "down", "ratio_lo": 0.25, "ratio_hi": 0.8, "confidence": 0.7 }
+}
+```
+
+错误示例:`direction=up` 但 `ratio_hi` 不大于 1.25(方向与区间矛盾)。
+
+<!-- example:invalid schema=JudgeOutput -->
+
+```json
+{
+  "verdict": "accept",
+  "overfit_risk": "low",
+  "generality": "high",
+  "volatile": false,
+  "conflicts": [],
+  "injection_suspected": false,
+  "notes": "ok",
+  "prediction": { "direction": "up", "ratio_lo": 0.5, "ratio_hi": 1.25, "confidence": 0.7 }
+}
+```
+
+`Attest` 带 `acceptance_sha256`。
+
+<!-- example:valid schema=Attest -->
+
+```json
+{
+  "schema_version": 1,
+  "rule_id": "negative-assertion-needs-positive-control",
+  "rule_sha256": "0000000000000000000000000000000000000000000000000000000000000005",
+  "channel": "canary",
+  "member": "@handle",
+  "window_start": "2026-10-15",
+  "window_end": "2026-10-21",
+  "kit_version": "0.0.0",
+  "collector_versions": { "claude": "2.1.280" },
+  "sessions_total": 41,
+  "exposure_sessions": 12,
+  "exposure_projects": 3,
+  "fired": 12,
+  "harmful": 0,
+  "recurrence": 0,
+  "signal_ids_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000006",
+  "method": "signature_proxy_v1",
+  "acceptance_sha256": "0000000000000000000000000000000000000000000000000000000000000009",
+  "run_id": "run-0001"
+}
+```
+
+错误示例:`acceptance_sha256` 不是 64 位小写十六进制。
+
+<!-- example:invalid schema=Attest -->
+
+```json
+{
+  "schema_version": 1,
+  "rule_id": "negative-assertion-needs-positive-control",
+  "rule_sha256": "0000000000000000000000000000000000000000000000000000000000000005",
+  "channel": "canary",
+  "member": "@handle",
+  "window_start": "2026-10-15",
+  "window_end": "2026-10-21",
+  "kit_version": "0.0.0",
+  "collector_versions": { "claude": "2.1.280" },
+  "sessions_total": 41,
+  "exposure_sessions": 12,
+  "exposure_projects": 3,
+  "fired": 12,
+  "harmful": 0,
+  "recurrence": 0,
+  "signal_ids_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000006",
+  "acceptance_sha256": "ABC",
+  "run_id": "run-0001"
+}
+```
+
+`KitConfig` 带 `acceptance_tile_days` / `acceptance_max_tiles`。
+
+<!-- example:valid schema=KitConfig -->
+
+```json
+{
+  "kit": { "name": "agent-kit", "version": "0.0.0" },
+  "agents": { "enabled": ["claude"] },
+  "budget": {},
+  "channels": {},
+  "lifecycle": { "canary_window_days": 14, "acceptance_tile_days": 7, "acceptance_max_tiles": 4 }
+}
+```
+
+错误示例:`canary_window_days=28`、`tile=7`、`max_tiles=4` 得 `ceil(28/7)+1 = 5 > 4`。
+
+<!-- example:invalid schema=KitConfig -->
+
+```json
+{
+  "kit": { "name": "agent-kit", "version": "0.0.0" },
+  "agents": { "enabled": ["claude"] },
+  "budget": {},
+  "channels": {},
+  "lifecycle": { "canary_window_days": 28, "acceptance_tile_days": 7, "acceptance_max_tiles": 4 }
+}
+```
+
 ## 19. sync / doctor / update 命令面与自动更新契约(S0,契约先行;S1–S9 实装后订正)
 
 本节先定死三条命令的命令面、退出码、稳定码、文件位置与授权边界,实现在后续块(S1–S8)。`doctor` 已由 S5 实装(§19.3),`update` 是新注册的命令桩。设计依据:`sync-doctor-update-design.md` §0–§6、§8;用户 2026-10-14 对 16 条决策的拍板(14 条按设计稿推荐,**② 改 B、⑭ 改 B**)。新增 schema 全部 `strictObject`,只追加;`contracts-v1` 既有编号不重排。

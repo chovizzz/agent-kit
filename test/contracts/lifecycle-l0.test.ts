@@ -243,6 +243,9 @@ describe('KitConfig.lifecycle', () => {
       min_exposure_sessions: 10,
       max_harmful: 0,
       no_exposure_windows: 2,
+      // K1 追加的两项默认值(旧 kit.toml 不写它们也成立:2+1 ≤ 4)
+      acceptance_tile_days: 7,
+      acceptance_max_tiles: 4,
     });
   });
   it('可以调严', () => {
@@ -254,6 +257,8 @@ describe('KitConfig.lifecycle', () => {
         min_non_owner_members: 3,
         min_exposure_sessions: 50,
         no_exposure_windows: 3,
+        // K1:canary_window_days=30 时 ceil(30/7)+1=6,须同步放宽 max_tiles(否则 refine 拒)
+        acceptance_max_tiles: 6,
       },
     });
     expect(r.lifecycle?.min_members).toBe(4);
@@ -278,6 +283,9 @@ describe('KitConfig.lifecycle', () => {
         min_members: 101,
         min_non_owner_members: 101,
         no_exposure_windows: 60,
+        // K1:ceil(400/60)+1=8 ≤ 8
+        acceptance_tile_days: 60,
+        acceptance_max_tiles: 8,
       },
     });
     expect(r.success).toBe(true);
@@ -313,6 +321,10 @@ describe('KitConfig.lifecycle', () => {
     const parsed = parseToml(await readText(KIT_TOML));
     const r = KitConfigSchema.parse(parsed);
     expect(r.lifecycle).toEqual(KitConfigSchema.parse({ ...kit, lifecycle: {} }).lifecycle);
-    expect((parsed as { lifecycle: object }).lifecycle).toEqual(r.lifecycle);
+    // kit.toml 自述的是 L0 的六项;K1 的两项缺省不写(旧 kit.toml 照常通过),所以比较时剔掉
+    const legacy: Record<string, unknown> = { ...r.lifecycle };
+    delete legacy.acceptance_tile_days;
+    delete legacy.acceptance_max_tiles;
+    expect((parsed as { lifecycle: object }).lifecycle).toEqual(legacy);
   });
 });

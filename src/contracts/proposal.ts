@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import {
+  IsoDateSchema,
+  IsoTimestampSchema,
   KebabIdSchema,
   MAX_EVIDENCE_EXCERPT_CHARS,
   Sha256Schema,
@@ -34,6 +36,234 @@ export const JudgeHopSchema = z.strictObject({
   result: HopResultSchema,
 });
 
+/**
+ * K1 追加(RSI 借鉴 §1.2):预测账。预测对象固定为验收窗口的曝光率比值
+ * `r = 验收 exposure_rate / 基线 exposure_rate`;LLM 只给 direction / ratio_lo / ratio_hi / confidence 四个值,
+ * 其余(metric、status、acceptance_sha256)由 kit 计算填写。
+ *
+ * 网格:JSON/YAML 都没有 Infinity,所以最后一格用字符串 `'inf'` 表示 +∞(不用 `null`:
+ * 在 strictObject + optional 的语境里 `null` 与「缺省」语义冲突)。**所有位置/跨度比较一律按 `RATIO_GRID` 下标做,
+ * 不做数值比较**,`'inf'` 因此不会产生 NaN。规范形(进哈希时):数字用 JS 数字(`4` 不是 `4.0`),+∞ 恒为字符串 `"inf"`。
+ */
+export const RATIO_GRID = [0, 0.1, 0.25, 0.5, 0.8, 1.25, 2, 4, 'inf'] as const;
+export type RatioGridPoint = (typeof RATIO_GRID)[number];
+export const RatioGridPointSchema = z.union([
+  z.literal(0),
+  z.literal(0.1),
+  z.literal(0.25),
+  z.literal(0.5),
+  z.literal(0.8),
+  z.literal(1.25),
+  z.literal(2),
+  z.literal(4),
+  z.literal('inf'),
+]);
+/** 区间在网格上的最大下标差(锐度上限,防「永远报 [0,+inf] 必中」) */
+export const PREDICTION_MAX_GRID_SPAN = 3;
+/** 置信度 = 「实际 r 落在 [lo,hi] 的概率」,只能取这三档 */
+export const PREDICTION_CONFIDENCES = [0.5, 0.7, 0.9] as const;
+export type PredictionConfidence = (typeof PREDICTION_CONFIDENCES)[number];
+export const PredictionConfidenceSchema = z.union([z.literal(0.5), z.literal(0.7), z.literal(0.9)]);
+/** down / flat / up;flat = r ∈ [0.8, 1.25] */
+export const PREDICTION_DIRECTIONS = ['down', 'flat', 'up'] as const;
+export const PredictionDirectionSchema = z.enum(PREDICTION_DIRECTIONS);
+export type PredictionDirection = z.infer<typeof PredictionDirectionSchema>;
+/** 由 kit 决定,LLM 不参与 */
+export const PREDICTION_STATUSES = [
+  'predicted',
+  'baseline_insufficient',
+  'not_measurable',
+] as const;
+export const PredictionStatusSchema = z.enum(PREDICTION_STATUSES);
+export type PredictionStatus = z.infer<typeof PredictionStatusSchema>;
+/** 目前只有曝光率;日后加 harmful 预测用新枚举值 */
+export const PREDICTION_METRICS = ['exposure_rate'] as const;
+export const PredictionMetricSchema = z.enum(PREDICTION_METRICS);
+
+/** `validatePredictionShape` 的原因码(稳定码 `prediction_invalid` 的细分,见 docs/contracts.md §18.8) */
+export const PREDICTION_SHAPE_REASONS = [
+  'lo_off_grid',
+  'hi_off_grid',
+  'lo_inf',
+  'order',
+  'span',
+  'direction_down',
+  'direction_up',
+  'direction_flat',
+  'direction_unknown',
+  'confidence_off_grid',
+] as const;
+export type PredictionShapeReason = (typeof PREDICTION_SHAPE_REASONS)[number];
+
+export interface PredictionShapeInput {
+  direction?: unknown;
+  ratio_lo?: unknown;
+  ratio_hi?: unknown;
+  confidence?: unknown;
+}
+
+/** 纯函数、不抛错:返回**全部**违反项(不提前返回);空数组 = 形状合法。judge 输出校验与 CI 复用。 */
+export function validatePredictionShape(p: PredictionShapeInput): PredictionShapeReason[] {
+  const out: PredictionShapeReason[] = [];
+  // 直接在 zod 之外调用本函数的人(CI)也不能因为方向/置信度写错而整条放行
+  if (!(PREDICTION_DIRECTIONS as readonly unknown[]).includes(p.direction)) {
+    out.push('direction_unknown');
+  }
+  if (
+    p.confidence !== undefined &&
+    !(PREDICTION_CONFIDENCES as readonly unknown[]).includes(p.confidence)
+  ) {
+    out.push('confidence_off_grid');
+  }
+  const grid: readonly unknown[] = RATIO_GRID;
+  const lo = grid.indexOf(p.ratio_lo);
+  const hi = grid.indexOf(p.ratio_hi);
+  const iInf = RATIO_GRID.length - 1;
+  if (lo < 0) out.push('lo_off_grid');
+  else if (lo === iInf) out.push('lo_inf');
+  if (hi < 0) out.push('hi_off_grid');
+  if (lo < 0 || hi < 0) return out; // 下标不可得,区间类检查无从谈起
+  if (lo >= hi) out.push('order');
+  else if (hi - lo > PREDICTION_MAX_GRID_SPAN) out.push('span');
+  const iLow = RATIO_GRID.indexOf(0.8); // 0.8 的下标
+  const iHigh = RATIO_GRID.indexOf(1.25); // 1.25 的下标
+  // down ⇒ lo < 0.8;up ⇒ hi > 1.25;flat ⇒ 闭区间 [lo,hi] 与 [0.8,1.25] 相交
+  if (p.direction === 'down' && !(lo < iLow)) out.push('direction_down');
+  if (p.direction === 'up' && !(hi > iHigh)) out.push('direction_up');
+  if (p.direction === 'flat' && !(lo <= iHigh && hi >= iLow)) out.push('direction_flat');
+  return out;
+}
+
+/** 原因码 → 出问题的字段(order / span 同时涉及两端,约定记在 ratio_hi) */
+function shapeReasonField(r: PredictionShapeReason): string {
+  switch (r) {
+    case 'lo_off_grid':
+    case 'lo_inf':
+      return 'ratio_lo';
+    case 'hi_off_grid':
+    case 'order':
+    case 'span':
+      return 'ratio_hi';
+    case 'confidence_off_grid':
+      return 'confidence';
+    default:
+      return 'direction';
+  }
+}
+
+function refinePredictionShape(
+  p: PredictionShapeInput,
+  ctx: z.RefinementCtx,
+  basePath: (string | number)[] = [],
+): void {
+  for (const reason of validatePredictionShape(p)) {
+    ctx.addIssue({
+      code: 'custom',
+      path: [...basePath, shapeReasonField(reason)],
+      message: `prediction_invalid:${reason}`,
+    });
+  }
+}
+
+/** LLM 给出的四个值(裁判输出里的 `prediction`) */
+export const PredictionValuesSchema = z
+  .strictObject({
+    direction: PredictionDirectionSchema,
+    ratio_lo: RatioGridPointSchema,
+    ratio_hi: RatioGridPointSchema,
+    confidence: PredictionConfidenceSchema,
+  })
+  .superRefine((p, ctx) => refinePredictionShape(p, ctx));
+export type PredictionValues = z.infer<typeof PredictionValuesSchema>;
+
+/**
+ * 落进 `judge.prediction` 的记录。`status=predicted` 时四值必填且形状合法;其余 status 四值必须缺省
+ * (LLM 给了也丢弃,所以落盘里不会有)。`acceptance_sha256` 绑定冻结的验收协议,**恒必填**
+ * (与 `judge.acceptance.sha256` 是否相等由 G3 判,得到 `ACCEPTANCE_HASH_MISMATCH`,这里只管形状)。
+ */
+export const JudgePredictionSchema = z
+  .strictObject({
+    schema_version: z.literal(1),
+    metric: PredictionMetricSchema,
+    status: PredictionStatusSchema,
+    direction: PredictionDirectionSchema.optional(),
+    ratio_lo: RatioGridPointSchema.optional(),
+    ratio_hi: RatioGridPointSchema.optional(),
+    confidence: PredictionConfidenceSchema.optional(),
+    acceptance_sha256: Sha256Schema,
+  })
+  .superRefine((p, ctx) => {
+    const keys = ['direction', 'ratio_lo', 'ratio_hi', 'confidence'] as const;
+    if (p.status === 'predicted') {
+      for (const k of keys) {
+        if (p[k] === undefined) {
+          ctx.addIssue({
+            code: 'custom',
+            path: [k],
+            message: `prediction_invalid:missing_${k}`,
+          });
+        }
+      }
+      if (keys.every((k) => p[k] !== undefined)) refinePredictionShape(p, ctx);
+    } else {
+      for (const k of keys) {
+        if (p[k] !== undefined) {
+          ctx.addIssue({
+            code: 'custom',
+            path: [k],
+            message: `prediction_invalid:unexpected_${k}`,
+          });
+        }
+      }
+    }
+  });
+export type JudgePrediction = z.infer<typeof JudgePredictionSchema>;
+
+const GitOidSchema = z.string().regex(/^[0-9a-f]{40}$/);
+
+/**
+ * K1 追加(RSI 借鉴 §2.3):冻结的验收协议,judge 写入评审记录时由 kit 确定性计算。
+ * 本 schema 只管形状;`sha256` 自哈希、与 prediction/rule_sha256/签名的相等、`guidance_until ≤ frozen_at`、
+ * git 锚点等全部由 G3(K4)核验,各有自己的稳定码(`ACCEPTANCE_*`)。
+ * `method` 写成字面量而不 import `attest.ts`(attest → config → proposal 会成环);与 `ATTEST_METHODS` 的一致由测试钉住。
+ */
+export const AcceptanceProtocolSchema = z.strictObject({
+  schema_version: z.literal(1),
+  method: z.literal('signature_proxy_v1'),
+  rule_sha256: Sha256Schema,
+  /** 签名 `{type,pattern}` 的 canonical JSON 哈希 */
+  signature_sha256: Sha256Schema,
+  /** 引导窗口上界(ISO 时间戳) */
+  guidance_until: IsoTimestampSchema,
+  /** `reflector.guidance` canonical JSON 的哈希 */
+  baseline_sha256: Sha256Schema,
+  /** judge 运行时仓库 HEAD 的提交 oid(外部锚点;40 位小写 hex) */
+  judged_at_head: GitOidSchema,
+  /** judge 时钟(纸面时间,只作交叉核对) */
+  frozen_at: IsoTimestampSchema,
+  /** D0 的文件内下界(ISO 日期) */
+  anchor_min: IsoDateSchema,
+  tile_days: z.number().int().min(7),
+  max_tiles: z.number().int().min(2).max(8),
+  /** 对以上所有字段(不含本字段)canonical JSON 的 sha256 */
+  sha256: Sha256Schema,
+});
+export type AcceptanceProtocol = z.infer<typeof AcceptanceProtocolSchema>;
+
+/** K1 追加(§2.2):reflect 写入的引导窗口落账。基线只有计数。自洽性(exposure ≤ total 等)由 G3 判。 */
+export const ReflectorGuidanceSchema = z.strictObject({
+  /** `reflect --since`;null = 不设下界 */
+  since: IsoDateSchema.nullable(),
+  /** reflect 运行时钟(ISO 时间戳) */
+  until: IsoTimestampSchema,
+  baseline: z.strictObject({
+    sessions_total: z.number().int().nonnegative(),
+    exposure_sessions: z.number().int().nonnegative(),
+    fired: z.number().int().nonnegative(),
+  }),
+});
+export type ReflectorGuidance = z.infer<typeof ReflectorGuidanceSchema>;
+
 /** 提案 CI 校验用的结构化裁判记录。 */
 export const JudgeRecordSchema = z
   .strictObject({
@@ -50,6 +280,10 @@ export const JudgeRecordSchema = z
      * 可选:旧记录没有它仍合法;晋升判据(L1+)要求必填且与当前文本一致,这里只管形状。
      */
     rule_sha256: Sha256Schema.optional(),
+    /** K1 追加:预测账(可选;旧记录没有它仍合法,晋升要求冻结见 G3 `ACCEPTANCE_MISSING`) */
+    prediction: JudgePredictionSchema.optional(),
+    /** K1 追加:冻结的验收协议 */
+    acceptance: AcceptanceProtocolSchema.optional(),
   })
   .superRefine((j, ctx) => {
     j.hops.forEach((h, i) => {
@@ -84,6 +318,8 @@ export const JudgeOutputSchema = z.strictObject({
   conflicts: z.array(z.string()),
   injection_suspected: z.boolean(),
   notes: z.string(),
+  /** K1 追加:裁判 v2 提示要求时必填(由 output 解析层强制),schema 层可选以兼容 v1 输出 */
+  prediction: PredictionValuesSchema.optional(),
 });
 export type JudgeOutput = z.infer<typeof JudgeOutputSchema>;
 
@@ -148,6 +384,8 @@ export const ProposalSchema = z
        * **CI 必须拒收 stub=true 的提案**:它只用于本机测试,不得进入合并流程(拒收逻辑属于 CI 校验,不在本 schema)。
        */
       stub: z.literal(true).optional(),
+      /** K1 追加:引导窗口落账(reflect 写,不可手填) */
+      guidance: ReflectorGuidanceSchema.optional(),
     }),
     /** 由运行裁判的一方写入;裁判运行前缺省 */
     judge: JudgeRecordSchema.optional(),
