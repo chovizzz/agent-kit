@@ -139,8 +139,12 @@ describe('打包产物:静态闸与结构', () => {
     expect(files.has('dist/main.js')).toBe(true);
 
     // provenance 里的 import('sigstore') 变成指向 chunk 的相对动态 import
-    const prov = Buffer.from(files.get('dist/provenance.js') as Uint8Array).toString('utf8');
-    expect(prov).toMatch(/await import\("\.\/chunks\/dist-[^"]+\.js"\)/);
+    // S7c-A 起安装器静态引用 provenance,其实现被拆进共享 chunk(chunks/provenance-*.js),入口 dist/provenance.js 只做再导出
+    const prov = [...files.entries()]
+      .filter(([k]) => k === 'dist/provenance.js' || k.startsWith('dist/chunks/provenance-'))
+      .map(([, v]) => Buffer.from(v).toString('utf8'))
+      .join('\n');
+    expect(prov).toMatch(/await import\("\.\/(?:chunks\/)?dist-[^"]+\.js"\)/);
     expect(prov).not.toMatch(/import\(["']sigstore["']\)/);
     const lic = parseLicenses(
       Buffer.from(files.get('dist/THIRD_PARTY_LICENSES') as Uint8Array).toString('utf8'),

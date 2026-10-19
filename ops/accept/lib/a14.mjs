@@ -41,6 +41,7 @@ export const IMPLEMENTED_LATER_PHASE = new Set([
   'retire',
   'sync',
   'doctor',
+  'update',
 ]);
 
 export const DELIVERABLES = [
@@ -107,7 +108,11 @@ async function a14(argv) {
     const emptyRoot = path.join(tmp, 'empty-root');
     fs.mkdirSync(emptyRoot, { recursive: true });
     const env = cleanEnv({ HOME: sb.home, KIT_TMP: sb.kit });
-    const cli = (args) => run(ctx.node, [ctx.cli, ...args], { cwd: emptyRoot, env });
+    // update 默认会读 registry:验收里绝不联网,指向 KIT_TMP 内一个空的假 registry(packument 缺失 → 网络类失败,退出 4)
+    const fakeReg = path.join(sb.kit, 'update-fake-registry');
+    fs.mkdirSync(fakeReg, { recursive: true });
+    const updateEnv = { ...env, KIT_UPDATE_REGISTRY: `file://${fakeReg}` };
+    const cli = (args, e = env) => run(ctx.node, [ctx.cli, ...args], { cwd: emptyRoot, env: e });
 
     const help = cli(['--help']);
     if (help.status !== 0) R.fail(`agent-kit --help 退出 ${help.status}`);
@@ -123,7 +128,7 @@ async function a14(argv) {
       const words = name.split(' ');
       const h = cli([...words, '--help']);
       if (h.status !== 0) R.fail(`${name} --help 退出 ${h.status}`);
-      const r = cli(['--root', emptyRoot, ...words]);
+      const r = cli(['--root', emptyRoot, ...words], name === 'update' ? updateEnv : env);
       if (phase === 'P0') {
         if (r.spawnFailed || r.status === null) R.notRun(`${name}: 未能正常结束`);
         else if (r.status === EXIT_STUB) R.notRun(`${name}: [P0] 命令仍是桩(退出 64),交付物不齐`);
@@ -133,7 +138,15 @@ async function a14(argv) {
         // 已实装的不再是桩:空仓库下必须正常结束且不得自报未执行(与 P0 同一判据)。
         if (r.spawnFailed || r.status === null) R.notRun(`${name}: 未能正常结束`);
         else if (r.status === EXIT_STUB) R.fail(`${name}: [${phase}] 已实装却仍以桩退出 64`);
-        else if (r.status === 4 && !(name === 'sync' && r.stderr.includes('SYNC_NO_PAYLOAD')))
+        else if (name === 'update') {
+          // 空的假 registry 下,update 的确定行为是:网络类失败 → 退出 4 + UPDATE_CHECK_FAILED(用法错误 / fail-closed / 其它都不算)
+          if (r.status === 4 && r.stderr.includes('UPDATE_CHECK_FAILED'))
+            R.pass(`${name}: [${phase}] 已实装(假 registry 下退出 4 UPDATE_CHECK_FAILED)`);
+          else
+            R.fail(
+              `${name}: [${phase}] 假 registry 下应退出 4 并报 UPDATE_CHECK_FAILED,实际 ${r.status}`,
+            );
+        } else if (r.status === 4 && !(name === 'sync' && r.stderr.includes('SYNC_NO_PAYLOAD')))
           R.notRun(`${name}: [${phase}] 命令自报未执行(退出 4)`);
         else R.pass(`${name}: [${phase}] 已实装(空仓库下退出 ${r.status})`);
       } else if (r.status !== EXIT_STUB)

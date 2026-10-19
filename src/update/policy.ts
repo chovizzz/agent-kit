@@ -289,7 +289,7 @@ export interface DecideInput {
   /** 只增不减的最高版本(state.max_seen_version) */
   maxSeen?: string | undefined;
   badVersions: readonly string[];
-  channel: 'latest' | 'next';
+  channel: 'latest' | 'rc';
   pin?: string | undefined;
   /** `update --major --write` 才为 true */
   allowMajor: boolean;
@@ -329,9 +329,9 @@ export function decideUpdate(input: DecideInput): Decision {
   if (tag === undefined) return { code: 'not_ready', detail: 'dist_tag_missing' };
   if (parseSemver(tag) === undefined) return { code: 'parse', detail: 'dist_tag_invalid' };
 
-  // 预发布只进 next 通道,或用户精确钉了一个预发布版本
+  // 预发布只进 rc 通道,或用户精确钉了一个预发布版本
   const pinIsPre = input.pin !== undefined && !input.pin.startsWith('~') && input.pin.includes('-');
-  const allowPre = input.channel === 'next' || pinIsPre;
+  const allowPre = input.channel === 'rc' || pinIsPre;
   const bad = new Set(input.badVersions);
 
   // 目标:无 pin → dist-tag;有 pin 且 dist-tag 在范围内 → dist-tag;否则取范围内可升级的最高版本

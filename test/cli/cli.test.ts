@@ -74,6 +74,8 @@ const IMPLEMENTED_COMMANDS = new Set([
   'sync',
   // doctor:S5 已实装(默认零写入、零网络);行为测试在 test/doctor/**。
   'doctor',
+  // update:S7c-A 已实装(默认干跑;行为测试在 test/update/**)。
+  'update',
 ]);
 
 describe('命令桩:每个命令退出 64 并说明原因(绝不静默成功)', () => {

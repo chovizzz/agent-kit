@@ -34,7 +34,8 @@ export const AUTO_SYNC_MODES = ['off', 'safe'] as const;
 export const AutoSyncModeSchema = z.enum(AUTO_SYNC_MODES);
 export type AutoSyncMode = z.infer<typeof AutoSyncModeSchema>;
 
-export const UPDATE_CHANNELS = ['latest', 'next'] as const;
+/** 通道 = npm dist-tag 名:稳定 `latest`,预发布 `rc`(release.yml 发布到 dist-tag rc;设计稿旧称 next 作废) */
+export const UPDATE_CHANNELS = ['latest', 'rc'] as const;
 
 /**
  * `auto_sync=safe` 拒绝自动应用的原因(§19.6 的机器可判条件,逐条对应)。
@@ -72,6 +73,11 @@ export const UPDATE_RESULT_CODES = [
   'verify_failed',
   'skipped_locked',
   'attestations_unreachable',
+  'trust_root_stale',
+  'tuf_unreachable',
+  'deprecated',
+  'internal',
+  'rolled_back',
   'timeout',
   'dns',
   'connect',
@@ -92,6 +98,21 @@ export const UPDATE_VERIFY_REASONS = [
   'provenance_identity',
   'bundle',
   'attestations_unreachable',
+  /** 以下为 S7c-A 追加:不进 bad_versions 的另有 trust_root_stale / tuf_unreachable / attestations_unreachable / internal */
+  'trust_root_stale',
+  'tuf_unreachable',
+  /** 签名通过的 tarball 解包失败(`TAR_*` 细分在 detail) */
+  'tar',
+  /** 包内 integrity.json / package.json 与已验签 tarball 不一致 */
+  'package',
+  /** 解包后的静态冒烟不过(bin 入口缺失 / 非普通文件 / 无 shebang) */
+  'smoke',
+  /** 目标版本已在 bad_versions(dry-run 的策略结果) */
+  'bad_version',
+  /** mirror 给的 tarball 地址不在允许主机内 */
+  'host_denied',
+  /** 不认识的异常(我们自己的 bug / 库升级):不拉黑该版本 */
+  'internal',
 ] as const;
 
 /** update 命令 / 后台 worker 的 stderr 稳定码(§19.4) */
@@ -104,6 +125,7 @@ export const UPDATE_STABLE_CODES = [
   'UPDATE_CURRENT_BROKEN',
   'UPDATE_NOT_READY',
   'UPDATE_FAIL_CLOSED',
+  'UPDATE_NOT_RUN',
   'SYNC_PENDING',
   'AUTO_SYNC_DECLINED',
 ] as const;
@@ -113,6 +135,7 @@ export const UPDATE_USAGE_REASONS = [
   'rollback_requires_write',
   'bad_registry',
   'registry_fixture_outside_tmp',
+  'home_not_allowed',
   'unknown_arg',
 ] as const;
 

@@ -39,8 +39,13 @@ const ent = table.find(([n]) => n === name);
 if (!ent) process.exit(2);
 if (ent[1] === 'P0') process.exit(mode === 'p0-stub' && name === 'build' ? 64 : mode === 'p0-notrun' && name === 'check' ? 4 : 2);
 // probe / reflect / judge / attest / promote / retire 已实装(a14 的 IMPLEMENTED_LATER_PHASE):正常模式下必须非桩、非 4。
-if (mode === 'silent-stub' && name === 'update') process.exit(64);
+if (mode === 'silent-stub' && name === 'inventory') process.exit(64);
 if (['probe', 'reflect', 'judge', 'attest', 'promote', 'retire', 'sync', 'doctor'].includes(name)) process.exit(mode === 'p1-stub-regression' ? 64 : 0);
+if (name === 'update') {
+  if (mode === 'update-usage') process.exit(2);
+  if (mode !== 'update-no-code') process.stderr.write('UPDATE_CHECK_FAILED reason=http_404\\n');
+  process.exit(mode === 'p1-stub-regression' ? 64 : 4);
+}
 process.stderr.write('未实现 — ' + ent[1] + ' 才实现\\n');
 process.exit(64);
 `;
@@ -126,7 +131,16 @@ describe('A14 交付物齐全', () => {
     expect(r.stdout).toContain('已实装却仍以桩退出 64');
     const r2 = a14(await setup('silent-stub'));
     expect(r2.status).toBe(1);
-    expect(r2.stdout).toContain('没有说明 P2');
+    expect(r2.stdout).toContain('没有说明 P1');
+  });
+  it('update 在假 registry 下必须退出 4 并报 UPDATE_CHECK_FAILED:用法错误(2)/ 没有稳定码 => 1', async () => {
+    const ok = a14(await setup('ok'));
+    expect(ok.stdout).toContain('update: [P2] 已实装(假 registry 下退出 4 UPDATE_CHECK_FAILED)');
+    for (const mode of ['update-usage', 'update-no-code']) {
+      const r = a14(await setup(mode));
+      expect(r.status, mode).toBe(1);
+      expect(r.stdout, mode).toContain('假 registry 下应退出 4');
+    }
   });
   it('P0 命令仍是桩 => 4(半成品不得判通过)', async () => {
     const r = a14(await setup('p0-stub'));
