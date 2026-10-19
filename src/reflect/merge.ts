@@ -6,7 +6,7 @@
  *  evidence[](摘录从信号机械复制)、支持次数(会话/项目数)。
  */
 import { stringify } from 'yaml';
-import { ProposalSchema, type Proposal } from '../contracts/proposal.js';
+import { ProposalSchema, type Proposal, type ReflectorGuidance } from '../contracts/proposal.js';
 import type { Layer } from '../contracts/atom.js';
 import type { ReflectorProposalDraft } from '../contracts/reflect.js';
 import { addDays } from '../atoms/dates.js';
@@ -29,6 +29,18 @@ export interface ReflectorInfo {
   stub: boolean;
 }
 
+/** 引导窗口基线(只有计数,口径同 attest 的 `countWindow`)。 */
+export type GuidanceBaseline = ReflectorGuidance['baseline'];
+
+/** 写进 `reflector.guidance` 的引导窗口落账;不传 = 不写(旧行为)。 */
+export interface GuidanceInput {
+  /** `reflect --since`;null = 不设下界 */
+  since: string | null;
+  /** reflect 运行时钟(ISO 时间戳),即 loadSignals 的上界 */
+  until: string;
+  baselineOf(draft: ReflectorProposalDraft): GuidanceBaseline;
+}
+
 export interface MergeInput {
   drafts: readonly ReflectorProposalDraft[];
   items: readonly EvidenceItem[];
@@ -40,6 +52,7 @@ export interface MergeInput {
   usedProposalIds: ReadonlySet<string>;
   /** 调用方标记的个人项目 project_key:其成员不计入团队层的跨项目/跨会话门槛 */
   personalProjectKeys?: ReadonlySet<string> | undefined;
+  guidance?: GuidanceInput | undefined;
 }
 
 export interface MergedProposal {
@@ -190,6 +203,15 @@ export function mergeProposals(input: MergeInput): MergedProposal[] {
         input_digest: r.input_digest,
         ...(r.kit_version !== undefined ? { kit_version: r.kit_version } : {}),
         ...(r.stub ? { stub: true as const } : {}),
+        ...(input.guidance !== undefined
+          ? {
+              guidance: {
+                since: input.guidance.since,
+                until: input.guidance.until,
+                baseline: input.guidance.baselineOf(d),
+              },
+            }
+          : {}),
       },
     });
     out.push({

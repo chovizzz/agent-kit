@@ -21,6 +21,8 @@ export interface LoadOptions {
   /** 只要 ts ≥ 该日期(YYYY-MM-DD,UTC 0 点)的信号 */
   since?: string | undefined;
   agents?: readonly AgentId[] | undefined;
+  /** 引导窗口上界(ISO 时间戳,不含):ts ≥ until 的信号丢弃并计入 filtered_future */
+  until?: string | undefined;
 }
 
 /** 单行上限:信号行是扁平小对象,远小于此。 */
@@ -35,6 +37,7 @@ export function emptyStats(): LoadStats {
     structure_unknown: 0,
     failed_excerpt_dropped: 0,
     filtered_out: 0,
+    filtered_future: 0,
   };
 }
 
@@ -54,6 +57,10 @@ export async function loadSignals(
   const sinceMs = opts.since === undefined ? undefined : Date.parse(`${opts.since}T00:00:00Z`);
   if (opts.since !== undefined && Number.isNaN(sinceMs)) {
     throw new RangeError('since 必须是 YYYY-MM-DD');
+  }
+  const untilMs = opts.until === undefined ? undefined : Date.parse(opts.until);
+  if (opts.until !== undefined && Number.isNaN(untilMs)) {
+    throw new RangeError('until 必须是 ISO 时间戳');
   }
   const wanted = opts.agents === undefined ? AGENT_IDS : opts.agents;
   if (!(await exists(root))) return { signals, stats };
@@ -85,6 +92,10 @@ export async function loadSignals(
         const s = parsed.data;
         if (sinceMs !== undefined && Date.parse(s.ts) < sinceMs) {
           stats.filtered_out++;
+          continue;
+        }
+        if (untilMs !== undefined && Date.parse(s.ts) >= untilMs) {
+          stats.filtered_future++;
           continue;
         }
         if (!hasStructureFields(s)) {
