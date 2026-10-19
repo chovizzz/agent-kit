@@ -39,6 +39,11 @@ export const AttestSchema = z
      * (曝光与命中无法区分)。日后换口径时用新枚举值,聚合器据此不混算。
      */
     method: AttestMethodSchema.optional(),
+    /**
+     * K1 追加(RSI 借鉴 §2.3):该 attest 所遵守的冻结验收协议的 `sha256`(64 位小写 hex)。
+     * 缺省 = 旧文件,不计入验收(是否计入由 G3 的 `frozenCountable` 判,这里只管形状)。
+     */
+    acceptance_sha256: Sha256Schema.optional(),
     /** 同一窗口重跑用不同 run_id,聚合时取最新一份;本字段与文件名里的 run_id 一致(由 CI 比对) */
     run_id: RunIdSchema,
   })

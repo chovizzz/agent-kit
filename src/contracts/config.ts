@@ -146,6 +146,17 @@ export const ReflectOverlaySchema = ReflectCoreConfigSchema.extend({
 export type ReflectOverlay = z.infer<typeof ReflectOverlaySchema>;
 
 /**
+ * K1 追加(RSI 借鉴 §1.8)。**写成代码常量,不进 kit.toml、覆盖层也改不了**——这样校准/加严口径不会被配置放宽。
+ * 三个数值是初始常量,没有统计依据。
+ */
+/** 被判过度自信的 judge 评过的规则,T2 的有效验收块要求 +1 */
+export const STRICT_EXTRA_TILES = 1;
+/** 校准度判定的最小样本数:n < 10 → insufficient,不下任何结论 */
+export const CALIBRATION_MIN_N = 10;
+/** gap = 平均置信度 − 命中率;n ≥ CALIBRATION_MIN_N 且 gap ≥ 0.20 → overconfident */
+export const CALIBRATION_GAP = 0.2;
+
+/**
  * L0 追加(④A):晋升/退役判据的阈值段。只放在 core(`kit.toml` 的 `[lifecycle]`),**覆盖层不接受该段**
  * (`OverlaySchema` 是 strict,出现即错),所以个人/渠道配置不可能放宽它。
  * 每个字段的下界就是保守默认值:core 只能调严,不能调松(调松要改契约)。
@@ -165,11 +176,25 @@ export const LifecycleCoreConfigSchema = z
     max_harmful: z.literal(0).default(0),
     /** `no_exposure` 退役理由要看的最近 canary 窗口数 K */
     no_exposure_windows: z.number().int().min(2).default(2),
+    /** K1 追加:验收分块天数(只许调大,下界 = 默认) */
+    acceptance_tile_days: z.number().int().min(7).default(7),
+    /** K1 追加:验收分块最多块数 */
+    acceptance_max_tiles: z.number().int().min(2).max(8).default(4),
   })
   .refine((c) => c.min_non_owner_members <= c.min_members, {
     path: ['min_non_owner_members'],
     message: 'min_non_owner_members 不得大于 min_members',
-  });
+  })
+  .refine(
+    (c) =>
+      Math.ceil(c.canary_window_days / c.acceptance_tile_days) + STRICT_EXTRA_TILES <=
+      c.acceptance_max_tiles,
+    {
+      path: ['acceptance_max_tiles'],
+      message:
+        'ceil(canary_window_days / acceptance_tile_days) + 1 不得大于 acceptance_max_tiles(否则加严后的有效块数永远凑不够)',
+    },
+  );
 export type LifecycleCoreConfig = z.infer<typeof LifecycleCoreConfigSchema>;
 
 /** `kit.toml`(core 仓库根)。 */
