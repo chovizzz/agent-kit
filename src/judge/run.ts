@@ -7,18 +7,24 @@
  * - 一跳成功 → 写 `judge` 并删除 `judge_attempts`;全链无成功 → 不写 `judge`,写记满整条链的 `judge_attempts`。
  * - judge **永远不改**提案的其它字段(状态转移只走 promote/retire 的人批 PR)。
  */
+import { LifecycleCoreConfigSchema } from '../contracts/config.js';
 import { JUDGE_HOP_CHAIN } from '../contracts/proposal.js';
 import type { JudgeHopId, JudgeOutput, Proposal } from '../contracts/proposal.js';
 import type { Redactor } from '../contracts/redact.js';
 import { deriveVendor, isCrossVendor } from '../contracts/vendor.js';
+import { loadKitConfig } from '../build/config.js';
+import { createGuardGit } from '../guards/git.js';
 import type { IoContext } from '../io/paths.js';
 import { assertWritable } from '../io/safe-fs.js';
 import { ruleSha256 } from '../lifecycle/checks.js';
 import type { LlmBackend } from '../reflect/backend-iface.js';
 import { JudgeProviderMismatchError, JudgeStateError } from './errors.js';
 import { parseJudgeOutput } from './output.js';
+import { buildAcceptance, buildPrediction, decidePredictionStatus, isoSeconds } from './freeze.js';
+import type { FreezeStatus } from './freeze.js';
 import { buildJudgePrompt } from './prompt/v1.js';
 import type { JudgePrompt } from './prompt/v1.js';
+import { buildJudgePromptV2 } from './prompt/v2.js';
 import {
   SAFE_STORE_FS,
   applyJudgeFields,
@@ -39,6 +45,10 @@ export interface JudgeDeps {
   readonly backends: JudgeBackends;
   /** 测试注入点:默认 safe-fs */
   readonly storeFs?: StoreFs;
+  /** 测试注入点:judge 运行时仓库 HEAD 的提交 oid;缺省经 guards/git 的 resolveCommit('HEAD')。取不到 → undefined */
+  readonly resolveHead?: () => string | undefined;
+  /** 测试注入点:judge 时钟(frozen_at),缺省 `new Date()` */
+  readonly now?: () => Date;
   /** 每处理完一条提案回调一次(命令层据此在中途失败时仍能输出已完成部分) */
   readonly onOutcome?: (o: ProposalOutcome) => void;
 }
@@ -140,10 +150,55 @@ function pendingReason(hops: readonly HopRecord[]): PendingReason {
 interface Prepared {
   readonly loaded: LoadedProposal;
   readonly prompt: JudgePrompt | undefined;
+  /** kit 决定的预测状态(LLM 不参与);已有 judge 的提案不用 */
+  readonly status: FreezeStatus;
+}
+
+interface FreezeEnv {
+  readonly tileDays: number;
+  readonly maxTiles: number;
+  /** 干跑不需要 HEAD(不写冻结记录) */
+  readonly headOid: string | undefined;
+  /** 本次运行的 judge 时钟:运行开始取一次,全部提案共用(frozen_at 在同一 run 内可比、可固定) */
+  readonly now: Date;
+}
+
+/**
+ * 读 kit.toml `[lifecycle]`(冻结参数必须与 CI 读到的基线一致,所以不能凭默认值冻结):
+ * kit.toml 缺失/无法解析/未过 schema → fail-closed(退出 3)。`[lifecycle]` 段缺省时用 schema 默认值
+ * (与 guards/criteria.ts 的 loadLifecycle 同形)。
+ */
+function loadFreezeEnv(deps: JudgeDeps, needHead: boolean): FreezeEnv {
+  const loaded = loadKitConfig(deps.io.repoRoot);
+  if (loaded.config === undefined) {
+    throw new JudgeStateError('JUDGE_STATE_INVALID: 读不到可用的 kit.toml,无法确定冻结参数');
+  }
+  const lc = loaded.config.lifecycle ?? LifecycleCoreConfigSchema.parse({});
+  let headOid: string | undefined;
+  if (needHead) {
+    try {
+      headOid = (deps.resolveHead ?? (() => createGuardGit(deps.io).resolveCommit('HEAD')))();
+    } catch {
+      headOid = undefined;
+    }
+    if (headOid === undefined || !/^[0-9a-f]{40}$/.test(headOid)) {
+      // 没有仓库 HEAD 就没有外部锚点(judged_at_head):不写冻结记录
+      throw new JudgeStateError('JUDGE_STATE_INVALID: 取不到仓库 HEAD 提交,无法冻结验收协议');
+    }
+  }
+  return {
+    tileDays: lc.acceptance_tile_days,
+    maxTiles: lc.acceptance_max_tiles,
+    headOid,
+    now: (deps.now ?? (() => new Date()))(),
+  };
 }
 
 /** 调用前:校验后端表、读取全部提案、为每条建提示(任何一步失败 → 抛错,零调用零写入)。 */
-async function prepare(deps: JudgeDeps, opts: JudgeOptions): Promise<Prepared[]> {
+async function prepare(
+  deps: JudgeDeps,
+  opts: JudgeOptions,
+): Promise<{ prepared: Prepared[]; freeze: FreezeEnv }> {
   for (const hop of JUDGE_HOP_CHAIN) {
     const b = deps.backends[hop];
     if (!b) continue;
@@ -153,7 +208,10 @@ async function prepare(deps: JudgeDeps, opts: JudgeOptions): Promise<Prepared[]>
     }
   }
   const loaded = await loadRun(deps.io, opts.runId);
+  const freeze = loadFreezeEnv(deps, !opts.dry && loaded.some((l) => !l.proposal.judge));
   const out: Prepared[] = [];
+  // 与 buildAcceptance 同精度(整秒):预检与实际冻结必须用同一个时钟值
+  const nowMs = Date.parse(isoSeconds(freeze.now));
   for (const l of loaded) {
     const p = l.proposal;
     if (p.reflector.run_id !== opts.runId) {
@@ -162,7 +220,7 @@ async function prepare(deps: JudgeDeps, opts: JudgeOptions): Promise<Prepared[]>
     assertReflectorVendor(p);
     assertExistingJudge(p);
     if (p.judge) {
-      out.push({ loaded: l, prompt: undefined });
+      out.push({ loaded: l, prompt: undefined, status: 'not_measurable' });
       continue;
     }
     if (!opts.dry) {
@@ -171,23 +229,31 @@ async function prepare(deps: JudgeDeps, opts: JudgeOptions): Promise<Prepared[]>
       assertWritable(deps.io, l.file);
       assertWritable(deps.io, `${l.file}.preflight.tmp`);
     }
+    // 时钟早于引导窗口上界:调用之前就中止(否则花了 LLM 调用才发现写不出一致的冻结记录)
+    if (!opts.dry && l.guidance !== undefined && Date.parse(l.guidance.until) > nowMs) {
+      throw new JudgeStateError('JUDGE_STATE_INVALID: guidance.until 晚于 judge 时钟,拒绝冻结');
+    }
+    const status = decidePredictionStatus(l.rule.signature, l.guidance);
+    const promptInput = {
+      op: p.op,
+      layer: p.layer,
+      signature: l.rule.signature,
+      do: l.rule.do,
+      why: l.rule.why,
+      verify: l.rule.verify,
+      evidence: p.evidence.map((e) => e.excerpt),
+    };
     out.push({
       loaded: l,
-      prompt: buildJudgePrompt(
-        {
-          op: p.op,
-          layer: p.layer,
-          signature: l.rule.signature,
-          do: l.rule.do,
-          why: l.rule.why,
-          verify: l.rule.verify,
-          evidence: p.evidence.map((e) => e.excerpt),
-        },
-        deps.redactor,
-      ),
+      status,
+      // 只有 kit 判定 predicted 才用 v2(给基线、要 prediction);其余沿用 v1
+      prompt:
+        status === 'predicted' && l.guidance !== undefined
+          ? buildJudgePromptV2({ ...promptInput, baseline: l.guidance.baseline }, deps.redactor)
+          : buildJudgePrompt(promptInput, deps.redactor),
     });
   }
-  return out;
+  return { prepared: out, freeze };
 }
 
 /** 内置厂商里随便取一个不同于 v 的,仅用来问「v 本身是不是可证明的内置规范厂商」。 */
@@ -229,7 +295,7 @@ function vendorUnproven(b: LlmBackend): boolean {
 }
 
 export async function runJudge(deps: JudgeDeps, opts: JudgeOptions): Promise<JudgeReport> {
-  const prepared = await prepare(deps, opts);
+  const { prepared, freeze } = await prepare(deps, opts);
   const fsx = deps.storeFs ?? SAFE_STORE_FS;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_JUDGE_TIMEOUT_MS;
   const maxOutputBytes = opts.maxOutputBytes ?? DEFAULT_JUDGE_MAX_OUTPUT_BYTES;
@@ -244,7 +310,7 @@ export async function runJudge(deps: JudgeDeps, opts: JudgeOptions): Promise<Jud
   };
   const known = opts.dry ? new Set<string>() : await loadKnownAtomIds(deps.io, opts.runId);
 
-  for (const { loaded, prompt } of prepared) {
+  for (const { loaded, prompt, status } of prepared) {
     const p = loaded.proposal;
     if (p.judge || prompt === undefined) {
       emit({
@@ -329,7 +395,10 @@ export async function runJudge(deps: JudgeDeps, opts: JudgeOptions): Promise<Jud
         }
         continue;
       }
-      const parsed = parseJudgeOutput(res.text, deps.redactor);
+      // predicted 时必须有合法 prediction:缺失/非法 = 该跳 invalid_output、走下一跳(③A,堵「挑难题不预测」)
+      const parsed = parseJudgeOutput(res.text, deps.redactor, {
+        predictionRequired: status === 'predicted',
+      });
       if (!parsed.ok) {
         invalidOutput = true;
         hops.push({ ...rec, result: 'error:invalid_output' });
@@ -367,7 +436,19 @@ export async function runJudge(deps: JudgeDeps, opts: JudgeOptions): Promise<Jud
         rule_sha256: ruleSha256(loaded.ruleText),
       };
       assertJudgeProvider(record.provider, hop);
-      const next = applyJudgeFields(loaded.raw, { judge: record });
+      // 冻结:验收协议与预测都由 kit 确定性计算;LLM 只贡献 predicted 时的四个值
+      // (非 predicted 时 parseJudgeOutput 已丢弃 LLM 的 prediction)
+      const acceptance = buildAcceptance({
+        ruleSha256: record.rule_sha256,
+        signature: loaded.rule.signature,
+        guidance: loaded.guidance,
+        headOid: freeze.headOid as string,
+        now: freeze.now,
+        tileDays: freeze.tileDays,
+        maxTiles: freeze.maxTiles,
+      });
+      const prediction = buildPrediction(status, value.prediction, acceptance);
+      const next = applyJudgeFields(loaded.raw, { judge: { ...record, prediction, acceptance } });
       await writeProposal(deps.io, loaded.file, next, loaded.text, fsx);
       emit({
         proposalId: p.id,

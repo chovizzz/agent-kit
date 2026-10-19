@@ -3,6 +3,7 @@ import { stringify } from 'yaml';
 import type { CommandContext } from '../../src/commands/types.js';
 import { JUDGE_HOP_CHAIN } from '../../src/contracts/proposal.js';
 import type { JudgeHopId } from '../../src/contracts/proposal.js';
+import { runSync } from '../../src/io/exec.js';
 import { createIoContext } from '../../src/io/paths.js';
 import type { IoContext } from '../../src/io/paths.js';
 import { readBytes, readDir, readText } from '../../src/io/read-fs.js';
@@ -14,7 +15,7 @@ import type {
   LlmCompleteRequest,
   LlmCompleteResult,
 } from '../../src/reflect/backend-iface.js';
-import { REPO_ROOT, makeTempDir } from '../helpers/tmp.js';
+import { REPO_ROOT, makeTempDir, wideCtx } from '../helpers/tmp.js';
 
 export const RUN_ID = 'run-0001';
 
@@ -99,7 +100,39 @@ export interface Work {
   readonly state: string;
   readonly io: IoContext;
   readonly runDir: string;
+  /** repo 的 HEAD 提交 oid(newWork 里真 git init + 提交了 kit.toml 与一份规则,judge 默认经 git 取 HEAD) */
+  readonly head: string;
 }
+
+/** 固定的 judge 时钟:大于夹具里 guidance.until(见 GUIDANCE),便于逐字段断言 */
+export const FROZEN_NOW = new Date('2026-10-14T05:40:00Z');
+export const fixedNow = (): Date => FROZEN_NOW;
+
+/** 夹具引导窗口落账:基线充足(sessions 412 ≥ 20,曝光 37 ≥ 3)→ status=predicted */
+export const GUIDANCE = {
+  since: '2026-09-01',
+  until: '2026-10-14T03:12:00Z',
+  baseline: { sessions_total: 412, exposure_sessions: 37, fired: 51 },
+} as const;
+
+/** 合法 prediction 输出(down,[0.25,0.8],0.7) */
+export const VALID_PREDICTION = {
+  direction: 'down',
+  ratio_lo: 0.25,
+  ratio_hi: 0.8,
+  confidence: 0.7,
+} as const;
+
+const GIT_IDENT = [
+  '-c',
+  'user.name=kit-test',
+  '-c',
+  'user.email=kit-test@example.invalid',
+  '-c',
+  'commit.gpgsign=false',
+  '-c',
+  'init.defaultBranch=main',
+] as const;
 
 export async function newWork(prefix = 'judge-'): Promise<Work> {
   const { dir } = await makeTempDir(prefix);
@@ -112,7 +145,32 @@ export async function newWork(prefix = 'judge-'): Promise<Work> {
   });
   await safe.mkdirp(io, path.join(repo, 'rules', 'org'));
   await safe.writeFile(io, path.join(repo, 'rules', 'org', 'known-rule.md'), 'placeholder\n');
-  return { dir, repo, state, io, runDir: path.join(state, 'reflect', RUN_ID) };
+  // judge 现在读 kit.toml [lifecycle] 并取仓库 HEAD:夹具放一份真 kit.toml 并真提交一次
+  await safe.writeFile(
+    io,
+    path.join(repo, 'kit.toml'),
+    await readText(path.join(REPO_ROOT, 'kit.toml')),
+  );
+  const wctx = wideCtx(dir);
+  const env = {
+    GIT_CONFIG_GLOBAL: '/dev/null',
+    GIT_CONFIG_NOSYSTEM: '1',
+    HOME: dir,
+    GIT_AUTHOR_DATE: '2026-10-08T00:00:00Z',
+    GIT_COMMITTER_DATE: '2026-10-08T00:00:00Z',
+  };
+  const git = (args: readonly string[]): string => {
+    const r = runSync(wctx, 'git', [...GIT_IDENT, ...args], { cwd: repo, env });
+    if (r.spawnError !== undefined || r.status !== 0) {
+      throw new Error(`git ${args.join(' ')} 失败:${r.spawnError ?? r.stderr}`);
+    }
+    return r.stdout;
+  };
+  git(['init', '--quiet', '--template=']);
+  git(['add', '-A']);
+  git(['commit', '--quiet', '-m', 'fixture']);
+  const head = git(['rev-parse', 'HEAD']).trim();
+  return { dir, repo, state, io, runDir: path.join(state, 'reflect', RUN_ID), head };
 }
 
 export const CANARY = {
@@ -142,6 +200,10 @@ export interface ProposalSpec {
   readonly doText?: string;
   readonly extra?: Record<string, unknown>;
   readonly runId?: string;
+  /** reflector.guidance;缺省 = 不写(旧暂存提案) */
+  readonly guidance?: Record<string, unknown>;
+  /** 规则签名类型;缺省 phrase */
+  readonly signature?: 'phrase' | 'tool' | 'path' | 'always' | 'none';
 }
 
 export function proposalObject(spec: ProposalSpec = {}): Record<string, unknown> {
@@ -170,9 +232,25 @@ export function proposalObject(spec: ProposalSpec = {}): Record<string, unknown>
       ...(spec.reflectorBackend === null ? {} : { backend: spec.reflectorBackend ?? 'claude' }),
       prompt_id: 'reflect-v1',
       stub: true,
+      ...(spec.guidance !== undefined ? { guidance: spec.guidance } : {}),
     },
     ...spec.extra,
   };
+}
+
+function signatureYaml(kind: NonNullable<ProposalSpec['signature']>): string {
+  switch (kind) {
+    case 'none':
+      return '';
+    case 'always':
+      return 'signature:\n  type: always\n';
+    case 'path':
+      return 'signature:\n  type: path\n  pattern: src/**\n';
+    case 'tool':
+      return `signature:\n  type: tool\n  pattern: ${CANARY.pattern}\n`;
+    case 'phrase':
+      return `signature:\n  type: phrase\n  pattern: ${CANARY.pattern}\n`;
+  }
 }
 
 export function ruleMarkdown(spec: ProposalSpec = {}): string {
@@ -188,10 +266,7 @@ status: proposed
 owner: '@owner-handle'
 created: 2026-10-12
 review_by: 2026-11-12
-signature:
-  type: phrase
-  pattern: ${CANARY.pattern}
-evidence:
+${signatureYaml(spec.signature ?? 'phrase')}evidence:
   - type: trace
     ref: ${CANARY.sig}
     excerpt: ${CANARY.excerpt}
