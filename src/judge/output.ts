@@ -1,4 +1,8 @@
-import { JudgeOutputSchema } from '../contracts/proposal.js';
+import {
+  JudgeOutputSchema,
+  PredictionValuesSchema,
+  validatePredictionShape,
+} from '../contracts/proposal.js';
 import type { JudgeOutput } from '../contracts/proposal.js';
 import type { Redactor } from '../contracts/redact.js';
 import { KebabIdSchema, codePointLength } from '../contracts/common.js';
@@ -14,6 +18,7 @@ export type JudgeOutputRejection =
   | 'not_json'
   | 'not_object'
   | 'schema'
+  | 'prediction_invalid'
   | 'notes_too_long'
   | 'conflicts_invalid'
   | 'placeholder'
@@ -31,6 +36,7 @@ export type JudgeOutputResult =
 export function parseJudgeOutput(
   text: string,
   redactor: Pick<Redactor, 'pass2'>,
+  opts: { readonly predictionRequired?: boolean } = {},
 ): JudgeOutputResult {
   const fail = (code: JudgeOutputRejection): JudgeOutputResult => ({ ok: false, code });
   if (Buffer.byteLength(text, 'utf8') > MAX_JUDGE_OUTPUT_BYTES) return fail('too_large');
@@ -41,9 +47,27 @@ export function parseJudgeOutput(
     return fail('not_json');
   }
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return fail('not_object');
-  const parsed = JudgeOutputSchema.safeParse(raw);
+  // prediction 单独处理:不要求时(status 由 kit 决定)LLM 给的一律丢弃,哪怕它形状非法;
+  // 要求时缺失/非法 = prediction_invalid(该跳作废走下一跳,不允许「收下 verdict、prediction 缺省」,③A)
+  const { prediction: rawPrediction, ...rest } = raw as Record<string, unknown>;
+  const parsed = JudgeOutputSchema.safeParse(rest);
   if (!parsed.success) return fail('schema');
-  const v = parsed.data;
+  let v = parsed.data;
+  if (opts.predictionRequired === true) {
+    if (
+      typeof rawPrediction !== 'object' ||
+      rawPrediction === null ||
+      Array.isArray(rawPrediction)
+    ) {
+      return fail('prediction_invalid');
+    }
+    if (validatePredictionShape(rawPrediction as Record<string, unknown>).length > 0) {
+      return fail('prediction_invalid');
+    }
+    const pv = PredictionValuesSchema.safeParse(rawPrediction);
+    if (!pv.success) return fail('prediction_invalid');
+    v = { ...v, prediction: pv.data };
+  }
   if (codePointLength(v.notes) > MAX_JUDGE_NOTES_CHARS) return fail('notes_too_long');
   if (
     v.conflicts.length > MAX_JUDGE_CONFLICTS ||

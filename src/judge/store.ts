@@ -11,7 +11,7 @@ import { parseRestrictedYaml } from '../atoms/frontmatter.js';
 import { LayerSchema } from '../contracts/atom.js';
 import { RunIdSchema } from '../contracts/common.js';
 import { ProposalSchema } from '../contracts/proposal.js';
-import type { Proposal } from '../contracts/proposal.js';
+import type { Proposal, ReflectorGuidance } from '../contracts/proposal.js';
 import type { IoContext } from '../io/paths.js';
 import { lstat, readDir, readText } from '../io/read-fs.js';
 import { chmod, remove, rename, writeFile } from '../io/safe-fs.js';
@@ -31,6 +31,8 @@ export interface LoadedProposal {
   /** 读取时的文件原文;写回前重读比对,被改过就中止 */
   readonly text: string;
   readonly proposal: Proposal;
+  /** 引导窗口落账(`reflector.guidance`);旧暂存提案没有它 → undefined(judge 据此把 status 定为 baseline_insufficient,不拒) */
+  readonly guidance: ReflectorGuidance | undefined;
   /** 规则文件原文(供 judge 写入 rule_sha256:评审结论绑定评审时的规则文本,契约 ⑨A) */
   readonly ruleText: string;
   /** yaml 解析出的原始对象(保持键序),更新时在它上面改 */
@@ -120,6 +122,7 @@ export async function loadRun(io: IoContext, runId: string): Promise<LoadedPropo
       file,
       text,
       proposal,
+      guidance: proposal.reflector.guidance,
       ruleText: src,
       raw: { ...(y.value as Record<string, unknown>) },
       rule: {

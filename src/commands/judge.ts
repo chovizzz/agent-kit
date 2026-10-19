@@ -8,6 +8,8 @@
  *   (覆盖层 `reflect.backends` → `buildBackends`),**只在 `--run-llm --allow-egress` 时构造**,干跑不构造;
  *   覆盖层须 `reflect.egress = true`,否则退出 2。没有已配置的槽位 → 真跑退出 4 并提示。
  *   本文件不 import llm-exec 与 `src/reflect/backends/**`(经 ./reflect.js 的接线辅助)。
+ * - 真跑还读 kit.toml `[lifecycle]` 与仓库 HEAD 提交 oid,写入 `judge.prediction` / `judge.acceptance`(冻结验收协议,K3);
+ *   读不到 kit.toml 或取不到 HEAD → 退出 3(fail-closed)。
  * - 读写只经 read-fs/safe-fs;写入限 `.state/reflect/<run_id>/proposals/` 下的 judge/judge_attempts。
  * - 退出码:0 完成(含 pending=no_cross_vendor);1 有提案 reject / injection_suspected / 没评上且出现过评审输出校验不通过;
  *   2 用法错(含 run 不存在);3 状态损坏、提示复扫残留、厂商不可证明、写出口拒绝;
@@ -53,6 +55,10 @@ export interface JudgeCommandDeps {
   requireOverlayEgress?: boolean;
   /** 测试注入;缺省按覆盖层建真实 Redactor */
   redactor?: Pick<Redactor, 'pass2'>;
+  /** 测试注入:仓库 HEAD 提交 oid(缺省经 git 取);取不到 → 真跑退出 3 */
+  resolveHead?: () => string | undefined;
+  /** 测试注入:judge 时钟(frozen_at) */
+  now?: () => Date;
 }
 
 interface Parsed {
@@ -251,7 +257,14 @@ export function createJudgeCommand(deps: JudgeCommandDeps = {}): CommandDef {
       };
       try {
         report = await runJudge(
-          { io: ctx.io, redactor, backends, onOutcome: (o) => done.push(o) },
+          {
+            io: ctx.io,
+            redactor,
+            backends,
+            onOutcome: (o) => done.push(o),
+            ...(deps.resolveHead !== undefined ? { resolveHead: deps.resolveHead } : {}),
+            ...(deps.now !== undefined ? { now: deps.now } : {}),
+          },
           { runId: args.run, dry: !args.runLlm, maxCalls: args.maxCalls },
         );
       } catch (e) {
