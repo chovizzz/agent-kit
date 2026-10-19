@@ -400,6 +400,8 @@ function summaryOf(
       dropped_residual: rep.signals_dropped.residual,
       external_excerpt_forced: rep.signals_dropped.external_excerpt_forced,
       structure_unknown: r.plan.structure_unknown,
+      // 仅 >0 时出现,保持旧输出形状
+      ...(r.load.filtered_future > 0 ? { filtered_future: r.load.filtered_future } : {}),
     },
     plan: {
       clusters: r.plan.clusters,
@@ -435,7 +437,7 @@ function humanLines(s: Record<string, unknown>): string {
   return (
     [
       `reflect: run=${String(s['run_id'])} mode=${String(s['mode'])} outcome=${String(s['outcome'])} exit=${String(s['exit_code'])}`,
-      `signals: loaded=${sig['loaded']} dropped_schema=${sig['dropped_schema']} dropped_residual=${sig['dropped_residual']} external_excerpt_forced=${sig['external_excerpt_forced']} structure_unknown=${sig['structure_unknown']}`,
+      `signals: loaded=${sig['loaded']} dropped_schema=${sig['dropped_schema']} dropped_residual=${sig['dropped_residual']} external_excerpt_forced=${sig['external_excerpt_forced']} structure_unknown=${sig['structure_unknown']}${sig['filtered_future'] !== undefined ? ` filtered_future=${sig['filtered_future']}` : ''}`,
       `plan: clusters=${plan['clusters']} evidence=${plan['evidence']} truncated=${plan['evidence_truncated']} batches=${plan['batches']} calls_needed=${plan['calls_needed']} exceeds_call_limit=${String(plan['exceeds_call_limit'])}`,
       `prompt: bytes=${String(prompt['bytes'])} sha256=${String(prompt['sha256'])}`,
       `backend: ${backend === null ? `none planned=${String(s['planned_backend'])}` : `slot=${backend.slot} vendor=${backend.vendor} model=${backend.model}`}`,

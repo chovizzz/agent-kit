@@ -21,6 +21,8 @@ export interface LoadStats {
   failed_excerpt_dropped: number;
   /** 被 since/agents 过滤掉的条数 */
   filtered_out: number;
+  /** ts ≥ until(引导窗口上界,不含)而被丢弃的条数;不传 until 时恒为 0 */
+  filtered_future: number;
 }
 
 export interface LoadResult {

@@ -35,8 +35,14 @@ import {
   splitPack,
   type EvidencePack,
 } from './evidence.js';
+import {
+  windowBounds,
+  buildMatcher,
+  countWindow,
+  loadWindowData,
+} from '../lifecycle/attest-count.js';
 import { loadSignals } from './load.js';
-import { mergeProposals, type ReflectorInfo } from './merge.js';
+import { mergeProposals, type GuidanceBaseline, type ReflectorInfo } from './merge.js';
 import { renderWithinBudget, type RenderedPrompt } from './prompt/v1.js';
 import { filesOf, simulateGuards, writeReportOnly, writeStage } from './stage.js';
 import { sha256Hex } from './text.js';
@@ -180,9 +186,12 @@ export async function runReflect(deps: RunDeps, opts: RunOpts): Promise<RunResul
   const dryRun = mode === 'dry';
 
   // 1~4 装载、分类、聚类、证据包
+  // 引导窗口 [since, until):until = 运行时钟,取一次;晚于它的信号不参与提案也不参与基线
+  const until = deps.clock().toISOString();
   const loaded = await loadSignals(deps.io, deps.redactor, {
     since: opts.since,
     agents: opts.agents,
+    until,
   });
   const clusters: Cluster[] = buildClusters(classifySignals(loaded.signals));
   // 个人层原子的标题不进提示(否则可能被改写进团队提案)
@@ -201,6 +210,7 @@ export async function runReflect(deps: RunDeps, opts: RunOpts): Promise<RunResul
   );
   const rejected: Record<string, number> = {};
   bump(rejected, 'load_structure_unknown', loaded.stats.structure_unknown);
+  bump(rejected, 'load_filtered_future', loaded.stats.filtered_future);
 
   const plan: RunPlan = {
     signals_loaded: loaded.stats.loaded,
@@ -421,9 +431,20 @@ export async function runReflect(deps: RunDeps, opts: RunOpts): Promise<RunResul
     kit_version: deps.kitVersion,
     stub: mode === 'stub',
   };
+  // 基线读到窗口内的坏记录:不写残缺基线,整批作废(SignalStoreError 等读库损坏照常向上抛 → 退出 3)
+  let guidance;
+  try {
+    guidance = await buildGuidance(deps.io, accepted, opts.since, until, opts.agents);
+  } catch (e) {
+    if (!(e instanceof ReflectFailClosedError) || e.code !== 'REFLECT_BASELINE_UNAVAILABLE')
+      throw e;
+    bump(rejected, 'baseline_unavailable');
+    return fail('output_rejected', callsMade, 1, tail);
+  }
   let merged;
   try {
     merged = mergeProposals({
+      guidance,
       drafts: accepted,
       items,
       clusters,
@@ -477,5 +498,66 @@ function toTarget(a: ExistingAtomInfo): DedupeTarget {
       a.signatureType === undefined
         ? undefined
         : { type: a.signatureType, pattern: a.signaturePattern },
+  };
+}
+
+/**
+ * 引导窗口落账:基线 = 该提案规则签名在 [since, until) 的计数。
+ * 一律复用 attest 的 `buildMatcher` / `countWindow` / `loadWindowData`(同口径,不另写匹配)。
+ * `path` 型(attest 无法计数)与不可用匹配器:只写 sessions_total,曝光/命中记 0,不假装有预测信息;
+ * `always` 型按 countWindow 原样(exposure = fired = sessions_total),是否可预测由 judge(K3)按签名类型决定。
+ */
+async function buildGuidance(
+  io: IoContext,
+  drafts: readonly ReflectorProposalDraft[],
+  since: string | undefined,
+  until: string,
+  agents: readonly AgentId[] | undefined,
+): Promise<{
+  since: string | null;
+  until: string;
+  baselineOf(d: ReflectorProposalDraft): GuidanceBaseline;
+}> {
+  const fromMs = since === undefined ? 0 : windowBounds(since, since).fromMs;
+  const toMs = Date.parse(until);
+  const ag = agents ?? [];
+  const data = await loadWindowData(io, fromMs, toMs, ag);
+  if (data.droppedSchema > 0) {
+    throw new ReflectFailClosedError(
+      'REFLECT_BASELINE_UNAVAILABLE',
+      '引导窗口内有不合 schema 的记录,基线不可信',
+    );
+  }
+  const count = (matcher: Parameters<typeof countWindow>[0]['matcher']) =>
+    countWindow({
+      signals: data.signals,
+      sessionStats: data.sessionStats,
+      matcher,
+      from: fromMs,
+      to: toMs,
+      agents: ag,
+    });
+  const byDraft = new Map<ReflectorProposalDraft, GuidanceBaseline>();
+  for (const d of drafts) {
+    const m = buildMatcher(d.signature);
+    if (m.kind === 'match' || m.kind === 'always') {
+      const c = count(m);
+      byDraft.set(d, {
+        sessions_total: c.sessions_total,
+        exposure_sessions: c.exposure_sessions,
+        fired: c.fired,
+      });
+    } else {
+      byDraft.set(d, {
+        sessions_total: count({ kind: 'always' }).sessions_total,
+        exposure_sessions: 0,
+        fired: 0,
+      });
+    }
+  }
+  return {
+    since: since ?? null,
+    until,
+    baselineOf: (d) => byDraft.get(d) as GuidanceBaseline,
   };
 }
