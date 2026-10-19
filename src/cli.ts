@@ -17,6 +17,7 @@ import { command as signalsCollect } from './commands/signals-collect.js';
 import { command as sync } from './commands/sync.js';
 import type { CommandDef } from './commands/types.js';
 import { command as update } from './commands/update.js';
+import { createBackgroundCommand } from './update/worker.js';
 
 /**
  * 命令注册表。**只有 B01 改本文件**:后续块替换 src/commands/<x>.ts 的内容,
@@ -143,7 +144,12 @@ export async function main(argv: readonly string[], env: MainEnv = {}): Promise<
     return ExitCode.OK;
   }
 
-  const resolved = resolveCommand(flags.rest);
+  // 内部入口:后台 update worker。不在 COMMANDS 里,不进 --help;只有这一个精确形状
+  const hidden =
+    flags.rest[0] === '__update' && !flags.help
+      ? { def: createBackgroundCommand(), args: flags.rest.slice(1) }
+      : undefined;
+  const resolved = hidden ?? resolveCommand(flags.rest);
   if (flags.help && resolved === undefined) {
     stdout(helpText());
     return ExitCode.OK;

@@ -43,6 +43,19 @@ export function getRealHome(env?: Readonly<Record<string, string | undefined>>):
   return e['KIT_REAL_HOME_OVERRIDE'] ?? os.homedir();
 }
 
+/**
+ * 从真实 process.env 里只取键名匹配 `keyRe` 的那部分(拷贝,不含其它键)。
+ * 给启动器 / runSelf 用:它们不能直接碰 process.env(eslint 闸),又必须看到「是否 CI」「代理变量」这类具体键。
+ * 调用方应传一个收窄的正则,不要传「匹配一切」的正则。
+ */
+export function pickProcessEnv(keyRe: RegExp): Record<string, string | undefined> {
+  const out: Record<string, string | undefined> = {};
+  for (const [k, v] of Object.entries(process.env)) {
+    if (keyRe.test(k)) out[k] = v;
+  }
+  return out;
+}
+
 function findUp(start: string, marker: string): string | undefined {
   let dir = start;
   for (;;) {

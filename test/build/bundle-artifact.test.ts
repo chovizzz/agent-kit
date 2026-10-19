@@ -134,8 +134,9 @@ describe('打包产物:静态闸与结构', () => {
     const cli = Buffer.from(files.get('dist/cli.js') as Uint8Array).toString('utf8');
     expect(cli).toMatch(/^#!\/usr\/bin\/env node\n/);
     expect(cli.length).toBeLessThan(2048);
-    // 主程序在另一个 chunk,由入口静态加载(不惰性)
-    expect(cli).toMatch(/^import .* from "\.\/chunks\/[^"]+";$/m);
+    // S7c-B:入口先惰性加载启动器 chunk,由它决定是否把控制权交给 current;退回自身时才加载主程序(dist/main.js)
+    expect(cli).toMatch(/await import\("\.\/chunks\/launcher-[^"]+\.js"\)/);
+    expect(cli).toMatch(/await import\("\.\/main\.js"\)/);
     expect(files.has('dist/main.js')).toBe(true);
 
     // provenance 里的 import('sigstore') 变成指向 chunk 的相对动态 import
@@ -222,17 +223,14 @@ describe('打包产物:零 node_modules 隔离目录里的冒烟', () => {
   it('隔离目录不会因解析不到依赖而退化:掏空主程序 chunk 后 CLI 必须失败(证明 chunk 真的被加载)', async () => {
     const broken = path.join(sb.dir, 'iso', 'broken');
     await copyTree(sb, distA, path.join(broken, 'dist'));
-    const chunks = (await listFiles(path.join(broken, 'dist'))).filter((f) =>
-      f.startsWith('chunks/cli-'),
-    );
-    expect(chunks).toHaveLength(1);
-    await safe.writeFile(sb.wctx, path.join(broken, 'dist', chunks[0] as string), 'export {};\n');
+    // S7c-B:入口惰性加载主程序 dist/main.js(只在启动器没把控制权交出去时)
+    await safe.writeFile(sb.wctx, path.join(broken, 'dist', 'main.js'), 'export {};\n');
     const r = node([path.join(broken, 'dist', 'cli.js'), '--version'], {
       cwd: broken,
       env: childEnv,
     });
     expect(r.status).not.toBe(0);
-    expect(r.stderr).toMatch(/does not provide an export named/);
+    expect(r.stderr).toMatch(/is not a function/);
   });
 });
 
