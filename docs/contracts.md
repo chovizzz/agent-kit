@@ -2507,6 +2507,42 @@ agent-kit retire  --rule <id> --to deprecated|retired --reason manual|expired|su
 
 **残余缺口(如实)**:提交者日期可伪造(既有 GD-3),git 锚点给的是相对主线合并顺序的保证;`judged_at_head` 只证明时序锚点,不证明 judge 真的在该提交上运行;`textSince` 在非线性历史(合并提交)下沿 `git log -- path` 的线性结果取值,属 GD-3 同类残余;`GuardGit` 接口未改,浅克隆靠「冻结提交无父提交」识别。
 
+### 18.10 judge 校准与 ①B 晋升加严(K5a 实装,订正 §18.8 的 K5a 行)
+
+实现:`src/lifecycle/calibration.ts`(`computeCalibration`)、`src/guards/criteria.ts` 的 `promotion()`(T2)。常量 `STRICT_EXTRA_TILES` / `CALIBRATION_MIN_N` / `CALIBRATION_GAP` 在 `src/contracts/config.ts`,**不进 `kit.toml`**(`[lifecycle]` 是 strictObject,写这些键即配置不合法)。
+
+**账本**:**基线树**(`baseOid`)里每个 `proposals/<id>.yaml` 的**每一份**不同冻结协议(`judge.acceptance.sha256`;同一 sha 的连续版本算一份,最老的提交 = 冻结提交)。只读基线,PR(head)里新增或改动的提案、attest 一概不影响自己的校准。排除正在被判的提案(按**文件名里的 id**,含它的全部历史版本)。只统计 `prediction.status=predicted`;`baseline_insufficient` / `not_measurable` 不进分母,但要复核——`predicted` 与由 guidance(及能定位到、且签名哈希相符的原子签名)复算的状态不一致即损坏,防止手改 status 逃避结算。没有 `judge`、或 judge 没有 acceptance 也没有 prediction(K1 之前的旧记录)直接忽略。条目从**冻结提交**那一版读取 prediction / guidance / vendor / model;同一冻结协议的后续版本若这些内容与冻结时不同(冻结之后被改),算损坏。
+
+**校准键(两档并集)**:`vendor`(`judge.vendor`,须等于最后一跳的 vendor)与 `vendor/model`(最后一跳的 model),小写去空白。任一档过度自信即加严。只用 `vendor/model` 的话,改 model 串(`hops[].model` 是自由串)就能拆成 n<10 的新键。
+
+**结算(命中口径)**:取 `attest/<targets>/` 下 `acceptance_sha256` 等于该冻结协议 `sha256` 的 attest,并要求 canary 渠道、成员在基线 `kit.toml` 成员表内(不早于 `since`)、`rule_sha256` 等于 `acceptance.rule_sha256`、`method=signature_proxy_v1`、窗口经 `classifyTile`(D0 = `acceptanceD0(acc, 冻结提交日期)`)对齐、attest 首次入库的提交以冻结提交为严格后代、入库日期 + 1 ≥ `window_end`;同 (成员,窗口) 取 run_id 时间戳最新。一块**有效** = ≥`min_members` 名成员、其中 ≥`min_non_owner_members` 名非 owner(owner 取基线里 `id == target` 的原子;找不到时不排除任何人)。实测比值 `r = (Σexposure_sessions / Σsessions_total) ÷ (guidance.baseline.exposure_sessions / guidance.baseline.sessions_total)`,只在有效块上合计;**命中 ⇔ ratio_lo ≤ r ≤ ratio_hi**(闭区间,`"inf"` 无上界)。比较用整数交叉相乘(网格点写成有理数),不用浮点。
+
+- **最新一份**:有效块数 ≥ `ceil(canary_window_days / tile_days)`(基线 `kit.toml`,**不含**加严的 extra)才算已结算,否则未结算、不进分母(只在 `CALIBRATION_INSUFFICIENT` 的消息里披露条数)。块齐了但 `Σsessions_total=0` → 无法算比值,按损坏处理(加严)。
+- **被重跑 judge 取代的旧份**(同一提案文件历史上出现过多份冻结):**每一份都进账**,不能只看最新或只看第一份——作者可以在本机 `attest` 偷看数据(命令不读 git、数据不必入库),发现要失手就重跑 judge 换掉预测。取代它的提交日期 `< 该份 D0`(验收期还没开始,没有数据可偷看)→ 忽略;否则有效块 ≥1 按已有块结算,0 块**按失手计**。被取代的旧份仍用它自己的 `acceptance_sha256` 绑定的 attest,新协议下不再计入它们(这是 §18.9 既有行为)。
+- 同一冻结协议出现在两个提案文件里(整块 judge 复制)→ 都算损坏,不去重(去重会吞掉真实的独立预测,而复制是明显的伪造信号)。
+
+**判据**:`n ≥ CALIBRATION_MIN_N` 且 `平均置信度 − 命中率 ≥ CALIBRATION_GAP` → overconfident。置信度只有 0.5/0.7/0.9,按十分位整数算:`Σconf10 − 10·hits ≥ 2·n`,与 gap ≥ 0.20 严格等价,没有浮点边界(n=10:conf 0.9 时 7 命中恰好 gap=0.20 → 加严,8 命中 → 不加严)。
+
+**T2 接入**:加严(过度自信 / 校准不可用 / 同键条目损坏)→ 所需有效块数 `requiredValidTiles(canary_window_days, tile_days, STRICT_EXTRA_TILES)`,否则 extra=0;不足报 `GUARD_G3_THRESHOLD_TILES`,消息写明是否因加严。若所需块数超过冻结协议的 `max_tiles`(分块序号 ≥ `max_tiles` 不被 `classifyTile` 接受,永远凑不够)→ 直接报 `THRESHOLD_TILES` 并写明须重跑 judge 重新冻结,**不削减 extra**。
+
+| 码                                     | 严重度 | 含义                                                                                                                                 |
+| -------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `GUARD_G3_JUDGE_OVERCONFIDENT`         | warn   | 某档(vendor 或 vendor/model)n ≥ 10 且 gap ≥ 0.20,加严                                                                                |
+| `GUARD_G3_CALIBRATION_INSUFFICIENT`    | warn   | 两档 n 都不足,**不加严**(消息附 n 与未结算条数)                                                                                      |
+| `GUARD_G3_CALIBRATION_UNAVAILABLE`     | warn   | 全局计算失败(异常、git 失败、提案 yaml 解析不了、judge 读不出 vendor/model 无法归属键、基线文本与其历史不一致):**按过度自信加严**    |
+| `GUARD_G3_CALIBRATION_ITEM_UNREADABLE` | warn   | 同 vendor 条目读不出 / 哈希不符 / 冻结后被改 / status 被改 / 重复冻结协议 / attest 读不出:**按过度自信加严**;别家 judge 的损坏不影响 |
+
+**偏离设计稿的一处**:`Diagnostic.severity` 只有 `error` / `warn` 两级,设计稿的「info」用 `warn` 实现(同 `ATTEST_NOT_COUNTED`,不计入失败);四个码的 warn 本身不使 G3 红,红的是加严后的 `THRESHOLD_TILES`。fail-closed 的损坏路径用 warn 提示 + 实际加严,不单独报 error。
+
+**残余缺口(如实,K5a 不解决,需披露)**:
+
+- **选择偏差**:账本只含「judge 给了 accept、原子到了 advisory、canary 成员凑够有效块」的预测。reject / revise 的预测永远不结算;作者可以不收集数据让会失手的最新预测永远不结算(只在 `INSUFFICIENT` 消息里报未结算条数,**不**把过期未结算算失手,那样罚的是缺数据而不是判错)。这是**完成样本的校准**,不是全部冻结预测的校准。覆盖率(已结算 / 已冻结)应随报告披露。
+- **删除**:账本只枚举基线树里现存的 `proposals/*.yaml`;先用内容 PR 删掉失手的提案再发晋升 PR,历史上的失手就出账了。需要守卫禁止删改 `proposals/` 里已冻结的 judge 块,或账本按历史索引——K5a 未做。
+- **稀释**:同 vendor 下用大量低置信度(0.5)、宽区间的预测稀释高置信度失手,压低平均置信度。未做「置信度 ≥0.7 子集再算一次」(偏离 §18.8 的口径,需用户决定)。新模型 / 冷门模型在两档都 n<10 时不会被加严。
+- **时间边界**:「取代日期 < D0 忽略」依赖提交者日期(作者可写,GD-3 同类);`attest` 成员字段是自报的,非 owner 门槛可伪造(CODEOWNERS / 四眼);owner 取自基线现值。
+- **冻结核验未逐条重做**:账本条目只核哈希自洽与「冻结后未改」,不重做 `judged_at_head` 祖先、时钟交叉(那是晋升该原子时 K4 的事)。
+- **性能**:每次 T2 对同 vendor 的每个提案读全部历史版本与其 attest 的 git 历史(别家 vendor 的条目仅解析、不结算),提案多了会慢;超时 / 失败记 `CALIBRATION_UNAVAILABLE`(加严),不静默跳过。CI 须用完整历史(浅克隆 → 加严)。
+
 ## 19. sync / doctor / update 命令面与自动更新契约(S0,契约先行;S1–S9 实装后订正)
 
 本节先定死三条命令的命令面、退出码、稳定码、文件位置与授权边界,实现在后续块(S1–S8)。`sync` 已由 S4 实装(§19.2),`doctor` 已由 S5 实装(§19.3),`update` 的检查 / 安装 / 回滚本体已由 S7c-A 实装(§19.4),启动器、后台 worker、自动同步评估由 S7c-B 实装(§19.5–§19.7)。设计依据:`sync-doctor-update-design.md` §0–§6、§8;用户 2026-10-14 对 16 条决策的拍板(14 条按设计稿推荐,**② 改 B、⑭ 改 B**)。新增 schema 全部 `strictObject`,只追加;`contracts-v1` 既有编号不重排。

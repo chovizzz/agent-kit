@@ -49,7 +49,8 @@ describe('K4 冻结核验:基线与口径', () => {
     const { w, r } = await runWorld();
     expect(w.d0).toBe(D0);
     expect(r.codes).toEqual([]);
-    expect(r.diagnostics).toEqual([]);
+    // 唯一的诊断是 K5a 的「校准样本不足,不加严」提示(基线里没有别的已结算预测)
+    expect(r.diagnostics.map((d) => d.code)).toEqual([G('CALIBRATION_INSUFFICIENT')]);
   });
 
   it('W4 对齐:window_start = D0+1 不计入,D0+7 计入;长度不是 tile_days 不计入', async () => {
@@ -411,7 +412,7 @@ describe('K4 冻结核验:层 2 git 锚点(W8、W11、W17)', () => {
       },
     });
     expect(rejudge.codes).toEqual([]);
-    expect(rejudge.r.diagnostics).toEqual([]);
+    expect(rejudge.r.diagnostics.map((d) => d.code)).toEqual([G('CALIBRATION_INSUFFICIENT')]);
   });
 });
 

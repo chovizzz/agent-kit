@@ -167,7 +167,12 @@ export interface World {
   attestFiles: Record<string, string>;
   advisoryAtom: string;
   /** 在 base..head 上跑守卫(默认 tag kit-base / kit-head) */
-  run(extra?: { base?: string; head?: string; cwd?: string }): GuardResult & { codes: string[] };
+  /** `codes` 不含 K5a 的样本不足提示(默认世界里恒出现,不是本组测试要断言的);`allCodes` 含全部 */
+  run(extra?: {
+    base?: string;
+    head?: string;
+    cwd?: string;
+  }): GuardResult & { codes: string[]; allCodes: string[] };
 }
 
 /** 默认的有效 attest 集:alice、bob 各交块 0 与块 1(总曝光 4×10) */
@@ -365,7 +370,12 @@ export async function buildWorld(o: WorldOpts = {}): Promise<World> {
       label: o.label ?? 'kit:promotion',
       criteria: lifecycleCriteria,
     });
-    return { ...result, codes: [...new Set(result.diagnostics.map((d) => d.code))].sort() };
+    const allCodes = [...new Set(result.diagnostics.map((d) => d.code))].sort();
+    return {
+      ...result,
+      codes: allCodes.filter((c) => c !== 'GUARD_G3_CALIBRATION_INSUFFICIENT'),
+      allCodes,
+    };
   };
   return {
     repo,
