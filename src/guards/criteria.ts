@@ -6,6 +6,7 @@ import { fileStem } from '../atoms/parse.js';
 import { AttestSchema, attestFileName, type Attest } from '../contracts/attest.js';
 import {
   KitConfigSchema,
+  STRICT_EXTRA_TILES,
   LifecycleCoreConfigSchema,
   type LifecycleCoreConfig,
 } from '../contracts/config.js';
@@ -17,6 +18,7 @@ import { deriveVendor, isCrossVendor } from '../contracts/vendor.js';
 import { canonicalJson } from '../io/canonical-json.js';
 import { acceptanceSha256, guidanceSha256, signatureSha256 } from '../judge/freeze.js';
 import { acceptanceD0, classifyTile, requiredValidTiles } from '../lifecycle/attest-count.js';
+import { computeCalibration } from '../lifecycle/calibration.js';
 import { checkC5, ruleSha256 } from '../lifecycle/checks.js';
 import { createRedactor } from '../redact/redactor.js';
 import { scanDangerousPhrases } from '../reflect/validate.js';
@@ -40,6 +42,8 @@ import { statusOf, viewAtom } from './view.js';
  *    ATTEST_AMBIGUOUS_LATEST ATTEST_OVERLAP THRESHOLD_TILES THRESHOLD_EXPOSURE THRESHOLD_HARMFUL
  *  T2 冻结核验(K4,docs/contracts.md §18.9):ACCEPTANCE_MISSING ACCEPTANCE_HASH_MISMATCH ACCEPTANCE_CLOCK_INCONSISTENT
  *    ACCEPTANCE_CHANGED_AFTER_FREEZE PREDICTION_CHANGED_AFTER_FREEZE ACCEPTANCE_WEAKER_THAN_CORE FREEZE_COMMIT_UNKNOWN
+ *  T2 校准加严(K5a,docs/contracts.md §18.10;严重度 warn = 提示,不计入失败):JUDGE_OVERCONFIDENT CALIBRATION_INSUFFICIENT
+ *    CALIBRATION_UNAVAILABLE CALIBRATION_ITEM_UNREADABLE(后两者与 JUDGE_OVERCONFIDENT 一样令 THRESHOLD_TILES 多要 STRICT_EXTRA_TILES 块)
  *  退役:LIFECYCLE_RECORD_MISSING LIFECYCLE_RECORD_AMBIGUOUS LIFECYCLE_RECORD_INVALID LIFECYCLE_RECORD_MISMATCH
  *    RECORD_DIGESTS REASON_NOT_EXPIRED REASON_BY_INVALID REASON_NO_EXPOSURE_UNMET REASON_NOT_HARMFUL COOLDOWN_NOT_MET
  *  warn(不计入失败):ATTEST_NOT_COUNTED ACCEPTANCE_REFROZEN
@@ -862,7 +866,69 @@ function promotion(i: CriteriaInput): Diagnostic[] {
     const nonOwner = [...members].filter((m) => m !== owner).length;
     if (members.size >= cfg.min_members && nonOwner >= cfg.min_non_owner_members) validTiles.add(k);
   }
-  const required = requiredValidTiles(cfg.canary_window_days, frozen.acc.tile_days);
+  // K5a:judge 校准(只读基线树)。过度自信 / 校准不可用 / 同键条目损坏 → 多要 STRICT_EXTRA_TILES 块;样本不足不加严
+  const judge = lp.proposal.judge;
+  const cal = computeCalibration({
+    git: i.git,
+    baseOid: i.baseOid,
+    baseView: i.baseView,
+    listBase: i.listBase,
+    cfg,
+    roster: lc.roster,
+    excludeProposalId: lp.proposal.id,
+    target: {
+      vendor: judge?.vendor ?? '',
+      model: judge?.hops[judge.hops.length - 1]?.model ?? '',
+    },
+  });
+  const overconfident = cal.tiers.filter((t) => t.overconfident);
+  const strict =
+    cal.unavailable !== undefined || cal.unreadable.length > 0 || overconfident.length > 0;
+  const pp = `proposals/${lp.proposal.id}.yaml`;
+  if (cal.unavailable !== undefined) {
+    out.push(
+      warn(
+        'GUARD_G3_CALIBRATION_UNAVAILABLE',
+        pp,
+        `校准账计算失败(${cal.unavailable}),按过度自信加严:有效验收块 +${STRICT_EXTRA_TILES}`,
+      ),
+    );
+  }
+  for (const u of cal.unreadable) {
+    out.push(
+      warn(
+        'GUARD_G3_CALIBRATION_ITEM_UNREADABLE',
+        u.path,
+        `同厂商 judge 的校准账条目读不出或哈希不符(${u.reason}),按过度自信加严:有效验收块 +${STRICT_EXTRA_TILES}`,
+      ),
+    );
+  }
+  for (const t of overconfident) {
+    out.push(
+      warn(
+        'GUARD_G3_JUDGE_OVERCONFIDENT',
+        pp,
+        `judge ${t.key} 过度自信(n=${t.n},命中 ${t.hits},置信度和 ${t.sumConf10 / 10}):有效验收块 +${STRICT_EXTRA_TILES}`,
+      ),
+    );
+  }
+  if (!strict) {
+    const tier = cal.tiers.find((t) => t.insufficient);
+    if (tier !== undefined) {
+      out.push(
+        warn(
+          'GUARD_G3_CALIBRATION_INSUFFICIENT',
+          pp,
+          `judge 校准样本不足(${cal.tiers.map((t) => `${t.key}: n=${t.n}`).join(';')}),不加严;另有 ${cal.unsettled} 份最新预测未结算`,
+        ),
+      );
+    }
+  }
+  const required = requiredValidTiles(
+    cfg.canary_window_days,
+    frozen.acc.tile_days,
+    strict ? STRICT_EXTRA_TILES : 0,
+  );
   const exposure = kept
     .filter((k) => validTiles.has(k.k))
     .reduce((sum, k) => sum + k.a.exposure_sessions, 0);
@@ -871,10 +937,16 @@ function promotion(i: CriteriaInput): Diagnostic[] {
   const need = (cond: boolean, code: string, msg: string): void => {
     if (!cond) out.push(e(code, a.path, msg));
   };
+  // 所需块数超过冻结协议的 max_tiles:classifyTile 拒绝序号 ≥ max_tiles 的分块,永远凑不够;不削减 extra,提示须重跑 judge 重新冻结
+  const note =
+    (strict ? `;已因 judge 过度自信/校准不可用/校准条目损坏加严(+${STRICT_EXTRA_TILES} 块)` : '') +
+    (required > frozen.acc.max_tiles
+      ? `;冻结的 max_tiles=${frozen.acc.max_tiles} 装不下 ${required} 块,须重跑 judge 重新冻结(旧预测按校准账规则仍会结算)`
+      : '');
   need(
     validTiles.size >= required,
     'THRESHOLD_TILES',
-    `有效验收块 ${validTiles.size} 个(每块需 ≥${cfg.min_members} 名成员、其中 ≥${cfg.min_non_owner_members} 名非 owner),需要 ≥${required} 个(每块 ${frozen.acc.tile_days} 天,canary_window_days=${cfg.canary_window_days})`,
+    `有效验收块 ${validTiles.size} 个(每块需 ≥${cfg.min_members} 名成员、其中 ≥${cfg.min_non_owner_members} 名非 owner),需要 ≥${required} 个(每块 ${frozen.acc.tile_days} 天,canary_window_days=${cfg.canary_window_days})${note}`,
   );
   need(
     exposure >= cfg.min_exposure_sessions,
