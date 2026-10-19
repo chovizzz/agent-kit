@@ -2479,6 +2479,34 @@ agent-kit retire  --rule <id> --to deprecated|retired --reason manual|expired|su
 }
 ```
 
+### 18.9 G3 冻结核验、按块覆盖与 `attest --tile`(K4 实装,订正 §18.8 的 G3 部分)
+
+实现:`src/guards/criteria.ts`(`textSince` / `locateFreezeCommit` / `verifyFreeze` / `frozenCountable`)、`src/lifecycle/attest-count.ts`(`acceptanceD0` / `tileWindow` / `classifyTile` / `requiredValidTiles`,**G3 与 `attest --tile` 共用同一组函数**)、`src/commands/attest.ts`。
+
+**哈希口径(K3 写、K4 重算,必须一致)**:`sha256(canonicalJson(对象))`,canonicalJson 即 `src/io/canonical-json.ts`(键按码元序、2 空格缩进、LF、**含末尾换行**)。`acceptance.sha256` 的对象 = acceptance 去掉顶层 `sha256` 键后的全部字段;`signature_sha256` 的对象 = `{type, pattern?}`(无 pattern 则不带该键),原子无 signature 时对象 = `null`;`baseline_sha256` 的对象 = `reflector.guidance` 原样,旧暂存提案没有 guidance 时对象 = `null`。旧暂存提案缺 guidance 时 judge 写 `guidance_until = frozen_at`、`baseline_sha256 = sha256(canonicalJson(null))`、`prediction.status = baseline_insufficient`;没有 signature 的原子 `prediction.status = not_measurable`。
+
+**T2(advisory→active)判据顺序**:T1 全部检查 → `SIGNATURE_MISSING` → `ADVISORY_SINCE_UNKNOWN` → `textSince`(`TEXT_SINCE_UNKNOWN`)→ 冻结核验 → attest 载入与 `frozenCountable` → 按块覆盖阈值。T1(proposed→advisory)不要求冻结。**没有回落旧口径的分支**:提案缺 `judge.acceptance` 即 `ACCEPTANCE_MISSING` 并停止(重跑 judge 补)。retire 的 `no_exposure` / `harmful` 理由**继续用原 `countable`**,不受冻结口径影响(退役是安全方向)。
+
+**历史一律从基线(`baseOid`)取**,不从 head 取:PR 作者能用合并提交的父顺序操纵 head 侧的 `git log -- path` 历史简化(opus 咨询结论)。因此晋升 PR 不得改规则正文(基线与 head 的归一化哈希须相等,否则 `TEXT_SINCE_UNKNOWN`)、不得改 `judge.acceptance`(`ACCEPTANCE_CHANGED_AFTER_FREEZE`)和 `judge.prediction`(`PREDICTION_CHANGED_AFTER_FREEZE`)。
+
+**冻结核验三层**(全部失败项一次性报出):
+
+1. 内容哈希 → `ACCEPTANCE_HASH_MISMATCH`:重算 `acceptance.sha256`;`prediction` 必须存在且 `acceptance_sha256` 相等;`acceptance.rule_sha256 == judge.rule_sha256 == 当前原子哈希`;`signature_sha256` == 当前签名的哈希;`baseline_sha256 == guidanceSha256(reflector.guidance)`;有 guidance 时基线自洽(`exposure_sessions ≤ sessions_total`、`≤ fired`)且 `guidance.until == acceptance.guidance_until`。
+2. git 锚点:冻结提交 = `fileHistory(baseOid, proposals/<id>.yaml)` 中「从最新开始、`judge.acceptance` 的 canonical JSON 连续等于当前值」的**最老**提交。须:有父提交(根提交 / 浅克隆边界 → `FREEZE_COMMIT_UNKNOWN`)、是基线祖先;`judged_at_head` 是冻结提交的**严格**祖先,且不早于提案上一版(冻结提交之前最近一次改提案的提交须是它的祖先,否则填个根提交就能满足祖先检查)→ 否则 `ACCEPTANCE_CLOCK_INCONSISTENT`(oid 不存在 / git 失败同码);冻结提交里的 prediction 与当前相等,否则 `PREDICTION_CHANGED_AFTER_FREEZE`;`guidance_until ≤ frozen_at`,且 `frozen_at` 的 UTC 日期 ≤ 冻结提交日期 + 1(`fileHistory` 只给提交者**本地**日期,容忍 1 天时区差)→ 否则 `ACCEPTANCE_CLOCK_INCONSISTENT`。
+3. `ACCEPTANCE_WEAKER_THAN_CORE`:`tile_days <` 基线 `acceptance_tile_days`,或 `max_tiles >` 基线 `acceptance_max_tiles`(比 `baseView('kit.toml')` 的现值;core 调严后旧冻结须重跑 judge)。
+
+**重跑 judge(同一份规则文本再冻结)不报错**,只记 warn `GUARD_G3_ACCEPTANCE_REFROZEN`(附次数):重跑后 D0 取新冻结提交,旧协议下的 attest 因 `acceptance_sha256` 不符自动不计入。残余风险:看了前几块结果后重跑 judge 可以换掉一个差的预测——K5a 的校准账对同一 `rule_sha256` 的每一份已冻结预测都应结算(至少取第一份),不能只看最新一份。
+
+**D0 与分块**:`D0 = max(anchor_min, guidance_until 的次日, frozen_at 的次日, 冻结提交日期的次日)`(UTC 日历日;`anchor_min` 可被手改,所以其余纸面时钟各自参与取大);第 k 块 = `[D0 + k·tile_days, D0 + k·tile_days + tile_days − 1]`,`0 ≤ k < max_tiles`。
+
+**`frozenCountable`**(在现有 `countable` 全部条件之上再加,不满足记 warn `GUARD_G3_ATTEST_NOT_COUNTED` 并附原因):`acceptance_sha256 ==` 冻结协议的 `sha256`;窗口恰为某个对齐分块;`window_start ≥ textSince`(当前规则文本首次进入基线历史的日期,取「连续等于当前哈希」的最老提交,X→Y→X 取最近一次回到 X;堵 F4);attest 文件首次入库提交以冻结提交为**严格**祖先;attest 首次入库的提交者日期 + 1 天 ≥ `window_end`(挡住预先提交未来窗口;提交者日期是作者可写数据,只挡诚实的误用)。
+
+**按块覆盖**:一块**有效** = 该块有 ≥ `min_members` 名成员(小写去重)各交了一份计入的 attest,其中 ≥ `min_non_owner_members` 名非 owner。`有效块数 ≥ requiredValidTiles(canary_window_days, tile_days, extra)` = `ceil(canary_window_days / tile_days) + extra`,否则 `THRESHOLD_TILES`(**`extra` 默认 0,是 K5a 晋升加严的参数位**;K4 的 `promotion()` 只传默认值)。`exposure_sessions` 只在有效块上合计(`THRESHOLD_EXPOSURE`)。**偏离设计稿**:`harmful` 取全部计入的 attest 合计(`THRESHOLD_HARMFUL`),不只看有效块——无效块里的有害证据不能被静默丢弃。旧的 `THRESHOLD_WINDOW_DAYS` / `THRESHOLD_MEMBERS` / `THRESHOLD_NON_OWNER_MEMBERS` 在 T2 不再产出(被 `THRESHOLD_TILES` 取代);同成员同窗口取 run_id 最新、同成员窗口不重叠两条保留。
+
+**`attest --tile <k> --freeze-date <YYYY-MM-DD>`**:读**工作树**里原子 `origin` 指向的提案的 `judge.acceptance`(须通过 `AcceptanceProtocolSchema`、自哈希自洽、`rule_sha256` 与当前原子一致),用与 G3 相同的 `acceptanceD0` / `tileWindow` 算第 k 块窗口并把冻结协议的 `sha256` 写入 attest 的 `acceptance_sha256`;`--tile` 与 `--window-start/--window-end` 互斥;窗口结束日 ≥ 今天(UTC)→ 退出 4 `tile_not_ended`;`k ≥ max_tiles` → 退出 2;冻结缺失 / 已过时 → 退出 1;提案不可读 / 协议损坏 → 退出 3。**不读 git**(验收 A22 要求本命令闭包不含 child_process),所以冻结提交日期由调用方经 `--freeze-date` 给(`git log -1 --format=%cs -- proposals/<id>.yaml`,须是冻结提交);给错只会算出 G3 判为不对齐的窗口,不会放宽任何判据。手填窗口时若工作树提案有匹配的冻结协议也会绑定 `acceptance_sha256`,读不到就不写(这样的 attest 不会被 G3 计入)。
+
+**残余缺口(如实)**:提交者日期可伪造(既有 GD-3),git 锚点给的是相对主线合并顺序的保证;`judged_at_head` 只证明时序锚点,不证明 judge 真的在该提交上运行;`textSince` 在非线性历史(合并提交)下沿 `git log -- path` 的线性结果取值,属 GD-3 同类残余;`GuardGit` 接口未改,浅克隆靠「冻结提交无父提交」识别。
+
 ## 19. sync / doctor / update 命令面与自动更新契约(S0,契约先行;S1–S9 实装后订正)
 
 本节先定死三条命令的命令面、退出码、稳定码、文件位置与授权边界,实现在后续块(S1–S8)。`doctor` 已由 S5 实装(§19.3),`update` 是新注册的命令桩。设计依据:`sync-doctor-update-design.md` §0–§6、§8;用户 2026-10-14 对 16 条决策的拍板(14 条按设计稿推荐,**② 改 B、⑭ 改 B**)。新增 schema 全部 `strictObject`,只追加;`contracts-v1` 既有编号不重排。

@@ -19,6 +19,7 @@ import {
   type RecordOpts,
 } from './criteria-world.js';
 import { scenario, useRepoCleanup, type ScenarioOptions } from './helpers.js';
+import { buildWorld, type AttestSpec, type Dates } from './frozen-world.js';
 import { lifecycleCriteria } from '../../src/guards/criteria.js';
 
 useRepoCleanup();
@@ -187,47 +188,60 @@ describe('T1 proposed→advisory', () => {
 });
 
 // ───────────────────────── T2:advisory → active ─────────────────────────
+// K4 起 T2 走冻结协议 + 按块覆盖:世界由 frozen-world.ts 按日期造真实 git 历史(冻结在基线历史里,attest 按分块对齐)。
+// 冻结核验本身(W4–W17)见 frozen.test.ts;这里保留 T2 通用判据(judge/重扫/固定字段/阈值/attest 结构)的回归。
 
 interface T2Over {
   atom?: AtomOpts;
   proposal?: ProposalOpts;
-  attests?: AttestOpts[];
+  attests?: AttestSpec[];
   extraFiles?: Record<string, string | null>;
   kit?: string;
-  history?: ScenarioOptions['history'];
+  dates?: Partial<Dates>;
 }
 const ALICE: AttestOpts = { member: '@alice' };
 const BOB: AttestOpts = { member: '@bob' };
+const ALICE_T = (tile: number, over: Partial<AttestSpec> = {}): AttestSpec => ({
+  member: '@alice',
+  tile,
+  ...over,
+});
+const BOB_T = (tile: number, over: Partial<AttestSpec> = {}): AttestSpec => ({
+  member: '@bob',
+  tile,
+  ...over,
+});
 
 async function t2(over: T2Over = {}) {
-  const baseAtom = atomText({ status: 'advisory', ...over.atom });
-  const headAtom = atomText({ status: 'active', review_by: '2027-02-08', ...over.atom });
-  const base: Record<string, string | null> = {
-    ...COMMON_FILES,
-    'kit.toml': over.kit ?? kitToml(),
-    [PATH]: baseAtom,
-    [PROPOSAL_PATH]: proposalYaml(baseAtom, over.proposal),
-  };
-  const head: Record<string, string | null> = { [PATH]: headAtom, ...over.extraFiles };
-  for (const a of over.attests ?? [ALICE, BOB]) {
-    const [p, t] = attestFile(baseAtom, a);
-    head[p] = t;
-  }
-  return run(base, head, 'kit:promotion', over.history ? { history: over.history } : {});
+  const w = await buildWorld({
+    ...(over.atom ? { atom: over.atom } : {}),
+    ...(over.proposal ? { proposal: over.proposal } : {}),
+    ...(over.kit ? { kit: over.kit } : {}),
+    ...(over.dates ? { dates: over.dates } : {}),
+    ...(over.attests ? { attests: over.attests } : {}),
+    ...(over.extraFiles
+      ? { headExtra: () => over.extraFiles as Record<string, string | null> }
+      : {}),
+  });
+  const r = w.run();
+  return { ...r, codes: r.codes, world: w, result: r, pathsOf: undefined };
 }
 
 describe('T2 advisory→active', () => {
-  it('合法对照:两名成员、15 天窗口、曝光 20、无 harmful → 绿', async () => {
+  it('合法对照:两名成员各交块 0、块 1(14 天)、曝光 40、无 harmful → 绿', async () => {
     expect((await t2()).codes).toEqual([]);
   });
 
   it('T1 的 judge / 哈希 / 重扫同样适用于 T2', async () => {
     expect((await t2({ proposal: { noJudge: true } })).codes).toEqual([G('JUDGE_MISSING')]);
-    expect((await t2({ proposal: { hash: sha('x') } })).codes).toEqual([G('RULE_HASH_MISMATCH')]);
+    // 评审哈希对不上规则文本:既是 RULE_HASH_MISMATCH,也让冻结协议的 rule_sha256 对不上
+    expect((await t2({ proposal: { hash: sha('x') } })).codes).toEqual(
+      [G('RULE_HASH_MISMATCH'), G('ACCEPTANCE_HASH_MISMATCH')].sort(),
+    );
   });
 
   it('SIGNATURE_MISSING:无 signature 的 advisory 原子不能经 G3 升 active(须先走内容 PR 补,GD-6)', async () => {
-    expect((await t2({ atom: { signature: false } })).codes).toEqual([G('SIGNATURE_MISSING')]);
+    expect((await t2({ atom: { signature: false } })).codes).toContain(G('SIGNATURE_MISSING'));
   });
 
   it('FIXED_FIELDS:T2 同样检查(设计 §3.1:T2 = T1 的全部 + attest 聚合)', async () => {
@@ -235,60 +249,40 @@ describe('T2 advisory→active', () => {
     expect((await t2({ atom: { verifierNone: false } })).codes).toEqual([G('FIXED_FIELDS')]);
   });
 
-  it('ATTEST_OVERLAP:同一成员重叠的不同窗口不能重复累计曝光;不重叠的窗口仍可累计', async () => {
-    const a1 = { ...ALICE, start: '2026-10-08', end: '2026-10-21', exposure: 5 };
-    const a2 = { ...ALICE, start: '2026-10-08', end: '2026-10-22', exposure: 5 };
-    const r = await t2({ attests: [a1, a2, { ...BOB, exposure: 0 }] });
-    expect(r.codes).toContain(G('ATTEST_OVERLAP'));
-    const ok = await t2({
+  it('ATTEST_OVERLAP:同一成员重叠的不同窗口不能重复累计曝光;不重叠的窗口(块 0 + 块 1)仍可累计', async () => {
+    const overlap = await t2({
       attests: [
-        { ...ALICE, start: '2026-10-08', end: '2026-10-14', exposure: 5 },
-        { ...ALICE, start: '2026-10-15', end: '2026-10-21', exposure: 5 },
-        { ...BOB, start: '2026-10-08', end: '2026-10-14', exposure: 0 },
+        ALICE_T(0),
+        ALICE_T(1),
+        { member: '@alice', start: '2026-10-15', end: '2026-10-21' },
+        BOB_T(0),
+        BOB_T(1),
       ],
     });
-    expect(ok.codes).toEqual([]);
+    expect(overlap.codes).toContain(G('ATTEST_OVERLAP'));
+    expect((await t2()).codes).toEqual([]);
   });
 
-  it('THRESHOLD_WINDOW_DAYS:窗口合计不足 14 天', async () => {
-    const short = { start: '2026-10-08', end: '2026-10-14' };
+  it('THRESHOLD_TILES:只有一个有效块(14 天需要 2 块)', async () => {
+    expect((await t2({ attests: [ALICE_T(0), BOB_T(0)] })).codes).toEqual([G('THRESHOLD_TILES')]);
+  });
+
+  it('THRESHOLD_TILES:只有一名成员(每块都不够 min_members)', async () => {
     expect(
-      (
-        await t2({
-          attests: [
-            { ...ALICE, ...short },
-            { ...BOB, ...short },
-          ],
-        })
-      ).codes,
-    ).toEqual([G('THRESHOLD_WINDOW_DAYS')]);
+      (await t2({ attests: [ALICE_T(0, { exposure: 12 }), ALICE_T(1, { exposure: 12 })] })).codes,
+    ).toEqual([G('THRESHOLD_EXPOSURE'), G('THRESHOLD_TILES')]);
   });
 
-  it('窗口按并集算天数:两名成员同一窗口只算一次;分开的窗口相加', async () => {
-    const w1 = { start: '2026-10-08', end: '2026-10-14' };
-    const w2 = { start: '2026-10-15', end: '2026-10-21' };
-    expect(
-      (
-        await t2({
-          attests: [
-            { ...ALICE, ...w1 },
-            { ...BOB, ...w2 },
-          ],
-        })
-      ).codes,
-    ).toEqual([]);
-  });
-
-  it('THRESHOLD_MEMBERS:只有一名成员', async () => {
-    expect((await t2({ attests: [{ ...ALICE, exposure: 12 }] })).codes).toEqual([
-      G('THRESHOLD_MEMBERS'),
-    ]);
-  });
-
-  it('THRESHOLD_NON_OWNER_MEMBERS:成员数够但全是 owner 自己(⑥A)', async () => {
+  it('THRESHOLD_TILES:成员数够但全是 owner 自己(⑥A,块内非 owner 门槛)', async () => {
     const kit = kitToml({ members: ['@owner-handle'] });
-    const r = await t2({ kit, attests: [{ member: OWNER, exposure: 12 }] });
-    expect(r.codes).toEqual([G('THRESHOLD_MEMBERS'), G('THRESHOLD_NON_OWNER_MEMBERS')]);
+    const r = await t2({
+      kit,
+      attests: [
+        { member: OWNER, tile: 0, exposure: 12 },
+        { member: OWNER, tile: 1, exposure: 12 },
+      ],
+    });
+    expect(r.codes).toEqual([G('THRESHOLD_EXPOSURE'), G('THRESHOLD_TILES')]);
   });
 
   it('THRESHOLD_EXPOSURE:曝光合计不足', async () => {
@@ -296,8 +290,10 @@ describe('T2 advisory→active', () => {
       (
         await t2({
           attests: [
-            { ...ALICE, exposure: 2 },
-            { ...BOB, exposure: 2 },
+            ALICE_T(0, { exposure: 2 }),
+            ALICE_T(1, { exposure: 2 }),
+            BOB_T(0, { exposure: 2 }),
+            BOB_T(1, { exposure: 2 }),
           ],
         })
       ).codes,
@@ -305,9 +301,9 @@ describe('T2 advisory→active', () => {
   });
 
   it('THRESHOLD_HARMFUL:有效 attest 里出现 harmful>0', async () => {
-    expect((await t2({ attests: [ALICE, { ...BOB, harmful: 1 }] })).codes).toEqual([
-      G('THRESHOLD_HARMFUL'),
-    ]);
+    expect(
+      (await t2({ attests: [ALICE_T(0), ALICE_T(1), BOB_T(0), BOB_T(1, { harmful: 1 })] })).codes,
+    ).toEqual([G('THRESHOLD_HARMFUL')]);
   });
 
   it('阈值取自 kit.toml 的 [lifecycle](core 调严后生效);缺省段 = schema 默认', async () => {
@@ -333,18 +329,18 @@ describe('T2 advisory→active', () => {
   });
 
   it('不计入口径(warn)+ 阈值失败:stable 渠道 / 名单外成员 / 哈希不符 / 未声明 method / 窗口早于 advisory', async () => {
-    const cases: [string, AttestOpts][] = [
-      ['channel', { ...BOB, channel: 'stable' }],
-      ['roster', { member: '@mallory' }],
-      ['hash', { ...BOB, hash: sha('别的文本') }],
-      ['method', { ...BOB, method: null }],
-      ['before-advisory', { ...BOB, start: '2026-09-01', end: '2026-09-20' }],
+    const cases: [string, AttestSpec][] = [
+      ['channel', BOB_T(1, { channel: 'stable' })],
+      ['roster', { member: '@mallory', tile: 1 }],
+      ['hash', BOB_T(1, { hash: sha('别的文本') })],
+      ['method', BOB_T(1, { method: null })],
+      ['before-advisory', BOB_T(1, { start: '2026-09-01', end: '2026-09-07' })],
     ];
     for (const [name, bad] of cases) {
-      const r = await t2({ attests: [ALICE, bad] });
-      expect(r.codes, name).toEqual([G('THRESHOLD_MEMBERS'), 'GUARD_G3_ATTEST_NOT_COUNTED'].sort());
+      const r = await t2({ attests: [ALICE_T(0), BOB_T(0), ALICE_T(1), bad] });
+      expect(r.codes, name).toEqual([G('THRESHOLD_TILES'), 'GUARD_G3_ATTEST_NOT_COUNTED'].sort());
       expect(
-        r.result.diagnostics.filter((d) => d.code === 'GUARD_G3_ATTEST_NOT_COUNTED')[0]?.severity,
+        r.diagnostics.filter((d) => d.code === 'GUARD_G3_ATTEST_NOT_COUNTED')[0]?.severity,
       ).toBe('warn');
     }
   });
@@ -352,45 +348,42 @@ describe('T2 advisory→active', () => {
   it('ATTEST_INVALID / ATTEST_RUN_ID_SHAPE:结构不合法的 attest 文件判红', async () => {
     const r1 = await t2({ extraFiles: { [`attest/${ID}/junk.json`]: '{not json' } });
     expect(r1.codes).toEqual([G('ATTEST_INVALID')]);
-    const base = atomText({ status: 'advisory' });
-    const [p, t] = attestFile(base, { ...BOB, run: 'run-1' });
-    const r2 = await t2({ attests: [ALICE], extraFiles: { [p]: t } });
-    expect(r2.codes).toEqual([G('ATTEST_RUN_ID_SHAPE')].concat(G('THRESHOLD_MEMBERS')).sort());
+    const r2 = await t2({
+      attests: [ALICE_T(0), BOB_T(0), ALICE_T(1), BOB_T(1, { run: 'run-1' })],
+    });
+    expect(r2.codes).toEqual([G('ATTEST_RUN_ID_SHAPE'), G('THRESHOLD_TILES')].sort());
   });
 
   it('ATTEST_INVALID:文件名与内容不一致(内容 member 被换)', async () => {
     const base = atomText({ status: 'advisory' });
-    const [p, t] = attestFile(base, BOB);
-    const swapped = t.replace('@bob', '@alice');
-    const r = await t2({ attests: [ALICE], extraFiles: { [p]: swapped } });
+    const [p, t] = attestFile(base, { member: '@bob', start: '2026-10-13', end: '2026-10-19' });
+    const r = await t2({
+      attests: [ALICE_T(0), BOB_T(0), ALICE_T(1)],
+      extraFiles: { [p]: t.replace('@bob', '@alice') },
+    });
     expect(r.codes).toContain(G('ATTEST_INVALID'));
   });
 
   it('同成员同窗口取 run_id 时间戳最新的一份:新的覆盖旧的(旧的 harmful 不再计入)', async () => {
-    const r = await t2({
-      attests: [
-        ALICE,
-        { ...BOB, harmful: 1, run: 'run-20261020T000000Z-aaaaaa' },
-        { ...BOB, harmful: 0, run: 'run-20261021T000000Z-bbbbbb' },
-      ],
-    });
-    expect(r.codes).toEqual([]);
-    const r2 = await t2({
-      attests: [
-        ALICE,
-        { ...BOB, harmful: 0, run: 'run-20261020T000000Z-aaaaaa' },
-        { ...BOB, harmful: 1, run: 'run-20261021T000000Z-bbbbbb' },
-      ],
-    });
-    expect(r2.codes).toEqual([G('THRESHOLD_HARMFUL')]);
+    const withBob = (older: number, newer: number) => [
+      ALICE_T(0),
+      ALICE_T(1),
+      BOB_T(0),
+      BOB_T(1, { harmful: older, run: 'run-20261020T000000Z-aaaaaa' }),
+      BOB_T(1, { harmful: newer, run: 'run-20261021T000000Z-bbbbbb' }),
+    ];
+    expect((await t2({ attests: withBob(1, 0) })).codes).toEqual([]);
+    expect((await t2({ attests: withBob(0, 1) })).codes).toEqual([G('THRESHOLD_HARMFUL')]);
   });
 
   it('ATTEST_AMBIGUOUS_LATEST:时间戳相同、后缀不同 → 判不出最新 → 红', async () => {
     const r = await t2({
       attests: [
-        ALICE,
-        { ...BOB, run: 'run-20261020T000000Z-aaaaaa' },
-        { ...BOB, run: 'run-20261020T000000Z-bbbbbb' },
+        ALICE_T(0),
+        ALICE_T(1),
+        BOB_T(0),
+        BOB_T(1, { run: 'run-20261020T000000Z-aaaaaa' }),
+        BOB_T(1, { run: 'run-20261020T000000Z-bbbbbb' }),
       ],
     });
     expect(r.codes).toContain(G('ATTEST_AMBIGUOUS_LATEST'));
@@ -399,15 +392,26 @@ describe('T2 advisory→active', () => {
   it('member.since:窗口早于成员加入日期的 attest 不计入', async () => {
     const kit = kitToml().replace('"@bob" = {}', '"@bob" = { since = "2026-11-01" }');
     const r = await t2({ kit });
-    expect(r.codes).toEqual([G('THRESHOLD_MEMBERS'), 'GUARD_G3_ATTEST_NOT_COUNTED'].sort());
+    expect(r.codes).toEqual(
+      [G('THRESHOLD_EXPOSURE'), G('THRESHOLD_TILES'), 'GUARD_G3_ATTEST_NOT_COUNTED'].sort(),
+    );
   });
 
-  it('转 advisory 之日取自该原子的提交历史:历史里 advisory 之前是 proposed', async () => {
-    // 历史:先 proposed(2026-10-08),本场景 base 提交里才是 advisory;窗口从 2026-10-08 起 → 仍计入
-    const r = await t2({
-      history: [{ files: { ...COMMON_FILES, [PATH]: atomText({ status: 'proposed' }) } }],
+  it('转 advisory 之日取自该原子的提交历史:advisory 之前的块不计入(块 0/1),之后的块计入(块 2/3)', async () => {
+    const dates = { advisory: '2026-10-14' };
+    const early = await t2({ dates });
+    expect(early.codes).toContain(G('THRESHOLD_TILES'));
+    expect(early.codes).toContain('GUARD_G3_ATTEST_NOT_COUNTED');
+    const late = await t2({
+      dates,
+      attests: [
+        ALICE_T(2),
+        BOB_T(2),
+        ALICE_T(3, { commitDate: '2026-11-03' }),
+        BOB_T(3, { commitDate: '2026-11-03' }),
+      ],
     });
-    expect(r.codes).toEqual([]);
+    expect(late.codes).toEqual([]);
   });
 });
 

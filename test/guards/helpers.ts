@@ -12,6 +12,12 @@ export function useRepoCleanup(): void {
   });
 }
 
+/** 登记一个由测试自己建的仓库,afterEach 时统一清理(K4:冻结世界要按日期造提交,不走 scenario) */
+export function trackRepo(repo: TestRepo): TestRepo {
+  repos.push(repo);
+  return repo;
+}
+
 export const PASS: CriteriaChecker = () => [];
 
 export interface Scenario {

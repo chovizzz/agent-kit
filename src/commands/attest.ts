@@ -1,9 +1,13 @@
 /**
- * `agent-kit attest --rule <id> --member @handle --window-start D --window-end D
+ * `agent-kit attest --rule <id> --member @handle (--window-start D --window-end D | --tile <k>)
  *   [--channel canary|stable] [--agent <id>]… [--write] [--json]`(L5,docs/contracts.md §18):
  * 在本机把窗口内的信号数成一份证据摘要(`Attest`,口径 `signature_proxy_v1`),并生成只新增
  * `attest/<rule-id>/<member>-<window_end>-<run_id>.json` 的补丁 `attest.patch`。
  *
+ * - `--tile <k> --freeze-date D`(K4):读**工作树**提案里冻结的验收协议,按与 G3 同一组函数(`acceptanceD0`/`tileWindow`)算第 k 块窗口,
+ *   并把冻结协议的 `sha256` 写进 attest 的 `acceptance_sha256`;手填窗口时若工作树提案有匹配的冻结协议也会绑定。
+ *   **不读 git**(A22:本命令闭包不含 child_process),冻结提交日期由 `--freeze-date` 给;给错只会产生 G3 判为不计入的窗口。
+ *   读不到冻结协议:--tile 退出 1/3,手填窗口则不写该字段(这样的 attest 不会被 G3 计入)。
  * - **纯本地、零网络**:不 import llm-exec 或任何后端;`--run-llm` / `--allow-egress` 出现即退出 2。
  * - **默认干跑**:只算、只打印;`--write` 才写,且只写 `.state/attest/<run_id>/`(attest.patch + report.json),
  *   一律经 safe-fs(写出口守卫);不写 `attest/`、不写 `rules/`——落到仓库靠人 `git apply` + `kit:attest` PR。
@@ -21,25 +25,32 @@ import { parseAtom } from '../atoms/parse.js';
 import { loadKitConfig } from '../build/config.js';
 import { AttestSchema, attestFileName } from '../contracts/attest.js';
 import type { Attest } from '../contracts/attest.js';
+import type { AcceptanceProtocol } from '../contracts/proposal.js';
 import type { Atom } from '../contracts/atom.js';
 import { AgentIdSchema, IsoDateSchema } from '../contracts/common.js';
 import type { AgentId } from '../contracts/common.js';
 import { ChannelNameSchema, OverlaySchema } from '../contracts/config.js';
+import { AcceptanceProtocolSchema } from '../contracts/proposal.js';
 import { ExitCode } from '../contracts/exit-codes.js';
 import { KIT_VERSION } from '../contracts/meta.js';
+import { parseRestrictedYaml } from '../atoms/frontmatter.js';
 import { canonicalJson } from '../io/canonical-json.js';
+import { acceptanceSha256 } from '../judge/freeze.js';
 import type { IoContext } from '../io/paths.js';
 import { exists, lstat, readDir, readText } from '../io/read-fs.js';
 import { chmod, mkdirp, rename, writeFile, WriteDeniedError } from '../io/safe-fs.js';
 import { checkAttestScope } from '../guards/attest.js';
 import type { Change } from '../guards/types.js';
 import {
+  acceptanceD0,
   buildMatcher,
   buildNewFilePatch,
   countWindow,
   loadWindowData,
   normalizedRuleSha256,
+  proposalPathOfOrigin,
   signalIdsDigest,
+  tileWindow,
   windowBounds,
 } from '../lifecycle/attest-count.js';
 import { gitBlobOid, patchUnsafe } from '../reflect/stage.js';
@@ -58,6 +69,8 @@ interface Parsed {
   member: string | undefined;
   windowStart: string | undefined;
   windowEnd: string | undefined;
+  tile: number | undefined;
+  freezeDate: string | undefined;
   channel: string | undefined;
   agents: AgentId[];
   write: boolean;
@@ -74,6 +87,8 @@ function parseArgs(argv: readonly string[]): Parsed {
     member: undefined,
     windowStart: undefined,
     windowEnd: undefined,
+    tile: undefined,
+    freezeDate: undefined,
     channel: undefined,
     agents: [],
     write: false,
@@ -130,6 +145,18 @@ function parseArgs(argv: readonly string[]): Parsed {
       out.windowEnd = we;
       continue;
     }
+    const tile = value('--tile');
+    if (tile !== undefined) {
+      if (/^\d{1,3}$/.test(tile)) out.tile = Number(tile);
+      else fail('bad_tile');
+      continue;
+    }
+    const fd = value('--freeze-date');
+    if (fd !== undefined) {
+      if (IsoDateSchema.safeParse(fd).success) out.freezeDate = fd;
+      else fail('bad_freeze_date');
+      continue;
+    }
     const ch = value('--channel');
     if (ch !== undefined) {
       out.channel = ch;
@@ -147,12 +174,30 @@ function parseArgs(argv: readonly string[]): Parsed {
   if (out.error === undefined) {
     if (out.rule === undefined) out.error = 'missing:--rule';
     else if (out.member === undefined) out.error = 'missing:--member';
-    else if (out.windowStart === undefined) out.error = 'missing:--window-start';
-    else if (out.windowEnd === undefined) out.error = 'missing:--window-end';
+    else if (
+      out.tile !== undefined &&
+      (out.windowStart !== undefined || out.windowEnd !== undefined)
+    )
+      out.error = 'tile_conflicts_window';
+    else if (out.tile !== undefined && out.freezeDate === undefined)
+      out.error = 'missing:--freeze-date';
+    else if (out.tile === undefined && out.freezeDate !== undefined)
+      out.error = 'freeze_date_needs_tile';
+    else if (out.tile === undefined && out.windowStart === undefined)
+      out.error = 'missing:--window-start';
+    else if (out.tile === undefined && out.windowEnd === undefined)
+      out.error = 'missing:--window-end';
     else if (!MEMBER_RE.test(out.member)) out.error = 'bad_member';
-    else if (!IsoDateSchema.safeParse(out.windowStart).success) out.error = 'bad_window_start';
-    else if (!IsoDateSchema.safeParse(out.windowEnd).success) out.error = 'bad_window_end';
-    else if (out.windowEnd < out.windowStart) out.error = 'window_reversed';
+    else if (out.windowStart !== undefined && !IsoDateSchema.safeParse(out.windowStart).success)
+      out.error = 'bad_window_start';
+    else if (out.windowEnd !== undefined && !IsoDateSchema.safeParse(out.windowEnd).success)
+      out.error = 'bad_window_end';
+    else if (
+      out.windowStart !== undefined &&
+      out.windowEnd !== undefined &&
+      out.windowEnd < out.windowStart
+    )
+      out.error = 'window_reversed';
     else if (out.channel !== undefined && !ChannelNameSchema.safeParse(out.channel).success)
       out.error = 'bad_channel';
   }
@@ -237,6 +282,43 @@ async function put(io: IoContext, file: string, content: string): Promise<void> 
   await chmod(io, file, 0o600);
 }
 
+/**
+ * 工作树提案里的冻结协议。本命令的 import 闭包不得含 child_process(A22:零网络、不起子进程),所以**不读 git**:
+ * 冻结提交的日期由调用方经 `--freeze-date` 给(`git log -1 --format=%cs -- proposals/<id>.yaml`,须是 `judge.acceptance`
+ * 首次入库的那次提交)。给错了只会算出 G3 判为不对齐的窗口(不计入),不会放宽任何判据——权威是 G3 对 git 的复核。
+ */
+interface FrozenProtocol {
+  acc: AcceptanceProtocol;
+}
+async function readFrozenProtocol(
+  io: IoContext,
+  origin: unknown,
+  ruleSha: string | undefined,
+): Promise<{ ok: true; frozen: FrozenProtocol } | { ok: false; reason: string }> {
+  const pp = proposalPathOfOrigin(origin);
+  if (pp === undefined) return { ok: false, reason: 'no_proposal' };
+  const file = path.join(io.repoRoot, pp);
+  if (!(await exists(file))) return { ok: false, reason: 'no_proposal' };
+  const y = parseRestrictedYaml(await readText(file), pp, 'GUARD_PROPOSAL_YAML');
+  const judge =
+    y.ok && typeof y.value === 'object' && y.value !== null
+      ? (y.value as { judge?: unknown }).judge
+      : undefined;
+  const rawAcc =
+    typeof judge === 'object' && judge !== null
+      ? (judge as { acceptance?: unknown }).acceptance
+      : undefined;
+  if (rawAcc === undefined) return { ok: false, reason: 'acceptance_missing' };
+  const parsed = AcceptanceProtocolSchema.safeParse(rawAcc);
+  if (!parsed.success || acceptanceSha256(parsed.data) !== parsed.data.sha256) {
+    return { ok: false, reason: 'acceptance_invalid' };
+  }
+  if (ruleSha === undefined || parsed.data.rule_sha256 !== ruleSha) {
+    return { ok: false, reason: 'acceptance_stale' };
+  }
+  return { ok: true, frozen: { acc: parsed.data } };
+}
+
 export function createAttestCommand(deps: AttestCommandDeps = {}): CommandDef {
   const now = deps.now ?? ((): Date => new Date());
   const rnd = deps.randomHex ?? ((n: number): string => randomBytes(n).toString('hex'));
@@ -244,8 +326,6 @@ export function createAttestCommand(deps: AttestCommandDeps = {}): CommandDef {
   async function execute(ctx: CommandContext, args: Parsed): Promise<number> {
     const rule = args.rule as string;
     const member = args.member as string;
-    const windowStart = args.windowStart as string;
-    const windowEnd = args.windowEnd as string;
     const io = ctx.io;
 
     const loaded = loadKitConfig(io.repoRoot);
@@ -279,6 +359,32 @@ export function createAttestCommand(deps: AttestCommandDeps = {}): CommandDef {
     if (matcher.kind === 'path')
       throw new Exit(ExitCode.NOT_RUN, 'NOT_RUN', 'signature_path_unsupported');
 
+    // K4:冻结协议(读工作树提案,不起子进程)。--tile 必须读到;手填窗口时尽力绑定,读不到就不写 acceptance_sha256(这样的 attest 不会被 G3 计入)
+    const ruleSha = normalizedRuleSha256(source);
+    const fr = await readFrozenProtocol(io, atom.fm.origin, ruleSha);
+    let windowStart = args.windowStart as string;
+    let windowEnd = args.windowEnd as string;
+    if (args.tile !== undefined) {
+      if (!fr.ok) {
+        if (fr.reason === 'acceptance_missing' || fr.reason === 'acceptance_stale') {
+          throw new Exit(ExitCode.CHECK_FAILED, 'CHECK_FAILED', fr.reason);
+        }
+        throw new Exit(ExitCode.FAIL_CLOSED, 'FAIL_CLOSED', fr.reason);
+      }
+      if (args.tile >= fr.frozen.acc.max_tiles) {
+        throw new Exit(ExitCode.USAGE, 'USAGE', 'tile_out_of_range');
+      }
+      const d0 = acceptanceD0(fr.frozen.acc, args.freezeDate as string);
+      const w = tileWindow(d0, fr.frozen.acc.tile_days, args.tile);
+      windowStart = w.start;
+      windowEnd = w.end;
+      // 分块还没结束就出 attest 会把不完整的窗口记成「已覆盖」
+      if (windowEnd >= now().toISOString().slice(0, 10)) {
+        throw new Exit(ExitCode.NOT_RUN, 'NOT_RUN', 'tile_not_ended');
+      }
+    }
+    const acceptanceBind = fr.ok ? fr.frozen.acc.sha256 : undefined;
+
     const runId = newRunId(now(), rnd);
     const attestPath = `attest/${rule}/${attestFileName({ member, window_end: windowEnd, run_id: runId })}`;
 
@@ -303,7 +409,7 @@ export function createAttestCommand(deps: AttestCommandDeps = {}): CommandDef {
     const attest: Attest = AttestSchema.parse({
       schema_version: 1,
       rule_id: rule,
-      rule_sha256: normalizedRuleSha256(source),
+      rule_sha256: ruleSha,
       channel,
       member,
       window_start: windowStart,
@@ -318,6 +424,7 @@ export function createAttestCommand(deps: AttestCommandDeps = {}): CommandDef {
       recurrence: counted.recurrence,
       signal_ids_digest: signalIdsDigest(counted.signal_ids),
       method: 'signature_proxy_v1',
+      ...(acceptanceBind !== undefined ? { acceptance_sha256: acceptanceBind } : {}),
       run_id: runId,
     } satisfies Attest);
 
@@ -347,6 +454,8 @@ export function createAttestCommand(deps: AttestCommandDeps = {}): CommandDef {
       window_start: windowStart,
       window_end: windowEnd,
       method: 'signature_proxy_v1',
+      ...(args.tile !== undefined ? { tile: args.tile } : {}),
+      ...(acceptanceBind !== undefined ? { acceptance_sha256: acceptanceBind } : {}),
       sessions_total: attest.sessions_total,
       exposure_sessions: attest.exposure_sessions,
       exposure_projects: attest.exposure_projects,
@@ -408,8 +517,18 @@ export function createAttestCommand(deps: AttestCommandDeps = {}): CommandDef {
     flags: [
       { name: '--rule <id>', description: '要计数的原子 id(status 须为 advisory/active);必填' },
       { name: '--member <@handle>', description: '成员 handle,须在渠道成员表里;必填' },
-      { name: '--window-start <YYYY-MM-DD>', description: '窗口起(UTC,含);必填' },
+      { name: '--window-start <YYYY-MM-DD>', description: '窗口起(UTC,含);不用 --tile 时必填' },
       { name: '--window-end <YYYY-MM-DD>', description: '窗口止(UTC,含);必填' },
+      {
+        name: '--tile <k>',
+        description:
+          '按工作树提案里冻结的验收协议算第 k 块(0 起)的窗口并绑定 acceptance_sha256;与 --window-* 互斥,须配 --freeze-date',
+      },
+      {
+        name: '--freeze-date <YYYY-MM-DD>',
+        description:
+          '冻结提交(judge.acceptance 首次入库的提交)的提交者日期:git log -1 --format=%cs -- proposals/<id>.yaml;仅与 --tile 一起用',
+      },
       { name: '--channel <canary|stable>', description: '缺省取覆盖层 channel,再缺省 canary' },
       { name: '--agent <id>', description: '只数该 agent,可重复;缺省按原子 applies_to' },
       {
