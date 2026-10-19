@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { parse as parseToml } from 'smol-toml';
+import { addDays } from '../atoms/dates.js';
 import { parseRestrictedYaml } from '../atoms/frontmatter.js';
 import { fileStem } from '../atoms/parse.js';
 import { AttestSchema, attestFileName, type Attest } from '../contracts/attest.js';
@@ -11,15 +12,19 @@ import {
 import type { Diagnostic } from '../contracts/diagnostics.js';
 import { LifecycleRecordSchema, lifecycleFileName } from '../contracts/lifecycle.js';
 import type { LifecycleRecord } from '../contracts/lifecycle.js';
-import { ProposalSchema, type Proposal } from '../contracts/proposal.js';
+import { ProposalSchema, type AcceptanceProtocol, type Proposal } from '../contracts/proposal.js';
 import { deriveVendor, isCrossVendor } from '../contracts/vendor.js';
+import { canonicalJson } from '../io/canonical-json.js';
+import { acceptanceSha256, guidanceSha256, signatureSha256 } from '../judge/freeze.js';
+import { acceptanceD0, classifyTile, requiredValidTiles } from '../lifecycle/attest-count.js';
 import { checkC5, ruleSha256 } from '../lifecycle/checks.js';
 import { createRedactor } from '../redact/redactor.js';
 import { scanDangerousPhrases } from '../reflect/validate.js';
 import { hasInvisible } from '../reflect/text.js';
 import { err } from './diff.js';
+import { GitError } from './git.js';
 import { isAtomPath } from './paths.js';
-import type { CriteriaChecker, CriteriaInput } from './types.js';
+import type { CriteriaChecker, CriteriaInput, GuardGit } from './types.js';
 import { statusOf, viewAtom } from './view.js';
 
 /**
@@ -31,11 +36,13 @@ import { statusOf, viewAtom } from './view.js';
  *  晋升共用:LAYER_NOT_TEAM PROPOSAL_MISSING PROPOSAL_INVALID JUDGE_PENDING JUDGE_MISSING JUDGE_NOT_ACCEPT JUDGE_INJECTION
  *    NOT_CROSS_VENDOR JUDGE_HOP_MISMATCH REFLECTOR_UNVERIFIABLE REFLECTOR_STUB RULE_HASH_UNCOMPUTABLE RULE_HASH_MISSING
  *    RULE_HASH_MISMATCH RESCAN_DIRTY REDACTION_RESIDUAL PROPOSAL_MISMATCH FIXED_FIELDS
- *  T2:SIGNATURE_MISSING CONFIG_UNREADABLE ADVISORY_SINCE_UNKNOWN ATTEST_INVALID ATTEST_RUN_ID_SHAPE ATTEST_AMBIGUOUS_LATEST ATTEST_OVERLAP
- *    THRESHOLD_WINDOW_DAYS THRESHOLD_MEMBERS THRESHOLD_NON_OWNER_MEMBERS THRESHOLD_EXPOSURE THRESHOLD_HARMFUL
+ *  T2:SIGNATURE_MISSING CONFIG_UNREADABLE ADVISORY_SINCE_UNKNOWN TEXT_SINCE_UNKNOWN ATTEST_INVALID ATTEST_RUN_ID_SHAPE
+ *    ATTEST_AMBIGUOUS_LATEST ATTEST_OVERLAP THRESHOLD_TILES THRESHOLD_EXPOSURE THRESHOLD_HARMFUL
+ *  T2 冻结核验(K4,docs/contracts.md §18.9):ACCEPTANCE_MISSING ACCEPTANCE_HASH_MISMATCH ACCEPTANCE_CLOCK_INCONSISTENT
+ *    ACCEPTANCE_CHANGED_AFTER_FREEZE PREDICTION_CHANGED_AFTER_FREEZE ACCEPTANCE_WEAKER_THAN_CORE FREEZE_COMMIT_UNKNOWN
  *  退役:LIFECYCLE_RECORD_MISSING LIFECYCLE_RECORD_AMBIGUOUS LIFECYCLE_RECORD_INVALID LIFECYCLE_RECORD_MISMATCH
  *    RECORD_DIGESTS REASON_NOT_EXPIRED REASON_BY_INVALID REASON_NO_EXPOSURE_UNMET REASON_NOT_HARMFUL COOLDOWN_NOT_MET
- *  warn(不计入失败):ATTEST_NOT_COUNTED
+ *  warn(不计入失败):ATTEST_NOT_COUNTED ACCEPTANCE_REFROZEN
  *
  * 🔴 已知缺口(如实记录):
  *  - 没有签名/创建者校验:attest 计数、judge 记录、lifecycle 记录都是 PR 里的普通文件,造假靠 CODEOWNERS/四眼(P1-D)。
@@ -44,7 +51,6 @@ import { statusOf, viewAtom } from './view.js';
  *  - 预算("不超")不在 G3 判据里(由 `check --budget` 与 promote 的 out/ 进出清单承担)。
  */
 
-const ISO_DAY_MS = 86_400_000;
 const RUN_ID_RE = /^run-(\d{8}T\d{6}Z)-([0-9a-f]{6})$/;
 const PROPOSAL_ORIGIN_RE = /^proposal\/(\d{4}-\d{2}-\d{2}-\d{3})$/;
 
@@ -58,9 +64,6 @@ const e = (code: string, path: string, message: string): Diagnostic =>
   err(`GUARD_G3_${code}`, path, message);
 
 const sha256Hex = (s: string): string => createHash('sha256').update(s, 'utf8').digest('hex');
-
-/** 'YYYY-MM-DD' → 自 1970 起的天数(输入已由 IsoDateSchema 保证是真实日期) */
-const dayNum = (iso: string): number => Math.floor(Date.parse(`${iso}T00:00:00Z`) / ISO_DAY_MS);
 
 /**
  * 规则文本哈希:与 L1 的 C6(`ruleSha256`)、attest 的 `normalizedRuleSha256` 是**同一个实现**(`lifecycle/checks.ts`),
@@ -225,32 +228,372 @@ function countable(
   return { kept, diags };
 }
 
-function unionDays(items: readonly AttestItem[]): number {
-  const iv = items
-    .map((it) => [dayNum(it.a.window_start), dayNum(it.a.window_end)] as const)
-    .sort((x, y) => x[0] - y[0]);
-  let total = 0;
-  let curS = 0;
-  let curE = -Infinity;
-  for (const [s, en] of iv) {
-    if (s > curE + 1) {
-      if (curE !== -Infinity) total += curE - curS + 1;
-      curS = s;
-      curE = en;
-    } else if (en > curE) {
-      curE = en;
-    }
-  }
-  if (curE !== -Infinity) total += curE - curS + 1;
-  return total;
-}
-
 interface AtomCtx {
   path: string;
   id: string;
   fm: Readonly<Record<string, unknown>>;
   text: string;
   ruleSha: string | undefined;
+}
+
+// ───────────────────────── K4:冻结验收协议的核验(设计 §2.3–§2.5,docs/contracts.md §18.9) ─────────────────────────
+
+/** git 本身失败(浅克隆缺对象、oid 不存在等)一律按「查不出」处理,由调用方 fail-closed;其他异常照常抛。 */
+function tryGit<T>(f: () => T): T | undefined {
+  try {
+    return f();
+  } catch (x) {
+    if (x instanceof GitError) return undefined;
+    throw x;
+  }
+}
+
+const canon = (v: unknown): string | undefined => {
+  try {
+    return canonicalJson(v ?? null);
+  } catch {
+    return undefined;
+  }
+};
+
+interface JudgeParts {
+  acceptance: unknown;
+  prediction: unknown;
+}
+
+/** 从提案 yaml 文本里取 `judge.acceptance` / `judge.prediction` 的原始值(不经 schema,历史版本也能读) */
+function judgeParts(text: string | undefined, pp: string): JudgeParts | undefined {
+  if (text === undefined) return undefined;
+  const y = parseRestrictedYaml(text, pp, 'GUARD_PROPOSAL_YAML');
+  if (!y.ok || typeof y.value !== 'object' || y.value === null) return undefined;
+  const judge = (y.value as { judge?: unknown }).judge;
+  if (typeof judge !== 'object' || judge === null)
+    return { acceptance: undefined, prediction: undefined };
+  const j = judge as { acceptance?: unknown; prediction?: unknown };
+  return { acceptance: j.acceptance, prediction: j.prediction };
+}
+
+/**
+ * 当前规则文本(归一化哈希 == `ruleSha`)首次进入仓库的提交日期:从 `commitOid` 往回,取「连续等于当前哈希」的最老一个提交的日期。
+ * 状态(proposed→advisory→active)不进哈希,所以只改状态的提交不会重置它;改了正文再改回来,取最近一次回到当前文本的那次。
+ * 查不出(历史为空 / 最新一版就不等于当前哈希 / git 失败)→ undefined,调用方 fail-closed(`TEXT_SINCE_UNKNOWN`)。
+ */
+export function textSince(
+  git: GuardGit,
+  commitOid: string,
+  atomPath: string,
+  ruleSha: string,
+): string | undefined {
+  const hist = tryGit(() => git.fileHistory(commitOid, atomPath));
+  if (hist === undefined) return undefined;
+  let since: string | undefined;
+  for (const h of hist) {
+    const text = tryGit(() => git.textAt(h.commit, atomPath));
+    const sha = text === undefined ? undefined : normalizedRuleSha256(text);
+    if (sha === ruleSha) since = h.date;
+    else break;
+  }
+  return since;
+}
+
+export interface FreezeLocation {
+  /** 冻结提交:当前 `judge.acceptance` 首次(连续)出现在提案文件里的那次提交 */
+  commit: string;
+  /** 冻结提交的提交者日期 YYYY-MM-DD */
+  date: string;
+  /** 冻结提交里的 prediction 与 head 的 prediction 是否 canonical 相等 */
+  predictionSame: boolean;
+  /** 冻结提交之前的历史里,「同一份规则文本(acceptance.rule_sha256 相同)但 acceptance 内容不同」的版本数(重新冻结次数) */
+  refrozen: number;
+  /** 冻结提交之前最近一次改动提案的提交(没有 = 提案在冻结提交里首次入库) */
+  prev: string | undefined;
+  /** 冻结提交没有父提交:根提交,或浅克隆的边界(此时它只是「历史截断处」,不是真正引入 acceptance 的提交) */
+  parentless: boolean;
+}
+
+/**
+ * 定位冻结提交(attest --tile 与 G3 共用)。`commitOid` 是要看的头(G3 传 headOid,attest 传 HEAD)。
+ * 从新到旧扫描 `fileHistory(commitOid, 提案路径)`:连续与 `commitOid` 版本 acceptance(canonical JSON)相等的提交构成一段,
+ * 这一段里最老的就是冻结提交。找不到(提案里没有 acceptance、历史为空、git 失败)→ undefined。
+ */
+export function locateFreezeCommit(
+  git: GuardGit,
+  commitOid: string,
+  proposalPath: string,
+): FreezeLocation | undefined {
+  const head = judgeParts(
+    tryGit(() => git.textAt(commitOid, proposalPath)),
+    proposalPath,
+  );
+  const headAcc = canon(head?.acceptance);
+  if (head === undefined || head.acceptance === undefined || headAcc === undefined)
+    return undefined;
+  const hist = tryGit(() => git.fileHistory(commitOid, proposalPath));
+  if (hist === undefined) return undefined;
+  const ruleOf = (acc: unknown): unknown =>
+    typeof acc === 'object' && acc !== null
+      ? (acc as { rule_sha256?: unknown }).rule_sha256
+      : undefined;
+  let runEnd = -1;
+  for (let n = 0; n < hist.length; n++) {
+    const parts = judgeParts(
+      tryGit(() => git.textAt(hist[n]!.commit, proposalPath)),
+      proposalPath,
+    );
+    if (parts !== undefined && canon(parts.acceptance) === headAcc) runEnd = n;
+    else break;
+  }
+  if (runEnd < 0) return undefined;
+  const freeze = hist[runEnd]!;
+  const atFreeze = judgeParts(
+    tryGit(() => git.textAt(freeze.commit, proposalPath)),
+    proposalPath,
+  );
+  let refrozen = 0;
+  for (const h of hist.slice(runEnd + 1)) {
+    const parts = judgeParts(
+      tryGit(() => git.textAt(h.commit, proposalPath)),
+      proposalPath,
+    );
+    if (
+      parts?.acceptance !== undefined &&
+      ruleOf(parts.acceptance) === ruleOf(head.acceptance) &&
+      canon(parts.acceptance) !== headAcc
+    ) {
+      refrozen++;
+    }
+  }
+  return {
+    commit: freeze.commit,
+    date: freeze.date,
+    predictionSame: canon(atFreeze?.prediction) === canon(head.prediction),
+    refrozen,
+    prev: hist[runEnd + 1]?.commit,
+    parentless: tryGit(() => git.isAncestor(`${freeze.commit}^`, freeze.commit)) !== true,
+  };
+}
+
+interface Frozen {
+  acc: AcceptanceProtocol;
+  commit: string;
+  /** D0:验收窗口锚点(UTC 日) */
+  d0: string;
+}
+
+/** 冻结三层核验。失败返回全部诊断;通过返回冻结上下文。调用方保证 `pr.judge` 存在、`a.ruleSha` 可算。 */
+function verifyFreeze(
+  i: CriteriaInput,
+  a: AtomCtx,
+  pr: Proposal,
+  lc: Lifecycle,
+): { frozen: Frozen; diags: Diagnostic[] } | { diags: Diagnostic[] } {
+  const pp = `proposals/${pr.id}.yaml`;
+  const j = pr.judge!;
+  const acc = j.acceptance;
+  if (acc === undefined) {
+    return {
+      diags: [
+        e(
+          'ACCEPTANCE_MISSING',
+          pp,
+          '提案没有冻结的验收协议(judge.acceptance);请先重跑 `agent-kit judge` 补冻结,再走晋升',
+        ),
+      ],
+    };
+  }
+  const diags: Diagnostic[] = [];
+  const bad = (code: string, msg: string): void => {
+    diags.push(e(code, pp, msg));
+  };
+
+  // 层 1:内容哈希
+  if (acceptanceSha256(acc) !== acc.sha256)
+    bad('ACCEPTANCE_HASH_MISMATCH', 'acceptance.sha256 与内容重算的哈希不符');
+  if (j.prediction === undefined) {
+    bad('ACCEPTANCE_HASH_MISMATCH', 'judge.prediction 缺失,无法绑定冻结协议');
+  } else if (j.prediction.acceptance_sha256 !== acc.sha256) {
+    bad('ACCEPTANCE_HASH_MISMATCH', 'prediction.acceptance_sha256 与 acceptance.sha256 不一致');
+  }
+  if (acc.rule_sha256 !== j.rule_sha256 || acc.rule_sha256 !== a.ruleSha) {
+    bad(
+      'ACCEPTANCE_HASH_MISMATCH',
+      'acceptance.rule_sha256 与 judge.rule_sha256 / 当前规则文本不一致',
+    );
+  }
+  const sig = a.fm['signature'];
+  const sigArg =
+    typeof sig === 'object' && sig !== null && typeof (sig as { type?: unknown }).type === 'string'
+      ? {
+          type: (sig as { type: string }).type,
+          ...(typeof (sig as { pattern?: unknown }).pattern === 'string'
+            ? { pattern: (sig as { pattern: string }).pattern }
+            : {}),
+        }
+      : undefined;
+  if (acc.signature_sha256 !== signatureSha256(sigArg)) {
+    bad(
+      'ACCEPTANCE_HASH_MISMATCH',
+      'acceptance.signature_sha256 与当前原子签名不符(签名改了须重新提案/重新 judge)',
+    );
+  }
+  const g = pr.reflector.guidance;
+  if (acc.baseline_sha256 !== guidanceSha256(g)) {
+    bad('ACCEPTANCE_HASH_MISMATCH', 'acceptance.baseline_sha256 与 reflector.guidance 的哈希不符');
+  }
+  if (g !== undefined) {
+    if (
+      g.baseline.exposure_sessions > g.baseline.sessions_total ||
+      g.baseline.exposure_sessions > g.baseline.fired
+    ) {
+      bad(
+        'ACCEPTANCE_HASH_MISMATCH',
+        'reflector.guidance.baseline 不自洽(exposure_sessions 超过 sessions_total 或 fired)',
+      );
+    }
+    if (g.until !== acc.guidance_until) {
+      bad(
+        'ACCEPTANCE_HASH_MISMATCH',
+        'acceptance.guidance_until 与 reflector.guidance.until 不一致',
+      );
+    }
+  }
+
+  // 层 3:冻结值不得弱于基线 kit.toml 的现值
+  if (acc.tile_days < lc.cfg.acceptance_tile_days || acc.max_tiles > lc.cfg.acceptance_max_tiles) {
+    bad(
+      'ACCEPTANCE_WEAKER_THAN_CORE',
+      `冻结值 tile_days=${acc.tile_days}/max_tiles=${acc.max_tiles} 弱于基线 kit.toml 的 ${lc.cfg.acceptance_tile_days}/${lc.cfg.acceptance_max_tiles}`,
+    );
+  }
+
+  // 层 2:git 锚点。历史一律从**基线**取(不从 head 取):PR 作者能用合并提交的父顺序操纵 head 侧的路径历史简化。
+  const baseParts = judgeParts(i.baseView(pp), pp);
+  const headParts = judgeParts(i.headView(pp), pp);
+  if (
+    baseParts?.acceptance !== undefined &&
+    canon(baseParts.acceptance) !== canon(headParts?.acceptance)
+  ) {
+    bad('ACCEPTANCE_CHANGED_AFTER_FREEZE', '晋升 PR 改动了基线里已冻结的 judge.acceptance');
+  }
+  if (baseParts !== undefined && canon(baseParts.prediction) !== canon(headParts?.prediction)) {
+    bad('PREDICTION_CHANGED_AFTER_FREEZE', '晋升 PR 改动了基线里的 judge.prediction');
+  }
+  const loc =
+    baseParts?.acceptance === undefined ? undefined : locateFreezeCommit(i.git, i.baseOid, pp);
+  if (loc === undefined) {
+    bad('FREEZE_COMMIT_UNKNOWN', '基线历史里找不到冻结提交(提案没有冻结、历史被改写或浅克隆)');
+  } else {
+    if (loc.parentless) {
+      bad(
+        'FREEZE_COMMIT_UNKNOWN',
+        '冻结提交没有父提交(根提交或浅克隆边界),无法确认 acceptance 首次入库的位置',
+      );
+    }
+    if (tryGit(() => i.git.isAncestor(loc.commit, i.baseOid)) !== true) {
+      bad('FREEZE_COMMIT_UNKNOWN', '冻结提交不是基线提交的祖先(冻结必须已合进主线)');
+    }
+    const judgedOk = tryGit(
+      () =>
+        acc.judged_at_head !== loc.commit &&
+        i.git.isAncestor(acc.judged_at_head, loc.commit) &&
+        // judge 运行时提案上一版若已入库,judged_at_head 不得早于它(否则填个根提交就能满足上面的祖先检查)
+        (loc.prev === undefined || i.git.isAncestor(loc.prev, acc.judged_at_head)),
+    );
+    if (judgedOk !== true) {
+      bad(
+        'ACCEPTANCE_CLOCK_INCONSISTENT',
+        'judged_at_head 不是冻结提交的严格祖先(或早于提案上一版、或不在本仓库历史里)',
+      );
+    }
+    if (!loc.predictionSame) {
+      bad('PREDICTION_CHANGED_AFTER_FREEZE', '冻结提交之后 judge.prediction 被改过');
+    }
+    const untilMs = Date.parse(acc.guidance_until);
+    const frozenMs = Date.parse(acc.frozen_at);
+    // fileHistory 只给提交者本地日期:容忍 1 天的时区差,仍挡住「纸面时钟晚于提交」
+    const frozenDay = Number.isNaN(frozenMs) ? '' : new Date(frozenMs).toISOString().slice(0, 10);
+    if (
+      Number.isNaN(untilMs) ||
+      Number.isNaN(frozenMs) ||
+      untilMs > frozenMs ||
+      frozenDay > addDays(loc.date, 1)
+    ) {
+      bad(
+        'ACCEPTANCE_CLOCK_INCONSISTENT',
+        '时钟交叉核对不过:需 guidance_until ≤ frozen_at ≤ 冻结提交日期(容忍 1 天时区差)',
+      );
+    }
+    if (loc.refrozen > 0) {
+      diags.push(
+        warn(
+          'GUARD_G3_ACCEPTANCE_REFROZEN',
+          pp,
+          `同一份规则文本此前已被冻结过 ${loc.refrozen} 次(重跑 judge);旧协议下的 attest 不计入,校准账须以第一份预测为准`,
+        ),
+      );
+    }
+  }
+  if (loc === undefined || diags.some((d) => d.severity === 'error')) return { diags };
+  return { frozen: { acc, commit: loc.commit, d0: acceptanceD0(acc, loc.date) }, diags };
+}
+
+type FrozenItem = AttestItem & { k: number };
+
+/**
+ * T2 的计入口径(新增,不改 `countable`):`countable` 的全部条件 + 冻结协议的分块条件。
+ * 不满足的记 warn `ATTEST_NOT_COUNTED`(附原因),即以「不计入」实现 fail-closed。
+ */
+function frozenCountable(
+  i: CriteriaInput,
+  id: string,
+  items: readonly AttestItem[],
+  lc: Lifecycle,
+  ruleSha: string,
+  since: string,
+  textSinceDate: string,
+  fr: Frozen,
+): { kept: FrozenItem[]; diags: Diagnostic[] } {
+  const base = countable(items, lc, ruleSha, since);
+  const baseFiles = new Set(i.listBase(`attest/${id}`));
+  const diags = [...base.diags];
+  const kept: FrozenItem[] = [];
+  for (const it of base.kept) {
+    const a = it.a;
+    let why: string | undefined;
+    let k = -1;
+    const cls = classifyTile(
+      fr.d0,
+      fr.acc.tile_days,
+      fr.acc.max_tiles,
+      a.window_start,
+      a.window_end,
+    );
+    if (a.acceptance_sha256 !== fr.acc.sha256) {
+      why = 'acceptance_sha256 缺失或与冻结协议不符';
+    } else if (!cls.ok) {
+      why = cls.reason;
+    } else if (a.window_start < textSinceDate) {
+      why = '窗口早于当前规则文本进入仓库的日期(textSince)';
+    } else {
+      k = cls.k;
+      const from = baseFiles.has(it.path) ? i.baseOid : i.headOid;
+      const hist = tryGit(() => i.git.fileHistory(from, it.path));
+      const intro = hist === undefined ? undefined : hist[hist.length - 1];
+      const after =
+        intro !== undefined &&
+        intro.commit !== fr.commit &&
+        tryGit(() => i.git.isAncestor(fr.commit, intro.commit)) === true;
+      if (!after) {
+        why = 'attest 的首次入库提交不晚于冻结提交(或查不出)';
+      } else if (a.window_end > addDays(intro.date, 1)) {
+        // 提交者日期是作者可写数据,只能挡诚实的「预先提交未来窗口」;容忍 1 天时区差
+        why = 'attest 的入库日期早于窗口结束(预先提交了未来窗口)';
+      }
+    }
+    if (why === undefined) kept.push({ ...it, k });
+    else diags.push(warn('GUARD_G3_ATTEST_NOT_COUNTED', it.path, `不计入:${why}`));
+  }
+  return { kept, diags };
 }
 
 function loadAtom(i: CriteriaInput): AtomCtx | Diagnostic[] {
@@ -478,41 +821,65 @@ function promotion(i: CriteriaInput): Diagnostic[] {
   if (since === undefined) {
     return [...out, e('ADVISORY_SINCE_UNKNOWN', a.path, '查不出原子转为 advisory 的日期')];
   }
+  if (a.ruleSha === undefined) return out;
+  if (!('proposal' in lp) || lp.proposal.judge === undefined) return out; // 提案/评审缺失已在上面报错,没有冻结可核
+  // 历史从基线取;同时要求晋升 PR 没改规则文本(base 与 head 的归一化哈希相等),否则 head 的哈希在基线历史里根本没有「首次出现」
+  const baseText = i.baseView(a.path);
+  const baseSha = baseText === undefined ? undefined : normalizedRuleSha256(baseText);
+  const tSince = baseSha === a.ruleSha ? textSince(i.git, i.baseOid, a.path, a.ruleSha) : undefined;
+  if (tSince === undefined) {
+    return [...out, e('TEXT_SINCE_UNKNOWN', a.path, '查不出当前规则文本首次进入仓库的日期')];
+  }
+  const fz = verifyFreeze(i, a, lp.proposal, lc);
+  out.push(...fz.diags);
+  if (!('frozen' in fz)) return out;
+  const { frozen } = fz;
   const { items, diags } = loadAttests(i, a.id);
   out.push(...diags);
-  if (a.ruleSha === undefined) return out;
-  const { kept, diags: notCounted } = countable(items, lc, a.ruleSha, since);
+  const { kept, diags: notCounted } = frozenCountable(
+    i,
+    a.id,
+    items,
+    lc,
+    a.ruleSha,
+    since,
+    tSince,
+    frozen,
+  );
   out.push(...notCounted);
 
   const { cfg } = lc;
   const owner = typeof a.fm['owner'] === 'string' ? a.fm['owner'].toLowerCase() : '';
-  const members = new Set(kept.map((k) => k.a.member.toLowerCase()));
-  const nonOwner = [...members].filter((m) => m !== owner);
-  const days = unionDays(kept);
-  const exposure = kept.reduce((s, k) => s + k.a.exposure_sessions, 0);
-  const harmful = kept.reduce((s, k) => s + k.a.harmful, 0);
+  // 按块覆盖:一块有效 = 该块有 ≥min_members 名成员各交了一份计入的 attest,其中 ≥min_non_owner_members 名非 owner
+  const byTile = new Map<number, Set<string>>();
+  for (const it of kept) {
+    const set = byTile.get(it.k) ?? new Set<string>();
+    set.add(it.a.member.toLowerCase());
+    byTile.set(it.k, set);
+  }
+  const validTiles = new Set<number>();
+  for (const [k, members] of byTile) {
+    const nonOwner = [...members].filter((m) => m !== owner).length;
+    if (members.size >= cfg.min_members && nonOwner >= cfg.min_non_owner_members) validTiles.add(k);
+  }
+  const required = requiredValidTiles(cfg.canary_window_days, frozen.acc.tile_days);
+  const exposure = kept
+    .filter((k) => validTiles.has(k.k))
+    .reduce((sum, k) => sum + k.a.exposure_sessions, 0);
+  // harmful 取全部计入的 attest(比「只在有效块」更严:无效块里的有害证据不能被静默丢弃)
+  const harmful = kept.reduce((sum, k) => sum + k.a.harmful, 0);
   const need = (cond: boolean, code: string, msg: string): void => {
     if (!cond) out.push(e(code, a.path, msg));
   };
   need(
-    days >= cfg.canary_window_days,
-    'THRESHOLD_WINDOW_DAYS',
-    `有效 attest 覆盖 ${days} 天,需要 ≥${cfg.canary_window_days}`,
-  );
-  need(
-    members.size >= cfg.min_members,
-    'THRESHOLD_MEMBERS',
-    `有效 attest 的成员数 ${members.size},需要 ≥${cfg.min_members}`,
-  );
-  need(
-    nonOwner.length >= cfg.min_non_owner_members,
-    'THRESHOLD_NON_OWNER_MEMBERS',
-    `非 owner 成员数 ${nonOwner.length},需要 ≥${cfg.min_non_owner_members}`,
+    validTiles.size >= required,
+    'THRESHOLD_TILES',
+    `有效验收块 ${validTiles.size} 个(每块需 ≥${cfg.min_members} 名成员、其中 ≥${cfg.min_non_owner_members} 名非 owner),需要 ≥${required} 个(每块 ${frozen.acc.tile_days} 天,canary_window_days=${cfg.canary_window_days})`,
   );
   need(
     exposure >= cfg.min_exposure_sessions,
     'THRESHOLD_EXPOSURE',
-    `exposure_sessions 合计 ${exposure},需要 ≥${cfg.min_exposure_sessions}`,
+    `有效块内 exposure_sessions 合计 ${exposure},需要 ≥${cfg.min_exposure_sessions}`,
   );
   need(
     harmful <= cfg.max_harmful,

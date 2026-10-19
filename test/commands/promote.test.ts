@@ -25,7 +25,8 @@ import {
   kitToml,
   proposalYaml,
 } from '../guards/criteria-world.js';
-import type { AtomOpts, AttestOpts, ProposalOpts } from '../guards/criteria-world.js';
+import type { AtomOpts, ProposalOpts } from '../guards/criteria-world.js';
+import { buildWorld, twoTiles, type AttestSpec } from '../guards/frozen-world.js';
 import { makeTestRepo } from '../helpers/make-repo.js';
 import type { TestRepo } from '../helpers/make-repo.js';
 
@@ -44,7 +45,7 @@ interface WOpts {
   status?: string;
   atom?: AtomOpts;
   proposal?: ProposalOpts;
-  attests?: AttestOpts[];
+  attests?: AttestSpec[];
   extra?: Record<string, string | null>;
   kit?: string;
   rulePath?: string;
@@ -59,10 +60,36 @@ interface World {
   atom: string;
 }
 
-const ALICE: AttestOpts = { member: '@alice' };
-const BOB: AttestOpts = { member: '@bob' };
+/**
+ * K4:T2(advisory→active)的世界要有真实的冻结历史(冻结在基线历史里、attest 按分块对齐),
+ * 由 guards/frozen-world.ts 造;仓库 HEAD 停在基线,promote 自己合成 head。
+ */
+async function frozenWorld(o: WOpts): Promise<World> {
+  const w = await buildWorld({
+    atom: { body: BODY, ...o.atom },
+    rulePath: o.rulePath ?? RULE,
+    ...(o.kit ? { kit: o.kit } : {}),
+    proposal: { rationale: `理由 ${CANARY_RATIONALE}`, ...o.proposal },
+    proposalTransform: (y) => y.replace('provider: openai', 'provider: codex'),
+    attests: o.attests ?? [],
+    ...(o.extra ? { baseExtra: o.extra } : {}),
+    stopAtBase: true,
+  });
+  repos.push(w.repo);
+  const parent = path.dirname(w.repo.dir);
+  const state = path.join(parent, 'state');
+  const io = createIoContext({
+    cwd: w.repo.dir,
+    root: w.repo.dir,
+    env: { KIT_TMP: parent, KIT_STATE_DIR: state, PATH: '/usr/bin:/bin' },
+  });
+  return { repo: w.repo, io, parent, state, atom: w.advisoryAtom };
+}
 
 async function world(o: WOpts = {}): Promise<World> {
+  if (o.status === 'advisory' && o.noProposal !== true && o.proposalText === undefined) {
+    return frozenWorld(o);
+  }
   const status = o.status ?? 'proposed';
   const atom = atomText({ status, body: BODY, ...o.atom });
   const files: Record<string, string | null> = {
@@ -112,7 +139,7 @@ async function promote(w: World, argv: string[]) {
 
 const TO_ADV = ['--rule', ID, '--to', 'advisory'];
 const TO_ACT = ['--rule', ID, '--to', 'active'];
-const T2_OK: Partial<WOpts> = { status: 'advisory', attests: [ALICE, BOB] };
+const T2_OK: Partial<WOpts> = { status: 'advisory', attests: twoTiles() };
 
 async function promoDirs(w: World): Promise<string[]> {
   const root = path.join(w.state, 'promote');
@@ -407,7 +434,7 @@ describe('T2 advisory→active', () => {
       attest_files: number;
     };
     expect(j.review_by_new).toBe('2027-01-23'); // 2026-10-25 + 90 天(< created+180)
-    expect(j.attest_files).toBe(2);
+    expect(j.attest_files).toBe(4);
     const dir = path.join(w.state, 'promote', j.promo_id);
     const patch = await readText(path.join(dir, 'promote.patch'));
     expect(patch.split('\n').filter((l) => /^[-+][^-+]/.test(l))).toEqual([
@@ -466,53 +493,57 @@ describe('T2 advisory→active', () => {
     expect(r.err).toBe('PROMOTE_CHECK_FAILED reason=REVIEW_BY_UNREACHABLE\n');
   });
 
-  it('attest 判据红(L2 原因码):窗口不足 / 成员不足 / 曝光不足 / harmful / 成员不在名单 / 窗口早于 advisory', async () => {
-    const short = { start: '2026-10-08', end: '2026-10-14' };
-    const cases: [string, WOpts, string][] = [
-      [
-        '窗口',
-        {
-          attests: [
-            { ...ALICE, ...short },
-            { ...BOB, ...short },
-          ],
-        },
-        'G3:THRESHOLD_WINDOW_DAYS',
-      ],
-      ['成员数', { attests: [{ ...ALICE, exposure: 12 }] }, 'G3:THRESHOLD_MEMBERS'],
-      [
-        '曝光',
-        {
-          attests: [
-            { ...ALICE, exposure: 2 },
-            { ...BOB, exposure: 2 },
-          ],
-        },
-        'G3:THRESHOLD_EXPOSURE',
-      ],
-      ['harmful', { attests: [ALICE, { ...BOB, harmful: 1 }] }, 'G3:THRESHOLD_HARMFUL'],
-      ['不在名单', { kit: kitToml({ members: ['@alice'] }) }, 'G3:THRESHOLD_MEMBERS'],
-      [
-        '早于 advisory',
-        {
-          attests: [
-            { ...ALICE, start: '2026-09-01', end: '2026-09-15' },
-            { ...BOB, start: '2026-09-01', end: '2026-09-15' },
-          ],
-        },
-        'G3:THRESHOLD_WINDOW_DAYS',
-      ],
-      ['没有 attest', { attests: [] }, 'G3:THRESHOLD_WINDOW_DAYS'],
-    ];
-    for (const [name, o, code] of cases) {
+  const T = (tile: number, over: Partial<AttestSpec> = {}): AttestSpec => ({ tile, ...over });
+  const cases: [string, WOpts, string][] = [
+    [
+      '有效块不足',
+      { attests: [T(0, { member: '@alice' }), T(0, { member: '@bob' })] },
+      'G3:THRESHOLD_TILES',
+    ],
+    [
+      '成员不足',
+      {
+        attests: [
+          T(0, { member: '@alice', exposure: 12 }),
+          T(1, { member: '@alice', exposure: 12 }),
+        ],
+      },
+      'G3:THRESHOLD_TILES',
+    ],
+    ['曝光不足', { attests: twoTiles({ exposure: 2 }) }, 'G3:THRESHOLD_EXPOSURE'],
+    [
+      'harmful',
+      {
+        attests: [
+          ...twoTiles(),
+          T(1, { member: '@alice', harmful: 1, run: 'run-20261030T000000Z-bbbbbb' }),
+        ],
+      },
+      'G3:THRESHOLD_HARMFUL',
+    ],
+    ['成员不在名单', { kit: kitToml({ members: ['@alice'] }) }, 'G3:THRESHOLD_TILES'],
+    [
+      '窗口早于 advisory',
+      {
+        attests: [
+          { member: '@alice', start: '2026-09-01', end: '2026-09-07' },
+          { member: '@bob', start: '2026-09-01', end: '2026-09-07' },
+        ],
+      },
+      'G3:THRESHOLD_TILES',
+    ],
+    ['没有 attest', { attests: [] }, 'G3:THRESHOLD_TILES'],
+  ];
+  for (const [name, o, code] of cases) {
+    it(`attest 判据红(L2/K4 原因码):${name} → ${code}`, async () => {
       const w = await world({ ...T2_OK, ...o });
       const before = await snapshot(w.parent);
       const r = await promote(w, [...TO_ACT, '--write']);
       expect(r.code, name).toBe(ExitCode.CHECK_FAILED);
       expect(r.out, name).toContain(`fail ${code}`);
       expect(await snapshot(w.parent), name).toBe(before);
-    }
-  });
+    });
+  }
 
   it('无 signature 的 advisory 原子:退出 1 + 稳定码 SIGNATURE_MISSING + 两步流程提示', async () => {
     const w = await world({ ...T2_OK, atom: { signature: false } });
@@ -530,9 +561,13 @@ describe('T2 advisory→active', () => {
     const b = await world({
       ...T2_OK,
       attests: [
-        ALICE,
-        BOB,
-        { ...ALICE, start: '2026-10-23', end: '2026-10-24', run: 'run-20261025T000000Z-bbbbbb' },
+        ...twoTiles(),
+        {
+          member: '@alice',
+          start: '2026-10-23',
+          end: '2026-10-24',
+          run: 'run-20261025T000000Z-bbbbbb',
+        },
       ],
     });
     const ja = JSON.parse((await promote(a, [...TO_ACT, '--json'])).out) as { promo_id: string };

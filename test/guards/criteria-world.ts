@@ -74,6 +74,11 @@ export interface ProposalOpts {
   layer?: string;
   targets?: string[];
   evidenceExcerpt?: string;
+  /** K4:写进 reflector.guidance(引导窗口落账) */
+  guidance?: unknown;
+  /** K4:写进 judge.acceptance / judge.prediction(冻结的验收协议与预测) */
+  acceptance?: unknown;
+  prediction?: unknown;
 }
 
 export function proposalYaml(atom: string, o: ProposalOpts = {}): string {
@@ -96,6 +101,7 @@ export function proposalYaml(atom: string, o: ProposalOpts = {}): string {
       run_id: 'run-20261008T000000Z-aaaaaa',
       ...(o.backend === null ? {} : { backend: o.backend ?? 'claude' }),
       ...(o.stub ? { stub: true } : {}),
+      ...(o.guidance !== undefined ? { guidance: o.guidance } : {}),
     },
   };
   if (o.attempts) {
@@ -119,6 +125,8 @@ export function proposalYaml(atom: string, o: ProposalOpts = {}): string {
       injection_suspected: o.injection ?? false,
       conflicts: [],
       ...(hash === null || hash === undefined ? {} : { rule_sha256: hash }),
+      ...(o.acceptance !== undefined ? { acceptance: o.acceptance } : {}),
+      ...(o.prediction !== undefined ? { prediction: o.prediction } : {}),
     };
   }
   return stringify(doc);
@@ -152,6 +160,8 @@ export interface AttestOpts {
   method?: string | null;
   run?: string;
   rule_id?: string;
+  /** K4:attest 绑定的冻结协议 sha256 */
+  acceptance?: string;
 }
 
 export function attestFile(atom: string, o: AttestOpts = {}): [string, string] {
@@ -175,6 +185,7 @@ export function attestFile(atom: string, o: AttestOpts = {}): [string, string] {
     run_id: o.run ?? 'run-20261023T000000Z-aaaaaa',
   };
   if (o.method !== null) a['method'] = o.method ?? 'signature_proxy_v1';
+  if (o.acceptance !== undefined) a['acceptance_sha256'] = o.acceptance;
   const text = `${JSON.stringify(a)}\n`;
   const name = attestFileName({
     member: a['member'] as string,

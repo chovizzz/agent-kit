@@ -18,6 +18,7 @@
 import { createHash } from 'node:crypto';
 import * as path from 'node:path';
 import type { z } from 'zod';
+import { addDays, daysBetween } from '../atoms/dates.js';
 import type { SignatureSchema } from '../contracts/atom.js';
 import { AGENT_IDS } from '../contracts/common.js';
 import type { AgentId } from '../contracts/common.js';
@@ -261,6 +262,81 @@ export function signalIdsDigest(sortedIds: readonly string[]): string {
  * 否则 judge 写入的哈希、attest 里的哈希、CI 重算的哈希会彼此对不上。无法归一化(status/review_by 不是恰好各一行等)时抛 RuleHashError。
  */
 export const normalizedRuleSha256 = ruleSha256;
+
+// ───────────────────────── K4:冻结验收协议的分块(attest --tile 与 G3 共用) ─────────────────────────
+
+/** ISO 时间戳 → UTC 日(YYYY-MM-DD);解析失败返回 undefined */
+function utcDay(ts: string): string | undefined {
+  const ms = Date.parse(ts);
+  return Number.isNaN(ms) ? undefined : new Date(ms).toISOString().slice(0, 10);
+}
+
+/**
+ * 验收窗口锚点 D0(设计 §2.2/§2.3):`max(acceptance.anchor_min, guidance_until 的次日, frozen_at 的次日, 冻结提交日期的次日)`。
+ * 冻结提交日期取自 git(CI 可复核),其余三项是文件里的纸面值(`anchor_min` 可被手改,所以另两个纸面时钟也各自参与取大)。
+ * 日期都是 UTC 日历日算术。`attest --tile` 与 G3 的 `frozenCountable` **必须**用这一个函数,否则 CLI 算出的窗口会被 CI 判为不对齐。
+ */
+export function acceptanceD0(
+  acc: { readonly anchor_min: string; readonly guidance_until: string; readonly frozen_at: string },
+  freezeCommitDate: string,
+): string {
+  const cands = [
+    acc.anchor_min,
+    addDays(freezeCommitDate, 1),
+    ...[acc.guidance_until, acc.frozen_at].flatMap((t) => {
+      const d = utcDay(t);
+      return d === undefined ? [] : [addDays(d, 1)];
+    }),
+  ];
+  return cands.reduce((m, d) => (d > m ? d : m));
+}
+
+const PROPOSAL_ORIGIN_RE = /^proposal\/(\d{4}-\d{2}-\d{2}-\d{3})$/;
+
+/** 原子 `origin: proposal/<id>` → `proposals/<id>.yaml`;不是这个形状返回 undefined。attest --tile 与 G3 共用。 */
+export function proposalPathOfOrigin(origin: unknown): string | undefined {
+  const m = typeof origin === 'string' ? PROPOSAL_ORIGIN_RE.exec(origin) : null;
+  return m === null ? undefined : `proposals/${m[1]!}.yaml`;
+}
+
+/** 第 k 块(0 起)的窗口:`[D0 + k·tile_days, D0 + k·tile_days + tile_days − 1]`(含两端)。 */
+export function tileWindow(
+  d0: string,
+  tileDays: number,
+  k: number,
+): { start: string; end: string } {
+  const start = addDays(d0, k * tileDays);
+  return { start, end: addDays(start, tileDays - 1) };
+}
+
+export type TileClass = { ok: true; k: number } | { ok: false; reason: string };
+
+/**
+ * 判一个窗口是不是冻结协议下的合法分块:`window_start = D0 + k·tile_days`、`window_end = window_start + tile_days − 1`、
+ * `0 ≤ k < max_tiles`。不满足返回原因(给 `ATTEST_NOT_COUNTED` 的 warn 用)。
+ */
+export function classifyTile(
+  d0: string,
+  tileDays: number,
+  maxTiles: number,
+  windowStart: string,
+  windowEnd: string,
+): TileClass {
+  const off = daysBetween(d0, windowStart);
+  if (off < 0) return { ok: false, reason: '窗口早于验收锚点 D0' };
+  if (off % tileDays !== 0) return { ok: false, reason: '窗口起点没有对齐到验收分块' };
+  const k = off / tileDays;
+  if (k >= maxTiles) return { ok: false, reason: `分块序号 ${k} 超出 max_tiles=${maxTiles}` };
+  if (windowEnd !== tileWindow(d0, tileDays, k).end) {
+    return { ok: false, reason: `窗口长度不是 tile_days=${tileDays} 天` };
+  }
+  return { ok: true, k };
+}
+
+/** T2 需要的有效验收块数:`ceil(canary_window_days / tile_days) + extra`(`extra` 留给 K5a 的晋升加严,默认 0)。 */
+export function requiredValidTiles(canaryWindowDays: number, tileDays: number, extra = 0): number {
+  return Math.ceil(canaryWindowDays / tileDays) + extra;
+}
 
 async function* jsonlRows(file: string, what: string): AsyncGenerator<unknown, void, undefined> {
   for await (const line of readLines(file, MAX_LINE_BYTES)) {
