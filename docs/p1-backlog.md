@@ -106,6 +106,8 @@
 - ☐ **`kit:reflector` 标签不禁止修改既有文件**:A17 的 N1 钉住了现状——反思器 PR 改已有 active 原子的**正文**不被
   路径守卫 / G1 / G2 拒(G2 只锁治理字段,契约 GD-2 已接受);`reflect` 自己只产生新增文件,但 CI 侧对 `kit:reflector`
   应加「只许新增」判据
+  **K6 部分落地**:`proposals/**` 已「只许新增」(`GUARD_PATH_PROPOSAL_DELETED` / `GUARD_PATH_PROPOSAL_MODIFIED`,contracts §12.3);
+  `rules/` `skills/` `cases/` 下修改既有文件仍未拦(同上条原因,待定);无标签内容 PR 删提案由 `GUARD_PROPOSAL_DELETED_UNLABELED` 拒
 - ☑ **`sync` 写全局 + `doctor`**(已实装:S4 / S5,契约见 contracts §19.2 / §19.3)(P2 表内但同批):真实 HOME 受管路径写入,依赖 B17 守卫面
 
 ## Phase P1-D(发布与治理,⏸ 等用户凭据/授权)

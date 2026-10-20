@@ -1785,10 +1785,13 @@ R5 追加字段(#29):`allow_unverified` 与 `team_project_keys`。
 - GD-4(`.kit/rules/` 子模块被 lint 读到而守卫看不到)、GD-5(merge-base 契约未强制,只会假阳性)、GD-6(晋升 PR 不能同时补 `signature`,须先走内容 PR 补)延后;GD-6 的两步流程以此处为准。
 - **`GUARD_*` 稳定码表(非 G3;G3 判据码见 `src/guards/criteria.ts` 头部注释与 `g3.ts`,K6 补登)**:
   - 引用与通用:`GUARD_REF_UNRESOLVED`(`--base`/`--head` 解析不成提交)、`GUARD_GIT_FAILED`(git 不可用或命令意外失败)、`GUARD_LABEL_UNKNOWN`(标签不在 `kit:promotion|retire|attest|reflector`)、`GUARD_PATH_UNSAFE`(路径含空段 / `.` / `..` / 反斜杠 / NUL)、`GUARD_FRONTMATTER_UNPARSEABLE`(原子任一侧读不出 frontmatter 或不是普通文件,各守卫据此 fail-closed)。
-  - 反思器路径守卫(`kit:reflector`,`src/guards/path-guard.ts`;比较的是 `--no-renames` 的 diff-tree,重命名 = 旧路径 D + 新路径 A):`GUARD_PATH_FORBIDDEN`(触碰 `hooks/ kit.toml codeowners .github/ adapters/ attest/`,不区分大小写)、`GUARD_PATH_OUTSIDE_ALLOWED`(不在 `rules/ skills/ cases/ proposals/`,区分大小写)、**`GUARD_PATH_PROPOSAL_DELETED`(K6)**。
+  - 反思器路径守卫(`kit:reflector`,`src/guards/path-guard.ts`;比较的是 `--no-renames` 的 diff-tree,重命名 = 旧路径 D + 新路径 A):`GUARD_PATH_FORBIDDEN`(触碰 `hooks/ kit.toml codeowners .github/ adapters/ attest/`,不区分大小写)、`GUARD_PATH_OUTSIDE_ALLOWED`(不在 `rules/ skills/ cases/ proposals/`,区分大小写)、**`GUARD_PATH_PROPOSAL_DELETED`(K6)**、**`GUARD_PATH_PROPOSAL_MODIFIED`(K6)**。无标签内容 PR:**`GUARD_PROPOSAL_DELETED_UNLABELED`(K6)**。
   - G1:`GUARD_G1_NEW_ATOM_NOT_PROPOSED`、`GUARD_G1_NEW_ATOM_HAS_EDGES`。G2:`GUARD_G2_STATUS_CHANGED`、`GUARD_G2_REVIEW_BY_EXTENDED`、`GUARD_G2_FIELD_LOCKED`。G4:`GUARD_G4_DELETE_NOT_RETIRED`、`GUARD_G4_NOT_IN_STABLE_TAG`。`kit:attest`:`GUARD_ATTEST_SCOPE`。
   - G3 外壳(`g3.ts` / `labels.ts`):`GUARD_G3_FORBIDDEN_CHANGE`、`GUARD_G3_FIELD_NOT_ALLOWED`、`GUARD_G3_DIRECTION_NOT_ALLOWED`、`GUARD_G3_REVIEW_BY_WITHOUT_TRANSITION`、`GUARD_G3_LIFECYCLE_ORPHAN`、`GUARD_G3_CRITERIA_NOT_IMPLEMENTED`。
-- **提案账本只增(K6)**:`kit:reflector` PR 对基线里已有的 `proposals/**` 文件,**删除、重命名(旧路径)、换成符号链接 / 子模块等非普通文件**一律报 `GUARD_PATH_PROPOSAL_DELETED`(前缀比较不区分大小写,与禁区同口径;它与 `FORBIDDEN` / `OUTSIDE_ALLOWED` 独立,可同时出现)。**不拦**:新增提案、追加或改内容(含清空为空文件——内容修改仍按现有规则判定,`reflect` 本身只产生新增文件,见 `docs/p1-backlog.md` 的「`kit:reflector` 不禁止修改既有文件」)。只对 `kit:reflector` 标签生效:无标签的内容 PR 仍可删提案(靠 CODEOWNERS / 评审),这一缺口与 §18.10「残余缺口 · 删除」相关。
+- **提案账本只增(K6)**:
+  - `kit:reflector` PR 对基线里已有的 `proposals/**` 文件:**删除、重命名(旧路径)、换成符号链接 / 子模块等非普通文件** → `GUARD_PATH_PROPOSAL_DELETED`;**任何修改**(追加、改内容、清空成空文件、仅改权限位)→ `GUARD_PATH_PROPOSAL_MODIFIED`。只许新增文件。前缀比较不区分大小写(与禁区同口径);两个码与 `FORBIDDEN` / `OUTSIDE_ALLOWED` 独立,可同时出现。
+  - **合法修改场景核对(K6 第二轮)**:仓库内没有任何命令会生成「修改已有 `proposals/*.yaml`」的补丁——`judge` 只写 `.state/reflect/<run>/proposals/` 暂存区,`promote --run` 的采纳补丁只**新增** `proposals/<id>.yaml`(已存在即 `PROPOSAL_PATH_EXISTS` 丢弃);`kit:promotion` / `kit:retire` / `kit:attest` 的 G3 / 范围守卫本来就禁止改 `proposals/`。唯一的「手工改已入库提案」场景是重跑 judge 后重新冻结(`GUARD_G3_ACCEPTANCE_REFROZEN`),它只能走**无标签内容 PR**,不受本条影响。**假设**:该场景不会被作者贴上 `kit:reflector` 标签;若有人这样做会被拒,应改走无标签 PR(待主代理确认这一假设与流程文档一致)。
+  - 无任何 `kit:*` 标签的内容 PR:基线里已有的 `proposals/**` 被**删除 / 重命名旧路径 / 换成非普通文件** → `GUARD_PROPOSAL_DELETED_UNLABELED`(`runGuards` 的无标签分支,与 G1 / G2 / G4 并列)。**不拦**无标签 PR 新增提案或修改提案内容。带 `kit:promotion` / `kit:retire` / `kit:attest` 标签的 PR 行为不变(各走自己的守卫),`kit:reflector` 走上一条的 DELETED 码,不重复出本码。
 - **评审清单(retire / promote 类 PR)**:PR 描述必须写明「本 PR 使哪些被压住 / 生效的原子重新出现在、或退出 `out/`」。原因:`merge` 只采纳 `active`/`advisory` 声明者的边,而 render / lint 不按 status 过滤——把一个持有 `overrides`/`disables` 的原子改成 `retired`(或把 `proposed` 晋升为 `active`)会让它压住的原子复活进 `out/`(或反过来让既有原子从 `out/` 消失)。评审者对照 `out/` 的重新生成结果核对这份清单;同 id 的替换因声明者 status 不合格而被丢弃时,`merge` 会给 `MERGE_REPLACEMENT_INERT`(warn)。
 
 ### 12.4 真跑(`--run-llm --allow-egress`)不在 A5 零写入覆盖范围内(R0,如实记录)
@@ -1926,6 +1929,7 @@ A16–A19、A21–A23 直接 import / 运行 `dist/`;dist 比 src 旧会按「�
 ### 18.1 字段与格式
 
 - `JudgeRecord.rule_sha256?`:64 位小写十六进制。评审时规则文本的哈希:先把 frontmatter 顶层的 `status:` 与 `review_by:` 两行的**值**换成占位符,再对 `canonicalText(全文)` 取 sha256(`src/lifecycle/checks.ts` 的 `ruleSha256`;C6、G3 判据、attest 三处是同一个实现)。`judge` 命令写入;晋升时必填且必须与当前文本一致。两行之外的任何改动(含这两行行尾追加注释)都会改哈希;`status`/`review_by` 不是恰好各一行、块标量、流式写法一律 `RULE_TEXT_UNHASHABLE`(fail-closed)。
+- `JudgeRecord.prompt_id?` / `prompt_sha256?`(K6,可追溯):评审用的提示模板 id(`judge-v1`,或 kit 判定 `predicted` 时的 `judge-v2`)与模板哈希;`judge` 命令写入。`prompt_sha256` = sha256(`system` 段 + `\n--USER-SKELETON--\n` + user 段**固定骨架**),骨架由同一个 `buildJudgePrompt(V2)` 用固定占位符输入渲染得到(标签结构、属性、转义改了哈希就变,数据不进哈希)。取舍:旧常量 `JUDGE_PROMPT_SHA256` 只哈希 system、保持不动(历史可查),新字段用新常量 `JUDGE_PROMPT_TEMPLATE_SHA256`,字段名与 `reflector.prompt_sha256`(模板原文哈希)同口径。**纯留痕**:两字段不是 `acceptance`(`buildAcceptance` 不接收它们)与 `rule_sha256`(规则文本哈希)的输入,G3 不要求必填,旧记录没有它们仍合法(`test/judge/prompt-trace.test.ts` 钉住)。
 - `Signal.event_key?`:跨文件去重键(D4,加盐 sha256 的产物)。契约只约束:非空、≤128 字符、仅 `[A-Za-z0-9_.:-]`。
 - `Attest.method?`:枚举,目前只有 `signature_proxy_v1`(按原子签名匹配信号的代理口径)。
 - `KitConfig.lifecycle?`(`kit.toml` 的 `[lifecycle]`):`canary_window_days`(≥14,默认 14)、`min_members`(≥2,默认 2)、`min_non_owner_members`(≥1 且 ≤ `min_members`,默认 1)、`min_exposure_sessions`(≥10,默认 10)、`max_harmful`(只能是 0)、`no_exposure_windows`(≥2,默认 2)。每项的下界就是默认值:core 只能调严。**覆盖层(`Overlay`)不接受 `lifecycle`**(strict,出现即错),所以覆盖层无法放宽;G3 读的是**基线**的 `kit.toml`,PR 改了它也放不宽。
@@ -2544,7 +2548,7 @@ agent-kit retire  --rule <id> --to deprecated|retired --reason manual|expired|su
 **残余缺口(如实,K5a 不解决,需披露)**:
 
 - **选择偏差**:账本只含「judge 给了 accept、原子到了 advisory、canary 成员凑够有效块」的预测。reject / revise 的预测永远不结算;作者可以不收集数据让会失手的最新预测永远不结算(只在 `INSUFFICIENT` 消息里报未结算条数,**不**把过期未结算算失手,那样罚的是缺数据而不是判错)。这是**完成样本的校准**,不是全部冻结预测的校准。覆盖率(已结算 / 已冻结)应随报告披露。
-- **删除**:账本只枚举基线树里现存的 `proposals/*.yaml`;先用内容 PR 删掉失手的提案再发晋升 PR,历史上的失手就出账了。K6 已在 `kit:reflector` 路径守卫里禁止删除 / 重命名 / 换类型 `proposals/**`(`GUARD_PATH_PROPOSAL_DELETED`,见 §12.3);**无标签的内容 PR 仍可删**,且守卫不禁止改已冻结的 judge 块(那由 K4 冻结核验兜住当前提案,但不影响别家提案的校准账),账本按历史索引仍未做。
+- **删除**:账本只枚举基线树里现存的 `proposals/*.yaml`;先用内容 PR 删掉失手的提案再发晋升 PR,历史上的失手就出账了。K6 已补两道:`kit:reflector` PR 对已有 `proposals/**` 只许新增(`GUARD_PATH_PROPOSAL_DELETED` / `GUARD_PATH_PROPOSAL_MODIFIED`),无标签内容 PR 不得删除(`GUARD_PROPOSAL_DELETED_UNLABELED`),见 §12.3。残余:无标签内容 PR 仍可**修改**已有提案(含改已冻结的 judge 块;那由 K4 冻结核验兜住当前提案,但不影响别家提案的校准账),账本按历史索引仍未做。
 - **稀释**:同 vendor 下用大量低置信度(0.5)、宽区间的预测稀释高置信度失手,压低平均置信度。未做「置信度 ≥0.7 子集再算一次」(偏离 §18.8 的口径,需用户决定)。新模型 / 冷门模型在两档都 n<10 时不会被加严。
 - **时间边界**:「取代日期 < D0 忽略」依赖提交者日期(作者可写,GD-3 同类);`attest` 成员字段是自报的,非 owner 门槛可伪造(CODEOWNERS / 四眼);owner 取自基线现值。
 - **冻结核验未逐条重做**:账本条目只核哈希自洽与「冻结后未改」,不重做 `judged_at_head` 祖先、时钟交叉(那是晋升该原子时 K4 的事)。
