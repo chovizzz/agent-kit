@@ -229,8 +229,7 @@ export function createCalibrateCommand(deps: CalibrateCommandDeps = {}): Command
         if (args.error !== undefined) throw new Exit(ExitCode.USAGE, 'USAGE', args.error);
         const io = ctx.io;
         // 只读命令不许因缺失对象(partial clone)触发 lazy fetch:那既联网又写 .git/objects
-        const git =
-          deps.git ?? createGuardGit(io, io.repoRoot, { GIT_NO_LAZY_FETCH: '1', ...deps.gitEnv });
+        const git = deps.git ?? createGuardGit(io, io.repoRoot, deps.gitEnv);
         const oid = git.resolveCommit('HEAD');
         if (oid === undefined)
           throw new Exit(ExitCode.FAIL_CLOSED, 'FAIL_CLOSED', 'HEAD_UNRESOLVED');

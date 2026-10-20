@@ -15,6 +15,7 @@ import { calibrationStrictReasons, computeCalibration } from '../../src/lifecycl
 import { snapshot } from '../fixtures/reflect/world.js';
 import { evalLib, guardRealHome } from '../accept/helpers.js';
 import * as safe from '../../src/io/safe-fs.js';
+import { readText } from '../../src/io/read-fs.js';
 import { REPO_ROOT } from '../helpers/tmp.js';
 import { batch, peerFiles, peerHook, type Peer } from '../guards/calibration-world.js';
 import { buildWorld, type World, type WorldOpts } from '../guards/frozen-world.js';
@@ -587,7 +588,7 @@ describe('K5b calibrate', { timeout: 240_000 }, () => {
     }
   });
 
-  it('calibrationStrictReasons 与 T2 内联判断同口径(三种原因各自独立)', () => {
+  it('calibrationStrictReasons 三种原因各自独立(T2 与本命令共用这一份实现)', () => {
     const t = (over: boolean) => ({
       key: 'k',
       n: 1,
@@ -606,6 +607,13 @@ describe('K5b calibrate', { timeout: 240_000 }, () => {
     expect(calibrationStrictReasons({ unavailable: 'x', unreadable: [], tiers: [] })).toEqual([
       'unavailable',
     ]);
+  });
+
+  it('单一实现:criteria.ts 的 T2 用 calibrationStrictReasons,不再内联一份加严条件(K6;改回内联则红)', async () => {
+    const src = await readText(path.join(REPO_ROOT, 'src/guards/criteria.ts'));
+    expect(src).toMatch(/const strict = calibrationStrictReasons\(cal\)\.length > 0;/);
+    // 负向:旧内联写法的特征(同时检查 unavailable / unreadable 长度)不得再出现在 criteria.ts 里
+    expect(src).not.toMatch(/cal\.unavailable !== undefined \|\| cal\.unreadable\.length > 0/);
   });
 
   it('零网络:命令源码的 import 传递闭包不含 llm-exec / reflect/backends / 网络模块', () => {

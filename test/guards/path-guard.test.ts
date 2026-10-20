@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ATOM_PATH, COMMON_FILES, atom } from '../fixtures/guards/atoms.js';
+import { checkReflectorPaths } from '../../src/guards/path-guard.js';
+import type { Change } from '../../src/guards/types.js';
 import { scenario, useRepoCleanup } from './helpers.js';
 
 useRepoCleanup();
@@ -97,6 +99,86 @@ describe('反思器路径守卫(kit:reflector;设计 §6.4)', () => {
       { label: 'kit:reflector' },
     );
     expect(s.codes).toEqual(['GUARD_G2_STATUS_CHANGED']);
+  });
+
+  describe('proposals/ 只增:删除守卫(K6)', () => {
+    const PBASE = { ...BASE, 'proposals/p1.yaml': 'id: p1\nbody: a\n' };
+    const run = (
+      head: Record<string, string | null | { link: string }>,
+      label = 'kit:reflector' as const,
+    ) => scenario(PBASE, head, { label });
+
+    it('删除已有提案 → GUARD_PATH_PROPOSAL_DELETED(仅此一码)', async () => {
+      const s = await run({ 'proposals/p1.yaml': null });
+      expect(s.codes).toEqual(['GUARD_PATH_PROPOSAL_DELETED']);
+      expect(s.pathsOf('GUARD_PATH_PROPOSAL_DELETED')).toEqual(['proposals/p1.yaml']);
+    });
+
+    it('重命名(旧路径视为删除)→ 命中旧路径,新路径不报', async () => {
+      const s = await run({ 'proposals/p1.yaml': null, 'proposals/p2.yaml': 'id: p1\nbody: a\n' });
+      expect(s.codes).toEqual(['GUARD_PATH_PROPOSAL_DELETED']);
+      expect(s.pathsOf('GUARD_PATH_PROPOSAL_DELETED')).toEqual(['proposals/p1.yaml']);
+    });
+
+    it('移出 proposals/(到 cases/)同样命中', async () => {
+      const s = await run({ 'proposals/p1.yaml': null, 'cases/x/p1.yaml': 'id: p1\n' });
+      expect(s.codes).toEqual(['GUARD_PATH_PROPOSAL_DELETED']);
+    });
+
+    it('大小写路径变体(直接喂 Change,不依赖本机文件系统是否区分大小写)', () => {
+      const mk = (path: string, kind: Change['kind'], headMode = '000000'): Change => ({
+        kind,
+        path,
+        baseMode: '100644',
+        headMode,
+        baseOid: 'a'.repeat(40),
+        headOid: '0'.repeat(40),
+      });
+      for (const p of ['Proposals/x.yaml', 'PROPOSALS/x.yaml', 'proposals/X.YAML']) {
+        const d = checkReflectorPaths([mk(p, 'D')]);
+        expect(
+          d.map((x) => x.code),
+          p,
+        ).toContain('GUARD_PATH_PROPOSAL_DELETED');
+      }
+      // 大小写-only 重命名在 --no-renames 下是 D(旧)+ A(新):旧路径命中
+      const ren = checkReflectorPaths([
+        mk('proposals/p1.yaml', 'D'),
+        { ...mk('Proposals/p1.yaml', 'A', '100644'), baseMode: '000000' },
+      ]);
+      expect(
+        ren.filter((x) => x.code === 'GUARD_PATH_PROPOSAL_DELETED').map((x) => x.path),
+      ).toEqual(['proposals/p1.yaml']);
+      // 对照:纯新增、普通文件的修改不命中
+      expect(
+        checkReflectorPaths([{ ...mk('proposals/n.yaml', 'A', '100644'), baseMode: '000000' }]),
+      ).toEqual([]);
+      expect(checkReflectorPaths([mk('proposals/m.yaml', 'M', '100644')])).toEqual([]);
+    });
+
+    it('把提案文件换成符号链接(类型变更)→ 命中', async () => {
+      const s = await run({ 'proposals/p1.yaml': { link: '../cases/x/case.yaml' } });
+      expect(s.codes).toEqual(['GUARD_PATH_PROPOSAL_DELETED']);
+    });
+
+    it('用目录顶替提案文件(proposals/p1.yaml → proposals/p1.yaml/x)→ 命中', async () => {
+      const s = await run({ 'proposals/p1.yaml': null, 'proposals/p1.yaml/x': 'id: x\n' });
+      expect(s.codes).toEqual(['GUARD_PATH_PROPOSAL_DELETED']);
+    });
+
+    it('对照(不误伤):追加内容、改内容、清空内容、新增提案 → 不报本码', async () => {
+      const append = await run({ 'proposals/p1.yaml': 'id: p1\nbody: a\nextra: b\n' });
+      expect(append.codes).toEqual([]);
+      const empty = await run({ 'proposals/p1.yaml': '' });
+      expect(empty.codes).not.toContain('GUARD_PATH_PROPOSAL_DELETED');
+      const add = await run({ 'proposals/p9.yaml': 'id: p9\n' });
+      expect(add.codes).toEqual([]);
+    });
+
+    it('对照:无标签的内容 PR 删提案不触发本守卫(守卫只对反思器 PR 生效)', async () => {
+      const s = await scenario(PBASE, { 'proposals/p1.yaml': null });
+      expect(s.codes).not.toContain('GUARD_PATH_PROPOSAL_DELETED');
+    });
   });
 
   it('对照:无标签的普通内容 PR 改 kit.toml 不触发路径守卫(守卫只对反思器 PR 生效)', async () => {

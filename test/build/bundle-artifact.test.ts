@@ -1,5 +1,3 @@
-/* eslint-disable no-restricted-imports -- S7b:打包产物的冒烟 / 隔离 / 确定性验证必须起子进程(vite build、node dist/cli.js);
-   test/ 下的 child_process 限制属 eslint.config.js 的共享热点(同 test/accept/helpers.ts),待主代理加 override 后可去掉本行。 */
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import * as path from 'node:path';

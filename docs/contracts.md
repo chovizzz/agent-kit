@@ -1783,6 +1783,12 @@ R5 追加字段(#29):`allow_unverified` 与 `team_project_keys`。
 - **GD-3(stable tag)**:只认**注解** `stable-*` tag,且其提交须是基线的**严格**祖先(指向基线本身的不算)。**已知缺口**:没有签名/创建者校验(tagger 可伪造,CODEOWNERS 的 handle 与 tagger 邮箱也无映射,故不做该匹配);任何能在本地打注解 tag 的人都能在基线祖先上补 tag。**P1 CI 必须使用服务端受保护 tag 或 `verify-tag` 验签,不得信任仓库内可写的 tag。**
 - 发版说明:仓库里存量的轻量 `stable-*` tag 现在被忽略,原本能通过的删除会变红(收紧方向)。
 - GD-4(`.kit/rules/` 子模块被 lint 读到而守卫看不到)、GD-5(merge-base 契约未强制,只会假阳性)、GD-6(晋升 PR 不能同时补 `signature`,须先走内容 PR 补)延后;GD-6 的两步流程以此处为准。
+- **`GUARD_*` 稳定码表(非 G3;G3 判据码见 `src/guards/criteria.ts` 头部注释与 `g3.ts`,K6 补登)**:
+  - 引用与通用:`GUARD_REF_UNRESOLVED`(`--base`/`--head` 解析不成提交)、`GUARD_GIT_FAILED`(git 不可用或命令意外失败)、`GUARD_LABEL_UNKNOWN`(标签不在 `kit:promotion|retire|attest|reflector`)、`GUARD_PATH_UNSAFE`(路径含空段 / `.` / `..` / 反斜杠 / NUL)、`GUARD_FRONTMATTER_UNPARSEABLE`(原子任一侧读不出 frontmatter 或不是普通文件,各守卫据此 fail-closed)。
+  - 反思器路径守卫(`kit:reflector`,`src/guards/path-guard.ts`;比较的是 `--no-renames` 的 diff-tree,重命名 = 旧路径 D + 新路径 A):`GUARD_PATH_FORBIDDEN`(触碰 `hooks/ kit.toml codeowners .github/ adapters/ attest/`,不区分大小写)、`GUARD_PATH_OUTSIDE_ALLOWED`(不在 `rules/ skills/ cases/ proposals/`,区分大小写)、**`GUARD_PATH_PROPOSAL_DELETED`(K6)**。
+  - G1:`GUARD_G1_NEW_ATOM_NOT_PROPOSED`、`GUARD_G1_NEW_ATOM_HAS_EDGES`。G2:`GUARD_G2_STATUS_CHANGED`、`GUARD_G2_REVIEW_BY_EXTENDED`、`GUARD_G2_FIELD_LOCKED`。G4:`GUARD_G4_DELETE_NOT_RETIRED`、`GUARD_G4_NOT_IN_STABLE_TAG`。`kit:attest`:`GUARD_ATTEST_SCOPE`。
+  - G3 外壳(`g3.ts` / `labels.ts`):`GUARD_G3_FORBIDDEN_CHANGE`、`GUARD_G3_FIELD_NOT_ALLOWED`、`GUARD_G3_DIRECTION_NOT_ALLOWED`、`GUARD_G3_REVIEW_BY_WITHOUT_TRANSITION`、`GUARD_G3_LIFECYCLE_ORPHAN`、`GUARD_G3_CRITERIA_NOT_IMPLEMENTED`。
+- **提案账本只增(K6)**:`kit:reflector` PR 对基线里已有的 `proposals/**` 文件,**删除、重命名(旧路径)、换成符号链接 / 子模块等非普通文件**一律报 `GUARD_PATH_PROPOSAL_DELETED`(前缀比较不区分大小写,与禁区同口径;它与 `FORBIDDEN` / `OUTSIDE_ALLOWED` 独立,可同时出现)。**不拦**:新增提案、追加或改内容(含清空为空文件——内容修改仍按现有规则判定,`reflect` 本身只产生新增文件,见 `docs/p1-backlog.md` 的「`kit:reflector` 不禁止修改既有文件」)。只对 `kit:reflector` 标签生效:无标签的内容 PR 仍可删提案(靠 CODEOWNERS / 评审),这一缺口与 §18.10「残余缺口 · 删除」相关。
 - **评审清单(retire / promote 类 PR)**:PR 描述必须写明「本 PR 使哪些被压住 / 生效的原子重新出现在、或退出 `out/`」。原因:`merge` 只采纳 `active`/`advisory` 声明者的边,而 render / lint 不按 status 过滤——把一个持有 `overrides`/`disables` 的原子改成 `retired`(或把 `proposed` 晋升为 `active`)会让它压住的原子复活进 `out/`(或反过来让既有原子从 `out/` 消失)。评审者对照 `out/` 的重新生成结果核对这份清单;同 id 的替换因声明者 status 不合格而被丢弃时,`merge` 会给 `MERGE_REPLACEMENT_INERT`(warn)。
 
 ### 12.4 真跑(`--run-llm --allow-egress`)不在 A5 零写入覆盖范围内(R0,如实记录)
@@ -2538,7 +2544,7 @@ agent-kit retire  --rule <id> --to deprecated|retired --reason manual|expired|su
 **残余缺口(如实,K5a 不解决,需披露)**:
 
 - **选择偏差**:账本只含「judge 给了 accept、原子到了 advisory、canary 成员凑够有效块」的预测。reject / revise 的预测永远不结算;作者可以不收集数据让会失手的最新预测永远不结算(只在 `INSUFFICIENT` 消息里报未结算条数,**不**把过期未结算算失手,那样罚的是缺数据而不是判错)。这是**完成样本的校准**,不是全部冻结预测的校准。覆盖率(已结算 / 已冻结)应随报告披露。
-- **删除**:账本只枚举基线树里现存的 `proposals/*.yaml`;先用内容 PR 删掉失手的提案再发晋升 PR,历史上的失手就出账了。需要守卫禁止删改 `proposals/` 里已冻结的 judge 块,或账本按历史索引——K5a 未做。
+- **删除**:账本只枚举基线树里现存的 `proposals/*.yaml`;先用内容 PR 删掉失手的提案再发晋升 PR,历史上的失手就出账了。K6 已在 `kit:reflector` 路径守卫里禁止删除 / 重命名 / 换类型 `proposals/**`(`GUARD_PATH_PROPOSAL_DELETED`,见 §12.3);**无标签的内容 PR 仍可删**,且守卫不禁止改已冻结的 judge 块(那由 K4 冻结核验兜住当前提案,但不影响别家提案的校准账),账本按历史索引仍未做。
 - **稀释**:同 vendor 下用大量低置信度(0.5)、宽区间的预测稀释高置信度失手,压低平均置信度。未做「置信度 ≥0.7 子集再算一次」(偏离 §18.8 的口径,需用户决定)。新模型 / 冷门模型在两档都 n<10 时不会被加严。
 - **时间边界**:「取代日期 < D0 忽略」依赖提交者日期(作者可写,GD-3 同类);`attest` 成员字段是自报的,非 owner 门槛可伪造(CODEOWNERS / 四眼);owner 取自基线现值。
 - **冻结核验未逐条重做**:账本条目只核哈希自洽与「冻结后未改」,不重做 `judged_at_head` 祖先、时钟交叉(那是晋升该原子时 K4 的事)。
@@ -2556,7 +2562,7 @@ agent-kit retire  --rule <id> --to deprecated|retired --reason manual|expired|su
   - **盲区行(固定,总是输出)**:`selection_bias_settled_only`(只算已结算样本)、`coverage_settled_over_frozen`、`deleted_proposals_not_in_ledger`、`dilution_not_checked`、`time_boundary_committer_date`、`attest_member_self_reported`、`shallow_clone_or_root_commit_unavailable`(提案历史最老一条没有父提交即 UNAVAILABLE,空账时不触发;能力限制,不是「仓库是浅克隆」的探测)、`not_a_promotion_preview`。
 - **`--vendor <v>`** 只过滤显示(`calibrationKeys` 归一化);盲区、全局计数、被隐藏部分的计数与退出码都不受影响。
 - **退出码**:0 完成(有 overconfident / 损坏条目也是 0,只报告);2 用法(未知参数、`--vendor` 缺值或为空、`--run-llm` / `--allow-egress`,先于任何仓库访问);3 fail-closed(git 不可用、`HEAD` 解析不了、`kit.toml` 读不出、枚举调用或任一 vendor/model 的调用返回 `unavailable`):stderr `CALIBRATE_FAIL_CLOSED reason=CALIBRATION_UNAVAILABLE`(其余 `HEAD_UNRESOLVED` / `CONFIG_UNREADABLE` / `git_failed` / `internal`),stdout 只有 `ok=false`,**不**输出残缺的档位。
-- **零写入零网络**:不写任何文件,import 闭包不含 `llm-exec` / `reflect/backends/**` / 网络模块(`test/commands/calibrate.test.ts` 静态检查);git 子进程额外带 `GIT_NO_LAZY_FETCH=1`。
+- **零写入零网络**:不写任何文件,import 闭包不含 `llm-exec` / `reflect/backends/**` / 网络模块(`test/commands/calibrate.test.ts` 静态检查);git 子进程带 `GIT_NO_LAZY_FETCH=1`(K6 起由共享入口 `createGuardGit` 统一设置,所有守卫 / 晋升 / 退役 / calibrate 的只读 git 都带;调用方 `extraEnv` 仍可覆盖,仅测试用)。
 
 ## 19. sync / doctor / update 命令面与自动更新契约(S0,契约先行;S1–S9 实装后订正)
 
@@ -2668,7 +2674,7 @@ backups/<id>/complete           备份写完的标记(缺失则 --resume 拒绝)
 - **文件权限**:更新已有文件保留其权限位;新建文件 0644;状态目录与状态文件 0700 / 0600。`modes.json` 让回滚重建被删文件时沿用原权限位。
 - **托管块操作的 txn shaBefore / shaAfter 是整文件 sha**(计划器给的是块体 sha;执行层先算出写后全文再填)。
 - **幂等运行不拿锁**:`--write` 先无锁规划,计划为空(无写操作、登记表不变)直接返回,零写入、零 mtime 变化(含目录项);有东西要写才拿锁,并在锁内重新读登记表 / 磁盘、重新规划。
-- **锁**:`sync/lock`,pid + 开始时间 + nonce;持锁进程还在 → 退出 4 `SYNC_LOCKED`(超过 15 分钟 TTL 也只报不杀);进程已不在或内容损坏 → 回收。⚠️ sync 的锁仍是「检查 → 原子写 → 复读核对 nonce」,窄化了竞态窗口但**不是严格互斥**;home-fs 已于 S7c-A 增加 `createExclusive`(update 锁在用),sync 锁改接它是后续的小改动(待主代理排期)。
+- **锁**:`sync/lock`,pid + 开始时间 + nonce;持锁进程还在 → 退出 4 `SYNC_LOCKED`(超过 15 分钟 TTL 也只报不杀);进程已不在或内容损坏 → 回收。S7c-B 起 sync 锁与 update 锁同用 `createExclusive`(见 §19.5);回收协议本身仍**不是严格互斥**(两个回收者先后删除的竞态靠提交点前 `assertHeld` 复核 nonce 兜底)。K6 补齐 `assertHeld` 覆盖:`--rollback`、`--resume`、仅改登记表的 `applyPlan` 路径此前拿了锁却不复核,现与常规 sync 一样在每个写出口前复核;另在写备份前、journal 状态推进前、删 journal 前、修剪备份前也复核(`test/sync/lock-lost.test.ts`)。
 - **`--resume`**:恰好一个残留 journal 且 `backups/<id>/complete` 在,才继续;每个文件当前 sha 必须等于写前或写后(写后的跳过),否则 `SYNC_TXN_INCOMPLETE`;写完后登记表、删 journal、修剪备份。不需要 payload。没有残留事务时是空操作(退出 0)。
 - **`--rollback <id>`**:id 是残留事务(放宽:每个文件当前 sha 等于写前**或**写后,写后的还原;登记表同理)或已收尾事务(严格:每个文件与登记表当前 sha 都等于该事务写入后的 sha)。任一前提不成立,或备份缺失 / 内容 sha 对不上 → `SYNC_ROLLBACK_MISMATCH`,整次不写。回滚本身是一个有 journal 与备份的事务(`action=rollback`,可再回滚);先文件后登记表。回滚残留事务成功后删除该事务的 journal。
 - **备份保留**:成功后只保留 id 最大(时间最新)的 `SYNC_BACKUPS_KEPT`(5)个 `backups/<id>/`;有 journal 的事务永不修剪。

@@ -18,7 +18,7 @@ import { deriveVendor, isCrossVendor } from '../contracts/vendor.js';
 import { canonicalJson } from '../io/canonical-json.js';
 import { acceptanceSha256, guidanceSha256, signatureSha256 } from '../judge/freeze.js';
 import { acceptanceD0, classifyTile, requiredValidTiles } from '../lifecycle/attest-count.js';
-import { computeCalibration } from '../lifecycle/calibration.js';
+import { calibrationStrictReasons, computeCalibration } from '../lifecycle/calibration.js';
 import { checkC5, ruleSha256 } from '../lifecycle/checks.js';
 import { createRedactor } from '../redact/redactor.js';
 import { scanDangerousPhrases } from '../reflect/validate.js';
@@ -33,11 +33,12 @@ import { statusOf, viewAtom } from './view.js';
  * G3 的真判据(L2,设计 §1 状态机 T1–T6 / §3 / §4)。纯函数:只经 `CriteriaInput` 读两棵树与 git,不读盘不写盘不联网。
  * 阈值与成员表**取自基线**的 kit.toml(PR 即使改了 kit.toml 也放不宽;G3 本身也会因改了别的文件而红)。
  *
- * 诊断码(全部 GUARD_G3_ 前缀,稳定):
+ * 诊断码(本文件产出的全部 GUARD_G3_ 前缀,稳定;`g3.ts` / `labels.ts` 自己产出的 G3 外壳码见 docs/contracts.md §12.3 的 GUARD_* 码表):
  *  通用:ATOM_UNREADABLE
  *  晋升共用:LAYER_NOT_TEAM PROPOSAL_MISSING PROPOSAL_INVALID JUDGE_PENDING JUDGE_MISSING JUDGE_NOT_ACCEPT JUDGE_INJECTION
  *    NOT_CROSS_VENDOR JUDGE_HOP_MISMATCH REFLECTOR_UNVERIFIABLE REFLECTOR_STUB RULE_HASH_UNCOMPUTABLE RULE_HASH_MISSING
  *    RULE_HASH_MISMATCH RESCAN_DIRTY REDACTION_RESIDUAL PROPOSAL_MISMATCH FIXED_FIELDS
+ *    JUDGE_PROVIDER_MISMATCH JUDGE_LAST_HOP_NOT_OK JUDGE_VENDOR_UNPROVEN VENDOR_OVERRIDES_INVALID(后四个是 C5 评审记录检查的原因码,经 judgeChecks 以本前缀输出)
  *  T2:SIGNATURE_MISSING CONFIG_UNREADABLE ADVISORY_SINCE_UNKNOWN TEXT_SINCE_UNKNOWN ATTEST_INVALID ATTEST_RUN_ID_SHAPE
  *    ATTEST_AMBIGUOUS_LATEST ATTEST_OVERLAP THRESHOLD_TILES THRESHOLD_EXPOSURE THRESHOLD_HARMFUL
  *  T2 冻结核验(K4,docs/contracts.md §18.9):ACCEPTANCE_MISSING ACCEPTANCE_HASH_MISMATCH ACCEPTANCE_CLOCK_INCONSISTENT
@@ -882,8 +883,7 @@ function promotion(i: CriteriaInput): Diagnostic[] {
     },
   });
   const overconfident = cal.tiers.filter((t) => t.overconfident);
-  const strict =
-    cal.unavailable !== undefined || cal.unreadable.length > 0 || overconfident.length > 0;
+  const strict = calibrationStrictReasons(cal).length > 0;
   const pp = `proposals/${lp.proposal.id}.yaml`;
   if (cal.unavailable !== undefined) {
     out.push(

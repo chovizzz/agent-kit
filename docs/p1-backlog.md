@@ -53,6 +53,9 @@
   压缩形(`no_verify`)出现次数多于正常形命中次数时按未否定拦,不再被旁边一处合法护栏写法抵消。
   已知仍会误杀的合法写法:间隔里有未列入填充表的词(「不要使用 --no-verify 或 --no-gpg-sign」的第二项、「请勿再直接使用」之外的口语);误杀只会让提案被拒或 C1 红灯,不会放行。
   已知仍可能放行的形态:否定词后的间隔恰好全是填充词、但语义被后文翻转的写法(如「不要 X,否则…」类需靠整批其它话术表兜住);本规则不做语义理解
+  **K6 极性核查(启用 `auto_sync=safe` 的前置,已完成)**:`blocked` 非空 = 不放行;五个调用点(`reflect/validate.ts` 整批拒、`lifecycle/checks.ts` C1、`lifecycle/adopt.ts` 补丁复扫、`guards/criteria.ts` `rescan`、`sync/safe.ts` 自动同步)都以 `blocked.length > 0` 拒绝,
+  没有把「检测失败 / 异常 / 空结果」当放行的路径:扫描抛异常在 C1 → `CHECK_INTERNAL_ERROR`,在 `runAutoSync` → 外层 `catch` 记 `failed`(不写);`sync/safe.ts` 对内容缺失(`undefined`)按 `rescan_dirty` 拒;空串没有载荷,返回空 blocked 是预期。
+  回归钉:`test/reflect/validate-polarity.test.ts` 末尾 `fail-closed 极性钉`。
 - ☐ ② **`SAFE_PATH_RE` 在 `src/reflect/stage.ts` 与 `src/lifecycle/checks.ts` 各复刻一份**:应从 stage.ts 导出、checks.ts 引用,去掉重复(两处改一处就会分叉)
 - ☐ ③ **retire 靠 L2 诊断文案挑 `attest_digests`**:`lifecycle/retire.ts` 对每个候选单独探测、按判据返回的诊断剔除无效项;
   应由 `src/guards/criteria.ts` 导出「计入口径的有效 attest 集合」纯函数,或给「digest 无效」单独稳定码,不要靠文案

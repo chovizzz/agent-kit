@@ -8,7 +8,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import * as path from 'node:path';
-import { spawnSync } from 'node:child_process'; // eslint-disable-line no-restricted-imports -- 与 helpers.ts 同理:验收脚本的黑盒测试必须起子进程
+import { spawnSync } from 'node:child_process';
 import { exists, readTextSync } from '../../src/io/read-fs.js';
 import {
   callLib,
