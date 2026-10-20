@@ -3,6 +3,7 @@ import { CLI_NAME, KIT_VERSION } from './contracts/meta.js';
 import { createIoContext, PathsError } from './io/paths.js';
 import { command as attest } from './commands/attest.js';
 import { command as build } from './commands/build.js';
+import { command as calibrate } from './commands/calibrate.js';
 import { command as check } from './commands/check.js';
 import { command as doctor } from './commands/doctor.js';
 import { command as inventory } from './commands/inventory.js';
@@ -35,6 +36,7 @@ export const COMMANDS: readonly CommandDef[] = [
   attest,
   promote,
   retire,
+  calibrate,
   sync,
   doctor,
   update,
