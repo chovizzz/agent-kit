@@ -82,6 +82,36 @@ export interface CalibrationOutcome {
   tiers: KeyStat[];
   /** 最新一份、数据不够块数而未结算的条数(披露用) */
   unsettled: number;
+  /** K5b 披露用(只追加,不影响 G3):基线里出现过的全部 judge 键(含历史冻结与损坏条目),归一化、去重、按字典序 */
+  seen: { vendor: string; model: string }[];
+  /**
+   * K5b 披露用(只追加):**target 所在 vendor 整家**的条目计数,不分 model。
+   * entries = 该 vendor 的冻结条目总数(含损坏、含被忽略的);其余是 entries 的互斥子类之一:
+   * 损坏(unreadable 数组)/ baselineInsufficient / notMeasurable / ignoredSuperseded / settled(= vendor 档 n)/ unsettled。
+   * supersededMiss 与 conf10 是 settled 的细分(被取代且按失手计的条数;已结算条目的置信度十分位 5/7/9 各多少条)。
+   */
+  counts: {
+    entries: number;
+    baselineInsufficient: number;
+    notMeasurable: number;
+    ignoredSuperseded: number;
+    supersededMiss: number;
+    conf10: Record<string, number>;
+  };
+}
+
+/**
+ * 按 G3 T2 的口径判断这份校准结果是否会触发晋升加严:不可用、同 vendor 有损坏条目、或任一档过度自信。
+ * (criteria.ts 的 T2 里有一份同口径的内联判断;K5b 的测试把两者钉在一起。)
+ */
+export function calibrationStrictReasons(
+  o: Pick<CalibrationOutcome, 'unavailable' | 'unreadable' | 'tiers'>,
+): ('unavailable' | 'unreadable' | 'overconfident')[] {
+  const r: ('unavailable' | 'unreadable' | 'overconfident')[] = [];
+  if (o.unavailable !== undefined) r.push('unavailable');
+  if (o.unreadable.length > 0) r.push('unreadable');
+  if (o.tiers.some((t) => t.overconfident)) r.push('overconfident');
+  return r;
 }
 
 /** 校准键两档(小写、去首尾空白) */
@@ -261,7 +291,20 @@ interface Settled {
 type Attestation = { it: Attest; path: string };
 
 export function computeCalibration(env: CalibrationEnv): CalibrationOutcome {
-  const out: CalibrationOutcome = { unreadable: [], tiers: [], unsettled: 0 };
+  const out: CalibrationOutcome = {
+    unreadable: [],
+    tiers: [],
+    unsettled: 0,
+    seen: [],
+    counts: {
+      entries: 0,
+      baselineInsufficient: 0,
+      notMeasurable: 0,
+      ignoredSuperseded: 0,
+      supersededMiss: 0,
+      conf10: {},
+    },
+  };
   try {
     run(env, out);
   } catch (x) {
@@ -365,6 +408,19 @@ function run(env: CalibrationEnv, out: CalibrationOutcome): void {
     }
   }
 
+  {
+    const seenKeys = new Map<string, { vendor: string; model: string }>();
+    for (const en of entries) {
+      const j = en.version.judge!;
+      const v = j.vendor.trim().toLowerCase();
+      const m = j.model.trim().toLowerCase();
+      seenKeys.set(`${v}\u0000${m}`, { vendor: v, model: m });
+    }
+    out.seen = [...seenKeys.entries()]
+      .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+      .map((e) => e[1]);
+  }
+
   // 同一冻结协议出现在 ≥2 个提案文件里:一份 judge 块被复制,命中会被算两次 → 全部算损坏
   const shaFiles = new Map<string, Set<string>>();
   for (const en of entries) {
@@ -395,6 +451,7 @@ function run(env: CalibrationEnv, out: CalibrationOutcome): void {
   for (const en of entries) {
     // 别家 judge 的条目既不进账也不影响本次(损坏只影响同 vendor);跳过还省掉大量 git 调用
     if (en.vendorKey !== vendorKey) continue;
+    out.counts.entries += 1;
     if (en.accSha.startsWith('malformed:')) {
       unreadable(en, 'acceptance 缺失或没有 sha256,而 prediction / acceptance 之一存在');
       continue;
@@ -457,7 +514,12 @@ function run(env: CalibrationEnv, out: CalibrationOutcome): void {
       unreadable(en, `prediction.status=${p.status} 与复算的 ${expected} 不一致`);
       continue;
     }
-    if (p.status !== 'predicted') continue; // 不进分母(已复核)
+    if (p.status !== 'predicted') {
+      // 不进分母(已复核)
+      if (p.status === 'baseline_insufficient') out.counts.baselineInsufficient += 1;
+      else out.counts.notMeasurable += 1;
+      continue;
+    }
     if (
       p.ratio_lo === undefined ||
       p.ratio_hi === undefined ||
@@ -471,7 +533,10 @@ function run(env: CalibrationEnv, out: CalibrationOutcome): void {
     }
 
     const d0 = acceptanceD0(a, en.freezeDate);
-    if (en.supersededDate !== undefined && en.supersededDate < d0) continue; // 还没有数据可偷看
+    if (en.supersededDate !== undefined && en.supersededDate < d0) {
+      out.counts.ignoredSuperseded += 1; // 还没有数据可偷看
+      continue;
+    }
 
     // —— 结算 ——
     const settledRes = settle(env, en, a, v.targets, d0, atomOf);
@@ -511,12 +576,14 @@ function run(env: CalibrationEnv, out: CalibrationOutcome): void {
       }
     } else if (en.supersededDate !== undefined) {
       hit = false; // 被取代的旧份、取代时已有验收期但没凑出有效数据:按失手计
+      out.counts.supersededMiss += 1;
     } else {
       out.unsettled += 1;
       continue;
     }
     const s: Settled = { hit, conf10: Math.round(p.confidence * 10) };
     bump(vendorKey, s);
+    out.counts.conf10[String(s.conf10)] = (out.counts.conf10[String(s.conf10)] ?? 0) + 1;
     if (en.modelKey === modelKey) bump(modelKey, s);
   }
 

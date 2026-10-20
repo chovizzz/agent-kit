@@ -46,6 +46,7 @@ describe('命令表', () => {
       'attest',
       'promote',
       'retire',
+      'calibrate',
       'sync',
       'doctor',
       'update',
@@ -70,6 +71,8 @@ const IMPLEMENTED_COMMANDS = new Set([
   'promote',
   // retire:L6 已实装;无参数是用法错误(2)。
   'retire',
+  // calibrate:K5b 只读报告;无参数即正常运行(空仓库 / 非 git → 3)。
+  'calibrate',
   // sync:S4 已实装(默认干跑;无 payload → 4);行为测试在 test/sync/**。
   'sync',
   // doctor:S5 已实装(默认零写入、零网络);行为测试在 test/doctor/**。

@@ -194,6 +194,7 @@ A2 的 12 格矩阵(`limit_source` × `enforce` × 超/不超;退出码 / 是否
 | `signals collect`                                     | P0     | `src/commands/signals-collect.ts` | `--source <路径> --dry`(B10b)                                                                                                                       |
 | `inventory`                                           | P1(桩) | `src/commands/inventory.ts`       | 见 §4.1                                                                                                                                             |
 | `probe` `reflect` `judge` `attest` `promote` `retire` | P1     | 各一个文件                        | `probe` `reflect` `judge` 已实装(`reflect`/`judge` 见 §17);其余仍是桩                                                                               |
+| `calibrate`                                           | P1     | `src/commands/calibrate.ts`       | 已实装(K5b:judge 校准账的只读报告,零写入零网络,契约见 §18.10「K5b」)                                                                                |
 | `sync` `doctor`                                       | P2     | 各一个文件                        | 已实装(S4 / S5,契约见 §19.2 / §19.3)                                                                                                                |
 | `update`                                              | P2     | `src/commands/update.ts`          | 已实装(S7c-A:检查 / 安装 / 回滚;S7c-B:启动器、后台 worker `__update --background`(内部入口,不在本表、不进 --help)、自动同步评估,契约见 §19.4–§19.7) |
 
@@ -2542,6 +2543,20 @@ agent-kit retire  --rule <id> --to deprecated|retired --reason manual|expired|su
 - **时间边界**:「取代日期 < D0 忽略」依赖提交者日期(作者可写,GD-3 同类);`attest` 成员字段是自报的,非 owner 门槛可伪造(CODEOWNERS / 四眼);owner 取自基线现值。
 - **冻结核验未逐条重做**:账本条目只核哈希自洽与「冻结后未改」,不重做 `judged_at_head` 祖先、时钟交叉(那是晋升该原子时 K4 的事)。
 - **性能**:每次 T2 对同 vendor 的每个提案读全部历史版本与其 attest 的 git 历史(别家 vendor 的条目仅解析、不结算),提案多了会慢;超时 / 失败记 `CALIBRATION_UNAVAILABLE`(加严),不静默跳过。CI 须用完整历史(浅克隆 → 加严)。
+
+#### K5b `agent-kit calibrate [--vendor <v>] [--json]`:校准账的只读报告
+
+实现:`src/commands/calibrate.ts`;`src/lifecycle/calibration.ts` 只**追加**了输出字段(`seen`、`counts`)与 `calibrationStrictReasons`,G3 行为不变。目的:让维护者在晋升前看到「judge 过度自信吗、数据够不够」,以及这份账**测不到什么**。
+
+- **读什么**:基线 = 仓库 `HEAD` 树(工作树里改过、删掉、未跟踪的文件一概不读)。先用空 target 调一次 `computeCalibration` 枚举出现过的全部 `(vendor, model)`(含被重跑 judge 取代的历史冻结、损坏条目),再对每个键各调一次;不排除任何提案(G3 T2 排除正在被判的提案,所以**这不是某次晋升的预演**:n=10 的边界上差一份就可能不同)。不新增任何阈值,`CALIBRATION_MIN_N` / `CALIBRATION_GAP` 只经 `judgeKeyStat` 使用。
+- **输出**(全是整数 / 枚举 / id;`--json` 为 canonical JSON,无浮点;`*_permille` = ×1000 四舍五入,**只用于显示**,状态取自 `judgeKeyStat`):
+  - 每个 vendor:`frozen`(该 vendor 的冻结条目总数)= `unreadable_items` + `baseline_insufficient` + `not_measurable` + `ignored_superseded` + `settled` + `unsettled`(互斥守恒);`coverage_permille` = settled/frozen;`superseded_counted_miss`(被取代、0 块按失手计)、`settled_conf_05/07/09`(已结算条目的置信度分布,看稀释);`unreadable_files`(去重的提案路径,不含原因文本);`g3_strict` + `g3_strict_reasons`(`overconfident|unreadable`,与 T2 同口径:该 vendor 下**任一** model 作为被判 judge 时会不会触发加严)。
+  - 每个键(vendor、vendor/model 两档):`n`、`hits`、`sum_conf10`、`mean_conf_permille`、`hit_permille`、`gap_permille`、`status`(`insufficient|overconfident|ok`)。`ok` **只表示本档没触发 gap 判据**:`n` 小、覆盖率低时 `ok` 不代表校准良好,须与 `n`、`coverage_permille` 一起读。
+  - 全局:`vendors_total`、`frozen_total`、`settled_total`、`coverage_permille`、`unsettled_total`;`--vendor` 过滤后的 `hidden_vendors` / `hidden_overconfident` / `hidden_unreadable_items` / `hidden_g3_strict`。
+  - **盲区行(固定,总是输出)**:`selection_bias_settled_only`(只算已结算样本)、`coverage_settled_over_frozen`、`deleted_proposals_not_in_ledger`、`dilution_not_checked`、`time_boundary_committer_date`、`attest_member_self_reported`、`shallow_clone_or_root_commit_unavailable`(提案历史最老一条没有父提交即 UNAVAILABLE,空账时不触发;能力限制,不是「仓库是浅克隆」的探测)、`not_a_promotion_preview`。
+- **`--vendor <v>`** 只过滤显示(`calibrationKeys` 归一化);盲区、全局计数、被隐藏部分的计数与退出码都不受影响。
+- **退出码**:0 完成(有 overconfident / 损坏条目也是 0,只报告);2 用法(未知参数、`--vendor` 缺值或为空、`--run-llm` / `--allow-egress`,先于任何仓库访问);3 fail-closed(git 不可用、`HEAD` 解析不了、`kit.toml` 读不出、枚举调用或任一 vendor/model 的调用返回 `unavailable`):stderr `CALIBRATE_FAIL_CLOSED reason=CALIBRATION_UNAVAILABLE`(其余 `HEAD_UNRESOLVED` / `CONFIG_UNREADABLE` / `git_failed` / `internal`),stdout 只有 `ok=false`,**不**输出残缺的档位。
+- **零写入零网络**:不写任何文件,import 闭包不含 `llm-exec` / `reflect/backends/**` / 网络模块(`test/commands/calibrate.test.ts` 静态检查);git 子进程额外带 `GIT_NO_LAZY_FETCH=1`。
 
 ## 19. sync / doctor / update 命令面与自动更新契约(S0,契约先行;S1–S9 实装后订正)
 
