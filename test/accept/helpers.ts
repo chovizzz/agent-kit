@@ -1,5 +1,3 @@
-/* eslint-disable no-restricted-imports -- B18:验收脚本(ops/accept)的黑盒测试必须起子进程;
-   test/ 下的 child_process 限制属 eslint.config.js 的共享热点,待主代理为 test/accept/** 加 override 后可去掉本行(同 test/ops/helpers.ts)。 */
 import { spawnSync } from 'node:child_process';
 import { afterAll, beforeAll, expect } from 'vitest';
 import * as path from 'node:path';

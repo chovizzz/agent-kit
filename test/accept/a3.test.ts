@@ -11,7 +11,7 @@ import {
   SAFE_PATH,
 } from './helpers.js';
 import type { Fx } from './helpers.js';
-import { spawnSync } from 'node:child_process'; // eslint-disable-line no-restricted-imports -- 取真实 selftest 输出作为假 CLI 的底稿
+import { spawnSync } from 'node:child_process';
 
 guardRealHome();
 

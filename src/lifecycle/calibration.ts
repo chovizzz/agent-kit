@@ -102,7 +102,7 @@ export interface CalibrationOutcome {
 
 /**
  * 按 G3 T2 的口径判断这份校准结果是否会触发晋升加严:不可用、同 vendor 有损坏条目、或任一档过度自信。
- * (criteria.ts 的 T2 里有一份同口径的内联判断;K5b 的测试把两者钉在一起。)
+ * 单一实现:criteria.ts 的 T2 与 `calibrate` 命令共用本函数(K6 去重;此前 T2 内联了一份同口径判断)。
  */
 export function calibrationStrictReasons(
   o: Pick<CalibrationOutcome, 'unavailable' | 'unreadable' | 'tiers'>,

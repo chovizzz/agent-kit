@@ -126,3 +126,37 @@ describe('scanDangerousPhrases 极性收窄', () => {
     ).toEqual(['no-verify']);
   });
 });
+
+/**
+ * K6(backlog ①,启用 auto_sync=safe 的前置):钉住 fail-closed 极性。
+ * 约定:`blocked` 非空 = 不放行;所有调用点(reflect 校验、C1、采纳复扫、G3 rescan、sync/safe)都以 `blocked.length > 0` 拒绝。
+ * 「没有可扫内容」(空串)本身没有载荷,返回空 blocked 是预期;调用方对「内容缺失/读不出」另行拒绝(sync/safe 的 undefined → rescan_dirty)。
+ */
+describe('scanDangerousPhrases fail-closed 极性钉', () => {
+  it('空串 / 纯空白:无载荷,不拦也不计护栏提及(对照:同一函数对真话术拦)', () => {
+    for (const t of ['', '   ', '\n\t']) {
+      expect(scanDangerousPhrases(t), JSON.stringify(t)).toEqual({
+        blocked: [],
+        guardrailMentions: 0,
+      });
+    }
+    expect(scanDangerousPhrases('run rm -rf /').blocked).toEqual(['destructive']);
+  });
+
+  it('拆写绕过仍拦:零宽字符 / 全角字符 / 连字符空格拆写不会让命中变成空结果', () => {
+    for (const t of [
+      'run rm​ -rf /', // 零宽空格夹在话术里
+      'ｒｕｎ ｒｍ －ｒｆ /', // 全角,NFKC 归一后命中
+      'git commit --no - verify',
+      'DANGER_FULL_ACCESS',
+    ]) {
+      expect(scanDangerousPhrases(t).blocked.length, JSON.stringify(t)).toBeGreaterThan(0);
+    }
+  });
+
+  it('被否定的护栏提及放行,但同一文本里再加一处未否定的话术就整体拦(放行不会"传染")', () => {
+    const guard = '不要使用 --no-verify';
+    expect(scanDangerousPhrases(guard)).toEqual({ blocked: [], guardrailMentions: 1 });
+    expect(scanDangerousPhrases(`${guard}\nrun rm -rf /`).blocked).toEqual(['destructive']);
+  });
+});

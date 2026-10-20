@@ -360,6 +360,7 @@ async function writeEdits(
   const setPhase = async (phase: SyncTxn['phase']): Promise<void> => {
     await writeState(ctx, journalOf(id), canonicalJson({ ...doc, phase }));
   };
+  await lock?.assertHeld();
   await setPhase('writing');
   for (const e of edits) {
     await inject(env, `before-write:${e.path}`);
@@ -388,8 +389,10 @@ async function writeEdits(
   if (ledgerAfter.action === 'write') await writeState(ctx, LEDGER_REL, ledgerAfter.text as string);
   else if (ledgerAfter.action === 'delete') await remove(ctx, LEDGER_REL);
   await inject(env, 'after-ledger');
+  await lock?.assertHeld();
   await setPhase('ledger_written');
   await inject(env, 'before-journal-delete');
+  await lock?.assertHeld();
   await remove(ctx, journalOf(id));
 }
 
@@ -409,11 +412,13 @@ export async function executeTxn(env: ApplyEnv, spec: TxnSpec): Promise<void> {
   await spec.lock?.assertHeld();
   await writeState(ctx, journalOf(id), canonicalJson(spec.txn));
   await inject(env, 'journal-written');
+  await spec.lock?.assertHeld();
   await writeBackups(ctx, spec.txn, spec.edits, spec.ledgerBeforeText, spec.ledgerAfter);
   await inject(env, 'backup-written');
   const backedUp = { ...spec.txn, phase: 'backed_up' as const };
   await writeState(ctx, journalOf(id), canonicalJson(backedUp));
   await writeEdits(env, ctx, backedUp, spec.edits, spec.ledgerAfter, false, spec.lock);
+  await spec.lock?.assertHeld();
   await pruneBackups(env, id);
 }
 
@@ -503,6 +508,7 @@ export async function applyPlan(env: ApplyEnv, input: ApplyPlanInput): Promise<A
   if (edits.length === 0) {
     if (ledgerAfter.action === 'none') return { files: 0, ledger: 'none' };
     // 只改登记表(adopt / 仅 agents 变化):单文件原子替换,不开事务
+    await input.lock?.assertHeld();
     const ctx = mkCtx(env, [LEDGER_REL]);
     if (ledgerAfter.action === 'write')
       await writeState(ctx, LEDGER_REL, ledgerAfter.text as string);
@@ -618,7 +624,7 @@ export interface RollbackReport {
 }
 
 /**
- * 回滚事务 `id`(调用方已持锁;干跑传 write=false 不写)。
+ * 回滚事务 `id`(调用方已持锁;干跑传 write=false 不写;传了 `lock` 就在每个写出口前复核仍持有)。
  * 前提:已收尾事务要求每个文件当前 sha == 该事务写入后的 sha,登记表当前 sha == 写入后的 sha;
  * 残留事务放宽为「写前或写后」(崩溃时有的文件已写、有的没写)。任一前提不成立 → `SYNC_ROLLBACK_MISMATCH`,整次不写。
  * 回滚本身也是一个有 journal / 备份的事务(可再回滚)。
@@ -628,6 +634,7 @@ export async function rollbackTxn(
   id: string,
   write: boolean,
   freshId: string,
+  lock?: LockHandle,
 ): Promise<RollbackReport> {
   const mismatch = (d: string): ApplyError => new ApplyError('SYNC_ROLLBACK_MISMATCH', d);
   if (!TXN_ID_RE.test(id)) throw mismatch('bad_id');
@@ -711,12 +718,14 @@ export async function rollbackTxn(
 
   const finishSource = async (): Promise<void> => {
     if (kind === 'incomplete') {
+      await lock?.assertHeld();
       await remove(mkCtx(env, [journalOf(id)]), journalOf(id));
     }
   };
 
   if (edits.length === 0) {
     if (ledgerAfter.action !== 'none') {
+      await lock?.assertHeld();
       const ctx = mkCtx(env, [LEDGER_REL]);
       if (ledgerAfter.action === 'write')
         await writeState(ctx, LEDGER_REL, ledgerAfter.text as string);
@@ -741,6 +750,7 @@ export async function rollbackTxn(
     edits,
     ledgerBeforeText: lr.state === 'ok' || lr.state === 'invalid' ? lr.text : null,
     ledgerAfter,
+    ...(lock !== undefined ? { lock } : {}),
   });
   await finishSource();
   return { ...report, txnId: freshId, wrote: true };
@@ -759,10 +769,14 @@ export interface ResumeReport {
 }
 
 /**
- * 继续残留事务(调用方已持锁;干跑传 write=false)。只需要备份目录(不需要 payload):
+ * 继续残留事务(调用方已持锁;干跑传 write=false;传了 `lock` 就在每个写出口前复核仍持有)。只需要备份目录(不需要 payload):
  * 备份没写完整(`complete` 标记缺失)→ `SYNC_TXN_INCOMPLETE`,请改用 `--rollback`。
  */
-export async function resumeTxn(env: ApplyEnv, write: boolean): Promise<ResumeReport> {
+export async function resumeTxn(
+  env: ApplyEnv,
+  write: boolean,
+  lock?: LockHandle,
+): Promise<ResumeReport> {
   const residual = await listResidualTxns(env.homeReal);
   if (residual.length === 0) return { txn: null, pending: [], done: [], wrote: false };
   if (residual.length > 1) throw new ApplyError('SYNC_TXN_INCOMPLETE', 'multiple');
@@ -779,7 +793,9 @@ export async function resumeTxn(env: ApplyEnv, write: boolean): Promise<ResumeRe
     const all = [...fileLevel(doc.ops).keys()];
     const finished: ResumeReport = { txn: id, pending: [], done: all, wrote: false };
     if (!write) return finished;
+    await lock?.assertHeld();
     await remove(mkCtx(env, [journalOf(id)]), journalOf(id));
+    await lock?.assertHeld();
     await pruneBackups(env, id);
     return { ...finished, wrote: true };
   }
@@ -825,7 +841,8 @@ export async function resumeTxn(env: ApplyEnv, write: boolean): Promise<ResumeRe
   const report: ResumeReport = { txn: id, pending, done, wrote: false };
   if (!write) return report;
   const ctx = mkCtx(env, backupScope(id, edits));
-  await writeEdits(env, ctx, doc, edits, view.ledgerAfter, true);
+  await writeEdits(env, ctx, doc, edits, view.ledgerAfter, true, lock);
+  await lock?.assertHeld();
   await pruneBackups(env, id);
   return { ...report, wrote: true };
 }

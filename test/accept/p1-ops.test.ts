@@ -13,7 +13,7 @@ import { validateReflectorOutput } from '../../src/reflect/validate.js';
 import { exists } from '../../src/io/read-fs.js';
 import { mkdirp, remove, writeFile } from '../../src/io/safe-fs.js';
 import { callLib, commitAll, evalLib, guardRealHome, makeFx, SAFE_PATH } from './helpers.js';
-import { spawnSync } from 'node:child_process'; // eslint-disable-line no-restricted-imports -- 与 helpers.ts 同理:验收脚本的黑盒测试必须起子进程
+import { spawnSync } from 'node:child_process';
 import { REPO_ROOT } from './helpers.js';
 
 guardRealHome();

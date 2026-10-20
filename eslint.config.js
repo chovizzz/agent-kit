@@ -51,7 +51,7 @@ const MESSAGES = {
 /**
  * allowFs/allowCp/allowEnv/allowNet:该文件**自己**可以 import 对应的 node 模块(出口实现文件);
  * allowLlm/allowHomeFs/allowNetOut/allowLauncher/allowRunSelf:该文件可以 import 对应出口模块(授权使用方)。
- * @param {{ allowFs?: boolean; allowCp?: boolean; allowEnv?: boolean; allowNet?: boolean; allowLlm?: boolean; allowHomeFs?: boolean; allowNetOut?: boolean; allowLauncher?: boolean; allowRunSelf?: boolean; allowSigstore?: boolean }} allow
+ * @param {{ allowFs?: boolean; allowCp?: boolean; allowCpOnly?: boolean; allowEnv?: boolean; allowNet?: boolean; allowLlm?: boolean; allowHomeFs?: boolean; allowNetOut?: boolean; allowLauncher?: boolean; allowRunSelf?: boolean; allowSigstore?: boolean }} allow
  */
 function restrictions(allow = {}) {
   /** @type {{name: string; message: string}[]} */
@@ -64,7 +64,13 @@ function restrictions(allow = {}) {
     dynamicBanned.push(...names);
   };
   add(NODE_MODULES_FS, MESSAGES.fs, allow.allowFs);
-  add(NODE_MODULES_CP, MESSAGES.cp, allow.allowCp);
+  // allowCpOnly:只放开 child_process;vm / worker_threads / cluster / inspector 照旧禁,动态 import child_process 也照旧禁
+  add(
+    allow.allowCpOnly ? NODE_MODULES_CP.filter((n) => n !== 'child_process') : NODE_MODULES_CP,
+    MESSAGES.cp,
+    allow.allowCp,
+  );
+  if (allow.allowCpOnly) dynamicBanned.push('child_process');
   add(NODE_MODULES_ENV, MESSAGES.env, allow.allowEnv);
   add(NODE_MODULES_NET, MESSAGES.net, allow.allowNet);
   add(NODE_MODULES_LOADER, MESSAGES.loader, false);
@@ -244,6 +250,17 @@ const GUARDED = [
   'vitest.config.ts',
 ];
 
+/** 必须起子进程的黑盒测试(验收脚本 ops/、打包产物冒烟、子进程内真 schema 校验)。 */
+const SUBPROCESS_TESTS = [
+  'test/accept/helpers.ts',
+  'test/accept/a3.test.ts',
+  'test/accept/a15.test.ts',
+  'test/accept/p1-ops.test.ts',
+  'test/accept/p1-lifecycle-ops.test.ts',
+  'test/ops/helpers.ts',
+  'test/build/bundle-artifact.test.ts',
+];
+
 export default tseslint.config(
   {
     ignores: [
@@ -314,6 +331,12 @@ export default tseslint.config(
     rules: restrictions({ allowLauncher: true, allowRunSelf: true }),
   },
   { files: ['cli.ts', 'src/cli.ts'], rules: restrictions({ allowLauncher: true }) },
+  // K6:以子进程方式跑 CLI / 验收脚本的黑盒测试(原先各自行内 eslint-disable)。只放开 child_process,fs/os/env 等照旧禁;
+  // 范围是下面这几个具体文件,不放开 test/accept/**、test/ops/** 整个目录(新增的此类测试要显式登记在这里)。
+  {
+    files: SUBPROCESS_TESTS,
+    rules: restrictions({ allowCpOnly: true }),
+  },
   {
     // 本机口径:vitest 配置文件里允许 console 以外的一切照旧;eqeqeq 全局
     rules: { eqeqeq: ['error', 'always'] },

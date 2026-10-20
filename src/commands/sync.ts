@@ -494,7 +494,7 @@ export function createSyncCommand(deps: SyncCommandDeps = {}): CommandDef {
     if (!args.write) return emit(await rollbackTxn(aenv, id, false, freshTxnId(aenv)), false);
     const lock = await acquireLock(aenv);
     try {
-      return emit(await rollbackTxn(aenv, id, true, freshTxnId(aenv)), true);
+      return emit(await rollbackTxn(aenv, id, true, freshTxnId(aenv), lock), true);
     } finally {
       await lock.release().catch(() => undefined);
     }
@@ -526,7 +526,7 @@ export function createSyncCommand(deps: SyncCommandDeps = {}): CommandDef {
     if (!args.write) return emit(await resumeTxn(aenv, false), false);
     const lock = await acquireLock(aenv);
     try {
-      return emit(await resumeTxn(aenv, true), true);
+      return emit(await resumeTxn(aenv, true, lock), true);
     } finally {
       await lock.release().catch(() => undefined);
     }

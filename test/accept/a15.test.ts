@@ -60,7 +60,7 @@ function check(dir: string): string[] {
   `;
   return JSON.parse(callLibRaw(code)) as string[];
 }
-import { spawnSync } from 'node:child_process'; // eslint-disable-line no-restricted-imports -- 子进程里用真实 schema 校验
+import { spawnSync } from 'node:child_process';
 function callLibRaw(code: string): string {
   const r = spawnSync(process.execPath, ['--input-type=module', '-e', code], { encoding: 'utf8' });
   if (r.status !== 0) throw new Error(r.stderr);

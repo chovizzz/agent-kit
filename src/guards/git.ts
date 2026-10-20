@@ -17,6 +17,7 @@ const OID_RE = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
  * - diff-tree 不走 textconv / 外部 diff / 重命名检测,输出 -z,路径不被引号转义;
  * - GIT_NO_REPLACE_OBJECTS=1:`refs/replace` 不得改变我们读到的内容;
  * - GIT_OPTIONAL_LOCKS=0:只读命令不去抢 index 锁。
+ * - GIT_NO_LAZY_FETCH=1:部分克隆下缺对象不得联网补取(K6;`calibrate` 原先自己加,现收进共享入口)。
  * 不继承 HOME;调用方(测试 harness)需要 HOME 时通过 `extraEnv` 显式给(必须在 KIT_TMP 内)。
  */
 export function createGuardGit(
@@ -30,6 +31,8 @@ export function createGuardGit(
     GIT_NO_REPLACE_OBJECTS: '1',
     GIT_CONFIG_COUNT: '0',
     GIT_OPTIONAL_LOCKS: '0',
+    // 部分克隆(promisor)下缺对象时 git 会偷偷联网补取;守卫只读本地对象,缺了就该报错而不是联网
+    GIT_NO_LAZY_FETCH: '1',
     GIT_TERMINAL_PROMPT: '0',
     // 只在 cwd 自己里找仓库,不向上爬:被检目录不是 git 仓库时必须报错(退出 2),不能静默落到外层仓库
     // (实测:工作树内的测试仓库删掉 .git 后,git 命令落到外层工作树并往它提交)。

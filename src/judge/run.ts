@@ -22,9 +22,17 @@ import { JudgeProviderMismatchError, JudgeStateError } from './errors.js';
 import { parseJudgeOutput } from './output.js';
 import { buildAcceptance, buildPrediction, decidePredictionStatus, isoSeconds } from './freeze.js';
 import type { FreezeStatus } from './freeze.js';
-import { buildJudgePrompt } from './prompt/v1.js';
+import {
+  buildJudgePrompt,
+  JUDGE_PROMPT_ID as V1_ID,
+  JUDGE_PROMPT_TEMPLATE_SHA256 as V1_TEMPLATE_SHA,
+} from './prompt/v1.js';
 import type { JudgePrompt } from './prompt/v1.js';
-import { buildJudgePromptV2 } from './prompt/v2.js';
+import {
+  buildJudgePromptV2,
+  JUDGE_PROMPT_ID as V2_ID,
+  JUDGE_PROMPT_TEMPLATE_SHA256 as V2_TEMPLATE_SHA,
+} from './prompt/v2.js';
 import {
   SAFE_STORE_FS,
   applyJudgeFields,
@@ -150,6 +158,8 @@ function pendingReason(hops: readonly HopRecord[]): PendingReason {
 interface Prepared {
   readonly loaded: LoadedProposal;
   readonly prompt: JudgePrompt | undefined;
+  /** 本次实际用的模板 id / 模板哈希(写进 `judge.prompt_id` / `judge.prompt_sha256`);没建提示时为 undefined */
+  readonly promptMeta?: { readonly id: string; readonly sha256: string };
   /** kit 决定的预测状态(LLM 不参与);已有 judge 的提案不用 */
   readonly status: FreezeStatus;
 }
@@ -243,14 +253,19 @@ async function prepare(
       verify: l.rule.verify,
       evidence: p.evidence.map((e) => e.excerpt),
     };
+    // 只有 kit 判定 predicted 才用 v2(给基线、要 prediction);其余沿用 v1
+    const g = status === 'predicted' ? l.guidance : undefined;
     out.push({
       loaded: l,
       status,
-      // 只有 kit 判定 predicted 才用 v2(给基线、要 prediction);其余沿用 v1
       prompt:
-        status === 'predicted' && l.guidance !== undefined
-          ? buildJudgePromptV2({ ...promptInput, baseline: l.guidance.baseline }, deps.redactor)
+        g !== undefined
+          ? buildJudgePromptV2({ ...promptInput, baseline: g.baseline }, deps.redactor)
           : buildJudgePrompt(promptInput, deps.redactor),
+      promptMeta:
+        g !== undefined
+          ? { id: V2_ID, sha256: V2_TEMPLATE_SHA }
+          : { id: V1_ID, sha256: V1_TEMPLATE_SHA },
     });
   }
   return { prepared: out, freeze };
@@ -310,7 +325,7 @@ export async function runJudge(deps: JudgeDeps, opts: JudgeOptions): Promise<Jud
   };
   const known = opts.dry ? new Set<string>() : await loadKnownAtomIds(deps.io, opts.runId);
 
-  for (const { loaded, prompt, status } of prepared) {
+  for (const { loaded, prompt, promptMeta, status } of prepared) {
     const p = loaded.proposal;
     if (p.judge || prompt === undefined) {
       emit({
@@ -434,6 +449,10 @@ export async function runJudge(deps: JudgeDeps, opts: JudgeOptions): Promise<Jud
         conflicts: value.conflicts.filter((c) => known.has(c)),
         // 评审结论绑定评审时的规则文本(⑨A):后续规则被改,promote/CI 的 C6 会对不上
         rule_sha256: ruleSha256(loaded.ruleText),
+        // 可追溯(K6):纯留痕,不进下面 acceptance 的哈希(buildAcceptance 不接收它们)
+        ...(promptMeta !== undefined
+          ? { prompt_id: promptMeta.id, prompt_sha256: promptMeta.sha256 }
+          : {}),
       };
       assertJudgeProvider(record.provider, hop);
       // 冻结:验收协议与预测都由 kit 确定性计算;LLM 只贡献 predicted 时的四个值

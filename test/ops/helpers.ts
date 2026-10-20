@@ -1,5 +1,3 @@
-/* eslint-disable no-restricted-imports -- B17:验收脚本(ops/)的黑盒测试必须起子进程跑 node;
-   test/ 下的 child_process 限制属 eslint.config.js 的共享热点,待主代理为 test/ops/** 加 override 后可去掉本行。 */
 import { spawnSync } from 'node:child_process';
 import * as path from 'node:path';
 import type { IoContext } from '../../src/io/paths.js';

@@ -101,3 +101,28 @@ export function buildJudgePrompt(
   scan(`${system}\n${user}`);
   return { system, user };
 }
+
+export const SKELETON_INPUT: JudgePromptInput = {
+  op: 'add',
+  layer: 'team',
+  signature: { type: 'regex', pattern: 'PATTERN' },
+  do: 'DO',
+  why: 'WHY',
+  verify: 'VERIFY',
+  evidence: ['EVIDENCE'],
+};
+/** 取模板骨架用的放行复扫器:骨架全是固定占位符,不含数据,不需要真脱敏器。 */
+export const SKELETON_REDACTOR: Pick<Redactor, 'pass2'> = {
+  pass2: () => ({ clean: true, hits: [] }),
+};
+
+/**
+ * 模板哈希(K6,写进 `judge.prompt_sha256`):覆盖 **system 段 + user 段的固定骨架**。
+ * user 段由 `buildJudgePrompt` 用固定占位符输入渲染得到,所以标签结构、属性名、转义规则一改,哈希就变;
+ * 数据不进哈希。与上面只哈希 system 的 `JUDGE_PROMPT_SHA256` 是两个量,后者保持不变(历史可查)。
+ */
+export const JUDGE_PROMPT_TEMPLATE_SHA256 = createHash('sha256')
+  .update(
+    `${JUDGE_SYSTEM_PROMPT}\n--USER-SKELETON--\n${buildJudgePrompt(SKELETON_INPUT, SKELETON_REDACTOR).user}`,
+  )
+  .digest('hex');

@@ -284,6 +284,16 @@ export const JudgeRecordSchema = z
     prediction: JudgePredictionSchema.optional(),
     /** K1 追加:冻结的验收协议 */
     acceptance: AcceptanceProtocolSchema.optional(),
+    /**
+     * K6 追加(可追溯):评审用的提示模板 id(如 `judge-v2`)与模板哈希。**纯留痕**:不进 `acceptance` /
+     * `rule_sha256` 的哈希,G3 不要求必填(旧记录没有它们仍合法)。`prompt_sha256` 覆盖 system 段 + user 段固定骨架(不含数据),
+     * 与 `reflector.prompt_sha256` 同口径(模板原文的哈希)。
+     */
+    prompt_id: z
+      .string()
+      .regex(/^[a-z0-9][a-z0-9._-]{0,63}$/)
+      .optional(),
+    prompt_sha256: Sha256Schema.optional(),
   })
   .superRefine((j, ctx) => {
     j.hops.forEach((h, i) => {

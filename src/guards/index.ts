@@ -5,7 +5,7 @@ import { checkG1 } from './g1.js';
 import { checkG2 } from './g2.js';
 import { checkG3 } from './g3.js';
 import { checkG4 } from './g4.js';
-import { checkReflectorPaths } from './path-guard.js';
+import { checkReflectorPaths, checkUnlabeledProposalDeletes } from './path-guard.js';
 import type { GuardOptions, GuardResult } from './types.js';
 
 export { createGuardGit, GitError } from './git.js';
@@ -19,7 +19,7 @@ export class RefError extends Error {
 
 /**
  * 对 base..head 做机械比较。哪些守卫生效由 `label` 决定(P0 本地模拟 PR 标签):
- *  - 无标签(内容 PR):G1 + G2 + G4
+ *  - 无标签(内容 PR):G1 + G2 + G4 + 提案不可删(GUARD_PROPOSAL_DELETED_UNLABELED,K6)
  *  - kit:promotion / kit:retire:G3(+ G4)
  *  - kit:attest:仅允许新增 attest/**(+ G4)
  *  - kit:reflector:路径守卫 + G1 + G2 + G4(设计 §6.4)
@@ -46,6 +46,7 @@ export function runGuards(opts: GuardOptions): GuardResult {
     diagnostics.push(...checkAttestScope(changes));
   } else {
     if (label === 'kit:reflector') diagnostics.push(...checkReflectorPaths(changes));
+    else diagnostics.push(...checkUnlabeledProposalDeletes(changes));
     diagnostics.push(...checkG1(atoms), ...checkG2(atoms));
   }
   diagnostics.push(...checkG4(git, baseOid, atoms));

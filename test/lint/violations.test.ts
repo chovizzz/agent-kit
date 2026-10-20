@@ -118,6 +118,38 @@ describe('lint 正向对照:同样的代码放到被授权的文件里不报错'
     expect((await lintAs(CP, 'src/commands/build.ts')).length).toBeGreaterThan(0);
   });
 
+  it('child_process 的测试例外只限登记的子进程黑盒测试文件(K6 override;其余 test/ 文件照拒)', async () => {
+    for (const ok of [
+      'test/accept/helpers.ts',
+      'test/accept/a3.test.ts',
+      'test/accept/a15.test.ts',
+      'test/accept/p1-ops.test.ts',
+      'test/accept/p1-lifecycle-ops.test.ts',
+      'test/ops/helpers.ts',
+      'test/build/bundle-artifact.test.ts',
+    ]) {
+      expect(await lintAs(CP, ok), ok).toEqual([]);
+    }
+    for (const bad of [
+      'test/accept/a1.test.ts', // 同目录但未登记
+      'test/ops/other.test.ts',
+      'test/build/write.test.ts',
+      'test/guards/x.test.ts',
+    ]) {
+      expect((await lintAs(CP, bad)).length, bad).toBeGreaterThan(0);
+    }
+    // 放行的只有 child_process 的静态 import:同组的 vm / worker_threads / cluster / inspector、动态 import child_process 照旧被拦
+    for (const m of ['vm', 'worker_threads', 'cluster', 'inspector']) {
+      const code = `import * as m from 'node:${m}';\nexport const x = m;\n`;
+      expect((await lintAs(code, 'test/accept/helpers.ts')).length, m).toBeGreaterThan(0);
+    }
+    const dyn = "export const l = () => import('node:child_process');\n";
+    expect((await lintAs(dyn, 'test/ops/helpers.ts')).length).toBeGreaterThan(0);
+    // 同一文件里 fs / process.env 照旧被拦
+    expect((await lintAs(FS, 'test/accept/helpers.ts')).length).toBeGreaterThan(0);
+    expect((await lintAs(ENV, 'test/ops/helpers.ts')).length).toBeGreaterThan(0);
+  });
+
   it('llm-exec 只许 reflect 后端目录与相关测试引用(含 re-export 与动态 import)', async () => {
     const IMP = "import { runLlm } from '../../io/llm-exec.js';\nexport const r = runLlm;\n";
     const REX = "export { runLlm } from '../io/llm-exec.js';\n";

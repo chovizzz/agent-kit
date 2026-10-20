@@ -5,6 +5,8 @@ import {
   JUDGE_SYSTEM_PROMPT as V1_SYSTEM_PROMPT,
   MAX_JUDGE_PROMPT_BYTES,
   buildJudgePrompt as buildV1Prompt,
+  SKELETON_INPUT,
+  SKELETON_REDACTOR,
 } from './v1.js';
 import type { JudgePrompt, JudgePromptInput } from './v1.js';
 
@@ -80,3 +82,15 @@ export function buildJudgePromptV2(
   }
   return { system, user };
 }
+
+/** 同 v1 的 `JUDGE_PROMPT_TEMPLATE_SHA256`:system + 固定骨架渲染出的 user 段(含 `<baseline>` 行的结构);数据不进哈希。 */
+export const JUDGE_PROMPT_TEMPLATE_SHA256 = createHash('sha256')
+  .update(
+    `${JUDGE_SYSTEM_PROMPT}\n--USER-SKELETON--\n${
+      buildJudgePromptV2(
+        { ...SKELETON_INPUT, baseline: { sessions_total: 1, exposure_sessions: 1, fired: 1 } },
+        SKELETON_REDACTOR,
+      ).user
+    }`,
+  )
+  .digest('hex');
