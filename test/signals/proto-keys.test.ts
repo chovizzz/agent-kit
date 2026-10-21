@@ -67,7 +67,7 @@ const CASES: Case[] = [
     agent: 'codex',
     marker: 'brand_new_event',
     mutate: (o, name) => {
-      const rest = { ...o, type: name };
+      const rest: Record<string, unknown> = { ...o, type: name };
       delete rest['payload'];
       return rest;
     },
