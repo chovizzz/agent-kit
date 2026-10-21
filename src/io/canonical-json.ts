@@ -32,7 +32,8 @@ function normalize(value: unknown, seen: Set<object>, where: string): unknown {
     if (proto !== Object.prototype && proto !== null) {
       throw new CanonicalJsonError(`非纯对象:${where}`);
     }
-    const out: Record<string, unknown> = {};
+    // 无原型对象:键叫 `__proto__` 时普通 `{}` 的赋值会改原型而不是写键(计数凭空消失)
+    const out = Object.create(null) as Record<string, unknown>;
     for (const k of Object.keys(obj).sort()) {
       out[k] = normalize((obj as Record<string, unknown>)[k], seen, `${where}.${k}`);
     }

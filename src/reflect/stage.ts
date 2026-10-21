@@ -34,7 +34,8 @@ export interface StagedFile {
   inPatch: boolean;
 }
 
-const SAFE_PATH_RE = /^[a-z0-9][a-z0-9/._-]*$/;
+/** 补丁 / 提案路径白名单字符形;`lifecycle/checks.ts`(C9)引用同一对象,不要复刻。 */
+export const SAFE_PATH_RE = /^[a-z0-9][a-z0-9/._-]*$/;
 const ZERO_OID = '0'.repeat(40);
 
 export function gitBlobOid(content: string): string {

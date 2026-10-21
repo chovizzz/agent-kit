@@ -56,7 +56,7 @@
   **K6 极性核查(启用 `auto_sync=safe` 的前置,已完成)**:`blocked` 非空 = 不放行;五个调用点(`reflect/validate.ts` 整批拒、`lifecycle/checks.ts` C1、`lifecycle/adopt.ts` 补丁复扫、`guards/criteria.ts` `rescan`、`sync/safe.ts` 自动同步)都以 `blocked.length > 0` 拒绝,
   没有把「检测失败 / 异常 / 空结果」当放行的路径:扫描抛异常在 C1 → `CHECK_INTERNAL_ERROR`,在 `runAutoSync` → 外层 `catch` 记 `failed`(不写);`sync/safe.ts` 对内容缺失(`undefined`)按 `rescan_dirty` 拒;空串没有载荷,返回空 blocked 是预期。
   回归钉:`test/reflect/validate-polarity.test.ts` 末尾 `fail-closed 极性钉`。
-- ☐ ② **`SAFE_PATH_RE` 在 `src/reflect/stage.ts` 与 `src/lifecycle/checks.ts` 各复刻一份**:应从 stage.ts 导出、checks.ts 引用,去掉重复(两处改一处就会分叉)
+- ✅ ② **`SAFE_PATH_RE` 在 `src/reflect/stage.ts` 与 `src/lifecycle/checks.ts` 各复刻一份**:应从 stage.ts 导出、checks.ts 引用,去掉重复(两处改一处就会分叉)
 - ☐ ③ **retire 靠 L2 诊断文案挑 `attest_digests`**:`lifecycle/retire.ts` 对每个候选单独探测、按判据返回的诊断剔除无效项;
   应由 `src/guards/criteria.ts` 导出「计入口径的有效 attest 集合」纯函数,或给「digest 无效」单独稳定码,不要靠文案
 - ☐ ④ **`harmful` / `recurrence` 在真实信号库里恒为 0**:信号流水线没有纠正 / 回滚类信号,所以 `harmful` 判据(`THRESHOLD_HARMFUL`、`harmful` 退役理由)
@@ -67,7 +67,7 @@
 - ☐ ⑦ **无签名的 advisory 原子要两步晋升**:先走内容 PR 补 `signature` 并重跑 judge(`rule_sha256` 会变),再 `promote --to active`;命令只给 `SIGNATURE_MISSING` 与提示,不自动化
 - ☐ ⑧ **org 层现有 3 个原子没有 `origin=proposal`,不能走晋升**(`ORG_LAYER_NOT_PROMOTABLE`);它们的状态变更需要另一条路径(或给它们补提案出身),否则永远是 proposed
 - ☐ ⑨ **`promote --run` 里 personal + team 混合的退出码语义**:现在 team 提案照常写出、整体退 2;是否改为「整批不写」待定
-- ☐ ⑩ **`test/ops/inventory-refresh.test.ts` 在全量高负载下总是超时红、单跑绿**(单跑约 30s):应加大该用例的超时(本块未改,只登记)
+- ✅ ⑩ **`test/ops/inventory-refresh.test.ts` 在全量高负载下总是超时红、单跑绿**(单跑约 30s):应加大该用例的超时(已改:用 `SLOW_TEST_TIMEOUT_MS`,见 vitest.config.ts)
 - ☐ ⑪ **T2 的 `review_by` 受 lint 上限约束**:`promote --to active` 的新 `review_by` = `min(今天 + 90/30, created + 180/30)`,老原子(created 很久以前)可能 `REVIEW_BY_UNREACHABLE`;
   需要一条「复审后延期」的合法路径(改 lint 上限的语义,或允许 `review_by` 随复审重置)
 - ☐ ⑫ **P1-D:四眼 / 受保护 tag / 签名缺口(GD-3)**:PR 作者 ≠ 审批人只能靠远端分支保护 + CODEOWNERS;stable tag 本地可伪造(`COOLDOWN_NOT_MET` 与 G4 都依赖它);
@@ -81,10 +81,11 @@
   (contracts §16①),需实测或允许 `KIT_STATE_DIR` 指向仓库外;③每个 CLI 真跑实际写了哪些全局文件(会话日志、history),列清单
 - ☐ **暂存区过期 / gc**:`.state/reflect/<run_id>/` 现在只增不减(`loadUsedProposalIds` / `loadStagedAtoms` 会随之变慢,
   且已用编号永不释放);需要 `reflect --gc` 或过期策略,并保证不删还在被 judge / 人工 apply 使用的 run
-- ☐ **契约层不可见字符补全**:`HIDDEN_CHARS_RE` 漏 Unicode tag 字符(U+E0000 段)、bidi U+061C(ALM)、变体选择符
+- ⏸ **待定夺:契约层 FE0F**——`reflect.ts` 已拦 U+FE0F(与命令层 `hasInvisible` 一致,⚠️/❤️ 这类 emoji 呈现序列会被拒),`lifecycle.ts` 的 `note` 为避免旧记录解析失败刻意放行 FE0F;是否统一待定
+- ✅ **契约层不可见字符补全**:`HIDDEN_CHARS_RE` 漏 Unicode tag 字符(U+E0000 段)、bidi U+061C(ALM)、变体选择符
   (U+FE00–FE0F、U+E0100 段)、Hangul 填充(U+3164、U+115F/1160、U+FFA0)等;`hidden_chars_in_output` 目前只是纵深防御
   (A16 里没有夹具能走到它,因为 schema 的零宽检查先拦下)
-- ☐ **reader 原型键问题**:事件类型名为 `constructor` / `__proto__` / `toString` 时,按普通对象做计数键会碰到原型链
+- ✅ **reader 原型键问题**:事件类型名为 `constructor` / `__proto__` / `toString` 时,按普通对象做计数键会碰到原型链
   (`unknown_event_types` 之类);reader 与 `safeKey` 要改用 `Object.create(null)` / `Map` 或前缀转义,并加用例
 - ☐ **单厂商时 `no_cross_vendor` 退出 0 的提示**:`judge` 在只有同厂商 / 未配置时退出 0(决策 ⑩A),且「未配置」与「单厂商」
   都落成 `no_cross_vendor`,用户看不出是配置问题;需要在 stdout/stderr 区分(`not_configured` vs `same_vendor_only`),

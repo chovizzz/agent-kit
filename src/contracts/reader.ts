@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { countRecordSchema } from './count-record.js';
 import { AgentIdSchema, IsoTimestampSchema, SessionRefIdSchema } from './common.js';
 
 /** 一个会话文件。`path` 是本机绝对路径,只在内存中使用,不得写入任何落盘产物。 */
@@ -47,13 +48,13 @@ export const CountsSchema = z.strictObject({
   user_messages: z.number().int().nonnegative(),
   tool_calls: z.number().int().nonnegative(),
   tool_failures: z.number().int().nonnegative(),
-  unknown_event_types: z.record(z.string(), z.number().int().nonnegative()),
+  unknown_event_types: countRecordSchema(),
   /** 单行超过 maxEventBytes 而被丢弃的行数(B10b) */
   oversized_lines: z.number().int().nonnegative().optional(),
   /** Pi v3 树结构:非活动分支条目数(Q-N10;其它 agent 缺省) */
   branch_count: z.number().int().nonnegative().optional(),
   /** Codex 等同一事件被两种记录重复时,被忽略的那一种的计数(Q-N11) */
-  ignored_duplicate_kinds: z.record(z.string(), z.number().int().nonnegative()).optional(),
+  ignored_duplicate_kinds: countRecordSchema().optional(),
 });
 export type Counts = z.infer<typeof CountsSchema>;
 

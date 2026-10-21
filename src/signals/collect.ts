@@ -8,6 +8,7 @@ import type { CollectReport, Signal } from '../contracts/signal.js';
 import type { RedactFailReason } from '../contracts/redact.js';
 import type { IoContext } from '../io/paths.js';
 import { MAX_LINE_BYTES } from '../io/read-fs.js';
+import { addCount, newCountRecord } from '../contracts/count-record.js';
 import { processSession } from './pipeline.js';
 import type { PipelineDeps, SessionResult } from './pipeline.js';
 import { applySessionStats, buildSessionStat, planSessionStats } from './session-stats.js';
@@ -63,7 +64,7 @@ export async function collect(input: CollectInput): Promise<CollectOutput> {
 
   const processed = results.filter((r) => r.status === 'processed');
   const signals: Signal[] = processed.flatMap((r) => r.signals);
-  const unknown: Record<string, number> = {};
+  const unknown = newCountRecord();
   let oversized = 0;
   let events = 0;
   let fallback = 0;
@@ -72,7 +73,7 @@ export async function collect(input: CollectInput): Promise<CollectOutput> {
     events += r.eventsSeen;
     oversized += r.counts?.oversized_lines ?? 0;
     for (const [k, v] of Object.entries(r.counts?.unknown_event_types ?? {})) {
-      unknown[k] = (unknown[k] ?? 0) + v;
+      addCount(unknown, k, v);
     }
     if (r.version?.source === 'collector_fallback') fallback++;
     for (const [k, v] of Object.entries(r.dropReasons)) {
@@ -95,7 +96,7 @@ export async function collect(input: CollectInput): Promise<CollectOutput> {
     return limited ? ('codex_pre_0149_limited' as const) : ('full' as const);
   })();
 
-  const readErrorClasses: Record<string, number> = Object.create(null) as Record<string, number>;
+  const readErrorClasses = newCountRecord();
   for (const r of results) {
     if (r.status !== 'read_error') continue;
     const k = r.errorClass ?? 'Error';

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { countRecordSchema } from './count-record.js';
 import { AgentIdSchema, IsoTimestampSchema, SessionRefIdSchema, Sha256Schema } from './common.js';
 
 export const SignalTypeSchema = z.enum([
@@ -81,7 +82,7 @@ export const CollectReportSchema = z.strictObject({
   signals_emitted: z.number().int().nonnegative(),
   /** 脱敏第二遍命中或扫描失败而丢弃的信号数 */
   signals_dropped_redaction: z.number().int().nonnegative(),
-  unknown_event_types: z.record(z.string(), z.number().int().nonnegative()),
+  unknown_event_types: countRecordSchema(),
   oversized_lines: z.number().int().nonnegative().optional(),
   agent_version_fallback_ratio: z.number().min(0).max(1),
   /**

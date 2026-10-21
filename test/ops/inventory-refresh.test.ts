@@ -3,6 +3,7 @@
 import { createHash } from 'node:crypto';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { SLOW_TEST_TIMEOUT_MS } from '../../vitest.config.js';
 import { getRealHome } from '../../src/io/paths.js';
 import { exists, lstat, readDir, readText } from '../../src/io/read-fs.js';
 import * as safe from '../../src/io/safe-fs.js';
@@ -152,146 +153,154 @@ async function realHomeMeta(): Promise<string> {
 // ---------------------------------------------------------------- 真实 inventory 格式的集成
 
 // 每个用例要起十几次子进程(每次重跑 61 条命令),单独放宽超时
-describe('inventory-refresh:真实 inventory 格式 + 合成 HOME', { timeout: 120_000 }, () => {
-  it('dry-run 不写任何文件;--apply 后 md 与 commands.sh 一致、A7 通过、再 dry-run 无差异', async () => {
-    const meta0 = await realHomeMeta();
-    const w = await world();
-    await copyRealInventory(w);
-    await fakeHome(w, 2);
-    const before = await w.snapshot();
-    const filesBefore = (await readDir(w.dir)).map((e) => e.name).sort();
+describe(
+  'inventory-refresh:真实 inventory 格式 + 合成 HOME',
+  { timeout: SLOW_TEST_TIMEOUT_MS },
+  () => {
+    it('dry-run 不写任何文件;--apply 后 md 与 commands.sh 一致、A7 通过、再 dry-run 无差异', async () => {
+      const meta0 = await realHomeMeta();
+      const w = await world();
+      await copyRealInventory(w);
+      await fakeHome(w, 2);
+      const before = await w.snapshot();
+      const filesBefore = (await readDir(w.dir)).map((e) => e.name).sort();
 
-    // A7 现状必红(合成 HOME 与 10-09 的期望值全不同)
-    expect(a7(w).status).toBe(1);
+      // A7 现状必红(合成 HOME 与 10-09 的期望值全不同)
+      expect(a7(w).status).toBe(1);
 
-    const dry = tool(w, ['--backup-dir', w.backup]);
-    expect(dry.status, dry.stdout + dry.stderr).toBe(1);
-    expect(dry.stdout).toContain('CHANGED B15-001');
-    expect(dry.stdout).toContain('dry-run:未写任何文件');
-    expect(await w.snapshot()).toEqual(before);
-    expect(await exists(w.backup)).toBe(false);
-    expect((await readDir(w.dir)).map((e) => e.name).sort()).toEqual(filesBefore);
-    expect((await readDir(path.join(w.root, 'inventory'))).map((e) => e.name).sort()).toEqual(
-      Object.keys(before).sort(),
-    );
+      const dry = tool(w, ['--backup-dir', w.backup]);
+      expect(dry.status, dry.stdout + dry.stderr).toBe(1);
+      expect(dry.stdout).toContain('CHANGED B15-001');
+      expect(dry.stdout).toContain('dry-run:未写任何文件');
+      expect(await w.snapshot()).toEqual(before);
+      expect(await exists(w.backup)).toBe(false);
+      expect((await readDir(w.dir)).map((e) => e.name).sort()).toEqual(filesBefore);
+      expect((await readDir(path.join(w.root, 'inventory'))).map((e) => e.name).sort()).toEqual(
+        Object.keys(before).sort(),
+      );
 
-    const ap = tool(w, ['--apply', '--backup-dir', w.backup]);
-    expect(ap.stdout).toContain(`A7 重跑 exit=0`);
-    expect([0, 5], ap.stdout + ap.stderr).toContain(ap.status);
+      const ap = tool(w, ['--apply', '--backup-dir', w.backup]);
+      expect(ap.stdout).toContain(`A7 重跑 exit=0`);
+      expect([0, 5], ap.stdout + ap.stderr).toContain(ap.status);
 
-    // 备份 = 原文件
-    const saved = (await readDir(w.backup)).map((e) => e.name);
-    expect(saved).toEqual(expect.arrayContaining(['commands.sh', 'claude-md-sections.md']));
-    for (const name of saved) expect(await readText(path.join(w.backup, name))).toBe(before[name]);
-    // 目录里没有残留的临时文件
-    for (const e of await readDir(path.join(w.root, 'inventory')))
-      expect(e.name).not.toMatch(/\.tmp$/);
+      // 备份 = 原文件
+      const saved = (await readDir(w.backup)).map((e) => e.name);
+      expect(saved).toEqual(expect.arrayContaining(['commands.sh', 'claude-md-sections.md']));
+      for (const name of saved)
+        expect(await readText(path.join(w.backup, name))).toBe(before[name]);
+      // 目录里没有残留的临时文件
+      for (const e of await readDir(path.join(w.root, 'inventory')))
+        expect(e.name).not.toMatch(/\.tmp$/);
 
-    // A7 回绿
-    const r7 = a7(w);
-    expect(r7.status, r7.stdout).toBe(0);
+      // A7 回绿
+      const r7 = a7(w);
+      expect(r7.status, r7.stdout).toBe(0);
 
-    // 语义核对:md 里的总字节 / 哈希 / 行数是合成 CLAUDE.md 的真实值
-    const claude = await readText(path.join(w.home, '.claude/CLAUDE.md'));
-    const bytes = Buffer.byteLength(claude);
-    const lines = claude.split('\n').length - 1;
-    const sha = createHash('sha256').update(claude).digest('hex');
-    const secMd = await w.readInv('claude-md-sections.md');
-    expect(secMd).toContain(`${bytes} [#B15-001]`);
-    expect(secMd).toContain(`${lines} [#B15-003]`);
-    expect(secMd).toContain(`\`${sha}\` [#B15-005]`);
-    // 起止行由行数累计重算:最后一节止于总行数
-    expect(secMd).toMatch(new RegExp(`\\| \\d+-${lines} +\\|`));
-    // 旧哈希 / 旧字节不再残留(正向对照:拷贝来的 before 里确实有它)
-    expect(before['claude-md-sections.md']).toContain(
-      '92f83c3107d6590619c7dd2790434f76165e145e4f4f20b44d7bf516e7d5cfdf',
-    );
-    expect(secMd).not.toContain('92f83c3107d6590619c7dd2790434f76165e145e4f4f20b44d7bf516e7d5cfdf');
+      // 语义核对:md 里的总字节 / 哈希 / 行数是合成 CLAUDE.md 的真实值
+      const claude = await readText(path.join(w.home, '.claude/CLAUDE.md'));
+      const bytes = Buffer.byteLength(claude);
+      const lines = claude.split('\n').length - 1;
+      const sha = createHash('sha256').update(claude).digest('hex');
+      const secMd = await w.readInv('claude-md-sections.md');
+      expect(secMd).toContain(`${bytes} [#B15-001]`);
+      expect(secMd).toContain(`${lines} [#B15-003]`);
+      expect(secMd).toContain(`\`${sha}\` [#B15-005]`);
+      // 起止行由行数累计重算:最后一节止于总行数
+      expect(secMd).toMatch(new RegExp(`\\| \\d+-${lines} +\\|`));
+      // 旧哈希 / 旧字节不再残留(正向对照:拷贝来的 before 里确实有它)
+      expect(before['claude-md-sections.md']).toContain(
+        '92f83c3107d6590619c7dd2790434f76165e145e4f4f20b44d7bf516e7d5cfdf',
+      );
+      expect(secMd).not.toContain(
+        '92f83c3107d6590619c7dd2790434f76165e145e4f4f20b44d7bf516e7d5cfdf',
+      );
 
-    // 再 dry-run:无差异
-    const again = tool(w);
-    expect(again.status, again.stdout).toBe(0);
-    expect(again.stdout).toContain('没有需要刷新');
+      // 再 dry-run:无差异
+      const again = tool(w);
+      expect(again.status, again.stdout).toBe(0);
+      expect(again.stdout).toContain('没有需要刷新');
 
-    // 第二阶段(贴近真实场景):只改 CLAUDE.md 与一个 hook 脚本,再刷新一次
-    await fakeHome(w, 6);
-    const dry2 = tool(w);
-    expect(dry2.status, dry2.stdout).toBe(1);
-    const ids2 = [...dry2.stdout.matchAll(/CHANGED (B15-\d+):/g)].map((m) => m[1]).sort();
-    expect(ids2).toEqual(
-      ['001', '002', '003', '004', '005', '009', '010', '011', '012', '049', '050', '051']
-        .map((n) => `B15-${n}`)
-        .sort(),
-    );
-    const ap2 = tool(w, ['--apply']);
-    expect([0, 5], ap2.stdout).toContain(ap2.status);
-    expect(a7(w).status).toBe(0);
-    const claude2 = await readText(path.join(w.home, '.claude/CLAUDE.md'));
-    const lines2 = claude2.split('\n').length - 1;
-    const secMd2 = await w.readInv('claude-md-sections.md');
-    expect(secMd2).toContain(`${Buffer.byteLength(claude2)} [#B15-001]`);
-    expect(secMd2).toMatch(new RegExp(`\\| \\d+-${lines2} +\\|`));
-    expect(secMd2).not.toContain(`\`${sha}\``);
-    const hooksMd = await w.readInv('hooks-and-agents-md.md');
-    const sizes = await Promise.all(
-      ['guard-bash.sh', 'guard-write.sh', 'guard-agent-model.sh'].map(async (h) =>
-        Buffer.byteLength(await readText(path.join(w.home, '.claude/hooks', h))),
-      ),
-    );
-    for (const n of sizes) expect(hooksMd).toMatch(new RegExp(`\\| ${n} +\\|`));
-    expect((await w.snapshot())['claude-md-sections.md']).toBe(secMd2);
-    // 数字位数变了表格列宽会变:工具不重排,只提示。这里验证「按仓库 prettier 口径重排之后,
-    // 工具仍认得这些 md(再 dry-run 无差异)」,并且 prettier 真的会处理这些文件(不被 .prettierignore 吞掉)
-    const pw = runNode([
-      path.join(REPO_ROOT, 'node_modules', 'prettier', 'bin', 'prettier.cjs'),
-      '--config',
-      path.join(REPO_ROOT, '.prettierrc'),
-      '--ignore-path',
-      '/dev/null', // 合成仓库在 .state/ 下会被 .prettierignore 忽略,不加这行等于没处理
-      '--write',
-      ...(await readDir(path.join(w.root, 'inventory')))
-        .filter((e) => e.name.endsWith('.md'))
-        .map((e) => path.join(w.root, 'inventory', e.name)),
-    ]);
-    expect(pw.status, pw.stdout + pw.stderr).toBe(0);
-    const again2 = tool(w);
-    expect(again2.status, again2.stdout).toBe(0);
+      // 第二阶段(贴近真实场景):只改 CLAUDE.md 与一个 hook 脚本,再刷新一次
+      await fakeHome(w, 6);
+      const dry2 = tool(w);
+      expect(dry2.status, dry2.stdout).toBe(1);
+      const ids2 = [...dry2.stdout.matchAll(/CHANGED (B15-\d+):/g)].map((m) => m[1]).sort();
+      expect(ids2).toEqual(
+        ['001', '002', '003', '004', '005', '009', '010', '011', '012', '049', '050', '051']
+          .map((n) => `B15-${n}`)
+          .sort(),
+      );
+      const ap2 = tool(w, ['--apply']);
+      expect([0, 5], ap2.stdout).toContain(ap2.status);
+      expect(a7(w).status).toBe(0);
+      const claude2 = await readText(path.join(w.home, '.claude/CLAUDE.md'));
+      const lines2 = claude2.split('\n').length - 1;
+      const secMd2 = await w.readInv('claude-md-sections.md');
+      expect(secMd2).toContain(`${Buffer.byteLength(claude2)} [#B15-001]`);
+      expect(secMd2).toMatch(new RegExp(`\\| \\d+-${lines2} +\\|`));
+      expect(secMd2).not.toContain(`\`${sha}\``);
+      const hooksMd = await w.readInv('hooks-and-agents-md.md');
+      const sizes = await Promise.all(
+        ['guard-bash.sh', 'guard-write.sh', 'guard-agent-model.sh'].map(async (h) =>
+          Buffer.byteLength(await readText(path.join(w.home, '.claude/hooks', h))),
+        ),
+      );
+      for (const n of sizes) expect(hooksMd).toMatch(new RegExp(`\\| ${n} +\\|`));
+      expect((await w.snapshot())['claude-md-sections.md']).toBe(secMd2);
+      // 数字位数变了表格列宽会变:工具不重排,只提示。这里验证「按仓库 prettier 口径重排之后,
+      // 工具仍认得这些 md(再 dry-run 无差异)」,并且 prettier 真的会处理这些文件(不被 .prettierignore 吞掉)
+      const pw = runNode([
+        path.join(REPO_ROOT, 'node_modules', 'prettier', 'bin', 'prettier.cjs'),
+        '--config',
+        path.join(REPO_ROOT, '.prettierrc'),
+        '--ignore-path',
+        '/dev/null', // 合成仓库在 .state/ 下会被 .prettierignore 忽略,不加这行等于没处理
+        '--write',
+        ...(await readDir(path.join(w.root, 'inventory')))
+          .filter((e) => e.name.endsWith('.md'))
+          .map((e) => path.join(w.root, 'inventory', e.name)),
+      ]);
+      expect(pw.status, pw.stdout + pw.stderr).toBe(0);
+      const again2 = tool(w);
+      expect(again2.status, again2.stdout).toBe(0);
 
-    // 第三阶段:hook 换序(Write 挪到 Bash 前面)——按行配对的字节数不得被自动写错行
-    const hooksBefore = await w.readInv('hooks-and-agents-md.md');
-    const settings = JSON.parse(await readText(path.join(w.home, '.claude/settings.json')));
-    const pre = settings.hooks.PreToolUse as unknown[];
-    settings.hooks.PreToolUse = [pre[1], pre[0], pre[2]];
-    await w.put('.claude/settings.json', JSON.stringify(settings));
-    const swap = tool(w, ['--apply']);
-    expect(swap.stdout).toContain('也变了(可能换序)');
-    expect(swap.status, swap.stdout).not.toBe(0);
-    expect(await w.readInv('hooks-and-agents-md.md')).toBe(hooksBefore);
+      // 第三阶段:hook 换序(Write 挪到 Bash 前面)——按行配对的字节数不得被自动写错行
+      const hooksBefore = await w.readInv('hooks-and-agents-md.md');
+      const settings = JSON.parse(await readText(path.join(w.home, '.claude/settings.json')));
+      const pre = settings.hooks.PreToolUse as unknown[];
+      settings.hooks.PreToolUse = [pre[1], pre[0], pre[2]];
+      await w.put('.claude/settings.json', JSON.stringify(settings));
+      const swap = tool(w, ['--apply']);
+      expect(swap.stdout).toContain('也变了(可能换序)');
+      expect(swap.status, swap.stdout).not.toBe(0);
+      expect(await w.readInv('hooks-and-agents-md.md')).toBe(hooksBefore);
 
-    // 真实 HOME 没被碰(元数据级)
-    expect(await realHomeMeta()).toBe(meta0);
-  });
+      // 真实 HOME 没被碰(元数据级)
+      expect(await realHomeMeta()).toBe(meta0);
+    });
 
-  it('需人工核对的位置只来自「值不可绑定」的引用,md 行本身保持原样', async () => {
-    const w = await world();
-    await copyRealInventory(w);
-    await fakeHome(w, 2);
-    const before = await w.snapshot();
-    const ap = tool(w, ['--apply']);
-    const after = await w.snapshot();
-    // 无论是否有人工项,未被报告的行不得被改动:逐行比较,改动行必须落在 [#编号] 标注行或时点行或起止行表格内
-    for (const name of Object.keys(before)) {
-      if (name === 'commands.sh') continue;
-      const a = (before[name] ?? '').split('\n');
-      const b = (after[name] ?? '').split('\n');
-      expect(b.length).toBe(a.length);
-      a.forEach((l, i) => {
-        if (l !== b[i]) expect(l, `${name}:${i + 1}`).toMatch(/\[#B15-\d+\]|^- 时点|\| 第 \d+ 节/);
-      });
-    }
-    if (ap.status === 5) expect(ap.stdout).toContain('需人工核对');
-  });
-});
+    it('需人工核对的位置只来自「值不可绑定」的引用,md 行本身保持原样', async () => {
+      const w = await world();
+      await copyRealInventory(w);
+      await fakeHome(w, 2);
+      const before = await w.snapshot();
+      const ap = tool(w, ['--apply']);
+      const after = await w.snapshot();
+      // 无论是否有人工项,未被报告的行不得被改动:逐行比较,改动行必须落在 [#编号] 标注行或时点行或起止行表格内
+      for (const name of Object.keys(before)) {
+        if (name === 'commands.sh') continue;
+        const a = (before[name] ?? '').split('\n');
+        const b = (after[name] ?? '').split('\n');
+        expect(b.length).toBe(a.length);
+        a.forEach((l, i) => {
+          if (l !== b[i])
+            expect(l, `${name}:${i + 1}`).toMatch(/\[#B15-\d+\]|^- 时点|\| 第 \d+ 节/);
+        });
+      }
+      if (ap.status === 5) expect(ap.stdout).toContain('需人工核对');
+    });
+  },
+);
 
 // ---------------------------------------------------------------- 小型合成 inventory:语义细节
 

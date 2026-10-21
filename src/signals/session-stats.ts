@@ -24,6 +24,7 @@ import type { SessionStat } from '../contracts/session-stat.js';
 import type { IoContext } from '../io/paths.js';
 import { lstat, readDir, readText } from '../io/read-fs.js';
 import { chmod, mkdirp, rename, writeFile } from '../io/safe-fs.js';
+import { newCountRecord } from '../contracts/count-record.js';
 import type { SessionResult } from './pipeline.js';
 import { signalMonth, SignalStoreError } from './state-store.js';
 
@@ -37,7 +38,7 @@ function capKeys(rec: Record<string, number>): Record<string, number> {
   const sorted = keys
     .filter((k) => k !== OTHER_KEY)
     .sort((a, b) => (rec[b] as number) - (rec[a] as number) || (a < b ? -1 : a > b ? 1 : 0));
-  const out: Record<string, number> = {};
+  const out = newCountRecord();
   let other = rec[OTHER_KEY] ?? 0;
   sorted.forEach((k, i) => {
     const v = rec[k] as number;
@@ -82,7 +83,7 @@ function sortDeep(v: unknown): unknown {
   if (Array.isArray(v)) return v.map(sortDeep);
   if (v !== null && typeof v === 'object') {
     const o = v as Record<string, unknown>;
-    const out: Record<string, unknown> = {};
+    const out = Object.create(null) as Record<string, unknown>;
     for (const k of Object.keys(o).sort()) out[k] = sortDeep(o[k]);
     return out;
   }
