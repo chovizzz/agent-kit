@@ -19,7 +19,7 @@ import { isUnsafePath } from '../guards/paths.js';
 import { canonicalText } from '../io/canonical-text.js';
 import { findDuplicate, type DedupeTarget, type DedupeThresholds } from '../reflect/dedupe.js';
 import { REVIEW_DAYS_STABLE, REVIEW_DAYS_VOLATILE } from '../reflect/merge.js';
-import { patchUnsafe } from '../reflect/stage.js';
+import { patchUnsafe, SAFE_PATH_RE } from '../reflect/stage.js';
 import { hasInvisible } from '../reflect/text.js';
 import { scanDangerousPhrases } from '../reflect/validate.js';
 import { findInvisibleRanges } from './invisible.js';
@@ -627,8 +627,8 @@ export function checkC8(input: C8Input): CheckResult {
 
 // ---------------------------------------------------------------- C9
 
-/** 与 `src/reflect/stage.ts` 的 `SAFE_PATH_RE` 同值(那边未导出,临时复刻,见汇报「需要导出」)。 */
-export const SAFE_PATH_RE = /^[a-z0-9][a-z0-9/._-]*$/;
+/** 同一对象来自 `src/reflect/stage.ts`(单一来源,C9 与 reflect 暂存共用)。 */
+export { SAFE_PATH_RE };
 
 /** 调用方 lstat 出来的事实;本库不碰文件系统 */
 export interface FsFact {

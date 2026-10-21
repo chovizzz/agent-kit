@@ -231,6 +231,30 @@ describe('LifecycleRecord', () => {
     const hidden = issues(LifecycleRecordSchema.safeParse({ ...rec, note: 'x​y' }));
     expect(hidden[0]!.message).toBe('note 含不可见/控制字符');
   });
+  it('note:变体选择符与 Hangul 填充也被拒(它们不属 Cc/Cf/Co/Cn);普通中文与 emoji 通过', () => {
+    for (const note of [
+      'a\ufe00b',
+      'a\ufe0fb',
+      'a\u{e0100}b',
+      'a\u{e01ef}b',
+      'a\u3164b',
+      'a\u115fb',
+      'a\u1160b',
+      'a\uffa0b',
+      // 已由 Cf / Cc 覆盖的几类,一并钉住
+      'a\u061cb',
+      'a\u{e0041}b',
+      'a\u{e007f}b',
+    ]) {
+      expect(
+        issues(LifecycleRecordSchema.safeParse({ ...rec, note })).map((i) => i.path),
+        JSON.stringify(note),
+      ).toEqual(['note']);
+    }
+    expect(
+      LifecycleRecordSchema.safeParse({ ...rec, note: '因被取代而退役,见新规则 🚀 😀' }).success,
+    ).toBe(true);
+  });
 });
 
 describe('KitConfig.lifecycle', () => {

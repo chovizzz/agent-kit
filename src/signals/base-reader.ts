@@ -25,6 +25,8 @@ import type {
   SessionRef,
   TraceReader,
 } from '../contracts/reader.js';
+import { addCount, newCountRecord, toCountRecord } from './count-record.js';
+import type { CountRecord } from './count-record.js';
 import { provisionalSessionRef, sessionRefFor } from './ids.js';
 import { openReadonlyLines, statReadonly } from './open-readonly.js';
 
@@ -241,8 +243,8 @@ export abstract class JsonlTraceReader<S = undefined> implements TraceReader {
     let toolCalls = 0;
     let toolFailures = 0;
     let oversized = 0;
-    const unknown: Record<string, number> = {};
-    const ignored: Record<string, number> = {};
+    const unknown = newCountRecord();
+    const ignored = newCountRecord();
     let extra: Partial<Pick<Counts, 'branch_count'>> = {};
 
     let agentVersion: string | null = null;
@@ -253,9 +255,7 @@ export abstract class JsonlTraceReader<S = undefined> implements TraceReader {
     const rulePaths: string[] = [];
     let started = false;
 
-    const bump = (rec: Record<string, number>, key: string): void => {
-      rec[key] = (rec[key] ?? 0) + 1;
-    };
+    const bump = (rec: CountRecord, key: string): void => addCount(rec, key);
 
     const applyMeta = (m: MetaUpdate): void => {
       // R1:agent_version 是唯一原样来自 trace 的字符串,必须是版本号形状且有长度上限,否则当取不到
@@ -366,9 +366,11 @@ export abstract class JsonlTraceReader<S = undefined> implements TraceReader {
         user_messages: userMessages,
         tool_calls: toolCalls,
         tool_failures: toolFailures,
-        unknown_event_types: { ...unknown },
+        unknown_event_types: toCountRecord(unknown),
         oversized_lines: oversized,
-        ...(Object.keys(ignored).length > 0 ? { ignored_duplicate_kinds: { ...ignored } } : {}),
+        ...(Object.keys(ignored).length > 0
+          ? { ignored_duplicate_kinds: toCountRecord(ignored) }
+          : {}),
         ...(extra.branch_count !== undefined ? { branch_count: extra.branch_count } : {}),
       }),
       meta: (): SessionMeta => ({

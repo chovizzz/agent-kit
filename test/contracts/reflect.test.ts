@@ -365,3 +365,40 @@ describe('R0-6 ReflectRunReport', () => {
     expect(okR({ mode: 'net' }).success).toBe(false);
   });
 });
+
+describe('契约层不可见字符补全(tag 段 / U+061C / 变体选择符 / Hangul 填充)', () => {
+  // 每类至少一条;用 \u 转义写,避免源码里出现真实的不可见字符
+  const CLASSES: Record<string, string> = {
+    'tag 字符 U+E0041': 'a\u{e0041}b',
+    'tag 终止符 U+E007F': 'a\u{e007f}b',
+    'Arabic letter mark U+061C': 'a؜b',
+    '变体选择符 U+FE00': 'a︀b',
+    '变体选择符 U+FE0F': 'a️b',
+    '变体选择符补充 U+E0100': 'a\u{e0100}b',
+    '变体选择符补充 U+E01EF': 'a\u{e01ef}b',
+    'Hangul filler U+3164': 'aㅤb',
+    'Hangul choseong filler U+115F': 'aᅟb',
+    'Hangul jungseong filler U+1160': 'aᅠb',
+    'halfwidth Hangul filler U+FFA0': 'aﾠb',
+  };
+
+  it('每一类在 do / title / 签名 pattern 里都被拒', () => {
+    for (const [name, bad] of Object.entries(CLASSES)) {
+      expect(ok(out({ do: bad })), `do: ${name}`).toBe(false);
+      expect(ok(out({ title: bad })), `title: ${name}`).toBe(false);
+      expect(checkPatternSafety(bad), `pattern: ${name}`).toEqual({
+        ok: false,
+        reason: 'control_chars',
+      });
+    }
+  });
+
+  it('负向控制:普通中文、标点与常见 emoji(无变体选择符 / ZWJ)不被拦', () => {
+    const fine = '先跑测试再提交,别用 --force。🚀 完成 😀 ✔ 全角:“引号”、(括号)';
+    expect(ok(out({ do: fine }))).toBe(true);
+    expect(ok(out({ title: fine }))).toBe(true);
+    expect(checkPatternSafety('测试🚀通过').ok).toBe(true);
+    // 正向控制的前提:同一份 out() 去掉隐藏字符后确实通过,且上面的拒绝不是别的原因
+    expect(ok(out({ do: CLASSES['tag 字符 U+E0041']!.replace(/[\u{e0041}]/u, '') }))).toBe(true);
+  });
+});

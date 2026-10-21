@@ -31,6 +31,7 @@ import {
   PLACEHOLDER_NEUTRALIZED,
   PLACEHOLDER_OPEN,
 } from '../redact/placeholder.js';
+import { addCount, newCountRecord } from './count-record.js';
 import { resolveAgentVersion } from './version.js';
 import type { ResolvedVersion } from './version.js';
 
@@ -182,11 +183,8 @@ export function safeKey(redactor: Redactor, key: string): string {
 }
 
 function sanitizeRecord(redactor: Redactor, rec: Record<string, number>): Record<string, number> {
-  const out: Record<string, number> = {};
-  for (const [k, v] of Object.entries(rec)) {
-    const sk = safeKey(redactor, k);
-    out[sk] = (out[sk] ?? 0) + v;
-  }
+  const out = newCountRecord();
+  for (const [k, v] of Object.entries(rec)) addCount(out, safeKey(redactor, k), v);
   return out;
 }
 

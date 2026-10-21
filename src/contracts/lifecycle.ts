@@ -34,8 +34,12 @@ export const RETIRE_TRANSITIONS = [
 
 export const MAX_LIFECYCLE_NOTE_CHARS = 200;
 
-/** 契约层的不可见字符判定(控制字符 Cc(含 TAB/LF/CR)、格式字符 Cf、私用区 Co、未分配 Cn);命令层另有更全的 `hasInvisible`。 */
-const HIDDEN_CHARS_RE = /[\p{Cc}\p{Cf}\p{Co}\p{Cn}]/u;
+/**
+ * 契约层的不可见字符判定:控制字符 Cc(含 TAB/LF/CR)、格式字符 Cf(含 bidi、U+061C、tag 段)、私用区 Co、未分配 Cn,
+ * 外加不属这些类的两族:变体选择符(U+FE00–FE0F、U+E0100–E01EF,类 Mn)与 Hangul 填充(U+115F/1160/3164/FFA0,类 Lo)。
+ */
+const HIDDEN_CHARS_RE =
+  /[\p{Cc}\p{Cf}\p{Co}\p{Cn}\u115f\u1160\u3164\ufe00-\ufe0f\uffa0\u{e0100}-\u{e01ef}]/u;
 
 export const LifecycleRecordSchema = z
   .strictObject({

@@ -178,9 +178,15 @@ export function checkPatternSafety(pattern: string): PatternSafety {
 // 文本卫生
 // ---------------------------------------------------------------------------
 
-/** 控制字符(含 DEL/C1)、零宽、bidi 控制与 BOM:既不该进规则,也是常见的隐藏指令载体。TAB/LF/CR 不在此列。 */
+/**
+ * 控制字符(含 DEL/C1)、零宽、bidi 控制(含 U+061C)、BOM、Unicode tag 段(U+E0000–E007F)、
+ * 变体选择符(U+FE00–FE0F、U+E0100–E01EF)与 Hangul 填充(U+115F/1160/3164/FFA0):
+ * 既不该进规则,也是常见的隐藏指令载体。TAB/LF/CR 不在此列。
+ * 与命令层 `src/reflect/text.ts` 的 `hasInvisible` 同口径(含 FE0F:带 U+FE0F 的 emoji 呈现序列、ZWJ 序列会被拦,
+ * 普通中文与无变体选择符的 emoji 不受影响)。
+ */
 const HIDDEN_CHARS_RE =
-  /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/;
+  /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u061c\u115f\u1160\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\u3164\ufe00-\ufe0f\ufeff\uffa0\u{e0000}-\u{e007f}\u{e0100}-\u{e01ef}]/u;
 const NEWLINE_RE = /[\n\r\t\u2028\u2029\u0085]/;
 /** 伪造原子正文标签 / frontmatter 分隔线 */
 const FORGED_LABEL_RE =
