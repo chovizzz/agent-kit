@@ -170,7 +170,9 @@ function selfCheck(R, ctx) {
     // .local 的其它子目录不豁免(审查补:不能整个 .local 都放过)
     fs.mkdirSync(path.join(h, '.local/share/other'), { recursive: true });
     fs.writeFileSync(path.join(h, '.local/share/other/f'), 'x');
-    const c3b = compareRoundtrip(base, snapTree(h, { skipState: true })).some((p) => p.includes('.local/share'));
+    const c3b = compareRoundtrip(base, snapTree(h, { skipState: true })).some((p) =>
+      p.includes('.local/share'),
+    );
     fs.rmSync(path.join(h, '.local/share'), { recursive: true });
     const c4 = compareExact(baseFull, snapTree(h)).length > 0; // 完整快照看得到状态目录
     const s1 = snapTree(h);
@@ -184,8 +186,13 @@ function selfCheck(R, ctx) {
     fs.rmSync(path.join(h, 'tmp-top'));
     const c6 = compareExact(s2, snapTree(h)).some((p) => p === 'mtime 变化 ');
     if (ok0 && c1 && c2 && c3 && c3b && c4 && c5 && c6)
-      R.pass('正向控制:比较函数对改动/非空新增目录/.local 其它子目录/mtime 与 HOME 根 mtime 变化报出,只对状态目录豁免');
-    else R.fail(`正向控制失败(同一 ${[ok0, c1, c2, c3, c3b, c4, c5, c6].join('/')}):比较函数可能静默变空`);
+      R.pass(
+        '正向控制:比较函数对改动/非空新增目录/.local 其它子目录/mtime 与 HOME 根 mtime 变化报出,只对状态目录豁免',
+      );
+    else
+      R.fail(
+        `正向控制失败(同一 ${[ok0, c1, c2, c3, c3b, c4, c5, c6].join('/')}):比较函数可能静默变空`,
+      );
   } finally {
     rmTmp(tmp);
   }

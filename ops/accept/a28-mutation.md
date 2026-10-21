@@ -5,16 +5,16 @@ A28 不是普通脚本:它要求对 sync / update 的 8 处关键逻辑各做一
 
 ## 8 处核心变异(S1–S8)
 
-| 编号 | 变异                                                                         | 位置                                                  | 应变红的测试                                                               |
-| ---- | ---------------------------------------------------------------------------- | ----------------------------------------------------- | -------------------------------------------------------------------------- |
-| S1   | 卸载不删块(`block_remove` 不再从文件里移除托管块)                            | `src/sync/txn.ts`(`block_remove` 分支)                | `test/sync/command.test.ts`(装 → 卸载)、`test/sync/recovery.test.ts`(卸载) |
-| S2   | 回滚时备份内容不校验 sha(被改过的备份也被当作写前全文还原)                   | `src/sync/apply.ts`(`rollbackTxn`)                    | `test/sync/rollback-backup-sha.test.ts`(本块新增,原先没有用例钉这一行)     |
-| S3   | 回滚不检前提(文件当前 sha 不等于该事务写入后的 sha 也照样还原)               | `src/sync/apply.ts`(`rollbackTxn` 的 `file_changed`)  | `test/sync/recovery.test.ts`(回滚前提不成立)                               |
-| S4   | registry 夹具路径守卫放宽(KIT_TMP 之外的 `file://` 目录也被接受)             | `src/update/registry.ts`(`openRegistrySource`)        | `test/update/registry.test.ts`                                             |
-| S5   | 锁不复核 `assertHeld`(锁被夺走后仍继续写)                                    | `src/sync/apply.ts`(`acquireLock` 的 `assertHeld`)    | `test/sync/lock-lost.test.ts`                                              |
-| S6   | 完整性校验跳过(`dist.integrity` 与 tarball 不符也继续安装)                   | `src/update/install.ts`(`sriMatches` 调用处)          | `test/update/install-flow.test.ts`(dist.integrity 与 tarball 不符)         |
-| S7   | 回滚不验上一版本目录的完整树(被篡改 / 多文件的上一版本也被切回)              | `src/update/install.ts`(`verifyInstalledTree` 结果)   | `test/update/install-rollback.test.ts`                                     |
-| S8   | sync 写前不复核文件当前 sha(计划之后被用户改过的文件会被覆盖 / 删除)         | `src/sync/apply.ts`(`applyTxn` 的 `changed_during_run`) | `test/sync/recovery.test.ts`(计划之后、写盘之前文件被改)                   |
+| 编号 | 变异                                                                 | 位置                                                    | 应变红的测试                                                               |
+| ---- | -------------------------------------------------------------------- | ------------------------------------------------------- | -------------------------------------------------------------------------- |
+| S1   | 卸载不删块(`block_remove` 不再从文件里移除托管块)                    | `src/sync/txn.ts`(`block_remove` 分支)                  | `test/sync/command.test.ts`(装 → 卸载)、`test/sync/recovery.test.ts`(卸载) |
+| S2   | 回滚时备份内容不校验 sha(被改过的备份也被当作写前全文还原)           | `src/sync/apply.ts`(`rollbackTxn`)                      | `test/sync/rollback-backup-sha.test.ts`(本块新增,原先没有用例钉这一行)     |
+| S3   | 回滚不检前提(文件当前 sha 不等于该事务写入后的 sha 也照样还原)       | `src/sync/apply.ts`(`rollbackTxn` 的 `file_changed`)    | `test/sync/recovery.test.ts`(回滚前提不成立)                               |
+| S4   | registry 夹具路径守卫放宽(KIT_TMP 之外的 `file://` 目录也被接受)     | `src/update/registry.ts`(`openRegistrySource`)          | `test/update/registry.test.ts`                                             |
+| S5   | 锁不复核 `assertHeld`(锁被夺走后仍继续写)                            | `src/sync/apply.ts`(`acquireLock` 的 `assertHeld`)      | `test/sync/lock-lost.test.ts`                                              |
+| S6   | 完整性校验跳过(`dist.integrity` 与 tarball 不符也继续安装)           | `src/update/install.ts`(`sriMatches` 调用处)            | `test/update/install-flow.test.ts`(dist.integrity 与 tarball 不符)         |
+| S7   | 回滚不验上一版本目录的完整树(被篡改 / 多文件的上一版本也被切回)      | `src/update/install.ts`(`verifyInstalledTree` 结果)     | `test/update/install-rollback.test.ts`                                     |
+| S8   | sync 写前不复核文件当前 sha(计划之后被用户改过的文件会被覆盖 / 删除) | `src/sync/apply.ts`(`applyTxn` 的 `changed_during_run`) | `test/sync/recovery.test.ts`(计划之后、写盘之前文件被改)                   |
 
 具体替换文本、匹配次数断言(必须恰好 1 次)和「失败用例须指向被变异的行为」的标题子串都写在 `ops/accept/lib/a28.mjs` 的 `MUTATIONS` 里;
 `test/accept/p1-sync-update-ops.test.ts` 另有一条用例在**未变异**的源码上核对每处 `find` 恰好出现 1 次(源码漂移时先在那里红)。
@@ -43,16 +43,16 @@ node ops/accept/lib/a28.mjs --run --ids S2,S5                         # 只做�
 
 ## 实跑记录(javis,基线 116/116 通过,还原后 116/116)
 
-| 编号 | 结果 | 指向被变异行为的失败用例(节选)                                                                |
-| ---- | ---- | --------------------------------------------------------------------------------------------- |
-| S1   | red  | `装 → 卸载:受管路径树逐字节一致…`、`只卸一个 agent:共用路径仍被其它 agent 请求就保留…`        |
-| S2   | red  | `备份内容被改(sha 对不上)=> SYNC_ROLLBACK_MISMATCH,整次不写`                                  |
-| S3   | red  | `回滚前提不成立 → SYNC_ROLLBACK_MISMATCH,整次不写(文件被改 / 登记表被改 / 不是最新事务 …)`    |
-| S4   | red  | `KIT_TMP 之外 / 没有 KIT_TMP / 非 file:// 写法 → registry_fixture_outside_tmp`                |
+| 编号 | 结果 | 指向被变异行为的失败用例(节选)                                                                    |
+| ---- | ---- | ------------------------------------------------------------------------------------------------- |
+| S1   | red  | `装 → 卸载:受管路径树逐字节一致…`、`只卸一个 agent:共用路径仍被其它 agent 请求就保留…`            |
+| S2   | red  | `备份内容被改(sha 对不上)=> SYNC_ROLLBACK_MISMATCH,整次不写`                                      |
+| S3   | red  | `回滚前提不成立 → SYNC_ROLLBACK_MISMATCH,整次不写(文件被改 / 登记表被改 / 不是最新事务 …)`        |
+| S4   | red  | `KIT_TMP 之外 / 没有 KIT_TMP / 非 file:// 写法 → registry_fixture_outside_tmp`                    |
 | S5   | red  | `journal 写完后锁被夺走:不写任何受管文件…`、`写第一个文件之后锁被夺走:不继续写后面的文件与登记表` |
-| S6   | red  | `dist.integrity 与 tarball 不符(非镜像)→ integrity,拉黑,不再重试`                            |
-| S7   | red  | `上一版本目录被篡改 → 不切(完整树校验)…`、`上一版本目录里多了文件 → 同样拒绝`                  |
-| S8   | red  | `计划之后、写盘之前文件被改(竞态):写前复核指纹,拒绝覆盖 / 删除用户版本`                       |
+| S6   | red  | `dist.integrity 与 tarball 不符(非镜像)→ integrity,拉黑,不再重试`                                 |
+| S7   | red  | `上一版本目录被篡改 → 不切(完整树校验)…`、`上一版本目录里多了文件 → 同样拒绝`                     |
+| S8   | red  | `计划之后、写盘之前文件被改(竞态):写前复核指纹,拒绝覆盖 / 删除用户版本`                           |
 
 S2 在本块之前没有任何用例钉「备份 sha 核对」这一行(变异存活),所以本块补了 `test/sync/rollback-backup-sha.test.ts`(含正向对照:备份完好则回滚成功)。
 
