@@ -76,7 +76,8 @@ export const ITEMS = [
   },
   {
     id: 'A27',
-    title: '更新(假 registry):检查 / 安装 / 回滚、registry 在 KIT_TMP 外被拒、完整性不符安装失败且 current 不变',
+    title:
+      '更新(假 registry):检查 / 安装 / 回滚、registry 在 KIT_TMP 外被拒、完整性不符安装失败且 current 不变',
     script: 'a27.mjs',
   },
   {

@@ -7,8 +7,24 @@
 // 前置:pnpm run build(dist/cli.js)与 pnpm run build:payload(sync 干跑用包内 payload);基线 ref 默认 origin/main。
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { EXIT, Reporter, cleanEnv, makeCtx, mkTmp, parseCommon, rmTmp, run, runMain } from './common.mjs';
-import { DEFAULT_ARGS, commandsText, interpretReport, payloadMissing, syncDoctorCommands } from './a5.mjs';
+import {
+  EXIT,
+  Reporter,
+  cleanEnv,
+  makeCtx,
+  mkTmp,
+  parseCommon,
+  rmTmp,
+  run,
+  runMain,
+} from './common.mjs';
+import {
+  DEFAULT_ARGS,
+  commandsText,
+  interpretReport,
+  payloadMissing,
+  syncDoctorCommands,
+} from './a5.mjs';
 
 const FORBIDDEN = /--(write|uninstall|rollback|resume|adopt)\b|\bupdate\b/;
 
@@ -81,7 +97,10 @@ async function a26(argv) {
   // ① 静态
   const listProblems = checkCommandList(commandsText('social-ops-hub', ctx.cli));
   if (listProblems.length > 0) R.fail(`A5 命令清单:${listProblems.join('; ')}`);
-  else R.pass('A5 命令清单含 doctor 与 sync,且只有干跑形态(无 --write/--uninstall/--rollback/--resume/--adopt,无 update)');
+  else
+    R.pass(
+      'A5 命令清单含 doctor 与 sync,且只有干跑形态(无 --write/--uninstall/--rollback/--resume/--adopt,无 update)',
+    );
   // 正向对照:检查函数对坏清单要报
   const bad = checkCommandList('{NODE} x --root {REPO} sync --write\n');
   if (bad.length >= 2) R.pass('正向控制:清单检查对缺 doctor、带 --write 的 sync 都报出');
@@ -101,7 +120,11 @@ async function a26(argv) {
   }
   const baseRef = flags.baseRef ?? 'origin/main';
   const gitEnv = cleanEnv({ GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' });
-  const rp = run('git', ['-C', ctx.root, 'rev-parse', '--verify', '--quiet', `${baseRef}^{commit}`], { env: gitEnv });
+  const rp = run(
+    'git',
+    ['-C', ctx.root, 'rev-parse', '--verify', '--quiet', `${baseRef}^{commit}`],
+    { env: gitEnv },
+  );
   if (rp.status !== 0) {
     R.notRun(`基线 ref ${baseRef} 不可解析(用 --base-ref <ref> 指定;不静默跳过)`);
     return R.exit();
@@ -129,17 +152,37 @@ async function a26(argv) {
     } else {
       const { exit, reasons } = interpretReport(main.r.status, main.report);
       for (const why of reasons) R.info(why);
-      if (exit === EXIT.OK && ran.length >= 2 && ran.every((n) => n === syncDoctorCommands(ctx.cli).length + 1))
-        R.pass(`doctor/sync 干跑 + KIT_AUTO_UPDATE 探针零写入(两轮各 ${ran[0]} 条命令均退出 0,假 HOME 无残留)`);
-      else R.merge(exit === EXIT.OK ? EXIT.FAIL : exit, `zero-write-check 退出 ${main.r.status} => ${exit}(各轮命令数 ${ran.join('/')})`);
+      if (
+        exit === EXIT.OK &&
+        ran.length >= 2 &&
+        ran.every((n) => n === syncDoctorCommands(ctx.cli).length + 1)
+      )
+        R.pass(
+          `doctor/sync 干跑 + KIT_AUTO_UPDATE 探针零写入(两轮各 ${ran[0]} 条命令均退出 0,假 HOME 无残留)`,
+        );
+      else
+        R.merge(
+          exit === EXIT.OK ? EXIT.FAIL : exit,
+          `zero-write-check 退出 ${main.r.status} => ${exit}(各轮命令数 ${ran.join('/')})`,
+        );
     }
 
     // ③ 正向控制
-    const ctl = zeroWrite(ctx, script, tmp, [...syncDoctorCommands(ctx.cli), `{NODE} ${writer}`, ''].join('\n'), baseRef, 'ctl', flags.home);
-    if (ctl.r.spawnFailed || ctl.r.status === null) R.notRun('正向控制的 zero-write-check 异常终止');
+    const ctl = zeroWrite(
+      ctx,
+      script,
+      tmp,
+      [...syncDoctorCommands(ctx.cli), `{NODE} ${writer}`, ''].join('\n'),
+      baseRef,
+      'ctl',
+      flags.home,
+    );
+    if (ctl.r.spawnFailed || ctl.r.status === null)
+      R.notRun('正向控制的 zero-write-check 异常终止');
     else if (ctl.r.status === EXIT.FAIL && ctl.r.stdout.includes('FAKE_HOME_NOT_EMPTY'))
       R.pass('正向控制:清单里夹一条写假 HOME 的命令,zero-write 判违规(FAKE_HOME_NOT_EMPTY)');
-    else R.fail(`正向控制:往假 HOME 写文件的命令没有被判违规(退出 ${ctl.r.status})——A26 可能静默变空`);
+    else
+      R.fail(`正向控制:往假 HOME 写文件的命令没有被判违规(退出 ${ctl.r.status})——A26 可能静默变空`);
   } finally {
     rmTmp(tmp);
   }

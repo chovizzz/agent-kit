@@ -10,7 +10,17 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { EXIT, Reporter, cleanEnv, makeCtx, mkTmp, parseCommon, rmTmp, runMain, runVitest } from './common.mjs';
+import {
+  EXIT,
+  Reporter,
+  cleanEnv,
+  makeCtx,
+  mkTmp,
+  parseCommon,
+  rmTmp,
+  runMain,
+  runVitest,
+} from './common.mjs';
 import { applyEdit } from './a20.mjs';
 import { realHomeGuard } from './real-home-guard.mjs';
 
@@ -60,7 +70,8 @@ export const MUTATIONS = [
       {
         file: 'src/sync/apply.ts',
         find: '    if (cur === lv.after) {\n      restores.push({ path: p, before: lv.before, after: lv.after });',
-        replace: '    if (true) {\n      restores.push({ path: p, before: lv.before, after: lv.after });',
+        replace:
+          '    if (true) {\n      restores.push({ path: p, before: lv.before, after: lv.after });',
       },
     ],
     tests: [T_SYNC_REC],
@@ -86,7 +97,8 @@ export const MUTATIONS = [
       {
         file: 'src/sync/apply.ts',
         find: "          if (cur.state !== 'ok' || cur.doc.nonce !== doc.nonce) {\n            throw new ApplyError('SYNC_LOCKED', 'lost');",
-        replace: "          if (false as boolean) {\n            throw new ApplyError('SYNC_LOCKED', 'lost');",
+        replace:
+          "          if (false as boolean) {\n            throw new ApplyError('SYNC_LOCKED', 'lost');",
       },
     ],
     tests: [T_SYNC_LOCK],
@@ -205,10 +217,14 @@ async function a28(argv) {
     }
   }
   if (flags.writeMarker) {
-    const dirty = spawnSync('git', ['-C', ctx.root, 'status', '--porcelain', '--untracked-files=normal'], {
-      encoding: 'utf8',
-      env: cleanEnv({ GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' }),
-    });
+    const dirty = spawnSync(
+      'git',
+      ['-C', ctx.root, 'status', '--porcelain', '--untracked-files=normal'],
+      {
+        encoding: 'utf8',
+        env: cleanEnv({ GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' }),
+      },
+    );
     if (dirty.status !== 0) {
       R_.notRun('无法读取 git 状态,不能确认工作树干净,拒绝写标记');
       return R_.exit();
@@ -235,8 +251,7 @@ async function a28(argv) {
   fs.mkdirSync(fakeTmpdir, { recursive: true });
   const guard = await realHomeGuard(ctx, flags.home);
   const homeBefore = guard.take();
-  const vitest = (files) =>
-    runVitest(ctx, tmp, files, [], { HOME: fakeHome, TMPDIR: fakeTmpdir });
+  const vitest = (files) => runVitest(ctx, tmp, files, [], { HOME: fakeHome, TMPDIR: fakeTmpdir });
 
   const pending = [];
   const restoreOne = (s) => {
@@ -325,9 +340,14 @@ async function a28(argv) {
     restoreAll();
   }
   const n = guard.diff(homeBefore, guard.take());
-  if (n === 0) R_.pass('真实 HOME 的受管路径与套件 share/state/config 目录前后无差异(变异期间 vitest 用假 HOME)');
+  if (n === 0)
+    R_.pass(
+      '真实 HOME 的受管路径与套件 share/state/config 目录前后无差异(变异期间 vitest 用假 HOME)',
+    );
   else
-    R_.attribute(`真实 HOME 出现 ${n} 处差异;请用 ops/zero-write-check.sh 归因(多半是其它进程的写入)`);
+    R_.attribute(
+      `真实 HOME 出现 ${n} 处差异;请用 ops/zero-write-check.sh 归因(多半是其它进程的写入)`,
+    );
   rmTmp(tmp);
 
   const allRed = results.every((r) => r.red);

@@ -43,7 +43,8 @@ export async function installNoNet(ctx, tmp) {
   try {
     await fetch('http://127.0.0.1:9/');
   } catch (e) {
-    controlBlocked = e?.code === 'ENO_NET' || /no-net/.test(String(e?.cause?.message ?? e?.message));
+    controlBlocked =
+      e?.code === 'ENO_NET' || /no-net/.test(String(e?.cause?.message ?? e?.message));
   }
   const controlLogged = fs.existsSync(log) && fs.readFileSync(log, 'utf8').trim() !== '';
   fs.rmSync(log, { force: true });
@@ -212,7 +213,8 @@ export function writePayloadFixture(mods, pkgRoot, files, kitVersion = '0.2.0') 
   });
   const tree = new Map();
   const entries = sorted.map((f) => {
-    const text = f.block !== undefined ? mods.block.renderManagedBlock(f.block, f.content) : f.content;
+    const text =
+      f.block !== undefined ? mods.block.renderManagedBlock(f.block, f.content) : f.content;
     const mode = f.block !== undefined ? 'managed-block' : 'owned';
     const payloadPath = `files/${f.agent}/home/${f.path}`;
     tree.set(`payload/${payloadPath}`, text);
@@ -346,7 +348,9 @@ export function buildPkg(mods, version, o = {}) {
     });
   const base = { schema_version: 1, kit_version: version, algorithm: 'sha256', files: listed };
   const integrity = o.integrity === undefined ? base : o.integrity(base);
-  const integrityBytes = Buffer.from(integrity === undefined ? '' : mods.canon.canonicalJson(integrity));
+  const integrityBytes = Buffer.from(
+    integrity === undefined ? '' : mods.canon.canonicalJson(integrity),
+  );
   const entries = [{ name: 'package/', type: '5', mode: 0o755 }];
   const dirs = new Set();
   for (const f of files) {
@@ -354,8 +358,10 @@ export function buildPkg(mods, version, o = {}) {
     for (let i = 1; i < parts.length; i++) dirs.add(parts.slice(0, i).join('/'));
   }
   for (const d of [...dirs].sort()) entries.push({ name: `package/${d}/`, type: '5', mode: 0o755 });
-  for (const f of files) entries.push({ name: `package/${f.path}`, data: f.data, mode: f.mode ?? 0o644 });
-  if (integrity !== undefined) entries.push({ name: 'package/integrity.json', data: integrityBytes });
+  for (const f of files)
+    entries.push({ name: `package/${f.path}`, data: f.data, mode: f.mode ?? 0o644 });
+  if (integrity !== undefined)
+    entries.push({ name: 'package/integrity.json', data: integrityBytes });
   const tgz = gzipSync(Buffer.concat([...entries.map(tarEntry), Buffer.alloc(1024)]));
   return { version, tgz, sha512: sha512(tgz), anchor: sha256(integrityBytes) };
 }
@@ -491,11 +497,12 @@ export async function runUpdate(mods, ctx, dirs, args, o = {}) {
 export const share = (dirs) => path.join(dirs.home, '.local', 'share', 'agent-kit');
 export const updateState = (dirs) =>
   JSON.parse(
-    fs.readFileSync(path.join(dirs.home, '.local', 'state', 'agent-kit', 'update', 'state.json'), 'utf8'),
+    fs.readFileSync(
+      path.join(dirs.home, '.local', 'state', 'agent-kit', 'update', 'state.json'),
+      'utf8',
+    ),
   );
 export const currentVersion = (dirs) => {
   const cur = path.join(share(dirs), 'current');
-  return fs.lstatSync(cur, { throwIfNoEntry: false })
-    ? path.basename(fs.realpathSync(cur))
-    : null;
+  return fs.lstatSync(cur, { throwIfNoEntry: false }) ? path.basename(fs.realpathSync(cur)) : null;
 };

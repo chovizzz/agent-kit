@@ -4,13 +4,14 @@ import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { byteCmp, sha256 } from './common.mjs';
 
-
 /**
  * 真实 HOME 守卫:受管路径快照(ops/lib/snapshot.mjs)+ 套件自己的 share/config 目录树哈希。
  * 返回 { take(), diff(before, after) -> 差异条目数 }。
  */
 export async function realHomeGuard(ctx, home) {
-  const snapLib = await import(pathToFileURL(path.join(ctx.root, 'ops', 'lib', 'snapshot.mjs')).href);
+  const snapLib = await import(
+    pathToFileURL(path.join(ctx.root, 'ops', 'lib', 'snapshot.mjs')).href
+  );
   const realHome = path.resolve(home ?? snapLib.resolveHome());
   const managedText = fs.readFileSync(path.join(ctx.root, 'ops', 'managed-paths.txt'), 'utf8');
   const volatileText = fs.readFileSync(path.join(ctx.root, 'ops', 'volatile-paths.txt'), 'utf8');
@@ -59,4 +60,3 @@ export async function realHomeGuard(ctx, home) {
     },
   };
 }
-

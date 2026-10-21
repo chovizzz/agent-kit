@@ -31,7 +31,10 @@ describe('A25 往返比较函数', () => {
     });
   `;
   const run = (body: string): unknown =>
-    evalLib('sk-world.mjs', `(m) => { ${T} const { compareRoundtrip, compareExact } = m; ${body} }`);
+    evalLib(
+      'sk-world.mjs',
+      `(m) => { ${T} const { compareRoundtrip, compareExact } = m; ${body} }`,
+    );
 
   it('一致 => 无问题;改内容 / 改权限 / 缺失 / 多出 / 原有目录消失 / 新增目录含文件 => 各报出(正向控制)', () => {
     const r = run(`
@@ -89,7 +92,9 @@ describe('A26 命令清单与环境', () => {
       ['{NODE} c --root {REPO} doctor\n'],
       ['{NODE} c --root {REPO} doctor\n{NODE} c --root {REPO} sync --write\n'],
       ['{NODE} c --root {REPO} doctor\n{NODE} c --root {REPO} sync --uninstall\n'],
-      ['{NODE} c --root {REPO} doctor\n{NODE} c --root {REPO} sync\n{NODE} c --root {REPO} update\n'],
+      [
+        '{NODE} c --root {REPO} doctor\n{NODE} c --root {REPO} sync\n{NODE} c --root {REPO} update\n',
+      ],
     ]) as string[][];
     expect(noDoctor?.join()).toContain('缺 doctor');
     expect(noSync?.join()).toContain('缺 sync');

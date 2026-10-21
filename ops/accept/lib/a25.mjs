@@ -10,14 +10,7 @@
 // 输出只含计数与受管相对路径。
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import {
-  Reporter,
-  makeCtx,
-  mkTmp,
-  parseCommon,
-  rmTmp,
-  runMain,
-} from './common.mjs';
+import { Reporter, makeCtx, mkTmp, parseCommon, rmTmp, runMain } from './common.mjs';
 import { freshDist } from './accept-p1.mjs';
 import {
   CODEX_MD,
@@ -65,16 +58,28 @@ async function scenario(R, ctx, mods, form, seeded) {
     const inst = await sync(['--write', '--json']);
     const ij = jsonOf(inst.out);
     if (inst.code !== 0 || ij === null || typeof ij.txn !== 'string' || !/^txn-/.test(ij.txn)) {
-      R.fail(`${tag}: --write 安装失败(退出 ${inst.code}, txn=${ij?.txn}):${inst.err.slice(0, 160)}`);
+      R.fail(
+        `${tag}: --write 安装失败(退出 ${inst.code}, txn=${ij?.txn}):${inst.err.slice(0, 160)}`,
+      );
       return;
     }
     const installed = snapTree(dirs.home, { skipState: true });
     const changed = compareRoundtrip(before, installed);
     const missing = INSTALLED.filter((f) => !installed.files.has(f));
     const blocksOk = [CODEX_MD, PI_MD].every((f) => installed.files.has(f));
-    if (changed.length === 0 || missing.length > 0 || !blocksOk || !fs.existsSync(path.join(dirs.home, STATE_REL)))
-      R.fail(`${tag}: 安装后树没有按预期变化(改动 ${changed.length};缺 ${missing.join(',') || '无'})——往返比较会是空转`);
-    else R.pass(`${tag}: 安装落盘(${ij.ops.length} 个操作,${changed.length} 处树差异),txn=${ij.txn.slice(0, 12)}…`);
+    if (
+      changed.length === 0 ||
+      missing.length > 0 ||
+      !blocksOk ||
+      !fs.existsSync(path.join(dirs.home, STATE_REL))
+    )
+      R.fail(
+        `${tag}: 安装后树没有按预期变化(改动 ${changed.length};缺 ${missing.join(',') || '无'})——往返比较会是空转`,
+      );
+    else
+      R.pass(
+        `${tag}: 安装落盘(${ij.ops.length} 个操作,${changed.length} 处树差异),txn=${ij.txn.slice(0, 12)}…`,
+      );
 
     const mid = snapTree(dirs.home);
     const again = await sync(['--write', '--json']);
@@ -97,7 +102,9 @@ async function scenario(R, ctx, mods, form, seeded) {
     const unProblems = compareRoundtrip(before, afterUn);
     if (un.code !== 0) R.fail(`${tag}: --uninstall 退出 ${un.code}:${un.err.slice(0, 160)}`);
     else if (unProblems.length > 0)
-      R.fail(`${tag}: 装→卸后受管路径树与安装前不一致(${unProblems.length} 处):${unProblems.slice(0, 4).join('; ')}`);
+      R.fail(
+        `${tag}: 装→卸后受管路径树与安装前不一致(${unProblems.length} 处):${unProblems.slice(0, 4).join('; ')}`,
+      );
     else
       R.pass(
         `${tag}: 装→卸往返逐字节一致(${before.files.size} 个文件;新增目录 ${[...afterUn.dirs].filter((d) => !before.dirs.has(d)).length} 个且均无文件)`,
@@ -124,9 +131,12 @@ async function rollbackScenario(R, ctx, mods, form, seeded) {
     const rb = await runSync(mods, ctx, dirs, ['--write', '--rollback', txn, '--json']);
     const after = snapTree(dirs.home, { skipState: true });
     const problems = compareRoundtrip(before, after);
-    if (rb.code !== 0) R.fail(`${tag}: --rollback ${txn.slice(0, 12)}… 退出 ${rb.code}:${rb.err.slice(0, 160)}`);
+    if (rb.code !== 0)
+      R.fail(`${tag}: --rollback ${txn.slice(0, 12)}… 退出 ${rb.code}:${rb.err.slice(0, 160)}`);
     else if (problems.length > 0)
-      R.fail(`${tag}: 装→回滚后树与安装前不一致(${problems.length} 处):${problems.slice(0, 4).join('; ')}`);
+      R.fail(
+        `${tag}: 装→回滚后树与安装前不一致(${problems.length} 处):${problems.slice(0, 4).join('; ')}`,
+      );
     else R.pass(`${tag}: 装→回滚往返逐字节一致(${before.files.size} 个文件)`);
   } finally {
     dirs.cleanup();
@@ -148,7 +158,9 @@ function selfCheck(R, ctx) {
     fs.writeFileSync(path.join(h, 'd', 'f.txt'), 'x\n');
     fs.mkdirSync(path.join(h, 'new'));
     fs.writeFileSync(path.join(h, 'new', 'left.txt'), 'z\n');
-    const c2 = compareRoundtrip(base, snapTree(h, { skipState: true })).some((p) => p.includes('不为空'));
+    const c2 = compareRoundtrip(base, snapTree(h, { skipState: true })).some((p) =>
+      p.includes('不为空'),
+    );
     fs.rmSync(path.join(h, 'new'), { recursive: true });
     fs.mkdirSync(path.join(h, '.local/state/agent-kit'), { recursive: true });
     fs.writeFileSync(path.join(h, '.local/state/agent-kit/x'), 'x');
@@ -158,7 +170,8 @@ function selfCheck(R, ctx) {
     const t = new Date(Date.now() + 5000);
     fs.utimesSync(path.join(h, 'd', 'f.txt'), t, t);
     const c5 = compareExact(s1, snapTree(h)).some((p) => p.startsWith('mtime 变化'));
-    if (ok0 && c1 && c2 && c3 && c4 && c5) R.pass('正向控制:比较函数对改动/非空新增目录/mtime 变化报出,对状态目录豁免');
+    if (ok0 && c1 && c2 && c3 && c4 && c5)
+      R.pass('正向控制:比较函数对改动/非空新增目录/mtime 变化报出,对状态目录豁免');
     else R.fail(`正向控制失败(同一 ${[ok0, c1, c2, c3, c4, c5].join('/')}):比较函数可能静默变空`);
   } finally {
     rmTmp(tmp);
