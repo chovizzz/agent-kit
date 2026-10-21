@@ -25,8 +25,8 @@ import type {
   SessionRef,
   TraceReader,
 } from '../contracts/reader.js';
-import { addCount, newCountRecord, toCountRecord } from './count-record.js';
-import type { CountRecord } from './count-record.js';
+import { addCount, newCountRecord, toCountRecord } from '../contracts/count-record.js';
+import type { CountRecord } from '../contracts/count-record.js';
 import { provisionalSessionRef, sessionRefFor } from './ids.js';
 import { openReadonlyLines, statReadonly } from './open-readonly.js';
 

@@ -2,7 +2,9 @@
 // 覆盖:四个 reader(claude / codex / kimi / pi,共用 base-reader 的计数)、safeKey 之后的 sanitizeCounts、
 // 会话计数库的 capKeys、collect 聚合与 CLI 输出。
 import { describe, expect, it } from 'vitest';
+import { CountsSchema } from '../../src/contracts/reader.js';
 import type { SessionRef, TraceReader } from '../../src/contracts/reader.js';
+import { SessionStatSchema } from '../../src/contracts/session-stat.js';
 import { readText } from '../../src/io/read-fs.js';
 import { writeFile } from '../../src/io/safe-fs.js';
 import { createClaudeReader } from '../../src/readers/claude/index.js';
@@ -10,8 +12,9 @@ import { createCodexReader } from '../../src/readers/codex/index.js';
 import { createKimiReader } from '../../src/readers/kimi/index.js';
 import { createPiReader } from '../../src/readers/pi/index.js';
 import { createRedactor } from '../../src/redact/index.js';
-import { addCount, newCountRecord, toCountRecord } from '../../src/signals/count-record.js';
+import { addCount, newCountRecord, toCountRecord } from '../../src/contracts/count-record.js';
 import { sanitizeCounts } from '../../src/signals/pipeline.js';
+import { statLine } from '../../src/signals/session-stats.js';
 import { genClaude } from '../fixtures/sessions/gen-claude.js';
 import { genCodex } from '../fixtures/sessions/gen-codex.js';
 import { genKimi } from '../fixtures/sessions/gen-kimi.js';
@@ -148,7 +151,7 @@ describe('count-record 与下游计数函数', () => {
       unknown_event_types: unknown,
       ignored_duplicate_kinds: toCountRecord({ constructor: 1, toString: 2 }),
     });
-    expect(sorted(out.unknown_event_types)).toEqual([...EXPECTED, ['<unprintable>', 5]]);
+    expect(sorted(out.unknown_event_types)).toEqual([['<unprintable>', 5], ...EXPECTED]);
     expect(sorted(out.ignored_duplicate_kinds ?? {})).toEqual([
       ['constructor', 1],
       ['toString', 2],
@@ -176,5 +179,50 @@ describe('collect 端到端(claude)', () => {
     };
     expect(sorted(out.report.unknown_event_types)).toEqual(EXPECTED);
     expect(sorted(out.sessions[0]!.counts.unknown_event_types)).toEqual(EXPECTED);
+  });
+});
+
+describe('契约模式不丢 __proto__ 键(zod 的 z.record 会静默丢)', () => {
+  const wire = '{"__proto__":1,"constructor":2,"toString":3}';
+
+  it('CountsSchema:JSON 反序列化出的自有 __proto__ 键保留,值仍被校验', () => {
+    const base = { user_messages: 0, tool_calls: 0, tool_failures: 0 };
+    const ok = CountsSchema.parse({ ...base, unknown_event_types: JSON.parse(wire) });
+    expect(sorted(ok.unknown_event_types)).toEqual([
+      ['__proto__', 1],
+      ['constructor', 2],
+      ['toString', 3],
+    ]);
+    expect(
+      CountsSchema.safeParse({ ...base, unknown_event_types: JSON.parse('{"__proto__":-1}') })
+        .success,
+    ).toBe(false);
+    expect(CountsSchema.safeParse({ ...base, unknown_event_types: { a: 1.5 } }).success).toBe(
+      false,
+    );
+    expect(CountsSchema.safeParse({ ...base, unknown_event_types: [] }).success).toBe(false);
+  });
+
+  it('SessionStatSchema:__proto__ 保留且键白名单仍生效;statLine 往返字节稳定', () => {
+    const mk = (counts: unknown) => ({
+      session_ref: 's_0123456789abcdef',
+      project_key: 'p_fedcba9876543210',
+      ts: '2026-10-12T00:00:00Z',
+      external_content: false,
+      counts,
+    });
+    const counts = {
+      user_messages: 1,
+      tool_calls: 0,
+      tool_failures: 0,
+      unknown_event_types: JSON.parse(wire),
+    };
+    const stat = SessionStatSchema.parse(mk(counts));
+    expect(sorted(stat.counts.unknown_event_types)).toHaveLength(3);
+    const line = statLine(stat);
+    expect(line).toContain('"__proto__":1');
+    expect(statLine(SessionStatSchema.parse(JSON.parse(line)))).toBe(line);
+    const badKey = { ...counts, unknown_event_types: { 'has space': 1 } };
+    expect(SessionStatSchema.safeParse(mk(badKey)).success).toBe(false);
   });
 });

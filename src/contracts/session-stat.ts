@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { countRecordSchema } from './count-record.js';
 import { AgentIdSchema, IsoTimestampSchema, SessionRefIdSchema } from './common.js';
 import { CountsSchema } from './reader.js';
 
@@ -14,11 +15,12 @@ export const SESSION_STAT_DIR = 'sessions';
 export const MAX_COUNT_KEYS = 64;
 const COUNT_KEY_RE = /^[A-Za-z0-9_.:()<>+-]{1,96}$/;
 
-const countRecord = z
-  .record(z.string().regex(COUNT_KEY_RE), z.number().int().nonnegative())
-  .refine((r) => Object.keys(r).length <= MAX_COUNT_KEYS, {
+const countRecord = countRecordSchema(z.string().regex(COUNT_KEY_RE)).refine(
+  (r) => Object.keys(r).length <= MAX_COUNT_KEYS,
+  {
     message: `计数键最多 ${MAX_COUNT_KEYS} 个`,
-  });
+  },
+);
 
 export const SessionStatCountsSchema = CountsSchema.extend({
   unknown_event_types: countRecord,

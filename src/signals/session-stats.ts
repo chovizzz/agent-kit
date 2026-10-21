@@ -24,7 +24,7 @@ import type { SessionStat } from '../contracts/session-stat.js';
 import type { IoContext } from '../io/paths.js';
 import { lstat, readDir, readText } from '../io/read-fs.js';
 import { chmod, mkdirp, rename, writeFile } from '../io/safe-fs.js';
-import { newCountRecord } from './count-record.js';
+import { newCountRecord } from '../contracts/count-record.js';
 import type { SessionResult } from './pipeline.js';
 import { signalMonth, SignalStoreError } from './state-store.js';
 
@@ -83,7 +83,7 @@ function sortDeep(v: unknown): unknown {
   if (Array.isArray(v)) return v.map(sortDeep);
   if (v !== null && typeof v === 'object') {
     const o = v as Record<string, unknown>;
-    const out: Record<string, unknown> = {};
+    const out = Object.create(null) as Record<string, unknown>;
     for (const k of Object.keys(o).sort()) out[k] = sortDeep(o[k]);
     return out;
   }

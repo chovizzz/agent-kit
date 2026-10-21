@@ -31,7 +31,7 @@ import {
   PLACEHOLDER_NEUTRALIZED,
   PLACEHOLDER_OPEN,
 } from '../redact/placeholder.js';
-import { addCount, newCountRecord } from './count-record.js';
+import { addCount, newCountRecord } from '../contracts/count-record.js';
 import { resolveAgentVersion } from './version.js';
 import type { ResolvedVersion } from './version.js';
 

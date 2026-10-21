@@ -8,7 +8,7 @@ import type { CollectReport, Signal } from '../contracts/signal.js';
 import type { RedactFailReason } from '../contracts/redact.js';
 import type { IoContext } from '../io/paths.js';
 import { MAX_LINE_BYTES } from '../io/read-fs.js';
-import { addCount, newCountRecord } from './count-record.js';
+import { addCount, newCountRecord } from '../contracts/count-record.js';
 import { processSession } from './pipeline.js';
 import type { PipelineDeps, SessionResult } from './pipeline.js';
 import { applySessionStats, buildSessionStat, planSessionStats } from './session-stats.js';
