@@ -201,6 +201,10 @@ describe('契约模式不丢 __proto__ 键(zod 的 z.record 会静默丢)', () =
       false,
     );
     expect(CountsSchema.safeParse({ ...base, unknown_event_types: [] }).success).toBe(false);
+    // 与原 z.number().int() 一致:不安全整数拒绝,MAX_SAFE_INTEGER 通过
+    const big = (n: number) => CountsSchema.safeParse({ ...base, unknown_event_types: { a: n } });
+    expect(big(Number.MAX_SAFE_INTEGER).success).toBe(true);
+    expect(big(Number.MAX_SAFE_INTEGER + 1).success).toBe(false);
   });
 
   it('SessionStatSchema:__proto__ 保留且键白名单仍生效;statLine 往返字节稳定', () => {

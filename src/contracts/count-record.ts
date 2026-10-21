@@ -38,7 +38,7 @@ export function countRecordSchema(keySchema: z.ZodType<string> = z.string()) {
         if (!keySchema.safeParse(k).success) {
           ctx.addIssue({ code: 'custom', path: [k], message: '计数键不合法' });
         }
-        if (typeof v !== 'number' || !Number.isInteger(v) || v < 0) {
+        if (typeof v !== 'number' || !Number.isSafeInteger(v) || v < 0) {
           ctx.addIssue({ code: 'custom', path: [k], message: '计数应为非负整数' });
         }
       }

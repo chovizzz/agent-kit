@@ -234,7 +234,7 @@ describe('LifecycleRecord', () => {
   it('note:变体选择符与 Hangul 填充也被拒(它们不属 Cc/Cf/Co/Cn);普通中文与 emoji 通过', () => {
     for (const note of [
       'a\ufe00b',
-      'a\ufe0fb',
+      'a\ufe0eb',
       'a\u{e0100}b',
       'a\u{e01ef}b',
       'a\u3164b',
@@ -254,6 +254,10 @@ describe('LifecycleRecord', () => {
     expect(
       LifecycleRecordSchema.safeParse({ ...rec, note: '因被取代而退役,见新规则 🚀 😀' }).success,
     ).toBe(true);
+    // 现状保留:U+FE0F 的 emoji 呈现序列(⚠️)在 note 里仍放行(是否拦待定夺,见 docs/p1-backlog.md)
+    expect(LifecycleRecordSchema.safeParse({ ...rec, note: '注意 \u26a0\ufe0f' }).success).toBe(
+      true,
+    );
   });
 });
 
