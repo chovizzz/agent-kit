@@ -49,7 +49,7 @@ export const MUTATIONS = [
       },
     ],
     tests: [T_SYNC_CMD, T_SYNC_REC],
-    redTitles: ['装 → 卸载', '卸载'],
+    redTitles: ['装 → 卸载', '只卸一个 agent'],
   },
   {
     id: 'S2',
@@ -103,7 +103,7 @@ export const MUTATIONS = [
       },
     ],
     tests: [T_SYNC_LOCK],
-    redTitles: ['提交点前复核锁所有权'],
+    redTitles: ['journal 写完后锁被夺走', '写第一个文件之后锁被夺走'],
   },
   {
     id: 'S6',
@@ -244,6 +244,12 @@ async function a28(argv) {
     }
   }
 
+  const gitOut = (args) =>
+    spawnSync('git', ['-C', ctx.root, ...args], {
+      encoding: 'utf8',
+      env: cleanEnv({ GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' }),
+    });
+  const startHead = gitOut(['rev-parse', 'HEAD']).stdout.trim(); // 标记绑定的是开跑时的 HEAD,结束时必须仍是它
   const tmp = mkTmp(ctx, 'a28');
   // 假 HOME:vitest 的 HOME 指向 tmp/sbx-home,KIT_TMP 与 TMPDIR 在同级的 tmp/sbx-kit(产品拒绝「KIT_TMP 是 HOME 的上级」),
   // 变异窗口里任何失控的写入都落不到真实 HOME
@@ -287,9 +293,10 @@ async function a28(argv) {
     return false;
   };
   const results = [];
+  let aborted = false;
   try {
-    if (!baseline('变异前')) return R_.exit();
-    for (const m of list) {
+    aborted = !baseline('变异前');
+    for (const m of aborted ? [] : list) {
       const saved = [];
       let outcome;
       try {
@@ -297,7 +304,7 @@ async function a28(argv) {
           const abs = path.join(ctx.root, e.file);
           if (!saved.some((s) => s.abs === abs)) {
             const st = fs.statSync(abs);
-            fs.copyFileSync(abs, `${abs}.mut-bak`);
+            fs.copyFileSync(abs, `${abs}.mut-bak`, fs.constants.COPYFILE_EXCL); // 已有备份就抛错,不覆盖(并发实例的保险)
             const rec = { abs, atime: st.atime, mtime: st.mtime };
             saved.push(rec);
             pending.push(rec);
@@ -337,7 +344,7 @@ async function a28(argv) {
       if (outcome.red) R_.pass(`${m.id} ${m.what}:变红(${outcome.note})`);
       else R_.fail(`${m.id} ${m.what}:${outcome.note}`);
     }
-    baseline('还原后');
+    if (!aborted) baseline('还原后');
   } finally {
     restoreAll();
   }
@@ -351,17 +358,20 @@ async function a28(argv) {
       `真实 HOME 出现 ${n} 处差异;请用 ops/zero-write-check.sh 归因(多半是其它进程的写入)`,
     );
   rmTmp(tmp);
+  if (aborted) return R_.exit();
 
   const allRed = results.every((r) => r.red);
   if (flags.writeMarker) {
     if (only !== undefined) R_.usage('--write-marker 不能与 --ids 一起用(必须做全部变异)');
     else if (!allRed || results.length !== A28_IDS.length || R_.codes.length > 0)
       R_.fail(`不是 ${A28_IDS.length}/${A28_IDS.length} 变红、基线为绿且真实 HOME 无差异,不写标记`);
+    else if (
+      gitOut(['rev-parse', 'HEAD']).stdout.trim() !== startHead ||
+      gitOut(['status', '--porcelain', '--untracked-files=normal']).stdout.trim() !== ''
+    )
+      R_.fail('运行期间 HEAD 变了或工作树被改动:不写标记(标记只绑开跑时的干净 HEAD)');
     else {
-      const head = spawnSync('git', ['-C', ctx.root, 'rev-parse', 'HEAD'], {
-        encoding: 'utf8',
-        env: cleanEnv({ GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' }),
-      }).stdout.trim();
+      const head = startHead;
       const file = path.join(ctx.root, A28_MARKER);
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(

@@ -31,7 +31,7 @@ export async function loadMods(ctx) {
 // ---------------------------------------------------------------- 零网络垫片
 
 /**
- * 进程内加载 no-net 垫片。返回 { log, blockedCount() }。
+ * 进程内加载 no-net 垫片(进程级补丁,无还原入口:只给 a25 / a27 这类独立子进程入口用,不要在长生命周期进程里复用)。返回 { log, blockedCount() }。
  * 正向对照:装好后立刻发一次 fetch,必须被拦且留痕;随后清空日志,之后日志里出现任何一行都算"碰了网络"。
  */
 export async function installNoNet(ctx, tmp) {
@@ -97,18 +97,16 @@ export function makeWorldDirs(ctx, label, form) {
 
 // ---------------------------------------------------------------- 树快照与比较
 
-const isStateRel = (rel) =>
-  rel === '.local' ||
-  rel === '.local/state' ||
-  rel === STATE_REL ||
-  rel.startsWith(`${STATE_REL}/`);
+// 只豁免 .local/state/agent-kit/**(契约 §19.2);.local、.local/state 及其兄弟目录(如 .local/share)照常遍历
+const isStateRel = (rel) => rel === STATE_REL || rel.startsWith(`${STATE_REL}/`);
 
 /**
  * 快照:files(相对路径 -> "权限位 sha256" | "link -> 目标")、dirs、mtimes(文件与目录)。
- * skipState:忽略 .local 与 .local/state 与 .local/state/agent-kit/**(契约 §19.2 的判据)。
+ * skipState:忽略 .local/state/agent-kit/**(契约 §19.2 的判据;.local 与 .local/state 本身照常遍历)。
  */
 export function snapTree(root, { skipState = false } = {}) {
   const t = { files: new Map(), dirs: new Set(), mtimes: new Map() };
+  t.mtimes.set('', fs.lstatSync(root).mtimeMs); // HOME 根目录自己的 mtime 也算(顶层建了又删文件会改它)
   const walk = (rel) => {
     const abs = rel === '' ? root : path.join(root, rel);
     for (const name of fs.readdirSync(abs).sort(byteCmp)) {

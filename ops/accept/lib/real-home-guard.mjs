@@ -21,22 +21,21 @@ export async function realHomeGuard(ctx, home) {
     path.join(realHome, '.local', 'state', 'agent-kit'),
     path.join(realHome, '.config', 'agent-kit'),
   ];
+  // 记录类型 + 权限位 + (文件内容 sha | 符号链接目标);根节点本身也记(根链接改指向、chmod 都看得见)
   const walk = (p) => {
     const out = [];
     const rec = (rel) => {
       const abs = rel === '' ? p : path.join(p, rel);
       const st = fs.lstatSync(abs, { throwIfNoEntry: false });
       if (!st) return;
-      if (rel === '' || st.isDirectory()) {
-        if (st.isDirectory() && !st.isSymbolicLink())
-          for (const n of fs.readdirSync(abs).sort(byteCmp)) rec(rel === '' ? n : `${rel}/${n}`);
-        out.push(`${rel}/`);
-      } else
-        out.push(
-          `${rel}\t${st.isSymbolicLink() ? fs.readlinkSync(abs) : sha256(fs.readFileSync(abs))}`,
-        );
+      const mode = (st.mode & 0o7777).toString(8);
+      if (st.isSymbolicLink()) out.push(`${rel}\tL\t${mode}\t${fs.readlinkSync(abs)}`);
+      else if (st.isDirectory()) {
+        out.push(`${rel}/\tD\t${mode}`);
+        for (const n of fs.readdirSync(abs).sort(byteCmp)) rec(rel === '' ? n : `${rel}/${n}`);
+      } else out.push(`${rel}\tF\t${mode}\t${sha256(fs.readFileSync(abs))}`);
     };
-    if (fs.lstatSync(p, { throwIfNoEntry: false })) rec('');
+    rec('');
     return out;
   };
   return {

@@ -10,6 +10,7 @@ import { readText } from '../../src/io/read-fs.js';
 import * as safe from '../../src/io/safe-fs.js';
 import { PI_MD, STATE_PREFIX, isState, newWorld, stdFixture, treeOf, type World } from './world.js';
 
+const LEDGER = `${STATE_PREFIX}/sync/ledger.json`;
 const USER_PI = '# 用户自己的 pi 规则\n- 保持简短\n';
 
 async function installed(label: string): Promise<{ w: World; id: string }> {
@@ -40,10 +41,15 @@ describe('sync --rollback:备份内容必须核对 sha', () => {
     expect(await readText(backup)).toBe(USER_PI); // 备份确实存在且是写前全文
     await safe.writeFile(w.io, backup, '# 被篡改的备份\n');
     const before = await managed(w);
+    const full = await treeOf(w.home); // 含状态目录:登记表也不得动
     const r = await w.run(['--write', '--rollback', id]);
     expect(r.code).toBe(ExitCode.FAIL_CLOSED);
     expect(r.err).toBe('SYNC_FAIL_CLOSED reason=SYNC_ROLLBACK_MISMATCH\n');
     expect(await managed(w)).toEqual(before);
+    const after = await treeOf(w.home);
+    expect(after.files.get(LEDGER)).toBeDefined();
+    expect([...after.files]).toEqual([...full.files]);
+    expect(after.mtimes.get(LEDGER)).toBe(full.mtimes.get(LEDGER));
     expect(await w.read(PI_MD)).not.toBe('# 被篡改的备份\n');
   });
 });

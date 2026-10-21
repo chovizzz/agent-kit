@@ -143,6 +143,8 @@ async function rollbackScenario(R, ctx, mods, form, seeded) {
   }
 }
 
+const sleepMs = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
 /** 比较函数自身的正向控制:一次真实改动、一个非空新增目录、一次 mtime 变化都必须被报出。 */
 function selfCheck(R, ctx) {
   const tmp = mkTmp(ctx, 'a25c');
@@ -165,14 +167,25 @@ function selfCheck(R, ctx) {
     fs.mkdirSync(path.join(h, '.local/state/agent-kit'), { recursive: true });
     fs.writeFileSync(path.join(h, '.local/state/agent-kit/x'), 'x');
     const c3 = compareRoundtrip(base, snapTree(h, { skipState: true })).length === 0; // 状态目录被忽略
+    // .local 的其它子目录不豁免(审查补:不能整个 .local 都放过)
+    fs.mkdirSync(path.join(h, '.local/share/other'), { recursive: true });
+    fs.writeFileSync(path.join(h, '.local/share/other/f'), 'x');
+    const c3b = compareRoundtrip(base, snapTree(h, { skipState: true })).some((p) => p.includes('.local/share'));
+    fs.rmSync(path.join(h, '.local/share'), { recursive: true });
     const c4 = compareExact(baseFull, snapTree(h)).length > 0; // 完整快照看得到状态目录
     const s1 = snapTree(h);
     const t = new Date(Date.now() + 5000);
     fs.utimesSync(path.join(h, 'd', 'f.txt'), t, t);
     const c5 = compareExact(s1, snapTree(h)).some((p) => p.startsWith('mtime 变化'));
-    if (ok0 && c1 && c2 && c3 && c4 && c5)
-      R.pass('正向控制:比较函数对改动/非空新增目录/mtime 变化报出,对状态目录豁免');
-    else R.fail(`正向控制失败(同一 ${[ok0, c1, c2, c3, c4, c5].join('/')}):比较函数可能静默变空`);
+    // 顶层建了又删文件:HOME 根目录 mtime 变化也要报
+    const s2 = snapTree(h);
+    sleepMs(20);
+    fs.writeFileSync(path.join(h, 'tmp-top'), 'x');
+    fs.rmSync(path.join(h, 'tmp-top'));
+    const c6 = compareExact(s2, snapTree(h)).some((p) => p === 'mtime 变化 ');
+    if (ok0 && c1 && c2 && c3 && c3b && c4 && c5 && c6)
+      R.pass('正向控制:比较函数对改动/非空新增目录/.local 其它子目录/mtime 与 HOME 根 mtime 变化报出,只对状态目录豁免');
+    else R.fail(`正向控制失败(同一 ${[ok0, c1, c2, c3, c3b, c4, c5, c6].join('/')}):比较函数可能静默变空`);
   } finally {
     rmTmp(tmp);
   }
