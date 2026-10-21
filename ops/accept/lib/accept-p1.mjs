@@ -1,5 +1,5 @@
-// P1 验收总入口(A16–A24)与 A16–A19、A21–A23 共用的小工具。A1–A15 由 ops/accept-p0.sh 负责,语义不变;
-// `--with-p0` 会在 A16–A24 之前先调用它做回归。A20、A24 与 A13 同构:人工完成项,按标记文件判定。
+// P1 验收总入口(A16–A28)与 A16–A19、A21–A23、A25–A27 共用的小工具。A1–A15 由 ops/accept-p0.sh 负责,语义不变;
+// `--with-p0` 会在 A16–A28 之前先调用它做回归。A20、A24、A28 与 A13 同构:人工完成项,按标记文件判定。
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -15,6 +15,7 @@ import {
 } from './common.mjs';
 import { a20Status } from './a20.mjs';
 import { a24Status } from './a24.mjs';
+import { a28Status } from './a28.mjs';
 
 export const ITEMS = [
   {
@@ -61,6 +62,29 @@ export const ITEMS = [
     manual: true,
     doc: 'a24-mutation.md',
     status: a24Status,
+  },
+  {
+    id: 'A25',
+    title:
+      'sync 往返(装→卸 / 装→回滚后受管路径树逐字节一致;干跑零写入;幂等零 mtime 变化;真实 HOME 未变)',
+    script: 'a25.mjs',
+  },
+  {
+    id: 'A26',
+    title: 'doctor 与 sync 干跑进 A5 命令清单并验证零写入(命令环境固定 KIT_AUTO_UPDATE=0)',
+    script: 'a26.mjs',
+  },
+  {
+    id: 'A27',
+    title: '更新(假 registry):检查 / 安装 / 回滚、registry 在 KIT_TMP 外被拒、完整性不符安装失败且 current 不变',
+    script: 'a27.mjs',
+  },
+  {
+    id: 'A28',
+    title: 'sync / update 变异抽检(8 处关键逻辑变异必须变红)',
+    manual: true,
+    doc: 'a28-mutation.md',
+    status: a28Status,
   },
 ];
 
@@ -170,8 +194,8 @@ async function p1Main(argv) {
   if (flags.help) {
     process.stdout.write(
       '用法:ops/accept-p1.sh [--list] [--only A16,A19] [--with-p0] [--root <仓库根>] [--cli <dist/cli.js>]\n' +
-        '无参:依次运行 A16–A24(A20、A24 为人工完成项,按标记文件判定)。--with-p0 先跑 ops/accept-p0.sh(A1–A15 回归)。\n' +
-        '前置:pnpm run build(A16–A19、A21–A23 用 dist;dist 比 src 旧会按"未执行"处理)。任何 4(未执行)都按失败汇总。\n' +
+        '无参:依次运行 A16–A28(A20、A24、A28 为人工完成项,按标记文件判定)。--with-p0 先跑 ops/accept-p0.sh(A1–A15 回归)。\n' +
+        '前置:pnpm run build(A16–A19、A21–A23、A25–A27 用 dist;dist 比 src 旧会按"未执行"处理);A26 另需 pnpm run build:payload。任何 4(未执行)都按失败汇总。\n' +
         '退出码:0 全部通过 | 1 有违规 | 2 用法错 | 3 清单被拒 | 4 有未执行/人工项未完成 | 5 待人工归因\n',
     );
     return EXIT.OK;

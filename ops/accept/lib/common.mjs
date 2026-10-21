@@ -336,7 +336,7 @@ export function evaluateVitest(json) {
  * 在 root 里跑 vitest(`<root>/node_modules/.bin/vitest`,可被 flags.vitestBin 覆盖),返回
  * { code, evaluation, raw }。code:0 通过 / 1 有失败 / 4 vitest 没起来或没产出 JSON。
  */
-export function runVitest(ctx, tmpDir, files, extraArgs = []) {
+export function runVitest(ctx, tmpDir, files, extraArgs = [], envExtra = {}) {
   const bin = ctx.flags.vitestBin ?? path.join(ctx.root, 'node_modules', '.bin', 'vitest');
   if (!fs.existsSync(bin))
     return { code: EXIT.NOT_RUN, why: `找不到 vitest:${bin}`, evaluation: null };
@@ -346,7 +346,7 @@ export function runVitest(ctx, tmpDir, files, extraArgs = []) {
     ['run', ...files, '--reporter=json', `--outputFile=${outFile}`, ...extraArgs],
     {
       cwd: ctx.root,
-      env: cleanEnv({ KIT_TMP: tmpDir, CI: '1' }),
+      env: cleanEnv({ KIT_TMP: tmpDir, CI: '1', ...envExtra }),
     },
   );
   if (r.spawnFailed || !fs.existsSync(outFile)) {
