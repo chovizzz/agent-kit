@@ -280,13 +280,15 @@ export function fakeHomeLeftovers(fakeHome, allowText) {
 }
 
 // ---------- 单轮 ----------
-function buildEnv(o, ctx) {
+export function buildEnv(o, ctx) {
   const env = {
     PATH: `${path.dirname(o.node)}:/usr/bin:/bin`,
     HOME: ctx.fakeHome,
     TMPDIR: ctx.tmpdir,
     KIT_TMP: ctx.kitTmp,
     KIT_ZW_RUN: ctx.nonce,
+    // 启动器在零写入窗口里不得拉起后台更新 worker(S8/A26)
+    KIT_AUTO_UPDATE: '0',
     KIT_WRITE_ROOTS: [path.join(o.repo, 'out'), path.join(o.repo, '.state')].join(path.delimiter),
     GIT_CONFIG_GLOBAL: '/dev/null',
     GIT_CONFIG_NOSYSTEM: '1',

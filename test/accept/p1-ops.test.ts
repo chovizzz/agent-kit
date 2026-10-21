@@ -311,7 +311,7 @@ describe('ops/accept-p1.sh 入口', () => {
     return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
   };
 
-  it('--list 列出 A16–A24,A20 与 A24 标为人工完成项并显示状态', async () => {
+  it('--list 列出 A16–A28,A20、A24、A28 标为人工完成项并显示状态', async () => {
     const fx = await makeFx('p1entry-');
     const r = run(['--list', '--root', fx.root], fx.env());
     expect(r.status).toBe(0);
@@ -326,8 +326,12 @@ describe('ops/accept-p1.sh 入口', () => {
       'A22',
       'A23',
       'A24',
+      'A25',
+      'A26',
+      'A27',
+      'A28',
     ]);
-    for (const i of [4, 8]) {
+    for (const i of [4, 8, 12]) {
       expect(lines[i]).toContain('【人工完成项】');
       expect(lines[i]).toContain('状态:未做');
     }
@@ -354,10 +358,10 @@ describe('ops/accept-p1.sh 入口', () => {
     expect(ok.stdout).toContain('通过 1/1');
   });
 
-  it('每个脚本型项目(A16–A19、A21–A23)都指向一个真实存在的 lib 文件', async () => {
+  it('每个脚本型项目(A16–A19、A21–A23、A25–A27)都指向一个真实存在的 lib 文件', async () => {
     const lines = callLib('accept-p1.mjs', 'listLines', [['/nonexistent-root']])[0] as string[];
-    expect(lines).toHaveLength(9);
-    for (const l of [...lines.slice(0, 4), ...lines.slice(5, 8)]) {
+    expect(lines).toHaveLength(13);
+    for (const l of [...lines.slice(0, 4), ...lines.slice(5, 8), ...lines.slice(9, 12)]) {
       const m = /ops\/accept\/lib\/(\S+)$/.exec(l);
       expect(m, l).not.toBeNull();
       expect(

@@ -25,11 +25,35 @@ export const DEFAULT_ARGS = [
   '--require-clean-tree',
 ];
 
+/**
+ * A26:doctor 与 sync(干跑,不带 --write / --uninstall / --rollback / --resume / --adopt)进 A5 命令清单。
+ * 二者默认零写入:doctor 只读(契约 §19.3),sync 干跑只算计划(§19.2);sync 用包内 payload(`pnpm run build:payload` 产物)。
+ * 命令环境固定带 KIT_AUTO_UPDATE=0(ops/lib/zero-write.mjs 的 buildEnv),免得启动器在零写入窗口里拉起后台更新 worker。
+ */
+export function syncDoctorCommands(cli = '{REPO}/dist/cli.js') {
+  return [
+    `{NODE} ${cli} --root {REPO} doctor`,
+    `{NODE} ${cli} --root {REPO} doctor --json`,
+    `{NODE} ${cli} --root {REPO} sync`,
+    `{NODE} ${cli} --root {REPO} sync --json`,
+  ];
+}
+
+/** sync 干跑要用包内 payload(<包根>/payload/manifest.json,包根 = dist/cli.js 的上一级)。CLI 不在含 package.json 的包里(测试桩)时不判。 */
+export function payloadMissing(cli) {
+  const pkgRoot = path.dirname(path.dirname(cli));
+  return (
+    fs.existsSync(path.join(pkgRoot, 'package.json')) &&
+    !fs.existsSync(path.join(pkgRoot, 'payload', 'manifest.json'))
+  );
+}
+
 export function commandsText(allowProject, cli = '{REPO}/dist/cli.js', extra = []) {
   return [
     `{NODE} ${cli} --root {REPO} build`,
     `{NODE} ${cli} --root {REPO} check`,
     `{NODE} ${cli} --root {REPO} redact --selftest`,
+    ...syncDoctorCommands(cli),
     ...['claude', 'codex', 'pi', 'kimi'].map(
       (a) =>
         `{NODE} ${cli} --root {REPO} signals collect --agent ${a} --allow-project ${allowProject} --source {SOURCE} --dry`,
@@ -193,6 +217,10 @@ async function a5(argv) {
   }
   if (!fs.existsSync(script)) {
     R.notRun(`找不到 ${script}`);
+    return R.exit();
+  }
+  if (payloadMissing(ctx.cli)) {
+    R.notRun('包里没有 payload/manifest.json:A5 清单含 sync 干跑,先 pnpm run build:payload');
     return R.exit();
   }
   const baseRef = flags.baseRef ?? 'origin/main';

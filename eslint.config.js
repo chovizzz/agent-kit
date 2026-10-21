@@ -257,6 +257,7 @@ const SUBPROCESS_TESTS = [
   'test/accept/a15.test.ts',
   'test/accept/p1-ops.test.ts',
   'test/accept/p1-lifecycle-ops.test.ts',
+  'test/accept/p1-sync-update-ops.test.ts',
   'test/ops/helpers.ts',
   'test/build/bundle-artifact.test.ts',
 ];
