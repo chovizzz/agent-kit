@@ -64,8 +64,9 @@ const CASES: Case[] = [
     agent: 'codex',
     marker: 'brand_new_event',
     mutate: (o, name) => {
-      const { payload: _drop, ...rest } = o;
-      return { ...rest, type: name };
+      const rest = { ...o, type: name };
+      delete rest['payload'];
+      return rest;
     },
     gen: (w) => genCodex(w.io, spec(w, 'p2')),
     make: createCodexReader,
