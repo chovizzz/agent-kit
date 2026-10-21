@@ -56,3 +56,14 @@ describe('canonicalText', () => {
     expect(canonicalText(once)).toBe(once);
   });
 });
+
+describe('canonicalJson:原型名作为普通键', () => {
+  it('`__proto__` / constructor 键保留(普通对象赋值会改原型而丢键),且按码元序', () => {
+    const o = JSON.parse('{"toString":3,"__proto__":{"x":1},"constructor":2}') as object;
+    expect(canonicalJson({ k: o })).toBe(
+      '{\n  "k": {\n    "__proto__": {\n      "x": 1\n    },\n    "constructor": 2,\n    "toString": 3\n  }\n}\n',
+    );
+    // 普通键的输出与以前逐字节相同(正向对照)
+    expect(canonicalJson({ b: 1, a: 2 })).toBe('{\n  "a": 2,\n  "b": 1\n}\n');
+  });
+});

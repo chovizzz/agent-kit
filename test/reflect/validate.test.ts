@@ -6,6 +6,7 @@ import {
   validateReflectorOutput,
   type ValidateContext,
 } from '../../src/reflect/validate.js';
+import { hasInvisible } from '../../src/reflect/text.js';
 import { draft, fakeKey, out, testRedactor } from '../fixtures/reflect/world.js';
 
 const ECHO_SRC =
@@ -172,10 +173,14 @@ describe('reflect/validate 评审后补强', () => {
       String.fromCodePoint(0xfe0f),
       String.fromCodePoint(0x3164),
     ]) {
+      // 契约层(HIDDEN_CHARS_RE 已补全)先拦下 => schema_invalid;命令层 hasInvisible 是第二道,单独钉住
       expect(
         code(out(draft({ do: `提交前运行测试。${hidden}` }))),
         hidden.codePointAt(0)?.toString(16),
-      ).toBe('hidden_chars_in_output');
+      ).toBe('schema_invalid');
+      expect(hasInvisible(`提交前运行测试。${hidden}`), hidden.codePointAt(0)?.toString(16)).toBe(
+        true,
+      );
     }
   });
 
