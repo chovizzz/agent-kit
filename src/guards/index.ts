@@ -5,7 +5,11 @@ import { checkG1 } from './g1.js';
 import { checkG2 } from './g2.js';
 import { checkG3 } from './g3.js';
 import { checkG4 } from './g4.js';
-import { checkReflectorPaths, checkUnlabeledProposalDeletes } from './path-guard.js';
+import {
+  checkReflectorPaths,
+  checkReflectorProposalOrigin,
+  checkUnlabeledProposalDeletes,
+} from './path-guard.js';
 import type { GuardOptions, GuardResult } from './types.js';
 
 export { createGuardGit, GitError } from './git.js';
@@ -22,7 +26,7 @@ export class RefError extends Error {
  *  - 无标签(内容 PR):G1 + G2 + G4 + 提案不可删(GUARD_PROPOSAL_DELETED_UNLABELED,K6)
  *  - kit:promotion / kit:retire:G3(+ G4)
  *  - kit:attest:仅允许新增 attest/**(+ G4)
- *  - kit:reflector:路径守卫 + G1 + G2 + G4(设计 §6.4)
+ *  - kit:reflector:路径守卫(含 rules/skills/cases/proposals 只许新增)+ 提案来源核验(backend 必填、拒 stub)+ G1 + G2 + G4(设计 §6.4)
  * 比较的是 base 与 head 两棵树本身(不取 merge-base):CI 若要 PR 语义,自行传 merge-base 作 base。
  * ref 解析不了抛 RefError;git 异常抛 GitError;诊断里的 error 非空 = 守卫判红。
  */
@@ -45,8 +49,12 @@ export function runGuards(opts: GuardOptions): GuardResult {
   } else if (label === 'kit:attest') {
     diagnostics.push(...checkAttestScope(changes));
   } else {
-    if (label === 'kit:reflector') diagnostics.push(...checkReflectorPaths(changes));
-    else diagnostics.push(...checkUnlabeledProposalDeletes(changes));
+    if (label === 'kit:reflector') {
+      diagnostics.push(
+        ...checkReflectorPaths(changes),
+        ...checkReflectorProposalOrigin(git, changes),
+      );
+    } else diagnostics.push(...checkUnlabeledProposalDeletes(changes));
     diagnostics.push(...checkG1(atoms), ...checkG2(atoms));
   }
   diagnostics.push(...checkG4(git, baseOid, atoms));

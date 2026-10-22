@@ -199,8 +199,16 @@ describe('端到端:collect → reflect → apply → check → judge', () => {
       stdout: (t) => co.push(t),
       stderr: (t) => ce.push(t),
     });
-    expect(code, co.join('') + ce.join('')).toBe(0);
-    expect(co.join('')).toMatch(/guards: .*; [1-9]\d* 个文件变更; 0 error, 0 warn/);
+    // 本夹具的提案来自 stub 反思器(无 backend):按 contracts #24,CI 侧守卫必须拒收它——这正是预期的唯一红灯;
+    // 路径守卫 / G1 / G2 / G4 零诊断(只剩来源核验码)。
+    const outText = co.join('') + ce.join('');
+    expect(code, outText).toBe(1);
+    const errCodes = [...outText.matchAll(/^error (\S+) /gm)].map((m) => m[1]);
+    expect(errCodes.length, outText).toBeGreaterThan(0);
+    expect(
+      errCodes.filter((c) => c !== 'GUARD_PROPOSAL_BACKEND_MISSING' && c !== 'GUARD_PROPOSAL_STUB'),
+      outText,
+    ).toEqual([]);
     expect(await exists(path.join(w.repo.dir, 'rules/team/run-lint-before-commit.md'))).toBe(true);
 
     // judge:两家 stub(openai 评审;反思器是 zhipu)
@@ -254,7 +262,7 @@ describe('端到端:collect → reflect → apply → check → judge', () => {
     ]);
     expect(p.judge_attempts?.find((h) => h.hop === 'glm')?.result).toBe('skipped:same-vendor');
     expect(p.judge_attempts?.some((h) => h.result === 'ok')).toBe(false);
-    expect(jc.err.join('')).toContain('reason=no_cross_vendor');
+    expect(jc.err.join('')).toContain('JUDGE_SAME_VENDOR_ONLY proposal=');
   });
 });
 

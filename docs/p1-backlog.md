@@ -17,8 +17,12 @@
   **收口(PB3,2026-10-22)**:A2 矩阵扩到 15 格(加三种来源「不写 enforce」超限格),A2 改为断言 `kit.toml` 的 `enforce = "block"`,真实 `kit.toml` 已翻成 block(契约 §6、§17.5「A2 语义订正」)
 - ✅ **D2:`agent_version` 的 `unknown` 入契约**(`1c09d06`)——`AgentVersionSourceSchema` 加 `unknown`(spec §8.1 D2 备选),
   消除 `collector_fallback` 的双词口径;reader/oracle/schema/test 五处同步
-- ◐ **脱敏 §7 残余缺口清理**:键名词表族已收(`c3034d0`:db_pass/passcode/requirepass/中文键名);
-  其余族(多行 heredoc/三引号、模板默认值链、`cred_*` pass2 残留探测器、对抗评审清单)待逐族排块
+- ✅(主体)**脱敏 §7 残余缺口清理**:键名词表族(`c3034d0`:db_pass/passcode/requirepass/中文键名)、多行三引号 / YAML 块标量 /
+  shell heredoc、模板默认值链、`probe_cred` pass2 探测器均已收(P1-A.3,用户 D3 定:声明主体完成)。
+  剩余缺口登记为 `known_gap` 种子(只报告、修好时测试变红提醒晋升):`gap.triple_escaped_quotes` `gap.yaml_anchor_block`
+  `gap.yaml_anchor_inline` `gap.yaml_tag` `gap.template_default_call` `gap.helm_default_func` `gap.hcl_variable_default`
+  `gap.hcl_ternary_default` `gap.long_segment_concat` `gap.md_inline_code_split` `gap.backtick_leading_space` `gap.placeholder_then_space_value`
+  `gap.upper_dollar_name` `gap.upper_getenv_default` `gap.upper_env_or_default`(详见 `docs/redaction.md` §7)
 
 ## Phase P1-B(设计决策 + 实现,按依赖序)
 
@@ -92,13 +96,12 @@
   (A16 里没有夹具能走到它,因为 schema 的零宽检查先拦下)
 - ✅ **reader 原型键问题**:事件类型名为 `constructor` / `__proto__` / `toString` 时,按普通对象做计数键会碰到原型链
   (`unknown_event_types` 之类);reader 与 `safeKey` 要改用 `Object.create(null)` / `Map` 或前缀转义,并加用例
-- ☐ **单厂商时 `no_cross_vendor` 退出 0 的提示**:`judge` 在只有同厂商 / 未配置时退出 0(决策 ⑩A),且「未配置」与「单厂商」
-  都落成 `no_cross_vendor`,用户看不出是配置问题;需要在 stdout/stderr 区分(`not_configured` vs `same_vendor_only`),
-  并考虑 `--strict` 退出 4
+- ✅ **单厂商时 `no_cross_vendor` 退出 0 的提示**(2026-10-22 用户定 D4):拆成 `JUDGE_NOT_CONFIGURED`(`not_configured`)与
+  `JUDGE_SAME_VENDOR_ONLY`(`same_vendor_only`),默认仍退出 0(决策 ⑩A),新增 `--strict` 时退出 4;契约见 contracts §17.1/§17.2
 - ☐ **`LlmBackend` 扩 `cli` / `provider` 字段**:现在命令层要靠覆盖层反查 `backendCli`(只能对默认接线做到,
   注入的后端拿不到);扩接口后 `reflector.backend` 才能从后端自己拿
-- ☐ **CI 校验**:要求 `reflector.backend` 必填(CI 才能用 provider/model 重算 `deriveVendor`),并拒收 `reflector.stub: true`
-  的提案(contracts #24)
+- ✅ **CI 校验**(S10-rc6):`kit:reflector` PR 新增的提案要求 `reflector.backend` 必填(`GUARD_PROPOSAL_BACKEND_MISSING`),拒收 `reflector.stub: true`
+  (`GUARD_PROPOSAL_STUB`,contracts #24),读不出 fail-closed(`GUARD_PROPOSAL_UNPARSEABLE`),见 contracts §12.3
 - ☐ **`IoContext.hostEnv`**:命令层不能读 `process.env`(eslint:只许 `src/io/paths.js`),真实 CLI 路径下 `reflect`/`judge`
   只能用 `IoContext.execPath`(= PATH)和 `getRealHome()` 拼子进程环境;应由 `paths.ts` 提供受控的 `hostEnv`
   (contracts §12.4 ④),并把 `CommandContext.env` 正式加进 `src/commands/types.ts`(目前经 `EnvCommandContext` 交叉类型传入)
@@ -109,11 +112,9 @@
   `--write-marker` 要求工作树干净、遗留 `.mut-bak` 时拒绝继续;SIGKILL 仍可能留下变异源码(靠 `.mut-bak` 检测发现)
 - ☐ **R2 接口**:`runReflect` 的 `personalProjectKeys` 是黑名单,命令层靠补集代理对象把白名单 `team_project_keys` 接进去
   (只支持 `has()`);R2 应直接提供 `teamProjectKeys` 白名单参数
-- ☐ **`kit:reflector` 标签不禁止修改既有文件**:A17 的 N1 钉住了现状——反思器 PR 改已有 active 原子的**正文**不被
-  路径守卫 / G1 / G2 拒(G2 只锁治理字段,契约 GD-2 已接受);`reflect` 自己只产生新增文件,但 CI 侧对 `kit:reflector`
-  应加「只许新增」判据
-  **K6 部分落地**:`proposals/**` 已「只许新增」(`GUARD_PATH_PROPOSAL_DELETED` / `GUARD_PATH_PROPOSAL_MODIFIED`,contracts §12.3);
-  `rules/` `skills/` `cases/` 下修改既有文件仍未拦(同上条原因,待定);无标签内容 PR 删提案由 `GUARD_PROPOSAL_DELETED_UNLABELED` 拒
+- ✅ **`kit:reflector` 标签不禁止修改既有文件**(S10-rc6,用户定 D7):`rules/` `skills/` `cases/` 同 `proposals/**` 一样「只许新增」:
+  修改 → `GUARD_PATH_EXISTING_MODIFIED`,删除 / 重命名旧路径 / 换成非普通文件 → `GUARD_PATH_EXISTING_DELETED`(contracts §12.3);A17 的 N1 已改钉新语义(被拒)。
+  只作用于带 `kit:reflector` 标签的 PR,无标签内容 PR 行为不变
 - ☑ **`sync` 写全局 + `doctor`**(已实装:S4 / S5,契约见 contracts §19.2 / §19.3)(P2 表内但同批):真实 HOME 受管路径写入,依赖 B17 守卫面
 
 ## S10 系列收口(2026-10-22)

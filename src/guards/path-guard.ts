@@ -1,7 +1,8 @@
 import type { Diagnostic } from '../contracts/diagnostics.js';
+import { parseRestrictedYaml } from '../atoms/frontmatter.js';
 import { err } from './diff.js';
 import { isRegularMode } from './paths.js';
-import type { Change } from './types.js';
+import type { Change, GuardGit } from './types.js';
 
 /** 设计 §6.4:反思器产出的 diff 只允许触碰这些目录(`skills/` 不含 third_party——后者是顶层目录,本来就不在清单里)。 */
 export const REFLECTOR_ALLOWED_DIRS: readonly string[] = ['rules', 'skills', 'cases', 'proposals'];
@@ -17,6 +18,8 @@ export const REFLECTOR_FORBIDDEN: readonly string[] = [
 
 /** 提案账本目录。前缀比较不区分大小写(同禁区;macOS 默认大小写不敏感,`Proposals/x` 与 `proposals/x` 是同一个文件)。 */
 const PROPOSALS_PREFIX = 'proposals/';
+/** D7:反思器对这些目录同样只许新增(修改 / 删除既有文件一律拒)。proposals/ 另有自己的一对码。比较不区分大小写。 */
+const APPEND_ONLY_PREFIXES: readonly string[] = ['rules/', 'skills/', 'cases/'];
 
 /** 基线侧存在、头部侧不再是普通文件:删除(`--no-renames` 下重命名的旧路径也是 D)、类型变更(T)、被替换成符号链接/子模块。 */
 function proposalGone(c: Change): boolean {
@@ -34,6 +37,8 @@ function forbiddenHit(p: string): string | undefined {
  * 命中禁区 → GUARD_PATH_FORBIDDEN;不在允许目录 → GUARD_PATH_OUTSIDE_ALLOWED(区分大小写:`Rules/x` 不算 `rules/`)。
  * 提案是只增的证据账本:基线里已有的 `proposals/**` 文件被删除(含重命名的旧路径)或被换成非普通文件(符号链接/子模块)
  * → GUARD_PATH_PROPOSAL_DELETED;已有文件被修改(内容、清空、仅改权限位)→ GUARD_PATH_PROPOSAL_MODIFIED(与上两个码独立,可同时出现;proposals/ 对反思器只许新增)。
+ * D7:`rules/` `skills/` `cases/` 同样只许新增:基线已有文件被删除 / 重命名旧路径 / 换成非普通文件 → GUARD_PATH_EXISTING_DELETED;
+ * 被修改(含仅改权限位)→ GUARD_PATH_EXISTING_MODIFIED。
  */
 export function checkReflectorPaths(changes: readonly Change[]): Diagnostic[] {
   const out: Diagnostic[] = [];
@@ -53,6 +58,26 @@ export function checkReflectorPaths(changes: readonly Change[]): Diagnostic[] {
             'GUARD_PATH_PROPOSAL_MODIFIED',
             c.path,
             '反思器 PR 对 proposals/ 只许新增文件,不得修改已有提案(含清空、改内容、改权限位)',
+          ),
+        );
+      }
+    }
+    const lowerPath = c.path.toLowerCase();
+    if (APPEND_ONLY_PREFIXES.some((d) => lowerPath.startsWith(d)) && c.kind !== 'A') {
+      if (proposalGone(c)) {
+        out.push(
+          err(
+            'GUARD_PATH_EXISTING_DELETED',
+            c.path,
+            '反思器 PR 对 rules/ skills/ cases/ 只许新增文件,不得删除、移走或用非普通文件替换既有文件',
+          ),
+        );
+      } else {
+        out.push(
+          err(
+            'GUARD_PATH_EXISTING_MODIFIED',
+            c.path,
+            '反思器 PR 对 rules/ skills/ cases/ 只许新增文件,不得修改既有文件(含改正文、清空、改权限位)',
           ),
         );
       }
@@ -88,4 +113,53 @@ export function checkUnlabeledProposalDeletes(changes: readonly Change[]): Diagn
         '无 kit:* 标签的 PR 不得删除或移走已有提案(proposals/ 是只增的证据账本)',
       ),
     );
+}
+
+const REFLECTOR_BACKENDS: readonly string[] = ['claude', 'codex', 'pi'];
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/**
+ * `kit:reflector` PR 新增的提案(`proposals/**.yaml`,头部侧新增的普通文件)的来源核验(contracts #24,CI 侧判据):
+ * - `reflector.backend` 必填且为 `claude|codex|pi`(CI 才能用 provider/model 重算 `deriveVendor`)→ 缺 / 非法 GUARD_PROPOSAL_BACKEND_MISSING;
+ * - `reflector.stub: true` 的提案一律拒收 → GUARD_PROPOSAL_STUB;
+ * - 读不出(YAML 语法错 / 顶层非映射 / 非普通文件)→ GUARD_PROPOSAL_UNPARSEABLE(fail-closed)。
+ * 只看新增文件;既有提案的修改 / 删除由 PROPOSAL_MODIFIED / DELETED 管。只在 `kit:reflector` 下调用。
+ */
+export function checkReflectorProposalOrigin(
+  git: GuardGit,
+  changes: readonly Change[],
+): Diagnostic[] {
+  const out: Diagnostic[] = [];
+  for (const c of changes) {
+    const lower = c.path.toLowerCase();
+    if (c.kind !== 'A' || !lower.startsWith(PROPOSALS_PREFIX)) continue;
+    if (!lower.endsWith('.yaml') && !lower.endsWith('.yml')) continue;
+    if (!isRegularMode(c.headMode)) {
+      out.push(err('GUARD_PROPOSAL_UNPARSEABLE', c.path, '提案不是普通文件,无法核验来源'));
+      continue;
+    }
+    const y = parseRestrictedYaml(git.blobText(c.headOid), c.path, 'GUARD_PROPOSAL_UNPARSEABLE');
+    if (!y.ok || !isRecord(y.value)) {
+      out.push(err('GUARD_PROPOSAL_UNPARSEABLE', c.path, '提案 YAML 读不出或顶层不是键值映射'));
+      continue;
+    }
+    const r = y.value['reflector'];
+    const backend = isRecord(r) ? r['backend'] : undefined;
+    if (typeof backend !== 'string' || !REFLECTOR_BACKENDS.includes(backend)) {
+      out.push(
+        err(
+          'GUARD_PROPOSAL_BACKEND_MISSING',
+          c.path,
+          '提案缺 reflector.backend(或不是 claude|codex|pi),CI 无法重算反思器厂商',
+        ),
+      );
+    }
+    if (isRecord(r) && r['stub'] === true) {
+      out.push(err('GUARD_PROPOSAL_STUB', c.path, 'reflector.stub: true 的提案不得合并(桩产物)'));
+    }
+  }
+  return out;
 }

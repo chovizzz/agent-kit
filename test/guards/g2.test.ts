@@ -131,7 +131,8 @@ describe('G2:非晋升/退役 PR 不得改已有原子的 status', () => {
       { [ATOM_PATH]: atom({ status: 'active' }) },
       { label: 'kit:reflector' },
     );
-    expect(s.codes).toEqual(['GUARD_G2_STATUS_CHANGED']);
+    // G2 仍独立生效;D7 起反思器改既有文件另出 GUARD_PATH_EXISTING_MODIFIED
+    expect(s.codes).toEqual(['GUARD_G2_STATUS_CHANGED', 'GUARD_PATH_EXISTING_MODIFIED']);
   });
 });
 

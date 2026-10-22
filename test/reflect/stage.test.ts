@@ -80,7 +80,12 @@ describe('reflect/stage apply.patch', () => {
       head,
       label: 'kit:reflector',
     });
-    expect(res.diagnostics).toEqual([]);
+    // stub 反思器的提案无 backend / 带 stub:true:CI 侧来源核验(contracts #24)必须拒收,这是唯一允许的红灯;
+    // 路径守卫 / G1 / G2 / G4 零诊断。
+    expect(res.diagnostics.map((d) => d.code).sort()).toEqual([
+      'GUARD_PROPOSAL_BACKEND_MISSING',
+      'GUARD_PROPOSAL_STUB',
+    ]);
     expect(res.changed).toBe(2);
     const lint = await lintRepo(repo.dir, { redactor: testRedactor() });
     expect(lint.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);

@@ -38,6 +38,25 @@ const atomText = (o = {}) =>
     '',
   ].join('\n');
 
+// 合成提案:守卫(kit:reflector)只看 reflector.backend / reflector.stub
+const proposalText = (o = {}) =>
+  [
+    `id: ${o.id ?? 'p-new'}`,
+    'body: a',
+    ...(o.omitReflector
+      ? []
+      : [
+          'reflector:',
+          '  provider: codex',
+          '  vendor: openai',
+          '  model: gpt-example',
+          '  run_id: run-1',
+          ...(o.backend === null ? [] : [`  backend: ${o.backend ?? 'codex'}`]),
+          ...(o.stub ? ['  stub: true'] : []),
+        ]),
+    '',
+  ].join('\n');
+
 const ATOM = 'rules/team/sample-atom.md';
 export const BASE_FILES = {
   'kit.toml': '[kit]\nname = "demo"\n',
@@ -58,7 +77,7 @@ export const CASES = [
     name: 'C0 合法对照:新增 proposed 原子 + 提案文件',
     head: {
       'rules/team/new-rule.md': atomText({ id: 'new-rule' }),
-      'proposals/p2.yaml': 'id: p2\n',
+      'proposals/p2.yaml': proposalText({ id: 'p2' }),
     },
     codes: [],
   },
@@ -79,27 +98,27 @@ export const CASES = [
   {
     name: 'G2 改已有 active 原子 status → retired',
     head: { [ATOM]: atomText({ status: 'retired' }) },
-    codes: ['GUARD_G2_STATUS_CHANGED'],
+    codes: ['GUARD_G2_STATUS_CHANGED', 'GUARD_PATH_EXISTING_MODIFIED'],
   },
   {
     name: 'G2 改已有 active 原子 status → advisory',
     head: { [ATOM]: atomText({ status: 'advisory' }) },
-    codes: ['GUARD_G2_STATUS_CHANGED'],
+    codes: ['GUARD_G2_STATUS_CHANGED', 'GUARD_PATH_EXISTING_MODIFIED'],
   },
   {
     name: 'G2 给已有 active 原子加 disables',
     head: { [ATOM]: atomText({ status: 'active', extra: ['disables: [other-atom]'] }) },
-    codes: ['GUARD_G2_FIELD_LOCKED'],
+    codes: ['GUARD_G2_FIELD_LOCKED', 'GUARD_PATH_EXISTING_MODIFIED'],
   },
   {
     name: 'G2 改已有 active 原子 strength',
     head: { [ATOM]: atomText({ status: 'active', strength: 'must' }) },
-    codes: ['GUARD_G2_FIELD_LOCKED'],
+    codes: ['GUARD_G2_FIELD_LOCKED', 'GUARD_PATH_EXISTING_MODIFIED'],
   },
   {
     name: 'G2 延长已有 active 原子 review_by',
     head: { [ATOM]: atomText({ status: 'active', review_by: '2099-01-01' }) },
-    codes: ['GUARD_G2_REVIEW_BY_EXTENDED'],
+    codes: ['GUARD_G2_REVIEW_BY_EXTENDED', 'GUARD_PATH_EXISTING_MODIFIED'],
   },
   {
     name: 'G1 新增原子 status=active',
@@ -116,14 +135,42 @@ export const CASES = [
   {
     name: 'G4 删除已有 active 原子(不经退役)',
     head: { [ATOM]: null },
-    codes: ['GUARD_G4_DELETE_NOT_RETIRED'],
+    codes: ['GUARD_G4_DELETE_NOT_RETIRED', 'GUARD_PATH_EXISTING_DELETED'],
   },
   {
-    // 策略说明(contracts §12.3 GD-2):守卫不约束已有原子的正文,靠人工评审。这里钉住现状,放宽/收紧都要同步改契约。
-    name: 'N1 仅改已有 active 原子正文 → 守卫不拒(已接受的策略,靠评审)',
+    // D7(2026-10-22 用户定):kit:reflector 对 rules/ skills/ cases/ 只许新增;原 N1(改正文放行)现钉住新语义:被拒
+    name: 'N1 仅改已有 active 原子正文 → 被拒(D7:反思器只许新增,不许改既有文件)',
     head: { [ATOM]: atomText({ status: 'active' }).replace('做某件具体的事', '做另一件事') },
-    codes: [],
+    codes: ['GUARD_PATH_EXISTING_MODIFIED'],
     policy: true,
+  },
+  {
+    name: 'D7 修改既有 skills/ 文件',
+    head: { 'skills/demo/SKILL.md': '---\nname: demo\n---\n改了\n' },
+    codes: ['GUARD_PATH_EXISTING_MODIFIED'],
+  },
+  {
+    name: 'D7 删除既有 cases/ 文件',
+    head: { 'cases/x/case.yaml': null },
+    codes: ['GUARD_PATH_EXISTING_DELETED'],
+  },
+  {
+    name: 'D7 对照:纯新增 skill + case 放行',
+    head: {
+      'skills/new/SKILL.md': '---\nname: new\n---\nbody\n',
+      'cases/new/case.yaml': 'id: new\n',
+    },
+    codes: [],
+  },
+  {
+    name: '#24 新增提案缺 reflector.backend',
+    head: { 'proposals/p2.yaml': proposalText({ id: 'p2', backend: null }) },
+    codes: ['GUARD_PROPOSAL_BACKEND_MISSING'],
+  },
+  {
+    name: '#24 新增提案 reflector.stub: true',
+    head: { 'proposals/p2.yaml': proposalText({ id: 'p2', stub: true }) },
+    codes: ['GUARD_PROPOSAL_STUB'],
   },
 ];
 
