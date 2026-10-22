@@ -249,7 +249,10 @@ describe('命令层不得绕过 hostEnv', () => {
     const lintAs = async (rel: string) => {
       const [res] = await eslint.lintText(code, { filePath: path.join(REPO_ROOT, rel) });
       expect(res, rel).toBeDefined();
-      expect(res!.messages.some((m) => m.fatal), rel).toBe(false);
+      expect(
+        res!.messages.some((m) => m.fatal),
+        rel,
+      ).toBe(false);
       return res!.messages.filter((m) => m.ruleId === 'no-restricted-properties');
     };
     expect((await lintAs('src/commands/reflect.ts')).length).toBeGreaterThan(0);
