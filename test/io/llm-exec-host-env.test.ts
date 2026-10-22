@@ -106,7 +106,8 @@ describe('IoContext.hostEnv:键集合快照', () => {
 
   it('值逐字来自注入的环境', () => {
     const io = mk(RICH);
-    for (const k of EXPECTED_KEYS.filter((x) => x !== 'HOME')) expect(io.hostEnv[k], k).toBe(RICH[k]);
+    for (const k of EXPECTED_KEYS.filter((x) => x !== 'HOME'))
+      expect(io.hostEnv[k], k).toBe(RICH[k]);
     expect(io.hostEnv['HOME']).toBe(FAKE_REAL_HOME); // HOME 例外:见下一组
   });
 
