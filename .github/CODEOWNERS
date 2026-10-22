@@ -1,0 +1,10 @@
+# 治理面:改动这些路径的 PR 需要代码所有者审批(分支保护开启"需要代码所有者审核"后生效)
+*                    @chovizzz
+/docs/contracts.md   @chovizzz
+/kit.toml            @chovizzz
+/rules/              @chovizzz
+/skills/             @chovizzz
+/cases/              @chovizzz
+/proposals/          @chovizzz
+/lifecycle/          @chovizzz
+/.github/            @chovizzz
