@@ -296,6 +296,8 @@ async function a10(argv) {
             if (pinCheck.problems.length)
               R.fail(`公开信任材料钉死校验失败:${pinCheck.problems.join(' | ')}`);
             for (const f of files) {
+              // 已 git 跟踪但工作树里被删掉的文件:钉死清单会在上面报「读取失败」,这里不让它崩掉整个扫描
+              if (!fs.existsSync(path.join(ctx.root, f))) continue;
               const buf = fs.readFileSync(path.join(ctx.root, f));
               if (!isText(buf)) continue;
               scanned++;
