@@ -2152,6 +2152,13 @@ export function buildSeeds(seed: number = SEED): Seed[] {
       '纯小写单词口令(<=12 字符)被当成普通单词放行',
     ),
     gap(
+      'gap.long_segment_concat',
+      'concat_multiline',
+      `${PW}="abcdefghijkl"${gapPw}`,
+      [gapPw],
+      '引号段不是短前缀的拼接(`NAME="长一点的段"值`,段 >= 8 字符):段本身被当作整个值脱敏,紧贴其后的值留在输出里,apply 放行 = 静默漏出;段 <= 4 字符(短前缀)时整体脱敏',
+    ),
+    gap(
       'gap.md_inline_code_split',
       'plain',
       `\`${PW}=\` ${gapPw}`,

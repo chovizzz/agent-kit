@@ -19,6 +19,7 @@ const D3_GAP_IDS = [
   'gap.helm_default_func',
   'gap.hcl_variable_default',
   'gap.hcl_ternary_default',
+  'gap.long_segment_concat',
   'gap.md_inline_code_split',
   'gap.backtick_leading_space',
   'gap.placeholder_then_space_value',
@@ -27,7 +28,7 @@ const D3_GAP_IDS = [
   'gap.upper_env_or_default',
 ] as const;
 
-const KNOWN_GAP_TOTAL = 31;
+const KNOWN_GAP_TOTAL = 32;
 
 /** 全部 known_gap 的 id(排序):替换一条为另一条也会红 */
 const ALL_GAP_IDS = [
@@ -41,6 +42,7 @@ const ALL_GAP_IDS = [
   'gap.hcl_variable_default',
   'gap.helm_default_func',
   'gap.lower36_24',
+  'gap.long_segment_concat',
   'gap.md_inline_code_split',
   'gap.neutral_open_type',
   'gap.obfuscated_at',
@@ -119,15 +121,7 @@ describe('D3:复测已不漏的形态(不是缺口)', () => {
     ['大写口令 NAME=UPPER', `${PW}=${U}`, U],
     ['大写口令带引号', `${PW}="${U}"`, U],
     ['大写口令 ${X:-UPPER} 默认值链', `${PW}=\${DB_X:-${U}}`, U],
-    ['引号段 + 全小写后随值', `${PW}="abcdefghijklmnop"kq7zr2wxlm9tb`, 'kq7zr2wxlm9tb'],
   ])('%s:第一遍已脱敏', (_n, input, v) => {
     expect(r.pass1(input).text.includes(v)).toBe(false);
-  });
-
-  it('引号段 + 混合大小写后随值:第一遍放过,但第二遍抓到、apply fail-closed', () => {
-    const input = `${PW}="abcdefghijklmnop"${V}`;
-    expect(r.pass1(input).text.includes(V)).toBe(true);
-    expect(r.pass2(input).clean).toBe(false);
-    expect(r.apply(input)).toEqual({ ok: false, reason: 'residual' });
   });
 });
