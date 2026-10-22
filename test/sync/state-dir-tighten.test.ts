@@ -14,7 +14,7 @@ const modeOf = async (abs: string): Promise<number> => (await lstat(abs)).mode &
 
 async function realStateMode(): Promise<number | null> {
   try {
-    return await modeOf(path.join(getRealHome(process.env), STATE_PREFIX));
+    return await modeOf(path.join(getRealHome(), STATE_PREFIX));
   } catch {
     return null;
   }
@@ -96,6 +96,8 @@ describe('sync:状态目录收紧到 0700', () => {
   it('属主不是当前用户:不改并告警(SYNC_STATE_DIR_SKIPPED)', async () => {
     const { w, dir } = await world('sd-foreign-', 0o755);
     const uid = process.getuid?.() ?? 0;
+    // 无法真造一个他人所有的目录(非 root):只在此处替换 getuid,用后立即还原
+    // eslint-disable-next-line no-restricted-syntax
     vi.spyOn(process, 'getuid').mockReturnValue(uid + 1);
     const r = await w.run(['--write']);
     vi.restoreAllMocks();

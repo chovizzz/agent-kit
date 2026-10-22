@@ -439,7 +439,9 @@ export function createSyncCommand(deps: SyncCommandDeps = {}): CommandDef {
     const r = await tightenStateDir(aenv, write);
     if (r.result === 'tightened') {
       const from = r.from.toString(8).padStart(4, '0');
-      ctx.stderr(`SYNC_STATE_DIR ${r.applied ? 'tightened' : 'would_tighten'} from=${from} to=0700\n`);
+      ctx.stderr(
+        `SYNC_STATE_DIR ${r.applied ? 'tightened' : 'would_tighten'} from=${from} to=0700\n`,
+      );
     } else if (r.result === 'skipped_foreign_owner' || r.result === 'skipped_unsafe') {
       const reason = r.result === 'skipped_unsafe' ? 'link_or_not_dir' : 'foreign_owner';
       ctx.stderr(`SYNC_STATE_DIR_SKIPPED reason=${reason}\n`);
