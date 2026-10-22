@@ -27,6 +27,7 @@ import {
 } from './common.mjs';
 import { freshDist } from './accept-p1.mjs';
 import { OK_TEXT, RUN_ID as JUDGE_RUN, writeRunDir } from './a18.mjs';
+import { commitStaged, initRepo } from './lc-world.mjs';
 
 /** 目录/文件的快照:name → { hash, count }。不存在记 absent。 */
 export function snapshotTargets(targets) {
@@ -196,6 +197,11 @@ async function a19(argv) {
       provider: 'anthropic',
       backend: 'claude',
     });
+    // judge 真跑(对照 c3)要写冻结记录,需要仓库 HEAD 作外部锚点(缺 HEAD → JUDGE_STATE_INVALID,退 3)。
+    // 在快照之前把 judge 仓库提交成真 git 仓库;git 的 HOME 是 tmp 内的空目录,不碰真实 HOME/全局配置
+    const gitHomeJ = path.join(tmp, 'githome-judge');
+    initRepo(repoJ, gitHomeJ);
+    commitStaged(repoJ, gitHomeJ, 'a19 judge world');
 
     const envFor = (bin) =>
       cleanEnv({
