@@ -97,8 +97,8 @@
   并考虑 `--strict` 退出 4
 - ☐ **`LlmBackend` 扩 `cli` / `provider` 字段**:现在命令层要靠覆盖层反查 `backendCli`(只能对默认接线做到,
   注入的后端拿不到);扩接口后 `reflector.backend` 才能从后端自己拿
-- ☐ **CI 校验**:要求 `reflector.backend` 必填(CI 才能用 provider/model 重算 `deriveVendor`),并拒收 `reflector.stub: true`
-  的提案(contracts #24)
+- ✅ **CI 校验**(S10-rc6):`kit:reflector` PR 新增的提案要求 `reflector.backend` 必填(`GUARD_PROPOSAL_BACKEND_MISSING`),拒收 `reflector.stub: true`
+  (`GUARD_PROPOSAL_STUB`,contracts #24),读不出 fail-closed(`GUARD_PROPOSAL_UNPARSEABLE`),见 contracts §12.3
 - ☐ **`IoContext.hostEnv`**:命令层不能读 `process.env`(eslint:只许 `src/io/paths.js`),真实 CLI 路径下 `reflect`/`judge`
   只能用 `IoContext.execPath`(= PATH)和 `getRealHome()` 拼子进程环境;应由 `paths.ts` 提供受控的 `hostEnv`
   (contracts §12.4 ④),并把 `CommandContext.env` 正式加进 `src/commands/types.ts`(目前经 `EnvCommandContext` 交叉类型传入)
@@ -109,11 +109,9 @@
   `--write-marker` 要求工作树干净、遗留 `.mut-bak` 时拒绝继续;SIGKILL 仍可能留下变异源码(靠 `.mut-bak` 检测发现)
 - ☐ **R2 接口**:`runReflect` 的 `personalProjectKeys` 是黑名单,命令层靠补集代理对象把白名单 `team_project_keys` 接进去
   (只支持 `has()`);R2 应直接提供 `teamProjectKeys` 白名单参数
-- ☐ **`kit:reflector` 标签不禁止修改既有文件**:A17 的 N1 钉住了现状——反思器 PR 改已有 active 原子的**正文**不被
-  路径守卫 / G1 / G2 拒(G2 只锁治理字段,契约 GD-2 已接受);`reflect` 自己只产生新增文件,但 CI 侧对 `kit:reflector`
-  应加「只许新增」判据
-  **K6 部分落地**:`proposals/**` 已「只许新增」(`GUARD_PATH_PROPOSAL_DELETED` / `GUARD_PATH_PROPOSAL_MODIFIED`,contracts §12.3);
-  `rules/` `skills/` `cases/` 下修改既有文件仍未拦(同上条原因,待定);无标签内容 PR 删提案由 `GUARD_PROPOSAL_DELETED_UNLABELED` 拒
+- ✅ **`kit:reflector` 标签不禁止修改既有文件**(S10-rc6,用户定 D7):`rules/` `skills/` `cases/` 同 `proposals/**` 一样「只许新增」:
+  修改 → `GUARD_PATH_EXISTING_MODIFIED`,删除 / 重命名旧路径 / 换成非普通文件 → `GUARD_PATH_EXISTING_DELETED`(contracts §12.3);A17 的 N1 已改钉新语义(被拒)。
+  只作用于带 `kit:reflector` 标签的 PR,无标签内容 PR 行为不变
 - ☑ **`sync` 写全局 + `doctor`**(已实装:S4 / S5,契约见 contracts §19.2 / §19.3)(P2 表内但同批):真实 HOME 受管路径写入,依赖 B17 守卫面
 
 ## S10 系列收口(2026-10-22)

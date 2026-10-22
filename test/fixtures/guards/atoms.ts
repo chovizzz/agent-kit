@@ -64,3 +64,30 @@ export const COMMON_FILES = {
   'skills/demo/SKILL.md': '---\nname: demo\n---\nbody\n',
   'proposals/p1.yaml': 'id: p1\n',
 } as const;
+
+export interface ProposalSpec {
+  id?: string;
+  /** 缺省 'codex';null = 不写 backend 行 */
+  backend?: string | null;
+  stub?: boolean;
+  /** 不写整个 reflector 块 */
+  omitReflector?: boolean;
+}
+
+/** 合成提案(守卫只看 reflector.backend / reflector.stub,其余字段随意)。 */
+export function proposal(spec: ProposalSpec = {}): string {
+  const backend = spec.backend === undefined ? 'codex' : spec.backend;
+  const lines = [`id: ${spec.id ?? 'p-new'}`, 'body: a'];
+  if (!spec.omitReflector) {
+    lines.push(
+      'reflector:',
+      '  provider: codex',
+      '  vendor: openai',
+      '  model: gpt-example',
+      '  run_id: run-1',
+    );
+    if (backend !== null) lines.push(`  backend: ${backend}`);
+    if (spec.stub === true) lines.push('  stub: true');
+  }
+  return `${lines.join('\n')}\n`;
+}
