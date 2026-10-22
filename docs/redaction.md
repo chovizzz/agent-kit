@@ -294,11 +294,18 @@ B09c 之后仍然存在、**没有种子**的行为(多数是多脱敏方向;标
 `(见 §3.2);以转义空白开头的口令(`NAME=
 …`);`cred_authz` / `cred_cookie` 是整行贪婪规则,不参与原视图补扫,值里字面 `
 ` 之后的部分不会脱敏。
-- 漏:转义引号包裹的三引号 / 双引号拼接(`"""…"""`,`gap.triple_escaped_quotes`);Helm / HCL 的模板默认值。(P1-A.3 已收:多行三引号值、YAML 块标量、shell heredoc,见 §3.4。)
+- 漏:转义引号包裹的三引号 / 双引号拼接(`"""…"""`,`gap.triple_escaped_quotes`);Helm / HCL 的模板默认值(`gap.template_default_call`〔Helm 管道式〕、`gap.helm_default_func`〔函数式〕、`gap.hcl_variable_default`〔`variable` 块 `default`〕、`gap.hcl_ternary_default`〔三元回退〕)。(P1-A.3 已收:多行三引号值、YAML 块标量、shell heredoc,见 §3.4。)
 - ~~漏:`KW` 没有的键名:`DB_PASS` `pw` `passcode` `requirepass`、中文键名(密码 / 口令 / 密钥 / 令牌)~~(**B09d-P1 已收**:`db[_-]?pass(?:word)?`(连同已有 `pwd` 覆盖 `DB_PASS` 大小写不敏感)、`passcode`、`requirepass`、密码 / 口令 / 密钥 / 令牌 进 `KW`;中文只收四个高频词且规则要求键名后紧跟操作符);没有运算符的写法(`.netrc` 的 `password 值`、Dockerfile `ENV X 值`、SQL `IDENTIFIED BY '值'`);`{"name":"DB_PASSWORD","value":"…"}` 名值对、XML `<add key=… value=…/>`、`<password>…</password>`;`-p值` / `sshpass -p`、`curl -u user:值`、`.pgpass`;`setPassword("…")` 调用形式。
 - 漏:`${NAME}` / `$HOME` 之后的路径后缀、`os.getenv("X", "…")` 之外的更长的默认值链。
 - 误脱敏(多脱敏方向,丢失可读性但不泄漏):源码里取值类动词以外的调用(键名等号后接 `hash(pw)` 一类)、yaml 里键名冒号后接 `$UPPER_ENV`(`$` 在非 shell 语境是字面字符)、带数字的 `config.db2.password` 路径段。
-- 漏(opus 对抗评审实测,未修):引号段不是短前缀的拼接(`NAME="长一点的段"值`);(`${NAME:-$(echo 值)}` 默认值链已于 P1-A.3 收掉,见 §3.4);带 `f` / `b` 前缀的字符串(`f"值"`);markdown 行内代码把键名和值隔开(`` `键名=` 值 ``);反引号内首字符是空白;YAML 锚点 / 标签(`password: &pw 值`、`!!str 值`);类型标注里带 `=` 的(`Annotated[str, Field(min_length=8)] = "值"`);输入里本来就带合法占位符字面量、其后接空白 / 制表符再接值(`NAME=[[REDACTED:credential]] 值`,正常两遍流程不会产出这种形状);纯大写字母的口令(`HUNTERXYZABC`)冒充环境变量名(默认值字面量、`$UPPER`)。
+- 漏(opus 对抗评审实测;P1-A.3 逐条复测后登记为 known_gap 种子,未修):
+  - markdown 行内代码把键名和值隔开(`` `键名=` 值 ``):`gap.md_inline_code_split`;反引号内首字符是空白:`gap.backtick_leading_space`。
+  - YAML 锚点 / 标签:`password: &pw 值` 为 `gap.yaml_anchor_inline`(换行写法为 `gap.yaml_anchor_block`),`!!str 值` 为 `gap.yaml_tag`。
+  - 输入里本来就带合法占位符字面量、其后接空白 / 制表符再接值(`NAME=[[REDACTED:credential]] 值`,正常两遍流程不会产出这种形状):`gap.placeholder_then_space_value`。
+  - 纯大写字母的口令(`HUNTERXYZABC`)冒充环境变量名:`$UPPER`(`gap.upper_dollar_name`)、`os.getenv('X', 'UPPER')` 默认值(`gap.upper_getenv_default`)、`process.env.X || "UPPER"`(`gap.upper_env_or_default`)。
+  - **复测已不漏(2026-10-22,不登记为缺口)**:带 `f` / `b` 前缀的字符串(`f"值"`、`b"值"`)两遍都能抓;类型标注里带 `=` 的(`Annotated[str, Field(min_length=8)] = "值"`)值本身已脱敏(输出里键名后的注解部分被一并替换,可读性受损但不泄漏);纯大写口令作 `NAME=UPPER`、`NAME="UPPER"`、`${X:-UPPER}` 默认值链时已脱敏。
+  - **引号段不是短前缀的拼接**(`NAME="长一点的段"值`):第一遍对混合大小写的后随值**会放过**,但第二遍的 `probe_cred` 能抓到,`apply` fail-closed(residual),不会放行;全小写 / 纯数字的后随值第一遍已脱敏。所以它是「第一遍漏、第二遍兜底」,不是 known_gap(没有 known_gap 种子)。
+  - `${NAME:-$(echo 值)}` 默认值链已于 P1-A.3 收掉,见 §3.4。
 - pass2 的 `cred_*` 残留探测器只有 `probe_cred` 一条(P1-A.3,覆盖引号包裹的混合大小写长值,见 §3.4);其它凭据赋值形态仍没有独立于规则表的探测器,同一判据的 bug 会在两遍里各犯一次。
 - 摘录里 JSON 字符串中的 `\n` 紧跟着值的位置(`NAME=
 …`)被当成空值。

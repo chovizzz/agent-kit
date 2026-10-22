@@ -2013,6 +2013,8 @@ export function buildSeeds(seed: number = SEED): Seed[] {
 
   // ---- 做不到的形态(只报告,不计入召回) ----
   const gapPw = 'K' + g.entropic(ALNUM, 10, 3.0);
+  const PW = ['pass', 'word'].join('');
+  const UPPER_PW = 'HUNTERXYZABC';
   const hex32 = g.pick(HEXL, 32);
   const lower36 = (() => {
     for (let k = 0; k < 5000; k++) {
@@ -2148,6 +2150,83 @@ export function buildSeeds(seed: number = SEED): Seed[] {
       'password: correcthorse',
       ['correcthorse'],
       '纯小写单词口令(<=12 字符)被当成普通单词放行',
+    ),
+    gap(
+      'gap.md_inline_code_split',
+      'plain',
+      `\`${PW}=\` ${gapPw}`,
+      [gapPw],
+      'markdown 行内代码把键名和值隔开(`` `键名=` 值 ``):收尾反引号之后的词不在赋值结构里;P1-A.3 评审实测漏,未修',
+    ),
+    gap(
+      'gap.backtick_leading_space',
+      'plain',
+      `${PW}=\` ${gapPw}\``,
+      [gapPw],
+      '反引号包裹的值首字符是空白:不按引用值判,也不当作无引号值;P1-A.3 评审实测漏,未修',
+    ),
+    gap(
+      'gap.yaml_anchor_inline',
+      'plain',
+      `${PW}: &pw ${gapPw}`,
+      [gapPw],
+      'YAML 锚点后同一行跟值(`&pw 值`):把锚点当作取值;换行写法见 gap.yaml_anchor_block',
+    ),
+    gap(
+      'gap.yaml_tag',
+      'plain',
+      `${PW}: !!str ${gapPw}`,
+      [gapPw],
+      'YAML 标签后跟值(`!!str 值`):把标签当作取值',
+    ),
+    gap(
+      'gap.placeholder_then_space_value',
+      'adjacent_placeholder',
+      `${PW}=[[REDACTED:credential]] ${gapPw}`,
+      [gapPw],
+      '输入里本来就带合法占位符字面量、其后接空白再接值:占位符被当作整个值,正常两遍流程不会产出这种形状(同形的制表符写法同源)',
+    ),
+    gap(
+      'gap.upper_dollar_name',
+      'plain',
+      `export ${PW}=$${UPPER_PW}`,
+      [UPPER_PW],
+      '纯大写字母口令冒充 `$ENV_NAME` 变量引用(shell 语境放行);带数字或混合大小写的口令不受影响',
+    ),
+    gap(
+      'gap.upper_getenv_default',
+      'plain',
+      `${PW} = os.getenv('X', '${UPPER_PW}')`,
+      [UPPER_PW],
+      '纯大写字母口令作 `os.getenv` 默认值字面量:形如环境变量名,按引用放行',
+    ),
+    gap(
+      'gap.upper_env_or_default',
+      'plain',
+      `${PW} = process.env.X || "${UPPER_PW}"`,
+      [UPPER_PW],
+      '纯大写字母口令作 `process.env.X || "…"` 回退字面量:形如环境变量名,按引用放行',
+    ),
+    gap(
+      'gap.hcl_variable_default',
+      'plain',
+      `variable "${PW}" {\n  default = "${gapPw}"\n}`,
+      [gapPw],
+      'HCL `variable` 块的 `default = "值"`:键名在块头,值在下一行的另一个键下,没有「键名 + 运算符 + 值」',
+    ),
+    gap(
+      'gap.hcl_ternary_default',
+      'plain',
+      `${PW} = var.x != "" ? var.x : "${gapPw}"`,
+      [gapPw],
+      'HCL 三元表达式的回退字面量:值以调用 / 属性路径开头按取值引用放行',
+    ),
+    gap(
+      'gap.helm_default_func',
+      'plain',
+      `${PW}: {{ default "${gapPw}" .Values.x }}`,
+      [gapPw],
+      'Helm 函数式 `default "值" .Values.x`:值以 `{{` 开头按模板表达式放行(管道式见 gap.template_default_call)',
     ),
     gap(
       'gap.pct_nested4',

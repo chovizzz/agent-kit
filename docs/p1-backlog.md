@@ -17,8 +17,12 @@
   **收口(PB3,2026-10-22)**:A2 矩阵扩到 15 格(加三种来源「不写 enforce」超限格),A2 改为断言 `kit.toml` 的 `enforce = "block"`,真实 `kit.toml` 已翻成 block(契约 §6、§17.5「A2 语义订正」)
 - ✅ **D2:`agent_version` 的 `unknown` 入契约**(`1c09d06`)——`AgentVersionSourceSchema` 加 `unknown`(spec §8.1 D2 备选),
   消除 `collector_fallback` 的双词口径;reader/oracle/schema/test 五处同步
-- ◐ **脱敏 §7 残余缺口清理**:键名词表族已收(`c3034d0`:db_pass/passcode/requirepass/中文键名);
-  其余族(多行 heredoc/三引号、模板默认值链、`cred_*` pass2 残留探测器、对抗评审清单)待逐族排块
+- ✅(主体)**脱敏 §7 残余缺口清理**:键名词表族(`c3034d0`:db_pass/passcode/requirepass/中文键名)、多行三引号 / YAML 块标量 /
+  shell heredoc、模板默认值链、`probe_cred` pass2 探测器均已收(P1-A.3,用户 D3 定:声明主体完成)。
+  剩余缺口登记为 `known_gap` 种子(只报告、修好时测试变红提醒晋升):`gap.triple_escaped_quotes` `gap.yaml_anchor_block`
+  `gap.yaml_anchor_inline` `gap.yaml_tag` `gap.template_default_call` `gap.helm_default_func` `gap.hcl_variable_default`
+  `gap.hcl_ternary_default` `gap.md_inline_code_split` `gap.backtick_leading_space` `gap.placeholder_then_space_value`
+  `gap.upper_dollar_name` `gap.upper_getenv_default` `gap.upper_env_or_default`(详见 `docs/redaction.md` §7)
 
 ## Phase P1-B(设计决策 + 实现,按依赖序)
 
