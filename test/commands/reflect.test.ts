@@ -214,7 +214,7 @@ describe('reflect 干跑:project_key 计数(供填 team_project_keys)', () => {
     const legacy = { ...j };
     delete legacy['project_key_counts'];
     expect(Object.keys(legacy).sort()).toEqual(OLD_KEYS);
-    expect(raw.replace(`"project_key_counts":${canonicalJson(counts)},`, '')).toBe(
+    expect(raw.replace(/ {2}"project_key_counts": \[[\s\S]*?\n {2}\],\n/, '')).toBe(
       canonicalJson(legacy),
     );
     expect((j['signals'] as { loaded: number }).loaded).toBe(4);
