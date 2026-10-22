@@ -825,3 +825,68 @@ export async function switchCurrent(ctx: HomeFsContext, version: string | null):
     throw new HomeWriteDeniedError(HOME_DENY.PATH_ESCAPE, CURRENT_LINK_REL);
   }
 }
+
+// ---------------------------------------------------------------------------
+// 状态目录收紧(contracts §19.3 D14 / §19.2 的一处写入例外)
+// ---------------------------------------------------------------------------
+
+const KIT_STATE_DIR_REL = '.local/state/agent-kit';
+
+export type TightenStateDirResult =
+  | { result: 'absent' }
+  | { result: 'ok' }
+  /** 宽于 0700:`applied=false` 是干跑(只报「将收紧」) */
+  | { result: 'tightened'; applied: boolean; from: number }
+  /** 不改:任一段是符号链接 / 非目录 */
+  | { result: 'skipped_unsafe' }
+  /** 不改:属主不是当前用户 */
+  | { result: 'skipped_foreign_owner' };
+
+/**
+ * 把 kit 自己的状态目录(`~/.local/state/agent-kit`,仅这一层)收紧到 0700。
+ * 只在权限宽于 0700(组 / 其他位有任一权限)时动;链上有符号链接、非目录、属主不是当前用户一律不改。
+ * 目录 chmod 走 O_NOFOLLOW|O_DIRECTORY 的 fd,并核对 dev:ino 与 lstat 一致。`apply=false` 不写。
+ */
+export async function tightenKitStateDir(
+  ctx: HomeFsContext,
+  apply: boolean,
+): Promise<TightenStateDirResult> {
+  // 复用 inspect:HOME 身份固定、逐段 lstat、精确目录名(挡大小写别名)、链接 / 非目录、realpath 复核
+  let info: Inspected;
+  try {
+    info = inspect(ctx, KIT_STATE_DIR_REL, 'dir');
+  } catch (e) {
+    if (e instanceof HomeWriteDeniedError && e.code !== HOME_DENY.BAD_HOME) {
+      return { result: 'skipped_unsafe' };
+    }
+    throw e;
+  }
+  const st = info.leaf;
+  if (st === undefined) return { result: 'absent' };
+  const uid = typeof process.getuid === 'function' ? process.getuid() : undefined;
+  if (uid === undefined || st.uid !== uid) return { result: 'skipped_foreign_owner' };
+  const mode = st.mode & 0o777;
+  if ((mode & 0o077) === 0) return { result: 'ok' };
+  if (!apply) return { result: 'tightened', applied: false, from: mode };
+  let fh: fsp.FileHandle;
+  try {
+    fh = await fsp.open(
+      info.abs,
+      fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW,
+    );
+  } catch {
+    return { result: 'skipped_unsafe' };
+  }
+  try {
+    const fst = await fh.stat();
+    if (fst.ino !== st.ino || fst.dev !== st.dev) return { result: 'skipped_unsafe' };
+    if (fst.uid !== uid) return { result: 'skipped_foreign_owner' };
+    // 以打开后的 fd 为准再判一次:这期间若已被别人收窄,不再改
+    const now = fst.mode & 0o777;
+    if ((now & 0o077) === 0) return { result: 'ok' };
+    await fh.chmod(0o700);
+    return { result: 'tightened', applied: true, from: now };
+  } finally {
+    await fh.close();
+  }
+}

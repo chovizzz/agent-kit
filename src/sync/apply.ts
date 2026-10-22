@@ -14,6 +14,8 @@ import {
   writeFile,
   type HomeFsContext,
   type HomeFsStage,
+  tightenKitStateDir,
+  type TightenStateDirResult,
 } from '../io/home-fs.js';
 import { lstat, readDir } from '../io/read-fs.js';
 import type { LoadedPayload } from './payload-load.js';
@@ -84,6 +86,14 @@ export interface ApplyEnv {
 }
 
 export const SYNC_LOCK_TTL_MS = 15 * 60 * 1000;
+
+/**
+ * 把 kit 自己的状态目录(`~/.local/state/agent-kit`)收紧到 0700(contracts §19.3 D14 的写入例外)。
+ * `apply=false` 只报「将收紧」;链接 / 非目录 / 他人所有一律不改。命令层只经这里调用。
+ */
+export function tightenStateDir(env: ApplyEnv, apply: boolean): Promise<TightenStateDirResult> {
+  return tightenKitStateDir(mkCtx(env, []), apply);
+}
 
 const STATE_FILE_MODE = 0o600;
 const STATE_DIR_MODE = 0o700;

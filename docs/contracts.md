@@ -2651,6 +2651,7 @@ agent-kit sync [--agent <id>]… [--write] [--overwrite-drifted] [--json] [--hom
 - 未执行(4):`SYNC_NO_PAYLOAD`、`SYNC_LOCKED`。
 - fail-closed(3):`SYNC_TXN_INCOMPLETE`、`SYNC_PATH_SYMLINK`、`SYNC_PATH_HARDLINK`、`SYNC_PATH_NOT_REGULAR`、`SYNC_BLOCK_CORRUPT`、`SYNC_SHARED_PATH_CONFLICT`、`SYNC_LEDGER_INVALID`、`SYNC_PAYLOAD_INVALID`、`SYNC_ROLLBACK_MISMATCH`、`SYNC_WRITE_DENIED`。
 - fail-closed(3,S4 追加):`SYNC_MIGRATION_UNSUPPORTED`(v1 不执行 migrations,见 §19.2.1;命令层常量 `SYNC_MIGRATION_UNSUPPORTED`,尚未进 `SYNC_FAIL_CLOSED_REASONS`,待主代理在契约 schema 里补)。
+- 提示(不改退出码,仅 stderr,S10-a 追加):`SYNC_STATE_DIR tightened|would_tighten from=<nnnn> to=0700`、`SYNC_STATE_DIR_SKIPPED reason=link_or_not_dir|foreign_owner`,见 §19.2.2。
 
 #### 19.2.1 S4 实装订正(sync 执行层与命令层)
 
@@ -2701,6 +2702,18 @@ backups/<id>/complete           备份写完的标记(缺失则 --resume 拒绝)
 - **sync 隐式创建的目录**:`home-fs` 写文件时隐式创建缺失的父目录;卸载 / 回滚删文件后,沿父目录向上 `removeDir` 空目录,止于 home-fs 的目录条目边界——能删的是严格位于条目内部的目录(如 `.claude/skills/<name>/`、`.agents/skills/<name>/`、`.claude/rules/agent-kit/paths/`)。**条目目录本身及其上级**(`.claude`、`.claude/skills`、`.claude/rules`、`.claude/rules/agent-kit`、`.codex`、`.codex/agents`、`.pi`、`.pi/agent`、`.agents`、`.agents/skills`、`.local/state/agent-kit/**` 等)home-fs 不允许删除,装 → 卸之后会留下**空目录**。条目目录可安全推定为 sync 所建:目录已存在而目标文件不在 → 计划器按外来拒绝,所以我们登记的文件所在的条目目录必为我们创建(用户后来往里放了文件则 `rmdir` 失败、原样保留)。
 - **「装 → 卸后受管路径树哈希逐字节一致」的判据**(S8 的 A25 同此):比较「文件集合(相对路径 + 权限位 + 内容 sha256)」,忽略状态目录 `.local/state/agent-kit/**`(含 `backups/`,它保存着可回滚的写前全文);目录只要求「新增的目录全是空目录」。即:不含空目录的文件树逐字节一致。
 
+#### 19.2.2 状态目录收紧(S10-a,D14 的处置;零写入口径里允许的唯一一处目录权限例外)
+
+用户拍板:真实 HOME 下 D14 报 `mode_not_0700` 时,处置方式是 **sync 自动把状态目录收紧到 0700**;doctor 本身仍只读、只报告。
+
+- **对象**:只有 `~/.local/state/agent-kit` 这一层(kit 自己拥有的状态目录),不碰其上级(`.local`、`.local/state`)、兄弟目录或目录里的任何文件。
+- **条件**:权限位含任一组 / 其他位(`mode & 0o077 != 0`,即宽于 0700)才动,目标恒为 `0700`。已是 0700 不动;窄于 0700 且无组 / 其他位的(如 0500)不改,仍由 D14 `mode_not_0700` 报告。
+- **不改并告警(不静默)**:任一路径段是符号链接或不是目录 → `SYNC_STATE_DIR_SKIPPED reason=link_or_not_dir`(实际上命令层更早的 `SYNC_PATH_SYMLINK` fail-closed 已先拦下,退出 3);属主不是当前用户 → `SYNC_STATE_DIR_SKIPPED reason=foreign_owner`。chmod 走 `O_NOFOLLOW|O_DIRECTORY` 的 fd 并核对 dev:ino 与 lstat 一致。
+- **何时**:`sync` / `--adopt` / `--uninstall` 且计划 `status=ok` 时。`--write` 才改(幂等运行、无其它变更也会收紧);`--rollback` / `--resume` 不收紧。计划被拒(退出非 0 的 refuse)时不写。
+- **干跑**:不改,只在 stderr 报 `SYNC_STATE_DIR would_tighten from=0755 to=0700`;写入后报 `SYNC_STATE_DIR tightened from=0755 to=0700`。**stdout 与 `--json` 的固定键集合不变**。
+- **零写入口径**:这是 §12.1 / A5 零写入验收里允许的一处例外:仅限 `sync --write`、仅限状态目录自身的 mode 位;干跑与 doctor 仍零写入。幂等:收紧后重复 sync 不再有任何写入或输出。
+- **写出口**:`src/io/home-fs.ts` 的 `tightenKitStateDir`,命令层经 `src/sync/apply.ts` 的 `tightenStateDir`;测试 `test/sync/state-dir-tighten.test.ts`。
+
 ### 19.3 `doctor`
 
 ```
@@ -2728,7 +2741,7 @@ agent-kit doctor [--json] [--only <id>]… [--online] [--home <dir>]
 | D11 | 探针:payload 里带 `conditional` 的文件个数;各 agent `tested_versions` 是否为空                                                              | `ok`、`untested`(warn:在用的 agent 为空)、`pending_probes`(warn)                                                                                                          |
 | D12 | 更新:开关、pin、上次检查时间与结果码、可用版本、锁、残留 staging、`max_seen_version`、registry 是否镜像(只读 `state.json` 与 `config.toml`) | `no_state` / `online_unavailable`(n_a)、`ok`、`last_check_failed` / `staging_residue` / `update_available`(warn)、`state_unreadable`(fail,退出 3)                         |
 | D13 | hook:套件目前不渲染 hook,恒 `n_a`                                                                                                           | `no_hook_rendered`(n_a)                                                                                                                                                   |
-| D14 | 状态目录权限:`~/.local/state/agent-kit` 为 0700、非链接、属主为当前用户                                                                     | `absent`(n_a)、`ok`、`mode_not_0700` / `foreign_owner`(fail)、`link_or_not_dir`(fail,退出 3)                                                                              |
+| D14 | 状态目录权限:`~/.local/state/agent-kit` 为 0700、非链接、属主为当前用户(doctor 只读只报;`sync --write` 会把宽于 0700 的收紧到 0700,见 §19.2.2)                                                                     | `absent`(n_a)、`ok`、`mode_not_0700` / `foreign_owner`(fail)、`link_or_not_dir`(fail,退出 3)                                                                              |
 | D15 | LLM 门:`egress` 取值、`allow_unverified` 槽位数、今日冷却标记数(只读覆盖层与 `.state/llm-cooldown/`,不清扫过期标记)                         | `no_overlay`(n_a)、`ok`、`egress_on` / `allow_unverified` / `overlay_invalid`(warn)                                                                                       |
 | D16 | 最近一次自动同步记录(`UpdateState.last_auto_sync`:outcome、原因码、计数)——② B 追加                                                          | `none`(n_a)、`applied`(ok)、`declined` / `failed`(warn)、`state_unreadable`(fail,退出 3)                                                                                  |
 

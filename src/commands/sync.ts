@@ -35,6 +35,7 @@ import {
   isHomeDenied,
   resumeTxn,
   rollbackTxn,
+  tightenStateDir,
   type ApplyDeps,
   type ApplyEnv,
 } from '../sync/apply.js';
@@ -429,6 +430,22 @@ export function createSyncCommand(deps: SyncCommandDeps = {}): CommandDef {
     return plan.exit;
   }
 
+  /** D14 的写入例外:状态目录宽于 0700 时收紧(干跑只报);结果走 stderr,不改 stdout / --json 键集合。 */
+  async function reportStateDirTighten(
+    ctx: CommandContext,
+    aenv: ApplyEnv,
+    write: boolean,
+  ): Promise<void> {
+    const r = await tightenStateDir(aenv, write);
+    if (r.result === 'tightened') {
+      const from = r.from.toString(8).padStart(4, '0');
+      ctx.stderr(`SYNC_STATE_DIR ${r.applied ? 'tightened' : 'would_tighten'} from=${from} to=0700\n`);
+    } else if (r.result === 'skipped_foreign_owner' || r.result === 'skipped_unsafe') {
+      const reason = r.result === 'skipped_unsafe' ? 'link_or_not_dir' : 'foreign_owner';
+      ctx.stderr(`SYNC_STATE_DIR_SKIPPED reason=${reason}\n`);
+    }
+  }
+
   async function runPlan(ctx: CommandContext, args: Parsed, aenv: ApplyEnv): Promise<number> {
     let payload: LoadedPayload | null = null;
     if (args.mode !== 'uninstall') {
@@ -441,16 +458,36 @@ export function createSyncCommand(deps: SyncCommandDeps = {}): CommandDef {
     // 同一个事务 id 贯穿规划与落盘:登记表条目里记的 txn 必须就是实际落盘的那个事务
     const txnId = freshTxnId(aenv);
     const first = await gather(args, aenv, payload, txnId);
-    if (!args.write || first.plan.status !== 'ok' || !hasChanges(first.plan)) {
+    // 状态目录收紧(D14 例外,§19.2.2):干跑只报;写入只在「计划 ok 且已拿锁并在锁内重新规划仍 ok」之后做
+    if (!args.write) {
+      await reportStateDirTighten(ctx, aenv, false);
+      return report(ctx, args, first.plan, false, undefined, 0);
+    }
+    if (first.plan.status !== 'ok') return report(ctx, args, first.plan, false, undefined, 0);
+    if (!hasChanges(first.plan)) {
+      // 无其它变更:仅当状态目录确需收紧时才拿锁(无锁预检只读,幂等运行仍零写入、不拿锁)
+      if ((await tightenStateDir(aenv, false)).result === 'tightened') {
+        const lock = await acquireLock(aenv);
+        try {
+          const g = await gather(args, aenv, payload, txnId);
+          if (g.plan.status === 'ok') await reportStateDirTighten(ctx, aenv, true);
+          return report(ctx, args, g.plan, false, undefined, 0);
+        } finally {
+          await lock.release().catch(() => undefined);
+        }
+      }
       return report(ctx, args, first.plan, false, undefined, 0);
     }
     // 有东西要写:先拿锁,再在锁内重读登记表 / 磁盘并重新规划(幂等运行不拿锁,零写入)
     const lock = await acquireLock(aenv);
     try {
       const g = await gather(args, aenv, payload, txnId);
-      if (g.plan.status !== 'ok' || !hasChanges(g.plan)) {
+      if (g.plan.status !== 'ok') return report(ctx, args, g.plan, false, undefined, 0);
+      if (!hasChanges(g.plan)) {
+        await reportStateDirTighten(ctx, aenv, true);
         return report(ctx, args, g.plan, false, undefined, 0);
       }
+      await reportStateDirTighten(ctx, aenv, true);
       const res = await applyPlanToDisk(aenv, {
         action: args.mode === 'uninstall' ? 'uninstall' : args.mode === 'adopt' ? 'adopt' : 'sync',
         plan: g.plan,
