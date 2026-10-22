@@ -120,7 +120,9 @@ export const PINNED_PUBLIC_TRUST_MATERIAL = {
 };
 
 const sha256Hex = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
-const isEntropyRule = (r) => r === 'high_entropy' || r.startsWith('decode_base64');
+// 只认最终类别:high_entropy(含 base64 解码链上的 high_entropy);解码后的 url 仅限证书 SAN 里的公开工作流 URL
+// (att-rc0.json 的 Fulcio 证书,内容已被 sha256 钉死)。解码后的邮箱 / 密钥形态等其他类别不放过。
+const isEntropyRule = (r) => /^(decode_base64>)*high_entropy$/.test(r) || r === 'decode_base64>url';
 
 /**
  * 核对钉死清单。返回 { problems, ok }:ok 是「路径与 sha256 都匹配」的文件集合(只有它们能忽略熵命中)。

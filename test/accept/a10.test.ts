@@ -199,6 +199,16 @@ describe('A10 公开信任材料:路径 + sha256 精确钉死', () => {
     expect(r.stdout).toContain('sha256 与钉死值不符');
   }, 120_000);
 
+  it('边界:钉死文件里 base64 编码的密钥形态也必须命中(只放过解码后的 high_entropy)=> 1', async () => {
+    const seed = buildSeeds().find((s) => s.category === 'plain' && s.tier === 'recognized');
+    const enc = Buffer.from(`token = ${seed?.input ?? ''}\n`).toString('base64');
+    const { fx, pins } = await pinned(`${body(entropy())}{"b":"${enc}"}\n`);
+    const r = withPins(fx, pins);
+    expect(r.status, r.stdout).toBe(1);
+    expect(r.stdout).toContain(PIN_PATH);
+    expect(r.stdout).toContain('decode_base64');
+  }, 120_000);
+
   it('边界:钉死文件里的熵命中被忽略,但密钥形态等其他命中照旧 => 1', async () => {
     const seed = buildSeeds().find((s) => s.category === 'plain' && s.tier === 'recognized');
     const { fx, pins } = await pinned(`${body(entropy())}token = ${seed?.input ?? ''}\n`);
