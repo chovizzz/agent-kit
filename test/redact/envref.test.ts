@@ -181,7 +181,8 @@ describe('B09b:真值赋值仍被拦(召回不倒退)', () => {
 });
 
 describe('B09b:幂等与两遍一致', () => {
-  const seeds = buildSeeds();
+  // 已知缺口种子按定义抓不到,不参与「apply 输出必须干净」的性质:候选池里直接不放
+  const seeds = buildSeeds().filter((s) => s.tier !== 'known_gap');
   const red = createRedactor(SELFTEST_CONFIG, { internalDomains: SELFTEST_INTERNAL_DOMAINS });
 
   /** 合成「引用」「真值」「普通文本」「种子」的混合文本。 */
@@ -204,8 +205,7 @@ describe('B09b:幂等与两遍一致', () => {
         parts.push(f(randomString(rand, ALNUM, 24 + Math.floor(rand() * 20))));
       } else if (c < 0.8) {
         const sd = seeds[Math.floor(rand() * seeds.length)];
-        // 已知缺口种子按定义抓不到,不参与「apply 输出必须干净」的性质
-        if (sd && sd.tier !== 'pass2_only' && sd.tier !== 'known_gap') parts.push(sd.input);
+        if (sd && sd.tier !== 'pass2_only') parts.push(sd.input);
       } else parts.push(noise[Math.floor(rand() * noise.length)] as string);
     }
     // 事件之间一律换行分隔(与真实会话一致);相邻拼接会制造出现实里不存在的新语法
