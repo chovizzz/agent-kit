@@ -98,8 +98,8 @@
   (`unknown_event_types` 之类);reader 与 `safeKey` 要改用 `Object.create(null)` / `Map` 或前缀转义,并加用例
 - ✅ **单厂商时 `no_cross_vendor` 退出 0 的提示**(2026-10-22 用户定 D4):拆成 `JUDGE_NOT_CONFIGURED`(`not_configured`)与
   `JUDGE_SAME_VENDOR_ONLY`(`same_vendor_only`),默认仍退出 0(决策 ⑩A),新增 `--strict` 时退出 4;契约见 contracts §17.1/§17.2
-- ☐ **`LlmBackend` 扩 `cli` / `provider` 字段**:现在命令层要靠覆盖层反查 `backendCli`(只能对默认接线做到,
-  注入的后端拿不到);扩接口后 `reflector.backend` 才能从后端自己拿
+- ✅ **`LlmBackend` 扩 `cli` / `provider` 字段**(S10-rc2):后端自己暴露 `cli`/`provider`,`reflector.backend` 与 judge 的厂商判定从后端取,
+  覆盖层反查 `backendCli` 已移除;缺字段 / `stub` 标记 fail-closed。契约见 contracts §17.4a
 - ✅ **CI 校验**(S10-rc6):`kit:reflector` PR 新增的提案要求 `reflector.backend` 必填(`GUARD_PROPOSAL_BACKEND_MISSING`),拒收 `reflector.stub: true`
   (`GUARD_PROPOSAL_STUB`,contracts #24),读不出 fail-closed(`GUARD_PROPOSAL_UNPARSEABLE`),见 contracts §12.3
 - ☐ **`IoContext.hostEnv`**:命令层不能读 `process.env`(eslint:只许 `src/io/paths.js`),真实 CLI 路径下 `reflect`/`judge`

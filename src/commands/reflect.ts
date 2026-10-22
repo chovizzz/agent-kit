@@ -557,7 +557,6 @@ export function createReflectCommand(deps: ReflectCommandDeps = {}): CommandDef 
       try {
         const now = clock();
         let backend: LlmBackend | undefined;
-        let backendCli: RunDeps['backendCli'];
         if (live) {
           const backends = await (deps.createBackends ?? defaultCreateBackends)(ctx, {
             overlay,
@@ -580,7 +579,6 @@ export function createReflectCommand(deps: ReflectCommandDeps = {}): CommandDef 
             ctx.stderr('REFLECT_NOT_RUN reason=backend_not_configured\n'); // 未调用、未写入
             return ExitCode.NOT_RUN;
           }
-          backendCli = overlay?.reflect?.backends.find((b) => b.slot === slot)?.cli;
           ctx.stderr(
             `REFLECT_EGRESS slot=${safeEnum(backend.slot) ?? '?'} vendor=${safeEnum(backend.vendor) ?? '?'}\n`,
           );
@@ -591,7 +589,6 @@ export function createReflectCommand(deps: ReflectCommandDeps = {}): CommandDef 
           redactor,
           clock,
           ...(backend !== undefined ? { backend } : {}),
-          backendCli,
           existingAtoms: await loadExistingAtoms(ctx.io),
           stagedAtoms: await loadStagedAtoms(ctx.io),
           usedProposalIds: await loadUsedProposalIds(ctx.io),

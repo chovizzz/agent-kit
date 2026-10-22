@@ -12,6 +12,7 @@ import type { JudgeBackends } from '../../src/judge/run.js';
 import { createRedactor } from '../../src/redact/redactor.js';
 import type {
   LlmBackend,
+  LlmBackendCli,
   LlmCompleteRequest,
   LlmCompleteResult,
 } from '../../src/reflect/backend-iface.js';
@@ -47,6 +48,8 @@ export class StubBackend implements LlmBackend {
     readonly vendor: string,
     readonly model: string,
     private readonly script: Script = () => ({ ok: true, text: outputText() }),
+    readonly cli: LlmBackendCli = 'pi',
+    readonly provider: string | undefined = undefined,
   ) {}
   async complete(req: LlmCompleteRequest): Promise<LlmCompleteResult> {
     this.calls.push(req);

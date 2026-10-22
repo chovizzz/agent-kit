@@ -18,6 +18,7 @@ import type { IoContext } from '../io/paths.js';
 import { assertWritable } from '../io/safe-fs.js';
 import { ruleSha256 } from '../lifecycle/checks.js';
 import type { LlmBackend } from '../reflect/backend-iface.js';
+import { provenVendorOf } from '../reflect/backend-identity.js';
 import { JudgeProviderMismatchError, JudgeStateError } from './errors.js';
 import { parseJudgeOutput } from './output.js';
 import { buildAcceptance, buildPrediction, decidePredictionStatus, isoSeconds } from './freeze.js';
@@ -307,13 +308,15 @@ function assertReflectorVendor(p: Proposal): void {
 }
 
 /**
- * 后端自报的厂商必须能被其模型串证实:由模型族推导出的厂商 == 自报厂商(归一化后)。
- * 推导不出(`opus`、含空白/非法字符的串)或与自报不符 → 不可证明,不放行。
- * (`LlmBackend` 只有 slot/vendor/model,拿不到 CLI 种类与 provider,所以只能靠模型串;见汇报「待主代理」。)
+ * 后端自报的厂商必须同时被两条独立推导证实,缺一不放行:
+ * ① 后端自己的 `cli`+`provider`+`model` 复算(`provenVendorOf`;缺 cli/provider 键、`stub`、`unconfigured` → unknown);
+ * ② 只看模型族(与 CI 的 C5 `JUDGE_VENDOR_UNPROVEN` 同一口径,本地不得比 CI 宽)。
+ * 任一推不出或与自报(归一化后)不符 → 不可证明。
  */
 function vendorUnproven(b: LlmBackend): boolean {
+  const own = provenVendorOf(b);
   const byModel = deriveVendor({ backend: 'pi', model: b.model });
-  return byModel === 'unknown' || byModel !== norm(b.vendor);
+  return own === 'unknown' || byModel === 'unknown' || own !== norm(b.vendor) || byModel !== own;
 }
 
 export async function runJudge(deps: JudgeDeps, opts: JudgeOptions): Promise<JudgeReport> {

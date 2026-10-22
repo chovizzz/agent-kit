@@ -16,10 +16,11 @@ import {
   type ReflectRunReport,
   type ReflectorProposalDraft,
 } from '../contracts/reflect.js';
-import { VENDOR_ID_RE, UNKNOWN_VENDOR } from '../contracts/vendor.js';
+import { BUILTIN_VENDORS, VENDOR_ID_RE, UNKNOWN_VENDOR } from '../contracts/vendor.js';
 import type { IoContext } from '../io/paths.js';
 import { DEFAULT_ATOM_MAX_BYTES } from '../contracts/common.js';
 import type { LlmBackend } from './backend-iface.js';
+import { isRealCli, provenVendorOf } from './backend-identity.js';
 import { classifySignals } from './classify.js';
 import { buildClusters } from './cluster.js';
 import {
@@ -73,8 +74,6 @@ export interface RunDeps {
   clock: () => Date;
   /** dry 模式不需要;stub/llm 模式必须给 */
   backend?: LlmBackend | undefined;
-  /** 实际 CLI(claude|codex|pi),写进提案的 reflector.backend */
-  backendCli?: 'claude' | 'codex' | 'pi' | undefined;
   existingAtoms: readonly ExistingAtomInfo[];
   stagedAtoms?: readonly ExistingAtomInfo[] | undefined;
   /** 已占用的提案编号(仓库 proposals/ + 暂存区) */
@@ -175,13 +174,30 @@ function checkOpts(
   const per = opts.evidencePerPrompt ?? DEFAULT_EVIDENCE_PER_PROMPT;
   if (!Number.isInteger(per) || per < 5) throw new ReflectUsageError('evidencePerPrompt 至少 5');
   const b = deps.backend;
-  if (b !== undefined && (!VENDOR_ID_RE.test(b.vendor) || b.vendor === UNKNOWN_VENDOR)) {
+  if (b !== undefined && !backendVendorProvable(b)) {
     throw new ReflectFailClosedError(
       'REFLECT_VENDOR_UNKNOWN',
       '后端厂商无法确定,无法证明与裁判不同厂商',
     );
   }
   return { mode, maxCalls };
+}
+
+/**
+ * 后端厂商必须可证明:id 形状合法且非 unknown;`cli` 必须是 claude|codex|pi|stub(缺失/非法 fail-closed);
+ * 真实 CLI 的厂商须与后端自己的 `cli`+`provider`+`model` 复算一致(自报不算数);
+ * 复算不出内置厂商时(覆盖层追加家族推出的非内置厂商)沿用原行为放行——它不可能与任何裁判构成「可证明不同厂商」。
+ * `stub` 不复算,但产出的提案一律带 `reflector.stub: true`(CI 拒收,#24)。
+ */
+function backendVendorProvable(b: LlmBackend): boolean {
+  if (typeof b.vendor !== 'string' || !VENDOR_ID_RE.test(b.vendor) || b.vendor === UNKNOWN_VENDOR) {
+    return false;
+  }
+  if (b.cli === 'stub') return true;
+  if (!isRealCli(b.cli)) return false;
+  const proven = provenVendorOf(b);
+  if (proven === b.vendor) return true;
+  return proven === UNKNOWN_VENDOR && !BUILTIN_VENDORS.includes(b.vendor) && 'provider' in b;
 }
 
 function backendInfo(b: LlmBackend | undefined): ReflectRunReport['backend'] {
@@ -457,12 +473,12 @@ export async function runReflect(deps: RunDeps, opts: RunOpts): Promise<RunResul
     vendor: backend.vendor,
     model: backend.model,
     run_id: opts.runId,
-    backend: deps.backendCli,
+    backend: isRealCli(backend.cli) ? backend.cli : undefined,
     prompt_id: (rendered[0] as (typeof rendered)[number]).prompt.prompt_id,
     prompt_sha256: promptSha as string,
     input_digest: digest as string,
     kit_version: deps.kitVersion,
-    stub: mode === 'stub',
+    stub: mode === 'stub' || backend.cli === 'stub',
   };
   // 基线读到窗口内的坏记录:不写残缺基线,整批作废(SignalStoreError 等读库损坏照常向上抛 → 退出 3)
   let guidance;

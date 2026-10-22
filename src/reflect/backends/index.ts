@@ -10,7 +10,7 @@ import { ReflectBackendBindingSchema } from '../../contracts/config.js';
 import { UNKNOWN_VENDOR } from '../../contracts/vendor.js';
 import type { IoContext } from '../../io/paths.js';
 import { LlmSpawnBudget } from '../../io/llm-exec.js';
-import type { LlmBackend, LlmCompleteResult } from '../backend-iface.js';
+import type { LlmBackend, LlmBackendCli, LlmCompleteResult } from '../backend-iface.js';
 import { CLAUDE_ARGS } from './cli-claude.js';
 import { CliBackend } from './cli-common.js';
 import { CODEX_ARGS } from './cli-codex.js';
@@ -74,6 +74,12 @@ class UnconfiguredBackend implements LlmBackend {
   }
   get model(): string {
     return 'unconfigured';
+  }
+  get cli(): LlmBackendCli {
+    return 'unconfigured';
+  }
+  get provider(): string | undefined {
+    return undefined;
   }
   complete(): Promise<LlmCompleteResult> {
     return Promise.resolve({ ok: false, reason: 'not_configured', detail: this.#detail });

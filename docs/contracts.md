@@ -1895,6 +1895,15 @@ agent-kit judge   --run <run_id> [--run-llm --allow-egress] [--max-calls N(1..10
 
 LLM CLI 用真实 HOME 的登录态并写它自己的全局文件,`llm-exec` 只管 env/cwd/超时/输出/次数(§12.4)。A5 与 A19 的零写入只对**干跑与 stub 路径**成立;A19 里的真跑只用来证明"假 codex 经 kit 确实可达"(正向对照),发生在最终快照之后。真跑前后的受管路径快照与「每个 CLI 实际写了哪些全局文件」清单属 R6。
 
+### 17.4a 后端自带身份:`LlmBackend.cli` / `provider`(S10-rc2)
+
+- **为什么**:此前命令层靠覆盖层按槽位反查 `backendCli` 写进 `reflector.backend`,只对默认接线成立;注入的后端拿不到 CLI,提案缺 `reflector.backend`,CI 无从复算厂商(#18 / §16 ④)。厂商证明的依据必须是**后端自己**,不能是调用方另给的旁证。
+- **接口**:`LlmBackend` 新增必填 `cli`(`claude|codex|pi`,另有两个标记 `stub` 与 `unconfigured`)和 `provider`(`string | undefined`,键必须存在)。`CliBackend` 从绑定取值;`StubBackend` 默认 `cli: 'stub'`;未绑定槽位占位是 `unconfigured`。
+- **厂商复算**:`provenVendorOf(b)` 只看 `cli` + `provider` + `model`(经 `deriveVendor` + codex 第一方 provider 矛盾规则),不看后端自报的 `vendor`。运行时再校验一遍(不信类型):`cli` 缺失/非真实 CLI(含 `stub`、`unconfigured`)、缺 `provider` 键、`provider`/`model` 非字符串 → `unknown`。
+- **`reflect`**:`reflector.backend` 取自 `backend.cli`(真实 CLI 才写);`cli === 'stub'` 的后端无论 `--stub` 与否,提案一律 `reflector.stub: true`(CI 照旧以 `GUARD_PROPOSAL_STUB` 拒收,语义不变)。真实 CLI 的后端须满足 `provenVendorOf === vendor`,否则 `REFLECT_VENDOR_UNKNOWN`;复算为 unknown 且自报厂商非内置(覆盖层追加家族)时沿用原行为放行(它不可能与任何裁判构成可证明的跨厂商)。`cli` 缺失/非法同样 `REFLECT_VENDOR_UNKNOWN`,零调用。
+- **`judge`**:一跳的厂商可证明须**同时**满足:①`provenVendorOf` 与自报(归一化后)一致;②模型族推导(与 CI 的 C5 `JUDGE_VENDOR_UNPROVEN` 同口径)与之一致。不再比以前宽:`claude` 后端若模型串推不出厂商(如 `opus`)仍是 `vendor_unknown`。`stub` 后端不能当裁判。不满足 → `error:vendor_unknown`,不调用。
+- **不变量**:命令输出、稳定码、退出码不变;`reflector.provider` 仍记槽位 id(与 `judge.provider` 同义),不是 CLI 的 `--provider`。
+
 ### 17.5 验收 `ops/accept-p1.sh`(A16–A24;A1–A15 仍是 `ops/accept-p0.sh`,语义不变,仅 A2 按下文「A2 语义订正」调整)
 
 | 项  | 内容                                                                                                                                                                                                                                                                                                                             |

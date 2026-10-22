@@ -7,8 +7,14 @@
  * (no-leak 测试扫描 src/ 里 backends/ 之外对本文件的 import)。
  */
 import * as path from 'node:path';
-import type { LlmBackend, LlmCompleteRequest, LlmCompleteResult } from '../backend-iface.js';
-import { FIRST_PARTY_PROVIDERS, UNKNOWN_VENDOR, deriveVendor } from '../../contracts/vendor.js';
+import type {
+  LlmBackend,
+  LlmBackendCli,
+  LlmCompleteRequest,
+  LlmCompleteResult,
+} from '../backend-iface.js';
+import { UNKNOWN_VENDOR } from '../../contracts/vendor.js';
+import { deriveBackendVendor } from '../backend-identity.js';
 import {
   LLM_MAX_TIMEOUT_MS,
   LLM_STDIN_MAX_BYTES,
@@ -119,28 +125,6 @@ function snapshotEnv(
   return { ok: true, env: Object.freeze(env) };
 }
 
-/**
- * 由绑定推导厂商。在 `deriveVendor` 之上多一条保守规则:codex 配了第一方 provider 却与模型族推出的厂商矛盾
- * (如 `--provider deepseek` + `claude-*` 模型)→ unknown。
- */
-export function deriveBackendVendor(
-  cli: CliArgSet['cli'],
-  provider: string | undefined,
-  model: string | undefined,
-  overrides: Readonly<Record<string, string>>,
-): string {
-  const v = deriveVendor({ backend: cli, provider, model }, overrides);
-  if (
-    cli === 'codex' &&
-    provider !== undefined &&
-    Object.hasOwn(FIRST_PARTY_PROVIDERS, provider) &&
-    FIRST_PARTY_PROVIDERS[provider] !== v
-  ) {
-    return UNKNOWN_VENDOR;
-  }
-  return v;
-}
-
 export interface CliBackendInit {
   readonly slot: string;
   /** 内部类型。生产路径只经 `buildBackends` 按 cli 选内置的冻结参数集 */
@@ -190,6 +174,12 @@ export class CliBackend implements LlmBackend {
   }
   get model(): string {
     return this.#model;
+  }
+  get cli(): LlmBackendCli {
+    return this.#args.cli;
+  }
+  get provider(): string | undefined {
+    return this.#provider;
   }
 
   async complete(req: LlmCompleteRequest): Promise<LlmCompleteResult> {
