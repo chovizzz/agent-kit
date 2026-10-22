@@ -48,12 +48,25 @@ export function payloadMissing(cli) {
   );
 }
 
+/**
+ * probe:干跑与 `--write`(只产补丁文本,不写文件系统;观测值由人给,这里用占位值)。
+ * 真实仓库 kit.toml 若没有非 documented 目标,--write 也只打印「没有可写回的目标」;两条都必须零写入、退出 0。
+ */
+export function probeCommands(cli = '{REPO}/dist/cli.js') {
+  return [
+    `{NODE} ${cli} --root {REPO} probe`,
+    // 只探当前 assumed 的三个 agent(documented 目标本来就跳过);观测值给足够大的占位值,保证不触发 LIMIT_ABOVE_OBSERVED
+    `{NODE} ${cli} --root {REPO} probe --write --agent pi --agent kimi --agent opencode --agent-version pi=1.0.0 --agent-version kimi=1.0.0 --agent-version opencode=1.0.0 --observed pi=65536 --observed kimi=65536 --observed opencode=65536`,
+  ];
+}
+
 export function commandsText(allowProject, cli = '{REPO}/dist/cli.js', extra = []) {
   return [
     `{NODE} ${cli} --root {REPO} build`,
     `{NODE} ${cli} --root {REPO} check`,
     `{NODE} ${cli} --root {REPO} redact --selftest`,
     ...syncDoctorCommands(cli),
+    ...probeCommands(cli),
     ...['claude', 'codex', 'pi', 'kimi'].map(
       (a) =>
         `{NODE} ${cli} --root {REPO} signals collect --agent ${a} --allow-project ${allowProject} --source {SOURCE} --dry`,

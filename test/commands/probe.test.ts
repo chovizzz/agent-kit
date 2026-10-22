@@ -90,7 +90,7 @@ describe('probe(P1-01,contracts #12)', () => {
     injectCodexRender();
     const root = await makeKitRepo();
     const { ctx, out } = cmdCtx(root);
-    ctx.argv = ['--write', '--agent-version', 'codex=0.161.0'];
+    ctx.argv = ['--write', '--agent-version', 'codex=0.161.0', '--observed', 'codex=1000'];
     const code = await probe.run(ctx);
     expect(code).toBe(ExitCode.OK);
     const joined = out.join('');
@@ -137,14 +137,13 @@ describe('probe(P1-01,contracts #12)', () => {
     expect(out.join('').endsWith('\n')).toBe(true);
   });
 
-  it('量出 0 → 不出补丁,打 PROBE_NOTHING_MEASURED,不产生 probed_value = 0', async () => {
+  it('产物量出 0 也不影响:probed_value 只来自 --observed', async () => {
     const { root } = await makeRepo({ 'kit.toml': KIT_TOML });
-    const { ctx, out, err } = cmdCtx(root);
-    ctx.argv = ['--write', '--agent-version', 'codex=0.87.1'];
+    const { ctx, out } = cmdCtx(root);
+    ctx.argv = ['--write', '--agent-version', 'codex=0.87.1', '--observed', 'codex=1500'];
     expect(await probe.run(ctx)).toBe(ExitCode.OK);
+    expect(out.join('')).toContain('probed_value = 1500\n');
     expect(out.join('')).not.toContain('probed_value = 0');
-    expect(out.join('')).not.toContain('[budget.codex]');
-    expect(err.join('')).toContain('PROBE_NOTHING_MEASURED agent=codex');
   });
 
   it('补丁自校验不过 → 退出 3,整批不打印', async () => {
@@ -152,7 +151,7 @@ describe('probe(P1-01,contracts #12)', () => {
     const root = await makeKitRepo();
     const { ctx, out, err } = cmdCtx(root);
     probeDeps.now = () => new Date(Number.NaN); // 产出非法 probed_at
-    ctx.argv = ['--write', '--agent-version', 'codex=0.161.0'];
+    ctx.argv = ['--write', '--agent-version', 'codex=0.161.0', '--observed', 'codex=1000'];
     expect(await probe.run(ctx)).toBe(ExitCode.FAIL_CLOSED);
     expect(err.join('')).toContain('PROBE_PATCH_INVALID agent=codex');
     expect(out.join('')).not.toContain('[budget.');
@@ -170,24 +169,95 @@ describe('probe(P1-01,contracts #12)', () => {
     const bytes = Number(m?.[1]);
     const lines = Number(m?.[2]);
     expect([bytes, lines]).toEqual([29, 3]);
+    expect(out.join('')).toContain('headroom(lines)=997');
     const w = cmdCtx(root);
-    w.ctx.argv = ['--write', '--agent-version', 'codex=0.161.0'];
+    w.ctx.argv = ['--write', '--agent-version', 'codex=0.161.0', '--observed', 'codex=1000'];
     expect(await probe.run(w.ctx)).toBe(ExitCode.OK);
-    expect(w.out.join('')).toContain(`probed_value = ${lines}\n`);
+    expect(w.out.join('')).toContain('probed_value = 1000\n');
+    expect(w.out.join('')).toContain('max_lines = 1000\n');
+    expect(w.out.join('')).not.toContain(`probed_value = ${lines}\n`);
   });
 
-  it('两个维度都配 → 仍取 bytes(D1 待定)', async () => {
+  it('两个维度都配 → 取 bytes 维度比较;补丁两个 max 原值都不动', async () => {
     const both = KIT_TOML.replace('max_bytes = 1000', 'max_bytes = 1000\nmax_lines = 1000');
     injectCodexRender();
     const root = await makeKitRepo({ 'kit.toml': both });
+    const w = cmdCtx(root);
+    w.ctx.argv = ['--write', '--agent-version', 'codex=0.161.0', '--observed', 'codex=1200'];
+    expect(await probe.run(w.ctx)).toBe(ExitCode.OK);
+    expect(w.out.join('')).toContain('probed_value = 1200\n');
+    expect(w.out.join('')).toContain('max_bytes = 1000\n');
+    expect(w.out.join('')).toContain('max_lines = 1000\n');
+  });
+
+  it('补丁里不出现产物实测值(29 字节/3 行)', async () => {
+    injectCodexRender();
+    const root = await makeKitRepo();
+    const w = cmdCtx(root);
+    w.ctx.argv = ['--write', '--agent-version', 'codex=0.161.0', '--observed', 'codex=4096'];
+    expect(await probe.run(w.ctx)).toBe(ExitCode.OK);
+    const o = w.out.join('');
+    expect(o).toContain('probed_value = 4096\n');
+    expect(o).not.toMatch(/probed_value = (29|3)\n/);
+  });
+
+  it('干跑打印余量(产物实测只作余量,不产补丁)', async () => {
+    injectCodexRender();
+    const root = await makeKitRepo();
     const d = cmdCtx(root);
     d.ctx.argv = [];
-    await probe.run(d.ctx);
-    const bytes = Number(/codex: measured bytes=(\d+)/.exec(d.out.join(''))?.[1]);
-    const w = cmdCtx(root);
-    w.ctx.argv = ['--write', '--agent-version', 'codex=0.161.0'];
-    await probe.run(w.ctx);
-    expect(w.out.join('')).toContain(`probed_value = ${bytes}\n`);
+    expect(await probe.run(d.ctx)).toBe(ExitCode.OK);
+    expect(d.out.join('')).toContain('codex: measured bytes=29 lines=3');
+    expect(d.out.join('')).toContain('headroom(bytes)=971');
+    expect(d.out.join('')).not.toContain('probed_value');
+  });
+
+  it('--write 缺 --observed → 退出 2 PROBE_OBSERVED_REQUIRED,不出任何补丁', async () => {
+    injectCodexRender();
+    const root = await makeKitRepo();
+    const { ctx, out, err } = cmdCtx(root);
+    ctx.argv = ['--write', '--agent-version', 'codex=0.161.0'];
+    expect(await probe.run(ctx)).toBe(ExitCode.USAGE);
+    expect(err.join('')).toContain('PROBE_OBSERVED_REQUIRED');
+    expect(out.join('')).not.toContain('probed_value');
+    expect(out.join('')).not.toContain('[budget.');
+  });
+
+  it('max_bytes 大于观测值 → 退出 2 PROBE_LIMIT_ABOVE_OBSERVED,不出补丁;等于则放行', async () => {
+    injectCodexRender();
+    const root = await makeKitRepo();
+    const bad = cmdCtx(root);
+    bad.ctx.argv = ['--write', '--agent-version', 'codex=0.161.0', '--observed', 'codex=999'];
+    expect(await probe.run(bad.ctx)).toBe(ExitCode.USAGE);
+    expect(bad.err.join('')).toContain('PROBE_LIMIT_ABOVE_OBSERVED agent=codex');
+    expect(bad.out.join('')).not.toContain('[budget.');
+    const eq = cmdCtx(root);
+    eq.ctx.argv = ['--write', '--agent-version', 'codex=0.161.0', '--observed', 'codex=1000'];
+    expect(await probe.run(eq.ctx)).toBe(ExitCode.OK);
+    expect(eq.out.join('')).toContain('probed_value = 1000\n');
+  });
+
+  it('documented 目标不要求 --observed(照旧跳过)', async () => {
+    injectCodexRender();
+    const root = await makeKitRepo();
+    const { ctx, out } = cmdCtx(root);
+    ctx.argv = ['--write', '--agent-version', 'codex=0.161.0', '--observed', 'codex=1000'];
+    expect(await probe.run(ctx)).toBe(ExitCode.OK);
+    expect(out.join('')).toContain('claude: documented,跳过写回');
+  });
+
+  it('--write 不写文件系统:仓库目录树前后一致', async () => {
+    injectCodexRender();
+    const root = await makeKitRepo();
+    const fs = await import('node:fs');
+    const snap = (): string[] => (fs.readdirSync(root, { recursive: true }) as string[]).sort();
+    const before = snap();
+    const kitBefore = fs.readFileSync(`${root}/kit.toml`, 'utf8');
+    const { ctx } = cmdCtx(root);
+    ctx.argv = ['--write', '--agent-version', 'codex=0.161.0', '--observed', 'codex=1000'];
+    expect(await probe.run(ctx)).toBe(ExitCode.OK);
+    expect(snap()).toEqual(before);
+    expect(fs.readFileSync(`${root}/kit.toml`, 'utf8')).toBe(kitBefore);
   });
 
   it.each([
@@ -200,6 +270,17 @@ describe('probe(P1-01,contracts #12)', () => {
       'PROBE_DUPLICATE_AGENT_VERSION',
     ],
     [['--write', '--agent-version', 'pi=1.0.0'], 'PROBE_AGENT_NOT_ENABLED'],
+    [['--write', '--observed', 'codex=abc'], 'PROBE_BAD_OBSERVED'],
+    [['--write', '--observed', 'codex=0'], 'PROBE_BAD_OBSERVED'],
+    [['--write', '--observed', 'codex=-5'], 'PROBE_BAD_OBSERVED'],
+    [['--write', '--observed', 'codex=1.5'], 'PROBE_BAD_OBSERVED'],
+    [['--write', '--observed', 'codex=007'], 'PROBE_BAD_OBSERVED'],
+    [['--write', '--observed'], 'PROBE_BAD_OBSERVED'],
+    [
+      ['--write', '--observed', 'codex=1000', '--observed', 'codex=2000'],
+      'PROBE_DUPLICATE_OBSERVED',
+    ],
+    [['--write', '--observed', 'pi=1000'], 'PROBE_AGENT_NOT_ENABLED'],
   ])('参数严格:%j → 退出 2 + %s', async (argv, code) => {
     const root = await makeKitRepo();
     const { ctx, err, out } = cmdCtx(root);
@@ -214,7 +295,7 @@ describe('probe(P1-01,contracts #12)', () => {
     const root = await makeKitRepo();
     const { ctx, out } = cmdCtx(root);
     probeDeps.now = () => new Date('2026-01-02T03:04:05.678Z');
-    ctx.argv = ['--write', '--agent-version', 'codex=0.161.0'];
+    ctx.argv = ['--write', '--agent-version', 'codex=0.161.0', '--observed', 'codex=1000'];
     expect(await probe.run(ctx)).toBe(ExitCode.OK);
     expect(out.join('')).toContain('probed_at = "2026-01-02T03:04:05Z"\n');
   });
@@ -224,7 +305,7 @@ describe('probe(P1-01,contracts #12)', () => {
     const toml = KIT_TOML.replace('max_bytes = 1000', 'max_bytes = 1000\nhard_limit = 2000');
     const root = await makeKitRepo({ 'kit.toml': toml });
     const { ctx, out } = cmdCtx(root);
-    ctx.argv = ['--write', '--agent-version', 'codex=0.161.0'];
+    ctx.argv = ['--write', '--agent-version', 'codex=0.161.0', '--observed', 'codex=1000'];
     expect(await probe.run(ctx)).toBe(ExitCode.OK);
     expect(out.join('')).toContain('hard_limit = 2000\n');
   });
