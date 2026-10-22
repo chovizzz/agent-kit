@@ -17,7 +17,7 @@ import * as path from 'node:path';
 import { RunIdSchema } from '../contracts/common.js';
 import { ReflectRunReportSchema } from '../contracts/reflect.js';
 import type { IoContext } from '../io/paths.js';
-import { exists, lstat, readDir, readText, realpath } from '../io/read-fs.js';
+import { lstat, readDir, readText, realpath } from '../io/read-fs.js';
 import { remove } from '../io/safe-fs.js';
 
 /** 保留期(天),固定值;契约 §17.7。 */
