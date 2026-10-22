@@ -262,7 +262,7 @@ describe('端到端:collect → reflect → apply → check → judge', () => {
     ]);
     expect(p.judge_attempts?.find((h) => h.hop === 'glm')?.result).toBe('skipped:same-vendor');
     expect(p.judge_attempts?.some((h) => h.result === 'ok')).toBe(false);
-    expect(jc.err.join('')).toContain('reason=no_cross_vendor');
+    expect(jc.err.join('')).toContain('JUDGE_SAME_VENDOR_ONLY proposal=');
   });
 });
 

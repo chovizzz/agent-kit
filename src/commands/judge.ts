@@ -1,5 +1,5 @@
 /**
- * `agent-kit judge --run <run_id> [--run-llm --allow-egress] [--max-calls N]`(R4,契约 #24–#28):
+ * `agent-kit judge --run <run_id> [--run-llm --allow-egress] [--max-calls N] [--strict]`(R4,契约 #24–#28):
  * 对 reflect 暂存的提案做跨厂商评审。
  *
  * - 默认干跑:读提案、建提示、列出每跳计划;**不调用后端、不写任何文件**。
@@ -11,7 +11,10 @@
  * - 真跑还读 kit.toml `[lifecycle]` 与仓库 HEAD 提交 oid,写入 `judge.prediction` / `judge.acceptance`(冻结验收协议,K3);
  *   读不到 kit.toml 或取不到 HEAD → 退出 3(fail-closed)。
  * - 读写只经 read-fs/safe-fs;写入限 `.state/reflect/<run_id>/proposals/` 下的 judge/judge_attempts。
- * - 退出码:0 完成(含 pending=no_cross_vendor);1 有提案 reject / injection_suspected / 没评上且出现过评审输出校验不通过;
+ * - 没评上且无跨厂商可用:拆成两个稳定码(P1 D4):`JUDGE_NOT_CONFIGURED`(链上没有任何已配置后端,配置问题)
+ *   与 `JUDGE_SAME_VENDOR_ONLY`(有已配置后端但都与反思器同厂商);默认仍退出 0(决策 ⑩A),`--strict` 时退出 4。
+ *   `--strict` 只影响这两种情形;干跑不产生 pending,故不受影响。
+ * - 退出码:0 完成(含 pending=not_configured / same_vendor_only,非 --strict);1 有提案 reject / injection_suspected / 没评上且出现过评审输出校验不通过;
  *   2 用法错(含 run 不存在);3 状态损坏、提示复扫残留、厂商不可证明、写出口拒绝;
  *   4 后端不可用/全部冷却/超出 --max-calls。
  */
@@ -66,6 +69,7 @@ interface Parsed {
   runLlm: boolean;
   allowEgress: boolean;
   maxCalls: number;
+  strict: boolean;
   error: string | undefined;
 }
 
@@ -75,6 +79,7 @@ function parseArgs(argv: readonly string[]): Parsed {
     runLlm: false,
     allowEgress: false,
     maxCalls: DEFAULT_MAX_CALLS,
+    strict: false,
     error: undefined,
   };
   for (let i = 0; i < argv.length; i++) {
@@ -98,6 +103,10 @@ function parseArgs(argv: readonly string[]): Parsed {
     }
     if (a === '--allow-egress') {
       out.allowEgress = true;
+      continue;
+    }
+    if (a === '--strict') {
+      out.strict = true;
       continue;
     }
     const run = value('--run');
@@ -124,7 +133,7 @@ function parseArgs(argv: readonly string[]): Parsed {
   return out;
 }
 
-function outcomeExit(o: ProposalOutcome): number {
+function outcomeExit(o: ProposalOutcome, strict: boolean): number {
   // 厂商不可证明导致没评上(或干跑里没有任何可调用的跳):配置问题,fail-closed
   if (
     o.vendorUnknown &&
@@ -143,7 +152,8 @@ function outcomeExit(o: ProposalOutcome): number {
       if (o.pending === 'cooldown') return ExitCode.NOT_RUN;
       if (o.pending === 'all_failed')
         return o.invalidOutput ? ExitCode.CHECK_FAILED : ExitCode.NOT_RUN;
-      return ExitCode.OK; // no_cross_vendor:单厂商环境照常出提案,晋升时机械拒绝(决策 ⑩A)
+      // not_configured / same_vendor_only:单厂商环境照常出提案,晋升时机械拒绝(决策 ⑩A);--strict 才升为 4
+      return strict ? ExitCode.NOT_RUN : ExitCode.OK;
     case 'not_run':
       return ExitCode.NOT_RUN;
     case 'planned':
@@ -151,8 +161,9 @@ function outcomeExit(o: ProposalOutcome): number {
   }
 }
 
-export function judgeExitCode(report: JudgeReport): number {
-  const codes = report.outcomes.map(outcomeExit);
+export function judgeExitCode(report: JudgeReport, opts: { strict?: boolean } = {}): number {
+  const strict = opts.strict === true;
+  const codes = report.outcomes.map((o) => outcomeExit(o, strict));
   if (report.budgetExhausted) codes.push(ExitCode.NOT_RUN);
   return combineExitCodes(codes);
 }
@@ -187,6 +198,11 @@ export function createJudgeCommand(deps: JudgeCommandDeps = {}): CommandDef {
       { name: '--run-llm', description: '真跑:调用评审后端(须同时给 --allow-egress);缺省干跑' },
       { name: '--allow-egress', description: '同意把提案摘录发送给评审厂商' },
       { name: '--max-calls <n>', description: '本次最多调用后端次数,默认 5,上限 10' },
+      {
+        name: '--strict',
+        description:
+          '没评上且无跨厂商可用(JUDGE_NOT_CONFIGURED / JUDGE_SAME_VENDOR_ONLY)时退出 4,而不是 0',
+      },
     ],
     async run(ctx: CommandContext): Promise<number> {
       const args = parseArgs(ctx.argv);
@@ -235,7 +251,7 @@ export function createJudgeCommand(deps: JudgeCommandDeps = {}): CommandDef {
       }
       if (args.runLlm && Object.keys(backends).length === 0) {
         ctx.stderr(
-          'agent-kit judge: 没有可用的评审后端(本命令不自带后端,须由接线块注入);未调用、未写入\n',
+          'JUDGE_NOT_CONFIGURED reason=no_backends agent-kit judge: 没有可用的评审后端(本命令不自带后端,须由接线块注入);未调用、未写入\n',
         );
         return ExitCode.NOT_RUN;
       }
@@ -289,14 +305,22 @@ export function createJudgeCommand(deps: JudgeCommandDeps = {}): CommandDef {
 
       ctx.stdout(summarize(report));
       for (const o of report.outcomes) {
-        if (o.pending !== undefined) {
+        if (o.pending === 'not_configured') {
+          ctx.stderr(
+            `JUDGE_NOT_CONFIGURED proposal=${o.proposalId} hint=没有已配置的评审后端,检查覆盖层 reflect.backends\n`,
+          );
+        } else if (o.pending === 'same_vendor_only') {
+          ctx.stderr(
+            `JUDGE_SAME_VENDOR_ONLY proposal=${o.proposalId} hint=已配置的评审后端都与反思器同厂商,需配置另一家厂商的后端\n`,
+          );
+        } else if (o.pending !== undefined) {
           ctx.stderr(`JUDGE_PENDING proposal=${o.proposalId} reason=${o.pending}\n`);
         }
         if (o.injectionSuspected === true) {
           ctx.stderr(`JUDGE_INJECTION_SUSPECTED proposal=${o.proposalId}\n`);
         }
       }
-      return judgeExitCode(report);
+      return judgeExitCode(report, { strict: args.strict });
     },
   };
   return def;

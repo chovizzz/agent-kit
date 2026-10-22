@@ -1851,7 +1851,7 @@ R5 追加字段(#29):`allow_unverified` 与 `team_project_keys`。
 agent-kit reflect [--agent <id>]… [--since YYYY-MM-DD] [--max-proposals N(1..5)]
                   [--run-llm --allow-egress] [--backend <slot>] [--max-calls N(1..3,默认 1)]
                   [--timeout-ms N(1000..600000)] [--owner @handle] [--show-prompt] [--json]
-agent-kit judge   --run <run_id> [--run-llm --allow-egress] [--max-calls N(1..10,默认 5)]
+agent-kit judge   --run <run_id> [--run-llm --allow-egress] [--max-calls N(1..10,默认 5)] [--strict]
 ```
 
 - **默认干跑**:装载/分类/聚类/构造提示并打印计划(聚类数、证据数、提示字节数与 sha256、预算状态、将用的后端槽位与 CLI);**不构造后端、不调用后端、不写任何文件**。`--show-prompt` 只在干跑下把提示打到 stdout(不落盘),与 `--json`、`--run-llm` 互斥(退出 2)。干跑不要求 `--owner`(占位 `@dry-run`,不落盘)。
@@ -1864,15 +1864,25 @@ agent-kit judge   --run <run_id> [--run-llm --allow-egress] [--max-calls N(1..10
 
 ### 17.2 退出码
 
-| 码  | `reflect`                                                                                                                     | `judge`                                                              |
-| --- | ----------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| 0   | 干跑完成;真跑已暂存/无提案(含全是与已有规则重复)                                                                              | 完成(含 `judge_pending = no_cross_vendor`)                           |
-| 1   | 输出被拒(schema/话术/回显/守卫模拟红灯),整批不暂存;或真跑时预算已满(未调用后端)                                               | 有 `reject` / `injection_suspected` / 没评上且出现过评审输出校验失败 |
-| 2   | 用法错(含缺 `--allow-egress`、覆盖层未同意外发、缺 `--owner`、多槽位未指定 `--backend`、`--show-prompt` 互斥、覆盖层读取失败) | 同左(`--run` 不存在也是 2)                                           |
-| 3   | `ReflectFailClosedError`(提示复扫残留、厂商 unknown…)、`SignalStoreError`、写出口拒绝、预算算不出来(真跑)、**任何未知异常**   | 状态损坏、提示复扫残留、厂商不可证明、写出口拒绝、未知异常           |
-| 4   | 没有已配置/可用的后端、后端报错/限流/超时、`ReflectCallLimitError`(批数 > `--max-calls`,调用前中止)                           | 后端不可用/全部冷却/超出 `--max-calls`                               |
+| 码  | `reflect`                                                                                                                     | `judge`                                                                                    |
+| --- | ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| 0   | 干跑完成;真跑已暂存/无提案(含全是与已有规则重复)                                                                              | 完成(含 `judge_pending = not_configured / same_vendor_only`,非 `--strict`)                 |
+| 1   | 输出被拒(schema/话术/回显/守卫模拟红灯),整批不暂存;或真跑时预算已满(未调用后端)                                               | 有 `reject` / `injection_suspected` / 没评上且出现过评审输出校验失败                       |
+| 2   | 用法错(含缺 `--allow-egress`、覆盖层未同意外发、缺 `--owner`、多槽位未指定 `--backend`、`--show-prompt` 互斥、覆盖层读取失败) | 同左(`--run` 不存在也是 2)                                                                 |
+| 3   | `ReflectFailClosedError`(提示复扫残留、厂商 unknown…)、`SignalStoreError`、写出口拒绝、预算算不出来(真跑)、**任何未知异常**   | 状态损坏、提示复扫残留、厂商不可证明、写出口拒绝、未知异常                                 |
+| 4   | 没有已配置/可用的后端、后端报错/限流/超时、`ReflectCallLimitError`(批数 > `--max-calls`,调用前中止)                           | 后端不可用/全部冷却/超出 `--max-calls`;`--strict` 下 `not_configured` / `same_vendor_only` |
 
 多个结果合并走 `combineExitCodes`(优先级 3 > 2 > 1 > 4 > 64 > 0)。
+
+**`judge` 没评上且无跨厂商可用的两个稳定码(P1 D4;取代原单码 `no_cross_vendor`)**:
+
+| 码 / `judge_pending`                          | 含义                                | 判据(`judge_attempts` 里)                                                                                                                                                         |
+| --------------------------------------------- | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `JUDGE_NOT_CONFIGURED` / `not_configured`     | 评审后端未配置(配置问题)            | 没有任何 `skipped:same-vendor`、`error:vendor_unknown` 与失败跳,各跳只有 `error:not_configured`(含后端自报未配置);命令层真跑时一个后端都没有也报此码(`reason=no_backends`,退出 4) |
+| `JUDGE_SAME_VENDOR_ONLY` / `same_vendor_only` | 已配置的后端存在,但都与反思器同厂商 | 至少一跳 `skipped:same-vendor`,其余为未配置/厂商不可证明,无真实失败、无冷却                                                                                                       |
+
+- stderr 每条提案一行 `JUDGE_NOT_CONFIGURED proposal=<id> hint=…` / `JUDGE_SAME_VENDOR_ONLY proposal=<id> hint=…`(只含稳定码、提案 id 与固定提示);stdout 摘要里 `judge_pending` 取 `not_configured` / `same_vendor_only`。`cooldown` / `all_failed` 仍用 `JUDGE_PENDING proposal=<id> reason=…`。
+- 默认退出 0(决策 ⑩A:单厂商环境照常出提案,晋升时机械拒绝)。`--strict`(布尔,不带值,走与其他参数同一套严格解析,`--strict=1` 之类退出 2)下,这两种情形退出 4(与「没评上」同属 4 的 NOT_RUN 语义,没有占用新含义);3(状态损坏/厂商不可证明)与 1 仍按优先级压过 4。干跑不产生 pending,`--strict` 对干跑无影响。含 `error:vendor_unknown` 的跳不归这两个码:`judge_pending = vendor_unknown`、stderr 走 `JUDGE_PENDING … reason=vendor_unknown`,退出 3。
 
 ### 17.3 R1 订正(三句)
 

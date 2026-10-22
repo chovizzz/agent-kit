@@ -96,9 +96,8 @@
   (A16 里没有夹具能走到它,因为 schema 的零宽检查先拦下)
 - ✅ **reader 原型键问题**:事件类型名为 `constructor` / `__proto__` / `toString` 时,按普通对象做计数键会碰到原型链
   (`unknown_event_types` 之类);reader 与 `safeKey` 要改用 `Object.create(null)` / `Map` 或前缀转义,并加用例
-- ☐ **单厂商时 `no_cross_vendor` 退出 0 的提示**:`judge` 在只有同厂商 / 未配置时退出 0(决策 ⑩A),且「未配置」与「单厂商」
-  都落成 `no_cross_vendor`,用户看不出是配置问题;需要在 stdout/stderr 区分(`not_configured` vs `same_vendor_only`),
-  并考虑 `--strict` 退出 4
+- ✅ **单厂商时 `no_cross_vendor` 退出 0 的提示**(2026-10-22 用户定 D4):拆成 `JUDGE_NOT_CONFIGURED`(`not_configured`)与
+  `JUDGE_SAME_VENDOR_ONLY`(`same_vendor_only`),默认仍退出 0(决策 ⑩A),新增 `--strict` 时退出 4;契约见 contracts §17.1/§17.2
 - ☐ **`LlmBackend` 扩 `cli` / `provider` 字段**:现在命令层要靠覆盖层反查 `backendCli`(只能对默认接线做到,
   注入的后端拿不到);扩接口后 `reflector.backend` 才能从后端自己拿
 - ✅ **CI 校验**(S10-rc6):`kit:reflector` PR 新增的提案要求 `reflector.backend` 必填(`GUARD_PROPOSAL_BACKEND_MISSING`),拒收 `reflector.stub: true`

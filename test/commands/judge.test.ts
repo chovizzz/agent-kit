@@ -125,7 +125,7 @@ describe('judge 命令:退出码', () => {
     expect(s.totalCalls()).toBe(1);
   });
 
-  it('pending:cooldown → 4;all_failed 纯后端故障 → 4;含输出校验失败 → 1;no_cross_vendor → 0', async () => {
+  it('pending:cooldown → 4;all_failed 纯后端故障 → 4;含输出校验失败 → 1', async () => {
     let w = await newWork();
     await writeProposal(w);
     expect(await make(makeStubs(allFail('rate_limited'))).run(cmdCtx(w, LIVE).ctx)).toBe(4);
@@ -149,24 +149,109 @@ describe('judge 命令:退出码', () => {
         }),
       ).run(c.ctx),
     ).toBe(1);
-
-    w = await newWork();
-    await writeProposal(w, {
-      reflectorVendor: 'deepseek',
-      reflectorBackend: 'pi',
-      reflectorModel: 'deepseek-r',
-    });
-    const same = makeStubs({}, ['maas-deepseek', 'official-deepseek']);
-    const c2 = cmdCtx(w, LIVE);
-    expect(await make(same).run(c2.ctx)).toBe(0);
-    expect(c2.err.join('')).toContain(
-      'JUDGE_PENDING proposal=2026-10-12-001 reason=no_cross_vendor',
-    );
-    const j = JSON.parse(c2.out.join('')) as { proposals: { judge_pending: string }[] };
-    expect(j.proposals[0]!.judge_pending).toBe('no_cross_vendor');
   });
 
-  it('已配置的后端厂商全部不可证明 → 3(配置问题,不伪装成 no_cross_vendor 的 0)', async () => {
+  const SAME = {
+    reflectorVendor: 'deepseek',
+    reflectorBackend: 'pi',
+    reflectorModel: 'deepseek-r',
+  } as const;
+  const parseOut = (out: string[]) =>
+    JSON.parse(out.join('')) as { proposals: { judge_pending?: string }[] };
+
+  it('只有同厂商 → same_vendor_only:默认 0,stderr 稳定码 JUDGE_SAME_VENDOR_ONLY,stdout judge_pending', async () => {
+    const w = await newWork();
+    await writeProposal(w, SAME);
+    const same = makeStubs({}, ['maas-deepseek', 'official-deepseek']);
+    const c = cmdCtx(w, LIVE);
+    expect(await make(same).run(c.ctx)).toBe(0);
+    const err = c.err.join('');
+    expect(err).toContain('JUDGE_SAME_VENDOR_ONLY proposal=2026-10-12-001');
+    expect(err).not.toContain('JUDGE_NOT_CONFIGURED');
+    expect(err).not.toContain('no_cross_vendor');
+    expect(parseOut(c.out).proposals[0]!.judge_pending).toBe('same_vendor_only');
+    expect(same.totalCalls()).toBe(0);
+  });
+
+  it('已有后端但都报 not_configured → not_configured:默认 0,stderr JUDGE_NOT_CONFIGURED', async () => {
+    const w = await newWork();
+    await writeProposal(w);
+    const nc = fail('not_configured');
+    const c = cmdCtx(w, LIVE);
+    const s = makeStubs({
+      codex: nc,
+      'maas-deepseek': nc,
+      glm: nc,
+      kimi: nc,
+      'official-deepseek': nc,
+    });
+    expect(await make(s).run(c.ctx)).toBe(0);
+    const err = c.err.join('');
+    expect(err).toContain('JUDGE_NOT_CONFIGURED proposal=2026-10-12-001');
+    expect(err).not.toContain('JUDGE_SAME_VENDOR_ONLY');
+    expect(parseOut(c.out).proposals[0]!.judge_pending).toBe('not_configured');
+  });
+
+  it('--strict:两种情形各退出 4,码不变;默认(无 --strict)仍 0', async () => {
+    let w = await newWork();
+    await writeProposal(w, SAME);
+    const c1 = cmdCtx(w, [...LIVE, '--strict']);
+    const same = makeStubs({}, ['maas-deepseek', 'official-deepseek']);
+    expect(await make(same).run(c1.ctx)).toBe(ExitCode.NOT_RUN);
+    expect(c1.err.join('')).toContain('JUDGE_SAME_VENDOR_ONLY');
+
+    w = await newWork();
+    await writeProposal(w);
+    const nc = fail('not_configured');
+    const c2 = cmdCtx(w, [...LIVE, '--strict']);
+    const s = makeStubs({
+      codex: nc,
+      'maas-deepseek': nc,
+      glm: nc,
+      kimi: nc,
+      'official-deepseek': nc,
+    });
+    expect(await make(s).run(c2.ctx)).toBe(ExitCode.NOT_RUN);
+    expect(c2.err.join('')).toContain('JUDGE_NOT_CONFIGURED');
+  });
+
+  it('--strict 不影响正常跨厂商成功路径(0)、reject(1)与干跑(0)', async () => {
+    let w = await newWork();
+    await writeProposal(w);
+    expect(await make(makeStubs()).run(cmdCtx(w, [...LIVE, '--strict']).ctx)).toBe(0);
+
+    w = await newWork();
+    await writeProposal(w);
+    const s = makeStubs({ codex: okWith(outputText({ verdict: 'reject' })) });
+    expect(await make(s).run(cmdCtx(w, [...LIVE, '--strict']).ctx)).toBe(1);
+
+    w = await newWork();
+    await writeProposal(w, SAME);
+    expect(await make(makeStubs()).run(cmdCtx(w, ['--run', RUN_ID, '--strict']).ctx)).toBe(0);
+  });
+
+  it('--strict 与不可证明厂商同在:3 压过 4(配置问题 fail-closed 不被降级)', async () => {
+    const w = await newWork();
+    await writeProposal(w);
+    const bad = new StubBackend('codex', 'unknown', 'mystery');
+    const cmd = createJudgeCommand({
+      createBackends: () => ({ codex: bad }),
+      redactor,
+      requireOverlayEgress: false,
+    });
+    expect(await cmd.run(cmdCtx(w, [...LIVE, '--strict']).ctx)).toBe(ExitCode.FAIL_CLOSED);
+  });
+
+  it('--strict 走严格参数解析:带值 / 拼错 → 2', async () => {
+    const w = await newWork();
+    await writeProposal(w);
+    for (const extra of [['--strict=1'], ['--stric'], ['--no-strict']]) {
+      const c = cmdCtx(w, [...LIVE, ...extra]);
+      expect(await make(makeStubs()).run(c.ctx)).toBe(ExitCode.USAGE);
+    }
+  });
+
+  it('已配置的后端厂商全部不可证明 → 3(配置问题,不伪装成 pending 的 0)', async () => {
     const w = await newWork();
     await writeProposal(w);
     const bad = new StubBackend('codex', 'unknown', 'mystery');
@@ -178,6 +263,12 @@ describe('judge 命令:退出码', () => {
     expect(await cmd.run(cmdCtx(w, LIVE).ctx)).toBe(ExitCode.FAIL_CLOSED);
     expect(bad.calls).toHaveLength(0);
     expect(await cmd.run(cmdCtx(w, ['--run', RUN_ID]).ctx)).toBe(ExitCode.FAIL_CLOSED); // 干跑同判
+    // 稳定码不得误报成「未配置/同厂商」
+    const c = cmdCtx(w, LIVE);
+    expect(await cmd.run(c.ctx)).toBe(ExitCode.FAIL_CLOSED);
+    expect(c.err.join('')).toContain('JUDGE_PENDING proposal=2026-10-12-001 reason=vendor_unknown');
+    expect(c.err.join('')).not.toContain('JUDGE_NOT_CONFIGURED');
+    expect(parseOut(c.out).proposals[0]!.judge_pending).toBe('vendor_unknown');
   });
 
   it('超过 --max-calls → 4,调用数不超上限', async () => {
