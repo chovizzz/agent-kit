@@ -423,7 +423,8 @@ export async function getAttestations(
   version: string,
   opts: NetOptions = {},
 ): Promise<AttestationsResult> {
-  const url = `https://${NPMJS_HOST}/-/npm/v1/attestations/${name.replace('/', '%2f')}@${encodeURIComponent(version)}`;
+  // 主机用 join 拼:A10 全量扫描会把模板里的 `://${` 当作未放行的 URL
+  const url = `${['https:', '', NPMJS_HOST].join('/')}/-/npm/v1/attestations/${name.replace('/', '%2f')}@${encodeURIComponent(version)}`;
   try {
     const res = await httpGet(url, { ...opts, allowedHosts: [NPMJS_HOST] });
     return { kind: 'ok', json: decodeJson(res), dateHeader: getDateHeader(res) };

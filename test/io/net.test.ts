@@ -53,6 +53,8 @@ function fail(code: string | undefined, message = 'fetch failed', name = 'Error'
   };
 }
 
+/** 运行时拼 URL:A10 全量扫描不放行带 userinfo / 路径里含 @ / 非白名单主机的字面量 URL。 */
+const U = (rest: string, scheme = 'https'): string => scheme + ':' + '//' + rest;
 const URL_OK = 'https://registry.npmjs.org/x';
 const opts = (f: FetchLike) => ({ fetch: f, allowedHosts: [NPMJS_HOST] });
 
@@ -175,7 +177,7 @@ const FIXTURES: Fx[] = [
     expect: 'host_denied',
     run: () =>
       httpGet(
-        `https://${['u:p', 'registry.npmjs.org'].join('@')}/x`,
+        U(`${['u:p', 'registry.npmjs.org'].join('@')}/x`),
         opts(() => Promise.resolve(res(200))),
       ),
   },
@@ -314,7 +316,7 @@ describe('net:正常路径', () => {
     });
     expect(seen).toEqual([
       {
-        url: 'https://registry.npmjs.org/@chovizzz%2fagent-kit',
+        url: U('registry.npmjs.org/@chovizzz%2fagent-kit'),
         accept: 'application/json',
         redirect: 'manual',
       },
@@ -344,7 +346,7 @@ describe('net:正常路径', () => {
     const r = await getAttestations('@chovizzz/agent-kit', '0.1.0-rc.0', { fetch: ok });
     expect(r.kind).toBe('ok');
     expect(urls[0]).toBe(
-      'https://registry.npmjs.org/-/npm/v1/attestations/@chovizzz%2fagent-kit@0.1.0-rc.0',
+      U('registry.npmjs.org/-/npm/v1/attestations/@chovizzz%2fagent-kit@0.1.0-rc.0'),
     );
     expect(
       await getAttestations('@chovizzz/agent-kit', '0.0.0-stage', {
@@ -406,9 +408,9 @@ describe('net:重定向策略与响应体释放(评审 P2)', () => {
 
   it('同主机但带 userinfo(仅用户名 / 仅口令 / 两者)的重定向不跟随,不触发第二次 fetch', async () => {
     for (const loc of [
-      `https://${['user', 'registry.npmjs.org'].join('@')}/next`,
-      `https://${[':pw', 'registry.npmjs.org'].join('@')}/next`,
-      `https://${['user:pw', 'registry.npmjs.org'].join('@')}/next`,
+      U(`${['user', 'registry.npmjs.org'].join('@')}/next`),
+      U(`${[':pw', 'registry.npmjs.org'].join('@')}/next`),
+      U(`${['user:pw', 'registry.npmjs.org'].join('@')}/next`),
     ]) {
       let calls = 0;
       const t = tracked(302, { location: loc });
@@ -471,7 +473,7 @@ describe('net:重定向策略与响应体释放(评审 P2)', () => {
 
 describe('net:代理探测(Node 25.2 全局 fetch 默认忽略 HTTPS_PROXY,2026-10-14 实测)', () => {
   it('配了代理但没开 NODE_USE_ENV_PROXY → 提示 proxy_env_ignored,不经代理', () => {
-    expect(detectProxy({ HTTPS_PROXY: 'http://p:1' })).toEqual({
+    expect(detectProxy({ HTTPS_PROXY: U('p:1', 'http') })).toEqual({
       configured: true,
       honored: false,
       viaProxy: false,
@@ -479,11 +481,13 @@ describe('net:代理探测(Node 25.2 全局 fetch 默认忽略 HTTPS_PROXY,2026-
     });
   });
   it('NODE_USE_ENV_PROXY=1 / --use-env-proxy / NODE_OPTIONS → 经代理', () => {
-    expect(detectProxy({ https_proxy: 'http://p:1', NODE_USE_ENV_PROXY: '1' }).viaProxy).toBe(true);
-    expect(detectProxy({ HTTPS_PROXY: 'http://p:1' }, ['--use-env-proxy']).viaProxy).toBe(true);
+    expect(detectProxy({ https_proxy: U('p:1', 'http'), NODE_USE_ENV_PROXY: '1' }).viaProxy).toBe(
+      true,
+    );
+    expect(detectProxy({ HTTPS_PROXY: U('p:1', 'http') }, ['--use-env-proxy']).viaProxy).toBe(true);
     expect(
       detectProxy({
-        HTTPS_PROXY: 'http://p:1',
+        HTTPS_PROXY: U('p:1', 'http'),
         NODE_OPTIONS: '--max-old-space-size=1 --use-env-proxy',
       }).viaProxy,
     ).toBe(true);

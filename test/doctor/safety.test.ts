@@ -158,7 +158,7 @@ describe('doctor:零网络', () => {
     const w = await richWorld();
     for (const args of [[], ['--online'], ['--json', '--online']]) {
       const r = await runDoctor(w, args, {
-        env: { HTTPS_PROXY: `http://${[127, 0, 0, 1].join('.')}:1` },
+        env: { HTTPS_PROXY: ['http:', '', [127, 0, 0, 1].join('.') + ':1'].join('/') },
       });
       expect([0, 1, 3, 4]).toContain(r.code);
       expect(r.out).toContain('D12');

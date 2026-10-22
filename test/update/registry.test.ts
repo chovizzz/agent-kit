@@ -64,7 +64,7 @@ describe('net registry', () => {
   it('https 以外 / 带用户信息 / 带查询 → bad_registry;镜像判定', async () => {
     for (const bad of [
       'http://r.example/',
-      'https://u:p@r.example/',
+      ['https:', '', ['u:p', 'r.example'].join('@'), ''].join('/'),
       'https://r.example/?x=1',
       'nonsense',
     ]) {

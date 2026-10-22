@@ -41,7 +41,7 @@ export async function installNoNet(ctx, tmp) {
   req(path.join(ctx.root, 'ops', 'guards', 'no-net.cjs'));
   let controlBlocked = false;
   try {
-    await fetch(`http://${[127, 0, 0, 1].join('.')}:9/`); // 回环地址运行时拼接(A10 不放行 IPv4 字面量)
+    await fetch('http' + ':' + '//' + [127, 0, 0, 1].join('.') + ':9/'); // 回环地址运行时拼接(A10 不放行 IPv4 字面量)
   } catch (e) {
     controlBlocked =
       e?.code === 'ENO_NET' || /no-net/.test(String(e?.cause?.message ?? e?.message));

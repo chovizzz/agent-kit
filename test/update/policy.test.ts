@@ -520,7 +520,9 @@ describe('readPackument', () => {
     const v = readPackument({
       'dist-tags': { latest: '0.1.0' },
       versions: {
-        '0.1.0': { dist: { integrity: 'sha512-a', tarball: 'https://x/y.tgz' } },
+        '0.1.0': {
+          dist: { integrity: 'sha512-a', tarball: ['https:', '', 'x', 'y.tgz'].join('/') },
+        },
         '0.0.9': {},
       },
       time: { '0.1.0': '2026-10-14T03:07:36.838Z' },

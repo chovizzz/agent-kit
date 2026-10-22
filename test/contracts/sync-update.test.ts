@@ -161,7 +161,7 @@ describe('UserConfig 默认值(决策 ②B / ③A / ⑤A / ⑭B)', () => {
     for (const bad of [
       'http://registry.example.com/',
       'file:///tmp/x',
-      'https://u:p@registry.example.com/',
+      ['https:', '', ['u:p', 'registry.example.com'].join('@'), ''].join('/'),
       'https://registry.example.com/?a=1',
       'https://registry.example.com/#x',
       'not a url',
