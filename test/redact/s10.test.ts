@@ -12,6 +12,8 @@ const PW = ['pass', 'word'].join('');
 const KEY = ['API', '_TOK', 'EN'].join('');
 const V = ['Kq7', 'Zr2', 'WxLm9', 'Tb'].join('');
 const SEG = 'abcdefghijkl';
+/** 自身就是口令的长段(足够高熵,单独出现也会被第一遍脱敏) */
+const SEG2 = ['Hk3m', 'Q9xT', 'z2Lp', 'Wn'].join('');
 
 function applyText(input: string): string {
   const a = r.apply(input);
@@ -59,45 +61,60 @@ describe('s10:长引号段 + 紧贴的值', () => {
 
   it('原文自带占位符:占位符之后的行为不变(不把占位符当值吞掉后再泄漏)', () => {
     const ph = `${PH}credential]]`;
-    const out = applyText(`${PW}="${SEG}"${ph}`);
-    expect(out.includes(SEG)).toBe(false);
+    const out = applyText(`${PW}="${SEG2}"${ph}`);
+    expect(out).toContain(PH);
+    expect(out.includes(SEG2)).toBe(false);
   });
 });
 
 describe('s10:不该被过度吞掉的形态', () => {
   const benign: Array<[string, string, string[]]> = [
-    ['引号值后空格 + 注释', `${PW}="${SEG}" # comment words`, ['# comment words']],
-    ['引号值后空格 + 命令', `${PW}="${SEG}" && echo hello`, ['&& echo hello']],
-    ['多个独立引号参数', `${PW}="${SEG}" "second arg"`, ['"second arg"']],
-    ['多个独立引号参数(单引号)', `${PW}='${SEG}' 'second'`, ["'second'"]],
-    ['收尾引号后 JSON 逗号', `{"${PW}":"${SEG}","user":"alice"}`, ['"user":"alice"']],
-    ['收尾引号后 JSON 花括号', `{"${PW}":"${SEG}"}`, ['}']],
-    ['收尾引号后点号(源码方法调用)', `${PW} = "${SEG}".trim()`, ['.trim()']],
-    ['收尾引号后加号(源码拼接)', `${PW} = "${SEG}" + suffix`, ['+ suffix']],
-    ['收尾引号后紧贴加号', `${PW} = "${SEG}"+suffix`, ['suffix']],
-    ['收尾引号后右括号', `connect(${PW}="${SEG}")`, [')']],
+    ['引号值后空格 + 注释', `${PW}="${SEG2}" # comment words`, ['# comment words']],
+    ['引号值后空格 + 命令', `${PW}="${SEG2}" && echo hello`, ['&& echo hello']],
+    ['多个独立引号参数', `${PW}="${SEG2}" "second arg"`, ['"second arg"']],
+    ['多个独立引号参数(单引号)', `${PW}='${SEG2}' 'second'`, ["'second'"]],
+    ['收尾引号后 JSON 逗号', `{"${PW}":"${SEG2}","user":"alice"}`, ['"user":"alice"']],
+    ['收尾引号后 JSON 花括号', `{"${PW}":"${SEG2}"}`, ['}']],
+    ['收尾引号后点号(源码方法调用)', `${PW} = "${SEG2}".trim()`, ['.trim()']],
+    ['收尾引号后加号(源码拼接)', `${PW} = "${SEG2}" + suffix`, ['+ suffix']],
+    ['收尾引号后紧贴加号', `${PW} = "${SEG2}"+suffix`, ['suffix']],
+    ['收尾引号后右括号', `connect(${PW}="${SEG2}")`, [')']],
   ];
 
   it.each(benign)('%s:口令段脱敏,后文原样保留', (_n, input, keep) => {
     const out = applyText(input);
     expect(out).toContain(PH);
-    expect(out.includes(SEG)).toBe(false);
+    expect(out.includes(SEG2)).toBe(false);
     for (const k of keep) expect(out, `应保留 ${k}`).toContain(k);
   });
 
+  it('源码里字符串字面量的收尾引号(段含空白 / 标点)不当拼接', () => {
+    // 回归:曾把 `'", R('` 当成长段、把后面的值字符吞进去
+    const input = `["${PW} = '", R('${V}', 'cred')]`;
+    const out = applyText(input);
+    expect(out).toContain(PH);
+    expect(out.includes(V)).toBe(false);
+    expect(out).toContain('", R(');
+  });
+
+  it('shell 里 KEY="..." 后紧贴的 "$f" 引号段(段含空白)不被整体吞掉', () => {
+    const input = `grep "^FOO_${KEY}=" "$f" | cut -d= -f2-`;
+    expect(r.pass1(input).text).toBe(input);
+  });
+
   it('无键名的 shell 引号拼接不动(echo "x"y)', () => {
-    const input = `echo "${SEG}"suffixword`;
+    const input = `echo "${SEG2}"suffixword`;
     expect(r.pass1(input).text).toBe(input);
     expect(applyText(input)).toBe(input);
   });
 
   it('非敏感键名的引号拼接不动', () => {
-    const input = `NAME="${SEG}"${V}`;
+    const input = `NAME="${SEG2}"${V}`;
     expect(r.pass1(input).text).toBe(input);
   });
 
   it('幂等:第二遍对第一遍输出不再改动', () => {
-    const input = `${PW}="${SEG}"${V}`;
+    const input = `${PW}="${SEG2}"${V}`;
     const once = r.pass1(input).text;
     expect(r.pass1(once).text).toBe(once);
     expect(r.pass2(once).clean).toBe(true);
