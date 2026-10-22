@@ -50,8 +50,12 @@ export interface MergeInput {
   reflector: ReflectorInfo;
   /** 已存在的 proposals/<id>.yaml 的 id(含暂存区),用来避开编号冲突 */
   usedProposalIds: ReadonlySet<string>;
-  /** 调用方标记的个人项目 project_key:其成员不计入团队层的跨项目/跨会话门槛 */
-  personalProjectKeys?: ReadonlySet<string> | undefined;
+  /**
+   * 团队层 project_key 白名单:只有列在这里的项目的信号才可能进团队层并计入跨项目/跨会话门槛;
+   * 不在名单里的一律按个人处理(fail-closed)。传空集 = 所有项目都是 personal。
+   * 不传(undefined)= 不设限(库级默认,仅供不经命令层的直接调用;命令层总是传入集合)。
+   */
+  teamProjectKeys?: ReadonlySet<string> | undefined;
   guidance?: GuidanceInput | undefined;
 }
 
@@ -84,9 +88,14 @@ function isoDate(now: Date): string {
   return now.toISOString().slice(0, 10);
 }
 
-/** 重新计算:排除个人项目成员后,聚类是否仍跨 ≥2 项目且 ≥2 会话。 */
-function clusterTeamEligible(c: Cluster, personal: ReadonlySet<string>): boolean {
-  const rest = c.allSignals.filter((s) => !personal.has(s.project_key));
+/** 白名单判定:未设白名单 → 不设限;设了(含空集)→ 只有名单内的 key 算团队项目。 */
+function isTeamKey(key: string, team: ReadonlySet<string> | undefined): boolean {
+  return team === undefined || team.has(key);
+}
+
+/** 重新计算:排除非白名单项目成员后,聚类是否仍跨 ≥2 项目且 ≥2 会话。 */
+function clusterTeamEligible(c: Cluster, team: ReadonlySet<string> | undefined): boolean {
+  const rest = c.allSignals.filter((s) => isTeamKey(s.project_key, team));
   return (
     new Set(rest.map((s) => s.project_key)).size >= 2 &&
     new Set(rest.map((s) => s.session_ref)).size >= 2
@@ -101,13 +110,13 @@ function clusterTeamEligible(c: Cluster, personal: ReadonlySet<string>): boolean
 export function decideLayer(
   evidence: readonly EvidenceItem[],
   clusters: readonly Cluster[],
-  personal: ReadonlySet<string> = new Set(),
+  team?: ReadonlySet<string>,
 ): Layer {
   const byId = new Map(clusters.map((c) => [c.id, c]));
   for (const e of evidence) {
-    if (personal.has(e.signal.project_key)) return 'personal';
+    if (!isTeamKey(e.signal.project_key, team)) return 'personal';
     const c = byId.get(e.clusterId);
-    if (c === undefined || !clusterTeamEligible(c, personal)) return 'personal';
+    if (c === undefined || !clusterTeamEligible(c, team)) return 'personal';
   }
   const projects = new Set(evidence.map((e) => e.signal.project_key));
   const sessions = new Set(evidence.map((e) => e.signal.session_ref));
@@ -142,7 +151,7 @@ export function mergeProposals(input: MergeInput): MergedProposal[] {
     const layer: Layer =
       d.kind === 'preference'
         ? 'personal'
-        : decideLayer(ev, input.clusters, input.personalProjectKeys);
+        : decideLayer(ev, input.clusters, input.teamProjectKeys);
     const days = d.volatility === 'volatile' ? REVIEW_DAYS_VOLATILE : REVIEW_DAYS_STABLE;
     const doT = normalizeSegment(d.do);
     const whyT = normalizeSegment(d.why);

@@ -105,13 +105,14 @@
 - ☐ **`IoContext.hostEnv`**:命令层不能读 `process.env`(eslint:只许 `src/io/paths.js`),真实 CLI 路径下 `reflect`/`judge`
   只能用 `IoContext.execPath`(= PATH)和 `getRealHome()` 拼子进程环境;应由 `paths.ts` 提供受控的 `hostEnv`
   (contracts §12.4 ④),并把 `CommandContext.env` 正式加进 `src/commands/types.ts`(目前经 `EnvCommandContext` 交叉类型传入)
-- ☐ **`team_project_keys` 填什么**:值是信号里的 `project_key`(加盐哈希 `p_…`),但 CLI 没有任何地方把它列给用户;
-  `reflect` 干跑(或 `signals collect --dry`)应列出各 `project_key` 的会话数/信号数(只有 id 与计数),用户才填得出白名单
+- ✅ **`team_project_keys` 填什么**(S10-rc34,用户定 D5):`reflect` 干跑在 `--json` 里新增可选键 `project_key_counts`、文本输出新增一段,
+  列出各 `project_key`(加盐哈希)的会话数/信号数(只有 id 与计数);契约见 contracts §17.1。`signals collect --dry` 因盐可能是临时盐而不加。
+  小计数 k-匿名/合并显示:契约无规定,未设阈值,待主代理定夺
 - ☐ **A20 / A24 在共用工作树里原地变异**(A24 同构:cp 备份 + cp 还原,还原后恢复 mtime,变异窗口里不构建 dist):同一棵树里别的进程(build / test)会读到变异后的源码;更稳的做法是在临时 worktree 里做变异。
   现已缓解:不恢复 mtime(变异窗口内构建的 dist 会被 `freshDist` 判陈旧)、结束后自动重建 dist、SIGINT/SIGTERM 先还原、
   `--write-marker` 要求工作树干净、遗留 `.mut-bak` 时拒绝继续;SIGKILL 仍可能留下变异源码(靠 `.mut-bak` 检测发现)
-- ☐ **R2 接口**:`runReflect` 的 `personalProjectKeys` 是黑名单,命令层靠补集代理对象把白名单 `team_project_keys` 接进去
-  (只支持 `has()`);R2 应直接提供 `teamProjectKeys` 白名单参数
+- ✅ **R2 接口**(S10-rc34,用户定 D5):`runReflect` 直接提供 `teamProjectKeys` 白名单参数(名单外一律 personal、空集全 personal、未知 key 无害),
+  删除命令层补集代理 `personalKeysFromTeamWhitelist` 与黑名单 `personalProjectKeys`;契约见 contracts #29
 - ✅ **`kit:reflector` 标签不禁止修改既有文件**(S10-rc6,用户定 D7):`rules/` `skills/` `cases/` 同 `proposals/**` 一样「只许新增」:
   修改 → `GUARD_PATH_EXISTING_MODIFIED`,删除 / 重命名旧路径 / 换成非普通文件 → `GUARD_PATH_EXISTING_DELETED`(contracts §12.3);A17 的 N1 已改钉新语义(被拒)。
   只作用于带 `kit:reflector` 标签的 PR,无标签内容 PR 行为不变

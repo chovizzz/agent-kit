@@ -96,12 +96,20 @@ export interface RunOpts {
   maxEvidence?: number | undefined;
   evidencePerPrompt?: number | undefined;
   atomMaxBytes?: number | undefined;
-  personalProjectKeys?: ReadonlySet<string> | undefined;
+  /** 团队层 project_key 白名单(语义见 MergeInput.teamProjectKeys):名单外的项目一律按个人处理 */
+  teamProjectKeys?: ReadonlySet<string> | undefined;
   dedupe?: Partial<DedupeThresholds> | undefined;
   /** 目标预算已满:不暂存 add 提案(调用方用 computeBudget 算) */
   budgetFull?: boolean | undefined;
   /** 在结果里带回完整提示(给 --show-prompt;不会落盘) */
   includePrompt?: boolean | undefined;
+}
+
+/** 各 project_key 的会话数/信号数(只有加盐哈希 id 与计数),供用户填 `team_project_keys` */
+export interface ProjectCount {
+  project_key: string;
+  sessions: number;
+  signals: number;
 }
 
 export interface RunPlan {
@@ -130,6 +138,8 @@ export interface RunResult {
   exitCode: 0 | 1 | 4;
   plan: RunPlan;
   load: LoadStats;
+  /** 装载通过的信号按 project_key 汇总(按 key 升序) */
+  projectCounts: ProjectCount[];
   prompts?: RenderedPrompt[];
   staged?: { dir: string; proposalIds: string[]; patchFiles: number };
   duplicates: DuplicateRecord[];
@@ -177,6 +187,21 @@ function backendInfo(b: LlmBackend | undefined): ReflectRunReport['backend'] {
   if (!slot.success)
     throw new ReflectFailClosedError('REFLECT_BACKEND_SLOT', '后端槽位不在固定枚举内');
   return { slot: slot.data, vendor: b.vendor, model: b.model };
+}
+
+export function countByProject(
+  signals: readonly { project_key: string; session_ref: string }[],
+): ProjectCount[] {
+  const m = new Map<string, { sessions: Set<string>; signals: number }>();
+  for (const s of signals) {
+    const e = m.get(s.project_key) ?? { sessions: new Set<string>(), signals: 0 };
+    e.sessions.add(s.session_ref);
+    e.signals += 1;
+    m.set(s.project_key, e);
+  }
+  return [...m.entries()]
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([project_key, e]) => ({ project_key, sessions: e.sessions.size, signals: e.signals }));
 }
 
 export async function runReflect(deps: RunDeps, opts: RunOpts): Promise<RunResult> {
@@ -257,6 +282,7 @@ export async function runReflect(deps: RunDeps, opts: RunOpts): Promise<RunResul
   const common = {
     plan,
     load: loaded.stats,
+    projectCounts: countByProject(loaded.signals),
     duplicates: [] as DuplicateRecord[],
     observations: [] as RunResult['observations'],
     guardrailMentions: 0,
@@ -452,7 +478,7 @@ export async function runReflect(deps: RunDeps, opts: RunOpts): Promise<RunResul
       now: deps.clock(),
       reflector,
       usedProposalIds: deps.usedProposalIds ?? new Set(),
-      personalProjectKeys: opts.personalProjectKeys,
+      teamProjectKeys: opts.teamProjectKeys,
     });
   } catch {
     bump(rejected, 'merge_failed');

@@ -88,8 +88,24 @@ describe('reflect/merge', () => {
     // 对照:L1+L2 是 team;再混入单项目单会话的 L_SINGLE → personal
     expect(decideLayer(items(L1, L2), plan.clusters)).toBe('team');
     expect(decideLayer(items(L1, L2, L_SINGLE), plan.clusters)).toBe('personal');
-    // 调用方标记项目 B 为个人项目:L2 的证据不再计入,聚类不再跨项目 → personal
-    expect(decideLayer(items(L1, L2), plan.clusters, new Set([projectKey('B')]))).toBe('personal');
+    // 白名单只含项目 A:B 的证据不再计入,聚类不再跨项目 → personal
+    expect(decideLayer(items(L1, L2), plan.clusters, new Set([projectKey('A')]))).toBe('personal');
+    // 白名单含 A、B → team(正向对照);空白名单 / 只含未知 key → personal(fail-closed)
+    expect(
+      decideLayer(items(L1, L2), plan.clusters, new Set([projectKey('A'), projectKey('B')])),
+    ).toBe('team');
+    expect(decideLayer(items(L1, L2), plan.clusters, new Set())).toBe('personal');
+    expect(decideLayer(items(L1, L2), plan.clusters, new Set(['p_unknown0000000000']))).toBe(
+      'personal',
+    );
+    // 白名单含 A、B 与未知 key:未知 key 无害,结果同 A+B
+    expect(
+      decideLayer(
+        items(L1, L2),
+        plan.clusters,
+        new Set([projectKey('A'), projectKey('B'), 'p_unknown0000000000']),
+      ),
+    ).toBe('team');
     // 端到端:所有 team 层提案的证据信号都来自「可入团队层」的聚类
     const eligible = new Set(
       plan.clusters.filter((c) => c.teamEligible).flatMap((c) => c.allSignals.map((s) => s.sig_id)),

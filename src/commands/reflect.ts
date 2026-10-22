@@ -34,7 +34,7 @@ import { loadExistingAtoms, loadStagedAtoms, loadUsedProposalIds } from '../refl
 import type { LlmBackend } from '../reflect/backend-iface.js';
 import { buildBackends, createSpawnBudget } from '../reflect/backends/index.js';
 import { runReflect } from '../reflect/run.js';
-import type { RunDeps, RunOpts, RunResult } from '../reflect/run.js';
+import type { ProjectCount, RunDeps, RunOpts, RunResult } from '../reflect/run.js';
 import {
   ReflectCallLimitError,
   ReflectFailClosedError,
@@ -195,21 +195,6 @@ export function buildCliBackends(input: BuildCliBackendsInput): CliBackends {
     }
   }
   return out;
-}
-
-/**
- * `team_project_keys` 是白名单,而 `runReflect` 的 `personalProjectKeys` 是黑名单(has 为真 → 降为 personal)。
- * 在命令层取反:`has(k) = !team.has(k)`,所以缺省(空白名单)时**所有**项目都是 personal。
- * 只支持 `has()`;其余成员(size、迭代、forEach…)一律抛错,免得将来有人迭代它得到悄悄放行的空集。
- */
-export function personalKeysFromTeamWhitelist(team: readonly string[]): ReadonlySet<string> {
-  const whitelist = new Set(team);
-  return new Proxy(new Set<string>(), {
-    get(_t, prop) {
-      if (prop === 'has') return (k: string) => !whitelist.has(k);
-      throw new TypeError(`personalProjectKeys 视图只支持 has()(访问了 ${String(prop)})`);
-    },
-  }) as ReadonlySet<string>;
 }
 
 // ---------------------------------------------------------------------------
@@ -421,6 +406,10 @@ function summaryOf(
     duplicates: r.duplicates.length,
     observations: rep.observations_n,
     guardrail_mentions: r.guardrailMentions,
+    // 仅干跑且有信号时出现(旧字段与旧形状不变);只含加盐哈希 id 与计数
+    ...(rep.mode === 'dry' && r.projectCounts.length > 0
+      ? { project_key_counts: r.projectCounts }
+      : {}),
   };
 }
 
@@ -434,6 +423,7 @@ function humanLines(s: Record<string, unknown>): string {
   const rejected = Object.entries(g<Record<string, number>>('rejected'))
     .map(([k, n]) => `${k}=${n}`)
     .join(',');
+  const counts = s['project_key_counts'] as ProjectCount[] | undefined;
   return (
     [
       `reflect: run=${String(s['run_id'])} mode=${String(s['mode'])} outcome=${String(s['outcome'])} exit=${String(s['exit_code'])}`,
@@ -444,6 +434,12 @@ function humanLines(s: Record<string, unknown>): string {
       `calls: made=${calls['made']} limit=${calls['limit']} budget=${String(s['budget'])}`,
       `staged: ${g<string[]>('staged').join(',') || '-'}`,
       `rejected: ${rejected || '-'}`,
+      ...(counts === undefined
+        ? []
+        : [
+            'project_keys(填入覆盖层 reflect.team_project_keys 即允许该项目进团队层;只有哈希 id 与计数):',
+            ...counts.map((c) => `  ${c.project_key} sessions=${c.sessions} signals=${c.signals}`),
+          ]),
     ].join('\n') + '\n'
   );
 }
@@ -611,7 +607,7 @@ export function createReflectCommand(deps: ReflectCommandDeps = {}): CommandDef 
           maxCalls,
           timeoutMs,
           allowEgress: live,
-          personalProjectKeys: personalKeysFromTeamWhitelist(ov?.team_project_keys ?? []),
+          teamProjectKeys: new Set(ov?.team_project_keys ?? []),
           budgetFull: budget === 'full',
           includePrompt: args.showPrompt,
         });

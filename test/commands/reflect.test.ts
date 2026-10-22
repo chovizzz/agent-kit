@@ -1,10 +1,13 @@
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { createReflectCommand, personalKeysFromTeamWhitelist } from '../../src/commands/reflect.js';
+import { createReflectCommand } from '../../src/commands/reflect.js';
 import type { ReflectCommandDeps } from '../../src/commands/reflect.js';
+import { canonicalJson } from '../../src/io/canonical-json.js';
+import type { Signal } from '../../src/contracts/signal.js';
 import { ExitCode } from '../../src/contracts/exit-codes.js';
 import { exists, readDir, readText } from '../../src/io/read-fs.js';
 import { runReflect } from '../../src/reflect/run.js';
+import type { RunDeps, RunOpts, RunResult } from '../../src/reflect/run.js';
 import { stageDir } from '../../src/reflect/stage.js';
 import {
   ReflectCallLimitError,
@@ -25,12 +28,31 @@ import {
   okText,
   out as outJson,
   projectKey,
+  sig,
   snapshot,
   testRedactor,
 } from '../fixtures/reflect/world.js';
 import { EGRESS_OVERLAY, ctxFor, kitToml, newR5World, overlayToml } from './r5-world.js';
 import type { R5World } from './r5-world.js';
 
+const OLD_KEYS = [
+  'backend',
+  'budget',
+  'calls',
+  'duplicates',
+  'exit_code',
+  'guardrail_mentions',
+  'mode',
+  'observations',
+  'outcome',
+  'plan',
+  'planned_backend',
+  'prompt',
+  'rejected',
+  'run_id',
+  'signals',
+  'staged',
+];
 const CLOCK = (): Date => new Date('2026-10-12T08:00:00Z');
 const RUN_ID = 'run-20261012T080000Z-abc123';
 const LIVE = ['--run-llm', '--allow-egress', '--owner', '@tester'];
@@ -142,6 +164,7 @@ describe('reflect 命令:默认干跑', () => {
       'outcome',
       'plan',
       'planned_backend',
+      'project_key_counts',
       'prompt',
       'rejected',
       'run_id',
@@ -153,6 +176,58 @@ describe('reflect 命令:默认干跑', () => {
     for (const c of [CANARY_UM, CANARY_EXT, CANARY_TR, INJECTION, '提交代码前']) {
       expect(text).not.toContain(c);
     }
+  });
+});
+
+describe('reflect 干跑:project_key 计数(供填 team_project_keys)', () => {
+  const sigs = (): Signal[] => [
+    sig({ project: 'A', session: 'A1', index: 0, text: '以后提交代码前必须先运行 lint 检查' }),
+    sig({ project: 'A', session: 'A1', index: 1, text: '以后修改配置前必须先备份旧文件' }),
+    sig({ project: 'A', session: 'A2', index: 0, text: '以后发布前必须先跑完整测试' }),
+    sig({ project: 'B', session: 'B1', index: 0, text: '以后提交代码前必须先运行 lint 检查并修复告警' }),
+  ];
+
+  it('--json:project_key_counts 按 key 升序,会话数按 session_ref 去重(同 key 多会话),信号数按条;旧字段逐字节不变', async () => {
+    const r = await rig({ signals: sigs() });
+    const { ctx, out } = ctxFor(r.w, ['--json']);
+    expect(await r.cmd.run(ctx)).toBe(ExitCode.OK);
+    const raw = out.join('');
+    const j = JSON.parse(raw) as Record<string, unknown>;
+    const counts = j['project_key_counts'] as { project_key: string; sessions: number; signals: number }[];
+    const expected = [
+      { project_key: projectKey('A'), sessions: 2, signals: 3 },
+      { project_key: projectKey('B'), sessions: 1, signals: 1 },
+    ].sort((a, b) => (a.project_key < b.project_key ? -1 : 1));
+    expect(counts).toEqual(expected);
+    // canonical:整份输出等于对解析结果重新 canonical 序列化(新键没有破坏键序/格式)
+    expect(raw).toBe(canonicalJson(j));
+    // 旧字段不变:去掉新键后的 canonical 字节 = 老形状(不含新键)的字节
+    const { project_key_counts: _drop, ...legacy } = j;
+    expect(Object.keys(legacy).sort()).toEqual(OLD_KEYS);
+    expect((j['signals'] as { loaded: number }).loaded).toBe(4);
+  });
+
+  it('文本输出新增一段,只有哈希 id 与计数;不含路径/文本', async () => {
+    const r = await rig({ signals: sigs() });
+    const { ctx, out } = ctxFor(r.w, []);
+    expect(await r.cmd.run(ctx)).toBe(ExitCode.OK);
+    const text = out.join('');
+    expect(text).toContain('project_keys(');
+    expect(text).toContain(`${projectKey('A')} sessions=2 signals=3`);
+    expect(text).toContain(`${projectKey('B')} sessions=1 signals=1`);
+    expect(text).not.toContain(r.w.parent);
+    expect(text).not.toContain('lint');
+  });
+
+  it('无信号 → 新键缺省(旧形状);真跑摘要也不带该键(只干跑)', async () => {
+    const empty = await rig({ signals: [] });
+    const e = ctxFor(empty.w, ['--json']);
+    expect(await empty.cmd.run(e.ctx)).toBe(ExitCode.OK);
+    expect('project_key_counts' in JSON.parse(e.out.join(''))).toBe(false);
+    const live = await rig();
+    const l = ctxFor(live.w, [...LIVE, '--json']);
+    expect(await live.cmd.run(l.ctx)).toBe(ExitCode.OK);
+    expect('project_key_counts' in JSON.parse(l.out.join(''))).toBe(false);
   });
 });
 
@@ -329,14 +404,48 @@ describe('reflect 命令:真跑(注入 stub 后端)', () => {
     ).toBe(true);
   });
 
-  it('personalKeysFromTeamWhitelist:has 取反;其余成员一律抛错(不留悄悄放行的空集)', () => {
-    const s = personalKeysFromTeamWhitelist(['p_team']);
-    expect(s.has('p_team')).toBe(false);
-    expect(s.has('p_other')).toBe(true);
-    expect(personalKeysFromTeamWhitelist([]).has('anything')).toBe(true);
-    expect(() => s.size).toThrow(TypeError);
-    expect(() => [...s]).toThrow(TypeError);
-    expect(() => s.forEach(() => undefined)).toThrow(TypeError);
+  it('命令层不再有补集代理:runReflect 收到的是 teamProjectKeys 白名单集合(真实 Set,可迭代)', async () => {
+    const run = async (overlay: string | undefined): Promise<RunOpts> => {
+      const seen: RunOpts[] = [];
+      const r = await rig({
+        ...(overlay !== undefined ? { overlay } : {}),
+        deps: {
+          runReflect: (d: RunDeps, o: RunOpts): Promise<RunResult> => {
+            seen.push(o);
+            return runReflect(d, o);
+          },
+        },
+      });
+      expect(await r.cmd.run(ctxFor(r.w, []).ctx)).toBe(0);
+      return seen[0]!;
+    };
+    const dflt = await run(undefined);
+    expect(dflt.teamProjectKeys).toBeInstanceOf(Set);
+    expect([...dflt.teamProjectKeys!]).toEqual([]); // 缺省 = 空白名单(fail-closed),不是 undefined
+    expect('personalProjectKeys' in dflt).toBe(false);
+    const two = await run(
+      overlayToml(
+        `egress = true\nteam_project_keys = ["${projectKey('A')}", "p_unknown0000000000"]`,
+      ),
+    );
+    expect([...two.teamProjectKeys!].sort()).toEqual(
+      [projectKey('A'), 'p_unknown0000000000'].sort(),
+    );
+  });
+
+  it('白名单含未知 key + 只含一个真实项目 → 仍 personal;空白名单 → personal', async () => {
+    const r = await rig({
+      overlay: overlayToml(
+        `egress = true\nteam_project_keys = ["${projectKey('A')}", "p_unknown0000000000"]`,
+      ),
+    });
+    expect(await r.cmd.run(ctxFor(r.w, LIVE).ctx)).toBe(0);
+    const d = stageDir(r.w.io, RUN_ID);
+    expect(await exists(path.join(d, 'rules/team'))).toBe(false);
+    expect(await exists(path.join(d, 'rules/personal/run-lint-before-commit.md'))).toBe(true);
+    const empty = await rig({ overlay: overlayToml('egress = true\nteam_project_keys = []') });
+    expect(await empty.cmd.run(ctxFor(empty.w, LIVE).ctx)).toBe(0);
+    expect(await exists(path.join(stageDir(empty.w.io, RUN_ID), 'rules/team'))).toBe(false);
   });
 
   it('预算已满 → 真跑不调用后端(摘录不白发)、不写任何文件,退出 1;预算未满时同样的运行会调用(正向对照)', async () => {
