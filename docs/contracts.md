@@ -1851,6 +1851,7 @@ R5 追加字段(#29):`allow_unverified` 与 `team_project_keys`。
 agent-kit reflect [--agent <id>]… [--since YYYY-MM-DD] [--max-proposals N(1..5)]
                   [--run-llm --allow-egress] [--backend <slot>] [--max-calls N(1..3,默认 1)]
                   [--timeout-ms N(1000..600000)] [--owner @handle] [--show-prompt] [--json]
+agent-kit reflect --gc [--write] [--json]            (暂存区回收,见 §17.7;与上面所有模式互斥)
 agent-kit judge   --run <run_id> [--run-llm --allow-egress] [--max-calls N(1..10,默认 5)] [--strict]
 ```
 
@@ -1922,6 +1923,22 @@ LLM CLI 用真实 HOME 的登录态并写它自己的全局文件,`llm-exec` 只
 **A2 语义订正(决策 ② 收口,用户拍板 D2;A1–A15 其余项语义不变)**:原 A2 断言真实 `kit.toml` 的 `enforce = "warn"`,现订正为断言 `enforce = "block"`,且在真实仓库上 `check` 退出 0(没有原子超限);矩阵由 12 格扩为 15 格(加「不写 `enforce`、走缺省 block」× 三种 `limit_source` × 超)。`test/fixtures/budget/matrix.json` 与 `test/budget/matrix.test.ts` 同步,`ops/accept/lib/a2.mjs` 的 `EXPECTED` 是独立 oracle。
 
 A16–A19、A21–A23 直接 import / 运行 `dist/`;dist 比 src 旧会按「未执行(4)」处理。A19 / A22 的真实 HOME 受管路径快照有差异时退出 5(待人工归因),汇总按未通过处理;它是「提示 + 归因」而不是硬判据(多半是别的进程在写)。`--with-p0` 先调用 `accept-p0.sh` 做 A1–A15 回归。
+
+### 17.7 `reflect --gc`:暂存区回收(S10-rc5,决策 D6)
+
+```
+agent-kit reflect --gc [--write] [--json]
+```
+
+- **只清「已过期且无引用」的 run;默认干跑**:干跑只列将删除的 `run_id`、原因(`expired_unreferenced`)与字节数,另列每个被保留的 run 及保留原因;`--write` 才真删。`--gc` 与其它模式互斥(只允许 `--write` / `--json`,否则退出 2);`--write` 只能与 `--gc` 同用(孤立的 `--write` 退出 2);未知参数退出 2。不读覆盖层、不构造后端、不读信号库。
+- **保留期固定 30 天**(`REFLECT_GC_RETENTION_DAYS`),不可配置(契约此前没有保留期;要可配置另行定夺)。「时间」取 `run_id` 里的 UTC 时间戳 `run-YYYYMMDDTHHMMSSZ-…`(`report.json` 没有时间字段);恰满 30 天算过期。
+- **候选必须同时满足**(任何一项无法判定 → 保留,fail-closed):①目录名过 `RunIdSchema` 且不含 `..`,且是真实目录(`lstat`,非符号链接);②目录内容**恰好**是一个普通文件 `report.json`(非链接、`nlink=1`)——没有 `proposals/`、`rules/`、`apply.patch`,即没有暂存提案,也就没有 judge 状态(写在提案里)、没有尚未 apply 的提案、不占任何提案编号;③`report.json` 过 `ReflectRunReportSchema`、`run_id` 与目录名一致、`staged` 为空;④时间戳可解析、不晚于现在、距今 ≥ 30 天;⑤仓库 `proposals/**` 与 `lifecycle/**` 的文件名与文本都不含该 `run_id`。点开头目录(`.tmp-*`)与 `cwd` 不是 run,不扫不报。
+- **已用编号不会被释放,不需要墓碑**:`loadUsedProposalIds` 只从仓库 `proposals/` 与各 run 的 `proposals/` 取编号;候选 run 按②不含 `proposals/`,删除它们不可能改变该集合;含 `proposals/` 的 run(无论多旧、是否已 apply)一律保留。测试钉死「gc 前后 `loadUsedProposalIds` 相同」(且前提断言集合非空、gc 确实删了东西)。
+- **删除范围与守卫**:只删 `.state/reflect/<run_id>/` 这一个目录,经 safe-fs `remove`(写出口守卫 + `findWriteRootEscape`);删之前对每个候选复核(仍是真实目录、`realpath` 的父目录仍是暂存根的 `realpath`、内容仍恰好是 `report.json`)。暂存根自身是符号链接 → 退出 3、什么都不删;引用来源读不了(含 `proposals/`、`lifecycle/` 里有符号链接等非常规条目)→ 退出 3、什么都不删。
+- **输出**:文本 `reflect gc: mode=dry|write retention_days=30 scanned=N candidates=K kept=M deleted=D bytes=B`,随后 `would_delete|did_delete run=<id> reason=… bytes=<n>` 与 `keep run=<id> reason=<码>`;`--json` 为 canonical,键集合固定 `bytes, candidates, deleted, kept, mode, retention_days, scanned, write`。目录名不合法的条目只显示为 `run=-`,不回显磁盘上的名字。
+- **保留原因码**:`not_expired`、`bad_run_id`、`not_real_dir`、`has_other_content`、`report_missing`、`report_invalid`、`report_run_id_mismatch`、`report_has_staged`、`stamp_unparseable`、`stamp_in_future`、`referenced`。
+- **退出码**:0 完成(干跑或已删);2 用法错;3 fail-closed(stderr `REFLECT_FAIL_CLOSED reason=<码>`,码取 `GC_ROOT_NOT_REAL_DIR` / `GC_REFERENCE_SCAN_FAILED` / `GC_RECHECK_FAILED` / `GC_RUN_ID_INVALID` / `IO_WRITE_DENIED` / `internal`)。没有 1 与 4。
+- **已知边界(待定夺)**:含暂存提案的 run(包括已 apply 或已被 judge/promote 用过的)本版不回收,所以它们仍使 `loadStagedAtoms` / `loadUsedProposalIds` 随时间变慢;要回收需先设计「已 apply 且仓库 `proposals/` 已含同编号」或高水位记录,见 `docs/p1-backlog.md`。
 
 ### 17.6 R6 真实环境实测结论(2026-10-13,合成提示,回复 `NOTOOLS` 表示零工具成立)
 

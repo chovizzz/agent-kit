@@ -88,8 +88,7 @@
   (`claude`/`codex`/`pi` 的 `claims` 全是 `claimed`/`unresolved`);②`llm-exec` 的固定 cwd 在仓库 git 树内
   (`<repo>/.state/reflect/cwd`),CLI 向上找项目根时可能读到仓库的 CLAUDE.md / AGENTS.md / `.claude/settings.json`
   (contracts §16①),需实测或允许 `KIT_STATE_DIR` 指向仓库外;③每个 CLI 真跑实际写了哪些全局文件(会话日志、history),列清单
-- ☐ **暂存区过期 / gc**:`.state/reflect/<run_id>/` 现在只增不减(`loadUsedProposalIds` / `loadStagedAtoms` 会随之变慢,
-  且已用编号永不释放);需要 `reflect --gc` 或过期策略,并保证不删还在被 judge / 人工 apply 使用的 run
+- ✅ **暂存区过期 / gc**(S10-rc5,D6):`reflect --gc`(默认干跑,`--write` 才删)只清「已过期(30 天)且无引用、目录仅含 `report.json`」的 run,fail-closed,不改变 `loadUsedProposalIds`(契约 §17.7)。**遗留**:含暂存提案的 run 不回收(需先设计「已 apply 的 run」判据或编号高水位记录)
 - ✅ **契约层 FE0F**(2026-10-22 用户定:保持现状,无代码改动)——`reflect.ts` 拦 U+FE0F(⚠️/❤️ 这类 emoji 呈现序列会被拒),`lifecycle.ts` 的 `note` 为避免旧记录解析失败刻意放行 FE0F,两处语义不统一是有意的
 - ✅ **契约层不可见字符补全**:`HIDDEN_CHARS_RE` 漏 Unicode tag 字符(U+E0000 段)、bidi U+061C(ALM)、变体选择符
   (U+FE00–FE0F、U+E0100 段)、Hangul 填充(U+3164、U+115F/1160、U+FFA0)等;`hidden_chars_in_output` 目前只是纵深防御
