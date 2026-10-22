@@ -42,20 +42,18 @@ async function makeKitRepo(extra: Record<string, string> = {}): Promise<string> 
 const CODEX_CONTENT = 'line one\nline two\nline three\n'; // 3 行 / 29 字节
 
 /** 注入渲染:codex 有真实常驻内容(仓库里的示例原子是 proposed、不渲染,量出来是 0)。 */
-function injectCodexRender(): void {
+function injectCodexRender(agents: readonly ('claude' | 'codex')[] = ['codex']): void {
   budgetDeps.render = () => ({
-    files: [
-      {
-        agent: 'codex',
-        target: 'home',
-        relPath: 'AGENTS.md',
-        content: CODEX_CONTENT,
-        mode: 'owned',
-        atomIds: ['a'],
-        atomBytes: { a: 29 },
-        confidence: 'documented',
-      },
-    ],
+    files: agents.map((agent) => ({
+      agent,
+      target: 'home' as const,
+      relPath: 'AGENTS.md',
+      content: CODEX_CONTENT,
+      mode: 'owned' as const,
+      atomIds: ['a'],
+      atomBytes: { a: 29 },
+      confidence: 'documented' as const,
+    })),
     report: {
       dropped: [],
       sideEffects: [],
@@ -136,6 +134,7 @@ describe('probe(P1-01,contracts #12)', () => {
     expect(lines).toHaveLength(2);
     expect(lines[0]).toMatch(/^claude: measured /);
     expect(lines[1]).toMatch(/^codex: measured /);
+    expect(out.join('').endsWith('\n')).toBe(true);
   });
 
   it('量出 0 → 不出补丁,打 PROBE_NOTHING_MEASURED,不产生 probed_value = 0', async () => {
@@ -218,5 +217,26 @@ describe('probe(P1-01,contracts #12)', () => {
     ctx.argv = ['--write', '--agent-version', 'codex=0.161.0'];
     expect(await probe.run(ctx)).toBe(ExitCode.OK);
     expect(out.join('')).toContain('probed_at = "2026-01-02T03:04:05Z"\n');
+  });
+
+  it('保留 hard_limit,避免整段替换后丢失硬上限', async () => {
+    injectCodexRender();
+    const toml = KIT_TOML.replace('max_bytes = 1000', 'max_bytes = 1000\nhard_limit = 2000');
+    const root = await makeKitRepo({ 'kit.toml': toml });
+    const { ctx, out } = cmdCtx(root);
+    ctx.argv = ['--write', '--agent-version', 'codex=0.161.0'];
+    expect(await probe.run(ctx)).toBe(ExitCode.OK);
+    expect(out.join('')).toContain('hard_limit = 2000\n');
+  });
+
+  it('整批原子:第二个目标缺版本 → 退出 2,第一个目标的补丁也不输出', async () => {
+    injectCodexRender(['claude', 'codex']);
+    const toml = KIT_TOML.replace('limit_source = "documented"', 'limit_source = "assumed"');
+    const root = await makeKitRepo({ 'kit.toml': toml });
+    const { ctx, out, err } = cmdCtx(root);
+    ctx.argv = ['--write', '--agent-version', 'claude=1.2.3'];
+    expect(await probe.run(ctx)).toBe(ExitCode.USAGE);
+    expect(err.join('')).toContain('codex 写回需要');
+    expect(out.join('')).not.toContain('[budget.');
   });
 });

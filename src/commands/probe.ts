@@ -109,6 +109,7 @@ function buildPatch(
   return {
     ...(t.max_bytes !== undefined ? { max_bytes: t.max_bytes } : {}),
     ...(t.max_lines !== undefined ? { max_lines: t.max_lines } : {}),
+    ...(t.hard_limit !== undefined ? { hard_limit: t.hard_limit } : {}),
     limit_source: 'probed',
     probed_value: measured,
     probed_agent_version: agentVersion,
@@ -121,6 +122,11 @@ function patchToToml(agent: string, p: BudgetTarget): string {
   const lines = [`[budget.${agent}]`];
   if (p.max_bytes !== undefined) lines.push(`max_bytes = ${p.max_bytes}`);
   if (p.max_lines !== undefined) lines.push(`max_lines = ${p.max_lines}`);
+  if (p.hard_limit !== undefined) {
+    lines.push(
+      `hard_limit = ${typeof p.hard_limit === 'number' ? p.hard_limit : `"${p.hard_limit}"`}`,
+    );
+  }
   lines.push('limit_source = "probed"');
   lines.push(`probed_value = ${p.probed_value}`);
   lines.push(`probed_agent_version = "${p.probed_agent_version}"`);
@@ -221,10 +227,10 @@ export const command: CommandDef = {
     if (write) {
       if (patches.length === 0) {
         ctx.stdout('probe: 没有可写回的目标\n');
-        return ExitCode.OK;
+      } else {
+        ctx.stdout('# 粘贴进 kit.toml(替换对应 [budget.<agent>] 段;探针不直接写文件系统)\n');
+        for (const p of patches) ctx.stdout(`${p}\n\n`);
       }
-      ctx.stdout('# 粘贴进 kit.toml(替换对应 [budget.<agent>] 段;探针不直接写文件系统)\n');
-      for (const p of patches) ctx.stdout(`${p}\n\n`);
     }
 
     const pending = rendered.report.pendingProbes;
