@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import * as crypto from 'node:crypto';
 import * as path from 'node:path';
 import { readText } from '../../src/io/read-fs.js';
 import * as safe from '../../src/io/safe-fs.js';
@@ -39,7 +40,11 @@ async function setup(
   return fx;
 }
 const a10 = (fx: Fx, extra: string[] = [], cli = REAL_CLI) =>
-  runScript('a10-privacy.sh', ['--root', fx.root, '--cli', cli, '--no-vitest', ...extra], fx.env());
+  runScript(
+    'a10-privacy.sh',
+    ['--root', fx.root, '--cli', cli, '--no-vitest', '--pins', 'none', ...extra],
+    fx.env(),
+  );
 
 describe('A10 隐私卫生', () => {
   it('干净仓库 => 0:主动探针、git 清单、样本清单、脱敏扫描都有效(正向控制)', async () => {
@@ -129,6 +134,78 @@ describe('A10 隐私卫生', () => {
     expect(r.status, r.stdout).toBe(1);
     expect(r.stdout).toContain('0600');
   }, 60_000);
+});
+
+describe('A10 公开信任材料:路径 + sha256 精确钉死', () => {
+  const PIN_PATH = 'test/fixtures/trust/root.json';
+  const sha = (t: string): string => crypto.createHash('sha256').update(t).digest('hex');
+  // 运行时生成的高熵内容(模拟公钥 / 签名),不入库
+  const entropy = (): string => crypto.randomBytes(96).toString('base64');
+  const body = (e: string): string => `{"keys":"${e}"}\n`;
+  async function putPins(fx: Fx, map: Record<string, string>): Promise<string> {
+    const f = path.join(fx.dir, 'pins.json');
+    await safe.writeFile(fx.ctx, f, JSON.stringify(map));
+    return f;
+  }
+  async function pinned(content: string, pinSha?: string) {
+    const fx = await setup({ [PIN_PATH]: content });
+    const pins = await putPins(fx, { [PIN_PATH]: pinSha ?? sha(content) });
+    return { fx, pins };
+  }
+  const withPins = (fx: Fx, pins: string) => a10(fx, ['--pins', pins]);
+
+  it('正向对照:同一份高熵内容,没钉死 => 1;路径与 sha256 都匹配 => 0', async () => {
+    const e = entropy();
+    const { fx, pins } = await pinned(body(e));
+    const r0 = a10(fx); // 默认 --pins none:同一份内容没有钉死
+    expect(r0.status, r0.stdout).toBe(1);
+    expect(r0.stdout).toContain(PIN_PATH);
+    const r = withPins(fx, pins);
+    expect(r.status, r.stdout).toBe(0);
+    expect(r.stdout).toContain('1 个路径+sha256 钉死');
+  }, 120_000);
+
+  it('钉死文件改 1 个字节 => 1(不是退回普通扫描碰巧通过)', async () => {
+    const e = entropy();
+    const { fx, pins } = await pinned(body(e));
+    await fx.put(PIN_PATH, body(`${e.slice(0, -2)}${e.endsWith('A') ? 'B' : 'A'}=`));
+    const r = withPins(fx, pins);
+    expect(r.status, r.stdout).toBe(1);
+    expect(r.stdout).toContain('钉死校验失败');
+    expect(r.stdout).toContain('sha256 与钉死值不符');
+  }, 120_000);
+
+  it('清单里的文件不存在 => 1(报错,不静默)', async () => {
+    const fx = await setup();
+    const pins = await putPins(fx, { [PIN_PATH]: 'a'.repeat(64) });
+    const r = withPins(fx, pins);
+    expect(r.status, r.stdout).toBe(1);
+    expect(r.stdout).toContain('钉死清单里的文件不存在');
+  }, 120_000);
+
+  it('同目录新增一个清单外的高熵文件 => 1(只放过清单里的路径)', async () => {
+    const { fx, pins } = await pinned(body(entropy()));
+    await fx.put('test/fixtures/trust/extra.json', body(entropy()));
+    const r = withPins(fx, pins);
+    expect(r.status, r.stdout).toBe(1);
+    expect(r.stdout).toContain('test/fixtures/trust/extra.json');
+    expect(r.stdout).not.toContain(`${PIN_PATH}(`);
+  }, 120_000);
+
+  it('清单里的 sha256 写错 => 1', async () => {
+    const { fx, pins } = await pinned(body(entropy()), 'f'.repeat(64));
+    const r = withPins(fx, pins);
+    expect(r.status, r.stdout).toBe(1);
+    expect(r.stdout).toContain('sha256 与钉死值不符');
+  }, 120_000);
+
+  it('边界:钉死文件里的熵命中被忽略,但密钥形态等其他命中照旧 => 1', async () => {
+    const seed = buildSeeds().find((s) => s.category === 'plain' && s.tier === 'recognized');
+    const { fx, pins } = await pinned(`${body(entropy())}token = ${seed?.input ?? ''}\n`);
+    const r = withPins(fx, pins);
+    expect(r.status, r.stdout).toBe(1);
+    expect(r.stdout).toContain(PIN_PATH);
+  }, 120_000);
 });
 
 describe('A10 纯函数', () => {
