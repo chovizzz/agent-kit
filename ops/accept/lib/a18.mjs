@@ -7,6 +7,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { Reporter, makeCtx, mkTmp, parseCommon, rmTmp, runMain } from './common.mjs';
 import { freshDist, importDist } from './accept-p1.mjs';
+import { kitToml } from './lc-world.mjs';
 
 export const CHAIN = ['codex', 'maas-deepseek', 'glm', 'kimi', 'official-deepseek'];
 const VENDOR = {
@@ -163,6 +164,8 @@ export const SCENARIOS = [
 export function writeRunDir(yaml, repo, state, reflector) {
   const runDir = path.join(state, 'reflect', RUN_ID);
   fs.mkdirSync(path.join(repo, 'rules', 'org'), { recursive: true });
+  // judge 冻结参数读 <repo>/kit.toml(缺失即 fail-closed JUDGE_STATE_INVALID);验收不能依赖运行环境里碰巧有它
+  fs.writeFileSync(path.join(repo, 'kit.toml'), kitToml());
   fs.writeFileSync(path.join(repo, 'rules', 'org', 'known-rule.md'), 'placeholder\n');
   fs.mkdirSync(path.join(runDir, 'proposals'), { recursive: true });
   fs.mkdirSync(path.join(runDir, 'rules', 'personal'), { recursive: true });
@@ -203,7 +206,14 @@ export async function runScenario(mods, tmp, sc, idx) {
   }
   const before = fs.readFileSync(propFile, 'utf8');
   await judgeRun.runJudge(
-    { io, redactor: redact.createRedactor({ timeout_ms: 5000 }), backends },
+    {
+      io,
+      redactor: redact.createRedactor({ timeout_ms: 5000 }),
+      backends,
+      // 冻结记录需要仓库 HEAD 与时钟:合成 run 目录不是 git 仓库,注入固定值(不依赖 git/系统时钟/用户名)
+      resolveHead: () => '0123456789abcdef0123456789abcdef01234567',
+      now: () => new Date('2026-10-12T08:00:00Z'),
+    },
     { runId: RUN_ID, dry: false, maxCalls: 10 },
   );
   const after = yaml.parse(fs.readFileSync(propFile, 'utf8'));
