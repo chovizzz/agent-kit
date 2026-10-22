@@ -291,6 +291,9 @@ describe('probe(P1-01,contracts #12)', () => {
     [['--write', '--observed', 'codex=bytes:5,bytes:6'], 'PROBE_BAD_OBSERVED'],
     [['--write', '--observed', 'codex=bytes:5,'], 'PROBE_BAD_OBSERVED'],
     [['--write', '--observed', 'codex=words:5'], 'PROBE_BAD_OBSERVED'],
+    [['--write', '--observed', 'codex=bytes:9007199254740992,lines:1'], 'PROBE_BAD_OBSERVED'],
+    [['--write', '--observed', 'codex=bytes:1,lines:9007199254740992'], 'PROBE_BAD_OBSERVED'],
+    [['--write', '--observed', 'codex=bytes:1000,lines:500\n'], 'PROBE_BAD_OBSERVED'],
     [['--write', '--observed', 'codex=bytes:5,lines:1.5'], 'PROBE_BAD_OBSERVED'],
     [
       ['--write', '--observed', 'codex=1000', '--observed', 'codex=bytes:1,lines:1'],
@@ -381,6 +384,40 @@ describe('probe(P1-01,contracts #12)', () => {
       expect(r.err).toContain('PROBE_LIMIT_ABOVE_OBSERVED agent=codex');
       expect(r.err).toContain('max_lines=500');
       expect(r.out).not.toContain('[budget.');
+    });
+
+    it('安全整数上界的双维度观测值有效', async () => {
+      const m = Number.MAX_SAFE_INTEGER;
+      const r = await run(BOTH, `codex=bytes:${m},lines:${m}`);
+      expect(r.code).toBe(ExitCode.OK);
+      expect(r.out).toContain(`probed_value = ${m}\n`);
+    });
+
+    it('单维度目标给 lines: 形式 → PROBE_OBSERVED_DIM_MISMATCH', async () => {
+      const r = await run(KIT_TOML, 'codex=lines:5000');
+      expect(r.code).toBe(ExitCode.USAGE);
+      expect(r.err).toContain('PROBE_OBSERVED_DIM_MISMATCH');
+    });
+
+    it('多目标:前一个目标可出补丁、后一个超限 → 整批无补丁', async () => {
+      injectCodexRender(['claude', 'codex']);
+      const toml = BOTH.replace('limit_source = "documented"', 'limit_source = "assumed"');
+      const root = await makeKitRepo({ 'kit.toml': toml });
+      const r = cmdCtx(root);
+      r.ctx.argv = [
+        '--write',
+        '--agent-version',
+        'claude=1.0.0',
+        '--agent-version',
+        'codex=1.0.0',
+        '--observed',
+        'claude=1000',
+        '--observed',
+        'codex=bytes:1000,lines:499',
+      ];
+      expect(await probe.run(r.ctx)).toBe(ExitCode.USAGE);
+      expect(r.err.join('')).toContain('PROBE_LIMIT_ABOVE_OBSERVED agent=codex');
+      expect(r.out.join('')).not.toContain('[budget.');
     });
 
     it('双维度目标只给单值 → PROBE_OBSERVED_DIM_MISMATCH', async () => {

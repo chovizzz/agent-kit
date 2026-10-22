@@ -232,10 +232,10 @@ A2 的 15 格矩阵(`limit_source` × `enforce` × 超/不超,外加「不写 `e
 12. **阈值探针写回结构(plan-P0 §7)**:`BudgetTarget` 增加可选 `probed_value` / `probed_agent_version` / `probed_at`;`limit_source=probed` 时三者必填。
     **语义(D1 定稿)**:`probed_value` 是**外部观测到的上限**(人在真实 agent 上观察到的),**不是 kit 产物大小**;kit 只记录,不编造。
     `agent-kit probe` 实装——干跑打印各目标实测 bytes/lines 及相对上限的余量(仅供参考,不写入任何补丁);
-    `--write` 对非 `documented` 目标必须同时给 `--agent-version <agent>=<x.y.z>` 与 `--observed <agent>=<N>`(N 为正整数),
-    产出 kit.toml 目标补丁(`limit_source=probed`、`probed_value=N` + 三元组,max_bytes/max_lines 原值不动),**不直接写文件系统**;
+    `--write` 对非 `documented` 目标必须同时给 `--agent-version <agent>=<x.y.z>` 与 `--observed`(写法见下),
+    产出 kit.toml 目标补丁(`limit_source=probed`、`probed_value` + 三元组,max_bytes/max_lines 原值不动),**不直接写文件系统**;
     `documented` 目标永不改写。**单维度目标**(只配 max_bytes 或只配 max_lines)写 `--observed <agent>=<N>`,N 的单位 = 该维度;
-    **双维度目标**(同一目标同时配 max_bytes 与 max_lines,PB4)必须写 `--observed <agent>=bytes:<N>,lines:<M>`(N、M 都是不带前导零的正整数),两个维度各自与观测值比。
+    **双维度目标**(同一目标同时配 max_bytes 与 max_lines,PB4)必须写 `--observed <agent>=bytes:<N>,lines:<M>`(N、M 都是不带前导零、不超过 `Number.MAX_SAFE_INTEGER` 的正整数),两个维度各自与观测值比。
     写法与目标不符(双维度只给单值或只给一个维度;单维度给 `bytes:`/`lines:` 形式)→ `PROBE_OBSERVED_DIM_MISMATCH`。
     任一已配维度的原 max 大于对应观测值时本命令拒绝整批出补丁(`PROBE_LIMIT_ABOVE_OBSERVED`,信息里带维度);这只约束 probe 的输出,schema 不校验 max 与 probed_value 的关系(§1 只追加)。
     **`probed_value` 仍是单字段(§1 不改 schema)**:单维度记那个观测值;双维度记 bytes 观测值,lines 观测值只参与比较、不落盘。
