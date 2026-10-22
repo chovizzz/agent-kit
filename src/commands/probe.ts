@@ -286,11 +286,7 @@ export const command: CommandDef = {
         return ExitCode.USAGE;
       }
       const dual = t.max_bytes !== undefined && t.max_lines !== undefined;
-      if (
-        dual
-          ? ob.bytes === undefined || ob.lines === undefined
-          : ob.single === undefined
-      ) {
+      if (dual ? ob.bytes === undefined || ob.lines === undefined : ob.single === undefined) {
         ctx.stderr(
           `agent-kit probe: PROBE_OBSERVED_DIM_MISMATCH agent=${t.agent}: ` +
             (dual
