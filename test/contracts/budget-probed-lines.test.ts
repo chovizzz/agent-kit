@@ -24,6 +24,11 @@ describe('BudgetTarget.probed_lines(PB5)', () => {
       }).success,
     ).toBe(true);
   });
+  it('schema 允许 lines-only 的 probed 目标带 probed_lines(不强制 max_bytes)', () => {
+    expect(
+      BudgetTargetSchema.safeParse({ max_lines: 500, ...PROBED, probed_lines: 3 }).success,
+    ).toBe(true);
+  });
   it('不写 probed_lines 的既有 probed 目标仍通过(向后兼容)', () => {
     expect(BudgetTargetSchema.safeParse({ max_bytes: 1000, ...PROBED }).success).toBe(true);
     expect(BudgetTargetSchema.safeParse({ max_bytes: 1000, max_lines: 5, ...PROBED }).success).toBe(
