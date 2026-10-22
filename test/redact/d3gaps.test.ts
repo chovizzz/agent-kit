@@ -56,6 +56,8 @@ describe('D3:残余缺口 known_gap 种子', () => {
 
   it('selftest 汇总里的 known_gap 数与登记一致', () => {
     const res = runSelftest({ mutate: false });
-    expect(res.lines.join('\n')).toContain(`known_gap (not counted, see docs/redaction.md): ${KNOWN_GAP_TOTAL}`);
+    expect(res.lines.join('\n')).toContain(
+      `known_gap (not counted, see docs/redaction.md): ${KNOWN_GAP_TOTAL}`,
+    );
   });
 });
