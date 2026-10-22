@@ -153,9 +153,11 @@ zod 校验失败统一映射为 `SCHEMA_INVALID`(`zodIssuesToDiagnostics`);各�
   `hard_limit` 为数字且被超过时,另出 `BUDGET_OVER_HARD_LIMIT`,阻断规则同下。
 - **阻断规则**:`blocking = (level==='over') && (enforce==='block') && (limit_source !== 'assumed')`。
   `assumed` 目标不论 `enforce` 都只告警(设计 §3.6 硬规则)。blocking 的诊断 severity 为 `error`,否则为 `warn`;`check` 在存在 `error` 时退出 1。
-- 决策 ②:真实仓库 `kit.toml` 的 `enforce = "warn"`;`block` 只由 fixture 开启;P1 把默认值改为 `block`(documented/probed 目标)。
+- 决策 ②:`enforce` 默认 `block`(documented/probed 目标)。
   **P1 落地(2026-10-09)**:`BudgetConfigSchema.enforce` 缺省改为 `block`(assumed 目标恒只告警的 carve-out 不变,
-  故缺省阻断实际只作用于 documented/probed);真实仓库 `kit.toml` 显式保持 `warn`,阈值探针(probe)定稿后再收紧。
+  故缺省阻断实际只作用于 documented/probed)。
+  **收口(用户拍板 D2)**:默认 block 已生效,真实仓库 `kit.toml` 的 `enforce` 已由 `warn` 改为 `block`(probe 定稿后收紧);
+  验收 A2 同步订正为断言真实 `kit.toml` 为 `block` 且 `check` 退出 0(见 §17.5「A2 语义订正」)。
 
 - **实现与上述口径的已知偏离(如实记录,B21/B5)**:
   1. 除 `conditional` 非空外,**纯技能/子代理文件**(有 `sourceRefs`、不含规则原子)也**不计入**预算(`countsTowardBudget`):技能/子代理按需加载、不常驻,这是实现里加的口径,各 agent 是否真如此未逐家核实。
@@ -165,7 +167,7 @@ zod 校验失败统一映射为 `SCHEMA_INVALID`(`zodIssuesToDiagnostics`);各�
 - **多维度目标**:逐维度判断(bytes↔`max_bytes`,lines↔`max_lines`),只配了一个维度的目标只看那一维;目标级 `level` = 任一维度 `over` 则 `over`,否则任一维度 `near` 则 `near`,否则 `ok`。
 - **Codex 项目链**:`projectChain` 是根→cwd 各层 AGENTS.md 的**文本内容**数组,字节数按 UTF-8 计后与托管块产物相加。
 
-A2 的 12 格矩阵(`limit_source` × `enforce` × 超/不超;退出码 / 是否出告警):
+A2 的 15 格矩阵(`limit_source` × `enforce` × 超/不超,外加「不写 `enforce`、走缺省 block」×超 3 格;退出码 / 是否出告警):
 
 | limit_source | enforce | 超   | 退出码 | 告警      |
 | ------------ | ------- | ---- | ------ | --------- |
@@ -181,6 +183,9 @@ A2 的 12 格矩阵(`limit_source` × `enforce` × 超/不超;退出码 / 是否
 | assumed      | warn    | 不超 | 0      | 无        |
 | assumed      | block   | 超   | **0**  | 有(warn)  |
 | assumed      | block   | 不超 | 0      | 无        |
+| documented   | 不写    | 超   | **1**  | 有(error) |
+| probed       | 不写    | 超   | **1**  | 有(error) |
+| assumed      | 不写    | 超   | **0**  | 有(warn)  |
 
 「不超」指 level 为 `ok`;处于 `near` 时同样无阻断,但出一条 `warn` 级的 `BUDGET_NEAR_LIMIT`(提示一进一出)。
 
@@ -1869,7 +1874,7 @@ agent-kit judge   --run <run_id> [--run-llm --allow-egress] [--max-calls N(1..10
 
 LLM CLI 用真实 HOME 的登录态并写它自己的全局文件,`llm-exec` 只管 env/cwd/超时/输出/次数(§12.4)。A5 与 A19 的零写入只对**干跑与 stub 路径**成立;A19 里的真跑只用来证明"假 codex 经 kit 确实可达"(正向对照),发生在最终快照之后。真跑前后的受管路径快照与「每个 CLI 实际写了哪些全局文件」清单属 R6。
 
-### 17.5 验收 `ops/accept-p1.sh`(A16–A24;A1–A15 仍是 `ops/accept-p0.sh`,语义不变)
+### 17.5 验收 `ops/accept-p1.sh`(A16–A24;A1–A15 仍是 `ops/accept-p0.sh`,语义不变,仅 A2 按下文「A2 语义订正」调整)
 
 | 项  | 内容                                                                                                                                                                                                                                                                                                                             |
 | --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -1882,6 +1887,8 @@ LLM CLI 用真实 HOME 的登录态并写它自己的全局文件,`llm-exec` 只
 | A22 | `attest` / `promote` / `retire` 零网络 + 零写入:import 传递闭包不含 `llm-exec` / `reflect/backends/**`、`child_process` 只在 `exec.ts`(白名单恰为 `['git']`);合成仓库 + 假 HOME + `node --permission` 干跑,树哈希前后一致、金丝雀二进制未被调用、真实 HOME 受管路径无差异;`--write` 只落 `.state/<命令>/`                        |
 | A23 | 端到端(合成仓库、进程内 stub):reflect→judge→`promote --run`→advisory→(attest 夹具)→active→`retire` deprecated→(stable tag)retired→G4 删除→再采纳同 id 被 C7 墓碑拒;每步 `git apply --check --whitespace=error` + 真 `check --guards --label <对应 label>`;含反向对照(无 attest 被拒、无 tag 不能退役 / 删除、拿走墓碑后不再被拒) |
 | A24 | 生命周期变异抽检(人工完成项,标记 `.state/accept/a24.done` 绑 HEAD):核心 9 处 L1–L9 + 验收脚本自检 X1–X2;`a24.mjs --run --set a24 --write-marker`,清单见 `ops/accept/a24-mutation.md`                                                                                                                                             |
+
+**A2 语义订正(决策 ② 收口,用户拍板 D2;A1–A15 其余项语义不变)**:原 A2 断言真实 `kit.toml` 的 `enforce = "warn"`,现订正为断言 `enforce = "block"`,且在真实仓库上 `check` 退出 0(没有原子超限);矩阵由 12 格扩为 15 格(加「不写 `enforce`、走缺省 block」× 三种 `limit_source` × 超)。`test/fixtures/budget/matrix.json` 与 `test/budget/matrix.test.ts` 同步,`ops/accept/lib/a2.mjs` 的 `EXPECTED` 是独立 oracle。
 
 A16–A19、A21–A23 直接 import / 运行 `dist/`;dist 比 src 旧会按「未执行(4)」处理。A19 / A22 的真实 HOME 受管路径快照有差异时退出 5(待人工归因),汇总按未通过处理;它是「提示 + 归因」而不是硬判据(多半是别的进程在写)。`--with-p0` 先调用 `accept-p0.sh` 做 A1–A15 回归。
 

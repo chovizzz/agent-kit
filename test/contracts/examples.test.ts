@@ -112,12 +112,12 @@ describe('错误示例是因为「预期的原因」失败', () => {
 });
 
 describe('kit.toml 示例', () => {
-  it('解析后通过 KitConfigSchema,且默认 enforce=warn', async () => {
+  it('解析后通过 KitConfigSchema,且 enforce=block(决策 ② 收口)', async () => {
     const parsed = parseToml(await readText(KIT_TOML));
     const r = KitConfigSchema.safeParse(parsed);
     expect(r.success, r.success ? '' : JSON.stringify(r.error.issues)).toBe(true);
     if (r.success) {
-      expect(r.data.budget.enforce).toBe('warn');
+      expect(r.data.budget.enforce).toBe('block');
       expect(r.data.budget.pi?.limit_source).toBe('assumed');
       expect(Object.keys(r.data.channels)).toEqual(['canary', 'stable']);
     }

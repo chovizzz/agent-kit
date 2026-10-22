@@ -1,4 +1,5 @@
-// A2 预算:12 格矩阵(脚本内硬编码期望,与 matrix.json 独立)+ vitest test/budget + 真实仓库 check 在 warn 下退出 0。
+// A2 预算:15 格矩阵(脚本内硬编码期望,与 matrix.json 独立;含「不写 enforce、走缺省 block」3 格)+ vitest test/budget
+// + 真实仓库 kit.toml 的 enforce 必须是 block 且 check 退出 0(决策 ② 收口:原断言 warn 已订正,见 contracts §17.5)。
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
@@ -26,6 +27,17 @@ export const EXPECTED = (() => {
       }
     }
   }
+  // enforce='default':kit.toml 不写 enforce,走 schema 缺省 = block(决策 ② / D2);只测「超」格
+  for (const ls of ['documented', 'probed', 'assumed']) {
+    const blocking = ls !== 'assumed';
+    cells.push({
+      limit_source: ls,
+      enforce: 'default',
+      over: true,
+      exit: blocking ? 1 : 0,
+      hasDiag: true,
+    });
+  }
   return cells;
 })();
 
@@ -33,7 +45,7 @@ export function checkMatrix(matrix) {
   const problems = [];
   const cells = matrix?.cells;
   if (!Array.isArray(cells)) return ['matrix.json 缺 cells 数组'];
-  if (cells.length !== 12) problems.push(`格数应为 12,实际 ${cells.length}`);
+  if (cells.length !== 15) problems.push(`格数应为 15,实际 ${cells.length}`);
   const seen = new Set();
   for (const c of cells) {
     const key = `${c.limit_source}/${c.enforce}/${c.over}`;
@@ -50,6 +62,8 @@ export function checkMatrix(matrix) {
     if (exp.hasDiag && !c.diagnostic) problems.push(`${key}: 超限格必须有告警诊断`);
     if (!exp.hasDiag && c.diagnostic) problems.push(`${key}: 不超的格不应有告警诊断`);
     if (exp.hasDiag && c.diagnostic) {
+      if (c.diagnostic.code !== 'BUDGET_OVER_LIMIT')
+        problems.push(`${key}: 告警码应为 BUDGET_OVER_LIMIT,文件里是 ${c.diagnostic.code}`);
       const sev = exp.exit === 1 ? 'error' : 'warn';
       if (c.diagnostic.severity !== sev)
         problems.push(`${key}: 告警严重度应为 ${sev},文件里是 ${c.diagnostic.severity}`);
@@ -79,20 +93,20 @@ async function a2(argv) {
     }
     const problems = m ? checkMatrix(m) : ['matrix.json 不是合法 JSON'];
     if (problems.length) for (const p of problems) R.fail(`矩阵:${p}`);
-    else R.pass('matrix.json 12 格与硬编码期望逐格一致');
+    else R.pass('matrix.json 15 格与硬编码期望逐格一致');
   }
 
-  // 2) kit.toml 默认 enforce=warn(用户决策 ②:P0 只告警)
+  // 2) 真实 kit.toml 的 enforce=block(用户决策 ② D2:probe 定稿后收紧;原断言为 warn)
   const kit = path.join(ctx.root, 'kit.toml');
   if (!fs.existsSync(kit)) R.fail('缺 kit.toml');
   else {
     const m = /^\s*enforce\s*=\s*"([^"]*)"/m.exec(fs.readFileSync(kit, 'utf8'));
     if (!m) R.fail('kit.toml 没有 [budget].enforce');
-    else if (m[1] !== 'warn') R.fail(`kit.toml enforce="${m[1]}",P0 必须是 "warn"(决策 ②)`);
-    else R.pass('kit.toml enforce="warn"');
+    else if (m[1] !== 'block') R.fail(`kit.toml enforce="${m[1]}",必须是 "block"(决策 ② D2)`);
+    else R.pass('kit.toml enforce="block"');
   }
 
-  // 3) 真实仓库 check:warn 下退出 0 并打印各目标字节/行数
+  // 3) 真实仓库 check:block 下仍退出 0(没有原子超限) 并打印各目标字节/行数
   if (!fs.existsSync(ctx.cli)) R.notRun(`找不到 CLI:${ctx.cli}`);
   else {
     const tmp = mkTmp(ctx, 'a2');
@@ -103,7 +117,7 @@ async function a2(argv) {
       });
       if (r.status === EXIT_STUB) R.notRun('check 是命令桩(退出 64)');
       else if (r.status !== 0)
-        R.fail(`check 退出 ${r.status}(warn 下应为 0) :: ${r.stderr.slice(0, 200)}`);
+        R.fail(`check 退出 ${r.status}(block 下应为 0) :: ${r.stderr.slice(0, 200)}`);
       else {
         const lines = r.stdout
           .split('\n')
@@ -112,7 +126,7 @@ async function a2(argv) {
         if (agents.size < 5)
           R.fail(`check 没有打印 5 个目标的字节/行数(只有 ${[...agents].join(',') || '无'})`);
         else {
-          R.pass('check 在 warn 下退出 0,并打印 5 个目标的字节/行数');
+          R.pass('check 在 block 下退出 0,并打印 5 个目标的字节/行数');
           for (const l of lines) R.info(`  ${l}`);
         }
       }
@@ -120,7 +134,7 @@ async function a2(argv) {
       // 4) vitest test/budget
       if (!flags.noVitest) {
         vitestStep(R, ctx, tmp, 'vitest test/budget', ['test/budget'], {
-          files: { 'test/budget/matrix.test.ts': { min: 12, controls: 0 } },
+          files: { 'test/budget/matrix.test.ts': { min: 32, controls: 0 } },
           dirs: ['test/budget'],
         });
       }

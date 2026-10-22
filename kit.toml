@@ -1,4 +1,4 @@
-# agent-kit core 配置(示例值;预算数值待决策 ② 定稿,P0 只告警)
+# agent-kit core 配置(示例值)
 
 [kit]
 name = "agent-kit"
@@ -9,9 +9,9 @@ version = "0.1.0-rc.0"
 enabled = ["claude", "codex", "pi", "kimi", "opencode"]
 
 [budget]
-# P1(决策 ② 落地):schema 缺省已改为 block(只作用于 documented/probed;assumed 恒只告警)。
-# 真实仓库在阈值探针(probe)定稿前显式保持 warn。
-enforce = "warn"
+# 决策 ② 收口(D2):P0 期间显式保持 warn;阈值探针(probe)定稿后收紧为 block,与 schema 缺省一致。
+# block 只作用于 documented/probed 目标;assumed 恒只告警(设计 §3.6)。
+enforce = "block"
 atom_max_bytes = 600
 threshold_percent = 90
 project_max_bytes = 16384

@@ -1,5 +1,5 @@
 {
-  "$comment": "A2 的 12 格矩阵(limit_source x enforce x 超/不超)。exit = check 退出码;diagnostic = 期望出现的告警(null 表示不应出现任何 BUDGET_ 诊断)。assumed 不论 enforce 都只告警、退出 0(设计 3.6 硬规则)。",
+  "$comment": "A2 的 15 格矩阵(limit_source x enforce x 超/不超;enforce=default 表示 kit.toml 不写 enforce、走 schema 缺省 block)。exit = check 退出码;diagnostic = 期望出现的告警(null 表示不应出现任何 BUDGET_ 诊断)。assumed 不论 enforce 都只告警、退出 0(设计 3.6 硬规则)。",
   "cells": [
     {
       "limit_source": "documented",
@@ -60,6 +60,27 @@
       "exit": 0,
       "diagnostic": { "code": "BUDGET_OVER_LIMIT", "severity": "warn" }
     },
-    { "limit_source": "assumed", "enforce": "block", "over": false, "exit": 0, "diagnostic": null }
+    { "limit_source": "assumed", "enforce": "block", "over": false, "exit": 0, "diagnostic": null },
+    {
+      "limit_source": "documented",
+      "enforce": "default",
+      "over": true,
+      "exit": 1,
+      "diagnostic": { "code": "BUDGET_OVER_LIMIT", "severity": "error" }
+    },
+    {
+      "limit_source": "probed",
+      "enforce": "default",
+      "over": true,
+      "exit": 1,
+      "diagnostic": { "code": "BUDGET_OVER_LIMIT", "severity": "error" }
+    },
+    {
+      "limit_source": "assumed",
+      "enforce": "default",
+      "over": true,
+      "exit": 0,
+      "diagnostic": { "code": "BUDGET_OVER_LIMIT", "severity": "warn" }
+    }
   ]
 }
