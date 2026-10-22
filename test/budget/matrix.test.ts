@@ -11,7 +11,8 @@ import { ascii, cfg, out } from './helpers.js';
 
 interface Cell {
   limit_source: 'documented' | 'probed' | 'assumed';
-  enforce: 'warn' | 'block';
+  /** 'default' = kit.toml 不写 enforce,走 schema 缺省(block) */
+  enforce: 'warn' | 'block' | 'default';
   over: boolean;
   exit: number;
   diagnostic: { code: string; severity: 'warn' | 'error' } | null;
@@ -38,8 +39,7 @@ version = "0.0.0"
 enabled = ["codex"]
 
 [budget]
-enforce = "${c.enforce}"
-
+${c.enforce === 'default' ? '' : `enforce = "${c.enforce}"\n`}
 [budget.codex]
 max_bytes = ${MAX}
 limit_source = "${c.limit_source}"
@@ -54,21 +54,25 @@ afterEach(() => {
   delete budgetDeps.projectChain;
 });
 
-describe('A2 矩阵:limit_source × enforce × 超/不超,共 12 格逐格写死', () => {
-  it('夹具本身完整:12 个互不相同的格子,覆盖全部取值;恰有 2 格退出 1', () => {
-    expect(MATRIX.cells).toHaveLength(12);
+describe('A2 矩阵:limit_source × enforce(含不写=缺省) × 超/不超,共 15 格逐格写死', () => {
+  it('夹具本身完整:15 个互不相同的格子,覆盖全部取值;恰有 4 格退出 1', () => {
+    expect(MATRIX.cells).toHaveLength(15);
     const keys = new Set(MATRIX.cells.map((c) => `${c.limit_source}/${c.enforce}/${c.over}`));
-    expect(keys.size).toBe(12);
+    expect(keys.size).toBe(15);
     for (const s of LimitSourceSchema.options) {
       for (const e of EnforceSchema.options) {
         for (const over of [true, false]) expect(keys.has(`${s}/${e}/${over}`)).toBe(true);
       }
     }
-    // 防变空:恰好 documented/probed × block × 超 这两格会阻断
+    // 不写 enforce 的 3 格(仅「超」),缺省必须是 block
+    for (const s of LimitSourceSchema.options) expect(keys.has(`${s}/default/true`)).toBe(true);
+    // 防变空:documented/probed × (block | 缺省) × 超 这四格会阻断
     const blocking = MATRIX.cells.filter((c) => c.exit === 1);
     expect(blocking.map((c) => `${c.limit_source}/${c.enforce}/${c.over}`).sort()).toEqual([
       'documented/block/true',
+      'documented/default/true',
       'probed/block/true',
+      'probed/default/true',
     ]);
     // assumed + block + 超:退出 0 且有告警(D 3.6 硬规则:enforce 对 assumed 无效)
     const a = MATRIX.cells.find(
@@ -83,7 +87,7 @@ describe('A2 矩阵:limit_source × enforce × 超/不超,共 12 格逐格写死
 
     it(`computeBudget:${name}`, () => {
       const config = cfg({
-        enforce: c.enforce,
+        ...(c.enforce === 'default' ? {} : { enforce: c.enforce }),
         codex: {
           max_bytes: MAX,
           limit_source: c.limit_source,
