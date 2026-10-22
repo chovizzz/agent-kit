@@ -20,7 +20,7 @@ export const ITEMS = [
   },
   {
     id: 'A2',
-    title: '预算:12 格矩阵逐格、kit.toml 为 warn、真实仓库 check 退出 0',
+    title: '预算:15 格矩阵逐格、kit.toml 为 block、真实仓库 check 退出 0',
     script: 'a2-budget.sh',
   },
   { id: 'A3', title: '脱敏:种子全形态 + 变异自检', script: 'a3-redaction.sh' },

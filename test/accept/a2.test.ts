@@ -32,7 +32,7 @@ async function setup(
   ) as { cells: Record<string, unknown>[] };
   const matrix = opts.matrix ? opts.matrix(structuredClone(real)) : real;
   await fx.put('test/fixtures/budget/matrix.json', JSON.stringify(matrix));
-  await fx.put('kit.toml', opts.kit ?? '[budget]\nenforce = "warn"\n');
+  await fx.put('kit.toml', opts.kit ?? '[budget]\nenforce = "block"\n');
   const cli = await putOutside(fx, 'stub-cli.mjs', opts.checkBody ?? CHECK_OK);
   return { fx, cli };
 }
@@ -41,11 +41,11 @@ const run = (fx: Fx, cli: string, extra: string[] = ['--no-vitest']) =>
   runScript('a2-budget.sh', ['--root', fx.root, '--cli', cli, ...extra], fx.env());
 
 describe('A2 预算', () => {
-  it('真实 matrix.json + warn + 5 个目标行 => 退出 0(正向控制)', async () => {
+  it('真实 matrix.json + block + 5 个目标行 => 退出 0(正向控制)', async () => {
     const { fx, cli } = await setup();
     const r = run(fx, cli);
     expect(r.status, r.stdout).toBe(0);
-    expect(r.stdout).toContain('12 格');
+    expect(r.stdout).toContain('15 格');
   });
 
   it('矩阵里有一格的 exit 被改错 => 1', async () => {
@@ -67,7 +67,7 @@ describe('A2 预算', () => {
     const dropped = await setup({ matrix: (m) => ({ cells: m.cells.slice(1) }) });
     const r1 = run(dropped.fx, dropped.cli);
     expect(r1.status).toBe(1);
-    expect(r1.stdout).toMatch(/格数应为 12|缺格/);
+    expect(r1.stdout).toMatch(/格数应为 15|缺格/);
     const dup = await setup({ matrix: (m) => ({ cells: [...m.cells.slice(1), m.cells[1]] }) });
     const r2 = run(dup.fx, dup.cli);
     expect(r2.status).toBe(1);
@@ -103,11 +103,11 @@ describe('A2 预算', () => {
     expect(run(fx, cli).status).toBe(1);
   });
 
-  it('kit.toml 默认 enforce 不是 warn(决策 ②:P0 只告警)=> 1', async () => {
-    const { fx, cli } = await setup({ kit: '[budget]\nenforce = "block"\n' });
+  it('kit.toml enforce 不是 block(决策 ② D2:原断言 warn 已订正)=> 1', async () => {
+    const { fx, cli } = await setup({ kit: '[budget]\nenforce = "warn"\n' });
     const r = run(fx, cli);
     expect(r.status, r.stdout).toBe(1);
-    expect(r.stdout).toContain('必须是 "warn"');
+    expect(r.stdout).toContain('必须是 "block"');
   });
 
   it('check 没打印 5 个目标 / 退出非 0 => 1;命令桩 64 => 4', async () => {
@@ -131,7 +131,7 @@ describe('A2 预算', () => {
       const good = await putFakeVitest(
         fx,
         vitestJson(fx.root, {
-          'test/budget/matrix.test.ts': Array.from({ length: 12 }, (_, i) => `c${i}`),
+          'test/budget/matrix.test.ts': Array.from({ length: 32 }, (_, i) => `c${i}`),
         }),
       );
       const r1 = runScript(
@@ -172,7 +172,7 @@ describe('A2 预算', () => {
       const redExit = await putFakeVitest(
         fx,
         vitestJson(fx.root, {
-          'test/budget/matrix.test.ts': Array.from({ length: 12 }, (_, i) => `c${i}`),
+          'test/budget/matrix.test.ts': Array.from({ length: 32 }, (_, i) => `c${i}`),
         }),
         1,
       );
