@@ -97,15 +97,26 @@ function stampOf(runId: string): number | 'unparseable' {
 /** 收集所有「可能引用某个 run_id」的文本:仓库 proposals/*.yaml 与 lifecycle/** 的文件名和内容。扫描失败 → 抛错(整体不删)。 */
 async function referenceCorpus(io: IoContext): Promise<string[]> {
   const out: string[] = [];
+  const scanFail = (m: string): never => {
+    throw new ReflectGcError('GC_REFERENCE_SCAN_FAILED', m);
+  };
   const walk = async (dir: string, depth: number): Promise<void> => {
-    if (!(await exists(dir))) return;
-    if (depth > 4) throw new ReflectGcError('GC_REFERENCE_SCAN_FAILED', '目录过深');
+    // 入口与每层目录都先 lstat:只有明确的 ENOENT 算「不存在」;符号链接、非目录、其它错误一律中止
+    let st;
+    try {
+      st = await lstat(dir);
+    } catch (e) {
+      if ((e as { code?: string }).code === 'ENOENT') return;
+      return scanFail('引用目录无法读取');
+    }
+    if (!st.isDirectory() || st.isSymbolicLink()) return scanFail('引用目录不是真实目录');
+    if (depth > 4) return scanFail('目录过深');
     for (const e of await readDir(dir)) {
       const p = path.join(dir, e.name);
       out.push(e.name);
       if (e.isDirectory) await walk(p, depth + 1);
       else if (e.isFile) out.push(await readText(p));
-      else throw new ReflectGcError('GC_REFERENCE_SCAN_FAILED', '引用目录里有非常规条目');
+      else scanFail('引用目录里有非常规条目');
     }
   };
   try {
@@ -143,8 +154,9 @@ async function assertReflectRoot(io: IoContext): Promise<string | undefined> {
   let st;
   try {
     st = await lstat(root);
-  } catch {
-    return undefined; // 不存在 = 没有可回收的东西
+  } catch (e) {
+    if ((e as { code?: string }).code === 'ENOENT') return undefined; // 不存在 = 没有可回收的东西
+    throw new ReflectGcError('GC_ROOT_UNREADABLE', '暂存根无法读取');
   }
   if (!st.isDirectory() || st.isSymbolicLink()) {
     throw new ReflectGcError('GC_ROOT_NOT_REAL_DIR', '暂存根不是真实目录');
@@ -236,9 +248,12 @@ export async function runReflectGc(
   now: Date,
   opts: { write: boolean },
 ): Promise<GcResult> {
-  const plan = await planReflectGc(io, now);
+  let plan = await planReflectGc(io, now);
   const deleted: string[] = [];
   if (opts.write && plan.candidates.length > 0) {
+    // 删之前整体重判一遍(引用、报告、过期全部重算),只留两次都判为候选的;缩小窗口,不是锁(见契约 §17.7「并发」)
+    const again = new Set((await planReflectGc(io, now)).candidates.map((c) => c.runId));
+    plan = { ...plan, candidates: plan.candidates.filter((c) => again.has(c.runId)) };
     const root = await realpath(path.join(io.stateDir, 'reflect'));
     for (const c of plan.candidates) {
       if (
