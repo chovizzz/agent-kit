@@ -6,7 +6,7 @@ import type { IoContext } from '../../src/io/paths.js';
 import { GIT_NO_AUTO_ARGS, GIT_NO_AUTO_CONFIG } from './git-quiet.js';
 import { makeTestRepo, type TestRepo } from './make-repo.js';
 import { newWork } from '../judge/helpers.js';
-import { commitAll, makeFx } from '../accept/helpers.js';
+import { callLib, commitAll, makeFx } from '../accept/helpers.js';
 import { REPO_ROOT } from './tmp.js';
 
 /**
@@ -58,13 +58,19 @@ describe('临时 git 仓库关闭后台维护', () => {
     expectQuiet(fx.ctx, fx.root, path.join(fx.dir, 'githome'));
   });
 
-  it('ops/accept/lib 的 lc-world / a17 建仓同样带上(源码级)', async () => {
-    for (const f of ['lc-world.mjs', 'a17.mjs']) {
-      const src = await readText(path.join(REPO_ROOT, 'ops/accept/lib', f));
-      expect(src, f).toContain("'maintenance.auto=false'");
-      expect(src, f).toContain("'gc.auto=0'");
-      expect(src, f).toMatch(/\['config', 'maintenance\.auto', 'false'\]/);
-      expect(src, f).toMatch(/\['config', 'gc\.auto', '0'\]/);
-    }
+  it('ops/accept/lib/lc-world.mjs 的 initRepo 真建仓(子进程)后配置存在', async () => {
+    const fx = await makeFx('quiet-lc-');
+    const dir = path.join(fx.dir, 'lc-repo');
+    const home = path.join(fx.dir, 'lc-home');
+    callLib('lc-world.mjs', 'initRepo', [[dir, home]]);
+    expectQuiet(fx.ctx, dir, home);
+  });
+
+  it('ops/accept/lib/a17.mjs 的建仓入口带上(源码级,该入口无法单独调用)', async () => {
+    const src = await readText(path.join(REPO_ROOT, 'ops/accept/lib/a17.mjs'));
+    expect(src).toContain("'maintenance.auto=false'");
+    expect(src).toContain("'gc.auto=0'");
+    expect(src).toMatch(/\['config', 'maintenance\.auto', 'false'\]/);
+    expect(src).toMatch(/\['config', 'gc\.auto', '0'\]/);
   });
 });
