@@ -8,7 +8,8 @@ import { ExitCode } from '../../src/contracts/exit-codes.js';
 import { getRealHome } from '../../src/io/paths.js';
 import { lstat } from '../../src/io/read-fs.js';
 import * as safe from '../../src/io/safe-fs.js';
-import { STATE_PREFIX, newWorld, stdFixture, type World } from './world.js';
+import { STATE_PREFIX, SKILL, newWorld, stdFixture, type World } from './world.js';
+import * as hfs from '../../src/io/home-fs.js';
 
 const modeOf = async (abs: string): Promise<number> => (await lstat(abs)).mode & 0o777;
 
@@ -191,5 +192,78 @@ describe('sync:状态目录收紧到 0700', () => {
     const r = await w.run(['--rollback', id, '--write']);
     expect(r.err).not.toContain('SYNC_STATE_DIR');
     expect(await modeOf(dir)).toBe(0o755);
+  });
+});
+
+describe('sync:状态目录收紧——拒绝与链接路径', () => {
+  it('计划被拒(目标路径已有外来文件):退出非 0,状态目录不收紧', async () => {
+    const { w, dir } = await world('sd-planrefused-', 0o755);
+    const target = path.join(w.home, SKILL);
+    await safe.mkdirp(w.io, path.dirname(target));
+    await safe.writeFile(w.io, target, 'foreign user content\n');
+    const r = await w.run(['--write']);
+    expect(r.code).not.toBe(ExitCode.OK);
+    expect(r.err).not.toContain('tightened');
+    expect(await modeOf(dir)).toBe(0o755);
+  });
+
+  async function direct(label: string): Promise<{ w: World; ctx: hfs.HomeFsContext }> {
+    const w = await newWorld(label);
+    const tmpDir = path.join(w.dir, 'ht');
+    await safe.mkdirp(w.io, tmpDir);
+    return { w, ctx: hfs.createHomeFsContext({ home: w.home, planScope: [], tmpDir }) };
+  }
+
+  it('home-fs 直测:agent-kit 本身是符号链接 -> skipped_unsafe,链接目标权限不变', async () => {
+    const { w, ctx } = await direct('sd-d-link-');
+    const target = path.join(w.dir, 'elsewhere');
+    await safe.mkdirp(w.io, target, 0o755);
+    await safe.chmod(w.io, target, 0o755);
+    await safe.mkdirp(w.io, path.join(w.home, '.local/state'));
+    await safe.symlink(w.io, target, path.join(w.home, STATE_PREFIX));
+    expect(await hfs.tightenKitStateDir(ctx, true)).toEqual({ result: 'skipped_unsafe' });
+    expect(await modeOf(target)).toBe(0o755);
+  });
+
+  it('home-fs 直测:上级 .local/state 是符号链接 -> skipped_unsafe,不改链接目标内的 agent-kit', async () => {
+    const { w, ctx } = await direct('sd-d-plink-');
+    const real = path.join(w.dir, 'realstate');
+    const inner = path.join(real, 'agent-kit');
+    await safe.mkdirp(w.io, inner, 0o755);
+    await safe.chmod(w.io, inner, 0o755);
+    await safe.mkdirp(w.io, path.join(w.home, '.local'));
+    await safe.symlink(w.io, real, path.join(w.home, '.local/state'));
+    expect(await hfs.tightenKitStateDir(ctx, true)).toEqual({ result: 'skipped_unsafe' });
+    expect(await modeOf(inner)).toBe(0o755);
+  });
+
+  it('home-fs 直测:agent-kit 是普通文件 -> skipped_unsafe', async () => {
+    const { w, ctx } = await direct('sd-d-file-');
+    await safe.mkdirp(w.io, path.join(w.home, '.local/state'));
+    await safe.writeFile(w.io, path.join(w.home, STATE_PREFIX), 'x');
+    expect(await hfs.tightenKitStateDir(ctx, true)).toEqual({ result: 'skipped_unsafe' });
+  });
+
+  it('home-fs 直测:他人所有 -> skipped_foreign_owner,权限不变', async () => {
+    const { w, ctx } = await direct('sd-d-foreign-');
+    const dir = path.join(w.home, STATE_PREFIX);
+    await safe.mkdirp(w.io, dir, 0o755);
+    await safe.chmod(w.io, dir, 0o755);
+    const uid = process.getuid?.() ?? 0;
+    // eslint-disable-next-line no-restricted-syntax
+    vi.spyOn(process, 'getuid').mockReturnValue(uid + 1);
+    const r = await hfs.tightenKitStateDir(ctx, true);
+    vi.restoreAllMocks();
+    expect(r).toEqual({ result: 'skipped_foreign_owner' });
+    expect(await modeOf(dir)).toBe(0o755);
+  });
+
+  it('home-fs 直测:目录不存在 -> absent;已 0700 -> ok', async () => {
+    const { w, ctx } = await direct('sd-d-absent-');
+    expect(await hfs.tightenKitStateDir(ctx, true)).toEqual({ result: 'absent' });
+    const dir = path.join(w.home, STATE_PREFIX);
+    await safe.mkdirp(w.io, dir, 0o700);
+    await safe.chmod(w.io, dir, 0o700);
+    expect(await hfs.tightenKitStateDir(ctx, true)).toEqual({ result: 'ok' });
   });
 });
