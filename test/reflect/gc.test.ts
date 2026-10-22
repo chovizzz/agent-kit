@@ -321,6 +321,16 @@ describe('reflect --gc --write:只删「已过期且无引用」', () => {
     expect(await names(w)).toEqual([OLD]);
   });
 
+  it('lifecycle/ 是指向真实目录的符号链接 → 同样退出 3(不跟随)', async () => {
+    const w = await newR5World({ signals: null });
+    await putRun(w, OLD);
+    await w.repo.commit({ lifecycle: { link: 'rules' } }, 'linked');
+    const r = await run(w, ['--gc', '--write']);
+    expect(r.code).toBe(ExitCode.FAIL_CLOSED);
+    expect(r.err).toContain('GC_REFERENCE_SCAN_FAILED');
+    expect(await names(w)).toEqual([OLD]);
+  });
+
   it('没有暂存根:退出 0,零候选,也不创建目录', async () => {
     const w = await newR5World({ signals: null });
     const r = await run(w, ['--gc', '--write']);
