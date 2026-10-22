@@ -1382,11 +1382,14 @@ function readGluedWord(
       }
       // 以引号段开头的词:紧跟的必须还是引号段(`"ab""口令"`),否则多半是源码里字符串字面量的收尾引号
       // 例外:引号段是短的无空白前缀(`"ab"口令`),shell 里同样是一个词
+      // 第二个例外(s10):引号段不论多长,只要「收尾引号后紧贴一个字母 / 数字 / 下划线 / $ / % / @」就是同一个词
+      // (`NAME="长一点的段"值`);空白、分隔符、`.` `+` `:` 等不算,避免吞掉 `"x".trim()` `"a"+b` 这类源码
       if (
         quoteFirstNeedsQuote &&
         segs === 1 &&
         quoteAt(q) === null &&
-        !/^[\w.@%+-]{1,7}$/.test(content)
+        !/^[\w.@%+-]{1,7}$/.test(content) &&
+        !(q < eol && /[A-Za-z0-9_$%@]/.test(text[q] as string))
       )
         break;
     } else if (WORD_STOP.test(c)) {

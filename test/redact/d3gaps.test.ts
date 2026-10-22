@@ -19,7 +19,6 @@ const D3_GAP_IDS = [
   'gap.helm_default_func',
   'gap.hcl_variable_default',
   'gap.hcl_ternary_default',
-  'gap.long_segment_concat',
   'gap.md_inline_code_split',
   'gap.backtick_leading_space',
   'gap.placeholder_then_space_value',
@@ -28,7 +27,7 @@ const D3_GAP_IDS = [
   'gap.upper_env_or_default',
 ] as const;
 
-const KNOWN_GAP_TOTAL = 32;
+const KNOWN_GAP_TOTAL = 31;
 
 /** 全部 known_gap 的 id(排序):替换一条为另一条也会红 */
 const ALL_GAP_IDS = [
@@ -41,7 +40,6 @@ const ALL_GAP_IDS = [
   'gap.hcl_ternary_default',
   'gap.hcl_variable_default',
   'gap.helm_default_func',
-  'gap.long_segment_concat',
   'gap.lower36_24',
   'gap.md_inline_code_split',
   'gap.neutral_open_type',
