@@ -288,7 +288,7 @@ export const command: CommandDef = {
       const dual = t.max_bytes !== undefined && t.max_lines !== undefined;
       if (
         dual
-          ? ob.single !== undefined || ob.bytes === undefined || ob.lines === undefined
+          ? ob.bytes === undefined || ob.lines === undefined
           : ob.single === undefined
       ) {
         ctx.stderr(
