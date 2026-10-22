@@ -229,6 +229,12 @@ describe('reflect 干跑:project_key 计数(供填 team_project_keys)', () => {
     expect(text).toContain(`${projectKey('A')} sessions=2 signals=3`);
     expect(text).toContain(`${projectKey('B')} sessions=1 signals=1`);
     expect(text).not.toContain(r.w.parent);
+    // 该段每一行都只有「哈希 id + 两个计数」,别无他物(路径/文本都进不来)
+    const lines = text.split('\n');
+    const at = lines.findIndex((l) => l.startsWith('project_keys('));
+    const rows = lines.slice(at + 1).filter((l) => l !== '');
+    expect(rows).toHaveLength(2);
+    for (const l of rows) expect(l).toMatch(/^ {2}p_[0-9a-f]{16} sessions=\d+ signals=\d+$/);
     expect(text).not.toContain('lint');
   });
 
@@ -436,6 +442,10 @@ describe('reflect 命令:真跑(注入 stub 后端)', () => {
     expect(dflt.teamProjectKeys).toBeInstanceOf(Set);
     expect([...dflt.teamProjectKeys!]).toEqual([]); // 缺省 = 空白名单(fail-closed),不是 undefined
     expect('personalProjectKeys' in dflt).toBe(false);
+    // 覆盖层里完全没有 [reflect] 段:同样是空集合,不是 undefined
+    const noReflect = await run('');
+    expect(noReflect.teamProjectKeys).toBeInstanceOf(Set);
+    expect([...noReflect.teamProjectKeys!]).toEqual([]);
     const two = await run(
       overlayToml(
         `egress = true\nteam_project_keys = ["${projectKey('A')}", "p_unknown0000000000"]`,
