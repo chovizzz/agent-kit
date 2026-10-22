@@ -173,6 +173,15 @@ describe('sync:状态目录收紧到 0700', () => {
     await safe.chmod(w.io, dir, 0o700); // 还原以便清理
   });
 
+  it('0500 + --write:同样不改、不报', async () => {
+    const { w, dir } = await world('sd-narrow-w-', 0o755);
+    await safe.chmod(w.io, dir, 0o500);
+    const r = await w.run(['--write']);
+    expect(r.err).not.toContain('SYNC_STATE_DIR');
+    expect(await modeOf(dir)).toBe(0o500);
+    await safe.chmod(w.io, dir, 0o700);
+  });
+
   it('--json:stdout 键集合不变,提示只走 stderr', async () => {
     const { w } = await world('sd-json-', 0o755);
     const r = await w.run(['--json']);
