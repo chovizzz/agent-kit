@@ -30,7 +30,13 @@ export const EXPECTED = (() => {
   // enforce='default':kit.toml 不写 enforce,走 schema 缺省 = block(决策 ② / D2);只测「超」格
   for (const ls of ['documented', 'probed', 'assumed']) {
     const blocking = ls !== 'assumed';
-    cells.push({ limit_source: ls, enforce: 'default', over: true, exit: blocking ? 1 : 0, hasDiag: true });
+    cells.push({
+      limit_source: ls,
+      enforce: 'default',
+      over: true,
+      exit: blocking ? 1 : 0,
+      hasDiag: true,
+    });
   }
   return cells;
 })();
@@ -56,6 +62,8 @@ export function checkMatrix(matrix) {
     if (exp.hasDiag && !c.diagnostic) problems.push(`${key}: 超限格必须有告警诊断`);
     if (!exp.hasDiag && c.diagnostic) problems.push(`${key}: 不超的格不应有告警诊断`);
     if (exp.hasDiag && c.diagnostic) {
+      if (c.diagnostic.code !== 'BUDGET_OVER_LIMIT')
+        problems.push(`${key}: 告警码应为 BUDGET_OVER_LIMIT,文件里是 ${c.diagnostic.code}`);
       const sev = exp.exit === 1 ? 'error' : 'warn';
       if (c.diagnostic.severity !== sev)
         problems.push(`${key}: 告警严重度应为 ${sev},文件里是 ${c.diagnostic.severity}`);
@@ -94,7 +102,7 @@ async function a2(argv) {
   else {
     const m = /^\s*enforce\s*=\s*"([^"]*)"/m.exec(fs.readFileSync(kit, 'utf8'));
     if (!m) R.fail('kit.toml 没有 [budget].enforce');
-    else if (m[1] !== 'warn') R.fail(`kit.toml enforce="${m[1]}",必须是 "block"(决策 ② D2)`);
+    else if (m[1] !== 'block') R.fail(`kit.toml enforce="${m[1]}",必须是 "block"(决策 ② D2)`);
     else R.pass('kit.toml enforce="block"');
   }
 
@@ -126,7 +134,7 @@ async function a2(argv) {
       // 4) vitest test/budget
       if (!flags.noVitest) {
         vitestStep(R, ctx, tmp, 'vitest test/budget', ['test/budget'], {
-          files: { 'test/budget/matrix.test.ts': { min: 15, controls: 0 } },
+          files: { 'test/budget/matrix.test.ts': { min: 32, controls: 0 } },
           dirs: ['test/budget'],
         });
       }
