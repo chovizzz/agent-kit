@@ -16,7 +16,7 @@ import { randomBytes } from 'node:crypto';
 import * as path from 'node:path';
 import { parse as parseToml } from 'smol-toml';
 import { computeBudget } from '../budget/budget.js';
-import { AgentIdSchema, IsoDateSchema } from '../contracts/common.js';
+import { AgentIdSchema, IsoDateSchema, RunIdSchema } from '../contracts/common.js';
 import type { AgentId } from '../contracts/common.js';
 import { OverlaySchema } from '../contracts/config.js';
 import type { Overlay, ReflectBackendBinding } from '../contracts/config.js';
@@ -33,6 +33,8 @@ import { createRedactor } from '../redact/redactor.js';
 import { loadExistingAtoms, loadStagedAtoms, loadUsedProposalIds } from '../reflect/atoms-index.js';
 import type { LlmBackend } from '../reflect/backend-iface.js';
 import { buildBackends, createSpawnBudget } from '../reflect/backends/index.js';
+import { ReflectGcError, runReflectGc } from '../reflect/gc.js';
+import type { GcResult } from '../reflect/gc.js';
 import { runReflect } from '../reflect/run.js';
 import type { ProjectCount, RunDeps, RunOpts, RunResult } from '../reflect/run.js';
 import {
@@ -213,6 +215,10 @@ interface Parsed {
   owner: string | undefined;
   showPrompt: boolean;
   json: boolean;
+  gc: boolean;
+  write: boolean;
+  /** 出现过 gc / write / json 以外的任何参数(gc 与其它模式互斥) */
+  otherFlags: boolean;
   error: string | undefined;
 }
 
@@ -229,6 +235,9 @@ function parseArgs(argv: readonly string[]): Parsed {
     owner: undefined,
     showPrompt: false,
     json: false,
+    gc: false,
+    write: false,
+    otherFlags: false,
     error: undefined,
   };
   const fail = (m: string): void => {
@@ -249,11 +258,20 @@ function parseArgs(argv: readonly string[]): Parsed {
       if (a.startsWith(`${name}=`)) return a.slice(name.length + 1);
       return undefined;
     };
-    if (a === '--run-llm') out.runLlm = true;
-    else if (a === '--allow-egress') out.allowEgress = true;
-    else if (a === '--show-prompt') out.showPrompt = true;
-    else if (a === '--json') out.json = true;
+    if (a === '--gc') out.gc = true;
+    else if (a === '--write') out.write = true;
+    else if (a === '--run-llm') {
+      out.runLlm = true;
+      out.otherFlags = true;
+    } else if (a === '--allow-egress') {
+      out.allowEgress = true;
+      out.otherFlags = true;
+    } else if (a === '--show-prompt') {
+      out.showPrompt = true;
+      out.otherFlags = true;
+    } else if (a === '--json') out.json = true;
     else {
+      out.otherFlags = true;
       const agent = value('--agent');
       if (agent !== undefined) {
         const p = AgentIdSchema.safeParse(agent);
@@ -307,7 +325,10 @@ function parseArgs(argv: readonly string[]): Parsed {
     }
   }
   if (out.error === undefined) {
-    if (out.showPrompt && out.runLlm) out.error = '--show-prompt 只在干跑下可用(与 --run-llm 互斥)';
+    if (out.gc && out.otherFlags) out.error = '--gc 与其它模式互斥(只允许 --write / --json)';
+    else if (out.write && !out.gc) out.error = '--write 只用于 --gc';
+    else if (out.showPrompt && out.runLlm)
+      out.error = '--show-prompt 只在干跑下可用(与 --run-llm 互斥)';
     else if (out.showPrompt && out.json)
       out.error = '--show-prompt 与 --json 互斥(--json 摘要绝不含任何文本)';
     else if (out.runLlm && !out.allowEgress) {
@@ -444,6 +465,53 @@ function humanLines(s: Record<string, unknown>): string {
   );
 }
 
+const safeRunId = (id: string): string => (RunIdSchema.safeParse(id).success ? id : '-');
+
+function gcJson(r: GcResult): Record<string, unknown> {
+  return {
+    mode: 'gc',
+    write: r.write,
+    retention_days: r.retentionDays,
+    scanned: r.scanned,
+    candidates: r.candidates.map((c) => ({
+      run_id: safeRunId(c.runId),
+      reason: c.reason,
+      bytes: c.bytes,
+    })),
+    kept: r.kept.map((k) => ({ run_id: safeRunId(k.runId), reason: k.reason })),
+    deleted: [...r.deleted],
+    bytes: r.candidates.reduce((n, c) => n + c.bytes, 0),
+  };
+}
+
+function gcLines(r: GcResult): string {
+  const bytes = r.candidates.reduce((n, c) => n + c.bytes, 0);
+  const verb = r.write ? 'did_delete' : 'would_delete';
+  return (
+    [
+      `reflect gc: mode=${r.write ? 'write' : 'dry'} retention_days=${r.retentionDays} scanned=${r.scanned} candidates=${r.candidates.length} kept=${r.kept.length} deleted=${r.deleted.length} bytes=${bytes}`,
+      ...r.candidates.map(
+        (c) =>
+          `${r.write && !r.deleted.includes(c.runId) ? 'skip_delete' : verb} run=${safeRunId(c.runId)} reason=${c.reason} bytes=${c.bytes}`,
+      ),
+      ...r.kept.map((k) => `keep run=${safeRunId(k.runId)} reason=${k.reason}`),
+    ].join('\n') + '\n'
+  );
+}
+
+async function runGc(ctx: CommandContext, args: Parsed, clock: () => Date): Promise<number> {
+  try {
+    const res = await runReflectGc(ctx.io, clock(), { write: args.write });
+    ctx.stdout(args.json ? canonicalJson(gcJson(res)) : gcLines(res));
+    return ExitCode.OK;
+  } catch (e) {
+    const reason =
+      e instanceof ReflectGcError || e instanceof WriteDeniedError ? e.code : 'internal';
+    ctx.stderr(`REFLECT_FAIL_CLOSED reason=${reason}\n`); // 只报稳定码
+    return ExitCode.FAIL_CLOSED;
+  }
+}
+
 export function createReflectCommand(deps: ReflectCommandDeps = {}): CommandDef {
   const clock = deps.clock ?? ((): Date => new Date());
   const randomHex = deps.randomHex ?? ((n: number): string => randomBytes(n).toString('hex'));
@@ -469,6 +537,12 @@ export function createReflectCommand(deps: ReflectCommandDeps = {}): CommandDef 
       { name: '--owner <@handle>', description: '暂存原子的负责人;--run-llm 必填' },
       { name: '--show-prompt', description: '仅干跑:把提示打到 stdout(不落盘);与 --json 互斥' },
       { name: '--json', description: '输出 canonical JSON 摘要(只含计数、枚举、id、哈希)' },
+      {
+        name: '--gc',
+        description:
+          '回收暂存区:只清已过期(30 天)且无引用、仅含 report.json 的 run;默认干跑,与其它模式互斥',
+      },
+      { name: '--write', description: '仅 --gc:真正删除(缺省只列出将删除的 run)' },
     ],
     async run(rawCtx: CommandContext): Promise<number> {
       const ctx = rawCtx as EnvCommandContext;
@@ -477,6 +551,7 @@ export function createReflectCommand(deps: ReflectCommandDeps = {}): CommandDef 
         ctx.stderr(`agent-kit reflect: ${args.error}\n`);
         return ExitCode.USAGE;
       }
+      if (args.gc) return runGc(ctx, args, clock);
       const live = args.runLlm && args.allowEgress;
 
       const loaded = await loadOverlay(ctx);
