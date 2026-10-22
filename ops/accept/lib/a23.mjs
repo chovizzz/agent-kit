@@ -359,7 +359,7 @@ async function a23(argv) {
     if (
       !step('promote --run')(
         ad.code === 0 && adj?.adopted === 1 && adj?.wrote === true,
-        `退出 ${ad.code},adopted=${adj?.adopted} wrote=${adj?.wrote} ${ad.err.slice(0, 100)}`,
+        `退出 ${ad.code},adopted=${adj?.adopted} wrote=${adj?.wrote} dropped=${JSON.stringify(adj?.dropped_by_reason)} ${ad.err.slice(0, 100)}`,
       )
     )
       return R.exit();
