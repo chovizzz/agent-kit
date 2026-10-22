@@ -109,6 +109,11 @@ describe('s10:不该被过度吞掉的形态', () => {
     expect(r.pass1(input).text).toBe(input);
   });
 
+  it('段含空白的长引号段(多个词)后紧贴值:不并成一个词', () => {
+    const input = `${PW}="two words here"trailingword`;
+    expect(applyText(input)).toContain('trailingword');
+  });
+
   it('无键名的 shell 引号拼接不动(echo "x"y)', () => {
     const input = `echo "${SEG2}"suffixword`;
     expect(r.pass1(input).text).toBe(input);
