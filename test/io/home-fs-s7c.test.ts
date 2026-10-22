@@ -166,6 +166,7 @@ describe('switchCurrent', () => {
   it('检查与 rename 之间目标版本目录被换成别的目录(身份变了)→ PATH_ESCAPE,current 不变', async () => {
     const s = await withVersions(['1.0.0', '2.0.0']);
     await hfs.switchCurrent(s.mk(), '1.0.0');
+    const oldIno = (await lstat(path.join(s.home, ver('2.0.0')))).ino;
     const swap = hfs.createHomeFsContext({
       home: s.home,
       planScope: [LINK],
@@ -178,6 +179,8 @@ describe('switchCurrent', () => {
         await safe.rename(s.fx, v, aside);
         await safe.mkdirp(s.fx, v);
         await safe.remove(s.fx, aside);
+        // 前提断言:换进来的必须真是另一个 inode,否则用例没在测"身份变了"(静默通过比失败更糟)
+        expect((await lstat(v)).ino).not.toBe(oldIno);
       },
     });
     expect(await code(hfs.switchCurrent(swap, '2.0.0'))).toBe(HOME_DENY.PATH_ESCAPE);
