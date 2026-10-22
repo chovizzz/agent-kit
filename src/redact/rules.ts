@@ -1391,11 +1391,7 @@ function readGluedWord(
         segs === 1 &&
         quoteAt(q) === null &&
         !/^[\w.@%+-]{1,7}$/.test(content) &&
-        !(
-          q < eol &&
-          /[A-Za-z0-9_$%@]/.test(text[q] as string) &&
-          /^[\w.@%+-]{8,}$/.test(content)
-        )
+        !(q < eol && /[A-Za-z0-9_$%@]/.test(text[q] as string) && /^[\w.@%+-]{8,}$/.test(content))
       )
         break;
     } else if (WORD_STOP.test(c)) {
