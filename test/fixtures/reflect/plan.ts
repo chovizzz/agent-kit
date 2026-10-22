@@ -7,7 +7,15 @@ import type { ReflectorProposalDraft } from '../../../src/contracts/reflect.js';
 import { ReflectorOutputSchema } from '../../../src/contracts/reflect.js';
 import type { MergeInput } from '../../../src/reflect/merge.js';
 import { PROMPT_TEMPLATE_SHA256 } from '../../../src/reflect/prompt/v1.js';
-import { atomInfo, draft, newWork, putSignals, testRedactor, worldSignals } from './world.js';
+import {
+  allTeamKeys,
+  atomInfo,
+  draft,
+  newWork,
+  putSignals,
+  testRedactor,
+  worldSignals,
+} from './world.js';
 
 export async function worldPlan(signals: Signal[] = worldSignals()) {
   const w = await newWork('rl-plan-');
@@ -54,6 +62,7 @@ export function mergeInput(
       stub: true,
     },
     usedProposalIds: new Set(),
+    teamProjectKeys: allTeamKeys(plan.loaded),
     ...over,
   };
 }

@@ -96,7 +96,10 @@ export interface RunOpts {
   maxEvidence?: number | undefined;
   evidencePerPrompt?: number | undefined;
   atomMaxBytes?: number | undefined;
-  /** 团队层 project_key 白名单(语义见 MergeInput.teamProjectKeys):名单外的项目一律按个人处理 */
+  /**
+   * 团队层 project_key 白名单(语义见 MergeInput.teamProjectKeys):名单外的项目一律按个人处理。
+   * 缺省(undefined)= 空白名单 = 全部按个人处理(fail-closed),不是「不设限」。
+   */
   teamProjectKeys?: ReadonlySet<string> | undefined;
   dedupe?: Partial<DedupeThresholds> | undefined;
   /** 目标预算已满:不暂存 add 提案(调用方用 computeBudget 算) */
@@ -482,7 +485,7 @@ export async function runReflect(deps: RunDeps, opts: RunOpts): Promise<RunResul
       now: deps.clock(),
       reflector,
       usedProposalIds: deps.usedProposalIds ?? new Set(),
-      teamProjectKeys: opts.teamProjectKeys,
+      teamProjectKeys: opts.teamProjectKeys ?? new Set<string>(), // 缺省 = 空白名单(fail-closed)
     });
   } catch {
     bump(rejected, 'merge_failed');

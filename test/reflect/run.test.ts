@@ -2,7 +2,7 @@ import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ReflectRunReportSchema } from '../../src/contracts/reflect.js';
 import { exists, readDir, readText, stat } from '../../src/io/read-fs.js';
-import { runReflect } from '../../src/reflect/run.js';
+import { runReflect, type RunOpts } from '../../src/reflect/run.js';
 import {
   ReflectCallLimitError,
   ReflectFailClosedError,
@@ -17,14 +17,17 @@ import {
   INJECTION,
   StubBackend,
   aliasOf,
+  allTeamKeys,
   atomInfo,
   draft,
   lintDraft,
   okText,
   out,
+  projectKey,
   setupEnv,
   sig,
   snapshot,
+  worldSignals,
 } from '../fixtures/reflect/world.js';
 
 const allFiles = async (dir: string): Promise<string[]> => {
@@ -159,6 +162,30 @@ describe('runReflect 暂存', () => {
     expect(r.report.outcome).toBe('output_rejected');
     expect(r.report.rejected['injection_suspected_local']).toBe(1);
     expect(r.exitCode).toBe(1);
+  });
+});
+
+describe('runReflect 团队白名单缺省 fail-closed', () => {
+  const teamFiles = async (opts: Partial<RunOpts>): Promise<string[]> => {
+    const env = await setupEnv();
+    const r = await runReflect(env.deps, { ...env.opts, ...opts });
+    expect(r.report.outcome).toBe('staged');
+    const dir = stageDir(env.w.io, 'run-test-1');
+    return (await allFiles(dir))
+      .map((f) => path.relative(dir, f))
+      .filter((f) => f.startsWith('rules/'))
+      .sort();
+  };
+  it('不传 → 全部按个人;空集 → 同;传全部 key / 名单内两个项目 → 才进团队层', async () => {
+    const TEAM = ['rules/team/run-lint-before-commit.md'];
+    const PERSONAL = ['rules/personal/run-lint-before-commit.md'];
+    expect(await teamFiles({ teamProjectKeys: allTeamKeys(worldSignals()) })).toEqual(TEAM); // 正向对照
+    expect(await teamFiles({ teamProjectKeys: undefined })).toEqual(PERSONAL);
+    expect(await teamFiles({ teamProjectKeys: new Set() })).toEqual(PERSONAL);
+    expect(await teamFiles({ teamProjectKeys: new Set([projectKey('A')]) })).toEqual(PERSONAL);
+    expect(
+      await teamFiles({ teamProjectKeys: new Set([projectKey('A'), projectKey('B')]) }),
+    ).toEqual(TEAM);
   });
 });
 

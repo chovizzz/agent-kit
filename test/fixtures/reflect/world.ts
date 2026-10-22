@@ -289,6 +289,11 @@ export const lintDraft = (
 ): Record<string, unknown> =>
   draft({ evidence: [aliasOf(prompt, CANARY_UM), aliasOf(prompt, L2)], ...over });
 
+/** 「全部 key」白名单:把给定信号里出现的每个 project_key 都显式列为团队项目(库级缺省已是 fail-closed,要放行必须显式给)。 */
+export function allTeamKeys(signals: readonly Signal[]): Set<string> {
+  return new Set(signals.map((s) => s.project_key));
+}
+
 export interface Env {
   w: Work;
   deps: RunDeps;
@@ -311,7 +316,17 @@ export async function setupEnv(
     existingAtoms: [atomInfo()],
     kitVersion: '0.1.0',
   };
-  return { w, deps, backend, opts: { mode: 'stub', runId: 'run-test-1', owner: '@tester' } };
+  return {
+    w,
+    deps,
+    backend,
+    opts: {
+      mode: 'stub',
+      runId: 'run-test-1',
+      owner: '@tester',
+      teamProjectKeys: allTeamKeys(signals),
+    },
+  };
 }
 
 // 每个测试文件结束时删掉自己建的工作目录(否则 .state/test-tmp 会越积越多)

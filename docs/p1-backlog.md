@@ -113,6 +113,7 @@
   `--write-marker` 要求工作树干净、遗留 `.mut-bak` 时拒绝继续;SIGKILL 仍可能留下变异源码(靠 `.mut-bak` 检测发现)
 - ✅ **R2 接口**(S10-rc34,用户定 D5):`runReflect` 直接提供 `teamProjectKeys` 白名单参数(名单外一律 personal、空集全 personal、未知 key 无害),
   删除命令层补集代理 `personalKeysFromTeamWhitelist` 与黑名单 `personalProjectKeys`;契约见 contracts #29
+- ✅ **库级缺省语义**(S10-fc,用户定:默认 fail-closed):`runReflect` 不传 `teamProjectKeys` = 空白名单 = 全部按 personal(原为「不设限」);`MergeInput.teamProjectKeys` / `decideLayer` 的 `team` 改必填,测试夹具显式传 `allTeamKeys(...)`;命令层行为不变;契约见 contracts #29
 - ✅ **`kit:reflector` 标签不禁止修改既有文件**(S10-rc6,用户定 D7):`rules/` `skills/` `cases/` 同 `proposals/**` 一样「只许新增」:
   修改 → `GUARD_PATH_EXISTING_MODIFIED`,删除 / 重命名旧路径 / 换成非普通文件 → `GUARD_PATH_EXISTING_DELETED`(contracts §12.3);A17 的 N1 已改钉新语义(被拒)。
   只作用于带 `kit:reflector` 标签的 PR,无标签内容 PR 行为不变

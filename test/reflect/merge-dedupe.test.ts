@@ -3,7 +3,7 @@ import { parseAtom } from '../../src/atoms/parse.js';
 import { ProposalSchema } from '../../src/contracts/proposal.js';
 import { DEFAULT_DEDUPE, findDuplicate } from '../../src/reflect/dedupe.js';
 import { decideLayer, mergeProposals } from '../../src/reflect/merge.js';
-import { L1, L2, L_SINGLE, projectKey } from '../fixtures/reflect/world.js';
+import { L1, L2, L_SINGLE, allTeamKeys, projectKey } from '../fixtures/reflect/world.js';
 import { aliasFor, mergeInput, parsedDraft, worldPlan } from '../fixtures/reflect/plan.js';
 
 describe('reflect/merge', () => {
@@ -74,11 +74,33 @@ describe('reflect/merge', () => {
 
   it('层判定:单项目/单会话 → personal;跨 ≥2 项目且 ≥2 会话才可能 team', async () => {
     const plan = await worldPlan();
+    const all = allTeamKeys(plan.loaded);
     const items = (...texts: string[]) =>
       texts.map((t) => plan.pack.items.find((i) => i.signal.excerpt_redacted === t)!);
-    expect(decideLayer(items(L1, L2), plan.clusters)).toBe('team');
-    expect(decideLayer(items(L1), plan.clusters)).toBe('personal'); // 只有一个项目/会话
-    expect(decideLayer(items(L_SINGLE), plan.clusters)).toBe('personal');
+    expect(decideLayer(items(L1, L2), plan.clusters, all)).toBe('team');
+    expect(decideLayer(items(L1), plan.clusters, all)).toBe('personal'); // 只有一个项目/会话
+    expect(decideLayer(items(L_SINGLE), plan.clusters, all)).toBe('personal');
+  });
+
+  it('库级白名单 fail-closed:空集 → 全 personal;只有名单内 key 进团队层(decideLayer / mergeProposals)', async () => {
+    const plan = await worldPlan();
+    const items = (...texts: string[]) =>
+      texts.map((t) => plan.pack.items.find((i) => i.signal.excerpt_redacted === t)!);
+    const A = projectKey('A');
+    const B = projectKey('B');
+    expect(decideLayer(items(L1, L2), plan.clusters, allTeamKeys(plan.loaded))).toBe('team'); // 正向对照
+    expect(decideLayer(items(L1, L2), plan.clusters, new Set())).toBe('personal');
+    expect(decideLayer(items(L1, L2), plan.clusters, new Set([A]))).toBe('personal');
+    expect(decideLayer(items(L1, L2), plan.clusters, new Set([A, B]))).toBe('team');
+    const e = [aliasFor(plan.pack, L1), aliasFor(plan.pack, L2)];
+    const layerWith = (keys: Set<string>) =>
+      mergeProposals(
+        mergeInput(plan, [parsedDraft({ evidence: e })], { teamProjectKeys: keys }),
+      )[0]!.layer;
+    expect(layerWith(allTeamKeys(plan.loaded))).toBe('team');
+    expect(layerWith(new Set())).toBe('personal');
+    expect(layerWith(new Set([A]))).toBe('personal');
+    expect(layerWith(new Set([A, B]))).toBe('team');
   });
 
   it('个人层独有证据不泄漏进团队层:混入任何一条个人独有证据整条降为 personal', async () => {
@@ -86,8 +108,9 @@ describe('reflect/merge', () => {
     const items = (...texts: string[]) =>
       texts.map((t) => plan.pack.items.find((i) => i.signal.excerpt_redacted === t)!);
     // 对照:L1+L2 是 team;再混入单项目单会话的 L_SINGLE → personal
-    expect(decideLayer(items(L1, L2), plan.clusters)).toBe('team');
-    expect(decideLayer(items(L1, L2, L_SINGLE), plan.clusters)).toBe('personal');
+    const all = allTeamKeys(plan.loaded);
+    expect(decideLayer(items(L1, L2), plan.clusters, all)).toBe('team');
+    expect(decideLayer(items(L1, L2, L_SINGLE), plan.clusters, all)).toBe('personal');
     // 白名单只含项目 A:B 的证据不再计入,聚类不再跨项目 → personal
     expect(decideLayer(items(L1, L2), plan.clusters, new Set([projectKey('A')]))).toBe('personal');
     // 白名单含 A、B → team(正向对照);空白名单 / 只含未知 key → personal(fail-closed)

@@ -52,10 +52,10 @@ export interface MergeInput {
   usedProposalIds: ReadonlySet<string>;
   /**
    * 团队层 project_key 白名单:只有列在这里的项目的信号才可能进团队层并计入跨项目/跨会话门槛;
-   * 不在名单里的一律按个人处理(fail-closed)。传空集 = 所有项目都是 personal。
-   * 不传(undefined)= 不设限(库级默认,仅供不经命令层的直接调用;命令层总是传入集合)。
+   * 不在名单里的一律按个人处理(fail-closed)。空集 = 所有项目都是 personal。
+   * 必填(类型层面不允许「忘传」);库级入口 runReflect 的缺省(undefined)在那里折成空集。
    */
-  teamProjectKeys?: ReadonlySet<string> | undefined;
+  teamProjectKeys: ReadonlySet<string>;
   guidance?: GuidanceInput | undefined;
 }
 
@@ -88,13 +88,13 @@ function isoDate(now: Date): string {
   return now.toISOString().slice(0, 10);
 }
 
-/** 白名单判定:未设白名单 → 不设限;设了(含空集)→ 只有名单内的 key 算团队项目。 */
-function isTeamKey(key: string, team: ReadonlySet<string> | undefined): boolean {
-  return team === undefined || team.has(key);
+/** 白名单判定(fail-closed):只有名单内的 key 算团队项目,空集 = 没有任何团队项目。 */
+function isTeamKey(key: string, team: ReadonlySet<string>): boolean {
+  return team.has(key);
 }
 
 /** 重新计算:排除非白名单项目成员后,聚类是否仍跨 ≥2 项目且 ≥2 会话。 */
-function clusterTeamEligible(c: Cluster, team: ReadonlySet<string> | undefined): boolean {
+function clusterTeamEligible(c: Cluster, team: ReadonlySet<string>): boolean {
   const rest = c.allSignals.filter((s) => isTeamKey(s.project_key, team));
   return (
     new Set(rest.map((s) => s.project_key)).size >= 2 &&
@@ -110,7 +110,7 @@ function clusterTeamEligible(c: Cluster, team: ReadonlySet<string> | undefined):
 export function decideLayer(
   evidence: readonly EvidenceItem[],
   clusters: readonly Cluster[],
-  team?: ReadonlySet<string>,
+  team: ReadonlySet<string>, // 必填:没有「不设限」这个选项;要全放行就显式列出全部 key
 ): Layer {
   const byId = new Map(clusters.map((c) => [c.id, c]));
   for (const e of evidence) {
