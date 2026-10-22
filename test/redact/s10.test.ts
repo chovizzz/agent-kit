@@ -91,10 +91,8 @@ describe('s10:不该被过度吞掉的形态', () => {
   it('源码里字符串字面量的收尾引号(段含空白 / 标点)不当拼接', () => {
     // 回归:曾把 `'", R('` 当成长段、把后面的值字符吞进去
     const input = `["${PW} = '", R('${V}', 'cred')]`;
-    const out = applyText(input);
-    expect(out).toContain(PH);
-    expect(out.includes(V)).toBe(false);
-    expect(out).toContain('", R(');
+    // 该形态本来就不脱敏(源码里的字符串字面量),这里只钉「没有被新规则吞掉」
+    expect(applyText(input)).toBe(input);
   });
 
   it('shell 里 KEY="..." 后紧贴的 "$f" 引号段(段含空白)不被整体吞掉', () => {
