@@ -4,6 +4,7 @@
  * 口令全部运行时拼装;负向断言旁边钉死正向前提(占位符确实出现 / 对照组仍被脱敏)。
  */
 import { describe, expect, it } from 'vitest';
+import { buildSeeds } from '../../src/redact/seeds.js';
 import { newRedactor } from './helpers.js';
 
 const r = newRedactor();
@@ -20,6 +21,14 @@ function applyText(input: string): string {
   expect(a.ok, `apply 应放行: ${input}`).toBe(true);
   return a.ok ? a.text : '';
 }
+
+describe('s10:种子登记', () => {
+  it('s10.long_segment_concat 是 recognized 种子,gap.long_segment_concat 已不存在', () => {
+    const seeds = buildSeeds();
+    expect(seeds.find((x) => x.id === 's10.long_segment_concat')?.tier).toBe('recognized');
+    expect(seeds.some((x) => x.id === 'gap.long_segment_concat')).toBe(false);
+  });
+});
 
 describe('s10:长引号段 + 紧贴的值', () => {
   it.each([
