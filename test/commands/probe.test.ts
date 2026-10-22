@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { command as probe } from '../../src/commands/probe.js';
+import { afterEach, describe, expect, it } from 'vitest';
+import { command as probe, probeDeps } from '../../src/commands/probe.js';
 import { ExitCode } from '../../src/contracts/exit-codes.js';
 import { cmdCtx, GOOD_ATOM, makeRepo, OWNER_LINE } from '../atoms/helpers.js';
 
@@ -38,7 +38,13 @@ async function makeKitRepo(extra: Record<string, string> = {}): Promise<string> 
   return root;
 }
 
+const LINES_ONLY_TOML = KIT_TOML.replace('max_bytes = 1000', 'max_lines = 1000');
+
 describe('probe(P1-01,contracts #12)', () => {
+  afterEach(() => {
+    delete probeDeps.now;
+  });
+
   it('干跑:打印测量值与 limit_source,不产补丁;documented 目标标注不改写', async () => {
     const root = await makeKitRepo();
     const { ctx, out } = cmdCtx(root);
@@ -86,5 +92,97 @@ describe('probe(P1-01,contracts #12)', () => {
     const joined = out.join('');
     expect(joined).toContain('codex: measured');
     expect(joined).not.toContain('claude: measured');
+  });
+
+  it('干跑:每个目标各占一行(以换行结尾)', async () => {
+    const root = await makeKitRepo();
+    const { ctx, out } = cmdCtx(root);
+    ctx.argv = [];
+    expect(await probe.run(ctx)).toBe(ExitCode.OK);
+    const lines = out
+      .join('')
+      .split('\n')
+      .filter((l) => l.includes(': measured '));
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatch(/^claude: measured /);
+    expect(lines[1]).toMatch(/^codex: measured /);
+  });
+
+  it('量出 0 → 不出补丁,打 PROBE_NOTHING_MEASURED,不产生 probed_value = 0', async () => {
+    const { root } = await makeRepo({ 'kit.toml': KIT_TOML });
+    const { ctx, out, err } = cmdCtx(root);
+    ctx.argv = ['--write', '--agent-version', 'codex=0.87.1'];
+    expect(await probe.run(ctx)).toBe(ExitCode.OK);
+    expect(out.join('')).not.toContain('probed_value = 0');
+    expect(out.join('')).not.toContain('[budget.codex]');
+    expect(err.join('')).toContain('PROBE_NOTHING_MEASURED agent=codex');
+  });
+
+  it('补丁自校验不过 → 退出 3,整批不打印', async () => {
+    const root = await makeKitRepo();
+    const { ctx, out, err } = cmdCtx(root);
+    probeDeps.now = () => new Date(Number.NaN); // 产出非法 probed_at
+    ctx.argv = ['--write', '--agent-version', 'codex=0.161.0'];
+    expect(await probe.run(ctx)).toBe(ExitCode.FAIL_CLOSED);
+    expect(err.join('')).toContain('PROBE_PATCH_INVALID agent=codex');
+    expect(out.join('')).not.toContain('[budget.');
+    expect(out.join('')).not.toContain('probed_value');
+  });
+
+  it('只配 max_lines 的目标取 lines,不取 bytes', async () => {
+    const root = await makeKitRepo({ 'kit.toml': LINES_ONLY_TOML });
+    const { ctx, out } = cmdCtx(root);
+    ctx.argv = [];
+    expect(await probe.run(ctx)).toBe(ExitCode.OK);
+    const m = /codex: measured bytes=(\d+) lines=(\d+)/.exec(out.join(''));
+    expect(m).not.toBeNull();
+    const bytes = Number(m?.[1]);
+    const lines = Number(m?.[2]);
+    expect(bytes).not.toBe(lines);
+    const w = cmdCtx(root);
+    w.ctx.argv = ['--write', '--agent-version', 'codex=0.161.0'];
+    expect(await probe.run(w.ctx)).toBe(ExitCode.OK);
+    expect(w.out.join('')).toContain(`probed_value = ${lines}\n`);
+  });
+
+  it('两个维度都配 → 仍取 bytes(D1 待定)', async () => {
+    const both = KIT_TOML.replace('max_bytes = 1000', 'max_bytes = 1000\nmax_lines = 1000');
+    const root = await makeKitRepo({ 'kit.toml': both });
+    const d = cmdCtx(root);
+    d.ctx.argv = [];
+    await probe.run(d.ctx);
+    const bytes = Number(/codex: measured bytes=(\d+)/.exec(d.out.join(''))?.[1]);
+    const w = cmdCtx(root);
+    w.ctx.argv = ['--write', '--agent-version', 'codex=0.161.0'];
+    await probe.run(w.ctx);
+    expect(w.out.join('')).toContain(`probed_value = ${bytes}\n`);
+  });
+
+  it.each([
+    [['--agnet', 'codex'], 'PROBE_UNKNOWN_FLAG'],
+    [['--agent', 'nope'], 'PROBE_AGENT_NOT_ENABLED'],
+    [['--agent'], 'PROBE_MISSING_VALUE'],
+    [['--write', '--agent-version', 'codex=latest'], 'PROBE_BAD_AGENT_VERSION'],
+    [
+      ['--write', '--agent-version', 'codex=1.0.0', '--agent-version', 'codex=1.0.1'],
+      'PROBE_DUPLICATE_AGENT_VERSION',
+    ],
+    [['--write', '--agent-version', 'pi=1.0.0'], 'PROBE_AGENT_NOT_ENABLED'],
+  ])('参数严格:%j → 退出 2 + %s', async (argv, code) => {
+    const root = await makeKitRepo();
+    const { ctx, err, out } = cmdCtx(root);
+    ctx.argv = argv;
+    expect(await probe.run(ctx)).toBe(ExitCode.USAGE);
+    expect(err.join('')).toContain(code);
+    expect(out.join('')).not.toContain('measured');
+  });
+
+  it('时钟可注入:固定时钟 → probed_at 逐字相等', async () => {
+    const root = await makeKitRepo();
+    const { ctx, out } = cmdCtx(root);
+    probeDeps.now = () => new Date('2026-01-02T03:04:05.678Z');
+    ctx.argv = ['--write', '--agent-version', 'codex=0.161.0'];
+    expect(await probe.run(ctx)).toBe(ExitCode.OK);
+    expect(out.join('')).toContain('probed_at = "2026-01-02T03:04:05Z"\n');
   });
 });

@@ -13,57 +13,120 @@
  *     本命令只汇总列出,不产出事实(contracts:待探针验证项不作为事实)。
  */
 import { computeBudget } from '../budget/budget.js';
+import type { BudgetTargetReport } from '../contracts/budget.js';
+import { SemverSchema } from '../contracts/common.js';
+import { BudgetTargetSchema } from '../contracts/config.js';
 import type { BudgetTarget } from '../contracts/config.js';
 import { ExitCode } from '../contracts/exit-codes.js';
 import { prepareBudgetInputs } from './check-budget.js';
-import { stubReason } from './types.js';
 import type { CommandDef } from './types.js';
+
+/** 外部依赖注入点(照 check-budget 的 budgetDeps;不碰 CommandContext)。 */
+export interface ProbeDeps {
+  /** 时钟;缺省 = new Date() */
+  now?: () => Date;
+}
+
+export const probeDeps: ProbeDeps = {};
 
 interface AgentVersionFlag {
   agent: string;
   version: string;
 }
 
-function parseAgentVersions(argv: readonly string[]): AgentVersionFlag[] | undefined {
-  const out: AgentVersionFlag[] = [];
-  for (let i = 0; i < argv.length; i++) {
-    if (argv[i] !== '--agent-version') continue;
-    const v = argv[i + 1];
-    if (v === undefined) return undefined;
-    const m = /^([a-z][a-z0-9-]+)=(\S+)$/.exec(v);
-    if (!m) return undefined;
-    out.push({ agent: m[1] as string, version: m[2] as string });
-    i++;
-  }
-  return out;
+interface ParsedArgs {
+  write: boolean;
+  agents: string[];
+  versions: AgentVersionFlag[];
 }
 
-function collectFlag(argv: readonly string[], flag: string): string[] {
-  const out: string[] = [];
+interface ArgError {
+  code: string;
+  message: string;
+}
+
+const AGENT_ID_RE = /^[a-z][a-z0-9-]+$/;
+
+/** 严格解析:未知 flag / 缺值 / 版本非 semver / 同一 agent 版本重复 都是错误(退出 2)。 */
+function parseArgs(argv: readonly string[]): ParsedArgs | ArgError {
+  const out: ParsedArgs = { write: false, agents: [], versions: [] };
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === flag && argv[i + 1] !== undefined) {
-      out.push(argv[i + 1] as string);
-      i++;
+    const a = argv[i] as string;
+    if (a === '--write') {
+      out.write = true;
+    } else if (a === '--agent') {
+      const v = argv[++i];
+      if (v === undefined || v.startsWith('--')) {
+        return { code: 'PROBE_MISSING_VALUE', message: '--agent 需要一个 agent id' };
+      }
+      out.agents.push(v);
+    } else if (a === '--agent-version') {
+      const v = argv[++i];
+      const m = v === undefined ? null : /^([a-z][a-z0-9-]+)=(\S+)$/.exec(v);
+      if (m === null) {
+        return {
+          code: 'PROBE_BAD_AGENT_VERSION',
+          message: '--agent-version 形如 <agent>=<x.y.z>',
+        };
+      }
+      const agent = m[1] as string;
+      const version = m[2] as string;
+      if (!SemverSchema.safeParse(version).success) {
+        return {
+          code: 'PROBE_BAD_AGENT_VERSION',
+          message: `--agent-version ${agent}=${version} 不是合法的 semver(x.y.z)`,
+        };
+      }
+      if (out.versions.some((x) => x.agent === agent)) {
+        return {
+          code: 'PROBE_DUPLICATE_AGENT_VERSION',
+          message: `--agent-version 对 ${agent} 重复给了多次`,
+        };
+      }
+      out.versions.push({ agent, version });
+    } else {
+      return { code: 'PROBE_UNKNOWN_FLAG', message: `未知参数 ${a}` };
     }
   }
   return out;
 }
 
-/** 生成单条 kit.toml 目标补丁(字符串拼装仅限本文件内的 TOML 键值,值都是数字/引号包裹的受控词)。 */
-function targetPatch(
-  agent: string,
-  t: BudgetTarget,
+const isArgError = (x: ParsedArgs | ArgError): x is ArgError => 'code' in x;
+
+/**
+ * 取值维度:只配了 max_lines → 行数;其余(只配 max_bytes,或两者都配)→ 字节。
+ * 两者都配时仍取 bytes,属 D1 待定语义,不在此扩展。
+ */
+function probeDimension(t: BudgetTargetReport): 'bytes' | 'lines' {
+  return t.max_bytes === undefined && t.max_lines !== undefined ? 'lines' : 'bytes';
+}
+
+/** 构造补丁对象(未校验)。 */
+function buildPatch(
+  t: BudgetTargetReport,
   measured: number,
   agentVersion: string,
   now: string,
-): string {
+): BudgetTarget {
+  return {
+    ...(t.max_bytes !== undefined ? { max_bytes: t.max_bytes } : {}),
+    ...(t.max_lines !== undefined ? { max_lines: t.max_lines } : {}),
+    limit_source: 'probed',
+    probed_value: measured,
+    probed_agent_version: agentVersion,
+    probed_at: now,
+  };
+}
+
+/** 把已通过 BudgetTargetSchema 的补丁渲染成 kit.toml 段(值都是数字/受控词)。 */
+function patchToToml(agent: string, p: BudgetTarget): string {
   const lines = [`[budget.${agent}]`];
-  if (t.max_bytes !== undefined) lines.push(`max_bytes = ${t.max_bytes}`);
-  if (t.max_lines !== undefined) lines.push(`max_lines = ${t.max_lines}`);
+  if (p.max_bytes !== undefined) lines.push(`max_bytes = ${p.max_bytes}`);
+  if (p.max_lines !== undefined) lines.push(`max_lines = ${p.max_lines}`);
   lines.push('limit_source = "probed"');
-  lines.push(`probed_value = ${measured}`);
-  lines.push(`probed_agent_version = "${agentVersion}"`);
-  lines.push(`probed_at = "${now}"`);
+  lines.push(`probed_value = ${p.probed_value}`);
+  lines.push(`probed_agent_version = "${p.probed_agent_version}"`);
+  lines.push(`probed_at = "${p.probed_at}"`);
   return lines.join('\n');
 }
 
@@ -89,13 +152,12 @@ export const command: CommandDef = {
       for (const f of command.flags ?? []) ctx.stdout(`${f.name}  ${f.description}\n`);
       return ExitCode.OK;
     }
-    const write = argv.includes('--write');
-    const onlyAgents = collectFlag(argv, '--agent');
-    const versionFlag = parseAgentVersions(argv);
-    if (versionFlag === undefined) {
-      ctx.stderr('agent-kit probe: --agent-version 形如 <agent>=<x.y.z>\n');
+    const parsed = parseArgs(argv);
+    if (isArgError(parsed)) {
+      ctx.stderr(`agent-kit probe: ${parsed.code}: ${parsed.message}\n`);
       return ExitCode.USAGE;
     }
+    const { write, agents: onlyAgents, versions: versionFlag } = parsed;
 
     const prepared = await prepareBudgetInputs(ctx.io.repoRoot, ctx.stdout);
     if (prepared.inputs === undefined) {
@@ -103,21 +165,31 @@ export const command: CommandDef = {
       return ExitCode.FAIL_CLOSED;
     }
     const { config, rendered } = prepared.inputs;
+    const enabled: readonly string[] = config.agents.enabled;
+    for (const a of [...onlyAgents, ...versionFlag.map((v) => v.agent)]) {
+      if (!enabled.includes(a)) {
+        ctx.stderr(`agent-kit probe: PROBE_AGENT_NOT_ENABLED: ${a} 不在 agents.enabled 里\n`);
+        return ExitCode.USAGE;
+      }
+    }
     const report = computeBudget({ outputs: rendered.files, config: config.budget });
 
-    const now = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+    const d = (probeDeps.now ?? (() => new Date()))();
+    const now = Number.isNaN(d.getTime()) ? 'invalid-time' : d.toISOString().replace(/\.\d{3}Z$/, 'Z');
     const patches: string[] = [];
     const versionOf = (agent: string): string | undefined =>
       versionFlag.find((v) => v.agent === agent)?.version;
 
     for (const t of report.targets) {
       if (onlyAgents.length > 0 && !onlyAgents.includes(t.agent)) continue;
-      const measured = t.bytes;
+      const dim = probeDimension(t);
+      const measured = dim === 'lines' ? t.lines : t.bytes;
       if (!write) {
         ctx.stdout(
-          `${t.agent}: measured bytes=${measured} lines=${t.lines} ` +
+          `${t.agent}: measured bytes=${t.bytes} lines=${t.lines} ` +
             `limit_source=${t.limit_source} max_bytes=${t.max_bytes ?? '-'} max_lines=${t.max_lines ?? '-'}` +
-            (t.limit_source === 'documented' ? '(documented:官方值,探针不改写)' : ''),
+            (t.limit_source === 'documented' ? '(documented:官方值,探针不改写)' : '') +
+            '\n',
         );
         continue;
       }
@@ -132,7 +204,18 @@ export const command: CommandDef = {
         );
         return ExitCode.USAGE;
       }
-      patches.push(targetPatch(t.agent, t as BudgetTarget, measured, av, now));
+      if (measured === 0) {
+        ctx.stderr(`PROBE_NOTHING_MEASURED agent=${t.agent}\n`);
+        continue;
+      }
+      const patch = BudgetTargetSchema.safeParse(buildPatch(t, measured, av, now));
+      if (!patch.success) {
+        ctx.stderr(
+          `agent-kit probe: PROBE_PATCH_INVALID agent=${t.agent}: ${patch.error.issues.map((i) => i.message).join('; ')}\n`,
+        );
+        return ExitCode.FAIL_CLOSED;
+      }
+      patches.push(patchToToml(t.agent, patch.data));
     }
 
     if (write) {
@@ -152,6 +235,3 @@ export const command: CommandDef = {
     return ExitCode.OK;
   },
 };
-
-// 桩时代的说明保留给 --help 之外的读者(防删注释丢上下文):原桩行为见 git 历史 stubReason(command)。
-void stubReason;
