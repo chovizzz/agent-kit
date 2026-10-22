@@ -45,8 +45,6 @@ interface ArgError {
   message: string;
 }
 
-const AGENT_ID_RE = /^[a-z][a-z0-9-]+$/;
-
 /** 严格解析:未知 flag / 缺值 / 版本非 semver / 同一 agent 版本重复 都是错误(退出 2)。 */
 function parseArgs(argv: readonly string[]): ParsedArgs | ArgError {
   const out: ParsedArgs = { write: false, agents: [], versions: [] };
@@ -175,7 +173,9 @@ export const command: CommandDef = {
     const report = computeBudget({ outputs: rendered.files, config: config.budget });
 
     const d = (probeDeps.now ?? (() => new Date()))();
-    const now = Number.isNaN(d.getTime()) ? 'invalid-time' : d.toISOString().replace(/\.\d{3}Z$/, 'Z');
+    const now = Number.isNaN(d.getTime())
+      ? 'invalid-time'
+      : d.toISOString().replace(/\.\d{3}Z$/, 'Z');
     const patches: string[] = [];
     const versionOf = (agent: string): string | undefined =>
       versionFlag.find((v) => v.agent === agent)?.version;
