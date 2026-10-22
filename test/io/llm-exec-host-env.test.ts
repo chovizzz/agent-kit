@@ -178,7 +178,10 @@ describe('命令层的子进程环境来源', () => {
   it('注入了 ctx.env:行为同此前(整份展开 + PATH / HOME 缺省),子进程环境仍只有白名单键', () => {
     const io = mk({ KIT_REAL_HOME_OVERRIDE: FAKE_REAL_HOME });
     const ctx = ctxOf(io, { ...RICH });
-    const child = filterLlmEnv(hostEnvOf(ctx), [], io.execPath);
+    const source = hostEnvOf(ctx);
+    expect(source['OPENAI_API_KEY']).toBe('k'); // 来源接口不脱敏,过滤在 filterLlmEnv
+    const child = filterLlmEnv(source, [], io.execPath);
+    expect('OPENAI_API_KEY' in child).toBe(false);
     expect(Object.keys(child).sort()).toEqual([...EXPECTED_KEYS, 'NO_COLOR'].sort());
     const bare = hostEnvOf(ctxOf(io, { LANG: 'C' }));
     expect(bare['PATH']).toBe(io.execPath);
@@ -205,13 +208,14 @@ describe('命令层不得绕过 hostEnv', () => {
   }
 
   it('src/commands 与 src/reflect 的代码行里没有 process.env / os.homedir(注释除外)', async () => {
-    const files = [
-      ...(await walk(path.join(SRC, 'commands'))),
-      ...(await walk(path.join(SRC, 'reflect'))),
-    ];
-    expect(files.length).toBeGreaterThan(10); // 正向控制组:扫到了东西
+    const cmdFiles = await walk(path.join(SRC, 'commands'));
+    const reflectFiles = await walk(path.join(SRC, 'reflect'));
+    // 正向控制组:两棵树各自扫到了关键文件
+    expect(cmdFiles.some((f) => f.endsWith('commands/reflect.ts'))).toBe(true);
+    expect(cmdFiles.some((f) => f.endsWith('commands/judge.ts'))).toBe(true);
+    expect(reflectFiles.some((f) => f.endsWith('backends/cli-common.ts'))).toBe(true);
     const hits: string[] = [];
-    for (const f of files) {
+    for (const f of [...cmdFiles, ...reflectFiles]) {
       const lines = (await readText(f)).split('\n');
       lines.forEach((line, i) => {
         const t = line.trim();
@@ -244,6 +248,8 @@ describe('命令层不得绕过 hostEnv', () => {
     const code = "export const h = process.env['PATH'];\n";
     const lintAs = async (rel: string) => {
       const [res] = await eslint.lintText(code, { filePath: path.join(REPO_ROOT, rel) });
+      expect(res, rel).toBeDefined();
+      expect(res!.messages.some((m) => m.fatal), rel).toBe(false);
       return res!.messages.filter((m) => m.ruleId === 'no-restricted-properties');
     };
     expect((await lintAs('src/commands/reflect.ts')).length).toBeGreaterThan(0);
