@@ -45,7 +45,11 @@ import type { LoadedProposal, StoreFs } from './store.js';
 
 export type JudgeBackends = Readonly<Partial<Record<JudgeHopId, LlmBackend>>>;
 
-export type PendingReason = 'no_cross_vendor' | 'all_failed' | 'cooldown';
+/**
+ * 没评上的原因。`not_configured`(链上没有任何已配置的后端)与 `same_vendor_only`(有已配置后端,但都与反思器同厂商)
+ * 拆开,是为了让用户看出前者是配置问题(原单码 `no_cross_vendor` 已废,P1 backlog D4)。
+ */
+export type PendingReason = 'not_configured' | 'same_vendor_only' | 'all_failed' | 'cooldown';
 
 export interface JudgeDeps {
   readonly io: IoContext;
@@ -142,17 +146,16 @@ function assertExistingJudge(p: Proposal): void {
 
 function pendingReason(hops: readonly HopRecord[]): PendingReason {
   let cooldown = false;
+  let sameVendor = false;
   for (const h of hops) {
     if (h.result === 'skipped:cooldown') cooldown = true;
-    else if (
-      h.result !== 'skipped:same-vendor' &&
-      h.result !== 'error:vendor_unknown' &&
-      h.result !== 'error:not_configured'
-    ) {
+    else if (h.result === 'skipped:same-vendor') sameVendor = true;
+    else if (h.result !== 'error:vendor_unknown' && h.result !== 'error:not_configured') {
       return 'all_failed';
     }
   }
-  return cooldown ? 'cooldown' : 'no_cross_vendor';
+  if (cooldown) return 'cooldown';
+  return sameVendor ? 'same_vendor_only' : 'not_configured';
 }
 
 interface Prepared {

@@ -80,7 +80,7 @@ export const MUTATIONS = [
       '端到端:collect → reflect → apply → check → judge 只有与反思器同厂商的一家可用:不调用,记 skipped:same-vendor,judge_attempts 记满 5 跳且不含 ok',
       'judge 兜底链 同厂商的跳不调用且记 skipped:same-vendor;下一跳成功',
       'judge 兜底链 同厂商比较归一化:后端自报 "Anthropic " 也算同厂商,不调用',
-      'judge 兜底链 只有同厂商/未配置:no_cross_vendor,零调用,attempts 记满且同厂商贴 skipped:same-vendor',
+      'judge 兜底链 只有同厂商(其余未配置):same_vendor_only,零调用,attempts 记满且同厂商贴 skipped:same-vendor',
     ],
   },
   {

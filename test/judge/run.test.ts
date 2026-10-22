@@ -166,7 +166,7 @@ describe('judge 兜底链', () => {
     expect(ProposalSchema.safeParse(y).success).toBe(true);
   });
 
-  it('只有同厂商/未配置:no_cross_vendor,零调用,attempts 记满且同厂商贴 skipped:same-vendor', async () => {
+  it('只有同厂商(其余未配置):same_vendor_only,零调用,attempts 记满且同厂商贴 skipped:same-vendor', async () => {
     const w = await newWork();
     const file = await writeProposal(w, {
       reflectorVendor: 'deepseek',
@@ -176,7 +176,7 @@ describe('judge 兜底链', () => {
     const s = makeStubs({}, ['maas-deepseek', 'official-deepseek']);
     const rep = await go(w, s.backends);
     expect(s.totalCalls()).toBe(0);
-    expect(rep.outcomes[0]!.pending).toBe('no_cross_vendor');
+    expect(rep.outcomes[0]!.pending).toBe('same_vendor_only');
     const y = await readYaml(file);
     expect(y.judge_attempts!).toEqual([
       { hop: 'codex', vendor: 'unknown', model: '-', result: 'error:not_configured' },
@@ -196,6 +196,16 @@ describe('judge 兜底链', () => {
       },
     ]);
     expect(ProposalSchema.safeParse(y).success).toBe(true);
+  });
+
+  it('链上没有任何已配置后端:not_configured(与 same_vendor_only 区分),零调用,attempts 全为 error:not_configured', async () => {
+    const w = await newWork();
+    const file = await writeProposal(w);
+    const rep = await go(w, {});
+    expect(rep.outcomes[0]!.status).toBe('pending');
+    expect(rep.outcomes[0]!.pending).toBe('not_configured');
+    const y = await readYaml(file);
+    expect(y.judge_attempts!.map((h) => h.result)).toEqual(Array(5).fill('error:not_configured'));
   });
 
   it('全部限流:pending=cooldown;同一次运行里第二条提案不再调用已限流槽位', async () => {
