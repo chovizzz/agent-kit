@@ -2160,6 +2160,13 @@ export function buildSeeds(seed: number = SEED): Seed[] {
       ['cred_assign_ext'],
     ),
     gap(
+      'gap.long_segment_punct_glue',
+      'concat_multiline',
+      `${PW}="abcdefghijkl".${gapPw}`,
+      [gapPw],
+      '长引号段(>= 8 字符)后面紧贴 `.` `+` `:` 再接值(`NAME="长段".值`):与源码里的方法调用 / 字符串相加 / JSON 无法区分,s10 的拼接规则刻意不收,紧贴值留在输出里',
+    ),
+    gap(
       'gap.md_inline_code_split',
       'plain',
       `\`${PW}=\` ${gapPw}`,

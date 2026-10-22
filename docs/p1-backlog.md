@@ -23,7 +23,7 @@
   `gap.yaml_anchor_inline` `gap.yaml_tag` `gap.template_default_call` `gap.helm_default_func` `gap.hcl_variable_default`
   `gap.hcl_ternary_default` `gap.md_inline_code_split` `gap.backtick_leading_space` `gap.placeholder_then_space_value`
   `gap.upper_dollar_name` `gap.upper_getenv_default` `gap.upper_env_or_default`(详见 `docs/redaction.md` §7)
-  (`gap.long_segment_concat` 已于 s10 修复并晋升为 `s10.long_segment_concat`,召回 +1)
+  (`gap.long_segment_concat` 已于 s10 修复并晋升为 `s10.long_segment_concat`,召回 +1;评审后新登记 `gap.long_segment_punct_glue`〔段后紧贴 `.` `+` `:`〕)
 
 ## Phase P1-B(设计决策 + 实现,按依赖序)
 

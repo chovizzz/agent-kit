@@ -48,6 +48,20 @@ describe('s10:长引号段 + 紧贴的值', () => {
     expect(r.pass1(input).text.includes(V)).toBe(false);
   });
 
+  it.each([
+    ['连字符', '-'],
+    ['斜杠', '/'],
+  ])('收尾引号后紧贴%s再接值:并词脱敏', (_n, ch) => {
+    const out = applyText(`${PW}="${SEG}"${ch}${V}`);
+    expect(out).toContain(PH);
+    expect(out.includes(V)).toBe(false);
+  });
+
+  it('段是普通词、后随值才是口令:值被脱敏', () => {
+    const out = applyText(`${PW}="password"${V}`);
+    expect(out.includes(V)).toBe(false);
+  });
+
   it('后随值之后还有引号段:整词(三段)都脱敏', () => {
     const input = `${PW}="${SEG}"${V}"tailpart1"`;
     const out = applyText(input);
@@ -60,8 +74,10 @@ describe('s10:长引号段 + 紧贴的值', () => {
     const q = '\\"';
     const input = `{"cmd":"${PW}=${q}${SEG}${q}${V}"}`;
     const out = applyText(input);
-    expect(out).toContain(PH);
     expect(out.includes(V)).toBe(false);
+    expect(out.split(PH).length - 1).toBe(1);
+    expect(out.startsWith('{"cmd":"')).toBe(true);
+    expect(out.endsWith('"}')).toBe(true);
   });
 
   it('pass2 对原文(未经第一遍)判不干净:probe/规则仍工作', () => {
