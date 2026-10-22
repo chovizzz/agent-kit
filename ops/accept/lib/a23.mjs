@@ -428,6 +428,12 @@ async function a23(argv) {
     const acceptanceSha = frozenProposal?.judge?.acceptance?.sha256;
     if (typeof acceptanceSha !== 'string')
       return stop('准备:已入库提案里读不到 judge.acceptance.sha256(冻结记录缺失)');
+    // 夹具的窗口是按下面这组冻结参数手算的;显式断言它们,默认值日后调整时报"夹具前提变了"而不是难定位的晋升失败
+    const acc = frozenProposal.judge.acceptance;
+    if (acc.tile_days !== 7 || acc.max_tiles < 2 || acc.anchor_min !== '2026-10-13')
+      return stop(
+        `准备:冻结参数与夹具前提不符(tile_days=${acc.tile_days} max_tiles=${acc.max_tiles} anchor_min=${acc.anchor_min};夹具按 7/≥2/2026-10-13 手算)`,
+      );
     const attests = [];
     for (const [k, win] of [
       ['0', ['2026-10-13', '2026-10-19']],
@@ -442,7 +448,8 @@ async function a23(argv) {
             end: win[1],
             exposure: 5,
             acceptance: acceptanceSha,
-            run: `run-2026102${k}T00000${i}Z-aaaaa${i}`,
+            // run_id 的日期在窗口结束之后(块 1 的窗口到 10-26 结束,采集运行不可能早于它)
+            run: `run-2026102${8 + Number(k)}T00000${i}Z-aaaaa${i}`,
           }),
         );
     const files = Object.fromEntries(attests);
