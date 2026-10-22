@@ -303,8 +303,8 @@ B09c 之后仍然存在、**没有种子**的行为(多数是多脱敏方向;标
   - YAML 锚点 / 标签:`password: &pw 值` 为 `gap.yaml_anchor_inline`(换行写法为 `gap.yaml_anchor_block`),`!!str 值` 为 `gap.yaml_tag`。
   - 输入里本来就带合法占位符字面量、其后接空白 / 制表符再接值(`NAME=[[REDACTED:credential]] 值`,正常两遍流程不会产出这种形状):`gap.placeholder_then_space_value`。
   - 纯大写字母的口令(`HUNTERXYZABC`)冒充环境变量名:`$UPPER`(`gap.upper_dollar_name`)、`os.getenv('X', 'UPPER')` 默认值(`gap.upper_getenv_default`)、`process.env.X || "UPPER"`(`gap.upper_env_or_default`)。
-  - **复测已不漏(2026-10-22,不登记为缺口)**:带 `f` / `b` 前缀的字符串(`f"值"`、`b"值"`)两遍都能抓;类型标注里带 `=` 的(`Annotated[str, Field(min_length=8)] = "值"`)值本身已脱敏(输出里键名后的注解部分被一并替换,可读性受损但不泄漏);纯大写口令作 `NAME=UPPER`、`NAME="UPPER"`、`${X:-UPPER}` 默认值链时已脱敏。
-  - **引号段不是短前缀的拼接**(`NAME="长一点的段"值`):第一遍对混合大小写的后随值**会放过**,但第二遍的 `probe_cred` 能抓到,`apply` fail-closed(residual),不会放行;全小写 / 纯数字的后随值第一遍已脱敏。所以它是「第一遍漏、第二遍兜底」,不是 known_gap(没有 known_gap 种子)。
+  - **复测已不漏(2026-10-22,不登记为缺口;回归在 `test/redact/d3gaps.test.ts`)**:带 `f` / `b` 前缀的字符串(`f"值"`、`b"值"`)两遍都能抓;类型标注里带 `=` 的(`Annotated[str, Field(min_length=8)] = "值"`)值本身已脱敏(输出里键名后的注解部分被一并替换,可读性受损但不泄漏);纯大写口令作 `NAME=UPPER`、`NAME="UPPER"`、`${X:-UPPER}` 默认值链时已脱敏。
+  - **引号段不是短前缀的拼接**(`NAME="长一点的段"值`):第一遍对混合大小写 + 数字的后随值(实测 13 位)**会放过**,但第二遍的 `probe_cred` 能抓到(范围以 `probe_cred` 的判据为准,见 §3.4;更短 / 无数字 / 低熵的值是否被兜住未逐项验证),`apply` fail-closed(residual),不会放行;全小写 / 纯数字的后随值第一遍已脱敏。所以它是「第一遍漏、第二遍兜底」,不是 known_gap(没有 known_gap 种子)。
   - `${NAME:-$(echo 值)}` 默认值链已于 P1-A.3 收掉,见 §3.4。
 - pass2 的 `cred_*` 残留探测器只有 `probe_cred` 一条(P1-A.3,覆盖引号包裹的混合大小写长值,见 §3.4);其它凭据赋值形态仍没有独立于规则表的探测器,同一判据的 bug 会在两遍里各犯一次。
 - 摘录里 JSON 字符串中的 `\n` 紧跟着值的位置(`NAME=

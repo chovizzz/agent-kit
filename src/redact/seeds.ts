@@ -2014,7 +2014,7 @@ export function buildSeeds(seed: number = SEED): Seed[] {
   // ---- 做不到的形态(只报告,不计入召回) ----
   const gapPw = 'K' + g.entropic(ALNUM, 10, 3.0);
   const PW = ['pass', 'word'].join('');
-  const UPPER_PW = 'HUNTERXYZABC';
+  const UPPER_PW = ['HUNTER', 'XYZABC'].join('');
   const hex32 = g.pick(HEXL, 32);
   const lower36 = (() => {
     for (let k = 0; k < 5000; k++) {
