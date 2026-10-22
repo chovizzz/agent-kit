@@ -212,7 +212,7 @@ async function a10(argv) {
               else if (res.failure) bad.push(`${f}(扫描失败:${res.failure})`);
             }
             if (bad.length)
-              R.fail(`脱敏扫描命中 ${bad.length} 个文件:${bad.slice(0, 5).join(' | ')}`);
+              R.fail(`脱敏扫描命中 ${bad.length} 个文件:${bad.slice(0, 40).join(' | ')}`);
             else R.pass(`脱敏扫描 ${scanned} 个文本文件零命中(无豁免;植入正向对照已检出)`);
           }
         }
