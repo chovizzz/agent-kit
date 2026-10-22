@@ -229,7 +229,7 @@ A2 的 15 格矩阵(`limit_source` × `enforce` × 超/不超,外加「不写 `e
     以及文件名构造函数 `attestFileName` / `reportFileName`。字段照设计 §5.5 / §6.5 / §6.6。设计未给取值档的地方是**本契约的假设**:
     `overfit_risk`/`generality` 取 `low|medium|high`;`Attest.member` 必须是 `@handle`;`ReplayReport` 要求 `ci_run_url` 与 `self_reported:true` 二选一;
     `Attest` 在设计示例之外多一个 `run_id`(设计说文件名带 `run_id`,载荷里也要有,CI 才能比对)。
-12. **阈值探针写回结构(plan-P0 §7)**:`BudgetTarget` 增加可选 `probed_value` / `probed_agent_version` / `probed_at`;`limit_source=probed` 时三者必填。
+12. **阈值探针写回结构(plan-P0 §7)**:`BudgetTarget` 增加可选 `probed_value` / `probed_agent_version` / `probed_at`;`limit_source=probed` 时三者必填。另有可选 `probed_lines`(PB5,§1 只追加):正整数,只允许 `limit_source=probed` 且同配 `max_lines` 时出现,否则校验失败(诊断前缀 `PROBED_LINES_REQUIRES_PROBED` / `PROBED_LINES_REQUIRES_MAX_LINES`)。
     **语义(D1 定稿)**:`probed_value` 是**外部观测到的上限**(人在真实 agent 上观察到的),**不是 kit 产物大小**;kit 只记录,不编造。
     `agent-kit probe` 实装——干跑打印各目标实测 bytes/lines 及相对上限的余量(仅供参考,不写入任何补丁);
     `--write` 对非 `documented` 目标必须同时给 `--agent-version <agent>=<x.y.z>` 与 `--observed`(写法见下),
@@ -238,7 +238,7 @@ A2 的 15 格矩阵(`limit_source` × `enforce` × 超/不超,外加「不写 `e
     **双维度目标**(同一目标同时配 max_bytes 与 max_lines,PB4)必须写 `--observed <agent>=bytes:<N>,lines:<M>`(N、M 都是不带前导零、不超过 `Number.MAX_SAFE_INTEGER` 的正整数),两个维度各自与观测值比。
     写法与目标不符(双维度只给单值或只给一个维度;单维度给 `bytes:`/`lines:` 形式)→ `PROBE_OBSERVED_DIM_MISMATCH`。
     任一已配维度的原 max 大于对应观测值时本命令拒绝整批出补丁(`PROBE_LIMIT_ABOVE_OBSERVED`,信息里带维度);这只约束 probe 的输出,schema 不校验 max 与 probed_value 的关系(§1 只追加)。
-    **`probed_value` 仍是单字段(§1 不改 schema)**:单维度记那个观测值;双维度记 bytes 观测值,lines 观测值只参与比较、不落盘。
+    **落盘(PB5)**:单维度只写 `probed_value`(那个观测值,不写 `probed_lines`);双维度写 `probed_value` = bytes 观测值 + `probed_lines` = lines 观测值(两个维度都落盘并各自参与比较)。预算计算(budget/check)不读 `probed_value`/`probed_lines`,二者纯记录,不参与阈值比较。
     稳定错误码(均退出 2):`PROBE_BAD_OBSERVED` / `PROBE_DUPLICATE_OBSERVED` / `PROBE_OBSERVED_REQUIRED` / `PROBE_OBSERVED_DIM_MISMATCH` / `PROBE_LIMIT_ABOVE_OBSERVED`
     (另有 PB1 的 `PROBE_BAD_AGENT_VERSION` 等);缺 `--agent-version` 同样按 USAGE 拒绝(宁可报错不编造)。render 报告的 `pendingProbes`
     (有效性探针 P-Q*)由 probe 汇总列出,仍不作为事实;真实 agent 观察属主代理真实环境项。

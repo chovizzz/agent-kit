@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { budgetDeps } from '../../src/commands/check-budget.js';
 import { command as probe, probeDeps } from '../../src/commands/probe.js';
+import { BudgetTargetSchema } from '../../src/contracts/config.js';
 import { ExitCode } from '../../src/contracts/exit-codes.js';
 import { readDir, readText } from '../../src/io/read-fs.js';
 import { cmdCtx, GOOD_ATOM, makeRepo, OWNER_LINE } from '../atoms/helpers.js';
@@ -356,12 +357,41 @@ describe('probe(P1-01,contracts #12)', () => {
       return { code, out: r.out.join(''), err: r.err.join('') };
     };
 
-    it('两个维度都不超 → 出补丁,probed_value=bytes 观测值,lines 观测值不落盘', async () => {
+    it('两个维度都不超 → 出补丁,probed_value=bytes 观测值,probed_lines=lines 观测值', async () => {
       const r = await run(BOTH, 'codex=bytes:1000,lines:777');
       expect(r.code).toBe(ExitCode.OK);
       expect(r.out).toContain('probed_value = 1000\n');
+      expect(r.out).toContain('probed_lines = 777\n');
       expect(r.out).toContain('max_lines = 500\n');
-      expect(r.out).not.toContain('777');
+    });
+
+    it('单维度补丁不写 probed_lines', async () => {
+      const r = await run(KIT_TOML, 'codex=1500');
+      expect(r.code).toBe(ExitCode.OK);
+      expect(r.out).toContain('probed_value = 1500\n');
+      expect(r.out).not.toContain('probed_lines');
+    });
+
+    it('单维度 max_lines 目标也不写 probed_lines', async () => {
+      const lt = KIT_TOML.replace('max_bytes = 1000', 'max_lines = 500');
+      const r = await run(lt, 'codex=700');
+      expect(r.code).toBe(ExitCode.OK);
+      expect(r.out).toContain('probed_value = 700\n');
+      expect(r.out).not.toContain('probed_lines');
+    });
+
+    it('补丁渲染出的 TOML 能被 schema 回读(双维度往返)', async () => {
+      const r = await run(BOTH, 'codex=bytes:1000,lines:777');
+      const body = r.out.split('\n').filter((l) => /^[a-z_]+ = /.test(l));
+      const obj = Object.fromEntries(
+        body.map((l) => {
+          const [k, v] = l.split(' = ') as [string, string];
+          return [k, v.startsWith('"') ? v.slice(1, -1) : Number(v)];
+        }),
+      );
+      const parsed = BudgetTargetSchema.safeParse(obj);
+      expect(parsed.success).toBe(true);
+      if (parsed.success) expect(parsed.data.probed_lines).toBe(777);
     });
 
     it('书写顺序无关:lines 在前也行', async () => {

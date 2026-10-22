@@ -24,6 +24,8 @@ export const BudgetTargetSchema = z
     limit_source: LimitSourceSchema,
     /** 阈值探针写回(P1-01):外部观测到的上限(非 kit 产物大小)、被测 agent 版本、时点。limit_source=probed 时三者必填。 */
     probed_value: z.number().int().positive().optional(),
+    /** 双维度目标(同时配 max_bytes 与 max_lines)的 lines 观测值;此时 probed_value 记 bytes 观测值。只允许 limit_source=probed 且有 max_lines。 */
+    probed_lines: z.number().int().positive().optional(),
     probed_agent_version: z.string().min(1).optional(),
     probed_at: IsoTimestampSchema.optional(),
   })
@@ -37,7 +39,13 @@ export const BudgetTargetSchema = z
         t.probed_agent_version !== undefined &&
         t.probed_at !== undefined),
     { message: 'limit_source=probed 必须同时有 probed_value / probed_agent_version / probed_at' },
-  );
+  )
+  .refine((t) => t.probed_lines === undefined || t.limit_source === 'probed', {
+    message: 'PROBED_LINES_REQUIRES_PROBED: probed_lines 只允许在 limit_source=probed 时出现',
+  })
+  .refine((t) => t.probed_lines === undefined || t.max_lines !== undefined, {
+    message: 'PROBED_LINES_REQUIRES_MAX_LINES: probed_lines 只允许与 max_lines 同在',
+  });
 export type BudgetTarget = z.infer<typeof BudgetTargetSchema>;
 
 export const BudgetConfigSchema = z.strictObject({

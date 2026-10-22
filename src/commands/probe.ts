@@ -153,6 +153,7 @@ function probeDimension(t: BudgetTargetReport): 'bytes' | 'lines' {
 function buildPatch(
   t: BudgetTargetReport,
   observed: number,
+  observedLines: number | undefined,
   agentVersion: string,
   now: string,
 ): BudgetTarget {
@@ -162,6 +163,7 @@ function buildPatch(
     ...(t.hard_limit !== undefined ? { hard_limit: t.hard_limit } : {}),
     limit_source: 'probed',
     probed_value: observed,
+    ...(observedLines !== undefined ? { probed_lines: observedLines } : {}),
     probed_agent_version: agentVersion,
     probed_at: now,
   };
@@ -179,6 +181,7 @@ function patchToToml(agent: string, p: BudgetTarget): string {
   }
   lines.push('limit_source = "probed"');
   lines.push(`probed_value = ${p.probed_value}`);
+  if (p.probed_lines !== undefined) lines.push(`probed_lines = ${p.probed_lines}`);
   lines.push(`probed_agent_version = "${p.probed_agent_version}"`);
   lines.push(`probed_at = "${p.probed_at}"`);
   return lines.join('\n');
@@ -203,7 +206,7 @@ export const command: CommandDef = {
     {
       name: '--observed <id>=<N>|bytes:<N>,lines:<M>',
       description:
-        '--write 时该 agent 在真实环境观察到的上限(非 documented 目标必填;kit 只记录)。单维度目标 <id>=<N>(N 单位=该维度);同时配 max_bytes 与 max_lines 的目标 <id>=bytes:<N>,lines:<M>(两个维度都和观测值比,probed_value 记 bytes);写法与目标不符 → PROBE_OBSERVED_DIM_MISMATCH',
+        '--write 时该 agent 在真实环境观察到的上限(非 documented 目标必填;kit 只记录)。单维度目标 <id>=<N>(N 单位=该维度);同时配 max_bytes 与 max_lines 的目标 <id>=bytes:<N>,lines:<M>(两个维度都和观测值比,probed_value 记 bytes、probed_lines 记 lines);写法与目标不符 → PROBE_OBSERVED_DIM_MISMATCH',
     },
   ],
   async run(ctx) {
@@ -310,9 +313,10 @@ export const command: CommandDef = {
           return ExitCode.USAGE;
         }
       }
-      // probed_value 沿用 schema 单字段:双维度记 bytes 观测值(lines 观测值只参与比较、不落盘)
+      // 双维度:probed_value 记 bytes 观测值,probed_lines 记 lines 观测值;单维度只写 probed_value
       const recorded = dual ? (ob.bytes as number) : (ob.single as number);
-      const patch = BudgetTargetSchema.safeParse(buildPatch(t, recorded, av, now));
+      const recordedLines = dual ? (ob.lines as number) : undefined;
+      const patch = BudgetTargetSchema.safeParse(buildPatch(t, recorded, recordedLines, av, now));
       if (!patch.success) {
         ctx.stderr(
           `agent-kit probe: PROBE_PATCH_INVALID agent=${t.agent}: ${patch.error.issues.map((i) => i.message).join('; ')}\n`,
