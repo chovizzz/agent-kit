@@ -55,7 +55,7 @@ export function payloadMissing(cli) {
 export function probeCommands(cli = '{REPO}/dist/cli.js') {
   return [
     `{NODE} ${cli} --root {REPO} probe`,
-    // 只探当前 assumed 的三个 agent(documented 目标本来就跳过);观测值给足够大的占位值,保证不触发 LIMIT_ABOVE_OBSERVED
+    // 只探当前 assumed 的三个 agent(documented 目标本来就跳过);观测值给足够大的占位值(当前 max 均 16384);kit.toml 的 agent/max 变动后需同步这里
     `{NODE} ${cli} --root {REPO} probe --write --agent pi --agent kimi --agent opencode --agent-version pi=1.0.0 --agent-version kimi=1.0.0 --agent-version opencode=1.0.0 --observed pi=65536 --observed kimi=65536 --observed opencode=65536`,
   ];
 }

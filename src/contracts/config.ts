@@ -22,7 +22,7 @@ export const BudgetTargetSchema = z
     max_lines: z.number().int().positive().optional(),
     hard_limit: z.union([z.number().int().positive(), z.literal('unknown')]).optional(),
     limit_source: LimitSourceSchema,
-    /** 阈值探针写回(P1-01):实测值、被测 agent 版本、时点。limit_source=probed 时三者必填。 */
+    /** 阈值探针写回(P1-01):外部观测到的上限(非 kit 产物大小)、被测 agent 版本、时点。limit_source=probed 时三者必填。 */
     probed_value: z.number().int().positive().optional(),
     probed_agent_version: z.string().min(1).optional(),
     probed_at: IsoTimestampSchema.optional(),

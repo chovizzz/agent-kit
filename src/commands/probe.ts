@@ -119,8 +119,8 @@ function parseArgs(argv: readonly string[]): ParsedArgs | ArgError {
 const isArgError = (x: ParsedArgs | ArgError): x is ArgError => 'code' in x;
 
 /**
- * 取值维度:只配了 max_lines → 行数;其余(只配 max_bytes,或两者都配)→ 字节。
- * 两者都配时仍取 bytes,属 D1 待定语义,不在此扩展。
+ * 探针维度:只配了 max_lines → 行;其余(只配 max_bytes,或两者都配)→ 字节。
+ * `--observed` 的 N 与「原 max 是否大于 N」都按该维度的单位解释;两者都配时取 bytes,另一维度的 max 原样保留、不参与比较。
  */
 function probeDimension(t: BudgetTargetReport): 'bytes' | 'lines' {
   return t.max_bytes === undefined && t.max_lines !== undefined ? 'lines' : 'bytes';
@@ -163,7 +163,8 @@ function patchToToml(agent: string, p: BudgetTarget): string {
 
 export const command: CommandDef = {
   name: 'probe',
-  summary: '预算阈值探针:在真实渲染产物上测量并产出 limit_source=probed 写回补丁',
+  summary:
+    '预算阈值探针:干跑量余量;--write 记录人在真实 agent 上观察到的上限(--observed),产出 limit_source=probed 补丁',
   phase: 'P1',
   ownerBlock: 'P1',
   flags: [
@@ -179,7 +180,7 @@ export const command: CommandDef = {
     {
       name: '--observed <id>=<N>',
       description:
-        '--write 时该 agent 在真实环境观察到的上限(正整数;非 documented 目标必填;kit 只记录)',
+        '--write 时该 agent 在真实环境观察到的上限(正整数,单位=探针维度:仅配 max_lines 为行,否则字节;非 documented 目标必填;kit 只记录)',
     },
   ],
   async run(ctx) {
@@ -235,6 +236,9 @@ export const command: CommandDef = {
           `${t.agent}: measured bytes=${t.bytes} lines=${t.lines} ` +
             `limit_source=${t.limit_source} max_bytes=${t.max_bytes ?? '-'} max_lines=${t.max_lines ?? '-'} ` +
             `headroom(${dim})=${max === undefined ? '-' : max - measured}` +
+            (t.max_bytes !== undefined && t.max_lines !== undefined
+              ? ` headroom_bytes=${t.max_bytes - t.bytes} headroom_lines=${t.max_lines - t.lines}`
+              : '') +
             (t.limit_source === 'documented' ? '(documented:官方值,探针不改写)' : '') +
             '\n',
         );

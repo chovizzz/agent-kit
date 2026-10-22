@@ -1,3 +1,4 @@
+import * as fs from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import { budgetDeps } from '../../src/commands/check-budget.js';
 import { command as probe, probeDeps } from '../../src/commands/probe.js';
@@ -182,6 +183,10 @@ describe('probe(P1-01,contracts #12)', () => {
     const both = KIT_TOML.replace('max_bytes = 1000', 'max_bytes = 1000\nmax_lines = 1000');
     injectCodexRender();
     const root = await makeKitRepo({ 'kit.toml': both });
+    const d = cmdCtx(root);
+    d.ctx.argv = [];
+    await probe.run(d.ctx);
+    expect(d.out.join('')).toContain('headroom_bytes=971 headroom_lines=997');
     const w = cmdCtx(root);
     w.ctx.argv = ['--write', '--agent-version', 'codex=0.161.0', '--observed', 'codex=1200'];
     expect(await probe.run(w.ctx)).toBe(ExitCode.OK);
@@ -249,7 +254,6 @@ describe('probe(P1-01,contracts #12)', () => {
   it('--write 不写文件系统:仓库目录树前后一致', async () => {
     injectCodexRender();
     const root = await makeKitRepo();
-    const fs = await import('node:fs');
     const snap = (): string[] => (fs.readdirSync(root, { recursive: true }) as string[]).sort();
     const before = snap();
     const kitBefore = fs.readFileSync(`${root}/kit.toml`, 'utf8');
