@@ -14,6 +14,7 @@ import { baseCtx } from '../../helpers/tmp.js';
 import { writeSignals } from '../../../src/signals/state-store.js';
 import type {
   LlmBackend,
+  LlmBackendCli,
   LlmCompleteRequest,
   LlmCompleteResult,
 } from '../../../src/reflect/backend-iface.js';
