@@ -166,26 +166,29 @@ describe('runReflect 暂存', () => {
 });
 
 describe('runReflect 团队白名单缺省 fail-closed', () => {
-  const teamFiles = async (opts: Partial<RunOpts>): Promise<string[]> => {
+  const layerOf = async (opts: Partial<RunOpts>): Promise<{ files: string[]; layer: string }> => {
     const env = await setupEnv();
     const r = await runReflect(env.deps, { ...env.opts, ...opts });
     expect(r.report.outcome).toBe('staged');
     const dir = stageDir(env.w.io, 'run-test-1');
-    return (await allFiles(dir))
+    const files = (await allFiles(dir))
       .map((f) => path.relative(dir, f))
       .filter((f) => f.startsWith('rules/'))
       .sort();
+    const yaml = await readText(path.join(dir, 'proposals/2026-10-12-001.yaml'));
+    const layer = /^layer: (\w+)$/m.exec(yaml)?.[1] ?? 'none';
+    return { files, layer };
   };
   it('不传 → 全部按个人;空集 → 同;传全部 key / 名单内两个项目 → 才进团队层', async () => {
-    const TEAM = ['rules/team/run-lint-before-commit.md'];
-    const PERSONAL = ['rules/personal/run-lint-before-commit.md'];
-    expect(await teamFiles({ teamProjectKeys: allTeamKeys(worldSignals()) })).toEqual(TEAM); // 正向对照
-    expect(await teamFiles({ teamProjectKeys: undefined })).toEqual(PERSONAL);
-    expect(await teamFiles({ teamProjectKeys: new Set() })).toEqual(PERSONAL);
-    expect(await teamFiles({ teamProjectKeys: new Set([projectKey('A')]) })).toEqual(PERSONAL);
-    expect(
-      await teamFiles({ teamProjectKeys: new Set([projectKey('A'), projectKey('B')]) }),
-    ).toEqual(TEAM);
+    const TEAM = { files: ['rules/team/run-lint-before-commit.md'], layer: 'team' };
+    const PERSONAL = { files: ['rules/personal/run-lint-before-commit.md'], layer: 'personal' };
+    expect(await layerOf({ teamProjectKeys: allTeamKeys(worldSignals()) })).toEqual(TEAM); // 正向对照
+    expect(await layerOf({ teamProjectKeys: undefined })).toEqual(PERSONAL);
+    expect(await layerOf({ teamProjectKeys: new Set() })).toEqual(PERSONAL);
+    expect(await layerOf({ teamProjectKeys: new Set([projectKey('A')]) })).toEqual(PERSONAL);
+    expect(await layerOf({ teamProjectKeys: new Set([projectKey('A'), projectKey('B')]) })).toEqual(
+      TEAM,
+    );
   });
 });
 
