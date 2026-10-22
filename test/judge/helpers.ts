@@ -16,6 +16,7 @@ import type {
   LlmCompleteRequest,
   LlmCompleteResult,
 } from '../../src/reflect/backend-iface.js';
+import { GIT_NO_AUTO_ARGS, GIT_NO_AUTO_CONFIG } from '../helpers/git-quiet.js';
 import { REPO_ROOT, makeTempDir, wideCtx } from '../helpers/tmp.js';
 
 export const RUN_ID = 'run-0001';
@@ -135,6 +136,7 @@ const GIT_IDENT = [
   'commit.gpgsign=false',
   '-c',
   'init.defaultBranch=main',
+  ...GIT_NO_AUTO_ARGS,
 ] as const;
 
 export async function newWork(prefix = 'judge-'): Promise<Work> {
@@ -170,6 +172,7 @@ export async function newWork(prefix = 'judge-'): Promise<Work> {
     return r.stdout;
   };
   git(['init', '--quiet', '--template=']);
+  for (const [k, v] of GIT_NO_AUTO_CONFIG) git(['config', k, v]);
   git(['add', '-A']);
   git(['commit', '--quiet', '-m', 'fixture']);
   const head = git(['rev-parse', 'HEAD']).trim();

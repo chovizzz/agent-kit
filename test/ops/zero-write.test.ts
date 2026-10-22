@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { runSync } from '../../src/io/exec.js';
 import { readText } from '../../src/io/read-fs.js';
 import * as safe from '../../src/io/safe-fs.js';
+import { GIT_NO_AUTO_ARGS, GIT_NO_AUTO_CONFIG } from '../helpers/git-quiet.js';
 import { REPO_ROOT } from '../helpers/tmp.js';
 import { makeFixture, runMain } from './helpers.js';
 import type { Fixture } from './helpers.js';
@@ -298,11 +299,13 @@ describe('清单卫生:禁止把 managed 路径挪进 volatile', () => {
         'user.email=t@example.invalid',
         '-c',
         'commit.gpgsign=false',
+        ...GIT_NO_AUTO_ARGS,
         ...args,
       ]);
       expect(r.status, r.stderr).toBe(0);
     };
     git(['init', '-q']);
+    for (const [k, v] of GIT_NO_AUTO_CONFIG) git(['config', k, v]);
     git(['add', 'ops']);
     git(['commit', '-q', '-m', 'base']);
     // 基线 == 现状 => 通过

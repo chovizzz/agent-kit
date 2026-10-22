@@ -32,6 +32,10 @@ const IDENT = [
   'tag.gpgsign=false',
   '-c',
   'init.defaultBranch=main',
+  '-c',
+  'maintenance.auto=false',
+  '-c',
+  'gc.auto=0',
 ];
 
 /** 起 git 用的 env:HOME 必须是调用方给的空目录(在 KIT_TMP 之内,产品的 exec 白名单也要求这样) */
@@ -62,6 +66,8 @@ export function initRepo(dir, home) {
   fs.mkdirSync(dir, { recursive: true });
   fs.mkdirSync(home, { recursive: true });
   git(dir, ['init', '--quiet', '--template='], gitEnvFor(home));
+  git(dir, ['config', 'maintenance.auto', 'false'], gitEnvFor(home));
+  git(dir, ['config', 'gc.auto', '0'], gitEnvFor(home));
 }
 
 /** 写文件(增量;null = 删除)并提交,返回提交 oid。date 固定提交时间。 */

@@ -184,6 +184,10 @@ function git(dir, args, env) {
     'commit.gpgsign=false',
     '-c',
     'init.defaultBranch=main',
+    '-c',
+    'maintenance.auto=false',
+    '-c',
+    'gc.auto=0',
   ];
   const r = run('git', [...ident, ...args], { cwd: dir, env });
   if (r.status !== 0) throw new Error(`git ${args.join(' ')} 失败:${r.stderr.slice(0, 200)}`);
@@ -231,6 +235,8 @@ async function a17(argv) {
       const dir = path.join(tmp, `repo-${n++}`);
       fs.mkdirSync(dir, { recursive: true });
       git(dir, ['init', '--quiet', '--template='], gitEnv);
+      git(dir, ['config', 'maintenance.auto', 'false'], gitEnv);
+      git(dir, ['config', 'gc.auto', '0'], gitEnv);
       writeFiles(dir, BASE_FILES);
       git(dir, ['add', '-A'], gitEnv);
       git(dir, ['commit', '--quiet', '-m', 'base'], gitEnv);

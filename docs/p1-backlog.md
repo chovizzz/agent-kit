@@ -162,6 +162,8 @@ ops/inventory-refresh.sh --apply         # 写 inventory/**(先备份到仓库�
 
 - `test/build/determinism.test.ts`、`test/build/write.test.ts` 在机器重载时偶发红(build 退出 1、或 out/ 缺文件):2026-10-11 夜里 A12 在干净克隆里连红两次后转绿;重载循环 1/6 复现一次,基线 ac816ef 与 39a4ffd 各 12 次均 0 红。未查到根因,怀疑是负载下的时间预算(单位:CHECK_FAILED=1)。**脱敏缺口块收尾、机器空闲后在干净克隆里重测;复现时先抓 build 的 stdout 诊断再下结论**。同时发现:多个 vitest 进程同时跑同一仓库会互相踩 `.state/`(`test/signals/collect.test.ts` 红),并行验收时不要在同一树里开多个 vitest。
 
+- `test/commands/promote.test.ts`「T2 … THRESHOLD_TILES」偶发 `ENOENT lstat .git/objects/maintenance.lock`(CI run 39773552014):**已修(verify/s10-flake)**。根因=临时仓库提交后 git detach 的 `maintenance run --auto` 短暂创建 maintenance.lock,`test/fixtures/reflect/world.ts` 的 `snapshot` 遍历 `.git` 时 lstat 到它、随后被删。处理=所有测试/验收夹具建的临时仓库每条 git 命令带 `-c maintenance.auto=false -c gc.auto=0`,且 init 后写仓库级配置(`test/helpers/git-quiet.ts`);未给 snapshot 加 ENOENT 容错(源头已消除,容错只会掩盖别的问题)。新建临时仓库的夹具必须沿用该文件。
+
 ## 排期建议(串行优先,避免同文件并行)
 
 1. **P0-close**(等时机)→ 2. **P1-A** 三件(本仓内,无外部依赖)→ 3. **P1-B** 按 D1→D3→D4→D5/D6

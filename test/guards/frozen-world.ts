@@ -22,6 +22,7 @@ import {
   decidePredictionStatus,
 } from '../../src/judge/freeze.js';
 import { acceptanceD0, tileWindow } from '../../src/lifecycle/attest-count.js';
+import { GIT_NO_AUTO_ARGS } from '../helpers/git-quiet.js';
 import { makeTestRepo } from '../helpers/make-repo.js';
 import type { FileMap, TestRepo } from '../helpers/make-repo.js';
 import { COMMON_FILES } from '../fixtures/guards/atoms.js';
@@ -132,6 +133,7 @@ const IDENT = [
   'user.email=kit-test@example.invalid',
   '-c',
   'commit.gpgsign=false',
+  ...GIT_NO_AUTO_ARGS,
 ];
 
 /** 先按普通方式提交,再用指定的提交者/作者时间 amend(make-repo 的固定时间戳不可调) */

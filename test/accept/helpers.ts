@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import type { IoContext } from '../../src/io/paths.js';
 import * as safe from '../../src/io/safe-fs.js';
 import { homeSnapshot } from '../signals/helpers.js';
+import { GIT_NO_AUTO_ARGS, GIT_NO_AUTO_CONFIG } from '../helpers/git-quiet.js';
 import { makeTempDir, REPO_ROOT, wideCtx } from '../helpers/tmp.js';
 
 export { REPO_ROOT };
@@ -160,6 +161,7 @@ export function git(cwd: string, home: string, args: string[]): Run {
       'commit.gpgsign=false',
       '-c',
       'init.defaultBranch=main',
+      ...GIT_NO_AUTO_ARGS,
       ...args,
     ],
     { cwd, encoding: 'utf8', env: gitEnv(home) },
@@ -173,6 +175,7 @@ export async function commitAll(fx: Fx): Promise<string> {
   await safe.mkdirp(fx.ctx, home);
   await fx.put('.fixture-keep', 'x\n'); // 保证至少有一个可提交的文件
   git(fx.root, home, ['init', '-q']);
+  for (const [k, v] of GIT_NO_AUTO_CONFIG) git(fx.root, home, ['config', k, v]);
   git(fx.root, home, ['add', '-A']);
   const c = git(fx.root, home, ['commit', '-q', '-m', 'fixture']);
   if (c.status !== 0) throw new Error(`git commit 失败:${c.stderr}`);

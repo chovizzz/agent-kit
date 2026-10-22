@@ -2,6 +2,7 @@ import * as path from 'node:path';
 import { runSync } from '../../src/io/exec.js';
 import { createIoContext, type IoContext } from '../../src/io/paths.js';
 import * as safe from '../../src/io/safe-fs.js';
+import { GIT_NO_AUTO_ARGS, GIT_NO_AUTO_CONFIG } from './git-quiet.js';
 import { makeTempDir, wideCtx } from './tmp.js';
 
 /**
@@ -45,6 +46,7 @@ const IDENT = [
   'tag.gpgsign=false',
   '-c',
   'init.defaultBranch=main',
+  ...GIT_NO_AUTO_ARGS,
 ] as const;
 
 export async function makeTestRepo(prefix = 'guards-'): Promise<TestRepo> {
@@ -71,6 +73,7 @@ export async function makeTestRepo(prefix = 'guards-'): Promise<TestRepo> {
     return r.stdout;
   };
   git(['init', '--quiet', '--template=']);
+  for (const [k, v] of GIT_NO_AUTO_CONFIG) git(['config', k, v]);
 
   const commit = async (files: FileMap, message = 'test commit'): Promise<string> => {
     for (const [rel, spec] of Object.entries(files)) {
