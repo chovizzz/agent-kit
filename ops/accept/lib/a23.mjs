@@ -308,6 +308,9 @@ async function a23(argv) {
       requireOverlayEgress: false,
       createBackends: () => judgeStubs,
       redactor,
+      // frozen_at 必须与合成历史的提交日期同一天(G3 要求 guidance_until ≤ frozen_at ≤ 冻结提交日期+1 天);
+      // 用系统时钟则在合成日期(2026-10-12)之后一天起必红,与机器无关
+      now: clock(at('2026-10-12', '08:30:00')),
     });
     const jd = await exec(judgeCmd, ['--run', RUN_ID, '--run-llm', '--allow-egress']);
     if (
