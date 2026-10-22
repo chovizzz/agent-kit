@@ -230,6 +230,8 @@ export function attestFile(mods, atom, o = {}) {
     signal_ids_digest: `sha256:${'0'.repeat(64)}`,
     run_id: o.run ?? 'run-20261023T000000Z-aaaaaa',
     method: 'signature_proxy_v1',
+    // 冻结验收协议的哈希(K4):缺省不写 = 旧格式 attest,G3 不计入;需要计入的夹具传 o.acceptance
+    ...(o.acceptance !== undefined ? { acceptance_sha256: o.acceptance } : {}),
   };
   const name = mods.attest.attestFileName({
     member: a.member,

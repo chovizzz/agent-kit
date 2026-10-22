@@ -422,16 +422,29 @@ async function a23(argv) {
       `对照:没有 attest 时被拒(退出 ${early.code};${[...new Set(early.out.match(/G3:[A-Z_]+/g) ?? [])].join(',')})`,
     );
     const ruleText = fs.readFileSync(path.join(repo, RULE), 'utf8');
-    const attests = ['@alice', '@bob'].map((member, i) =>
-      attestFile(wmods, ruleText, {
-        rule_id: RULE_ID,
-        member,
-        start: '2026-10-14',
-        end: '2026-10-28',
-        exposure: 10,
-        run: `run-20261028T00000${i}Z-aaaaa${i}`,
-      }),
-    );
+    // 冻结协议(K4)下 attest 必须:带 acceptance_sha256、窗口对齐到验收分块(D0 = 冻结提交次日 2026-10-13,
+    // 每块 tile_days=7 天)、至少 ceil(14/7)=2 个有效块且每块 ≥2 名成员。窗口取块 0、块 1。
+    const frozenProposal = wmods.yaml.parse(fs.readFileSync(path.join(repo, PROPOSAL), 'utf8'));
+    const acceptanceSha = frozenProposal?.judge?.acceptance?.sha256;
+    if (typeof acceptanceSha !== 'string')
+      return stop('准备:已入库提案里读不到 judge.acceptance.sha256(冻结记录缺失)');
+    const attests = [];
+    for (const [k, win] of [
+      ['0', ['2026-10-13', '2026-10-19']],
+      ['1', ['2026-10-20', '2026-10-26']],
+    ])
+      for (const [i, member] of ['@alice', '@bob'].entries())
+        attests.push(
+          attestFile(wmods, ruleText, {
+            rule_id: RULE_ID,
+            member,
+            start: win[0],
+            end: win[1],
+            exposure: 5,
+            acceptance: acceptanceSha,
+            run: `run-2026102${k}T00000${i}Z-aaaaa${i}`,
+          }),
+        );
     const files = Object.fromEntries(attests);
     const baseA = headOf(repo, githome);
     commitFiles(repo, githome, files, 'attest evidence', at('2026-10-29'));
