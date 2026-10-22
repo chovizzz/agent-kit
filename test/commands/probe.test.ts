@@ -319,7 +319,7 @@ describe('probe(P1-01,contracts #12)', () => {
     const toml = KIT_TOML.replace('limit_source = "documented"', 'limit_source = "assumed"');
     const root = await makeKitRepo({ 'kit.toml': toml });
     const { ctx, out, err } = cmdCtx(root);
-    ctx.argv = ['--write', '--agent-version', 'claude=1.2.3'];
+    ctx.argv = ['--write', '--agent-version', 'claude=1.2.3', '--observed', 'claude=1000'];
     expect(await probe.run(ctx)).toBe(ExitCode.USAGE);
     expect(err.join('')).toContain('codex 写回需要');
     expect(out.join('')).not.toContain('[budget.');
