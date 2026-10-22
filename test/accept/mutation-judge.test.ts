@@ -1,6 +1,6 @@
-import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { readTextSync } from '../../src/io/read-fs.js';
 import { evalLib, guardRealHome, LIB } from './helpers.js';
 
 guardRealHome();
@@ -144,7 +144,7 @@ describe('judgeMutationRed:预期红灯精确命中,无关红灯不算数', () =
 });
 
 describe('A20 / A24 / A28 共用同一份判据(不在三处各写一份)', () => {
-  const src = (f: string) => readFileSync(path.join(LIB, f), 'utf8');
+  const src = (f: string) => readTextSync(path.join(LIB, f));
   it.each(['a20.mjs', 'a24.mjs', 'a28.mjs'])(
     '%s 调共享 judgeMutationRed,没有自己的子串比对',
     (f) => {
