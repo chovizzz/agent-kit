@@ -285,6 +285,7 @@ export default tseslint.config(
     files: [
       `src/reflect/backends/**/*.${EXT}`,
       'test/io/llm-exec.test.ts',
+      'test/io/llm-exec-host-env.test.ts',
       `test/reflect/backends/**/*.${EXT}`,
     ],
     rules: restrictions({ allowLlm: true }),
