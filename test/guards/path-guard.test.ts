@@ -100,7 +100,7 @@ describe('反思器路径守卫(kit:reflector;设计 §6.4)', () => {
       { [ATOM_PATH]: atom({ status: 'advisory' }) },
       { label: 'kit:reflector' },
     );
-    expect(s.codes).toEqual(['GUARD_G2_STATUS_CHANGED']);
+    expect(s.codes).toEqual(['GUARD_G2_STATUS_CHANGED', 'GUARD_PATH_EXISTING_MODIFIED']);
   });
 
   describe('proposals/ 只增:删除守卫(K6)', () => {
@@ -254,8 +254,8 @@ describe('反思器路径守卫(kit:reflector;设计 §6.4)', () => {
 
   describe('rules/ skills/ cases/ 只许新增(D7)', () => {
     const RBASE = { ...BASE, [ATOM_PATH]: atom({ status: 'active' }) };
-    const run = (head: FileMap, label: 'kit:reflector' | undefined = 'kit:reflector') =>
-      scenario(RBASE, head, label === undefined ? {} : { label });
+    const run = (head: FileMap, label: 'kit:reflector' | null = 'kit:reflector') =>
+      scenario(RBASE, head, label === null ? {} : { label });
 
     it('修改既有 active 原子正文 → GUARD_PATH_EXISTING_MODIFIED(原 N1:现在被拒)', async () => {
       const s = await run({
@@ -336,9 +336,9 @@ describe('反思器路径守卫(kit:reflector;设计 §6.4)', () => {
     });
 
     it('对照(无标签 PR 行为不变):修改 / 删除既有 skills、cases 不出 D7 码', async () => {
-      const mod = await run({ 'skills/demo/SKILL.md': '---\nname: demo\n---\n改了\n' }, undefined);
+      const mod = await run({ 'skills/demo/SKILL.md': '---\nname: demo\n---\n改了\n' }, null);
       expect(mod.codes).toEqual([]);
-      const del = await run({ 'cases/x/case.yaml': null }, undefined);
+      const del = await run({ 'cases/x/case.yaml': null }, null);
       expect(del.codes).toEqual([]);
     });
 
@@ -351,8 +351,8 @@ describe('反思器路径守卫(kit:reflector;设计 §6.4)', () => {
   });
 
   describe('提案来源核验:reflector.backend 必填、拒 stub(contracts #24)', () => {
-    const run = (head: FileMap, label: 'kit:reflector' | undefined = 'kit:reflector') =>
-      scenario({ ...BASE }, head, label === undefined ? {} : { label });
+    const run = (head: FileMap, label: 'kit:reflector' | null = 'kit:reflector') =>
+      scenario({ ...BASE }, head, label === null ? {} : { label });
 
     it('对照:带合法 backend、无 stub 的新增提案 → 绿(claude / codex / pi 都放行)', async () => {
       for (const backend of ['claude', 'codex', 'pi']) {
@@ -402,10 +402,7 @@ describe('反思器路径守卫(kit:reflector;设计 §6.4)', () => {
         'cases/new/case.yaml': 'id: new\n',
       });
       expect(s.codes).toEqual([]);
-      const un = await run(
-        { 'proposals/n.yaml': proposal({ stub: true, backend: null }) },
-        undefined,
-      );
+      const un = await run({ 'proposals/n.yaml': proposal({ stub: true, backend: null }) }, null);
       expect(un.codes).toEqual([]);
     });
   });
