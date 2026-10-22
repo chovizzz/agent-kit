@@ -120,7 +120,7 @@ zod 校验失败统一映射为 `SCHEMA_INVALID`(`zodIssuesToDiagnostics`);各�
 
 - **开关**:`req.allowEgress` 必须是布尔 `true`,否则 `IO_LLM_EGRESS_DENIED`,不 spawn、不消耗预算。命令层只在用户同时给 `--run-llm --allow-egress` 后置 true;**干跑路径不得 import 本模块**(eslint 强制,见下)。
 - **二进制**:只能是 `claude` / `codex` / `pi`(裸名按 `envSource.PATH` 的绝对项解析,或同名绝对路径);解析结果落在仓库内且不在 `KIT_TMP` 内 → 拒(防仓库里埋假 `claude`)。`shell:false`,参数数组,≤64 个、每个 ≤8KiB、无 NUL;提示走 stdin(≤64KiB)。
-- **env**:不继承。`LLM_ENV_ALLOW` 名字白名单(`PATH HOME USER LOGNAME LANG LC_* TZ TMPDIR XDG_*_HOME` 与代理变量)+ 固定 `NO_COLOR=1`;key/token/secret、`*_BASE_URL`、`CODEX_HOME`、`NODE_OPTIONS`、`LD_*`、`TERM` 等一律不传。唯一例外 `passEnv`:调用方在代码里写死、形如 `<NAME>_API_KEY` 的名字。本模块不读进程环境(只许 `paths.ts`),`envSource` 由调用方给,`filterLlmEnv()` 负责挑选(**待主代理**:`IoContext` 增可选 `hostEnv`,由 `paths.ts` 提供)。`HOME` 传**真实 HOME**(CLI 要读自己的登录态),必须绝对路径。
+- **env**:不继承。`LLM_ENV_ALLOW` 名字白名单(`PATH HOME USER LOGNAME LANG LC_* TZ TMPDIR XDG_*_HOME` 与代理变量)+ 固定 `NO_COLOR=1`;key/token/secret、`*_BASE_URL`、`CODEX_HOME`、`NODE_OPTIONS`、`LD_*`、`TERM` 等一律不传。唯一例外 `passEnv`:调用方在代码里写死、形如 `<NAME>_API_KEY` 的名字。本模块不读进程环境(只许 `paths.ts`),`envSource` 由调用方给,`filterLlmEnv()` 负责挑选(`IoContext.hostEnv` 由 `paths.ts` 提供,见 §12.4 ④)。`HOME` 传**真实 HOME**(CLI 要读自己的登录态),必须绝对路径。
 - **cwd**:固定 `<state>/reflect/cwd/`(0700,调用方不能指定);运行前必须为空(否则 `IO_LLM_CWD_DENIED`,不替用户删),运行后清掉子进程留下的条目并计数(`cwdResidue`)。目的:CLI 自动发现不到 CLAUDE.md / AGENTS.md。
 - **限制**:超时 1..600000ms(SIGKILL 整个进程组,正常退出后也杀遗留组员);stdout ≤32KiB(超出即杀并标 `stdoutTruncated`,调用方须视为失败);stderr 只留 4KiB;`LlmSpawnBudget(max≤10)` 在每次 spawn 前消耗,耗尽 `IO_LLM_SPAWN_LIMIT`。被拒的请求不消耗预算,失败的 spawn 消耗。
 - **eslint**:`child_process` 只许 `src/io/exec.ts`、`src/io/llm-exec.ts`;`llm-exec`(import / export-from / 动态 import)只许 `src/reflect/backends/**` 与 `test/io/llm-exec*.test.ts`、`test/reflect/backends/**`。命令层(`src/commands/{reflect,judge}.ts`)与 judge **经依赖注入**拿后端,不直接 import。放行走 `restrictions({allowLlm})` 生成(flat config 同名规则整条替换,不能另写局部 override)。**R3 须加传递依赖测试**:非 backends 的 `src/reflect/**` 不得经任何路径 import 到 llm-exec,backends 文件不得 re-export `runLlm`。
@@ -1812,7 +1812,7 @@ R5 追加字段(#29):`allow_unverified` 与 `team_project_keys`。
 ### 12.4 真跑(`--run-llm --allow-egress`)不在 A5 零写入覆盖范围内(R0,如实记录)
 
 - LLM CLI 用**真实 HOME** 里的登录态,并会写它自己的全局文件(会话日志、history、缓存);`llm-exec` 只管 env/cwd/超时/输出/次数,**不能**阻止这些写入,A5 零写入验收对真跑不成立。真跑前后的受管路径快照与「每个 CLI 实际写了哪些全局文件」清单属 R6(主代理、需用户当场同意)。干跑与 stub 路径零调用零写入,仍在 A5 覆盖内。
-- 残余:①`ANTHROPIC_BASE_URL` 等写在 CLI 自己的 `settings.json` 里时能把请求导向别家,`deriveVendor` 看不到,只能靠 R3 每次显式传 provider/model 与 R6 实测;②子进程若 `setsid` 脱离进程组则杀不到;③校验与 spawn 之间的路径竞态;④`envSource` 的来源(宿主环境)目前没有受控的 `IoContext` 字段(待主代理)。
+- 残余:①`ANTHROPIC_BASE_URL` 等写在 CLI 自己的 `settings.json` 里时能把请求导向别家,`deriveVendor` 看不到,只能靠 R3 每次显式传 provider/model 与 R6 实测;②子进程若 `setsid` 脱离进程组则杀不到;③校验与 spawn 之间的路径竞态;④`envSource` 的来源(宿主环境)✅ 由 `IoContext.hostEnv` 提供(S10-rc7):`paths.ts` 按 `HOST_ENV_NAMES`(与 `LLM_ENV_ALLOW` 逐项相同,测试钉住)+ `LC_*` 从 `createIoContext` 的 `env`(缺省真实环境)挑出的冻结副本,PATH 缺省 `/usr/bin:/bin`、HOME 缺省 `getRealHome()`;不含任何 `*_API_KEY` / `*_BASE_URL` / `AWS_*` / `NODE_OPTIONS` 等。命令层(`reflect`/`judge`)拼子进程环境:有注入的 `CommandContext.env`(测试 / `main(argv, env)`)用注入值,否则用 `ctx.io.hostEnv`;最终仍过 `filterLlmEnv`。`CommandContext.env` 已是 `src/commands/types.ts` 的正式字段(`EnvCommandContext` 已移除)。真实 CLI 路径上此前子进程环境只有 PATH/HOME,现在会带上白名单内的 LANG / LC_* / TZ / 代理 / XDG_* 等(白名单本身未扩大)。
 
 ## 13. reader 已知差异(B21 记录;口径正文见 `docs/reader-counting-spec.md` §8.3)
 

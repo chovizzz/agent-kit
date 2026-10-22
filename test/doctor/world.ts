@@ -5,7 +5,7 @@
 import * as path from 'node:path';
 import { buildIntegrity } from '../../src/build/payload.js';
 import { createDoctorCommand, type DoctorCommandDeps } from '../../src/commands/doctor.js';
-import type { EnvCommandContext } from '../../src/commands/reflect.js';
+import type { CommandContext } from '../../src/commands/types.js';
 import { canonicalJson } from '../../src/io/canonical-json.js';
 import { createIoContext } from '../../src/io/paths.js';
 import * as safe from '../../src/io/safe-fs.js';
@@ -61,7 +61,7 @@ export async function runDoctor(w: World, args: string[], o: RunOpts = {}): Prom
     ...(o.noPayload === true ? { KIT_PAYLOAD_DIR: payloadDir } : {}),
   };
   const io = o.stateDir !== undefined ? createIoContext({ cwd: REPO_ROOT, env }) : w.io;
-  const ctx: EnvCommandContext = {
+  const ctx: CommandContext = {
     argv: [...(o.noHome === true ? [] : ['--home', w.home]), ...args],
     io,
     overlayPath: o.overlay,

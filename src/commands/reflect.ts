@@ -56,11 +56,6 @@ export const DEFAULT_REFLECT_REDACT_TIMEOUT_MS = 5000;
 /** 干跑且未给 --owner 时的占位(runReflect 总要校验 owner;干跑不写任何文件,占位不会落盘)。 */
 export const DRY_RUN_OWNER = '@dry-run';
 
-/** 命令层额外拿到的宿主环境(由 `src/cli.ts` 的 `main(argv, env)` 注入;命令层不读 process.env)。 */
-export type EnvCommandContext = CommandContext & {
-  env?: Readonly<Record<string, string | undefined>>;
-};
-
 export type CliBackends = Readonly<Partial<Record<JudgeHopId, LlmBackend>>>;
 
 // ---------------------------------------------------------------------------
@@ -96,11 +91,12 @@ export function overlayAllowsEgress(overlay: Overlay | undefined): boolean {
 
 /**
  * 子进程环境的来源。命令层不能读 `process.env`(eslint:只许 `src/io/paths.ts`):
- * 有注入的环境就用它;PATH 缺省取 `IoContext.execPath`,HOME 缺省取 `getRealHome()`(CLI 要读自己的登录态)。
- * (待主代理:`IoContext` 增可选 `hostEnv` 后改为直接取它,见 contracts §12.4 ④。)
+ * 测试 / `main(argv, env)` 注入了 `ctx.env` 就用它(PATH 缺省取 `IoContext.execPath`,HOME 缺省取 `getRealHome()`);
+ * 没有注入(真实 CLI 路径)就取 `ctx.io.hostEnv`——`paths.ts` 按名字白名单收窄过的那份(contracts §12.4 ④)。
  */
-export function hostEnvOf(ctx: EnvCommandContext): Record<string, string | undefined> {
-  const src = ctx.env ?? {};
+export function hostEnvOf(ctx: CommandContext): Record<string, string | undefined> {
+  if (ctx.env === undefined) return { ...ctx.io.hostEnv };
+  const src = ctx.env;
   return {
     ...src,
     PATH: src['PATH'] ?? ctx.io.execPath,
@@ -150,7 +146,7 @@ function resolveBinary(
 }
 
 export interface BuildCliBackendsInput {
-  readonly ctx: EnvCommandContext;
+  readonly ctx: CommandContext;
   readonly overlay: Overlay | undefined;
   readonly now: () => Date;
   /** spawn 预算上限(≤10) */
@@ -356,7 +352,7 @@ export interface ReflectCommandDeps {
    * 缺省 = 按覆盖层的 `reflect.backends` 经 `buildBackends` 构造真实 CLI 后端。
    */
   createBackends?(
-    ctx: EnvCommandContext,
+    ctx: CommandContext,
     input: { overlay: Overlay | undefined; maxCalls: number; now: () => Date },
   ): CliBackends | Promise<CliBackends>;
   /** 测试注入;缺省按覆盖层建真实 Redactor */
@@ -545,7 +541,7 @@ export function createReflectCommand(deps: ReflectCommandDeps = {}): CommandDef 
       { name: '--write', description: '仅 --gc:真正删除(缺省只列出将删除的 run)' },
     ],
     async run(rawCtx: CommandContext): Promise<number> {
-      const ctx = rawCtx as EnvCommandContext;
+      const ctx = rawCtx;
       const args = parseArgs(ctx.argv);
       if (args.error !== undefined) {
         ctx.stderr(`agent-kit reflect: ${args.error}\n`);
@@ -719,7 +715,7 @@ export function createReflectCommand(deps: ReflectCommandDeps = {}): CommandDef 
 }
 
 function defaultCreateBackends(
-  ctx: EnvCommandContext,
+  ctx: CommandContext,
   input: { overlay: Overlay | undefined; maxCalls: number; now: () => Date },
 ): CliBackends {
   return buildCliBackends({

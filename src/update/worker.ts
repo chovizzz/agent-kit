@@ -12,7 +12,6 @@ import { parse as parseToml } from 'smol-toml';
 import { ExitCode } from '../contracts/exit-codes.js';
 import { UserConfigSchema } from '../contracts/update.js';
 import { createUpdateCommand, type UpdateCommandDeps } from '../commands/update.js';
-import type { EnvCommandContext } from '../commands/reflect.js';
 import type { CommandContext, CommandDef } from '../commands/types.js';
 import { RUN_SELF_ENV_PICK_RE } from '../io/exec.js';
 import { getRealHome, pickProcessEnv } from '../io/paths.js';
@@ -42,13 +41,13 @@ export function createBackgroundCommand(deps: WorkerDeps = {}): CommandDef {
     phase: 'P2',
     ownerBlock: 'S7c',
     async run(ctx: CommandContext): Promise<number> {
-      const outcome = await runWorker(ctx as EnvCommandContext, deps);
+      const outcome = await runWorker(ctx, deps);
       return outcome === 'usage' ? ExitCode.USAGE : ExitCode.OK;
     },
   };
 }
 
-async function runWorker(ctx: EnvCommandContext, deps: WorkerDeps): Promise<WorkerOutcome> {
+async function runWorker(ctx: CommandContext, deps: WorkerDeps): Promise<WorkerOutcome> {
   if (ctx.argv.length !== 1 || ctx.argv[0] !== '--background') return 'usage';
   // 真实 CLI 入口 main(argv) 不注入 env:从进程环境里取收窄的具名键(KIT_UPDATE_* / KIT_AUTO_* / CI / 代理 …)
   const env = ctx.env ?? pickProcessEnv(RUN_SELF_ENV_PICK_RE);
@@ -111,7 +110,7 @@ async function runWorker(ctx: EnvCommandContext, deps: WorkerDeps): Promise<Work
       );
     },
   });
-  const inner: EnvCommandContext = {
+  const inner: CommandContext = {
     ...ctx,
     env,
     argv: ['--write'],

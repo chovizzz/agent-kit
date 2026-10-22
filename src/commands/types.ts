@@ -5,6 +5,8 @@ export interface CommandContext {
   /** 命令名之后的参数(全局选项 --root/--overlay/--help 已被 cli.ts 取走) */
   argv: readonly string[];
   io: IoContext;
+  /** 注入的宿主环境(测试 / `main(argv, env)`);缺省 undefined = 真实 CLI,子进程环境取 `io.hostEnv`(paths.ts 受控读取) */
+  env?: Readonly<Record<string, string | undefined>>;
   /** `--overlay <path>`;P0 覆盖层只经此显式传入,不自动发现 */
   overlayPath: string | undefined;
   stdout(text: string): void;

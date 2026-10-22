@@ -54,7 +54,6 @@ import {
 } from '../update/policy.js';
 import { isDeprecated, openRegistrySource, type RegistrySource } from '../update/registry.js';
 import { emptyState, markBad, recordCheck } from '../update/state.js';
-import type { EnvCommandContext } from './reflect.js';
 import type { CommandContext, CommandDef } from './types.js';
 
 export interface UpdateCommandDeps extends InstallDeps {
@@ -206,7 +205,7 @@ export function createUpdateCommand(deps: UpdateCommandDeps = {}): CommandDef {
     async run(ctx: CommandContext): Promise<number> {
       const args = parseArgs(ctx.argv);
       // 真实 CLI 入口 main(argv) 不注入 env:KIT_UPDATE_PIN / KIT_UPDATE_REGISTRY / KIT_AUTO_* 等要从进程环境里取(只取收窄的具名键)
-      const env = (ctx as EnvCommandContext).env ?? pickProcessEnv(RUN_SELF_ENV_PICK_RE);
+      const env = ctx.env ?? pickProcessEnv(RUN_SELF_ENV_PICK_RE);
       try {
         if (args.error !== undefined) throw new Exit(ExitCode.USAGE, 'USAGE', args.error);
         const homeReal = await resolveAllowedHome(

@@ -5,7 +5,7 @@
 import * as path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { ExitCode } from '../../src/contracts/exit-codes.js';
-import type { EnvCommandContext } from '../../src/commands/reflect.js';
+import type { CommandContext } from '../../src/commands/types.js';
 import { readDir, readText } from '../../src/io/read-fs.js';
 import * as safe from '../../src/io/safe-fs.js';
 import { createUpdateCommand } from '../../src/commands/update.js';
@@ -54,7 +54,7 @@ async function runWorker(
   } = {},
 ): Promise<{ code: number; err: string }> {
   const err: string[] = [];
-  const ctx: EnvCommandContext = {
+  const ctx: CommandContext = {
     argv: o.argv ?? ['--background'],
     io: w.io,
     overlayPath: undefined,
@@ -83,7 +83,7 @@ describe('worker:开关', () => {
   it('stdout / stderr 都不输出(日志只有稳定码一行)', async () => {
     const w = await setup();
     const out: string[] = [];
-    const ctx: EnvCommandContext = {
+    const ctx: CommandContext = {
       argv: ['--background'],
       io: w.io,
       overlayPath: undefined,

@@ -38,7 +38,6 @@ import type { CheckResult } from '../doctor/types.js';
 import { canonicalJson } from '../io/canonical-json.js';
 import { getRealHome } from '../io/paths.js';
 import { resolveAllowedHome } from '../sync/snapshot.js';
-import type { EnvCommandContext } from './reflect.js';
 import { combineExitCodes } from './types.js';
 import type { CommandContext, CommandDef } from './types.js';
 
@@ -144,7 +143,7 @@ export function createDoctorCommand(deps: DoctorCommandDeps = {}): CommandDef {
     ],
     async run(ctx: CommandContext): Promise<number> {
       const args = parseArgs(ctx.argv);
-      const env = (ctx as EnvCommandContext).env ?? {};
+      const env = ctx.env ?? {};
       if (args.error !== undefined) {
         ctx.stderr(`DOCTOR_USAGE reason=${args.error}\n`);
         return ExitCode.USAGE;

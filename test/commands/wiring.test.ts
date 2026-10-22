@@ -10,7 +10,7 @@ import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { command as judgeCommand } from '../../src/commands/judge.js';
 import { command as reflectCommand } from '../../src/commands/reflect.js';
-import type { EnvCommandContext } from '../../src/commands/reflect.js';
+import type { CommandContext } from '../../src/commands/types.js';
 import { ExitCode } from '../../src/contracts/exit-codes.js';
 import { exists, readText } from '../../src/io/read-fs.js';
 import * as safe from '../../src/io/safe-fs.js';
@@ -127,7 +127,7 @@ describe('judge 默认接线', () => {
     }
     const out: string[] = [];
     const err: string[] = [];
-    const ctx: EnvCommandContext = {
+    const ctx: CommandContext = {
       argv,
       io: w.io,
       overlayPath,
