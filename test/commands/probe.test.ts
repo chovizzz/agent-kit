@@ -1,8 +1,8 @@
-import * as fs from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import { budgetDeps } from '../../src/commands/check-budget.js';
 import { command as probe, probeDeps } from '../../src/commands/probe.js';
 import { ExitCode } from '../../src/contracts/exit-codes.js';
+import { readDir, readText } from '../../src/io/read-fs.js';
 import { cmdCtx, GOOD_ATOM, makeRepo, OWNER_LINE } from '../atoms/helpers.js';
 
 const KIT_TOML = `[kit]
@@ -254,14 +254,14 @@ describe('probe(P1-01,contracts #12)', () => {
   it('--write 不写文件系统:仓库目录树前后一致', async () => {
     injectCodexRender();
     const root = await makeKitRepo();
-    const snap = (): string[] => (fs.readdirSync(root, { recursive: true }) as string[]).sort();
-    const before = snap();
-    const kitBefore = fs.readFileSync(`${root}/kit.toml`, 'utf8');
+    const snap = async (): Promise<string[]> => (await readDir(root)).map((e) => e.name).sort();
+    const before = await snap();
+    const kitBefore = await readText(`${root}/kit.toml`);
     const { ctx } = cmdCtx(root);
     ctx.argv = ['--write', '--agent-version', 'codex=0.161.0', '--observed', 'codex=1000'];
     expect(await probe.run(ctx)).toBe(ExitCode.OK);
-    expect(snap()).toEqual(before);
-    expect(fs.readFileSync(`${root}/kit.toml`, 'utf8')).toBe(kitBefore);
+    expect(await snap()).toEqual(before);
+    expect(await readText(`${root}/kit.toml`)).toBe(kitBefore);
   });
 
   it.each([
