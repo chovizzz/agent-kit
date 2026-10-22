@@ -205,7 +205,10 @@ describe('命令层不得绕过 hostEnv', () => {
   }
 
   it('src/commands 与 src/reflect 的代码行里没有 process.env / os.homedir(注释除外)', async () => {
-    const files = [...(await walk(path.join(SRC, 'commands'))), ...(await walk(path.join(SRC, 'reflect')))];
+    const files = [
+      ...(await walk(path.join(SRC, 'commands'))),
+      ...(await walk(path.join(SRC, 'reflect'))),
+    ];
     expect(files.length).toBeGreaterThan(10); // 正向控制组:扫到了东西
     const hits: string[] = [];
     for (const f of files) {
