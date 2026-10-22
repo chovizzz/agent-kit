@@ -184,7 +184,12 @@ describe('reflect 干跑:project_key 计数(供填 team_project_keys)', () => {
     sig({ project: 'A', session: 'A1', index: 0, text: '以后提交代码前必须先运行 lint 检查' }),
     sig({ project: 'A', session: 'A1', index: 1, text: '以后修改配置前必须先备份旧文件' }),
     sig({ project: 'A', session: 'A2', index: 0, text: '以后发布前必须先跑完整测试' }),
-    sig({ project: 'B', session: 'B1', index: 0, text: '以后提交代码前必须先运行 lint 检查并修复告警' }),
+    sig({
+      project: 'B',
+      session: 'B1',
+      index: 0,
+      text: '以后提交代码前必须先运行 lint 检查并修复告警',
+    }),
   ];
 
   it('--json:project_key_counts 按 key 升序,会话数按 session_ref 去重(同 key 多会话),信号数按条;旧字段逐字节不变', async () => {
@@ -193,7 +198,11 @@ describe('reflect 干跑:project_key 计数(供填 team_project_keys)', () => {
     expect(await r.cmd.run(ctx)).toBe(ExitCode.OK);
     const raw = out.join('');
     const j = JSON.parse(raw) as Record<string, unknown>;
-    const counts = j['project_key_counts'] as { project_key: string; sessions: number; signals: number }[];
+    const counts = j['project_key_counts'] as {
+      project_key: string;
+      sessions: number;
+      signals: number;
+    }[];
     const expected = [
       { project_key: projectKey('A'), sessions: 2, signals: 3 },
       { project_key: projectKey('B'), sessions: 1, signals: 1 },
@@ -202,8 +211,12 @@ describe('reflect 干跑:project_key 计数(供填 team_project_keys)', () => {
     // canonical:整份输出等于对解析结果重新 canonical 序列化(新键没有破坏键序/格式)
     expect(raw).toBe(canonicalJson(j));
     // 旧字段不变:去掉新键后的 canonical 字节 = 老形状(不含新键)的字节
-    const { project_key_counts: _drop, ...legacy } = j;
+    const legacy = { ...j };
+    delete legacy['project_key_counts'];
     expect(Object.keys(legacy).sort()).toEqual(OLD_KEYS);
+    expect(raw.replace(`"project_key_counts":${canonicalJson(counts)},`, '')).toBe(
+      canonicalJson(legacy),
+    );
     expect((j['signals'] as { loaded: number }).loaded).toBe(4);
   });
 

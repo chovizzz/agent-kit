@@ -149,9 +149,7 @@ export function mergeProposals(input: MergeInput): MergedProposal[] {
     });
     // 个人偏好(kind=preference)再多项目出现也不是团队规则
     const layer: Layer =
-      d.kind === 'preference'
-        ? 'personal'
-        : decideLayer(ev, input.clusters, input.teamProjectKeys);
+      d.kind === 'preference' ? 'personal' : decideLayer(ev, input.clusters, input.teamProjectKeys);
     const days = d.volatility === 'volatile' ? REVIEW_DAYS_VOLATILE : REVIEW_DAYS_STABLE;
     const doT = normalizeSegment(d.do);
     const whyT = normalizeSegment(d.why);
