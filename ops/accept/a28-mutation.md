@@ -34,7 +34,7 @@ node ops/accept/lib/a28.mjs --run --ids S2,S5                         # 只做�
 1. 先在**未变异**的树上跑对应测试(并集),确认基线是绿的(否则「变红」不能说明任何事);
 2. 变异前 `cp <文件> <文件>.mut-bak`(**不要用 `git checkout` 还原**:会丢掉未提交的改动;脚本用 `COPYFILE_EXCL` 拷备份,已有备份就报错而不覆盖,所以两个实例同时跑会失败而不是互相覆盖),并记下原 mtime;
 3. 用脚本做替换并**先断言匹配次数恰好为 1**(0 次 = 变异没落到代码上,多次 = 改多了),再跑测试;
-4. 红的判据:vitest 进程非零退出,**并且**该变异的 `redTitles`(预期变红用例的**完整标题**,整串精确相等,不是子串)里至少一条确实变红;变异运行里有 skipped / todo、有测试文件加载失败、或 `redTitles` 有标题没出现在这次运行里,一律不算红;`redTitles` 之外的失败用例是无关红灯,不计入(判据是 A20 / A24 / A28 共用的 `judgeMutationRed`,在 `ops/accept/lib/common.mjs`);
+4. 红的判据:vitest 进程非零退出,**并且**该变异的 `redTitles`(预期变红用例的**完整标题**,整串精确相等,不是子串)里至少一条确实变红;变异运行里有 skipped / todo、有测试文件加载失败、或 `redTitles` 有标题没出现在这次运行里或同名出现多次,一律不算红;`redTitles` 之外的失败用例是无关红灯,不计入(判据是 A20 / A24 / A28 共用的 `judgeMutationRed`,在 `ops/accept/lib/common.mjs`);
 5. `cp <文件>.mut-bak <文件>` 还原、删备份,并**恢复原 mtime**(变异窗口里没有构建 dist,vitest 直接跑 `.ts`,所以 dist 仍与 src 一致)。全部做完再跑一次并集基线,必须为绿;
 6. **假 HOME**:vitest 子进程的 `HOME` 是 `tmp/sbx-home`,`KIT_TMP` / `TMPDIR` 在同级的 `tmp/sbx-kit`(产品拒绝「KIT_TMP 是 HOME 的上级」,所以二者必须是同级)。
    整个运行开始与结束各取一次真实 HOME 快照(`ops/managed-paths.txt` 的受管路径 + `~/.local/share|state/agent-kit`、`~/.config/agent-kit` 的树),有差异按「待人工归因(5)」报并拒绝写标记;

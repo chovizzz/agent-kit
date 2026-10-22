@@ -124,6 +124,34 @@ describe('judgeMutationRed:预期红灯精确命中,无关红灯不算数', () =
     expect(v.credited).toEqual(['B']);
   });
 
+  it('预期标题在运行里出现两次(同名用例,一过一红)=> 拒绝', () => {
+    const v = judge([pass(WANT), fail(WANT)], [WANT]);
+    expect(v.red).toBe(false);
+    expect(v.note).toContain('出现多次');
+  });
+
+  it('vitest 进程以 0 退出(code=0)但报告里有失败 => 拒绝', () => {
+    const json = {
+      numTotalTests: 1,
+      numPassedTests: 0,
+      numFailedTests: 1,
+      numPendingTests: 0,
+      numTodoTests: 0,
+      numFailedTestSuites: 0,
+      success: false,
+      testResults: [{ name: '/x/a.test.ts', status: 'failed', assertionResults: [fail(WANT)] }],
+    };
+    const r = evalLib(
+      'common.mjs',
+      `(m) => {
+        const evaluation = m.evaluateVitest(${JSON.stringify(json)});
+        return m.judgeMutationRed({ code: 0, evaluation, why: '' }, [${JSON.stringify(WANT)}]);
+      }`,
+    ) as Verdict;
+    expect(r.red).toBe(false);
+    expect(r.note).toContain('0 退出');
+  });
+
   it('变异存活(全绿)=> 拒绝', () => {
     expect(judge([pass(WANT)], [WANT]).red).toBe(false);
   });

@@ -350,7 +350,7 @@ export function evaluateVitest(json) {
  * 判红须同时满足:
  *   1. vitest 跑起来了、有结果;
  *   2. 没有 skipped / todo(beforeAll 挂掉会让一批用例变 skipped,红灯可能只是假象)、没有测试文件加载失败(语法错误 / 导入失败);
- *   3. redTitles 里的每一条都真的出现在这次运行里(标题改名后预期陈旧,拒绝,不静默当作没命中);
+ *   3. redTitles 里的每一条都真的出现在这次运行里且恰好一次(标题改名后预期陈旧、或同名用例分不清,拒绝);
  *   4. redTitles 里至少一条状态为 failed。
  * 不在 redTitles 里的失败用例是「无关红灯」:不计入、也不否决(一处变异可以连带别的用例变红),但绝不能单独让变异判红。
  * 返回 { red, note, credited[] }。
@@ -365,6 +365,8 @@ export function judgeMutationRed(v, redTitles) {
     return { red: false, note: 'redTitles 必须是非空的完整标题数组', credited: [] };
   if (v.code === EXIT.NOT_RUN || !ev)
     return { red: false, note: `vitest 没跑起来:${v?.why ?? ''}`, credited: [] };
+  if (v.code === EXIT.OK)
+    return { red: false, note: 'vitest 进程以 0 退出,不是变红', credited: [] };
   if (ev.loadFailures > 0)
     return {
       red: false,
@@ -385,6 +387,13 @@ export function judgeMutationRed(v, redTitles) {
     return {
       red: false,
       note: `预期标题没有出现在本次运行里(标题改名或测试文件没选上):${missing[0].slice(-40)}`,
+      credited: [],
+    };
+  const dup = redTitles.filter((t) => status.get(t).length > 1);
+  if (dup.length > 0)
+    return {
+      red: false,
+      note: `预期标题在本次运行里出现多次(同名用例分不清是哪条红):${dup[0].slice(-40)}`,
       credited: [],
     };
   const credited = redTitles.filter((t) => status.get(t).includes('failed'));

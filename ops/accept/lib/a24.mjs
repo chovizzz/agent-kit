@@ -1,7 +1,7 @@
 // A24 生命周期功能变异抽检(与 A20 同构的人工完成项)。
 //   默认:只报告标记文件状态(.state/accept/a24.done,绑定 HEAD;换了提交就作废)。
 //   --run [--set a24|all] [--ids L1,L4] [--write-marker]:真的做变异——每处先 cp 备份、断言替换匹配数恰好 1、
-//     跑对应 vitest 必须变红(预期的那几条用例须以**完整标题精确**变红,见 common.mjs judgeMutationRed)、cp 还原并**恢复原 mtime**;全部做完再跑一次基线必须为绿。
+//     跑对应 vitest 必须变红(redTitles 里至少一条用例须以**完整标题精确**变红,见 common.mjs judgeMutationRed)、cp 还原并**恢复原 mtime**;全部做完再跑一次基线必须为绿。
 //     与 A20 的区别:A20 变异期间不碰 dist,但还原后重新 build;A24 的变异窗口里同样**不构建 dist**(vitest 直接跑 src 的 .ts),
 //     所以还原 mtime 之后 dist 与 src 仍然一致,A16–A19 不会因此变成"未执行"。
 //     进程收到 SIGINT/SIGTERM 会先还原再退出;SIGKILL 会留下 .mut-bak,下一次运行与 freshDist 都会拒绝继续。

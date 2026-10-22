@@ -1,7 +1,7 @@
 // A28 sync / update 变异抽检(与 A13 / A20 / A24 同构的人工完成项)。
 //   默认:只报告标记文件状态(.state/accept/a28.done,绑定 HEAD;换了提交就作废)。
 //   --run [--ids S1,S4] [--write-marker]:真的做变异——每处先 cp 备份、断言替换匹配数恰好 1、跑对应 vitest 必须变红
-//     (预期的那几条用例须以**完整标题精确**变红,见 common.mjs judgeMutationRed)、cp 还原并恢复原 mtime;全部做完再跑一次基线必须为绿。
+//     (redTitles 里至少一条用例须以**完整标题精确**变红,见 common.mjs judgeMutationRed)、cp 还原并恢复原 mtime;全部做完再跑一次基线必须为绿。
 //     vitest 在**假 HOME**(tmp/sbx-home;KIT_TMP 与 TMPDIR 在同级 tmp/sbx-kit)下运行,开始与结束各取一次真实 HOME 快照(受管路径 +
 //     套件 share/state/config 目录),有差异按"待人工归因"(5)报,不写标记。
 //     还原只用 cp(不用 git checkout:会丢掉未提交的改动)。SIGINT/SIGTERM 会先还原再退出;SIGKILL 会留下 .mut-bak,
