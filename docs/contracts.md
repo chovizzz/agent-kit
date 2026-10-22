@@ -1874,13 +1874,13 @@ agent-kit judge   --run <run_id> [--run-llm --allow-egress] [--max-calls N(1..10
 
 **`judge` 没评上且无跨厂商可用的两个稳定码(P1 D4;取代原单码 `no_cross_vendor`)**:
 
-| 码 / `judge_pending`                          | 含义                                | 判据(`judge_attempts` 里)                                                                                                                                 |
-| --------------------------------------------- | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `JUDGE_NOT_CONFIGURED` / `not_configured`     | 评审后端未配置(配置问题)            | 没有任何 `skipped:same-vendor` 与失败跳,各跳只有 `error:not_configured`(含后端自报未配置);命令层真跑时一个后端都没有也报此码(`reason=no_backends`,退出 4) |
-| `JUDGE_SAME_VENDOR_ONLY` / `same_vendor_only` | 已配置的后端存在,但都与反思器同厂商 | 至少一跳 `skipped:same-vendor`,其余为未配置/厂商不可证明,无真实失败、无冷却                                                                               |
+| 码 / `judge_pending`                          | 含义                                | 判据(`judge_attempts` 里)                                                                                                                                                         |
+| --------------------------------------------- | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `JUDGE_NOT_CONFIGURED` / `not_configured`     | 评审后端未配置(配置问题)            | 没有任何 `skipped:same-vendor`、`error:vendor_unknown` 与失败跳,各跳只有 `error:not_configured`(含后端自报未配置);命令层真跑时一个后端都没有也报此码(`reason=no_backends`,退出 4) |
+| `JUDGE_SAME_VENDOR_ONLY` / `same_vendor_only` | 已配置的后端存在,但都与反思器同厂商 | 至少一跳 `skipped:same-vendor`,其余为未配置/厂商不可证明,无真实失败、无冷却                                                                                                       |
 
 - stderr 每条提案一行 `JUDGE_NOT_CONFIGURED proposal=<id> hint=…` / `JUDGE_SAME_VENDOR_ONLY proposal=<id> hint=…`(只含稳定码、提案 id 与固定提示);stdout 摘要里 `judge_pending` 取 `not_configured` / `same_vendor_only`。`cooldown` / `all_failed` 仍用 `JUDGE_PENDING proposal=<id> reason=…`。
-- 默认退出 0(决策 ⑩A:单厂商环境照常出提案,晋升时机械拒绝)。`--strict`(布尔,不带值,走与其他参数同一套严格解析,`--strict=1` 之类退出 2)下,这两种情形退出 4(与「没评上」同属 4 的 NOT_RUN 语义,没有占用新含义);3(状态损坏/厂商不可证明)与 1 仍按优先级压过 4。干跑不产生 pending,`--strict` 对干跑无影响。
+- 默认退出 0(决策 ⑩A:单厂商环境照常出提案,晋升时机械拒绝)。`--strict`(布尔,不带值,走与其他参数同一套严格解析,`--strict=1` 之类退出 2)下,这两种情形退出 4(与「没评上」同属 4 的 NOT_RUN 语义,没有占用新含义);3(状态损坏/厂商不可证明)与 1 仍按优先级压过 4。干跑不产生 pending,`--strict` 对干跑无影响。含 `error:vendor_unknown` 的跳不归这两个码:`judge_pending = vendor_unknown`、stderr 走 `JUDGE_PENDING … reason=vendor_unknown`,退出 3。
 
 ### 17.3 R1 订正(三句)
 

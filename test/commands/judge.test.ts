@@ -263,6 +263,12 @@ describe('judge 命令:退出码', () => {
     expect(await cmd.run(cmdCtx(w, LIVE).ctx)).toBe(ExitCode.FAIL_CLOSED);
     expect(bad.calls).toHaveLength(0);
     expect(await cmd.run(cmdCtx(w, ['--run', RUN_ID]).ctx)).toBe(ExitCode.FAIL_CLOSED); // 干跑同判
+    // 稳定码不得误报成「未配置/同厂商」
+    const c = cmdCtx(w, LIVE);
+    expect(await cmd.run(c.ctx)).toBe(ExitCode.FAIL_CLOSED);
+    expect(c.err.join('')).toContain('JUDGE_PENDING proposal=2026-10-12-001 reason=vendor_unknown');
+    expect(c.err.join('')).not.toContain('JUDGE_NOT_CONFIGURED');
+    expect(parseOut(c.out).proposals[0]!.judge_pending).toBe('vendor_unknown');
   });
 
   it('超过 --max-calls → 4,调用数不超上限', async () => {
