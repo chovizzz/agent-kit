@@ -1,7 +1,7 @@
 // A20 变异抽检(与 A13 同构的人工完成项)。
 //   默认:只报告标记文件状态(.state/accept/a20.done,绑定 HEAD;换了提交就作废)。
 //   --run [--set a20|all] [--write-marker]:真的做变异——每处先 cp 备份、断言替换匹配数恰好 1、跑对应 vitest 必须变红
-//     (失败用例标题须命中该变异的 redTitles)、cp 还原;全部做完再跑一次基线必须为绿,并重新 build dist(变异期间 src 的 mtime 变了,
+//     (redTitles 里至少一条用例须以**完整标题精确**变红,见 common.mjs judgeMutationRed)、cp 还原;全部做完再跑一次基线必须为绿,并重新 build dist(变异期间 src 的 mtime 变了,
 //     dist 会被 freshDist 判陈旧——不恢复 mtime,宁可让 A16–A19 报「未执行」也不让变异窗口里构建的 dist 冒充新鲜)。
 //     进程收到 SIGINT/SIGTERM 会先还原再退出;SIGKILL 会留下 .mut-bak,下一次运行与 freshDist 都会拒绝继续。
 //     --write-marker 要求工作树干净(标记只绑 HEAD,脏树上写的标记会在之后的任何改动下继续有效)。
@@ -13,6 +13,7 @@ import {
   EXIT,
   Reporter,
   cleanEnv,
+  judgeMutationRed,
   makeCtx,
   mkTmp,
   parseCommon,
@@ -28,7 +29,7 @@ const R = 'test/commands/reflect.test.ts';
 const WIRE = 'test/commands/wiring.test.ts';
 const E2E = 'test/commands/r5-e2e.test.ts';
 
-/** edits 的 find 必须在文件里恰好出现 1 次;redTitles:失败用例标题须至少命中其中一个子串。 */
+/** edits 的 find 必须在文件里恰好出现 1 次;redTitles:预期变红用例的完整标题(vitest fullName,精确相等;判据见 common.mjs judgeMutationRed)。 */
 export const MUTATIONS = [
   // ---- A20 的六处(M1–M6)----
   {
@@ -53,7 +54,10 @@ export const MUTATIONS = [
       'test/reflect/load.test.ts',
       'test/reflect/evidence-prompt.test.ts',
     ],
-    redTitles: ['外部内容摘录强制清空', '会话级外部内容', '完整闭环'],
+    redTitles: [
+      'reflect/load 外部内容摘录强制清空、失败结果摘录清空、缺结构字段的信号排除并计数',
+      'reflect/load 评审后补强 会话级外部内容:先写入的非外部行,在会话后来出现外部信号时同样清空摘录',
+    ],
   },
   {
     id: 'M2',
@@ -72,7 +76,12 @@ export const MUTATIONS = [
       },
     ],
     tests: ['test/judge/run.test.ts', E2E],
-    redTitles: ['同厂商', 'same-vendor'],
+    redTitles: [
+      '端到端:collect → reflect → apply → check → judge 只有与反思器同厂商的一家可用:不调用,记 skipped:same-vendor,judge_attempts 记满 5 跳且不含 ok',
+      'judge 兜底链 同厂商的跳不调用且记 skipped:same-vendor;下一跳成功',
+      'judge 兜底链 同厂商比较归一化:后端自报 "Anthropic " 也算同厂商,不调用',
+      'judge 兜底链 只有同厂商/未配置:no_cross_vendor,零调用,attempts 记满且同厂商贴 skipped:same-vendor',
+    ],
   },
   {
     id: 'M3',
@@ -86,7 +95,11 @@ export const MUTATIONS = [
       },
     ],
     tests: [R],
-    redTitles: ['默认干跑', '不落盘'],
+    redTitles: [
+      'reflect 命令:默认干跑 零后端构造、零调用、零写入;打印计划(正向对照:聚类/证据数 > 0)',
+      'reflect 命令:默认干跑 --show-prompt:提示只打到 stdout 不落盘(正向对照:含 L1 canary;不含外部/失败结果 canary)',
+      'reflect 命令:默认干跑 干跑不要求 --owner;--json 摘要只含白名单键,且不含任何摘录/提示文本',
+    ],
   },
   {
     id: 'M4',
@@ -100,7 +113,10 @@ export const MUTATIONS = [
       },
     ],
     tests: [E2E, R],
-    redTitles: ['完整闭环', '退出 0;stdout 只含计数与 id'],
+    redTitles: [
+      '端到端:collect → reflect → apply → check → judge 完整闭环',
+      'reflect 命令:真跑(注入 stub 后端) 暂存 report.json / proposals / rules / apply.patch;退出 0;stdout 只含计数与 id',
+    ],
   },
   {
     id: 'M5',
@@ -114,7 +130,9 @@ export const MUTATIONS = [
       },
     ],
     tests: [R],
-    redTitles: ['缺 --allow-egress'],
+    redTitles: [
+      'reflect 命令:egress 门与用法错 --run-llm 缺 --allow-egress → 2:工厂不构造、后端零调用、零写入(正向对照:补上后才执行)',
+    ],
   },
   {
     id: 'M6',
@@ -128,7 +146,10 @@ export const MUTATIONS = [
       },
     ],
     tests: ['test/judge/store.test.ts', 'test/judge/run.test.ts', E2E],
-    redTitles: ['相同内容不重写', '不动状态', '完整闭环'],
+    redTitles: [
+      '幂等与互斥 重复 judge:attempts 整体替换不累积,相同内容不重写;之后成功写 judge 并删除 attempts;再跑跳过',
+      'judge 不越权 只改 proposals/*.yaml 的 judge 键;rules/*.md、report.json 与提案其它字段原样;accept+injection_suspected=true 也不动状态',
+    ],
   },
   // ---- 其余(R5 自己的 19 处变异里不在 A20 六处之内的)----
   {
@@ -142,7 +163,9 @@ export const MUTATIONS = [
       },
     ],
     tests: [R],
-    redTitles: ['缺 --owner'],
+    redTitles: [
+      'reflect 命令:egress 门与用法错 --run-llm --allow-egress 缺 --owner → 2;非法 owner → 2;零调用',
+    ],
   },
   {
     id: 'X2',
@@ -155,7 +178,12 @@ export const MUTATIONS = [
       },
     ],
     tests: [R],
-    redTitles: ['干跑', 'egress'],
+    redTitles: [
+      'reflect 命令:默认干跑 零后端构造、零调用、零写入;打印计划(正向对照:聚类/证据数 > 0)',
+      'reflect 命令:默认干跑 --show-prompt:提示只打到 stdout 不落盘(正向对照:含 L1 canary;不含外部/失败结果 canary)',
+      'reflect 命令:默认干跑 干跑不要求 --owner;--json 摘要只含白名单键,且不含任何摘录/提示文本',
+      'reflect 命令:真跑(注入 stub 后端) 预算算不出来(仓库没有 kit.toml):干跑报 unknown 仍退 0;真跑 fail-closed 退 3,零调用',
+    ],
   },
   {
     id: 'X3',
@@ -168,7 +196,11 @@ export const MUTATIONS = [
       },
     ],
     tests: [R],
-    redTitles: ['干跑'],
+    redTitles: [
+      'reflect 命令:默认干跑 零后端构造、零调用、零写入;打印计划(正向对照:聚类/证据数 > 0)',
+      'reflect 命令:默认干跑 --show-prompt:提示只打到 stdout 不落盘(正向对照:含 L1 canary;不含外部/失败结果 canary)',
+      'reflect 命令:真跑(注入 stub 后端) 预算算不出来(仓库没有 kit.toml):干跑报 unknown 仍退 0;真跑 fail-closed 退 3,零调用',
+    ],
   },
   {
     id: 'X4',
@@ -181,7 +213,9 @@ export const MUTATIONS = [
       },
     ],
     tests: [R],
-    redTitles: ['unknown'],
+    redTitles: [
+      'reflect 命令:退出码映射 厂商 unknown → 3,后端零调用(正向对照:换成可证明厂商后才调用)',
+    ],
   },
   {
     id: 'X5',
@@ -194,7 +228,11 @@ export const MUTATIONS = [
       },
     ],
     tests: [R],
-    redTitles: ['数字/枚举参数非法'],
+    redTitles: [
+      'reflect 命令:egress 门与用法错 数字/枚举参数非法 ["--max-calls","0x2"] → 2(parseDecimalUint)',
+      'reflect 命令:egress 门与用法错 数字/枚举参数非法 ["--max-calls","+2"] → 2(parseDecimalUint)',
+      'reflect 命令:egress 门与用法错 数字/枚举参数非法 ["--max-calls"," 2"] → 2(parseDecimalUint)',
+    ],
   },
   {
     id: 'X6',
@@ -208,7 +246,10 @@ export const MUTATIONS = [
       },
     ],
     tests: [R],
-    redTitles: ['ReflectCallLimitError', 'max-calls'],
+    redTitles: [
+      'reflect 命令:退出码映射 ReflectCallLimitError → NaN,stderr 只有稳定码、不带异常消息',
+      'reflect 命令:退出码映射 批数超过 --max-calls → 4,后端零调用(放大到 3 才执行)',
+    ],
   },
   {
     id: 'X7',
@@ -222,7 +263,10 @@ export const MUTATIONS = [
       },
     ],
     tests: [R],
-    redTitles: ['team_project_keys', 'personalKeysFromTeamWhitelist'],
+    redTitles: [
+      'reflect 命令:真跑(注入 stub 后端) team_project_keys 缺省 → 跨项目聚类也判 personal(无 apply.patch);列出两个项目 → team(fail-closed 的反面对照)',
+      'reflect 命令:真跑(注入 stub 后端) personalKeysFromTeamWhitelist:has 取反;其余成员一律抛错(不留悄悄放行的空集)',
+    ],
   },
   {
     id: 'X8',
@@ -235,7 +279,11 @@ export const MUTATIONS = [
       },
     ],
     tests: [WIRE],
-    redTitles: ['allow_unverified', '没写'],
+    redTitles: [
+      'reflect 默认接线(真实 buildBackends + 假 codex) 真跑但没写 allow_unverified:参数集未核实 → 不 spawn,退出 4;写了 allow_unverified=true 才 spawn(正向对照)',
+      'reflect 默认接线(真实 buildBackends + 假 codex) allow_unverified 逐槽位:两个槽位共用同一个 codex 二进制,没写的那个仍被拒',
+      'judge 默认接线 真跑:覆盖层已同意但没绑任何槽位 → 4;未核实且没写 allow_unverified → 不 spawn;写了才评审成功并写 judge',
+    ],
   },
   {
     id: 'X9',
@@ -248,7 +296,7 @@ export const MUTATIONS = [
       },
     ],
     tests: [WIRE],
-    redTitles: ['干跑'],
+    redTitles: ['judge 默认接线 干跑:不构造后端(canary 不出现),退出 0'],
   },
   {
     id: 'X10',
@@ -266,7 +314,9 @@ export const MUTATIONS = [
       },
     ],
     tests: [R],
-    redTitles: ['--json'],
+    redTitles: [
+      'reflect 命令:默认干跑 干跑不要求 --owner;--json 摘要只含白名单键,且不含任何摘录/提示文本',
+    ],
   },
   {
     id: 'X11',
@@ -279,7 +329,7 @@ export const MUTATIONS = [
       },
     ],
     tests: ['test/accept/p1-ops.test.ts'],
-    redTitles: ['A19'],
+    redTitles: ['A19 快照比对 A19 对一次真实写入报出差异;无变化时为空;删除也算差异(探测本身有效)'],
   },
   {
     id: 'X12',
@@ -292,7 +342,9 @@ export const MUTATIONS = [
       },
     ],
     tests: [R],
-    redTitles: ['预算已满'],
+    redTitles: [
+      'reflect 命令:真跑(注入 stub 后端) 预算已满 → 真跑不调用后端(摘录不白发)、不写任何文件,退出 1;预算未满时同样的运行会调用(正向对照)',
+    ],
   },
   {
     id: 'X13',
@@ -305,7 +357,9 @@ export const MUTATIONS = [
       },
     ],
     tests: [R],
-    redTitles: ['覆盖层未同意'],
+    redTitles: [
+      'reflect 命令:egress 门与用法错 两个 flag 都给但覆盖层未同意外发(缺覆盖层 / egress=false)→ 2,零构造零调用零写入',
+    ],
   },
   {
     id: 'X14',
@@ -318,7 +372,9 @@ export const MUTATIONS = [
       },
     ],
     tests: ['test/accept/p1-ops.test.ts'],
-    redTitles: ['A16'],
+    redTitles: [
+      'A16 矩阵夹具(src 上同样成立) A16 脚本的"原因码核对"会真的报错:假校验器给错原因码时,每条非法夹具都产生一条问题',
+    ],
   },
 ];
 
@@ -361,10 +417,6 @@ export function applyEdit(text, find, replace) {
   const n = text.split(find).length - 1;
   if (n !== 1) throw new Error(`变异没有落到代码上:匹配 ${n} 次(应恰好 1 次)`);
   return text.replace(find, () => replace);
-}
-
-function failedTitles(ev) {
-  return ev.titles.filter((t) => t.status === 'failed').map((t) => t.fullName);
 }
 
 async function a20(argv) {
@@ -462,26 +514,7 @@ async function a20(argv) {
           fs.writeFileSync(abs, applyEdit(fs.readFileSync(abs, 'utf8'), e.find, e.replace));
         }
         const v = runVitest(ctx, tmp, m.tests);
-        if (v.code === EXIT.NOT_RUN || !v.evaluation)
-          outcome = { red: false, note: `vitest 没跑起来:${v.why}` };
-        else if (v.evaluation.failed === 0) outcome = { red: false, note: '测试仍为绿(变异存活)' };
-        else {
-          const titles = failedTitles(v.evaluation);
-          const hit = titles.filter((t) => m.redTitles.some((r) => t.includes(r)));
-          outcome =
-            hit.length > 0
-              ? {
-                  red: true,
-                  note: `${titles.length} 个用例变红,其中 ${hit.length} 个指向该行为:${hit
-                    .slice(0, 2)
-                    .map((t) => t.slice(-40))
-                    .join(' | ')}`,
-                }
-              : {
-                  red: false,
-                  note: `变红了,但失败用例没有一个指向被变异的行为(${titles.length} 个)`,
-                };
-        }
+        outcome = judgeMutationRed(v, m.redTitles);
       } catch (e) {
         outcome = { red: false, note: String(e?.message ?? e) };
       } finally {

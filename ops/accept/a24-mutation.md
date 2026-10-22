@@ -20,7 +20,7 @@ A24 不是普通脚本:它要求对 attest / promote / retire 功能的 9 处关
 另有两处验收脚本自检(不计入标记的 9 处,`--set all` 才跑):X1 = A21 矩阵不再逐条核对原因码;X2 = A22 的 import 图检查不再拒绝 `llm-exec`
 (都由 `test/accept/p1-lifecycle-ops.test.ts` 变红)。
 
-具体替换文本、匹配次数断言(必须恰好 1 次)和「失败用例须指向被变异的行为」的标题子串都写在 `ops/accept/lib/a24.mjs` 的 `MUTATIONS` 里;
+具体替换文本、匹配次数断言(必须恰好 1 次)和预期变红用例的完整标题都写在 `ops/accept/lib/a24.mjs` 的 `MUTATIONS` 里;
 `test/accept/p1-lifecycle-ops.test.ts` 另有一条用例在**未变异**的源码上核对每处 `find` 恰好出现 1 次(源码漂移时先在那里红)。
 
 ## 做法(防止「变异没生效却显示绿」)
@@ -39,7 +39,7 @@ node ops/accept/lib/a24.mjs --run --ids L4,L9                          # 只做�
 1. 先在**未变异**的树上跑对应测试(并集),确认基线是绿的(否则「变红」不能说明任何事);
 2. 变异前 `cp <文件> <文件>.mut-bak`(**不要用 `git checkout` 还原**:会丢掉未提交的改动),并记下原 mtime;
 3. 用脚本做替换并**先断言匹配次数恰好为 1**(0 次 = 变异没落到代码上,多次 = 改多了),再跑测试;
-4. 红的判据:vitest 进程非零退出,**并且**失败用例的标题命中该变异的 `redTitles`(失败信息指向被变异的行为,不是语法错误、不是工具没启动);
+4. 红的判据:vitest 进程非零退出,**并且**该变异的 `redTitles`(预期变红用例的**完整标题**,整串精确相等,不是子串)里至少一条确实变红;变异运行里有 skipped / todo、有测试文件加载失败、`redTitles` 有标题没出现在这次运行里或同名出现多次,一律不算红;`redTitles` 之外的失败用例是无关红灯,不计入(共用判据 `judgeMutationRed` 在 `ops/accept/lib/common.mjs`);
 5. `cp <文件>.mut-bak <文件>` 还原、删备份,并**恢复原 mtime**(变异窗口里没有构建 dist,vitest 直接跑 `.ts`;恢复 mtime 后 dist 仍与 src 一致,A16–A19、A21–A23 不会变成「未执行」)。
    这一点与 A20 不同:A20 不恢复 mtime、结束后重新 build;A24 不构建,所以可以恢复。全部做完再跑一次并集基线,必须为绿;
 6. 变异期间**同一棵树里不要开别的 vitest**(也不要跑 `pnpm run build`);
