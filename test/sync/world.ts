@@ -8,7 +8,7 @@ import type { RenderAgentId } from '../../src/contracts/common.js';
 import { PayloadManifestSchema, type PayloadManifest } from '../../src/contracts/payload.js';
 import { buildIntegrity, payloadFileSha } from '../../src/build/payload.js';
 import { createSyncCommand, type SyncCommandDeps } from '../../src/commands/sync.js';
-import type { EnvCommandContext } from '../../src/commands/reflect.js';
+import type { CommandContext } from '../../src/commands/types.js';
 import { canonicalJson } from '../../src/io/canonical-json.js';
 import { createIoContext } from '../../src/io/paths.js';
 import type { IoContext } from '../../src/io/paths.js';
@@ -107,7 +107,7 @@ export async function newWorld(label: string): Promise<World> {
     async run(args, o = {}) {
       const out: string[] = [];
       const err: string[] = [];
-      const ctx: EnvCommandContext = {
+      const ctx: CommandContext = {
         argv: [...(o.noHome === true ? [] : ['--home', home]), ...args],
         io,
         overlayPath: undefined,

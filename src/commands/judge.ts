@@ -34,7 +34,6 @@ import { JudgeRunNotFoundError } from '../judge/store.js';
 import { createRedactor } from '../redact/redactor.js';
 import { parseDecimalUint } from './args.js';
 import { buildCliBackends, loadOverlay, overlayAllowsEgress } from './reflect.js';
-import type { EnvCommandContext } from './reflect.js';
 import { combineExitCodes } from './types.js';
 import type { CommandContext, CommandDef } from './types.js';
 
@@ -333,7 +332,7 @@ function defaultCreateBackends(
 ): JudgeBackends {
   if (!mode.live) return {};
   return buildCliBackends({
-    ctx: ctx as EnvCommandContext,
+    ctx: ctx,
     overlay: mode.overlay,
     now: () => new Date(),
     maxSpawns: mode.maxCalls,

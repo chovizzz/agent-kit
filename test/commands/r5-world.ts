@@ -4,7 +4,7 @@
  */
 import * as path from 'node:path';
 import { afterAll } from 'vitest';
-import type { EnvCommandContext } from '../../src/commands/reflect.js';
+import type { CommandContext } from '../../src/commands/types.js';
 import type { Signal } from '../../src/contracts/signal.js';
 import { createIoContext } from '../../src/io/paths.js';
 import type { IoContext } from '../../src/io/paths.js';
@@ -102,7 +102,7 @@ export function ctxFor(
   w: R5World,
   argv: string[],
   env?: Record<string, string>,
-): { ctx: EnvCommandContext; out: string[]; err: string[] } {
+): { ctx: CommandContext; out: string[]; err: string[] } {
   const out: string[] = [];
   const err: string[] = [];
   return {

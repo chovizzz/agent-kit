@@ -22,7 +22,37 @@ export interface IoContext {
   readonly tmpDir: string | undefined;
   /** 传给子进程的 PATH(exec 的默认 env 只有它,不含 HOME) */
   readonly execPath: string;
+  /**
+   * 宿主环境的受控副本(contracts §12.4 ④):只含 `HOST_ENV_NAMES` / `HOST_ENV_LC_RE` 命中的名字,
+   * PATH 缺省 `/usr/bin:/bin`;HOME **始终**是 `getRealHome()`(环境里的 HOME 不覆盖它)。不含任何 *_API_KEY / *_BASE_URL / 代理之外的路由变量。
+   * 命令层拼子进程环境只许取它(最终仍要过 `filterLlmEnv`)。
+   */
+  readonly hostEnv: Readonly<Record<string, string>>;
 }
+
+/** `hostEnv` 能带的变量名(固定集合)。与 `llm-exec` 的 `LLM_ENV_ALLOW` 逐项相同(测试钉住),不得更宽。 */
+export const HOST_ENV_NAMES: readonly string[] = Object.freeze([
+  'PATH',
+  'HOME',
+  'USER',
+  'LOGNAME',
+  'LANG',
+  'TZ',
+  'TMPDIR',
+  'XDG_CONFIG_HOME',
+  'XDG_DATA_HOME',
+  'XDG_STATE_HOME',
+  'XDG_CACHE_HOME',
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'ALL_PROXY',
+  'NO_PROXY',
+  'http_proxy',
+  'https_proxy',
+  'all_proxy',
+  'no_proxy',
+]);
+export const HOST_ENV_LC_RE = /^LC_[A-Z_]{1,32}$/;
 
 export interface CreateIoContextOptions {
   /** `--root`;相对路径按 cwd 解析 */
@@ -54,6 +84,21 @@ export function pickProcessEnv(keyRe: RegExp): Record<string, string | undefined
     if (keyRe.test(k)) out[k] = v;
   }
   return out;
+}
+
+/** 从 env 里按名字白名单挑出 hostEnv;PATH / HOME 一定在(缺省见 IoContext.hostEnv)。 */
+function pickHostEnv(
+  env: Readonly<Record<string, string | undefined>>,
+  home: string,
+): Readonly<Record<string, string>> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(env)) {
+    if (v === undefined) continue;
+    if (HOST_ENV_NAMES.includes(k) || HOST_ENV_LC_RE.test(k)) out[k] = v;
+  }
+  out['PATH'] = env['PATH'] ?? '/usr/bin:/bin';
+  out['HOME'] = home; // 始终 getRealHome():环境里的 HOME 不得覆盖(用户 2026-10-22 定)
+  return Object.freeze(out);
 }
 
 function findUp(start: string, marker: string): string | undefined {
@@ -341,6 +386,7 @@ export function createIoContext(opts: CreateIoContextOptions = {}): IoContext {
     writeRoots,
     tmpDir,
     execPath: env['PATH'] ?? '/usr/bin:/bin',
+    hostEnv: pickHostEnv(env, home),
   };
   // 字面路径通过不够:按 realpath(含最长已存在前缀)再判一遍,符号链接不得让有效写入根逃出允许范围
   const escape = findWriteRootEscape(ctx, home);

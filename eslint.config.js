@@ -285,6 +285,8 @@ export default tseslint.config(
     files: [
       `src/reflect/backends/**/*.${EXT}`,
       'test/io/llm-exec.test.ts',
+      // host-env 测试只用纯函数 filterLlmEnv / LLM_ENV_ALLOW 钉住 hostEnv 与子进程白名单一致,不 spawn、不碰 runLlm
+      'test/io/llm-exec-host-env.test.ts',
       `test/reflect/backends/**/*.${EXT}`,
     ],
     rules: restrictions({ allowLlm: true }),

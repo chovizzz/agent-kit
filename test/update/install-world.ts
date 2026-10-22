@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
 import * as path from 'node:path';
 import { createUpdateCommand, type UpdateCommandDeps } from '../../src/commands/update.js';
-import type { EnvCommandContext } from '../../src/commands/reflect.js';
+import type { CommandContext } from '../../src/commands/types.js';
 import { canonicalJson } from '../../src/io/canonical-json.js';
 import { getRealHome } from '../../src/io/paths.js';
 import { lstat, readBytes, readDir, readText } from '../../src/io/read-fs.js';
@@ -400,7 +400,7 @@ export async function runUpdate(
   const out: string[] = [];
   const err: string[] = [];
   const env = { ...w.env, ...o.env };
-  const ctx: EnvCommandContext = {
+  const ctx: CommandContext = {
     argv: [...(o.noHome === true ? [] : ['--home', w.home]), ...args],
     io: w.io,
     overlayPath: undefined,

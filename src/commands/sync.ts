@@ -55,7 +55,6 @@ import { TxnError } from '../sync/txn.js';
 import { WRITE_OPS, type PlanOp, type SyncPlan } from '../sync/types.js';
 import type { LoadedPayload } from '../sync/payload-load.js';
 import type { SyncLedger } from '../contracts/sync.js';
-import type { EnvCommandContext } from './reflect.js';
 import type { CommandContext, CommandDef } from './types.js';
 
 export type SyncCommandDeps = ApplyDeps;
@@ -275,7 +274,7 @@ export function createSyncCommand(deps: SyncCommandDeps = {}): CommandDef {
     ],
     async run(ctx: CommandContext): Promise<number> {
       const args = parseArgs(ctx.argv);
-      const env = (ctx as EnvCommandContext).env;
+      const env = ctx.env;
       try {
         if (args.error !== undefined) throw new Exit(ExitCode.USAGE, 'USAGE', args.error);
         const homeArg = args.home ?? getRealHome(env);
@@ -309,7 +308,7 @@ export function createSyncCommand(deps: SyncCommandDeps = {}): CommandDef {
   /** 事务 journal 已在盘上 → 报 SYNC_TXN_INCOMPLETE;否则保持原码。 */
   async function residualAware(
     _ctx: CommandContext,
-    env: EnvCommandContext['env'],
+    env: CommandContext['env'],
     args: Parsed,
     x: Exit,
   ): Promise<Exit> {

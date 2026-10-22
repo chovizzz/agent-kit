@@ -12,11 +12,10 @@ import { command as probe } from './commands/probe.js';
 import { command as promote } from './commands/promote.js';
 import { command as redact } from './commands/redact-cmd.js';
 import { command as reflect } from './commands/reflect.js';
-import type { EnvCommandContext } from './commands/reflect.js';
 import { command as retire } from './commands/retire.js';
 import { command as signalsCollect } from './commands/signals-collect.js';
 import { command as sync } from './commands/sync.js';
-import type { CommandDef } from './commands/types.js';
+import type { CommandContext, CommandDef } from './commands/types.js';
 import { command as update } from './commands/update.js';
 import { createBackgroundCommand } from './update/worker.js';
 
@@ -192,7 +191,7 @@ export async function main(argv: readonly string[], env: MainEnv = {}): Promise<
     throw e;
   }
   // 宿主环境只在入口处经 main(argv, env) 注入;命令层不读 process.env(reflect/judge 的后端接线用它)
-  const ctx: EnvCommandContext = {
+  const ctx: CommandContext = {
     argv: resolved.args,
     io,
     overlayPath: flags.overlay,
