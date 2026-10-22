@@ -1,3 +1,4 @@
+import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import * as hfs from '../../src/io/home-fs.js';
@@ -171,8 +172,14 @@ describe('switchCurrent', () => {
       planScope: [LINK],
       tmpDir: s.dir,
       onStage: async () => {
-        await safe.remove(s.fx, path.join(s.home, ver('2.0.0')));
-        await safe.mkdirp(s.fx, path.join(s.home, ver('2.0.0')));
+        // 旧目录先挪到一旁、新目录建好之后才删旧的:旧 inode 在新目录创建时仍被占用,
+        // 否则 ext4/tmpfs 会把刚释放的 inode 号立刻复用给新目录,身份(dev+ino)没变,竞态就测不出来
+        const v = path.join(s.home, ver('2.0.0'));
+        const aside = path.join(s.dir, 'aside-2.0.0');
+        await safe.mkdirp(s.fx, aside);
+        await fsp.rename(v, path.join(aside, 'old'));
+        await safe.mkdirp(s.fx, v);
+        await fsp.rm(aside, { recursive: true, force: true });
       },
     });
     expect(await code(hfs.switchCurrent(swap, '2.0.0'))).toBe(HOME_DENY.PATH_ESCAPE);

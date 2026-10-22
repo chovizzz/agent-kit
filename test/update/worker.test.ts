@@ -246,6 +246,21 @@ describe('worker:并发与锁', () => {
   });
 });
 
+/** 开关会读进程环境里的 CI 类变量(CI=true 时自动更新关闭);这两个用例要测的是别的键,先把它们清掉,免得在 CI 里被开关提前挡掉。 */
+function stubNoCiEnv(): void {
+  for (const k of [
+    'CI',
+    'GITHUB_ACTIONS',
+    'GITLAB_CI',
+    'BUILDKITE',
+    'CIRCLECI',
+    'TF_BUILD',
+    'JENKINS_URL',
+  ]) {
+    vi.stubEnv(k, '');
+  }
+}
+
 describe('worker:真实入口的环境(main(argv) 不注入 env)', () => {
   it('ctx.env 缺省时从进程环境取收窄的具名键:KIT_AUTO_UPDATE=0 生效(对照:不设则照常安装)', async () => {
     const w = await setup();
@@ -255,6 +270,7 @@ describe('worker:真实入口的环境(main(argv) 不注入 env)', () => {
     vi.stubEnv('KIT_TMP', w.dir);
     vi.stubEnv('KIT_UPDATE_REGISTRY', `file://${w.reg}`);
     vi.stubEnv('KIT_LAUNCHED', '1');
+    stubNoCiEnv();
     try {
       vi.stubEnv('KIT_AUTO_UPDATE', '0');
       const bare = async (): Promise<number> =>
@@ -285,6 +301,7 @@ describe('worker:真实入口的环境(main(argv) 不注入 env)', () => {
     vi.stubEnv('KIT_TMP', w.dir);
     vi.stubEnv('KIT_UPDATE_REGISTRY', `file://${w.reg}`);
     vi.stubEnv('KIT_UPDATE_PIN', '不是版本号');
+    stubNoCiEnv();
     try {
       await createBackgroundCommand({ now: FIXED_NOW, verifier: okVerifier, noSmoke: true }).run({
         argv: ['--background'],
