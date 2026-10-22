@@ -469,7 +469,7 @@ async function a23(argv) {
         t2.code === 0 &&
           t2j?.from === 'advisory' &&
           t2j?.to === 'active' &&
-          t2j?.attest_files === 2,
+          t2j?.attest_files === attests.length,
         `退出 ${t2.code},attest_files=${t2j?.attest_files} ${[...new Set(t2.out.match(/G3:[A-Z_]+/g) ?? [])].join(',')} ${t2.err.slice(0, 120)}`,
       )
     )
