@@ -292,7 +292,10 @@ describe('probe(P1-01,contracts #12)', () => {
     [['--write', '--observed', 'codex=bytes:5,'], 'PROBE_BAD_OBSERVED'],
     [['--write', '--observed', 'codex=words:5'], 'PROBE_BAD_OBSERVED'],
     [['--write', '--observed', 'codex=bytes:5,lines:1.5'], 'PROBE_BAD_OBSERVED'],
-    [['--write', '--observed', 'codex=1000', '--observed', 'codex=bytes:1,lines:1'], 'PROBE_DUPLICATE_OBSERVED'],
+    [
+      ['--write', '--observed', 'codex=1000', '--observed', 'codex=bytes:1,lines:1'],
+      'PROBE_DUPLICATE_OBSERVED',
+    ],
     [
       ['--write', '--observed', 'codex=1000', '--observed', 'codex=2000'],
       'PROBE_DUPLICATE_OBSERVED',
