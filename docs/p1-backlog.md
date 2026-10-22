@@ -103,7 +103,7 @@
   (`GUARD_PROPOSAL_STUB`,contracts #24),读不出 fail-closed(`GUARD_PROPOSAL_UNPARSEABLE`),见 contracts §12.3
 - ✅ **`IoContext.hostEnv`**(S10-rc7):`paths.ts` 提供受控的 `hostEnv`(`HOST_ENV_NAMES` + `LC_*` 的冻结副本,PATH/HOME 有缺省),
   `reflect`/`judge` 在没有注入 `ctx.env` 时取它;`CommandContext.env` 已正式加进 `src/commands/types.ts`,`EnvCommandContext` 已移除。
-  契约见 contracts §12.4 ④;测试 `test/io/host-env.test.ts`
+  契约见 contracts §12.4 ④;测试 `test/io/llm-exec-host-env.test.ts`
 - ✅ **`team_project_keys` 填什么**(S10-rc34,用户定 D5):`reflect` 干跑在 `--json` 里新增可选键 `project_key_counts`、文本输出新增一段,
   列出各 `project_key`(加盐哈希)的会话数/信号数(只有 id 与计数);契约见 contracts §17.1。`signals collect --dry` 因盐可能是临时盐而不加。
   小计数 k-匿名/合并显示:契约无规定,未设阈值,待主代理定夺

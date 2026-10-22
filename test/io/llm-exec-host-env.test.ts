@@ -221,7 +221,7 @@ describe('命令层不得绕过 hostEnv', () => {
 
   it('EnvCommandContext 已移除:src/ 与 test/ 里不再出现(本文件除外)', async () => {
     const files = [...(await walk(SRC)), ...(await walk(path.join(REPO_ROOT, 'test')))].filter(
-      (f) => !f.endsWith('host-env.test.ts'),
+      (f) => !f.endsWith('llm-exec-host-env.test.ts'),
     );
     expect(files.length).toBeGreaterThan(50);
     const hits: string[] = [];
