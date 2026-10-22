@@ -177,7 +177,24 @@ describe('reflect:提案的 reflector.backend / stub 来自后端自己', () => 
     await expect(runReflect({ ...env.deps, backend: liar }, env.opts)).rejects.toMatchObject({
       code: 'REFLECT_VENDOR_UNKNOWN',
     });
-    expect(calls.length + liar.calls).toBe(0);
+    // 非内置自报厂商 + 模型串明确属于内置厂商 / provider 非字符串 → 同样拒绝
+    const sneaky = new SrcStub({
+      vendor: 'acme',
+      model: 'gpt-4',
+      cli: 'pi',
+      provider: 'anthropic',
+    });
+    const badProv = new SrcStub({ vendor: 'acme', model: 'acme-1', cli: 'pi' });
+    (badProv as unknown as { provider: unknown }).provider = 123;
+    for (const b of [sneaky, badProv]) {
+      await expect(runReflect({ ...env.deps, backend: b }, env.opts)).rejects.toMatchObject({
+        code: 'REFLECT_VENDOR_UNKNOWN',
+      });
+    }
+    // 正向对照:覆盖层追加家族(模型串在内置表外,自报厂商非内置)沿用原行为放行
+    const family = new SrcStub({ vendor: 'acme', model: 'acme-1', cli: 'pi' });
+    await expect(runReflect({ ...env.deps, backend: family }, env.opts)).resolves.toBeDefined();
+    expect(calls.length + liar.calls + sneaky.calls + badProv.calls).toBe(0);
   });
 
   it('stub 标记的后端:即使 llm 模式,提案也带 stub: true 且无 backend', async () => {

@@ -16,11 +16,16 @@ import {
   type ReflectRunReport,
   type ReflectorProposalDraft,
 } from '../contracts/reflect.js';
-import { BUILTIN_VENDORS, VENDOR_ID_RE, UNKNOWN_VENDOR } from '../contracts/vendor.js';
+import {
+  BUILTIN_VENDORS,
+  VENDOR_ID_RE,
+  UNKNOWN_VENDOR,
+  deriveVendor,
+} from '../contracts/vendor.js';
 import type { IoContext } from '../io/paths.js';
 import { DEFAULT_ATOM_MAX_BYTES } from '../contracts/common.js';
 import type { LlmBackend } from './backend-iface.js';
-import { isRealCli, provenVendorOf } from './backend-identity.js';
+import { identityShapeValid, isRealCli, provenVendorOf } from './backend-identity.js';
 import { classifySignals } from './classify.js';
 import { buildClusters } from './cluster.js';
 import {
@@ -195,9 +200,16 @@ function backendVendorProvable(b: LlmBackend): boolean {
   }
   if (b.cli === 'stub') return true;
   if (!isRealCli(b.cli)) return false;
+  if (!identityShapeValid(b)) return false;
   const proven = provenVendorOf(b);
   if (proven === b.vendor) return true;
-  return proven === UNKNOWN_VENDOR && !BUILTIN_VENDORS.includes(b.vendor) && 'provider' in b;
+  // 覆盖层追加家族:模型族在内置表之外(只看模型串推不出内置厂商),自报厂商也非内置。
+  // 模型串明确属于内置厂商、却自称别家(或 provider 与之矛盾)的不在此列 → 拒绝。
+  return (
+    proven === UNKNOWN_VENDOR &&
+    !BUILTIN_VENDORS.includes(b.vendor) &&
+    !BUILTIN_VENDORS.includes(deriveVendor({ backend: 'pi', model: b.model }))
+  );
 }
 
 function backendInfo(b: LlmBackend | undefined): ReflectRunReport['backend'] {

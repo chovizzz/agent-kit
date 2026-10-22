@@ -32,15 +32,20 @@ export function isRealCli(cli: unknown): cli is RealBackendCli {
   return typeof cli === 'string' && (REAL_BACKEND_CLIS as readonly string[]).includes(cli);
 }
 
+/** 身份字段的运行时形状:`provider` 键必须存在(值为 undefined 或字符串),`model` 为字符串。 */
+export function identityShapeValid(b: LlmBackend): boolean {
+  if (!('provider' in b)) return false;
+  if (b.provider !== undefined && typeof b.provider !== 'string') return false;
+  return typeof b.model === 'string';
+}
+
 /**
  * 从后端自己的 `cli`/`provider`/`model` 复算厂商。运行时校验(不信任类型):`cli` 不是真实 CLI(含 `stub`/
  * `unconfigured`/缺失)、没有 `provider` 键、`provider`/`model` 不是字符串 → unknown。不依赖后端自报的 `vendor`。
  */
 export function provenVendorOf(b: LlmBackend): string {
   if (!isRealCli(b.cli)) return UNKNOWN_VENDOR;
-  if (!('provider' in b)) return UNKNOWN_VENDOR;
-  if (b.provider !== undefined && typeof b.provider !== 'string') return UNKNOWN_VENDOR;
-  if (typeof b.model !== 'string') return UNKNOWN_VENDOR;
+  if (!identityShapeValid(b)) return UNKNOWN_VENDOR;
   try {
     return deriveBackendVendor(b.cli, b.provider, b.model, {});
   } catch {
