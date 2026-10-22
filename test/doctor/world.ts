@@ -57,6 +57,8 @@ export async function runDoctor(w: World, args: string[], o: RunOpts = {}): Prom
     KIT_PAYLOAD_DIR: payloadDir,
     ...(o.stateDir !== undefined ? { KIT_STATE_DIR: o.stateDir } : {}),
     ...o.env,
+    // noPayload 的隔离不允许被 o.env 覆盖
+    ...(o.noPayload === true ? { KIT_PAYLOAD_DIR: payloadDir } : {}),
   };
   const io = o.stateDir !== undefined ? createIoContext({ cwd: REPO_ROOT, env }) : w.io;
   const ctx: EnvCommandContext = {

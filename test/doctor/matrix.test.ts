@@ -520,7 +520,10 @@ describe('doctor:各检查的细节', () => {
       status: 'n_a',
       result: 'no_payload',
     });
-    expect(await get(w, 'D08', { noPayload: true })).toMatchObject({ status: 'n_a' });
+    expect(await get(w, 'D08', { noPayload: true })).toMatchObject({
+      status: 'n_a',
+      result: 'not_evaluated',
+    });
   });
 
   it('D08:条目 id 是受管相对路径', async () => {
