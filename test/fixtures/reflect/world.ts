@@ -189,6 +189,9 @@ export class StubBackend implements LlmBackend {
   readonly slot: string;
   readonly vendor: string;
   readonly model = 'stub-model';
+  /** 进程内假后端:带 stub 标记,厂商不可复算(提案会被标 stub) */
+  readonly cli: LlmBackendCli = 'stub';
+  readonly provider: string | undefined = undefined;
   calls = 0;
   prompts: LlmCompleteRequest[] = [];
   constructor(
