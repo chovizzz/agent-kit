@@ -198,7 +198,7 @@ A2 的 15 格矩阵(`limit_source` × `enforce` × 超/不超,外加「不写 `e
 | `redact`                                              | P0     | `src/commands/redact-cmd.ts`      | `--selftest` / `--stdin`(B09)                                                                                                                       |
 | `signals collect`                                     | P0     | `src/commands/signals-collect.ts` | `--source <路径> --dry`(B10b)                                                                                                                       |
 | `inventory`                                           | P1(桩) | `src/commands/inventory.ts`       | 见 §4.1                                                                                                                                             |
-| `probe` `reflect` `judge` `attest` `promote` `retire` | P1     | 各一个文件                        | `probe` `reflect` `judge` 已实装(`reflect`/`judge` 见 §17);其余仍是桩                                                                               |
+| `probe` `reflect` `judge` `attest` `promote` `retire` | P1     | 各一个文件                        | `probe` `reflect` `judge` `attest` `promote` `retire` 均已实装(`reflect`/`judge` 见 §17;probe 见 §8 #12),本行已无桩;现存命令桩只剩 `inventory`      |
 | `calibrate`                                           | P1     | `src/commands/calibrate.ts`       | 已实装(K5b:judge 校准账的只读报告,零写入零网络,契约见 §18.10「K5b」)                                                                                |
 | `sync` `doctor`                                       | P2     | 各一个文件                        | 已实装(S4 / S5,契约见 §19.2 / §19.3)                                                                                                                |
 | `update`                                              | P2     | `src/commands/update.ts`          | 已实装(S7c-A:检查 / 安装 / 回滚;S7c-B:启动器、后台 worker `__update --background`(内部入口,不在本表、不进 --help)、自动同步评估,契约见 §19.4–§19.7) |
@@ -230,9 +230,13 @@ A2 的 15 格矩阵(`limit_source` × `enforce` × 超/不超,外加「不写 `e
     `overfit_risk`/`generality` 取 `low|medium|high`;`Attest.member` 必须是 `@handle`;`ReplayReport` 要求 `ci_run_url` 与 `self_reported:true` 二选一;
     `Attest` 在设计示例之外多一个 `run_id`(设计说文件名带 `run_id`,载荷里也要有,CI 才能比对)。
 12. **阈值探针写回结构(plan-P0 §7)**:`BudgetTarget` 增加可选 `probed_value` / `probed_agent_version` / `probed_at`;`limit_source=probed` 时三者必填。
-    **P1 落地(2026-10-09)**:`agent-kit probe` 实装——干跑打印各目标实测 bytes/lines;`--write` 产出
-    kit.toml 目标补丁(limit_source=probed + 三元组),**不直接写文件系统**;`documented` 目标永不改写;
-    缺 `--agent-version` 的目标按 USAGE 拒绝(宁可报错不编造被测版本)。render 报告的 `pendingProbes`
+    **语义(D1 定稿)**:`probed_value` 是**外部观测到的上限**(人在真实 agent 上观察到的),**不是 kit 产物大小**;kit 只记录,不编造。
+    `agent-kit probe` 实装——干跑打印各目标实测 bytes/lines 及相对上限的余量(仅供参考,不写入任何补丁);
+    `--write` 对非 `documented` 目标必须同时给 `--agent-version <agent>=<x.y.z>` 与 `--observed <agent>=<N>`(N 为正整数),
+    产出 kit.toml 目标补丁(`limit_source=probed`、`probed_value=N` + 三元组,max_bytes/max_lines 原值不动),**不直接写文件系统**;
+    `documented` 目标永不改写。N 的单位 = 探针维度(仅配 max_lines 为行,否则字节;两者都配取字节,另一维度 max 不参与比较)。探针维度的原 max 大于 N 时本命令拒绝出补丁(`PROBE_LIMIT_ABOVE_OBSERVED`);这只约束 probe 的输出,schema 不校验 max 与 probed_value 的关系(§1 只追加)。
+    稳定错误码(均退出 2):`PROBE_BAD_OBSERVED` / `PROBE_DUPLICATE_OBSERVED` / `PROBE_OBSERVED_REQUIRED` / `PROBE_LIMIT_ABOVE_OBSERVED`
+    (另有 PB1 的 `PROBE_BAD_AGENT_VERSION` 等);缺 `--agent-version` 同样按 USAGE 拒绝(宁可报错不编造)。render 报告的 `pendingProbes`
     (有效性探针 P-Q*)由 probe 汇总列出,仍不作为事实;真实 agent 观察属主代理真实环境项。
 13. **`ResolvedAtom`/`MergeResult` 在 B01 定稿**(plan-P0 B07 依赖「B05 的合并结果类型已在 B01 定」)。
 14. **`Hop.result` 取值**:`ok | skipped:cooldown | skipped:same-vendor | error:<码>`;**不含** `skipped:known-unavailable`(Q-N16 未决,等设计者)。

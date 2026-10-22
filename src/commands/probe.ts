@@ -1,12 +1,15 @@
 /**
  * `agent-kit probe`(P1-01,contracts #12):预算阈值探针。
  *
- * 做什么:在真实渲染产物上量出各 agent 目标的实际字节数/行数,
- *   - 干跑(默认):只打印测量值与现状;
+ * 做什么:
+ *   - 干跑(默认):在真实渲染产物上量出各 agent 目标的字节数/行数,并打印相对上限的余量;
  *   - `--write`:**不写文件系统**,产出可直接粘贴进 kit.toml 的目标行补丁
  *     (limit_source=probed + probed_value/probed_agent_version/probed_at 三元组,contracts #12)。
  *
  * 边界(刻意):
+ *   - `probed_value` 只来自人在真实 agent 上观察到的上限(`--observed <agent>=<N>`),kit 只记录、不编造;
+ *     kit 自己产物的实测大小只在干跑里当「余量」打印,绝不写进 probed_value;
+ *   - 原 max_*(探针维度)大于观测值的目标拒绝出补丁(PROBE_LIMIT_ABOVE_OBSERVED),probed 目标不得比观测更宽;
  *   - `limit_source='documented'` 的目标是官方文档值,**探针不改写**;
  *   - `--agent-version <agent>=<x.y.z>` 缺失的目标不能写回(三元组必填,缺版本宁可报错也不编造);
  *   - 有效性探针(render 报告里的 `pendingProbes`,如 P-Q1/P-Q2)需要跑真实 agent 观察,
@@ -34,10 +37,16 @@ interface AgentVersionFlag {
   version: string;
 }
 
+interface ObservedFlag {
+  agent: string;
+  value: number;
+}
+
 interface ParsedArgs {
   write: boolean;
   agents: string[];
   versions: AgentVersionFlag[];
+  observed: ObservedFlag[];
 }
 
 interface ArgError {
@@ -47,7 +56,7 @@ interface ArgError {
 
 /** 严格解析:未知 flag / 缺值 / 版本非 semver / 同一 agent 版本重复 都是错误(退出 2)。 */
 function parseArgs(argv: readonly string[]): ParsedArgs | ArgError {
-  const out: ParsedArgs = { write: false, agents: [], versions: [] };
+  const out: ParsedArgs = { write: false, agents: [], versions: [], observed: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i] as string;
     if (a === '--write') {
@@ -82,6 +91,24 @@ function parseArgs(argv: readonly string[]): ParsedArgs | ArgError {
         };
       }
       out.versions.push({ agent, version });
+    } else if (a === '--observed') {
+      const v = argv[++i];
+      const m = v === undefined ? null : /^([a-z][a-z0-9-]+)=([1-9][0-9]*)$/.exec(v);
+      const n = m === null ? Number.NaN : Number(m[2]);
+      if (m === null || !Number.isSafeInteger(n)) {
+        return {
+          code: 'PROBE_BAD_OBSERVED',
+          message: '--observed 形如 <agent>=<N>(N 为正整数)',
+        };
+      }
+      const agent = m[1] as string;
+      if (out.observed.some((x) => x.agent === agent)) {
+        return {
+          code: 'PROBE_DUPLICATE_OBSERVED',
+          message: `--observed 对 ${agent} 重复给了多次`,
+        };
+      }
+      out.observed.push({ agent, value: n });
     } else {
       return { code: 'PROBE_UNKNOWN_FLAG', message: `未知参数 ${a}` };
     }
@@ -92,8 +119,8 @@ function parseArgs(argv: readonly string[]): ParsedArgs | ArgError {
 const isArgError = (x: ParsedArgs | ArgError): x is ArgError => 'code' in x;
 
 /**
- * 取值维度:只配了 max_lines → 行数;其余(只配 max_bytes,或两者都配)→ 字节。
- * 两者都配时仍取 bytes,属 D1 待定语义,不在此扩展。
+ * 探针维度:只配了 max_lines → 行;其余(只配 max_bytes,或两者都配)→ 字节。
+ * `--observed` 的 N 与「原 max 是否大于 N」都按该维度的单位解释;两者都配时取 bytes,另一维度的 max 原样保留、不参与比较。
  */
 function probeDimension(t: BudgetTargetReport): 'bytes' | 'lines' {
   return t.max_bytes === undefined && t.max_lines !== undefined ? 'lines' : 'bytes';
@@ -102,7 +129,7 @@ function probeDimension(t: BudgetTargetReport): 'bytes' | 'lines' {
 /** 构造补丁对象(未校验)。 */
 function buildPatch(
   t: BudgetTargetReport,
-  measured: number,
+  observed: number,
   agentVersion: string,
   now: string,
 ): BudgetTarget {
@@ -111,7 +138,7 @@ function buildPatch(
     ...(t.max_lines !== undefined ? { max_lines: t.max_lines } : {}),
     ...(t.hard_limit !== undefined ? { hard_limit: t.hard_limit } : {}),
     limit_source: 'probed',
-    probed_value: measured,
+    probed_value: observed,
     probed_agent_version: agentVersion,
     probed_at: now,
   };
@@ -136,7 +163,8 @@ function patchToToml(agent: string, p: BudgetTarget): string {
 
 export const command: CommandDef = {
   name: 'probe',
-  summary: '预算阈值探针:在真实渲染产物上测量并产出 limit_source=probed 写回补丁',
+  summary:
+    '预算阈值探针:干跑量余量;--write 记录人在真实 agent 上观察到的上限(--observed),产出 limit_source=probed 补丁',
   phase: 'P1',
   ownerBlock: 'P1',
   flags: [
@@ -148,6 +176,11 @@ export const command: CommandDef = {
     {
       name: '--agent-version <id>=<x.y.z>',
       description: '--write 时该 agent 的被测版本(三元组必填;可重复)',
+    },
+    {
+      name: '--observed <id>=<N>',
+      description:
+        '--write 时该 agent 在真实环境观察到的上限(正整数,单位=探针维度:仅配 max_lines 为行,否则字节;非 documented 目标必填;kit 只记录)',
     },
   ],
   async run(ctx) {
@@ -161,7 +194,7 @@ export const command: CommandDef = {
       ctx.stderr(`agent-kit probe: ${parsed.code}: ${parsed.message}\n`);
       return ExitCode.USAGE;
     }
-    const { write, agents: onlyAgents, versions: versionFlag } = parsed;
+    const { write, agents: onlyAgents, versions: versionFlag, observed: observedFlag } = parsed;
 
     const prepared = await prepareBudgetInputs(ctx.io.repoRoot, ctx.stdout);
     if (prepared.inputs === undefined) {
@@ -170,7 +203,11 @@ export const command: CommandDef = {
     }
     const { config, rendered } = prepared.inputs;
     const enabled: readonly string[] = config.agents.enabled;
-    for (const a of [...onlyAgents, ...versionFlag.map((v) => v.agent)]) {
+    for (const a of [
+      ...onlyAgents,
+      ...versionFlag.map((v) => v.agent),
+      ...observedFlag.map((v) => v.agent),
+    ]) {
       if (!enabled.includes(a)) {
         ctx.stderr(`agent-kit probe: PROBE_AGENT_NOT_ENABLED: ${a} 不在 agents.enabled 里\n`);
         return ExitCode.USAGE;
@@ -186,14 +223,22 @@ export const command: CommandDef = {
     const versionOf = (agent: string): string | undefined =>
       versionFlag.find((v) => v.agent === agent)?.version;
 
+    const observedOf = (agent: string): number | undefined =>
+      observedFlag.find((v) => v.agent === agent)?.value;
+
     for (const t of report.targets) {
       if (onlyAgents.length > 0 && !onlyAgents.includes(t.agent)) continue;
       const dim = probeDimension(t);
       const measured = dim === 'lines' ? t.lines : t.bytes;
       if (!write) {
+        const max = dim === 'lines' ? t.max_lines : t.max_bytes;
         ctx.stdout(
           `${t.agent}: measured bytes=${t.bytes} lines=${t.lines} ` +
-            `limit_source=${t.limit_source} max_bytes=${t.max_bytes ?? '-'} max_lines=${t.max_lines ?? '-'}` +
+            `limit_source=${t.limit_source} max_bytes=${t.max_bytes ?? '-'} max_lines=${t.max_lines ?? '-'} ` +
+            `headroom(${dim})=${max === undefined ? '-' : max - measured}` +
+            (t.max_bytes !== undefined && t.max_lines !== undefined
+              ? ` headroom_bytes=${t.max_bytes - t.bytes} headroom_lines=${t.max_lines - t.lines}`
+              : '') +
             (t.limit_source === 'documented' ? '(documented:官方值,探针不改写)' : '') +
             '\n',
         );
@@ -210,11 +255,21 @@ export const command: CommandDef = {
         );
         return ExitCode.USAGE;
       }
-      if (measured === 0) {
-        ctx.stderr(`PROBE_NOTHING_MEASURED agent=${t.agent}\n`);
-        continue;
+      const ob = observedOf(t.agent);
+      if (ob === undefined) {
+        ctx.stderr(
+          `agent-kit probe: PROBE_OBSERVED_REQUIRED: ${t.agent} 写回需要 --observed ${t.agent}=<N>(在真实 agent 上观察到的上限;kit 不编造)\n`,
+        );
+        return ExitCode.USAGE;
       }
-      const patch = BudgetTargetSchema.safeParse(buildPatch(t, measured, av, now));
+      const maxInDim = dim === 'lines' ? t.max_lines : t.max_bytes;
+      if (maxInDim !== undefined && maxInDim > ob) {
+        ctx.stderr(
+          `agent-kit probe: PROBE_LIMIT_ABOVE_OBSERVED agent=${t.agent}: 原 max_${dim}=${maxInDim} 大于观测值 ${ob},不出补丁(先把 max 降到不超过观测值)\n`,
+        );
+        return ExitCode.USAGE;
+      }
+      const patch = BudgetTargetSchema.safeParse(buildPatch(t, ob, av, now));
       if (!patch.success) {
         ctx.stderr(
           `agent-kit probe: PROBE_PATCH_INVALID agent=${t.agent}: ${patch.error.issues.map((i) => i.message).join('; ')}\n`,
