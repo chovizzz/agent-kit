@@ -92,7 +92,7 @@ export function overlayAllowsEgress(overlay: Overlay | undefined): boolean {
 /**
  * 子进程环境的来源。命令层不能读 `process.env`(eslint:只许 `src/io/paths.ts`):
  * 测试 / `main(argv, env)` 注入了 `ctx.env` 就用它(PATH 缺省取 `IoContext.execPath`,HOME 缺省取 `getRealHome()`);
- * 没有注入(真实 CLI 路径)就取 `ctx.io.hostEnv`——`paths.ts` 按名字白名单收窄过的那份(contracts §12.4 ④)。
+ * 没有注入(真实 CLI 路径)就取 `ctx.io.hostEnv`——`paths.ts` 按名字白名单收窄过的那份,其 HOME 始终是 `getRealHome()`(contracts §12.4 ④)。
  */
 export function hostEnvOf(ctx: CommandContext): Record<string, string | undefined> {
   if (ctx.env === undefined) return { ...ctx.io.hostEnv };

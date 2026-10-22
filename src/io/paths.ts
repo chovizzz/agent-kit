@@ -24,7 +24,7 @@ export interface IoContext {
   readonly execPath: string;
   /**
    * 宿主环境的受控副本(contracts §12.4 ④):只含 `HOST_ENV_NAMES` / `HOST_ENV_LC_RE` 命中的名字,
-   * PATH 缺省 `/usr/bin:/bin`,HOME 缺省 `getRealHome()`。不含任何 *_API_KEY / *_BASE_URL / 代理之外的路由变量。
+   * PATH 缺省 `/usr/bin:/bin`;HOME **始终**是 `getRealHome()`(环境里的 HOME 不覆盖它)。不含任何 *_API_KEY / *_BASE_URL / 代理之外的路由变量。
    * 命令层拼子进程环境只许取它(最终仍要过 `filterLlmEnv`)。
    */
   readonly hostEnv: Readonly<Record<string, string>>;
@@ -97,7 +97,7 @@ function pickHostEnv(
     if (HOST_ENV_NAMES.includes(k) || HOST_ENV_LC_RE.test(k)) out[k] = v;
   }
   out['PATH'] = env['PATH'] ?? '/usr/bin:/bin';
-  out['HOME'] = env['HOME'] ?? home;
+  out['HOME'] = home; // 始终 getRealHome():环境里的 HOME 不得覆盖(用户 2026-10-22 定)
   return Object.freeze(out);
 }
 

@@ -101,7 +101,7 @@
   覆盖层反查 `backendCli` 已移除;缺字段 / `stub` 标记 fail-closed。契约见 contracts §17.4a
 - ✅ **CI 校验**(S10-rc6):`kit:reflector` PR 新增的提案要求 `reflector.backend` 必填(`GUARD_PROPOSAL_BACKEND_MISSING`),拒收 `reflector.stub: true`
   (`GUARD_PROPOSAL_STUB`,contracts #24),读不出 fail-closed(`GUARD_PROPOSAL_UNPARSEABLE`),见 contracts §12.3
-- ✅ **`IoContext.hostEnv`**(S10-rc7):`paths.ts` 提供受控的 `hostEnv`(`HOST_ENV_NAMES` + `LC_*` 的冻结副本,PATH/HOME 有缺省),
+- ✅ **`IoContext.hostEnv`**(S10-rc7):`paths.ts` 提供受控的 `hostEnv`(`HOST_ENV_NAMES` + `LC_*` 的冻结副本,PATH 有缺省,HOME 始终是 `getRealHome()`;子进程环境变宽已获用户接受),
   `reflect`/`judge` 在没有注入 `ctx.env` 时取它;`CommandContext.env` 已正式加进 `src/commands/types.ts`,`EnvCommandContext` 已移除。
   契约见 contracts §12.4 ④;测试 `test/io/llm-exec-host-env.test.ts`
 - ✅ **`team_project_keys` 填什么**(S10-rc34,用户定 D5):`reflect` 干跑在 `--json` 里新增可选键 `project_key_counts`、文本输出新增一段,

@@ -20,6 +20,7 @@ const FAKE_REAL_HOME = '/nonexistent-fake-home/real';
 const RICH: Record<string, string> = {
   PATH: '/fake/bin:/usr/bin',
   HOME: FAKE_HOME,
+  KIT_REAL_HOME_OVERRIDE: FAKE_REAL_HOME,
   USER: 'u',
   LOGNAME: 'u',
   LANG: 'C.UTF-8',
@@ -105,7 +106,8 @@ describe('IoContext.hostEnv:键集合快照', () => {
 
   it('值逐字来自注入的环境', () => {
     const io = mk(RICH);
-    for (const k of EXPECTED_KEYS) expect(io.hostEnv[k], k).toBe(RICH[k]);
+    for (const k of EXPECTED_KEYS.filter((x) => x !== 'HOME')) expect(io.hostEnv[k], k).toBe(RICH[k]);
+    expect(io.hostEnv['HOME']).toBe(FAKE_REAL_HOME); // HOME 例外:见下一组
   });
 
   it('名字集合与 llm-exec 的 LLM_ENV_ALLOW 逐项相同(不得更宽,也不得更窄)', () => {
@@ -132,9 +134,16 @@ describe('IoContext.hostEnv:键集合快照', () => {
     expect(Object.keys(io.hostEnv).sort()).toEqual(['HOME', 'PATH']);
   });
 
-  it('环境里有 HOME 就用它(与此前 hostEnvOf 的取值一致),KIT_REAL_HOME_OVERRIDE 不覆盖它', () => {
+  it('环境 HOME 与 getRealHome 不同时,hostEnv 的 HOME = getRealHome()(环境 HOME 不覆盖)', () => {
+    const before = getRealHome();
     const io = mk({ HOME: FAKE_HOME, KIT_REAL_HOME_OVERRIDE: FAKE_REAL_HOME });
-    expect(io.hostEnv['HOME']).toBe(FAKE_HOME);
+    expect(io.hostEnv['HOME']).toBe(FAKE_REAL_HOME);
+    expect(io.hostEnv['HOME']).not.toBe(FAKE_HOME);
+    // 没有 override 时:取 getRealHome(env)(= os.homedir()),同样不是环境里的假 HOME
+    const plain = mk({ HOME: FAKE_HOME });
+    expect(plain.hostEnv['HOME']).toBe(getRealHome({ HOME: FAKE_HOME }));
+    expect(plain.hostEnv['HOME']).not.toBe(FAKE_HOME);
+    expect(getRealHome()).toBe(before); // 真 HOME 未变
   });
 
   it('不传 env(真实 CLI 路径)时取受控读取:键都在白名单内,PATH / HOME 一定在', () => {
@@ -166,7 +175,7 @@ describe('命令层的子进程环境来源', () => {
     const child = filterLlmEnv(src, [], io.execPath);
     expect(Object.keys(child).sort()).toEqual([...EXPECTED_KEYS, 'NO_COLOR'].sort());
     expect(child['NO_COLOR']).toBe('1');
-    expect(child['HOME']).toBe(FAKE_HOME);
+    expect(child['HOME']).toBe(FAKE_REAL_HOME); // 真实路径子进程 HOME = getRealHome()
   });
 
   it('没注入 ctx.env 时 HOME 取错会被抓:override 下 HOME 必须是假真实 HOME', () => {
