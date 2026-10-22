@@ -9,7 +9,7 @@
  * 边界(刻意):
  *   - `probed_value` 只来自人在真实 agent 上观察到的上限(`--observed <agent>=<N>`),kit 只记录、不编造;
  *     kit 自己产物的实测大小只在干跑里当「余量」打印,绝不写进 probed_value;
- *   - 原 max_*(探针维度)大于观测值的目标拒绝出补丁(PROBE_LIMIT_ABOVE_OBSERVED),probed 目标不得比观测更宽;
+ *   - 任一已配维度的原 max_* 大于对应观测值的目标拒绝出补丁(PROBE_LIMIT_ABOVE_OBSERVED;双维度两个都比),probed 目标不得比观测更宽;
  *   - `limit_source='documented'` 的目标是官方文档值,**探针不改写**;
  *   - `--agent-version <agent>=<x.y.z>` 缺失的目标不能写回(三元组必填,缺版本宁可报错也不编造);
  *   - 有效性探针(render 报告里的 `pendingProbes`,如 P-Q1/P-Q2)需要跑真实 agent 观察,
@@ -37,9 +37,12 @@ interface AgentVersionFlag {
   version: string;
 }
 
+/** `--observed` 两种写法:`<agent>=<N>`(single)或 `<agent>=bytes:<N>[,lines:<M>]`(维度形式,双维度目标要求两个都给)。 */
 interface ObservedFlag {
   agent: string;
-  value: number;
+  single?: number;
+  bytes?: number;
+  lines?: number;
 }
 
 interface ParsedArgs {
@@ -93,22 +96,42 @@ function parseArgs(argv: readonly string[]): ParsedArgs | ArgError {
       out.versions.push({ agent, version });
     } else if (a === '--observed') {
       const v = argv[++i];
-      const m = v === undefined ? null : /^([a-z][a-z0-9-]+)=([1-9][0-9]*)$/.exec(v);
-      const n = m === null ? Number.NaN : Number(m[2]);
-      if (m === null || !Number.isSafeInteger(n)) {
-        return {
-          code: 'PROBE_BAD_OBSERVED',
-          message: '--observed 形如 <agent>=<N>(N 为正整数)',
-        };
+      const bad: ArgError = {
+        code: 'PROBE_BAD_OBSERVED',
+        message:
+          '--observed 形如 <agent>=<N> 或 <agent>=bytes:<N>,lines:<M>(N/M 为不带前导零的正整数)',
+      };
+      const head = v === undefined ? null : /^([a-z][a-z0-9-]+)=(.+)$/.exec(v);
+      if (head === null) return bad;
+      const agent = head[1] as string;
+      const rest = head[2] as string;
+      const num = (x: string): number | undefined => {
+        if (!/^[1-9][0-9]*$/.test(x)) return undefined;
+        const n = Number(x);
+        return Number.isSafeInteger(n) ? n : undefined;
+      };
+      const flag: ObservedFlag = { agent };
+      if (/^[0-9-]/.test(rest) || !rest.includes(':')) {
+        const n = num(rest);
+        if (n === undefined) return bad;
+        flag.single = n;
+      } else {
+        for (const part of rest.split(',')) {
+          const pm = /^(bytes|lines):(.+)$/.exec(part);
+          const n = pm === null ? undefined : num(pm[2] as string);
+          if (pm === null || n === undefined) return bad;
+          const dim = pm[1] as 'bytes' | 'lines';
+          if (flag[dim] !== undefined) return bad;
+          flag[dim] = n;
+        }
       }
-      const agent = m[1] as string;
       if (out.observed.some((x) => x.agent === agent)) {
         return {
           code: 'PROBE_DUPLICATE_OBSERVED',
           message: `--observed 对 ${agent} 重复给了多次`,
         };
       }
-      out.observed.push({ agent, value: n });
+      out.observed.push(flag);
     } else {
       return { code: 'PROBE_UNKNOWN_FLAG', message: `未知参数 ${a}` };
     }
@@ -119,8 +142,8 @@ function parseArgs(argv: readonly string[]): ParsedArgs | ArgError {
 const isArgError = (x: ParsedArgs | ArgError): x is ArgError => 'code' in x;
 
 /**
- * 探针维度:只配了 max_lines → 行;其余(只配 max_bytes,或两者都配)→ 字节。
- * `--observed` 的 N 与「原 max 是否大于 N」都按该维度的单位解释;两者都配时取 bytes,另一维度的 max 原样保留、不参与比较。
+ * 单维度目标的探针维度:只配了 max_lines → 行;只配 max_bytes → 字节;`--observed <agent>=<N>` 的 N 按该单位解释。
+ * 干跑的单行余量也用它(双维度目标另外打印 headroom_bytes / headroom_lines);--write 时双维度目标两个维度都与观测值比。
  */
 function probeDimension(t: BudgetTargetReport): 'bytes' | 'lines' {
   return t.max_bytes === undefined && t.max_lines !== undefined ? 'lines' : 'bytes';
@@ -178,9 +201,9 @@ export const command: CommandDef = {
       description: '--write 时该 agent 的被测版本(三元组必填;可重复)',
     },
     {
-      name: '--observed <id>=<N>',
+      name: '--observed <id>=<N>|bytes:<N>,lines:<M>',
       description:
-        '--write 时该 agent 在真实环境观察到的上限(正整数,单位=探针维度:仅配 max_lines 为行,否则字节;非 documented 目标必填;kit 只记录)',
+        '--write 时该 agent 在真实环境观察到的上限(非 documented 目标必填;kit 只记录)。单维度目标 <id>=<N>(N 单位=该维度);同时配 max_bytes 与 max_lines 的目标 <id>=bytes:<N>,lines:<M>(两个维度都和观测值比,probed_value 记 bytes);写法与目标不符 → PROBE_OBSERVED_DIM_MISMATCH',
     },
   ],
   async run(ctx) {
@@ -223,8 +246,8 @@ export const command: CommandDef = {
     const versionOf = (agent: string): string | undefined =>
       versionFlag.find((v) => v.agent === agent)?.version;
 
-    const observedOf = (agent: string): number | undefined =>
-      observedFlag.find((v) => v.agent === agent)?.value;
+    const observedOf = (agent: string): ObservedFlag | undefined =>
+      observedFlag.find((v) => v.agent === agent);
 
     for (const t of report.targets) {
       if (onlyAgents.length > 0 && !onlyAgents.includes(t.agent)) continue;
@@ -258,18 +281,42 @@ export const command: CommandDef = {
       const ob = observedOf(t.agent);
       if (ob === undefined) {
         ctx.stderr(
-          `agent-kit probe: PROBE_OBSERVED_REQUIRED: ${t.agent} 写回需要 --observed ${t.agent}=<N>(在真实 agent 上观察到的上限;kit 不编造)\n`,
+          `agent-kit probe: PROBE_OBSERVED_REQUIRED: ${t.agent} 写回需要 --observed ${t.agent}=<N>(双维度目标 bytes:<N>,lines:<M>;在真实 agent 上观察到的上限;kit 不编造)\n`,
         );
         return ExitCode.USAGE;
       }
-      const maxInDim = dim === 'lines' ? t.max_lines : t.max_bytes;
-      if (maxInDim !== undefined && maxInDim > ob) {
+      const dual = t.max_bytes !== undefined && t.max_lines !== undefined;
+      if (
+        dual
+          ? ob.single !== undefined || ob.bytes === undefined || ob.lines === undefined
+          : ob.single === undefined
+      ) {
         ctx.stderr(
-          `agent-kit probe: PROBE_LIMIT_ABOVE_OBSERVED agent=${t.agent}: 原 max_${dim}=${maxInDim} 大于观测值 ${ob},不出补丁(先把 max 降到不超过观测值)\n`,
+          `agent-kit probe: PROBE_OBSERVED_DIM_MISMATCH agent=${t.agent}: ` +
+            (dual
+              ? '同时配了 max_bytes 与 max_lines 的目标必须给 --observed <agent>=bytes:<N>,lines:<M>(两个维度都和观测值比)'
+              : `该目标只配了一个维度(${dim}),--observed 只能写 <agent>=<N>,不接受 bytes:/lines: 形式`) +
+            '\n',
         );
         return ExitCode.USAGE;
       }
-      const patch = BudgetTargetSchema.safeParse(buildPatch(t, ob, av, now));
+      const checks: [string, number | undefined, number][] = dual
+        ? [
+            ['bytes', t.max_bytes, ob.bytes as number],
+            ['lines', t.max_lines, ob.lines as number],
+          ]
+        : [[dim, dim === 'lines' ? t.max_lines : t.max_bytes, ob.single as number]];
+      for (const [cd, mx, obv] of checks) {
+        if (mx !== undefined && mx > obv) {
+          ctx.stderr(
+            `agent-kit probe: PROBE_LIMIT_ABOVE_OBSERVED agent=${t.agent}: 原 max_${cd}=${mx} 大于观测值 ${obv},不出补丁(先把 max 降到不超过观测值)\n`,
+          );
+          return ExitCode.USAGE;
+        }
+      }
+      // probed_value 沿用 schema 单字段:双维度记 bytes 观测值(lines 观测值只参与比较、不落盘)
+      const recorded = dual ? (ob.bytes as number) : (ob.single as number);
+      const patch = BudgetTargetSchema.safeParse(buildPatch(t, recorded, av, now));
       if (!patch.success) {
         ctx.stderr(
           `agent-kit probe: PROBE_PATCH_INVALID agent=${t.agent}: ${patch.error.issues.map((i) => i.message).join('; ')}\n`,

@@ -234,8 +234,12 @@ A2 的 15 格矩阵(`limit_source` × `enforce` × 超/不超,外加「不写 `e
     `agent-kit probe` 实装——干跑打印各目标实测 bytes/lines 及相对上限的余量(仅供参考,不写入任何补丁);
     `--write` 对非 `documented` 目标必须同时给 `--agent-version <agent>=<x.y.z>` 与 `--observed <agent>=<N>`(N 为正整数),
     产出 kit.toml 目标补丁(`limit_source=probed`、`probed_value=N` + 三元组,max_bytes/max_lines 原值不动),**不直接写文件系统**;
-    `documented` 目标永不改写。N 的单位 = 探针维度(仅配 max_lines 为行,否则字节;两者都配取字节,另一维度 max 不参与比较)。探针维度的原 max 大于 N 时本命令拒绝出补丁(`PROBE_LIMIT_ABOVE_OBSERVED`);这只约束 probe 的输出,schema 不校验 max 与 probed_value 的关系(§1 只追加)。
-    稳定错误码(均退出 2):`PROBE_BAD_OBSERVED` / `PROBE_DUPLICATE_OBSERVED` / `PROBE_OBSERVED_REQUIRED` / `PROBE_LIMIT_ABOVE_OBSERVED`
+    `documented` 目标永不改写。**单维度目标**(只配 max_bytes 或只配 max_lines)写 `--observed <agent>=<N>`,N 的单位 = 该维度;
+    **双维度目标**(同一目标同时配 max_bytes 与 max_lines,PB4)必须写 `--observed <agent>=bytes:<N>,lines:<M>`(N、M 都是不带前导零的正整数),两个维度各自与观测值比。
+    写法与目标不符(双维度只给单值或只给一个维度;单维度给 `bytes:`/`lines:` 形式)→ `PROBE_OBSERVED_DIM_MISMATCH`。
+    任一已配维度的原 max 大于对应观测值时本命令拒绝整批出补丁(`PROBE_LIMIT_ABOVE_OBSERVED`,信息里带维度);这只约束 probe 的输出,schema 不校验 max 与 probed_value 的关系(§1 只追加)。
+    **`probed_value` 仍是单字段(§1 不改 schema)**:单维度记那个观测值;双维度记 bytes 观测值,lines 观测值只参与比较、不落盘。
+    稳定错误码(均退出 2):`PROBE_BAD_OBSERVED` / `PROBE_DUPLICATE_OBSERVED` / `PROBE_OBSERVED_REQUIRED` / `PROBE_OBSERVED_DIM_MISMATCH` / `PROBE_LIMIT_ABOVE_OBSERVED`
     (另有 PB1 的 `PROBE_BAD_AGENT_VERSION` 等);缺 `--agent-version` 同样按 USAGE 拒绝(宁可报错不编造)。render 报告的 `pendingProbes`
     (有效性探针 P-Q*)由 probe 汇总列出,仍不作为事实;真实 agent 观察属主代理真实环境项。
 13. **`ResolvedAtom`/`MergeResult` 在 B01 定稿**(plan-P0 B07 依赖「B05 的合并结果类型已在 B01 定」)。
