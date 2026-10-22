@@ -182,7 +182,7 @@ describe('reflect --gc --write:只删「已过期且无引用」', () => {
     });
     // 只有 report.json 但声称 staged:矛盾,保留
     await putRun(w, 'run-20260103T000000Z-777777', {
-      report: `${JSON.stringify(staged)}\n`.replace('555555', '777777'),
+      report: `${JSON.stringify({ ...staged, run_id: 'run-20260103T000000Z-777777' })}\n`,
     });
     const r = await run(w, ['--gc', '--write']);
     expect(r.code).toBe(ExitCode.OK);
