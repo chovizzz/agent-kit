@@ -45,9 +45,16 @@ export interface RunOpts {
 export async function runDoctor(w: World, args: string[], o: RunOpts = {}): Promise<DoctorRun> {
   const out: string[] = [];
   const err: string[] = [];
+  // noPayload:不能只是「不设 KIT_PAYLOAD_DIR」——那会回退到真实包根,结果取决于仓库树里有没有 build 过 payload/。
+  // 显式指向 KIT_TMP 之内一个空的假包根,前提与仓库树的构建状态无关。
+  let payloadDir = w.payloadRoot;
+  if (o.noPayload === true) {
+    payloadDir = path.join(w.dir, 'empty-pkg');
+    await safe.mkdirp(w.io, payloadDir);
+  }
   const env: Record<string, string> = {
     ...w.env,
-    ...(o.noPayload === true ? {} : { KIT_PAYLOAD_DIR: w.payloadRoot }),
+    KIT_PAYLOAD_DIR: payloadDir,
     ...(o.stateDir !== undefined ? { KIT_STATE_DIR: o.stateDir } : {}),
     ...o.env,
   };
