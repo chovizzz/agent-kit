@@ -1860,8 +1860,8 @@ agent-kit judge   --run <run_id> [--run-llm --allow-egress] [--max-calls N(1..10
 - `run_id` 形如 `run-<UTC 时间戳>-<6 位十六进制>`(`RunIdSchema` 格式),时钟与随机源可注入。
 - 预算:`prepareBudgetInputs` + `computeBudget`;任一目标 `level != ok` 即「预算已满」。真跑遇到预算已满**不调用后端**(摘录不白发),stderr `REFLECT_BUDGET_FULL`,退出 1、不写任何文件;干跑只在摘要里标 `budget: full`。预算算不出来:干跑标 `budget: unknown` 仍退 0;真跑 fail-closed 退 3。
 - 上限(`max_calls` / `max_proposals` / `timeout_ms`)优先级:命令行 > 覆盖层 `[reflect]` 里**显式写的值**(schema 默认值不算) > `kit.toml` 的 `[reflect]` > 内置默认(1 / 5 / 180000)。
-- **干跑的 `project_key` 计数(S10-rc34,供用户填 `reflect.team_project_keys`)**:干跑且至少装载到一条信号时,`--json` 摘要**只增加一个可选键** `project_key_counts`:`[{project_key, sessions, signals}]`,按 `project_key` 升序;`sessions` = 该 key 下不同 `session_ref` 数(同 key 多会话各计一次),`signals` = 装载通过的信号条数;**只有加盐哈希 id 与计数,不含路径/文本**。无信号或真跑时该键缺省,其余键与旧形状逐字节不变;文本输出在末尾新增一段 `project_keys(…)` 逐行列出同样内容。本契约与脱敏文档对计数小的 key 没有 k-匿名/合并显示的规定,故不设阈值(待定夺)。`signals collect --dry` 不加此输出:其盐可能是临时盐,算出的 `project_key` 与落盘信号不一致,填进白名单会失效。
-- stdout:人类可读摘要;`--json` 为 canonical JSON(键集合固定),**只含计数、枚举、id、哈希**,绝不含摘录/提示/任何文本。stderr 只含稳定码(`REFLECT_USAGE|NOT_RUN|FAIL_CLOSED reason=<码>`)或用法提示(用法错可能回显用户自己输入的参数名/值,如 `未知参数:--x`),不带异常消息、不带任何信号/提示/LLM 文本。
+- **干跑的 `project_key` 计数(S10-rc34,供用户填 `reflect.team_project_keys`)**:干跑且至少装载到一条信号时,`--json` 摘要**只增加一个可选键** `project_key_counts`:`[{project_key, sessions, signals}]`,按 `project_key` 升序;`sessions` = 该 key 下不同 `session_ref` 数(同 key 多会话各计一次),`signals` = 装载通过的信号条数;**只有加盐哈希 id 与计数,不含路径/文本**;形状不是 `p_<16 位十六进制>` 的 key(被篡改的信号库)不列出。无信号或真跑时该键缺省,其余键与旧形状逐字节不变;文本输出在末尾新增一段 `project_keys(…)` 逐行列出同样内容。本契约与脱敏文档对计数小的 key 没有 k-匿名/合并显示的规定,故不设阈值(待定夺)。`signals collect --dry` 不加此输出:其盐可能是临时盐,算出的 `project_key` 与落盘信号不一致,填进白名单会失效。
+- stdout:人类可读摘要;`--json` 为 canonical JSON(基础键集合固定,另含上条列出的可选键),**只含计数、枚举、id、哈希**,绝不含摘录/提示/任何文本。stderr 只含稳定码(`REFLECT_USAGE|NOT_RUN|FAIL_CLOSED reason=<码>`)或用法提示(用法错可能回显用户自己输入的参数名/值,如 `未知参数:--x`),不带异常消息、不带任何信号/提示/LLM 文本。
 
 ### 17.2 退出码
 

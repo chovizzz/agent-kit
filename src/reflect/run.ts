@@ -189,11 +189,15 @@ function backendInfo(b: LlmBackend | undefined): ReflectRunReport['backend'] {
   return { slot: slot.data, vendor: b.vendor, model: b.model };
 }
 
+/** project_key 的契约形状(signals/ids.ts):不是这个形状的值(被篡改的信号库)不进计数输出,免得原样打到终端 */
+const PROJECT_KEY_SHAPE = /^p_[0-9a-f]{16}$/;
+
 export function countByProject(
   signals: readonly { project_key: string; session_ref: string }[],
 ): ProjectCount[] {
   const m = new Map<string, { sessions: Set<string>; signals: number }>();
   for (const s of signals) {
+    if (!PROJECT_KEY_SHAPE.test(s.project_key)) continue;
     const e = m.get(s.project_key) ?? { sessions: new Set<string>(), signals: 0 };
     e.sessions.add(s.session_ref);
     e.signals += 1;

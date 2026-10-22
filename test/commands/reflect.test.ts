@@ -220,6 +220,24 @@ describe('reflect 干跑:project_key 计数(供填 team_project_keys)', () => {
     expect((j['signals'] as { loaded: number }).loaded).toBe(4);
   });
 
+  it('形状不是 p_<16 位十六进制> 的 project_key(如被篡改成路径/转义序列)不进输出', async () => {
+    const bad = sig({
+      project: 'A',
+      session: 'A9',
+      index: 0,
+      text: '以后提交前必须先运行 lint 检查',
+    });
+    const evil = { ...bad, project_key: '/home/someone/secret\u001b[31m' };
+    const r = await rig({ signals: [...sigs(), evil] });
+    const { ctx, out } = ctxFor(r.w, ['--json']);
+    expect(await r.cmd.run(ctx)).toBe(ExitCode.OK);
+    const raw = out.join('');
+    expect(raw).not.toContain('someone');
+    expect(raw).not.toContain('\\u001b');
+    const j = JSON.parse(raw) as { project_key_counts: unknown[] };
+    expect(j.project_key_counts).toHaveLength(2); // 正向对照:合法的两个仍在
+  });
+
   it('文本输出新增一段,只有哈希 id 与计数;不含路径/文本', async () => {
     const r = await rig({ signals: sigs() });
     const { ctx, out } = ctxFor(r.w, []);
