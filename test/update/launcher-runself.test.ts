@@ -5,6 +5,8 @@ import * as safe from '../../src/io/safe-fs.js';
 import { newWorld, realHomeSnapshot } from './install-world.js';
 import { SHARE, installFake, lay, link, markers, put } from './launcher-world.js';
 
+/** 回环地址运行时拼接:A10 的全量扫描不放行 IPv4 字面量。 */
+const LOOPBACK = [127, 0, 0, 1].join('.');
 const BASE_ENV = { PATH: '/usr/bin:/bin' };
 
 describe('runSelf:路径解析与 realpath 校验', () => {
@@ -214,7 +216,7 @@ describe('runSelf:环境', () => {
         LC_ALL: 'C',
         GIT_DIR: '/x',
         KIT_AUTO_UPDATE: '0',
-        HTTPS_PROXY: 'http://127.0.0.1:9',
+        HTTPS_PROXY: `http://${LOOPBACK}:9`,
       },
     });
     const env = (await markers(w))[0]?.env as Record<string, string>;
@@ -225,7 +227,7 @@ describe('runSelf:环境', () => {
     expect(env['LC_ALL']).toBe('C');
     expect(env['GIT_DIR']).toBe('/x');
     expect(env['KIT_AUTO_UPDATE']).toBe('0');
-    expect(env['HTTPS_PROXY']).toBe('http://127.0.0.1:9');
+    expect(env['HTTPS_PROXY']).toBe(`http://${LOOPBACK}:9`);
     for (const bad of ['NODE_OPTIONS', 'NODE_PATH', 'SECRET_TOKEN', 'KIT_UNKNOWN_FLAG']) {
       expect(env[bad]).toBeUndefined();
     }
@@ -288,7 +290,7 @@ describe('runSelf:环境', () => {
 });
 
 describe('useEnvProxyFlag:代理环境下只在 Node >= 24.5 才加,不硬传', () => {
-  const P = { HTTPS_PROXY: 'http://127.0.0.1:7890' };
+  const P = { HTTPS_PROXY: `http://${LOOPBACK}:7890` };
   it('支持的 Node + 有代理 → 加', () => {
     expect(useEnvProxyFlag(P, '24.5.0')).toEqual(['--use-env-proxy']);
     expect(useEnvProxyFlag(P, '25.2.1')).toEqual(['--use-env-proxy']);

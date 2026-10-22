@@ -73,6 +73,19 @@ export const PUBLIC_DOC_HOSTS = [
   'www.npmjs.com',
   // 公开 npm registry 地址(发布工作流与 package.json 的 publishConfig);不是个人数据面。
   'registry.npmjs.org',
+  // 以下均是公开规范 / 公开基础设施的域名,出现在 provenance 校验代码、文档与测试里,不是个人数据面。
+  // slsa.dev:SLSA provenance predicate 类型 URI(https://slsa.dev/provenance/v1)。
+  'slsa.dev',
+  // in-toto.io:in-toto Statement 类型 URI(https://in-toto.io/Statement/v1)。
+  'in-toto.io',
+  // GitHub Actions OIDC 签发者(Fulcio 证书里的 issuer / SAN 校验值,公开)。
+  'token.actions.githubusercontent.com',
+  // Sigstore 公共基础设施(TUF 根 tuf-repo-cdn.sigstore.dev、Fulcio、Rekor、CT 日志、时间戳),后缀匹配含子域。
+  'sigstore.dev',
+  // 公开 npm 镜像(用户可配的 registry 示例与拒绝路径测试)。
+  'registry.npmmirror.com',
+  // Google OIDC 签发者(仅作为「issuer 不是 GitHub」的反例出现在 provenance 测试里)。
+  'accounts.google.com',
 ];
 
 async function loadScanner(ctx, allowHosts = []) {

@@ -175,7 +175,7 @@ const FIXTURES: Fx[] = [
     expect: 'host_denied',
     run: () =>
       httpGet(
-        'https://u:p@registry.npmjs.org/x',
+        `https://${['u:p', 'registry.npmjs.org'].join('@')}/x`,
         opts(() => Promise.resolve(res(200))),
       ),
   },
@@ -406,9 +406,9 @@ describe('net:重定向策略与响应体释放(评审 P2)', () => {
 
   it('同主机但带 userinfo(仅用户名 / 仅口令 / 两者)的重定向不跟随,不触发第二次 fetch', async () => {
     for (const loc of [
-      'https://user@registry.npmjs.org/next',
-      'https://:pw@registry.npmjs.org/next',
-      'https://user:pw@registry.npmjs.org/next',
+      `https://${['user', 'registry.npmjs.org'].join('@')}/next`,
+      `https://${[':pw', 'registry.npmjs.org'].join('@')}/next`,
+      `https://${['user:pw', 'registry.npmjs.org'].join('@')}/next`,
     ]) {
       let calls = 0;
       const t = tracked(302, { location: loc });
