@@ -196,6 +196,10 @@ export async function runScenario(mods, tmp, sc, idx) {
     const [vendor, model] = script === 'unknown-vendor' ? ['unknown', 'mystery'] : VENDOR[hop];
     backends[hop] = {
       slot: hop,
+      // 厂商只认后端自己暴露的 cli/provider/model(contracts §12.4/§16):缺 cli 会被判 vendor_unknown,
+      // 跨厂商的"合法对照"就永远不会被调用。provider 键必须存在(值 undefined 即可)
+      cli: 'pi',
+      provider: undefined,
       vendor,
       model,
       async complete() {
