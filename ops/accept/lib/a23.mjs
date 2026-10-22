@@ -91,7 +91,11 @@ function sessionText(cwd, id, users) {
 
 /** 进程内假后端:不 spawn、不联网 */
 class Stub {
-  constructor(slot, vendor, model, script) {
+  constructor(slot, vendor, model, script, cli = 'pi') {
+    // 厂商只认后端自己暴露的 cli/provider/model:裁判跳要有真实 CLI 身份(pi + 内置模型族)才算可证明跨厂商;
+    // 反思器 stub 传 cli='stub'(产出的提案带 reflector.stub: true)。provider 键必须存在
+    this.cli = cli;
+    this.provider = undefined;
     this.slot = slot;
     this.vendor = vendor;
     this.model = model;
@@ -271,7 +275,7 @@ async function a23(argv) {
     const reflectStub = new Stub('glm', 'zhipu', 'glm-example', (req) => ({
       ok: true,
       text: JSON.stringify({ proposals: [draft(req.user)] }),
-    }));
+    }), 'stub');
     const reflectCmd = D.reflect.createReflectCommand({
       clock: clock(at('2026-10-12')),
       randomHex: () => 'abc123',
