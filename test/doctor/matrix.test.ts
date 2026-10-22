@@ -2,7 +2,7 @@
  * S5:每个 Dxx 的 ok / 非 ok 两个夹具(夹具矩阵),并断言「检查清单 == 夹具覆盖清单」。
  * 全部在 KIT_TMP 内的假 HOME 上;D01 / D11 经注入,其余用真实磁盘状态。
  */
-import { existsSync } from 'node:fs';
+import { exists } from '../../src/io/read-fs.js';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { DOCTOR_CHECK_IDS } from '../../src/contracts/doctor.js';
@@ -513,7 +513,7 @@ describe('doctor:各检查的细节', () => {
     // 正向控制组:假包根里确实没有 payload;并且 D07 在有 payload 的世界里不是 n_a(断言不会变空)
     const empty = path.join(w.dir, 'empty-pkg');
     await safe.mkdirp(w.io, empty);
-    expect(existsSync(path.join(empty, 'payload'))).toBe(false);
+    expect(await exists(path.join(empty, 'payload'))).toBe(false);
     const withPayload = await installed('d07-withpayload-');
     expect((await get(withPayload, 'D07')).status).not.toBe('n_a');
     expect(await get(w, 'D07', { noPayload: true })).toMatchObject({
