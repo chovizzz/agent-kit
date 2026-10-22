@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { budgetDeps } from '../../src/commands/check-budget.js';
 import { command as probe, probeDeps } from '../../src/commands/probe.js';
 import { ExitCode } from '../../src/contracts/exit-codes.js';
 import { cmdCtx, GOOD_ATOM, makeRepo, OWNER_LINE } from '../atoms/helpers.js';
@@ -38,11 +39,39 @@ async function makeKitRepo(extra: Record<string, string> = {}): Promise<string> 
   return root;
 }
 
+const CODEX_CONTENT = 'line one\nline two\nline three\n'; // 3 行 / 29 字节
+
+/** 注入渲染:codex 有真实常驻内容(仓库里的示例原子是 proposed、不渲染,量出来是 0)。 */
+function injectCodexRender(): void {
+  budgetDeps.render = () => ({
+    files: [
+      {
+        agent: 'codex',
+        target: 'home',
+        relPath: 'AGENTS.md',
+        content: CODEX_CONTENT,
+        mode: 'owned',
+        atomIds: ['a'],
+        atomBytes: { a: 29 },
+        confidence: 'documented',
+      },
+    ],
+    report: {
+      dropped: [],
+      sideEffects: [],
+      shadowChecks: [],
+      pendingProbes: [],
+      skippedLayers: [],
+    },
+  });
+}
+
 const LINES_ONLY_TOML = KIT_TOML.replace('max_bytes = 1000', 'max_lines = 1000');
 
 describe('probe(P1-01,contracts #12)', () => {
   afterEach(() => {
     delete probeDeps.now;
+    delete budgetDeps.render;
   });
 
   it('干跑:打印测量值与 limit_source,不产补丁;documented 目标标注不改写', async () => {
@@ -60,6 +89,7 @@ describe('probe(P1-01,contracts #12)', () => {
   });
 
   it('--write:assumed 目标产补丁(三元组齐全),documented 目标跳过', async () => {
+    injectCodexRender();
     const root = await makeKitRepo();
     const { ctx, out } = cmdCtx(root);
     ctx.argv = ['--write', '--agent-version', 'codex=0.161.0'];
@@ -119,6 +149,7 @@ describe('probe(P1-01,contracts #12)', () => {
   });
 
   it('补丁自校验不过 → 退出 3,整批不打印', async () => {
+    injectCodexRender();
     const root = await makeKitRepo();
     const { ctx, out, err } = cmdCtx(root);
     probeDeps.now = () => new Date(Number.NaN); // 产出非法 probed_at
@@ -130,6 +161,7 @@ describe('probe(P1-01,contracts #12)', () => {
   });
 
   it('只配 max_lines 的目标取 lines,不取 bytes', async () => {
+    injectCodexRender();
     const root = await makeKitRepo({ 'kit.toml': LINES_ONLY_TOML });
     const { ctx, out } = cmdCtx(root);
     ctx.argv = [];
@@ -138,7 +170,7 @@ describe('probe(P1-01,contracts #12)', () => {
     expect(m).not.toBeNull();
     const bytes = Number(m?.[1]);
     const lines = Number(m?.[2]);
-    expect(bytes).not.toBe(lines);
+    expect([bytes, lines]).toEqual([29, 3]);
     const w = cmdCtx(root);
     w.ctx.argv = ['--write', '--agent-version', 'codex=0.161.0'];
     expect(await probe.run(w.ctx)).toBe(ExitCode.OK);
@@ -147,6 +179,7 @@ describe('probe(P1-01,contracts #12)', () => {
 
   it('两个维度都配 → 仍取 bytes(D1 待定)', async () => {
     const both = KIT_TOML.replace('max_bytes = 1000', 'max_bytes = 1000\nmax_lines = 1000');
+    injectCodexRender();
     const root = await makeKitRepo({ 'kit.toml': both });
     const d = cmdCtx(root);
     d.ctx.argv = [];
@@ -178,6 +211,7 @@ describe('probe(P1-01,contracts #12)', () => {
   });
 
   it('时钟可注入:固定时钟 → probed_at 逐字相等', async () => {
+    injectCodexRender();
     const root = await makeKitRepo();
     const { ctx, out } = cmdCtx(root);
     probeDeps.now = () => new Date('2026-01-02T03:04:05.678Z');
