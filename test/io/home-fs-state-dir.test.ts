@@ -17,9 +17,7 @@ async function setup(prefix: string) {
   const fx = wideCtx(dir);
   const home = path.join(dir, 'home');
   await safe.mkdirp(fx, home);
-  const tmpDir = path.join(dir, 'ht');
-  await safe.mkdirp(fx, tmpDir);
-  const ctx = hfs.createHomeFsContext({ home, planScope: [], tmpDir });
+  const ctx = hfs.createHomeFsContext({ home, planScope: [], tmpDir: dir });
   return { dir, fx, home, ctx };
 }
 

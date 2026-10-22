@@ -2709,7 +2709,7 @@ backups/<id>/complete           备份写完的标记(缺失则 --resume 拒绝)
 - **对象**:只有 `~/.local/state/agent-kit` 这一层(kit 自己拥有的状态目录),不碰其上级(`.local`、`.local/state`)、兄弟目录或目录里的任何文件。
 - **条件**:权限位含任一组 / 其他位(`mode & 0o077 != 0`,即宽于 0700)才动,目标恒为 `0700`。已是 0700 不动;窄于 0700 且无组 / 其他位的(如 0500)不改,仍由 D14 `mode_not_0700` 报告。
 - **不改并告警(不静默)**:任一路径段是符号链接或不是目录 → `SYNC_STATE_DIR_SKIPPED reason=link_or_not_dir`(实际上命令层更早的 `SYNC_PATH_SYMLINK` fail-closed 已先拦下,退出 3);属主不是当前用户 → `SYNC_STATE_DIR_SKIPPED reason=foreign_owner`。chmod 走 `O_NOFOLLOW|O_DIRECTORY` 的 fd 并核对 dev:ino 与 lstat 一致。
-- **何时**:`sync` / `--adopt` / `--uninstall` 且计划 `status=ok` 时。`--write` 才改(幂等运行、无其它变更也会收紧);`--rollback` / `--resume` 不收紧。计划被拒(退出非 0 的 refuse)时不写。
+- **何时**:`sync` / `--adopt` / `--uninstall` 且计划 `status=ok` 时。`--write` 才改(幂等运行、无其它变更也会收紧);`--rollback` / `--resume` 不收紧。计划 `refuse-all`(退出 3)/ `not-run`(退出 4)时不写;`status=ok` 但有外来文件被跳过(退出 1)属部分执行,照常写入与收紧。
 - **干跑**:不改,只在 stderr 报 `SYNC_STATE_DIR would_tighten from=0755 to=0700`;写入后报 `SYNC_STATE_DIR tightened from=0755 to=0700`。**stdout 与 `--json` 的固定键集合不变**。
 - **零写入口径**:这是 §12.1 / A5 零写入验收里允许的一处例外:仅限 `sync --write`、仅限状态目录自身的 mode 位;干跑与 doctor 仍零写入。幂等:收紧后重复 sync 不再有任何写入或输出。
 - **写出口**:`src/io/home-fs.ts` 的 `tightenKitStateDir`,命令层经 `src/sync/apply.ts` 的 `tightenStateDir`;测试 `test/sync/state-dir-tighten.test.ts`。

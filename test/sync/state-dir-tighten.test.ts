@@ -195,14 +195,25 @@ describe('sync:状态目录收紧到 0700', () => {
 });
 
 describe('sync:状态目录收紧——计划被拒', () => {
-  it('计划被拒(目标路径已有外来文件):退出非 0,状态目录不收紧', async () => {
+  it('计划 refuse-all(目标是符号链接,退出 3):不收紧', async () => {
     const { w, dir } = await world('sd-planrefused-', 0o755);
+    const target = path.join(w.home, SKILL);
+    await safe.mkdirp(w.io, path.dirname(target));
+    await safe.symlink(w.io, path.join(w.dir, 'elsewhere.md'), target);
+    const r = await w.run(['--write']);
+    expect(r.code).toBe(ExitCode.FAIL_CLOSED);
+    expect(r.err).not.toContain('SYNC_STATE_DIR');
+    expect(await modeOf(dir)).toBe(0o755);
+  });
+
+  it('计划 status=ok 但有外来文件被跳过(退出 1):照常写入,也照常收紧', async () => {
+    const { w, dir } = await world('sd-partial-', 0o755);
     const target = path.join(w.home, SKILL);
     await safe.mkdirp(w.io, path.dirname(target));
     await safe.writeFile(w.io, target, 'foreign user content\n');
     const r = await w.run(['--write']);
-    expect(r.code).not.toBe(ExitCode.OK);
-    expect(r.err).not.toContain('tightened');
-    expect(await modeOf(dir)).toBe(0o755);
+    expect(r.code).toBe(ExitCode.CHECK_FAILED);
+    expect(r.err).toContain('SYNC_STATE_DIR tightened from=0755 to=0700');
+    expect(await modeOf(dir)).toBe(0o700);
   });
 });
