@@ -13,7 +13,8 @@
 ## Phase P1-A(契约已写死的低成本项,可立即开工)
 
 - ✅ **决策 ②:预算 `enforce` 默认收紧**(`358f968`)——`documented`/`probed` 目标默认 `block`(assumed 仍恒 warn);
-  kit.toml 注释、`src/budget`、`test/budget`、contracts 决策 ② 同步。fixture 矩阵(A2)需加 block 默认格
+  kit.toml 注释、`src/budget`、`test/budget`、contracts 决策 ② 同步。
+  **收口(PB3,2026-10-22)**:A2 矩阵扩到 15 格(加三种来源「不写 enforce」超限格),A2 改为断言 `kit.toml` 的 `enforce = "block"`,真实 `kit.toml` 已翻成 block(契约 §6、§17.5「A2 语义订正」)
 - ✅ **D2:`agent_version` 的 `unknown` 入契约**(`1c09d06`)——`AgentVersionSourceSchema` 加 `unknown`(spec §8.1 D2 备选),
   消除 `collector_fallback` 的双词口径;reader/oracle/schema/test 五处同步
 - ◐ **脱敏 §7 残余缺口清理**:键名词表族已收(`c3034d0`:db_pass/passcode/requirepass/中文键名);
@@ -30,7 +31,11 @@
 ## Phase P1-C(新功能主体)
 
 - ✅ **探针 `probe`**(`d12a32a`):干跑测量 + `--write` 产 kit.toml 补丁(不落盘);
-  documented 不改写、缺版本 USAGE 拒绝;pendingProbes 只列不断言。有效性探针(跑真实 agent 观察 P-Q*)仍待主代理真实环境项
+  documented 不改写、缺版本 USAGE 拒绝;pendingProbes 只列不断言。有效性探针(跑真实 agent 观察 P-Q*)仍待主代理真实环境项。
+  **2026-10-22 收口(PB1–PB5)**:干跑行尾换行、量得 0 不出补丁、补丁 schema 自校验(`PROBE_PATCH_INVALID`,退出 3)、严格参数(未知 flag / 缺值 / 未启用 agent / 非法或重复版本退出 2);
+  `--write` 必须带 `--observed <agent>=<N>`,`probed_value` 写**外部观测值**(不是 kit 产物大小),原 `max_*` 大于观测值整批拒绝(`PROBE_LIMIT_ABOVE_OBSERVED`);
+  双维度目标用 `bytes:N,lines:M`(混用 `PROBE_OBSERVED_DIM_MISMATCH`),两个维度各自比较,并同时落盘 `probed_value` 与可选 `probed_lines`(仅 `probed` 且有 `max_lines` 时允许);契约 §8 #12。
+  遗留:显式 `--agent codex` 但没配 `[budget.codex]` 时静默输出 0(未处理)。发版说明须写明:新版双维度补丁粘进旧版 CLI 会被 `strictObject` 拒绝
 - ✅ **反思器 `reflect` + 裁判 `judge`**(实现:stub 验证;**真实后端未验证**——所有 CLI 参数集仍是 `verified:false`,
   默认拒绝真跑,需覆盖层 `allow_unverified` 显式放行,R6 实测前不要在真实数据上跑):`Proposal.reflector.vendor` 必填、
   `judge.vendor ≠ reflector.vendor`、`skipped:same-vendor` 记账(contracts #18);含外部内容的会话只进结构化计数(#8);
@@ -81,7 +86,7 @@
   (contracts §16①),需实测或允许 `KIT_STATE_DIR` 指向仓库外;③每个 CLI 真跑实际写了哪些全局文件(会话日志、history),列清单
 - ☐ **暂存区过期 / gc**:`.state/reflect/<run_id>/` 现在只增不减(`loadUsedProposalIds` / `loadStagedAtoms` 会随之变慢,
   且已用编号永不释放);需要 `reflect --gc` 或过期策略,并保证不删还在被 judge / 人工 apply 使用的 run
-- ⏸ **待定夺:契约层 FE0F**——`reflect.ts` 已拦 U+FE0F(与命令层 `hasInvisible` 一致,⚠️/❤️ 这类 emoji 呈现序列会被拒),`lifecycle.ts` 的 `note` 为避免旧记录解析失败刻意放行 FE0F;是否统一待定
+- ✅ **契约层 FE0F**(2026-10-22 用户定:保持现状,无代码改动)——`reflect.ts` 拦 U+FE0F(⚠️/❤️ 这类 emoji 呈现序列会被拒),`lifecycle.ts` 的 `note` 为避免旧记录解析失败刻意放行 FE0F,两处语义不统一是有意的
 - ✅ **契约层不可见字符补全**:`HIDDEN_CHARS_RE` 漏 Unicode tag 字符(U+E0000 段)、bidi U+061C(ALM)、变体选择符
   (U+FE00–FE0F、U+E0100 段)、Hangul 填充(U+3164、U+115F/1160、U+FFA0)等;`hidden_chars_in_output` 目前只是纵深防御
   (A16 里没有夹具能走到它,因为 schema 的零宽检查先拦下)
@@ -110,6 +115,16 @@
   **K6 部分落地**:`proposals/**` 已「只许新增」(`GUARD_PATH_PROPOSAL_DELETED` / `GUARD_PATH_PROPOSAL_MODIFIED`,contracts §12.3);
   `rules/` `skills/` `cases/` 下修改既有文件仍未拦(同上条原因,待定);无标签内容 PR 删提案由 `GUARD_PROPOSAL_DELETED_UNLABELED` 拒
 - ☑ **`sync` 写全局 + `doctor`**(已实装:S4 / S5,契约见 contracts §19.2 / §19.3)(P2 表内但同批):真实 HOME 受管路径写入,依赖 B17 守卫面
+
+## S10 系列收口(2026-10-22)
+
+- ✅ **S10-a(D14)**:`sync --write` 在拿锁并重新规划(replan)且计划 ok 后,把 kit 状态目录(`.local/state/agent-kit`)自动收紧到 0700;只动这一层,走 home-fs 守卫(HOME 身份、逐段 lstat、`O_NOFOLLOW`、dev:ino 复核);
+  干跑只在 stderr 报 `would_tighten`,失败稳定码 `SYNC_STATE_DIR_SKIPPED reason=link_or_not_dir|foreign_owner`。refuse-all(3)/ not-run(4)不收紧,退出 1 的部分执行照常收紧。
+- ✅ **S10-b**:A26 与 D07 各自准备并隔离载荷状态(`noPayload` 用 `KIT_TMP` 内空假包根)。
+- ✅ **S10-c**:A20/A24/A28 变异判据精确标题化(`judgeMutationRed`)。
+- ☐ S10-a 遗留(小):①干跑在计划被 refuse-all 时仍报 `would_tighten`(只改了文档);②`fsp.open` 的 EACCES / I/O 错误被归为 `link_or_not_dir`,可加更泛的 reason;
+  ③缺测试:replan 后变拒绝、chmod 期间目录被替换、`--rollback` 干跑、`--resume` 不收紧。
+- ☐ 已知偶发红:`test/commands/calibrate.test.ts` 在 javis 共用机器的全量 vitest 下偶发整文件加载失败(单跑 29/29,约 197s);疑似负载下超时,未查根因。
 
 ## Phase P1-D(发布与治理,⏸ 等用户凭据/授权)
 
