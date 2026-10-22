@@ -1,7 +1,7 @@
 // A28 sync / update 变异抽检(与 A13 / A20 / A24 同构的人工完成项)。
 //   默认:只报告标记文件状态(.state/accept/a28.done,绑定 HEAD;换了提交就作废)。
 //   --run [--ids S1,S4] [--write-marker]:真的做变异——每处先 cp 备份、断言替换匹配数恰好 1、跑对应 vitest 必须变红
-//     (失败用例标题须命中该变异的 redTitles)、cp 还原并恢复原 mtime;全部做完再跑一次基线必须为绿。
+//     (预期的那几条用例须以**完整标题精确**变红,见 common.mjs judgeMutationRed)、cp 还原并恢复原 mtime;全部做完再跑一次基线必须为绿。
 //     vitest 在**假 HOME**(tmp/sbx-home;KIT_TMP 与 TMPDIR 在同级 tmp/sbx-kit)下运行,开始与结束各取一次真实 HOME 快照(受管路径 +
 //     套件 share/state/config 目录),有差异按"待人工归因"(5)报,不写标记。
 //     还原只用 cp(不用 git checkout:会丢掉未提交的改动)。SIGINT/SIGTERM 会先还原再退出;SIGKILL 会留下 .mut-bak,
@@ -37,7 +37,7 @@ const T_UPD_REG = 'test/update/registry.test.ts';
 const T_UPD_FLOW = 'test/update/install-flow.test.ts';
 const T_UPD_ROLL = 'test/update/install-rollback.test.ts';
 
-/** edits 的 find 必须在文件里恰好出现 1 次;redTitles:失败用例标题须至少命中其中一个子串。 */
+/** edits 的 find 必须在文件里恰好出现 1 次;redTitles:预期变红用例的完整标题(vitest fullName,精确相等;判据见 common.mjs judgeMutationRed)。 */
 export const MUTATIONS = [
   {
     id: 'S1',
@@ -50,7 +50,10 @@ export const MUTATIONS = [
       },
     ],
     tests: [T_SYNC_CMD, T_SYNC_REC],
-    redTitles: ['装 → 卸载', '只卸一个 agent'],
+    redTitles: [
+      'sync:往返与幂等 装 → 卸载:受管路径树逐字节一致(忽略状态目录与 sync 自己建的空目录)',
+      'sync:卸载 只卸一个 agent:共用路径仍被其它 agent 请求就保留,登记条目只去掉该 agent',
+    ],
   },
   {
     id: 'S2',
@@ -63,7 +66,9 @@ export const MUTATIONS = [
       },
     ],
     tests: [T_SYNC_BACKUP],
-    redTitles: ['备份内容被改'],
+    redTitles: [
+      'sync --rollback:备份内容必须核对 sha 备份内容被改(sha 对不上)=> SYNC_ROLLBACK_MISMATCH,整次不写',
+    ],
   },
   {
     id: 'S3',
@@ -77,7 +82,9 @@ export const MUTATIONS = [
       },
     ],
     tests: [T_SYNC_REC],
-    redTitles: ['回滚前提不成立'],
+    redTitles: [
+      'sync:崩溃一致性 回滚前提不成立 → SYNC_ROLLBACK_MISMATCH,整次不写(文件被改 / 登记表被改 / 不是最新事务 / 未知事务)',
+    ],
   },
   {
     id: 'S4',
@@ -90,7 +97,9 @@ export const MUTATIONS = [
       },
     ],
     tests: [T_UPD_REG],
-    redTitles: ['registry_fixture_outside_tmp', '符号链接指到 KIT_TMP 之外'],
+    redTitles: [
+      'fixture registry KIT_TMP 之外 / 没有 KIT_TMP / 非 file:// 写法 → registry_fixture_outside_tmp',
+    ],
   },
   {
     id: 'S5',
@@ -104,7 +113,12 @@ export const MUTATIONS = [
       },
     ],
     tests: [T_SYNC_LOCK],
-    redTitles: ['journal 写完后锁被夺走', '写第一个文件之后锁被夺走'],
+    redTitles: [
+      'sync:提交点前复核锁所有权 journal 写完后锁被夺走:不写任何受管文件,退出 4 SYNC_LOCKED,别人的锁不被删;对照:不夺锁则写完',
+      'sync:提交点前复核锁所有权 写第一个文件之后锁被夺走:不继续写后面的文件与登记表',
+      'sync:--rollback / --resume / 仅登记表写入同样在写出口前复核锁(K6) --rollback:回滚事务的 journal 写完后锁被夺走 → 退出 4,不还原任何文件',
+      'sync:收尾阶段(journal 删除 / 备份修剪)同样复核锁(K6 评审补) journal 写完后锁被夺走:不建任何备份(备份目录不存在);对照:不夺锁则备份目录存在',
+    ],
   },
   {
     id: 'S6',
@@ -117,7 +131,9 @@ export const MUTATIONS = [
       },
     ],
     tests: [T_UPD_FLOW],
-    redTitles: ['dist.integrity 与 tarball 不符'],
+    redTitles: [
+      '校验失败(fail-closed) dist.integrity 与 tarball 不符(非镜像)→ integrity,拉黑,不再重试',
+    ],
   },
   {
     id: 'S7',
@@ -130,7 +146,10 @@ export const MUTATIONS = [
       },
     ],
     tests: [T_UPD_ROLL],
-    redTitles: ['上一版本目录被篡改', '上一版本目录里多了文件'],
+    redTitles: [
+      '回滚 上一版本目录被篡改 → 不切(完整树校验),退出 3,current 仍指向当前版本',
+      '回滚 上一版本目录里多了文件 → 同样拒绝',
+    ],
   },
   {
     id: 'S8',
@@ -143,7 +162,7 @@ export const MUTATIONS = [
       },
     ],
     tests: [T_SYNC_REC],
-    redTitles: ['写前复核指纹'],
+    redTitles: ['sync:卸载 计划之后、写盘之前文件被改(竞态):写前复核指纹,拒绝覆盖 / 删除用户版本'],
   },
 ];
 
@@ -187,7 +206,6 @@ export function a28Status(root) {
     detail: `${A28_IDS.length}/${A28_IDS.length} red,HEAD ${head.slice(0, 12)}`,
   };
 }
-
 
 async function a28(argv) {
   const R_ = new Reporter('A28');

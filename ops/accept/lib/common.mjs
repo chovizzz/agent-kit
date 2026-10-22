@@ -366,7 +366,11 @@ export function judgeMutationRed(v, redTitles) {
   if (v.code === EXIT.NOT_RUN || !ev)
     return { red: false, note: `vitest 没跑起来:${v?.why ?? ''}`, credited: [] };
   if (ev.loadFailures > 0)
-    return { red: false, note: `有 ${ev.loadFailures} 个测试文件加载失败,红灯不可信`, credited: [] };
+    return {
+      red: false,
+      note: `有 ${ev.loadFailures} 个测试文件加载失败,红灯不可信`,
+      credited: [],
+    };
   if (ev.pending > 0 || ev.todo > 0)
     return {
       red: false,

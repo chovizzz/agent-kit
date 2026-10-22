@@ -1,7 +1,7 @@
 // A24 生命周期功能变异抽检(与 A20 同构的人工完成项)。
 //   默认:只报告标记文件状态(.state/accept/a24.done,绑定 HEAD;换了提交就作废)。
 //   --run [--set a24|all] [--ids L1,L4] [--write-marker]:真的做变异——每处先 cp 备份、断言替换匹配数恰好 1、
-//     跑对应 vitest 必须变红(失败用例标题须命中该变异的 redTitles)、cp 还原并**恢复原 mtime**;全部做完再跑一次基线必须为绿。
+//     跑对应 vitest 必须变红(预期的那几条用例须以**完整标题精确**变红,见 common.mjs judgeMutationRed)、cp 还原并**恢复原 mtime**;全部做完再跑一次基线必须为绿。
 //     与 A20 的区别:A20 变异期间不碰 dist,但还原后重新 build;A24 的变异窗口里同样**不构建 dist**(vitest 直接跑 src 的 .ts),
 //     所以还原 mtime 之后 dist 与 src 仍然一致,A16–A19 不会因此变成"未执行"。
 //     进程收到 SIGINT/SIGTERM 会先还原再退出;SIGKILL 会留下 .mut-bak,下一次运行与 freshDist 都会拒绝继续。
@@ -35,7 +35,7 @@ const T_RETIRE = 'test/commands/retire.test.ts';
 const T_CRITERIA = 'test/guards/criteria.test.ts';
 const T_OPS = 'test/accept/p1-lifecycle-ops.test.ts';
 
-/** edits 的 find 必须在文件里恰好出现 1 次;redTitles:失败用例标题须至少命中其中一个子串。 */
+/** edits 的 find 必须在文件里恰好出现 1 次;redTitles:预期变红用例的完整标题(vitest fullName,精确相等;判据见 common.mjs judgeMutationRed)。 */
 export const MUTATIONS = [
   {
     id: 'L1',
@@ -50,7 +50,18 @@ export const MUTATIONS = [
       },
     ],
     tests: [T_CHECKS_TEXT],
-    redTitles: ['C1 本地重扫注入'],
+    redTitles: [
+      'C1 本地重扫注入 judge 说 injection_suspected=false 时本地扫描照跑:危险话术仍被拒(不作放行依据)',
+      'C1 本地重扫注入 没有 judge 记录也照常扫描',
+      'C1 本地重扫注入 逐字段扫描:title',
+      'C1 本地重扫注入 逐字段扫描:do',
+      'C1 本地重扫注入 逐字段扫描:why',
+      'C1 本地重扫注入 逐字段扫描:verify',
+      'C1 本地重扫注入 逐字段扫描:signature.pattern',
+      'C1 本地重扫注入 逐字段扫描:evidence excerpt',
+      'C1 本地重扫注入 提案 rationale 与提案侧证据摘录也扫',
+      'C1 本地重扫注入 不可见字符 → HIDDEN_CHARS;多个原因都列出(不短路)',
+    ],
   },
   {
     id: 'L2',
@@ -64,7 +75,17 @@ export const MUTATIONS = [
       },
     ],
     tests: [T_CHECKS_GOV, T_ADOPT],
-    redTitles: ['C6 规则文本与评审绑定', '端到端'],
+    redTitles: [
+      'promote --run:端到端 reflect → judge → promote --write → git apply → check --guards(kit:reflector)绿,提案含 judge',
+      'promote --run:端到端 pr-body / report / stdout 不含摘录、正文、提示;写明以新 patch 为准',
+      'promote --run:端到端 默认只打印:前后快照相同;--write 缺省不写 .state/promote',
+      'promote --run:端到端 幂等:同输入再 --write → 退出 0 不重写;被改过的产物 → 退出 3 PROMOTE_RUN_EXISTS',
+      'promote --run:端到端 上次失败遗留的 .tmp- 目录 → 退出 3,不覆盖',
+      'promote --run:端到端 不同 KIT_TMP 下两次运行(同一份暂存与仓库内容)产物字节相同',
+      'C6 规则文本与评审绑定 合法样例通过',
+      'C6 规则文本与评审绑定 晋升后的文本仍可通过 C6(绑定的是归一化哈希)',
+      'C6 规则文本与评审绑定 文本无法哈希(无 frontmatter / status 不是恰好一行)→ RULE_TEXT_UNHASHABLE',
+    ],
   },
   {
     id: 'L3',
@@ -78,7 +99,18 @@ export const MUTATIONS = [
       },
     ],
     tests: [T_ADOPT, 'test/judge/rule-hash.test.ts'],
-    redTitles: ['端到端', 'rule_sha256'],
+    redTitles: [
+      'judge 记录里的 rule_sha256 judge 成功后记录带 rule_sha256,且等于规则文件当前的 ruleSha256(正向对照:改一个字就对不上)',
+      'promote --run:端到端 reflect → judge → promote --write → git apply → check --guards(kit:reflector)绿,提案含 judge',
+      'promote --run:端到端 pr-body / report / stdout 不含摘录、正文、提示;写明以新 patch 为准',
+      'promote --run:端到端 默认只打印:前后快照相同;--write 缺省不写 .state/promote',
+      'promote --run:端到端 幂等:同输入再 --write → 退出 0 不重写;被改过的产物 → 退出 3 PROMOTE_RUN_EXISTS',
+      'promote --run:端到端 上次失败遗留的 .tmp- 目录 → 退出 3,不覆盖',
+      'promote --run:端到端 不同 KIT_TMP 下两次运行(同一份暂存与仓库内容)产物字节相同',
+      'promote --run:逐条判据与退出码 真 judge 命令写入 rule_sha256,且等于评审时规则文本的归一化哈希(⑨A 接线)',
+      'promote --run:逐条判据与退出码 C6:旧版 judge 留下的记录没有 rule_sha256 → 丢弃 C6:RULE_SHA256_MISSING',
+      'promote --run:墓碑端到端(retire → 删文件 → 采纳同 id) 原子经 retire(rejected)退役、再被 G4 流程删除后,lifecycle 记录留存;采纳同 id 提案被 C7 以 ID_TOMBSTONED 拒',
+    ],
   },
   {
     id: 'L4',
@@ -93,7 +125,9 @@ export const MUTATIONS = [
       },
     ],
     tests: [T_ADOPT],
-    redTitles: ['端到端'],
+    redTitles: [
+      'promote --run:端到端 reflect → judge → promote --write → git apply → check --guards(kit:reflector)绿,提案含 judge',
+    ],
   },
   {
     id: 'L5',
@@ -108,7 +142,20 @@ export const MUTATIONS = [
       },
     ],
     tests: [T_CRITERIA, T_PROMOTE],
-    redTitles: ['THRESHOLD_'],
+    redTitles: [
+      'T2 advisory→active attest 判据红(L2/K4 原因码):有效块不足 → G3:THRESHOLD_TILES',
+      'T2 advisory→active attest 判据红(L2/K4 原因码):成员不足 → G3:THRESHOLD_TILES',
+      'T2 advisory→active attest 判据红(L2/K4 原因码):曝光不足 → G3:THRESHOLD_EXPOSURE',
+      'T2 advisory→active attest 判据红(L2/K4 原因码):harmful → G3:THRESHOLD_HARMFUL',
+      'T2 advisory→active attest 判据红(L2/K4 原因码):成员不在名单 → G3:THRESHOLD_TILES',
+      'T2 advisory→active attest 判据红(L2/K4 原因码):窗口早于 advisory → G3:THRESHOLD_TILES',
+      'T2 advisory→active attest 判据红(L2/K4 原因码):没有 attest → G3:THRESHOLD_TILES',
+      'T2 advisory→active THRESHOLD_TILES:只有一个有效块(14 天需要 2 块)',
+      'T2 advisory→active THRESHOLD_TILES:只有一名成员(每块都不够 min_members)',
+      'T2 advisory→active THRESHOLD_TILES:成员数够但全是 owner 自己(⑥A,块内非 owner 门槛)',
+      'T2 advisory→active THRESHOLD_EXPOSURE:曝光合计不足',
+      'T2 advisory→active THRESHOLD_HARMFUL:有效 attest 里出现 harmful>0',
+    ],
   },
   {
     id: 'L6',
@@ -122,7 +169,10 @@ export const MUTATIONS = [
       },
     ],
     tests: [T_RETIRE],
-    redTitles: ['kit:retire 绿', '审计记录'],
+    redTitles: [
+      'T3/T4 → deprecated(manual) advisory→deprecated:--write 产物三件套(0700/0600)、补丁只改 status 并新增一条记录、应用后 check --guards --label kit:retire 绿',
+      'T3/T4 → deprecated(manual) active→deprecated:--write 产物三件套(0700/0600)、补丁只改 status 并新增一条记录、应用后 check --guards --label kit:retire 绿',
+    ],
   },
   {
     id: 'L7',
@@ -136,7 +186,11 @@ export const MUTATIONS = [
       },
     ],
     tests: [T_CHECKS_GOV, T_PROMOTE],
-    redTitles: ['墓碑', 'C7 id 与去重', 'ID_TOMBSTONED'],
+    redTitles: [
+      '墓碑参与晋升的 C7 id 在 lifecycle/<id>/ 下有记录(墓碑)→ 晋升被 C7:ID_TOMBSTONED 拒,不写;无墓碑时同一世界通过',
+      'C7 id 与去重 id 在退役记录(墓碑)里 → ID_TOMBSTONED,即使原子文件已不在仓库',
+      'C7 id 与去重 promote 模式:自己的 id 在仓库里不算冲突,也不与自己比相似度;墓碑照查',
+    ],
   },
   {
     id: 'L8',
@@ -150,7 +204,9 @@ export const MUTATIONS = [
       },
     ],
     tests: [T_CRITERIA],
-    redTitles: ['C5 独有'],
+    redTitles: [
+      'T1 proposed→advisory C5 独有:JUDGE_PROVIDER_MISMATCH:judge.provider 不等于最后一跳 → 拒(CI 不得比本地 promote 宽)',
+    ],
   },
   {
     id: 'L9',
@@ -164,7 +220,7 @@ export const MUTATIONS = [
       },
     ],
     tests: [T_PROMOTE],
-    redTitles: ['干跑:退出 0、只算不写'],
+    redTitles: ['T1 proposed→advisory 干跑:退出 0、只算不写(前后快照相同)、JSON 键集合固定'],
   },
   // ---- 验收脚本自检(不计入标记的核心九处) ----
   {
@@ -178,7 +234,9 @@ export const MUTATIONS = [
       },
     ],
     tests: [T_OPS],
-    redTitles: ['A21'],
+    redTitles: [
+      'A21 矩阵脚本 A21 的原因码核对会真的报错:给错原因码 / 该拒却通过 / 字段不符 / 抛异常 / 回显文本,各产生问题(正向控制)',
+    ],
   },
   {
     id: 'X2',
@@ -191,7 +249,9 @@ export const MUTATIONS = [
       },
     ],
     tests: [T_OPS],
-    redTitles: ['A22'],
+    redTitles: [
+      'A22 import 图与白名单 分析器自身的对照:reflect 命令报出 llm-exec / backends;合成坏例逐种被发现;注释里的 import 不误报',
+    ],
   },
 ];
 
@@ -236,7 +296,6 @@ export function a24Status(root) {
     detail: `${A24_IDS.length}/${A24_IDS.length} red,HEAD ${head.slice(0, 12)}`,
   };
 }
-
 
 async function a24(argv) {
   const R_ = new Reporter('A24');
