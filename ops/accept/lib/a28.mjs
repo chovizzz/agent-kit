@@ -14,6 +14,7 @@ import {
   EXIT,
   Reporter,
   cleanEnv,
+  judgeMutationRed,
   makeCtx,
   mkTmp,
   parseCommon,
@@ -187,7 +188,6 @@ export function a28Status(root) {
   };
 }
 
-const failedTitles = (ev) => ev.titles.filter((t) => t.status === 'failed').map((t) => t.fullName);
 
 async function a28(argv) {
   const R_ = new Reporter('A28');
@@ -312,26 +312,7 @@ async function a28(argv) {
           fs.writeFileSync(abs, applyEdit(fs.readFileSync(abs, 'utf8'), e.find, e.replace));
         }
         const v = vitest(m.tests);
-        if (v.code === EXIT.NOT_RUN || !v.evaluation)
-          outcome = { red: false, note: `vitest 没跑起来:${v.why}` };
-        else if (v.evaluation.failed === 0) outcome = { red: false, note: '测试仍为绿(变异存活)' };
-        else {
-          const titles = failedTitles(v.evaluation);
-          const hit = titles.filter((t) => m.redTitles.some((r) => t.includes(r)));
-          outcome =
-            hit.length > 0
-              ? {
-                  red: true,
-                  note: `${titles.length} 个用例变红,其中 ${hit.length} 个指向该行为:${hit
-                    .slice(0, 2)
-                    .map((t) => t.slice(-40))
-                    .join(' | ')}`,
-                }
-              : {
-                  red: false,
-                  note: `变红了,但失败用例没有一个指向被变异的行为(${titles.length} 个)`,
-                };
-        }
+        outcome = judgeMutationRed(v, m.redTitles);
       } catch (e) {
         outcome = { red: false, note: String(e?.message ?? e) };
       } finally {

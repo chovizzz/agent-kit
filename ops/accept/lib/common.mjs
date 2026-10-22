@@ -317,6 +317,7 @@ export function evaluateVitest(json) {
     );
   }
   const titles = [];
+  let loadFailures = 0;
   for (const f of json?.testResults ?? []) {
     for (const a of f.assertionResults ?? []) {
       titles.push({
@@ -327,9 +328,77 @@ export function evaluateVitest(json) {
     }
     if (f.status === 'failed' && (f.assertionResults ?? []).length === 0) {
       problems.push(`测试文件加载失败:${path.basename(String(f.name))}`);
+      loadFailures += 1;
     }
   }
-  return { ok: problems.length === 0, problems, total, passed, failed, pending, todo, titles };
+  return {
+    ok: problems.length === 0,
+    problems,
+    total,
+    passed,
+    failed,
+    pending,
+    todo,
+    loadFailures,
+    titles,
+  };
+}
+
+/**
+ * 变异抽检(A20 / A24 / A28 共用)的「红灯」判据:变异后是否出现了**预期的**那条红灯。
+ * v 是 runVitest 的返回;redTitles 是该变异预期变红的用例**完整标题**(vitest fullName,整串精确相等,不做子串匹配)。
+ * 判红须同时满足:
+ *   1. vitest 跑起来了、有结果;
+ *   2. 没有 skipped / todo(beforeAll 挂掉会让一批用例变 skipped,红灯可能只是假象)、没有测试文件加载失败(语法错误 / 导入失败);
+ *   3. redTitles 里的每一条都真的出现在这次运行里(标题改名后预期陈旧,拒绝,不静默当作没命中);
+ *   4. redTitles 里至少一条状态为 failed。
+ * 不在 redTitles 里的失败用例是「无关红灯」:不计入、也不否决(一处变异可以连带别的用例变红),但绝不能单独让变异判红。
+ * 返回 { red, note, credited[] }。
+ */
+export function judgeMutationRed(v, redTitles) {
+  const ev = v?.evaluation;
+  if (
+    !Array.isArray(redTitles) ||
+    redTitles.length === 0 ||
+    redTitles.some((t) => typeof t !== 'string' || t === '')
+  )
+    return { red: false, note: 'redTitles 必须是非空的完整标题数组', credited: [] };
+  if (v.code === EXIT.NOT_RUN || !ev)
+    return { red: false, note: `vitest 没跑起来:${v?.why ?? ''}`, credited: [] };
+  if (ev.loadFailures > 0)
+    return { red: false, note: `有 ${ev.loadFailures} 个测试文件加载失败,红灯不可信`, credited: [] };
+  if (ev.pending > 0 || ev.todo > 0)
+    return {
+      red: false,
+      note: `变异运行里有 skipped/todo(${ev.pending}/${ev.todo}),红灯不可信`,
+      credited: [],
+    };
+  if (ev.failed === 0) return { red: false, note: '测试仍为绿(变异存活)', credited: [] };
+  const status = new Map();
+  for (const t of ev.titles) status.set(t.fullName, [...(status.get(t.fullName) ?? []), t.status]);
+  const missing = redTitles.filter((t) => !status.has(t));
+  if (missing.length > 0)
+    return {
+      red: false,
+      note: `预期标题没有出现在本次运行里(标题改名或测试文件没选上):${missing[0].slice(-40)}`,
+      credited: [],
+    };
+  const credited = redTitles.filter((t) => status.get(t).includes('failed'));
+  const failedAll = ev.titles.filter((t) => t.status === 'failed').length;
+  if (credited.length === 0)
+    return {
+      red: false,
+      note: `变红了,但预期的那几条用例没有一条变红(${failedAll} 个无关红灯不算数)`,
+      credited,
+    };
+  return {
+    red: true,
+    note: `${failedAll} 个用例变红,其中预期的 ${credited.length} 条精确命中:${credited
+      .slice(0, 2)
+      .map((t) => t.slice(-40))
+      .join(' | ')}`,
+    credited,
+  };
 }
 
 /**
