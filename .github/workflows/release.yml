@@ -8,8 +8,8 @@
 #   2. 全门禁(typecheck/build/test/lint/format:check)、`node dist/cli.js check`、与 ci.yml 同一组验收脚本(含 A11 供应链)通过;
 #   3. `node scripts/check-publish.mjs --tag <tag>` 通过(包内容白名单 + 禁运形态 + payload/打包闸 + tag/version 一致);
 #   4. tag 形如 `vX.Y.Z` 且与 package.json 的 version 逐字一致。
-# 失败不会半发:`npm publish` 是最后一步且只有一条命令,前面任何一步红都不会走到它;
-# npm 对同一版本号拒绝二次发布,所以重跑同一个 tag 不会覆盖已发布内容。
+# 前置门禁失败不会尝试发布:`npm publish` 是最后一步且只有一条命令;npm 对同一版本号拒绝二次发布,不会覆盖已发布内容。
+# publish 开始后若报红(如响应丢失),先 `npm view` 核对 registry 状态,再决定是否重跑,不要盲目重跑。
 #
 # 不做的事:不自动打 tag(打 tag 是人的决定)、不推分支、不创建 release notes。
 name: release
@@ -106,6 +106,6 @@ jobs:
         run: |
           VER="$(node -p "require('./package.json').version")"
           case "$VER" in *-*) DIST_TAG=rc ;; *) DIST_TAG=latest ;; esac
-          npm publish --provenance --access public --tag "$DIST_TAG"
+          npm publish --provenance --access public --ignore-scripts --tag "$DIST_TAG"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
