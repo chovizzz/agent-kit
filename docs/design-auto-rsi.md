@@ -91,7 +91,7 @@ L0 是否「足够」:够让用户看到「有 N 个聚类、M 条证据可以�
 
 ### 4.2 同意书(存放与撤销)[推荐]
 
-- `agent-kit rsi consent --slot <slot>`(前台;kit 不写文件,**也不执行**待授权的 CLI——不跑 `--version`,只做路径与静态元数据读取)打印一个同意令牌:对一份**带版本号的规范化 JSON**(`canonicalJson`)取 sha256 的前 32 位十六进制,内容含 `slot`、`cli`、`provider`、`model`、`realpath(二进制)`、CLI 所在包的 `package.json` 版本与包目录内 JS 文件的整体摘要、参数集 id、参数集里**全部非 `verified` 项**(`claimed` / `unresolved` / `not_met`,含状态)的有序集合、`globalWrites` 清单。命令逐条列出这些非 `verified` 项、已知副作用与「外发目的地由该 CLI 自己的用户配置决定」的提示,请用户读完再抄。
+- `agent-kit rsi consent --slot <slot>`(前台;kit 不写文件,**也不执行**待授权的 CLI——不跑 `--version`,只做路径与静态元数据读取)打印一个同意令牌,算法是对一份**带版本号的规范化 JSON**(`canonicalJson`)取 sha256 的前 32 位十六进制,内容含 `slot`、`cli`、`provider`、`model`、`realpath(二进制)`、CLI 所在包的 `package.json` 版本与包目录内 JS 文件的整体摘要、参数集 id、参数集里**全部非 `verified` 项**(`claimed` / `unresolved` / `not_met`,含状态)的有序集合、`globalWrites` 清单。命令逐条列出这些非 `verified` 项、已知副作用与「外发目的地由该 CLI 自己的用户配置决定」的提示,请用户读完再抄。
 - 执行时 spawn 的二进制必须是**计算令牌时解析出的同一个 realpath**,spawn 前复核一次,不再按 PATH 重新挑(评审 #4)。
 - 已知不覆盖:包外的依赖与 node 运行时变化;CLI 自己的用户配置(例如 pi 的 `models.json` 改写 baseUrl)变化。后者是否也要进令牌见决定 D11。
 - 用户**自己**把令牌写进覆盖层 `reflect.auto = { slot = "…", consent = "…", accept = ["noUserRouting", …], expires = "YYYY-MM-DD" }`(新增可选键,契约变更;kit 永不写覆盖层)。
