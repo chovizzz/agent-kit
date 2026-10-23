@@ -1,5 +1,16 @@
 # 自动 RSI 设计:会话内 agent 模式
 
+> **v3 自主循环见 [`design-autonomous-rsi.md`](design-autonomous-rsi.md),覆盖本稿的以下原则**(用户 2026-10-23 要求「去掉人工采纳、全自动循环」,并拍板 U1–U4):
+>
+> - 文首「用户的定调」第一条「不自动采纳、不写全局、不自动 promote」,§0 第 5 条与 §7.2 的「只写暂存区、绝不 apply」,§5 表中 apply / promote / retire / sync 写全局 / 开 PR 的「❌ 永不」行:改为个人层自动生效与回滚、团队层自动推分支并由仓库侧自动合并(v3 §2.1 P1、§6);
+> - §4.3 与 §15 N2「默认 S1」:自动循环以 S2 为前提(v3 §2.1 P8、§11.1 M10);
+> - §7.3 与 §15 N4「晋升仍要手动 judge」、§8a.5「晋升照旧要 judge 与人工」:个人层由随机灰度替代 judge,团队层由服务端检查与否决窗口替代 C5 与四眼(v3 §2.1 P3、P5);
+> - §13 末段「自动路径的 import 闭包不得包含 …」:新增 `__rsi --publish` 入口,允许 git 网络操作,仍禁 `net.ts` 与 LLM(v3 §2.1 P7);
+> - §4.2 hint「只含计数、≤ 200 字节」:新增 canary 注入模式(v3 §5.2);
+> - §8a.3 N6 taint 的范围:扩到已生效的自动产出(v3 §5.6)。
+>
+> 本稿的采集、提示、会话授权、受控入口、隐私约束(§3、§4.1、§6、§7.1、§8、§8a、§9–§12)继续有效。
+
 > 状态:**设计稿 v2,未实现**。基线 `815d2d0`。只出方案,不改 `src/` `test/` `ops/`。
 > v1(kit 后台自己拉起 LLM CLI 做 reflect)全文见本分支提交 `576e8ea`;其中只服务于「kit 自己 spawn LLM CLI」的内容已移到 §16「备选方案 B」保留。
 > 依据:`contracts.md` §5.2、§12.4、§16、§17(含 §17.6 R6、§17.7 gc)、§18、§19(含 §19.5 后台 worker、§19.6 `auto_sync`、§19.7 写入表);`redaction.md` §1、§6;`reader-counting-spec.md` §2;`p1-backlog.md`;`src/signals/{exclude,ids,pipeline,state-store}.ts`、`src/update/{launcher,worker}.ts`;本机 pi 0.87.1 的 `docs/` 与 `dist/core/extensions/types.d.ts`;本机 claude 2.1.308、codex-cli 0.161.0 二进制里的字符串(只读)。
