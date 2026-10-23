@@ -127,6 +127,7 @@
   **R20 契约已写,待实现**(`contracts.md` §20,2026-10-23;待定夺 Q1–Q25 见 §20.12,既有条款修订清单见 §20.9)。
   分块 R20(契约 §20,串行)→ A1 锁 → A2 L0 + 项目索引 / 排除 → A3 poke + hint →(P1)A4 digest / ingest → A5 技能 + 钩子 → A6 提醒 + 端到端;N3、N5、N6、N7 已定(2026-10-23,按推荐);待用户拍板 N1、N2、N4(P1 开工前,见设计稿 §15)
   ✅ **R20-A0(第 0 块,已实现 2026-10-23,分支 verify/s10-r20-a0)**:§20.9 第 1、2、4、5、14、20 条与第 3 条 ①②(已实现(R20-A0))—— `UserConfig` 接受 `[rsi]`(此前一写 `[rsi]` 就让 `update` 退出 3、后台更新停摆)、`safe-fs.createExclusive`、`runSelf` 的 RSI 环境键 / `PI_CODING_AGENT_DIR` 存在性折叠 / 受校验的 `cwd`、零网络桥接 `src/update/self-spawn.ts`(+ import 闭包测试、lint 授权块只多放行 `runSelf`)、`KIT_RSI_CHILD=1`、reader JSON 深度 256、`canonicalJsonLine`。
+  ✔ A1(锁,verify/s10-r20-a1):`src/rsi/lock.ts`(`rsi/lock` 试锁 / 陈旧锁协议 / nonce 与 `assertHeld`)、`src/rsi/snapshot.ts`(快照清单提交 / 恢复 / 只读核对)、盐首建改 `createExclusive` 已实现并有变异测试;**命令接线(reflect / judge / gc / promote / `signals collect` 拿 `rsi/lock`)与 §20.9 第 17 条留给 A2**(依赖 `[rsi]` 配置与 `rsiStateOf()`,off 下不得拿锁 / 建 `.state/rsi/`)。详见 contracts §20.5「R20-A1 实装后订正」。
   ☐ 第 0 块之外仍待做:第 3 条 ③④⑤(根入口路由等,A3)、第 6–8、11、17、21 条(依赖 RSI 锁 A1 / rsi 配置与状态机)、第 9、10、16、18、19 条(随 A2 / A3)、第 12、13、15 条(P1)。
 - ☐ **自主 RSI(v3.1,去掉人工采纳的个人层全自动循环)**(用户 2026-10-23 拍板 U1–U3、T0、M1–M5、M9–M15、P1–P3):设计稿 [`design-autonomous-rsi.md`](design-autonomous-rsi.md)(覆盖 v2 的「永不自动采纳 / 生效」部分);
   **契约已写,按分期待实现**(`contracts.md` §21,2026-10-23;既有条款修订清单见 §21.18,§20 的去留见 §21.19,落契约时新发现的细节取舍 Q-A–Q-P 已由主代理按推荐定下,见 §21.22;§21 **已冻结**(2026-10-23,五轮评审,第五轮通过;`§21.7a` 统计附录由 V1.5 补))。
