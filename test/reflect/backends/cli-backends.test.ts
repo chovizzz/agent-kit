@@ -87,6 +87,7 @@ describe('R3 适配器 happy path 与参数集', () => {
         '--no-context-files',
         '--no-skills',
         '--no-extensions',
+        '--no-approve',
         '--provider',
         'zai',
         '--model',
