@@ -24,6 +24,7 @@
   `gap.hcl_ternary_default` `gap.md_inline_code_split` `gap.backtick_leading_space` `gap.placeholder_then_space_value`
   `gap.upper_dollar_name` `gap.upper_getenv_default` `gap.upper_env_or_default`(详见 `docs/redaction.md` §7)
   (`gap.long_segment_concat` 已于 s10 修复并晋升为 `s10.long_segment_concat`,召回 +1;评审后新登记 `gap.long_segment_punct_glue`〔段后紧贴 `.` `+` `:`〕)
+  验证缺口(2026-10-22 用户定「直接合并」):`s10.long_segment_concat` 的变异 M3(紧贴字符任意放行)/M4(放行 `.`)/M5(放行 `+`)是在加入 `/`、`-` 之前的字符类上做的,最终版上其 perl 模式会成空操作、未重做;其余 7 个变异在最终版有效。下次动 `readGluedWord` 紧贴字符集时须先重做这三个变异
 
 ## Phase P1-B(设计决策 + 实现,按依赖序)
 
