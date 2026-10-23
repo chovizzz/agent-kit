@@ -1,7 +1,7 @@
 /**
  * `.state/` 的盐与信号库。写入一律经 safe-fs(KIT_WRITE_ROOTS 守卫);目录 0700、文件 0600。
  *
- * - 盐:`.state/salt`(首次创建非原子:safe-fs 没有 O_EXCL 导出,两个进程同时首跑可能各写一份,P0 按单进程假设;见汇报「待主代理」),32 字节随机数的十六进制,0600,gitignored。已存在但是符号链接、权限宽于 0600
+ * - 盐:`.state/salt`,32 字节随机数的十六进制,0600,gitignored。首建经 safe-fs `createExclusive`(O_EXCL,R20 A1,§20.9 第 8 条):两个进程同时首建只有一个赢家,输家读赢家落盘的那份(赢家写入前的短暂空文件窗口内有限次重试)。已存在但是符号链接、权限宽于 0600
  *   或格式非法 → SaltError(调用方 fail-closed 退出 3),**不静默重生成**(重生成会让历史哈希全部失联)。
  *   `create:false`(--dry)且文件不存在 → 内存临时盐,不落盘。
  * - 信号库:`.state/signals/<agent>/<yyyymm>.jsonl`,按 sig_id 去重(重跑幂等),
@@ -9,13 +9,14 @@
  *   库里有坏行 → SignalStoreError(fail-closed)。假设单进程写入:并发的两次 collect 会互相覆盖(P0 接受)。
  */
 import { randomBytes } from 'node:crypto';
+import { setTimeout as sleep } from 'node:timers/promises';
 import * as path from 'node:path';
 import type { AgentId } from '../contracts/common.js';
 import { SignalSchema } from '../contracts/signal.js';
 import type { Signal } from '../contracts/signal.js';
 import type { IoContext } from '../io/paths.js';
 import { lstat, readText } from '../io/read-fs.js';
-import { chmod, mkdirp, rename, writeFile } from '../io/safe-fs.js';
+import { chmod, createExclusive, mkdirp, rename, writeFile } from '../io/safe-fs.js';
 import { SALT_RE } from './ids.js';
 
 export class SaltError extends Error {
@@ -32,6 +33,10 @@ export interface SaltResult {
   /** false = 内存临时盐(--dry 且文件不存在) */
   persisted: boolean;
 }
+
+/** 输家遇到赢家尚未写入内容的空文件时的重试(共约 1 秒) */
+const SALT_EMPTY_RETRIES = 20;
+const SALT_EMPTY_RETRY_MS = 50;
 
 export function saltPath(io: IoContext): string {
   return path.join(io.stateDir, 'salt');
@@ -63,9 +68,18 @@ export async function loadSalt(io: IoContext, opts: { create: boolean }): Promis
   if (!opts.create) return { salt: newSalt(), persisted: false };
   await mkdirp(io, io.stateDir, 0o700);
   await chmod(io, io.stateDir, 0o700);
-  await writeFile(io, file, `${newSalt()}\n`, { mode: 0o600 });
-  await chmod(io, file, 0o600);
-  // 回读:并发创建时以最终落盘的那份为准
+  try {
+    await createExclusive(io, file, `${newSalt()}\n`, 0o600);
+  } catch (e) {
+    // 已被别的进程(或上一轮)建好:不覆盖,读它;其它错误照抛
+    if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+  }
+  // 回读:以最终落盘的那份为准。赢家 O_EXCL 创建与写入之间别人可能读到空文件,只对「空」重试
+  for (let i = 0; i < SALT_EMPTY_RETRIES; i++) {
+    const st = await lstat(file).catch(() => undefined);
+    if (st === undefined || !st.isFile() || st.size > 0) break;
+    await sleep(SALT_EMPTY_RETRY_MS);
+  }
   const final = await readExistingSalt(file);
   if (final === undefined) throw new SaltError('盐文件写入后读不到');
   return { salt: final, persisted: true };

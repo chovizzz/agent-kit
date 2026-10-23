@@ -3,6 +3,10 @@
  * 一方收尾清空 cwd 会删掉另一方的子进程刚写的文件。进程内用 Promise 链串行(gate.ts),跨进程用这把锁。
  * 原子创建只能借 safe-fs 里 `EEXIST` 语义明确的 `symlink`(safe-fs 没有 O_EXCL 写):锁 = `<state>/reflect/llm.lock`
  * 这条指向 cwd 目录的符号链接,过期判断用链接自身的 mtime。拿不到锁**不排队等**,直接报 busy。
+ *
+ * R20 A1(contracts §20.5 R20-5.2、§20.9 第 7 条)残余:本锁整段回调期间**不续期**,超过 15 分钟的调用(judge 最多约 100 分钟)期间它可能被另一个进程回收。
+ * 新版本里 reflect / judge 的真跑先拿外层 `rsi/lock`(`src/rsi/lock.ts`,锁序 `rsi/lock` → `reflect/llm.lock`),同一仓库的新版本进程因此互斥;
+ * 只剩「新旧两个版本并发」时这一残余(旧版本进程不拿 `rsi/lock`)。本文件的 mtime 过期语义不变。
  */
 import * as path from 'node:path';
 import type { IoContext } from '../../io/paths.js';
