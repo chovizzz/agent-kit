@@ -41,7 +41,7 @@ async function kind(p: Promise<unknown>): Promise<string> {
   return 'acquired';
 }
 
-const fixed = (w: Work, over: RsiLockDeps = {}): RsiLockDeps => ({
+const fixed = (over: RsiLockDeps = {}): RsiLockDeps => ({
   isAlive: () => true,
   ...over,
 });
@@ -83,9 +83,9 @@ describe('R20-5.3 锁文件位置与权限', () => {
       });
     const a = mk(path.join(w.dir, 'real', 'state'));
     const b = mk(path.join(w.dir, 'lnk', 'state'));
-    const la = await acquireRsiLock(a, fixed(w));
+    const la = await acquireRsiLock(a, fixed());
     // 两种写法解析到同一个真实路径:本进程已持有 → 重入(internal),而不是各拿一把
-    expect(await kind(acquireRsiLock(b, fixed(w)))).toBe('internal');
+    expect(await kind(acquireRsiLock(b, fixed()))).toBe('internal');
     expect(la.path).toBe(path.join(w.dir, 'real', 'state', 'rsi', 'lock'));
     await la.release();
   });

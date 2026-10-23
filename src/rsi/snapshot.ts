@@ -29,7 +29,7 @@ import { SessionStatSchema } from '../contracts/session-stat.js';
 import { SignalSchema } from '../contracts/signal.js';
 import { canonicalJson } from '../io/canonical-json.js';
 import type { IoContext } from '../io/paths.js';
-import { lstat, readBytes, readDir, realpath } from '../io/read-fs.js';
+import { lstat, readBytes, readDir } from '../io/read-fs.js';
 import { createExclusive, remove, rename, WriteDeniedError } from '../io/safe-fs.js';
 import { rsiDir, type RsiLockHandle } from './lock.js';
 

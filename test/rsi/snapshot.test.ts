@@ -54,12 +54,6 @@ async function withLock<T>(w: Work, fn: (l: RsiLockHandle) => Promise<T>): Promi
   }
 }
 
-async function names(w: Work): Promise<string[]> {
-  const r = await readSnapshot(w.io);
-  if (r.kind !== 'ok') throw new Error(r.kind);
-  return r.snapshot.files.map((f) => f.name);
-}
-
 const STATE = JSON.stringify({ schema_version: 1 });
 
 describe('R20-5.6 commitSnapshot', () => {
