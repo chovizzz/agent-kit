@@ -240,7 +240,10 @@ describe('闭包检查器自身的对照(证明上面的"干净"不是检查器�
       [`export const l = () => import('../io/net.js');`],
       'file:src/io/net.ts',
     ],
-    '经启动器间接引入': [[`import { launchCurrent } from '../update/launcher.js';`], 'file:src/io/net.ts'],
+    经启动器间接引入: [
+      [`import { launchCurrent } from '../update/launcher.js';`],
+      'file:src/io/net.ts',
+    ],
     '经 install.ts 间接引入': [
       [`import { SHARE_REL } from '../update/install.js';`],
       'file:src/io/net.ts',

@@ -59,10 +59,10 @@ const INVALID_RSI: Record<string, string> = {
   'repo 是相对路径': '[rsi]\nenabled = true\nrepo = "relative/path"\n',
   'agents 含未知值': '[rsi]\nenabled = true\nagents = ["claude", "vim"]\n',
   'exclude_dirs 含相对路径': '[rsi]\nenabled = true\nexclude_dirs = ["clients"]\n',
-  '未知键': '[rsi]\nenabled = true\nnot_a_key = 1\n[rsi.session]\nwhatever = [1, 2]\n',
+  未知键: '[rsi]\nenabled = true\nnot_a_key = 1\n[rsi.session]\nwhatever = [1, 2]\n',
   '整个 rsi 不是表': 'rsi = 5\n',
-  '嵌套表里的类型错乱': '[rsi.session]\nexpires = "soon"\n[rsi.nested.deep]\nx = { y = [true] }\n',
-  '空段': '[rsi]\n',
+  嵌套表里的类型错乱: '[rsi.session]\nexpires = "soon"\n[rsi.nested.deep]\nx = { y = [true] }\n',
+  空段: '[rsi]\n',
 };
 
 describe('R20-A0 §20.9#1 UserConfig:update 在三种 [rsi] 情形下的行为', () => {
@@ -77,7 +77,10 @@ describe('R20-A0 §20.9#1 UserConfig:update 在三种 [rsi] 情形下的行为',
 
   it('合法 [rsi]:退出 0、输出与无 [rsi] 的同内容 update 配置逐字相同(rsi 不改变 update 的任何决定)', async () => {
     const base = await runUpdate(await world('[update]\nchannel = "latest"\n'), []);
-    const withRsi = await runUpdate(await world(`[update]\nchannel = "latest"\n\n${VALID_RSI}`), []);
+    const withRsi = await runUpdate(
+      await world(`[update]\nchannel = "latest"\n\n${VALID_RSI}`),
+      [],
+    );
     expect(withRsi.code).toBe(0);
     expect(withRsi.err).toBe('');
     expect(withRsi.out).toBe(base.out);
@@ -114,10 +117,7 @@ describe('R20-A0 §20.9#1 UserConfig:update 在三种 [rsi] 情形下的行为',
   });
 
   it('反向对照:[update] 自身写错照样 config_invalid,不会被合法的 [rsi] 掩盖', async () => {
-    const r = await runUpdate(
-      await world(`[update]\nchannel = "nightly"\n\n${VALID_RSI}`),
-      [],
-    );
+    const r = await runUpdate(await world(`[update]\nchannel = "nightly"\n\n${VALID_RSI}`), []);
     expect(r.code).toBe(3);
     expect(r.err).toContain('UPDATE_FAIL_CLOSED reason=config_invalid');
   });

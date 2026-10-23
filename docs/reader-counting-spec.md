@@ -60,6 +60,8 @@ C1 到 C12 对四家都成立。四家各自的细节在 §2。
 
 **C8 补充(B21/R3)。** reader 另有一个单行**硬上限 64 MiB**(UTF-8 字节,不含 `\n` 但含行尾 `\r`;`maxEventBytes` 不得超过它,否则 `read()` 直接报错)。超过硬上限的行不再累积正文,无法分类,不产出事件:计入 `oversized_lines`,并计入 `unknown_event_types["<line-too-large>"]`(不计 `<malformed>`,因为 jq 能解析它)。会话其余行照常读取。这类文件按 C8 的规则不得用于 A6 比对;A6 对 `unknown_event_types == {}` 的断言会直接发现它。
 
+**C8 补充 2(R20-A0,contracts §20.9 第 14 条 / Q16-A)。** 单行 JSON **嵌套深度**另有上限 256(`RSI_MAX_JSON_DEPTH`):在 `JSON.parse` 之前按括号计数预扫,字符串字面量内的括号与转义不计,多余的闭括号不使层数变负。超过的行与超硬上限的行同样处理:不解析、不产出事件,计入 `oversized_lines`,并计入 `unknown_event_types["<line-too-deep>"]`(不计 `<malformed>`;已因字节数计过 `oversized_lines` 的行不重复计)。会话其余行照常读取。基类统一实现,四家 reader 与手动 `signals collect` 的计数同步变化;这类文件按 C8 的规则不得用于 A6 比对(`unknown_event_types == {}` 的断言会直接发现它)。本机语料里没有嵌套超过 256 层的行,既有 golden 与 A6 不受影响。
+
 **C9 跨文件重复(已知,P0 不处理)。** Claude 续接(resume)会把旧历史复制进新文件(`uuid`、`tool_use.id` 相同,`sessionId` 被改写成新文件的):本机 42 个主文件里有 1922 个 `uuid`、355 个 `tool_use.id` 出现在多个文件里。Pi `/fork` 会把父会话条目复制进新文件(本机 808 个 `id` 出现在 9 个文件里)。P0 的计数**按文件**:①继承来的历史在每个后代文件里都重复计入,不做跨文件去重;②因此跨文件求和没有全局意义;③这对 A6(逐文件比对)没有影响,但会让跨文件汇总(P1 attest 的 `sessions_total`、`fired`)重复计数;④量级校准:Claude 1922 个 `uuid` / 42 个文件,Pi 808 个 `id` / 9 个文件。去重键:Claude 用 `uuid`,Pi 用条目 `id`(都需要跨文件索引)。这是 §8 的 D4。
 
 **C10 活动文件。** 正在写入的会话文件计数会变。抽样一律排除最近 60 分钟内修改过的文件(§5);reader 对活动文件的结果是读取瞬间的快照。

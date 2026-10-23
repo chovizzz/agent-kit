@@ -294,7 +294,9 @@ describe('R0-7 llm-exec:env 名字白名单', () => {
       expect(filterLlmEnv({ KIT_RSI_CHILD: v })['KIT_RSI_CHILD']).toBe('1');
     }
     expect(filterLlmEnv({})['KIT_RSI_CHILD']).toBe('1');
-    expect(() => filterLlmEnv({ KIT_RSI_CHILD: '0' }, ['KIT_RSI_CHILD'])).toThrow(LlmExecDeniedError);
+    expect(() => filterLlmEnv({ KIT_RSI_CHILD: '0' }, ['KIT_RSI_CHILD'])).toThrow(
+      LlmExecDeniedError,
+    );
   });
 
   it('passEnv 必须点名且形如 <NAME>_API_KEY;路由/加载器类名字被拒', async () => {

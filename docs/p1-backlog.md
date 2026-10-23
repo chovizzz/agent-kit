@@ -126,6 +126,8 @@
   D9 默认全部项目可排除(隐私风险单列,项目索引让排除立即对历史生效);judge / apply / promote / sync 永不自动;现有 LLM 后端保留作手动路径。
   **R20 契约已写,待实现**(`contracts.md` §20,2026-10-23;待定夺 Q1–Q25 见 §20.12,既有条款修订清单见 §20.9)。
   分块 R20(契约 §20,串行)→ A1 锁 → A2 L0 + 项目索引 / 排除 → A3 poke + hint →(P1)A4 digest / ingest → A5 技能 + 钩子 → A6 提醒 + 端到端;N3、N5、N6、N7 已定(2026-10-23,按推荐);待用户拍板 N1、N2、N4(P1 开工前,见设计稿 §15)
+  ✅ **R20-A0(第 0 块,已实现 2026-10-23,分支 verify/s10-r20-a0)**:§20.9 第 1、2、4、5、14、20 条与第 3 条 ①②(已实现(R20-A0))—— `UserConfig` 接受 `[rsi]`(此前一写 `[rsi]` 就让 `update` 退出 3、后台更新停摆)、`safe-fs.createExclusive`、`runSelf` 的 RSI 环境键 / `PI_CODING_AGENT_DIR` 存在性折叠 / 受校验的 `cwd`、零网络桥接 `src/update/self-spawn.ts`(+ import 闭包测试、lint 授权块只多放行 `runSelf`)、`KIT_RSI_CHILD=1`、reader JSON 深度 256、`canonicalJsonLine`。
+  ☐ 第 0 块之外仍待做:第 3 条 ③④⑤(根入口路由等,A3)、第 6–8、11、17、21 条(依赖 RSI 锁 A1 / rsi 配置与状态机)、第 9、10、16、18、19 条(随 A2 / A3)、第 12、13、15 条(P1)。
 
 ## S10 系列收口(2026-10-22)
 

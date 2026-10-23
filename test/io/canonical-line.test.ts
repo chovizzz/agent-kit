@@ -8,7 +8,7 @@ import {
 
 describe('R20-A0 §20.9#20 canonicalJsonLine', () => {
   it('键按码元序、无缩进无多余空白、恰一个末尾 \\n', () => {
-    const out = canonicalJsonLine({ b: 1, a: { z: [1, { y: 2, x: 3 }], c: null }, 'é': 'x' });
+    const out = canonicalJsonLine({ b: 1, a: { z: [1, { y: 2, x: 3 }], c: null }, é: 'x' });
     expect(out).toBe('{"a":{"c":null,"z":[1,{"x":3,"y":2}]},"b":1,"é":"x"}\n');
     expect(out.endsWith('\n')).toBe(true);
     expect(out.indexOf('\n')).toBe(out.length - 1);

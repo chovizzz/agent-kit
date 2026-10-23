@@ -174,7 +174,9 @@ describe('命令层的子进程环境来源', () => {
     const src = hostEnvOf(ctxOf(io));
     expect(src).toEqual(io.hostEnv);
     const child = filterLlmEnv(src, [], io.execPath);
-    expect(Object.keys(child).sort()).toEqual([...EXPECTED_KEYS, 'NO_COLOR', 'KIT_RSI_CHILD'].sort());
+    expect(Object.keys(child).sort()).toEqual(
+      [...EXPECTED_KEYS, 'NO_COLOR', 'KIT_RSI_CHILD'].sort(),
+    );
     expect(child['NO_COLOR']).toBe('1');
     expect(child['HOME']).toBe(FAKE_REAL_HOME); // 真实路径子进程 HOME = getRealHome()
   });
@@ -192,7 +194,9 @@ describe('命令层的子进程环境来源', () => {
     expect(source['OPENAI_API_KEY']).toBe('k'); // 来源接口不脱敏,过滤在 filterLlmEnv
     const child = filterLlmEnv(source, [], io.execPath);
     expect('OPENAI_API_KEY' in child).toBe(false);
-    expect(Object.keys(child).sort()).toEqual([...EXPECTED_KEYS, 'NO_COLOR', 'KIT_RSI_CHILD'].sort());
+    expect(Object.keys(child).sort()).toEqual(
+      [...EXPECTED_KEYS, 'NO_COLOR', 'KIT_RSI_CHILD'].sort(),
+    );
     const bare = hostEnvOf(ctxOf(io, { LANG: 'C' }));
     expect(bare['PATH']).toBe(io.execPath);
     expect(bare['HOME']).toBe(getRealHome({ LANG: 'C' }));

@@ -41,8 +41,7 @@ export interface RsiWorkerDeps {
 }
 
 export type RsiWorkerResult =
-  | { spawned: true }
-  | { spawned: false; why: RunSelfRefusal | 'denied' | 'threw' };
+  { spawned: true } | { spawned: false; why: RunSelfRefusal | 'denied' | 'threw' };
 
 /**
  * 以 detached、stdio 丢弃的方式起一个 `__rsi --background` worker,不等待。**从不抛错、不写任何文件**:

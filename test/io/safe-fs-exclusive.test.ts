@@ -74,11 +74,7 @@ describe('R20-A0 §20.9#4 createExclusive', () => {
     const ctx = narrowCtx(dir, 'a');
     const a = path.join(dir, 'a');
     await safe.mkdirp(wideCtx(dir), a);
-    for (const target of [
-      path.join(dir, 'outside'),
-      path.join(a, '..', 'outside'),
-      a,
-    ]) {
+    for (const target of [path.join(dir, 'outside'), path.join(a, '..', 'outside'), a]) {
       await expect(safe.createExclusive(ctx, target, 'x', 0o600), target).rejects.toBeInstanceOf(
         WriteDeniedError,
       );
