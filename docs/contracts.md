@@ -1975,7 +1975,7 @@ agent-kit reflect --gc [--write] [--json]
 | D    | 对照:去掉 `--no-context-files`,AGENTS.md / CLAUDE.md 内放令牌     | 令牌被读到                             | context 文件只受 `--no-context-files` 控制(pi 文档:不受项目信任控制) |
 | D'   | kit 参数                                                          | 令牌读不到                             | noProjectContext=verified                                            |
 | F    | 对照:不加 `--no-tools` / `--no-extensions`                        | 自报约 50 个工具,含 `mcp`、`mcpScript` | 对照成立                                                             |
-| F'   | kit 参数                                                          | 自报 `NOTOOLS`                         | 不升级 noMcp                                                       |
+| F'   | kit 参数                                                          | 自报 `NOTOOLS`                         | 不升级 noMcp                                                         |
 
 结论:
 
