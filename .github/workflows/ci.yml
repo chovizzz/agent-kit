@@ -74,6 +74,10 @@ jobs:
       - name: Acceptance scripts (A1 A2 A3 A4 A8 A9 A10 A14 A15)
         run: ops/accept-p0.sh --only A1,A2,A3,A4,A8,A9,A10,A14,A15
 
+      # P1 验收里自洽、不依赖环境的几项(判官 / 生命周期夹具与产品契约脱节时会在这里红)
+      - name: Acceptance scripts P1 (A18 A19 A23)
+        run: ops/accept-p1.sh --only A18,A19,A23
+
   supply-chain:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
