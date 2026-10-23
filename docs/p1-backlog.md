@@ -86,10 +86,11 @@
 
 ## Phase P1-C 之后的待办(R5 汇报时登记)
 
-- ☐ **R6 真实环境 spike**(主代理、需用户当场同意):①各 CLI 的无工具 / 无会话 / 无上下文参数逐项核实
-  (`claude`/`codex`/`pi` 的 `claims` 全是 `claimed`/`unresolved`);②`llm-exec` 的固定 cwd 在仓库 git 树内
-  (`<repo>/.state/reflect/cwd`),CLI 向上找项目根时可能读到仓库的 CLAUDE.md / AGENTS.md / `.claude/settings.json`
-  (contracts §16①),需实测或允许 `KIT_STATE_DIR` 指向仓库外;③每个 CLI 真跑实际写了哪些全局文件(会话日志、history),列清单
+- ◐ **R6 真实环境 spike**(2026-10-13 已测 noTools/noSession/inputViaStdin/globalWrites;2026-10-23 **pi 部分完成**):pi 的 noProjectContext / noProjectSettings 已 verified(须加 `--no-approve`;noProjectSettings 限受项目信任控制的项目级资源),noMcp 仍 `claimed`,noUserRouting 实测 `not_met`(用户级 models.json 可改写 baseUrl),见 contracts §17.6「pi 补测」。
+  **仍 unresolved(单列)**:claude / codex 的 noProjectContext、noProjectSettings、noUserRouting;claude 的 noMcp。
+  另:`llm-exec` 的固定 cwd 在仓库 git 树内(`<repo>/.state/reflect/cwd`),CLI 向上找项目根时可能读到仓库的 CLAUDE.md / AGENTS.md / `.claude/settings.json`(contracts §16①),需实测或允许 `KIT_STATE_DIR` 指向仓库外
+- ☐ **pi 的 noMcp 证据补强**(2026-10-23):现仅有模型自报工具清单;补强办法:配一个可连通的测试 MCP,做加/去 `--no-tools --no-extensions` 的正负对照,并取工具注册/调用轨迹。另:noProjectSettings 的 hooks 与用户级设置未单测
+- ☐ **doctor 是否检测用户级路由改写**(2026-10-23 用户选择:只记 `not_met`,不做运行时检测):**暂不做**。若以后要做,需读用户级 pi 配置判断 provider 的 baseUrl 是否被改写,涉及读用户配置文件与隐私边界
 - ✅ **暂存区过期 / gc**(S10-rc5,D6):`reflect --gc`(默认干跑,`--write` 才删)只清「已过期(30 天)且无引用、目录仅含 `report.json`」的 run,fail-closed,不改变 `loadUsedProposalIds`(契约 §17.7)。**遗留**:含暂存提案的 run 不回收(需先设计「已 apply 的 run」判据或编号高水位记录)
 - ✅ **契约层 FE0F**(2026-10-22 用户定:保持现状,无代码改动)——`reflect.ts` 拦 U+FE0F(⚠️/❤️ 这类 emoji 呈现序列会被拒),`lifecycle.ts` 的 `note` 为避免旧记录解析失败刻意放行 FE0F,两处语义不统一是有意的
 - ✅ **契约层不可见字符补全**:`HIDDEN_CHARS_RE` 漏 Unicode tag 字符(U+E0000 段)、bidi U+061C(ALM)、变体选择符
