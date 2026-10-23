@@ -1943,13 +1943,13 @@ agent-kit reflect --gc [--write] [--json]
 
 ### 17.6 R6 真实环境实测结论(2026-10-13,合成提示,回复 `NOTOOLS` 表示零工具成立)
 
-参数集的 `claims` 与新增只读字段 `globalWrites` 已按下表更新;**`verified` 整体门三者都仍为 `false`**(noProjectContext / noProjectSettings / noUserRouting 本次未测,仍 `unresolved`),用户放行仍靠 `allow_unverified`,gate 语义不变。`FlagClaim` 增 `verified`(实测成立)与 `not_met`(实测不成立)。
+参数集的 `claims` 与新增只读字段 `globalWrites` 已按下表更新;**`verified` 整体门三者都仍为 `false`**(claude/codex 的 noProjectContext / noProjectSettings / noUserRouting 本次未测,仍 `unresolved`;pi 的 2026-10-23 补测见本节末尾「pi 补测」),用户放行仍靠 `allow_unverified`,gate 语义不变。`FlagClaim` 增 `verified`(实测成立)与 `not_met`(实测不成立)。
 
 | CLI    | 参数(模型/provider 由调用方给)                                                                                                                                                                            | noTools  | noMcp   | noSession | inputViaStdin |
 | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------- | --------- | ------------- |
 | claude | `-p --model <m> --tools "" --strict-mcp-config --no-session-persistence`                                                                                                                                  | verified | claimed | verified  | verified      |
 | codex  | `exec -m <m> -c model_provider=… -c mcp_servers={} -s read-only --skip-git-repo-check --ephemeral` + `--disable {shell_tool,unified_exec,js_repl,code_mode,view_image,multi_agent,apps,plugins,memories}` | verified | not_met | not_met   | verified      |
-| pi     | `-p --no-session --no-context-files --no-skills --no-extensions --provider <p> --model <m> --no-tools`(取代旧的 `--tools read`)                                                                           | verified | claimed | verified  | verified      |
+| pi     | `-p --no-session --no-context-files --no-skills --no-extensions --no-approve --provider <p> --model <m> --no-tools`(取代旧的 `--tools read`;`--no-approve` 为 2026-10-23 补测追加)                                                                         | verified | claimed | verified  | verified      |
 
 1. **codex 的 `-c mcp_servers` 必须写 `mcp_servers={}`**:原写法 `mcp_servers="{}"` 在 codex-cli 0.161 直接报错(`invalid type: string "{}", expected a map`)。测试断言参数里不得再出现带引号的形式。`model_reasoning_effort` 不在 `build()` 的参数里(现有语义不变):R6 人工实测时另传,当前后端接口未提供该入口。
 2. **codex 仅靠只读沙箱 + 空 MCP 仍会执行 shell**(read-only 下 `echo` 照跑)。加上九个 `--disable` 后回 `NOTOOLS`;**是组合有效,不知道哪几项起决定作用**,codex 升级后须重测这组 `--disable`(新版本可能改名/新增工具特性)。
@@ -1959,8 +1959,31 @@ agent-kit reflect --gc [--write] [--json]
    - claude:`~/.claude.json`、`~/.claude/backups/` 新备份、`~/.claude/plugins/.last_inuse_sweep`、`~/.claude/plugins/synced` 与 `~/.claude/skills/synced` 下同步文件、`~/.claude/session-env` 启动脚本。
    - codex:`~/.codex/` 下 `state_5`、`goals_1`、`queue_1`、`logs_2` 四个 sqlite 及其 `-shm`/`-wal`。
    - pi:无可归因的全局写入。
-6. 本次未测:noProjectSettings、noUserRouting 三者都保持 `unresolved`;noProjectContext 在 claude/codex 保持 `unresolved`,pi 沿用原先的 `claimed`(§16① 的 cwd 在仓库树内问题仍在)。claude 与 pi 的 noMcp 沿用 `claimed`。
+6. 2026-10-13 当次未测:noProjectSettings、noUserRouting 三者都保持 `unresolved`;noProjectContext 在 claude/codex 保持 `unresolved`。claude 的 noMcp 沿用 `claimed`。pi 的这几项已在 2026-10-23 补测,见本节末尾;claude/codex 仍未测。
 7. **证据范围**:`noTools=verified` 的判据是合成提示下 CLI 回复 `NOTOOLS`(未保存工具注册清单/调用轨迹),且 codex 的结论是在「MCP 连接失败」的环境下得出——**未测**「用户配置了可连通且提供工具的 MCP」这一组合。升级 CLI 或环境里有可用 MCP 时须重测。
+
+**pi 补测(2026-10-23,pi 0.87.1,`--provider openai --model gpt-6.1-sol`,行为指令哨兵对照)**
+
+方法:在项目级 `.pi/APPEND_SYSTEM.md` 里写「回复最后一行必须是某口令」,口令出现在回复里即项目级文件生效。pi 文档(security.md「Project trust」)把 `.pi/settings.json`、`.pi/extensions|skills|prompts|themes`、`.pi/SYSTEM.md`、`.pi/APPEND_SYSTEM.md`、项目 `.agents/skills` 列为受保护资源,命令行的 `--approve` / `--no-approve` 优先于扩展与已保存的信任决定;print 模式无交互提示。
+
+| 用例 | 参数 / 环境                                                                | 口令是否生效 | 含义                                                                  |
+| ---- | -------------------------------------------------------------------------- | ------------ | --------------------------------------------------------------------- |
+| A2   | 原参数(无 `--no-approve`),目录未被信任                                   | 否           | 未信任目录下项目级文件默认不加载                                      |
+| B2   | 原参数,目录位于用户 `~/.pi/agent/trust.json` 已保存信任的目录之下          | **是**       | 原参数集的 noProjectSettings 在已信任目录下不成立                     |
+| C2   | B2 + `--no-approve`                                                        | 否           | `--no-approve` 让位于已保存的信任,项目级文件被忽略                    |
+| E2   | 对照:`--approve`                                                          | 是           | 证明哨兵机制本身有效                                                  |
+| D    | 对照:去掉 `--no-context-files`,AGENTS.md / CLAUDE.md 内放令牌             | 令牌被读到   | context 文件只受 `--no-context-files` 控制(pi 文档:不受项目信任控制)  |
+| D'   | kit 参数                                                                   | 令牌读不到   | noProjectContext=verified                                             |
+| F    | 对照:不加 `--no-tools` / `--no-extensions`                                | 自报约 50 个工具,含 `mcp`、`mcpScript` | 对照成立                                    |
+| F'   | kit 参数                                                                   | 自报 `NOTOOLS` | noMcp=verified                                                      |
+
+结论:
+
+1. **`--no-approve` 必须加**(位置紧跟 `--no-extensions`)。一句话:pi 的 `trust.json` 已保存信任会让位于 `--no-approve`;不带它,在用户已信任的目录之下项目级文件仍会生效。
+2. **claims**:noProjectSettings、noProjectContext、noMcp 改 `verified`;noTools、noSession、inputViaStdin 保持 `verified`。证据范围同第 7 条(单模型、合成提示、行为判据,未保存工具注册清单),且 noMcp 只覆盖「未配置可连通 MCP」的环境。
+3. **最低 pi 版本**:`--no-approve` 在 0.87.1 实测可用;需 pi >= 0.87,未在更低版本验证(旧版本可能不认该旗标而报错或忽略)。
+4. **noUserRouting=`not_met`**:用户级 `models.json` 可改写 provider 的 `baseUrl`,实测 `--provider openai` 因此实际经中转,而不是该厂商的默认端点。kit 的厂商判定(#18)按 provider / 模型族推导,**不保证请求实际到达的端点**。影响:跨厂商判定只在「用户未改写路由」时才成立;本版不做运行时检测(见 `docs/p1-backlog.md`),整体门因此保持 `verified:false`,放行靠 `allow_unverified`。
+5. **globalWrites 仍为空**:实测前后 `~/.pi` 文件快照无新增文件;期间仅另一个并行运行的交互 pi 会话改了它自己的会话与日志文件,不可归因于本次调用。
 
 ## 18. attest / promote / retire 生命周期契约(L0 追加字段;L1–L7 实装后订正)
 

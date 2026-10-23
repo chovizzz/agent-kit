@@ -157,13 +157,49 @@ describe('R3 适配器 happy path 与参数集', () => {
     expect(a).not.toContain('read');
   });
 
+  it('pi 参数:--no-approve 紧跟 --no-extensions,完整参数序列钉死', () => {
+    const a = PI_ARGS.build({ model: 'm', provider: 'zai' });
+    expect(a).toContain('--no-approve');
+    expect(a).toContain('--no-extensions');
+    expect(a[a.indexOf('--no-extensions') + 1]).toBe('--no-approve');
+    expect(a.filter((x) => x === '--no-approve')).toHaveLength(1);
+    expect(a).toEqual([
+      '-p',
+      '--no-session',
+      '--no-context-files',
+      '--no-skills',
+      '--no-extensions',
+      '--no-approve',
+      '--provider',
+      'zai',
+      '--model',
+      'm',
+      '--no-tools',
+    ]);
+  });
+
+  it('pi claims(2026-10-23 补测):项目级三项与 noMcp 为 verified,noUserRouting 为 not_met,整体门仍 false', () => {
+    expect(PI_ARGS.claims).toEqual({
+      noTools: 'verified',
+      noMcp: 'verified',
+      noSession: 'verified',
+      noProjectContext: 'verified',
+      noProjectSettings: 'verified',
+      noUserRouting: 'not_met',
+      inputViaStdin: 'verified',
+    });
+    expect(PI_ARGS.verified).toBe(false);
+    expect(PI_ARGS.basis).toContain('2026-10-23');
+    expect(PI_ARGS.basis).toContain('--no-approve');
+  });
+
   it('三个参数集全部 verified:false,且逐项声明了核实状态(noTools 等至少一项 unresolved)', () => {
     const sets = listCliArgSets();
     expect(sets.map((s) => s.cli).sort()).toEqual(['claude', 'codex', 'pi']);
     for (const s of sets) {
       expect(s.verified).toBe(false);
       expect(s.basis.length).toBeGreaterThan(10);
-      expect(Object.values(s.claims).some((v) => v === 'unresolved')).toBe(true);
+      expect(Object.values(s.claims).some((v) => v === 'unresolved' || v === 'not_met')).toBe(true);
     }
   });
 
@@ -179,15 +215,19 @@ describe('R3 适配器 happy path 与参数集', () => {
     for (const s of [CLAUDE_ARGS, CODEX_ARGS]) {
       expect(s.claims.noProjectContext).toBe('unresolved');
     }
-    for (const s of [CLAUDE_ARGS, CODEX_ARGS, PI_ARGS]) {
+    for (const s of [CLAUDE_ARGS, CODEX_ARGS]) {
       expect(s.claims.noProjectSettings).toBe('unresolved');
       expect(s.claims.noUserRouting).toBe('unresolved');
     }
+    expect(PI_ARGS.claims.noProjectContext).toBe('verified');
+    expect(PI_ARGS.claims.noProjectSettings).toBe('verified');
+    expect(PI_ARGS.claims.noUserRouting).toBe('not_met');
   });
 
   it('claims 里每个 verified / not_met 项,basis 里有对应的 `<项>=<状态>` 说明与 R6 日期', () => {
     for (const s of listCliArgSets()) {
       expect(s.basis).toContain('2026-10-13');
+      if (s.cli === 'pi') expect(s.basis).toContain('2026-10-23');
       for (const [k, v] of Object.entries(s.claims)) {
         if (v === 'verified' || v === 'not_met') expect(s.basis).toContain(`${k}=${v}`);
       }
