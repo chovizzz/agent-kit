@@ -131,7 +131,7 @@ describe('worker:24h 节流', () => {
   it('24h 内不检查;满 24h 检查;时钟往回走(last_check_at 在未来)视为该检查了', async () => {
     const run = async (last: string): Promise<{ log: string; installed: boolean }> => {
       const w = await setup();
-      await putState(w, '0.1.0-rc.0', 'c'.repeat(64), (s) => ({ ...s, last_check_at: last }));
+      await putState(w, '0.1.0', 'c'.repeat(64), (s) => ({ ...s, last_check_at: last }));
       // putState 记了 installed(为了拿到合法 state);去掉它,免得影响决策
       const st = JSON.parse(
         await readText(path.join(w.home, '.local/state/agent-kit/update/state.json')),
@@ -202,7 +202,7 @@ describe('worker:24h 节流', () => {
 
   it('真实的锁内节流:外层判到期、进锁后时钟显示 24h 内已检查过 → 不联网', async () => {
     const w = await setup();
-    await putState(w, '0.1.0-rc.0', 'c'.repeat(64), (s) => ({
+    await putState(w, '0.1.0', 'c'.repeat(64), (s) => ({
       ...s,
       last_check_at: new Date(NOW_MS - 25 * 3_600_000).toISOString(),
     }));

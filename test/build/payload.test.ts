@@ -22,7 +22,7 @@ import { atomMd, fullFiles, makeSandbox, resetBuildDeps, runBuild, writeRepo } f
 
 afterEach(resetBuildDeps);
 
-const VERSION = '0.1.0-rc.0';
+const VERSION = '0.1.0';
 const STUB_DIST = { 'dist/cli.js': '#!/usr/bin/env node\n', 'package.json': '{"version":"x"}\n' };
 
 /** org-rule 为 must、team-rule 为 should:strength 取错字段时两边会一起露馅。 */

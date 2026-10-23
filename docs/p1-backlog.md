@@ -134,7 +134,7 @@
 
 - ◐ **npm 发布**:包定名 `@chovizzz/agent-kit`,`scripts/check-publish.mjs` 自检 + `.github/workflows/release.yml`(tag `v*` 触发,`npm publish --provenance`,用 `NPM_TOKEN`)。
   **2026-10-22 准备完成,未发**:干净检出里 install / build / check-publish / `npm pack` / 假 HOME 冒烟全过(20 个文件、905213 B,无白名单外内容);工作流已收紧(`id-token` 仅发布 job、tag 必须在 main 历史上、补齐验收门、绑定 `npm-publish` 环境)。详见 [`npm-first-publish.md`](npm-first-publish.md)。
-  **待你做**(精确步骤在该文 §6):①npm 建 granular token(仅 `@chovizzz/agent-kit`,Read and write);②GitHub 建 Environment `npm-publish`(required reviewers + tag 规则 `v*` + 环境 secret `NPM_TOKEN`);③建 `v*` tag ruleset;④版本提升 PR 合入 main(三处 `0.1.0-rc.0` → `0.1.0`,见该文 §3,待你定夺是否现在做);⑤自查后执行 `git tag -s v0.1.0 && git push origin v0.1.0`;⑥首发后 `npm view` / `npm audit signatures` 验证。
+  **待你做**(精确步骤在该文 §6):①npm 建 granular token(仅 `@chovizzz/agent-kit`,Read and write);②GitHub 建 Environment `npm-publish`(required reviewers + tag 规则 `v*` + 环境 secret `NPM_TOKEN`);③建 `v*` tag ruleset;④合入 verify/s10-rel 的 PR(版本三处 `0.1.0-rc.0` → `0.1.0` 与 MIT 许可证已在该 PR 里做完,见该文 §3,你只需审阅合并);⑤自查后执行 `git tag -s v0.1.0 && git push origin v0.1.0`;⑥首发后 `npm view` / `npm audit signatures` 验证。
   **许可证已做**(MIT,版权行用 GitHub 所有者名,是否改成真实姓名/公司名待你定);**待定夺**:是否改用 Trusted Publishing 去掉长期 token
 - ⏸ **远端分支保护 + CODEOWNERS**:需要 repo admin(geoly/chovizzz 两远端的策略要分别定)
 - ⏸ **签名提交**:需要本机签名密钥决策(ssh 签名可用现有 ssh-key,`git config gpg.format ssh` + GitHub 上传公钥)

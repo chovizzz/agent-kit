@@ -19,7 +19,7 @@ import {
 
 void ExitCode;
 
-const OWN = '0.1.0-rc.0';
+const OWN = '0.1.0';
 
 async function launch(
   w: World,
