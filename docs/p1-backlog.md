@@ -120,9 +120,10 @@
   只作用于带 `kit:reflector` 标签的 PR,无标签内容 PR 行为不变
 - ☑ **`sync` 写全局 + `doctor`**(已实装:S4 / S5,契约见 contracts §19.2 / §19.3)(P2 表内但同批):真实 HOME 受管路径写入,依赖 B17 守卫面
 
-- ☐ **自动 RSI(自动收集 + 干跑提案)**(用户 2026-10-23 定方向):设计稿 [`design-auto-rsi.md`](design-auto-rsi.md);
-  默认只自动跑零外发的 L0(collect + reflect 干跑),L1(reflect 真跑只写暂存区)需一次性同意并绑定 CLI 版本;judge / apply / promote / sync 永不自动。
-  分块 R20(契约 §20,串行)→ A1 锁 → A2 `rsi tick` → A3 后台调度 →(P1)A4 pi 扩展安装 / A5 L1 判据 / A6 提醒;待用户拍板 D1–D9(见设计稿 §10)
+- ☐ **自动 RSI(会话内 agent 模式)**(用户 2026-10-23 定方向与 D1/D2/D5/D9/D10):设计稿 v2 [`design-auto-rsi.md`](design-auto-rsi.md);
+  kit 不再自己拉起 LLM CLI:会话结束钩子触发 L0(collect + 干跑,零外发),会话开始钩子注入一行计数提示,会话内 agent 按技能 `agent-kit-rsi` 经 `rsi digest` 读脱敏摘要、经 `reflect --ingest` 交提案(kit 全量校验、只写暂存区);
+  D9 默认全部项目可排除(隐私风险单列,项目索引让排除立即对历史生效);judge / apply / promote / sync 永不自动;现有 LLM 后端保留作手动路径。
+  分块 R20(契约 §20,串行)→ A1 锁 → A2 L0 + 项目索引 / 排除 → A3 poke + hint →(P1)A4 digest / ingest → A5 技能 + 钩子 → A6 提醒 + 端到端;待用户拍板 N1–N5(见设计稿 §15)
 
 ## S10 系列收口(2026-10-22)
 
