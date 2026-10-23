@@ -60,8 +60,8 @@ export function exceedsJsonDepth(text: string, max: number = RSI_MAX_JSON_DEPTH)
   for (let i = 0; i < text.length; i++) {
     const c = text.charCodeAt(i);
     if (inString) {
-      if (c === 0x5c)
-        i++; // 反斜杠:跳过下一个码元(\" 不结束字符串)
+      // 反斜杠:跳过下一个码元(\" 不结束字符串)
+      if (c === 0x5c) i++;
       else if (c === 0x22) inString = false;
     } else if (c === 0x22) inString = true;
     else if (c === 0x7b || c === 0x5b) {
