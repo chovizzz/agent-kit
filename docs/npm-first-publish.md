@@ -6,10 +6,10 @@
 
 - npm 上已有 `0.0.0-stage` 与 `0.1.0-rc.0`;dist-tag:`latest` = `0.0.0-stage`,`rc` = `0.1.0-rc.0`。`0.1.0-rc.0` 带 provenance(见 `test/update/fixtures/att-rc0.json`),所以 `@chovizzz` scope 存在、发布链路曾经跑通。
 - GitHub 仓库是 PUBLIC(provenance 的前提)。`package.json` 已有 `repository`(指向本仓库)、`publishConfig.access=public`、`engines.node>=22`、`bin.agent-kit=dist/cli.js`、`files` 白名单。
-- **`package.json` / `src/contracts/meta.ts` 的 `KIT_VERSION` / `kit.toml` 三处版本仍是 `0.1.0-rc.0`**。此时推 `v0.1.0` 会在 `check-publish --tag` 一步红(fail-closed,不会误发)。见 §3。
+- `package.json` / `src/contracts/meta.ts` 的 `KIT_VERSION` / `kit.toml` 三处版本已提升为 `0.1.0`(见 §3,待该 PR 合入 main)。
 - **`latest` 现在指向 `0.0.0-stage`。** 发布稳定版 `0.1.0` 会把 `latest` 自动移到 `0.1.0`;带 `-` 后缀的版本只进 `rc`(`release.yml` 的发布步骤已按此分流)。
 
-## 2. 干净检出里已核对的结果(javis,Node 22 / pnpm 10.33 / npm 10)
+## 2. 干净检出里已核对的结果(javis,Node 22 / pnpm 10.33 / npm 10;**这是版本提升前 `0.1.0-rc.0` 的验证记录**,`0.1.0` 的验证见 §3 末尾)
 
 `pnpm install --frozen-lockfile --ignore-scripts`、`pnpm run build`、`node scripts/build-payload.mjs`、`node scripts/check-publish.mjs` 均退出 0。`npm pack --dry-run --json`:
 
@@ -24,13 +24,16 @@
 
 冒烟(临时目录 + 假 HOME,`npm install --ignore-scripts ./tarball`):`agent-kit --version` 输出 `0.1.0-rc.0`,`agent-kit check --help` 正常,`npx --no-install agent-kit --version` 正常;假 HOME 里只有 npm 自己的日志;真实 HOME 前后快照一致。
 
-## 3. 打 tag 之前要先合入的「版本提升」提交(待定夺,本分支没做)
+## 3. 「版本提升」提交(已做,随 verify/s10-rel 的 PR 合入 main)
 
-`0.1.0-rc.0` 的字符串散在生成物与测试夹具里(`out/` 的技能文件、`test/build/golden/*/tree.txt`、`test/update/*` 若干),提升版本是一个独立变更集,不是改一行。建议单独一个 PR:
+`0.1.0-rc.0` → `0.1.0` 是一个独立提交,没有机械全局替换。按类别处理:
 
-1. 同时改 `package.json` 的 `version`、`src/contracts/meta.ts` 的 `KIT_VERSION`、`kit.toml` 的 `version`(`check-publish` 会核对三处一致);
-2. 重新生成 `out/` 与 golden(`pnpm run golden:update`,并按 release-checklist §3 确认 `out/` 已随源码重生成);测试里把 `0.1.0-rc.0` 当作「被更新的旧版本」的夹具不要误改;
-3. 全量门禁 + A10 + 远端 CI 全绿后合入 main。
+1. 版本源三处一起改:`package.json` 的 `version`、`src/contracts/meta.ts` 的 `KIT_VERSION`、`kit.toml` 的 `version`(`check-publish` 核对三处一致)。
+2. 生成物用命令重建、不手改(先 `pnpm run build` 让 `dist/` 带上新 `KIT_VERSION`):`node dist/cli.js build` 重生成 `out/`(技能文件页脚与 `manifest.json` 的 `kit_version`/哈希),`vitest run test/build/build.test.ts -u` 重生成 `test/build/golden/*/tree.txt`。
+3. 测试夹具里「当前自身版本」的占位改为 `0.1.0`:`test/update/launcher.test.ts` 的 `OWN`、`test/update/worker.test.ts` 里两处 `putState`(它们都只要求「比 0.1.1 / 0.2.x 更旧」,相对关系不变),以及 `test/build/payload.test.ts` 的 `VERSION`(它要和构建出的 `KIT_VERSION` 一致,漏改会让 3 个用例报 `PAYLOAD_VERSION_MISMATCH`)。
+4. **没有改动**(真实历史或与当前版本无关):`test/update/fixtures/` 下真实的 `0.1.0-rc.0` 发布记录(tarball、`att-rc0.json`、TUF 缓存,A10 精确钉死 sha256)及依赖它们的 `provenance*.test.ts`、`tar.test.ts`、`test/update/fixtures/provenance-helpers.ts`、`test/io/net.test.ts`、`test/update/policy-binding.test.ts`(SAN/subject 里的 `v0.1.0-rc.0` 是那份真实 attestation 的内容);`policy.test.ts` 的「预发布 → 其正式版」用例(语义就是 rc.0 → 0.1.0);`sync-update.test.ts` 的合法 SemVer 清单;`bundle-artifact.test.ts` 里对 att-rc0 的验签。
+
+`0.1.0` 版本提升后的验证(javis,Node 22 / pnpm 10.33 / npm 10):typecheck、build、build-payload、`check-publish`、lint、format:check、全量 vitest、A10、A11 均通过;`npm pack --dry-run` 为 `@chovizzz/agent-kit@0.1.0`,20 个文件、`license` 为 MIT、无白名单外内容;假 HOME 里真装 tarball,`agent-kit --version` 输出 `0.1.0`。合入前仍要求远端 CI(verify、supply-chain)全绿。
 
 ## 4. 本分支对发布工作流做的修复
 
@@ -55,7 +58,7 @@
 
 ## 5. 待定夺(代理不拍板)
 
-- **许可证**:`package.json` 与 `LICENSE` 是 `UNLICENSED`(「私有、不授权再分发」),但包以 `access=public` 发在公开 registry,仓库也是公开的。这与「谁都能 `npm install`」并不矛盾,但没有任何人获得使用授权。要不要改成明确的许可证(例如 MIT)由你定;改的话要同时改 `package.json` 的 `license` 与 `LICENSE` 文件(版本提升 PR 里一起做最省事)。
+- **许可证(已做)**:`package.json` 的 `license` 改为 `MIT`,`LICENSE` 换成标准 MIT 全文,版权行 `Copyright (c) 2026 chovizzz`(GitHub 仓库所有者名);`check-publish` 新增 `LICENSE_FIELD` / `LICENSE_TEXT` 两项检查。**仍待你定**:版权行要不要换成真实姓名或公司名(改的话只改 `LICENSE` 里那一行即可,检查允许版权行不同)。
 - **长期去掉 `NPM_TOKEN`**:npm 支持 Trusted Publishing(用 GitHub OIDC 免 token 发布)。首发后可以评估;本分支没有实现,因为需要先在 npm 包设置里登记工作流。
 
 ## 6. 用户亲手做的清单
@@ -91,7 +94,7 @@
 
 ### 6.3 发布前自查(本机或 javis 均可)
 
-1. 版本提升 PR(§3)已合入 `main`,`main` 上 CI 全绿。
+1. 版本提升 + 许可证 PR(§3)已合入 `main`,`main` 上 CI 全绿。
 2. 在干净检出里:`git switch main && git pull --ff-only`,然后 `pnpm install --frozen-lockfile --ignore-scripts && pnpm run build && node scripts/build-payload.mjs && node scripts/check-publish.mjs --tag v0.1.0`,必须退出 0。
 3. `npm view @chovizzz/agent-kit versions dist-tags --json` 确认 `0.1.0` 尚不存在。
 
