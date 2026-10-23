@@ -120,6 +120,10 @@
   只作用于带 `kit:reflector` 标签的 PR,无标签内容 PR 行为不变
 - ☑ **`sync` 写全局 + `doctor`**(已实装:S4 / S5,契约见 contracts §19.2 / §19.3)(P2 表内但同批):真实 HOME 受管路径写入,依赖 B17 守卫面
 
+- ☐ **自动 RSI(自动收集 + 干跑提案)**(用户 2026-10-23 定方向):设计稿 [`design-auto-rsi.md`](design-auto-rsi.md);
+  默认只自动跑零外发的 L0(collect + reflect 干跑),L1(reflect 真跑只写暂存区)需一次性同意并绑定 CLI 版本;judge / apply / promote / sync 永不自动。
+  分块 R20(契约 §20,串行)→ A1 锁 → A2 `rsi tick` → A3 后台调度 →(P1)A4 pi 扩展安装 / A5 L1 判据 / A6 提醒;待用户拍板 D1–D9(见设计稿 §10)
+
 ## S10 系列收口(2026-10-22)
 
 - ✅ **S10-a(D14)**:`sync --write` 在拿锁并重新规划(replan)且计划 ok 后,把 kit 状态目录(`.local/state/agent-kit`)自动收紧到 0700;只动这一层,走 home-fs 守卫(HOME 身份、逐段 lstat、`O_NOFOLLOW`、dev:ino 复核);
