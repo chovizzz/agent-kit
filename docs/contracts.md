@@ -1949,7 +1949,7 @@ agent-kit reflect --gc [--write] [--json]
 | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------- | --------- | ------------- |
 | claude | `-p --model <m> --tools "" --strict-mcp-config --no-session-persistence`                                                                                                                                  | verified | claimed | verified  | verified      |
 | codex  | `exec -m <m> -c model_provider=… -c mcp_servers={} -s read-only --skip-git-repo-check --ephemeral` + `--disable {shell_tool,unified_exec,js_repl,code_mode,view_image,multi_agent,apps,plugins,memories}` | verified | not_met | not_met   | verified      |
-| pi     | `-p --no-session --no-context-files --no-skills --no-extensions --no-approve --provider <p> --model <m> --no-tools`(取代旧的 `--tools read`;`--no-approve` 为 2026-10-23 补测追加)                                                                         | verified | claimed | verified  | verified      |
+| pi     | `-p --no-session --no-context-files --no-skills --no-extensions --no-approve --provider <p> --model <m> --no-tools`(取代旧的 `--tools read`;`--no-approve` 为 2026-10-23 补测追加)                        | verified | claimed | verified  | verified      |
 
 1. **codex 的 `-c mcp_servers` 必须写 `mcp_servers={}`**:原写法 `mcp_servers="{}"` 在 codex-cli 0.161 直接报错(`invalid type: string "{}", expected a map`)。测试断言参数里不得再出现带引号的形式。`model_reasoning_effort` 不在 `build()` 的参数里(现有语义不变):R6 人工实测时另传,当前后端接口未提供该入口。
 2. **codex 仅靠只读沙箱 + 空 MCP 仍会执行 shell**(read-only 下 `echo` 照跑)。加上九个 `--disable` 后回 `NOTOOLS`;**是组合有效,不知道哪几项起决定作用**,codex 升级后须重测这组 `--disable`(新版本可能改名/新增工具特性)。
@@ -1966,16 +1966,16 @@ agent-kit reflect --gc [--write] [--json]
 
 方法:在项目级 `.pi/APPEND_SYSTEM.md` 里写「回复最后一行必须是某口令」,口令出现在回复里即项目级文件生效。pi 文档(security.md「Project trust」)把 `.pi/settings.json`、`.pi/extensions|skills|prompts|themes`、`.pi/SYSTEM.md`、`.pi/APPEND_SYSTEM.md`、项目 `.agents/skills` 列为受保护资源,命令行的 `--approve` / `--no-approve` 优先于扩展与已保存的信任决定;print 模式无交互提示。
 
-| 用例 | 参数 / 环境                                                                | 口令是否生效 | 含义                                                                  |
-| ---- | -------------------------------------------------------------------------- | ------------ | --------------------------------------------------------------------- |
-| A2   | 原参数(无 `--no-approve`),目录未被信任                                   | 否           | 未信任目录下项目级文件默认不加载                                      |
-| B2   | 原参数,目录位于用户 `~/.pi/agent/trust.json` 已保存信任的目录之下          | **是**       | 原参数集的 noProjectSettings 在已信任目录下不成立                     |
-| C2   | B2 + `--no-approve`                                                        | 否           | `--no-approve` 让位于已保存的信任,项目级文件被忽略                    |
-| E2   | 对照:`--approve`                                                          | 是           | 证明哨兵机制本身有效                                                  |
-| D    | 对照:去掉 `--no-context-files`,AGENTS.md / CLAUDE.md 内放令牌             | 令牌被读到   | context 文件只受 `--no-context-files` 控制(pi 文档:不受项目信任控制)  |
-| D'   | kit 参数                                                                   | 令牌读不到   | noProjectContext=verified                                             |
-| F    | 对照:不加 `--no-tools` / `--no-extensions`                                | 自报约 50 个工具,含 `mcp`、`mcpScript` | 对照成立                                    |
-| F'   | kit 参数                                                                   | 自报 `NOTOOLS` | noMcp=verified                                                      |
+| 用例 | 参数 / 环境                                                       | 口令是否生效                           | 含义                                                                 |
+| ---- | ----------------------------------------------------------------- | -------------------------------------- | -------------------------------------------------------------------- |
+| A2   | 原参数(无 `--no-approve`),目录未被信任                            | 否                                     | 未信任目录下项目级文件默认不加载                                     |
+| B2   | 原参数,目录位于用户 `~/.pi/agent/trust.json` 已保存信任的目录之下 | **是**                                 | 原参数集的 noProjectSettings 在已信任目录下不成立                    |
+| C2   | B2 + `--no-approve`                                               | 否                                     | `--no-approve` 让位于已保存的信任,项目级文件被忽略                   |
+| E2   | 对照:`--approve`                                                  | 是                                     | 证明哨兵机制本身有效                                                 |
+| D    | 对照:去掉 `--no-context-files`,AGENTS.md / CLAUDE.md 内放令牌     | 令牌被读到                             | context 文件只受 `--no-context-files` 控制(pi 文档:不受项目信任控制) |
+| D'   | kit 参数                                                          | 令牌读不到                             | noProjectContext=verified                                            |
+| F    | 对照:不加 `--no-tools` / `--no-extensions`                        | 自报约 50 个工具,含 `mcp`、`mcpScript` | 对照成立                                                             |
+| F'   | kit 参数                                                          | 自报 `NOTOOLS`                         | noMcp=verified                                                       |
 
 结论:
 
