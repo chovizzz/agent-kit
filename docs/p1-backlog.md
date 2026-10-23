@@ -132,8 +132,10 @@
 
 ## Phase P1-D(发布与治理,⏸ 等用户凭据/授权)
 
-- ◐ **npm 发布**:包定名 `@chovizzz/agent-kit@0.1.0`,`scripts/check-publish.mjs` 自检 + `.github/workflows/release.yml`(tag `v*` 触发,`npm publish --provenance`,用 `secrets.NPM_TOKEN`);
-  **待办:①在 GitHub 仓库加 `NPM_TOKEN` secret(npm token 须对 `@chovizzz` scope 有发布权;`chovizzz` 若还不是 npm org 需先建);②确认 CI 全绿;③推 tag `v0.1.0` 触发首发**
+- ◐ **npm 发布**:包定名 `@chovizzz/agent-kit`,`scripts/check-publish.mjs` 自检 + `.github/workflows/release.yml`(tag `v*` 触发,`npm publish --provenance`,用 `NPM_TOKEN`)。
+  **2026-10-22 准备完成,未发**:干净检出里 install / build / check-publish / `npm pack` / 假 HOME 冒烟全过(20 个文件、905213 B,无白名单外内容);工作流已收紧(`id-token` 仅发布 job、tag 必须在 main 历史上、补齐验收门、绑定 `npm-publish` 环境)。详见 [`npm-first-publish.md`](npm-first-publish.md)。
+  **待你做**(精确步骤在该文 §6):①npm 建 granular token(仅 `@chovizzz/agent-kit`,Read and write);②GitHub 建 Environment `npm-publish`(required reviewers + tag 规则 `v*` + 环境 secret `NPM_TOKEN`);③建 `v*` tag ruleset;④版本提升 PR 合入 main(三处 `0.1.0-rc.0` → `0.1.0`,见该文 §3,待你定夺是否现在做);⑤自查后执行 `git tag -s v0.1.0 && git push origin v0.1.0`;⑥首发后 `npm view` / `npm audit signatures` 验证。
+  **待定夺**:许可证(现为 `UNLICENSED` 却公开发布);是否改用 Trusted Publishing 去掉长期 token
 - ⏸ **远端分支保护 + CODEOWNERS**:需要 repo admin(geoly/chovizzz 两远端的策略要分别定)
 - ⏸ **签名提交**:需要本机签名密钥决策(ssh 签名可用现有 ssh-key,`git config gpg.format ssh` + GitHub 上传公钥)
 - ◐ CI 观察:`.github/workflows/ci.yml` 在 origin 的红点——已定位两处真红(见下),现验证中

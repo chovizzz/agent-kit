@@ -37,4 +37,6 @@ ops/accept-p0.sh                 # 汇总 A1–A15;任何 4(未执行)按失败
 
 ## 4. 不在 P0 的
 
+npm 首发的准备与用户手动步骤见 [`npm-first-publish.md`](npm-first-publish.md)。
+
 npm 发布、远端分支保护与 CODEOWNERS、签名提交、`sync` 写全局、探针与反思器:都是 P1 及以后。
