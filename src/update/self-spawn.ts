@@ -5,7 +5,7 @@
  * 而 poke / hint / `__rsi --background` / 各前台 rsi 命令从入口起算的 import 传递闭包**不得**含网络出口(R20-1.1)。
  * rsi 要起 worker 就只能走这里:本文件只引用 `io/exec.ts`(`runSelf`)与类型,**不得**引用 `install.ts` / `registry.ts` /
  * `provenance.ts` / `launcher.ts` / `net.ts` / `home-fs.ts`(eslint 对本文件的授权块只放行 `runSelf`,不放行这些;
- * `test/update/self-spawn.test.ts` 另从多个入口起算断言闭包里没有它们)。
+ * `test/rsi/import-closure.test.ts` 另从多个入口起算断言闭包里没有它们;`test/update/self-spawn.test.ts` 钉桥接的调用形状)。
  *
  * 不做的事(契约 Q25-A):不定位、不校验 `current`,也不转发到 `current`——钩子触发时跑的就是被调用的这份包
  * (`target: self`,信任不高于当前进程自己)。所以这里没有「完整性校验」:`verifyInstalledTree` 留在 `install.ts`。

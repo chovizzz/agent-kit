@@ -75,7 +75,7 @@ describe('R20-A0 §20.9#4 createExclusive', () => {
     await safe.symlink(wide, path.join(a, 'real'), path.join(a, 'link'));
     await expect(
       safe.createExclusive(narrowCtx(dir, 'a'), path.join(a, 'link'), 'evil', 0o600),
-    ).rejects.toBeDefined();
+    ).rejects.toMatchObject({ code: 'EEXIST' });
     expect(await readText(path.join(a, 'real'))).toBe('keep');
     expect((await lstat(path.join(a, 'link'))).isSymbolicLink()).toBe(true);
   });

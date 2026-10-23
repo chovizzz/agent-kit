@@ -22,7 +22,7 @@ describe('R20-A0 §20.9#20 canonicalJsonLine', () => {
     );
   });
 
-  it('字符串里的 \\n / U+2028 / U+2029 / \\r 被转义,输出仍是一行', () => {
+  it('字符串里的 \\n / \\r 被转义,输出仍是一行(U+2028 / U+2029 原样保留,不构成换行,与 readLines 口径一致)', () => {
     const out = canonicalJsonLine({ s: 'a\nb\r  c' });
     expect(out.split('\n')).toHaveLength(2);
     expect(JSON.parse(out) as unknown).toEqual({ s: 'a\nb\r  c' });
