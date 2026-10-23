@@ -2,7 +2,6 @@
  * R20-A0:safe-fs `createExclusive`(contracts §20.9 第 4 条;锁与去重 / 预留标记的基础)。
  * 判据:O_EXCL(已存在不覆盖)、O_NOFOLLOW(符号链接不跟随)、writeRoots 守卫、显式 mode、写失败不留半个文件。
  */
-import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { exists, lstat, readText } from '../../src/io/read-fs.js';
@@ -63,7 +62,7 @@ describe('R20-A0 §20.9#4 createExclusive', () => {
     const wide = wideCtx(dir);
     const a = path.join(dir, 'a');
     await safe.mkdirp(wide, a);
-    fs.symlinkSync(path.join(a, 'ghost'), path.join(a, 'link'));
+    await safe.symlink(wide, path.join(a, 'ghost'), path.join(a, 'link'));
     await expect(
       safe.createExclusive(narrowCtx(dir, 'a'), path.join(a, 'link'), 'x', 0o600),
     ).rejects.toBeInstanceOf(WriteDeniedError);

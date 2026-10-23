@@ -161,7 +161,7 @@ describe('R20-A0 §20.9#3 ② RunSelfOptions.cwd(R20-3.2.2)', () => {
       path.join(base, 'nope'),
       path.join(base, 'afile'),
       path.join(base, 'link-to-repo'),
-      path.join(base, 'repo', '..', 'repo'),
+      `${base}/repo/../repo`, // 字符串拼接:path.join 会把 .. 吃掉
       `${repo}/`,
     ];
     for (const cwd of cases) {
