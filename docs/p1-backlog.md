@@ -132,11 +132,10 @@
 
 ## Phase P1-D(发布与治理,⏸ 等用户凭据/授权)
 
-- ◐ **npm 发布**:包定名 `@chovizzz/agent-kit`,`scripts/check-publish.mjs` 自检 + `.github/workflows/release.yml`(tag `v*` 触发,`npm publish --provenance`,用 `NPM_TOKEN`)。
-  **2026-10-22 准备完成,未发**:干净检出里 install / build / check-publish / `npm pack` / 假 HOME 冒烟全过(20 个文件、905213 B,无白名单外内容);工作流已收紧(`id-token` 仅发布 job、tag 必须在 main 历史上、补齐验收门、绑定 `npm-publish` 环境)。详见 [`npm-first-publish.md`](npm-first-publish.md)。
-  **待你做**(精确步骤在该文 §6):①npm 建 granular token(仅 `@chovizzz/agent-kit`,Read and write);②GitHub 建 Environment `npm-publish`(required reviewers + tag 规则 `v*` + 环境 secret `NPM_TOKEN`);③建 `v*` tag ruleset;④合入 verify/s10-rel 的 PR(版本三处 `0.1.0-rc.0` → `0.1.0` 与 MIT 许可证已在该 PR 里做完,见该文 §3,你只需审阅合并);⑤自查后执行 `git tag -s v0.1.0 && git push origin v0.1.0`;⑥首发后 `npm view` / `npm audit signatures` 验证。
-  **许可证已做**(MIT,版权行用 GitHub 所有者名,是否改成真实姓名/公司名待你定);**待定夺**:是否改用 Trusted Publishing 去掉长期 token
-- ⏸ **远端分支保护 + CODEOWNERS**:需要 repo admin(geoly/chovizzz 两远端的策略要分别定)
+- ✅ **npm 发布**:`@chovizzz/agent-kit@0.1.0` 已于 2026-10-23 首发(tag `v0.1.0` 指向 `0505cbe`,`release` 工作流 run 39893164779 全步骤成功,带 provenance,透明日志 logIndex 3409129316)。npm 的 PUT 返回 202 排队,几分钟后才可见(没有重发);可见后 `latest=0.1.0`、`rc=0.1.0-rc.0`;空目录假 HOME 真装 `npm audit signatures` 报 1 个 registry 签名与 1 个 attestation 均已验证,`agent-kit --version` 输出 0.1.0,license MIT。详见 [`npm-first-publish.md`](npm-first-publish.md)。
+  **用户定(2026-10-23)**:`npm-publish` 环境不再设必需审批人,以后推 `v*` tag 直接发布(部署规则仍限 `v*` tag 与 `main`;tag 创建仅仓库管理员可绕过,更新/删除对所有人禁止);仓库级旧 `NPM_TOKEN` 继续使用,不换;版权行保持 `chovizzz`。
+  遗留:rc.0 不含 `update` 命令,所以「用 rc.0 跑 update 发现 0.1.0」没有可验证对象,留给下一次发版(0.1.0 → 下一个版本)验证;是否改用 Trusted Publishing 去掉长期 token 待以后再说。
+- ✅ **远端分支保护 + CODEOWNERS**(2026-10-22/23):`main` 规则集 `agent-kit` active(禁删除、禁强推、必须通过 `verify` 与 `supply-chain`,无绕过);`.github/CODEOWNERS` 已入库;`v*` tag 规则集 `protect-release-tags` / `lock-release-tags` active。geoly 远端未设
 - ⏸ **签名提交**:需要本机签名密钥决策(ssh 签名可用现有 ssh-key,`git config gpg.format ssh` + GitHub 上传公钥)
 - ◐ CI 观察:`.github/workflows/ci.yml` 在 origin 的红点——已定位两处真红(见下),现验证中
   - probe 那两次失败:`format:check`(已提交的 probe.ts/check-budget.ts/contracts.md 未过 prettier;`b312e95` 修复)
