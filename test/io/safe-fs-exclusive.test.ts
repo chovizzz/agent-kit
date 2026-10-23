@@ -22,6 +22,29 @@ describe('R20-A0 §20.9#4 createExclusive', () => {
     expect((await lstat(path.join(a, 'bytes'))).mode & 0o777).toBe(0o640);
   });
 
+  it('mode 不受 umask 影响:0o664 创建后恰为 0o664(显式 fchmod)', async () => {
+    const { dir } = await makeTempDir('excl-mode-');
+    const ctx = narrowCtx(dir, 'a');
+    const a = path.join(dir, 'a');
+    await safe.mkdirp(ctx, a);
+    await safe.createExclusive(ctx, path.join(a, 'm'), 'x', 0o664);
+    expect((await lstat(path.join(a, 'm'))).mode & 0o777).toBe(0o664);
+  });
+
+  it('创建后写入失败 → 抛错且不留半个文件占着名字(下一次仍可独占创建)', async () => {
+    const { dir } = await makeTempDir('excl-writefail-');
+    const ctx = narrowCtx(dir, 'a');
+    const a = path.join(dir, 'a');
+    await safe.mkdirp(ctx, a);
+    const f = path.join(a, 'lock');
+    await expect(
+      safe.createExclusive(ctx, f, 123 as unknown as string, 0o600),
+    ).rejects.toBeDefined();
+    expect(await exists(f)).toBe(false);
+    await safe.createExclusive(ctx, f, 'ok', 0o600);
+    expect(await readText(f)).toBe('ok');
+  });
+
   it('已存在 → EEXIST,且原内容、原权限不变(不是覆盖写)', async () => {
     const { dir } = await makeTempDir('excl-exist-');
     const ctx = narrowCtx(dir, 'a');
