@@ -3502,3 +3502,561 @@ S7c-A 给 home-fs 追加三个原语(都走同一套「表内 + planScope + 逐�
   ]
 }
 ```
+
+## 20. 自动 RSI(会话内 agent 模式)P0 契约(R20,契约先行;A1–A3 实装后订正)
+
+本节把 `docs/design-auto-rsi.md`(v2,2026-10-23 合并;下称「设计稿」)里属于 **P0** 的部分写成可验收条款。P0 范围按设计稿 §14:本节、锁(A1)、L0 采集与 `rsi tick`(A2)、后台调度 `rsi poke`(A3)、项目索引与排除 / purge、`rsi hint` / `rsi status` / `rsi projects` / `rsi confirm` / `rsi stop`。P1(digest / ingest、技能与钩子安装、提醒、D17)只给命令面占位与不变量(§20.10)。已定决定:N3、N5、N6、N7(2026-10-23,按推荐);N1、N2、N4 待第二批,相关处写「待定,不在 P0 范围」。
+
+条款编号形如 `R20-<小节>.<序号>`,测试与验收脚本按编号引用(`it('R20-1.4 …')`)。本节的数值全部是**不可配置的常量**(写进 `src/contracts/rsi.ts`),P0 的 `[rsi]` 没有任何调节预算、间隔、门槛的键;以后要开放,必须逐项写明字段、上下界与「调严」的方向。
+
+本节的 JSON 是说明性示例,**没有** `example` 标记(对应 schema 尚未登记,带标记会让 `test/contracts/examples.test.ts` 红);R20 schema 落地时改成带标记的合法 / 错误示例并在 `test/contracts/registry.ts` 登记,错误示例要断言「状态、阻断范围、原因码」三者,不只断言 zod 成败。
+
+通用约定(沿用 §17 / §18 / §19):
+
+- stdout 只含计数、枚举、id、哈希前缀;`--json` 为 canonical JSON、键集合固定。**唯一例外**:`rsi projects` 与 `rsi confirm` 输出经清洗的目录名(R20-3.5.2),`rsi projects --paths` 输出经清洗的绝对路径(R20-3.5.3)。stderr 只含稳定码 `RSI_<类别> reason=<码>` 或本节的顶层稳定码,不回显异常消息、文件内容、绝对路径、用户名、项目名。
+- 单行日志用 `canonicalJsonLine`(与 `canonicalJson` 同键序规则,但无缩进、无多余空白、恰一个末尾 `\n`;§20.9 第 20 条)。
+- 数字参数用 `parseDecimalUint`;未知参数、重复的单值参数、`--x=y` 写法一律退出 2 `RSI_USAGE reason=unknown_arg`(poke / hint 例外,见 R20-3.2.1 / R20-3.3.1)。
+- 退出码沿用 §2,多结果用 `combineExitCodes`(3 > 2 > 1 > 4 > 64 > 0)。
+- 时钟、随机源、进程存活判据、TTY 判据、文件系统读写都可注入(假时钟、假 `isAlive`、经 `read-fs` / `safe-fs` 注入的读写审计桩),测试不依赖真实时间。
+
+### 20.1 范围与不变量
+
+**决策**
+
+- R20-1.1 **自动路径零 LLM、零联网**:从 `rsi poke`、`rsi hint`、`__rsi --background`、`rsi tick|status|projects|confirm|stop|purge` 各自的入口**分别**起算的 import 传递闭包,都不含 `src/io/llm-exec.ts`、`src/reflect/backends/**`、`src/io/net.ts`。现有 `src/update/launcher.ts → install.ts → net.ts` 的链意味着这些入口**不得**经过现有启动器(R20-1.2a、§20.9 第 3 条)。唯一允许的子进程是 poke / 顺带调度经零网络的 `runSelf` 桥接起 worker。A8 的 no-net 垫片下这些命令零网络调用。
+- R20-1.2 **默认关闭**:`~/.config/agent-kit/config.toml` 不存在、没有 `[rsi]`、`[rsi] enabled` 不是布尔 `true` → 状态 `off`。不存在任何「缺省开启」的路径(变异:缺省改为开启 → 契约测试红)。
+- R20-1.2a **入口路由**:根入口 `cli.ts` 遇到 `rsi poke`、`rsi hint`、`__rsi --background` 时,**不**调用 `launchCurrent`(不转发到 `current`)、不调用 `noticeAutoSyncDeclined`、不调用 update 的 `scheduleBackground`,直接加载本包自己的 rsi 入口;因此这三者不会输出 `UPDATE_CURRENT_BROKEN` / `AUTO_SYNC_DECLINED`,也不会顺带起 update worker。代价:钩子触发时跑的是被调用的那份包(可能是引导版本),不是 `current`(待定夺 Q25)。其余 rsi 前台命令照常经启动器。验收用**真实发布产物**(`dist/cli.js` 子进程)测:`current` 损坏、存在待提示的自动同步记录、TTY / 非 TTY 四种组合下,poke / hint 的 stdout、stderr 为空且零写入。
+- R20-1.3 **状态机**:`off`、`armed`、`confirmed`、`stopped`。状态由「配置 + `.state/rsi/state.json` 的确认记录 + 停止标记」经唯一实现 `rsiStateOf()`(`src/rsi/state.ts`)现算,不存一个可被改成 `confirmed` 的状态字段:
+
+| 状态        | 判据(按顺序,先命中先算)                                                        | 允许读                                                                 | 允许写                                                                                                                          |
+| ----------- | ------------------------------------------------------------------------------ | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `off`       | §20.2 结果为 `off` 的配置问题;或(只对自动入口)`KIT_AUTO_RSI=0` 等 R20-1.6 条件 | 用户配置文件本身                                                       | 无                                                                                                                              |
+| `stopped`   | 配置可用,且 `.state/rsi/STOP` 存在                                             | 已有的 `.state/**`(只为展示与管理)                                     | `rsi confirm`(清标记)、`rsi purge --write` / `--resume`、`rsi status --ack`;自动写入一律不做                                    |
+| `armed`     | 配置可用、无停止标记、没有**有效**确认记录(R20-1.5)                            | 会话根的目录项;每个会话文件的头部预读(R20-1.4);已有的 `.state/**` 只读 | `.state/rsi/{state.json,log.jsonl,snapshot.json,counts.json,lock}`、poke 预留与 hint 去重标记、`rsi purge --write` / `--resume` |
+| `confirmed` | 配置可用、无停止标记、确认记录有效                                             | 会话文件全文(经 reader,受 §20.6 上限)                                  | `.state/rsi/**`、`.state/{signals,sessions,salt}`、暂存 run 与 `.state/promote/**` 的 taint 改写(R20-4.7)                       |
+
+- R20-1.4 **`armed` 零读正文**:对会话文件只允许 ①目录项列举(`readdir` / `lstat`);②**一次**从偏移 0 起、长度 ≤ 64KiB(`RSI_ARMED_HEAD_BYTES`)的物理读取。读到的字节里第一个 `\n` 之后的部分**直接丢弃**:不交给任何解析器、不保存、不计入任何输出(N5 衡量两件事:物理 I/O 为每个文件至多一次 ≤ 64KiB 的读;交给解析器的字节至多是首行)。首行用固定的轻量头部解析器取 cwd 与会话元数据,**不调用** reader 的 `read()`、不调用 `Redactor`、不读不建盐。首行取不到 cwd(没有 `\n`、不是 JSON、无 cwd 字段)→ 该会话计入归属不明,不再往下读。
+- R20-1.5 **确认记录**(`state.json` 的 `confirm`)只由 `rsi confirm` 写入(R20-3.6)。以下任一成立即**无效**、退回 `armed`:①排除被放宽(确认时的任一排除项哈希不在当前集合里);②当前 `agents` 含确认时没有的 agent;③`repo` 的 `realpath` 或 `(dev, ino)` 与确认时不同;④overlay 的有无或内容 sha256 与确认时不同;⑤kit 主版本不同;⑥记录过不了 schema。收紧排除、减少 agent、新增项目都不使确认失效;新增项目在 `confirmed` 下自动纳入(D9),在 hint、`rsi status`、`rsi projects` 里单列「新增项目 n」(R20-4.2a)。
+- R20-1.5a **首次 `armed` 与失效后的 `armed`**:从未确认过的仓库,`armed` 下 `.state/{signals,sessions,salt}`、`projects.json`、`cursor.json` **不存在**(N5 的验收面);确认失效退回 `armed` 时这些文件已经存在,`armed` 的约束是**不新建、不修改、不读会话正文**,已有数据只给 `rsi status` / `rsi projects` 只读展示和 `rsi purge` 删除用,不删除旧库来「满足」N5(待定夺 Q19)。
+- R20-1.6 **跳过触发**:以下任一成立,poke、hint、顺带调度、worker 一律空操作(零写入、退出 0、stdout 为空):`KIT_AUTO_RSI=0`;`KIT_RSI_CHILD=1`(kit 手动 `reflect --run-llm` / `judge --run-llm` 起的 LLM 子进程,§20.9 第 5 条);任一 CI 变量为真(与 update 同一张 `CI_ENV_KEYS`);`KIT_LAUNCHED` 已设且不为 `0` 时**只**跳过顺带调度(同 §19.5)。`KIT_AUTO_RSI` 只能关不能开(`=1` 与未设相同)。前台命令(`rsi status|projects|confirm|stop|purge|tick`)不受 `KIT_AUTO_RSI` 影响。
+- R20-1.7 **顺带调度白名单**:只有 `build`、`check`、`sync`、`reflect`(不带 `--run-llm`、不带 `--gc`)在命令结束后顺带调度,且 stdin 与 stdout 都是 TTY;`doctor`、`update`、`rsi *`、`__update`、`__rsi`、只带 `--version` / `--help` 的调用、任何读取用户配置失败的情况一律不调度(设计稿 §4.1,评审 v2 #15)。与 update 的 `scheduleBackground` 并列、互不影响,失败不改变用户命令的退出码。顺带调度的代码同样在零网络的桥接模块里(R20-1.1)。
+- R20-1.8 **自动路径永不做**:apply、`promote`、`attest`、`retire`、`judge`、sync 写全局、开 PR、对外通知、改用户配置 / 覆盖层 / `team_project_keys`、`rsi purge`、`rsi confirm`。
+- R20-1.9 **钩子参数不可信**:poke / hint / worker **不读 stdin**(钩子会把含会话路径的 JSON 写到 stdin;不读、不解析、不等待其关闭),不使用调用方 cwd,不接受路径类参数。worker 的会话根、仓库、状态目录只来自 §20.2 的固定来源。
+
+**不变量(测试钉死)**
+
+- R20-1.10 `off` 与 R20-1.6 的跳过情形下,poke / hint / 顺带调度在 §20.8.1 的范围内零写入,且 safe-fs 写审计桩调用次数为 0。
+- R20-1.11 首次 `armed`:读审计桩对每个会话文件至多记录一次偏移 0、≤ 64KiB 的读;reader `read()`、`Redactor.apply` 调用次数为 0;`.state/{signals,sessions,salt}`、`projects.json`、`cursor.json` 不存在。失效后的 `armed`:同样的读约束,且这些文件的内容 sha256 前后不变。
+- R20-1.12 poke / hint / worker / 各命令都调用 `rsiStateOf()`;测试对 4 种状态 × 每个跳过条件 × 首次 / 失效两种 `armed` 做矩阵。
+
+### 20.2 用户级配置 `[rsi]`
+
+**位置与校验**
+
+- R20-2.1 唯一入口:`<真实 HOME>/.config/agent-kit/config.toml`(`getRealHome()`;测试经 `KIT_REAL_HOME_OVERRIDE`)。kit 只读、永不写;不读 `XDG_CONFIG_HOME`,不跟随会话 cwd,不接受命令行或环境变量指定别的配置文件。
+- R20-2.2 读之前逐段 `lstat` 校验 `.config`、`.config/agent-kit`、`config.toml`:都不是符号链接;属主都是当前 uid;`mode & 0o022 == 0`;文件是普通文件、`nlink == 1`、≤ 64KiB。比 update 读同一文件更严(update 现有行为不变,§20.9 第 1 条)。
+- R20-2.3 `[rsi] repo`(启用时必填):绝对路径;`realpath(repo) === repo`;是目录;属主为当前 uid 且 `mode & 0o022 == 0`;直接含普通文件 `kit.toml`。rsi 命令与 worker 的仓库根**只**取它;全局 `--root` 给了且 `realpath` 不同 → 退出 2 `RSI_USAGE reason=root_mismatch`。
+- R20-2.4 `[rsi] overlay`(可选):绝对路径、链上无符号链接、普通文件、属主为当前 uid、`mode & 0o022 == 0`,且过 `OverlaySchema`。用途:脱敏词表(`sensitive_words`、`internal_domains`)、`exclude_dirs`(与 `[rsi] exclude_dirs` 取并集)、`team_project_keys`(只读)。不给 overlay 时照常采集,`rsi status` 报 `warnings: ["overlay_absent"]`。
+- R20-2.5 状态目录 = `<repo>/.state/`。rsi 的全部入口(自动与前台)**忽略** `KIT_STATE_DIR` 与 `KIT_WRITE_ROOTS`,除非同时设了 `KIT_TMP`(测试夹具),保证前台与后台读写同一份状态(待定夺 Q7)。
+
+**分层解析(R20-2.6;错误优先级按表中从上到下,先命中先报)**
+
+| 层        | 内容                                                                                                                                                                   | 失败结果                       |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ |
+| L-file    | 文件存在性、R20-2.2 校验、读取                                                                                                                                         | `off`                          |
+| L-toml    | TOML 解析                                                                                                                                                              | `off`                          |
+| L-base    | `RsiBaseSchema`(strict):`enabled`、`repo`、`overlay`、`agents` 的类型;`exclude_dirs` / `exclude_names` 只校验为「字符串数组、≤ 256 项」;`session` 只校验为「表或缺省」 | `off`                          |
+| L-enabled | `enabled === true`                                                                                                                                                     | `off`(`disabled`)              |
+| L-repo    | R20-2.3                                                                                                                                                                | `off`                          |
+| L-overlay | R20-2.4(仅当给了 overlay)                                                                                                                                              | **停止采集**                   |
+| L-policy  | 排除项内容:`exclude_dirs` 每项绝对路径、≤ 4096 字节、无 NUL / 控制字符;`exclude_names` 每项 1..255 字节、无 `/`、非 `.` / `..`、无 NUL / 控制字符                      | **停止采集**                   |
+| L-session | `[rsi.session]`(P1 的 `RsiSessionSchema`)                                                                                                                              | **只禁用会话授权**(P1);L0 照常 |
+
+| 键              | 类型                              | 缺省                      | 约束                                                         |
+| --------------- | --------------------------------- | ------------------------- | ------------------------------------------------------------ |
+| `enabled`       | boolean                           | `false`                   | 字符串 `"true"` 在 L-base 失败(`cfg_schema`),不是 `disabled` |
+| `repo`          | string                            | —                         | `enabled = true` 时必填(缺失 → `repo_invalid`)               |
+| `overlay`       | string                            | 不设                      | R20-2.4                                                      |
+| `agents`        | `("claude" \| "codex" \| "pi")[]` | `["claude","codex","pi"]` | 去重后非空;其它值在 L-base 失败(待定夺 Q12)                  |
+| `exclude_dirs`  | string[]                          | `[]`                      | L-policy                                                     |
+| `exclude_names` | string[]                          | `[]`                      | L-policy                                                     |
+| `session`       | 表                                | 不设                      | P1 占位(§20.10)                                              |
+
+示例(说明性,TOML 解析后的对象):
+
+```json
+{
+  "rsi": {
+    "enabled": true,
+    "repo": "/home/u/agent-kit",
+    "overlay": "/home/u/.config/agent-kit/overlay.toml",
+    "agents": ["claude", "pi"],
+    "exclude_dirs": ["/home/u/clients"],
+    "exclude_names": ["client-x"]
+  }
+}
+```
+
+错误示例:`exclude_dirs` 含相对路径 → 状态照算(`armed` / `confirmed`),阻断范围 = 停止采集,原因码 `exclude_invalid`(不是「少排除一项继续采」)。
+
+```json
+{ "rsi": { "enabled": true, "repo": "/home/u/agent-kit", "exclude_dirs": ["clients"] } }
+```
+
+**原因码(R20-2.7,`rsi status` 的 `reason` 与日志只报码)**
+
+| 问题                                                                          | 结果                                                                                          | 原因码                                                                                            |
+| ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| 文件不存在 / 无 `[rsi]`                                                       | `off`                                                                                         | `absent` / `no_section`                                                                           |
+| 符号链接 / 属主 / 组或其他人可写 / 非普通文件或硬链接 / 超 64KiB / 读取权限错 | `off`                                                                                         | `cfg_symlink` / `cfg_owner` / `cfg_perm` / `cfg_not_regular` / `cfg_too_large` / `cfg_unreadable` |
+| TOML 解析失败 / L-base 失败                                                   | `off`                                                                                         | `cfg_parse` / `cfg_schema`                                                                        |
+| `enabled` 为 `false` 或缺省                                                   | `off`                                                                                         | `disabled`                                                                                        |
+| `repo` 缺失或不合规                                                           | `off`                                                                                         | `repo_invalid`                                                                                    |
+| overlay 不合规                                                                | 停止采集                                                                                      | `overlay_invalid`                                                                                 |
+| 排除项内容不合规                                                              | 停止采集                                                                                      | `exclude_invalid`                                                                                 |
+| `exclude_dirs` 某项不存在                                                     | 照常生效(按字面前缀排除;挡住重建后的同路径)                                                   | —                                                                                                 |
+| 重复项                                                                        | 去重,不报错                                                                                   | —                                                                                                 |
+| 项目索引损坏 / 缺失 / 盐指纹不符                                              | 继续采集但不给摘要:L0 写信号库,索引不被覆盖(只能 `--rebuild-index` 替换),所有输出把信号计入 U | `index_invalid` / `index_absent`                                                                  |
+| `[rsi.session]` 不合规或过期                                                  | 只禁用会话授权(P1)                                                                            | `session_invalid` / `session_expired`                                                             |
+| 某 agent 会话根链上有符号链接、不是目录;pi 且 `PI_CODING_AGENT_DIR` 已设      | 该 agent 记 `not_evaluated`,其余照常                                                          | `root_symlink` / `root_not_dir` / `pi_dir_override`                                               |
+
+- R20-2.8 「停止采集」:状态照算(`armed` / `confirmed`),`rsi status` / `rsi projects` 照常展示已有数据;worker、`tick --write` 不读任何会话文件(结果 `skipped_collect_blocked`);hint 输出空串。
+- R20-2.9 会话根固定:claude `~/.claude/projects`,codex `~/.codex/sessions`(不含 `archived_sessions`),pi `~/.pi/agent/sessions`。只读普通文件(`lstat` 判定;符号链接、FIFO、设备跳过并计数 `skipped_not_regular`),沿用单行 64MiB 上限。`PI_CODING_AGENT_DIR` 的「已设置」语义要传到 worker:poke 发现它已设时给 worker 环境加 `KIT_RSI_PI_DIR_SET=1`(只传存在性,不传路径;§20.9 第 2 条);钩子环境里没有该变量时(例如 claude 的钩子),worker 读默认 pi 根,这是已知差异。
+
+### 20.3 命令面、退出码与稳定码
+
+```
+agent-kit rsi tick [--write] [--json]
+agent-kit rsi poke --agent <claude|codex|pi>
+agent-kit rsi hint --agent <claude|codex|pi>
+agent-kit rsi status [--json] [--ack]
+agent-kit rsi projects [--json | --paths] | --rebuild-index [--write] [--json]
+agent-kit rsi confirm
+agent-kit rsi stop
+agent-kit rsi purge (--project <绝对路径> | --excluded | --resume) [--write] [--json]
+agent-kit __rsi --background          (内部入口,不进 --help、不在 COMMANDS;只接受这一个精确形状,别的参数退出 2)
+```
+
+`rsi` 不带子命令或子命令未知 → 退出 2 `RSI_USAGE reason=unknown_subcommand`。P1 预留子命令(`digest`、`session`、`hooks`、`dismiss`、`should-continue`)在 P0 注册为命令桩,退出 64(§7)。
+
+**稳定码总表(R20-3.0;实现从 `src/contracts/rsi.ts` 的一份枚举生成,测试断言文档与枚举一致)**
+
+| 类别                                    | 码                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | 退出 |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---- |
+| `RSI_USAGE reason=`                     | `unknown_subcommand`、`unknown_arg`、`missing:--agent`、`bad_agent`、`mode_conflict`、`not_tty`、`paths_requires_tty`、`write_requires_mode`、`bad_path`、`root_mismatch`                                                                                                                                                                                                                                                                                                             | 2    |
+| `RSI_NOT_RUN reason=`                   | `off`、`stopped`、`collect_blocked`、`locked`、`locked_over_ttl`、`not_confirmed`、`no_journal`                                                                                                                                                                                                                                                                                                                                                                                       | 4    |
+| 顶层(4)                                 | `RSI_SNAPSHOT_BUSY`                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | 4    |
+| 顶层(1)                                 | `RSI_RUN_TAINTED`、`RSI_RUN_ATTRIBUTION_UNKNOWN`、`RSI_PURGE_NOT_EXCLUDED`、`RSI_CONFIRM_DECLINED`、`RSI_CONFIRM_STALE`                                                                                                                                                                                                                                                                                                                                                               | 1    |
+| `RSI_FAIL_CLOSED reason=`               | 配置:`cfg_symlink`、`cfg_owner`、`cfg_perm`、`cfg_not_regular`、`cfg_too_large`、`cfg_unreadable`、`cfg_parse`、`cfg_schema`、`repo_invalid`、`overlay_invalid`、`exclude_invalid`;状态:`state_invalid`、`state_dir_unsafe`、`index_invalid`、`cursor_invalid`、`counts_invalid`、`snapshot_invalid`、`journal_invalid`、`signal_store_corrupt`、`salt_invalid`、`redactor_init`、`staging_too_large`;运行:`lock_lost`、`write_denied`、`purge_incomplete`、`output_leak`、`internal` | 3    |
+| 计数码(不改退出码,只进 `--json` 与日志) | `RSI_FILE_TOO_LARGE`、`RSI_LIMIT_FILES`、`RSI_LIMIT_BYTES`、`RSI_LIMIT_TIME`、`RSI_LIMIT_DEPTH`、`RSI_LIMIT_ENTRIES`、`RSI_INDEX_FULL`                                                                                                                                                                                                                                                                                                                                                | —    |
+| P1 预留(不实现)                         | `RSI_INGEST_TOO_LARGE`、`RSI_STAGING_FULL`、`RSI_DIGEST_*`、`RSI_SESSION_*`                                                                                                                                                                                                                                                                                                                                                                                                           | —    |
+
+配置类原因码只在**前台命令确实需要读配置并因此无法继续**时以 `RSI_FAIL_CLOSED` 报出(例如 R20-4.8 的暂存区即时闸);`rsi status` 遇到同样的配置问题退出 0、在 `reason` 字段里报码;自动入口一律静默空操作。设计稿里的顶层码 `RSI_INDEX_INVALID` 在本节写作 `RSI_FAIL_CLOSED reason=index_invalid`(与 §19 风格一致)。
+
+#### 20.3.1 `rsi tick [--write] [--json]`(A2)
+
+- R20-3.1.1 **无 `--write` = 纯计划,零写入**:算出将读的文件数、字节数、预计新增信号数、项目 P / X / U / n、cursor 指纹是否匹配,打印后退出 0。不拿锁、不建目录;盐存在则只读,不存在则用内存临时盐(`--json` 里 `salt: "ephemeral"`,此时不输出依赖 key 的计数)。读快照不一致 → 退出 4 `RSI_SNAPSHOT_BUSY`。属 A5 零写入命令集。
+- R20-3.1.2 `--write`:前台执行一次完整 L0,不受节流与 L0 间隔约束,受锁、状态机、资源上限约束;`armed` 下只做列举并更新 `state.json` / `counts.json` 的计数;`confirmed` 下采集。成功(含 `ok_partial`)清除熔断(R20-6.6)。熔断打开时照常执行——它是用户清除熔断的入口。
+- R20-3.1.3 退出码:0;2;3(`RSI_FAIL_CLOSED`);4(`off`、`stopped`、`collect_blocked`、`locked`、`locked_over_ttl`、`RSI_SNAPSHOT_BUSY`)。
+- R20-3.1.4 `--json` 键集合固定:`mode`、`state`、`reason`、`salt`、`files_planned`、`files_read`、`bytes_read`、`signals_new`、`sessions_new`、`projects`(`{collecting, excluded, new}`)、`unknown_signals`、`skipped`(`{not_regular, too_large, unchanged, excluded, self_state, unknown_project}`)、`limits_hit`(计数码数组,升序)、`cursor`(`{fingerprint_match, full_scan: {epoch, done}}`)、`duration_ms`。不含路径、key、项目名。
+
+#### 20.3.2 `rsi poke --agent <id>`(A3,钩子专用)
+
+- R20-3.2.1 **不阻塞宿主**:退出码恒 0;stdout、stderr 恒为空(参数错误也不输出);不读 stdin、不等 stdin 关闭。自身工作有 1s 的**尽力**预算(`RSI_POKE_BUDGET_MS`):每一步之间查一次已耗时,超出即放弃、退出 0;Node 启动与单个同步系统调用的耗时不受这条约束,验收以「stdin 为永不关闭的管道时,进程在 2s 内退出」判定。
+- R20-3.2.2 判定顺序:R20-1.6 跳过条件 → 配置(`off` / 停止采集 → 空操作)→ 状态(`stopped` → 空操作)→ 熔断打开且未到半开时间 → 空操作 → L0 到期(读 `state.json` 的 `last_tick.completed_at`,距今 ≥ 6h 或时钟往回走)→ 不到期则空操作 → 启动预留(R20-6.2)→ 经零网络的 `runSelf` 桥接起 `__rsi --background`(`self` 目标:本包自己的 `dist/cli.js`;detached、stdio 丢弃、`unref`;`cwd` 固定为 `[rsi] repo`,需给 `RunSelfOptions` 加受校验的 `cwd`,§20.9 第 3 条)。
+- R20-3.2.3 **可诊断状态**:只有走到启动预留才写入:预留标记 + `log.jsonl` 一行(`trigger=poke`、`agent`、`action=spawned|spawn_failed`)。其余分支零写入,原因由 `rsi status` 现算(配置、状态、熔断、到期),不依赖 poke 留痕。
+- R20-3.2.4 `--agent` 缺失、非法或不在 `[rsi] agents` 里 → 空操作(不报错)。
+
+#### 20.3.3 `rsi hint --agent <id>`(A3)
+
+- R20-3.3.1 退出码恒 0;任何失败(参数、配置、快照不一致、超过 1s 尽力预算、索引损坏)输出空串。读集合**仅限**:用户配置与 overlay(排除项并集);`.state/rsi/{snapshot.json,state.json,projects.json,counts.json}`;对索引里的根路径做 `lstat` / `realpath`(元数据读取,≤ `RSI_INDEX_MAX_ENTRIES` 次,用于 R20-4.3 的 U 判定)。不读盐(用 `projects.json` 与 `counts.json` 各自的 `salt_fp` 互相核对)、不读信号库、不读会话文件、不拿锁。
+- R20-3.3.2 输出为下列模板之一加一个 `\n`,或空串;**≤ 200 字节**(含换行,`Buffer.byteLength`);不含路径、项目名、key、摘录、会话 id。每个计数显示 `min(n, 9999)`,超过写 `9999+`。
+
+```
+confirmed:agent-kit RSI: 新信号 N、待反思聚类 K、待审提案 M、项目 P(新增 n、排除 X、归属不明 U)。仅在用户要求时使用技能 agent-kit-rsi。
+armed:    agent-kit RSI: 待确认,将采集 P 个项目。仅在用户要求时运行 agent-kit rsi confirm。
+```
+
+(`confirmed:` / `armed:` 是本表的标签,不是输出。所有计数取最大显示值时,前者含换行 194 字节、后者 106 字节。)
+
+- R20-3.3.3 计数口径(全部由 `counts.json` + 当前配置 + 当前索引现算,R20-4.6):N = 近 7 个 UTC 日内由 L0 新增、归属为「采集中」的信号数;K = 剔除 X 与 U 的证据后,仍达到 reflect 干跑聚类门槛(与 reflect 干跑同一常量)的聚类数;M = 证据全部归属「采集中」且不是 tainted 的暂存 run 里的提案数;P / X = 采集中 / 已排除项目数;n = 新增项目数(R20-4.2a);U = 归属不明信号数。
+- R20-3.3.4 输出条件:`confirmed` 下 K ≥ 3(`RSI_HINT_MIN_CLUSTERS`)或 M ≥ 1 或 n ≥ 1;`armed` 下恒输出第二个模板;其余状态空串。同一 agent 30 分钟(`RSI_HINT_DEDUP_MINUTES`)内只输出一次:输出前独占创建 `.state/rsi/hint/<agent>-<窗口序号>`,`EEXIST` → 空串。这是 hint 唯一的写入;输出空串的调用零写入(待定夺 Q5)。
+- R20-3.3.5 P0 只有纯文本。claude / codex 钩子要求的 JSON 输出形状(`hookSpecificOutput.additionalContext`)是 P1(A5)的 `--format`;P0 传 `--format` 按参数错误处理(退出 0、空串)。
+
+#### 20.3.4 `rsi status [--json] [--ack]`(A2)
+
+- R20-3.4.1 只读(`--ack` 除外),不拿锁,按快照协议读(R20-5.6)。退出码:0(含 `off`、停止采集、存在 tainted run——这些是状态,不是错误);2;3(状态文件存在但过不了 schema);4 `RSI_SNAPSHOT_BUSY`。
+- R20-3.4.2 `--json` 键集合固定:`state`、`reason`、`first_armed`(布尔,R20-1.5a)、`overlay`(`absent|ok|invalid`)、`agents`(`[{id, status: ok|not_evaluated, reason}]`)、`counts`(`{projects_collecting, projects_excluded, projects_new, unknown_signals, signals_total, signals_new_7d, clusters_pending, staged_runs, staged_proposals, tainted_runs}`)、`last_tick`(`{at, trigger, outcome, code, duration_ms, files_read, bytes_read}` 或 `null`)、`breaker`(`{state: closed|open|half_open, kind: retryable|safety|null, consecutive_failures, until}`)、`index`(`{status: ok|absent|invalid, entries}`)、`cursor`(`{status: ok|absent|invalid, fingerprint_match, full_scan: {epoch, done, last_completed_at}}`)、`snapshot`(`ok|absent|stale|invalid`)、`confirm`(`{confirmed_at, policy_fp12, invalid_reason}` 或 `null`)、`stop`(`{present, at}`)、`purge`(`{journal: absent|present}`)、`lock`(`free|held|held_over_ttl|stale`)、`tainted`(`[{run_id, reason}]`,`reason` ∈ `exclude|purge`;**只列 id 与原因码**,这是 `RSI_RUN_TAINTED` 拒绝面之外唯一的展示)、`warnings`(`overlay_absent`、`cloud_sync_suspected`、`index_full`、`breaker_open`)。不含路径、key、项目名。
+- R20-3.4.3 `--ack`:需要 stdin 与 stdout 为 TTY(否则 `not_tty`),拿锁,把 `state.json` 的 `projects_ack_generation` 设为当前索引 `generation`(「新增项目 n」清零)。
+
+#### 20.3.5 `rsi projects`(A2)
+
+- R20-3.5.1 缺省文本:每行一项,按 `status` 分别成形:`collecting` / `excluded` / `purge_pending` / `new` 行为 `key=<p_ 后 8 位> name=<目录名> sessions=<n> signals=<n> status=<…>`;`unknown` 行为 `key=<p_ 后 8 位> sessions=<n> signals=<n> status=unknown`(**无** name、无 path,N7);末行 `projects collecting=P excluded=X new=n unknown_signals=U`。按 key 升序。首次 `armed`(无盐)的行形如 `key=- name=<目录名> sessions=<n> status=pending`(现算,R20-4.2),归属不明会话只计入末行的 `unknown_sessions=`。`purge_pending` = 已排除但信号库仍有该 key 的信号。
+- R20-3.5.2 目录名 = 最近一次见到的根路径的 basename,清洗:C0 / C1 控制字符、Unicode 格式字符(含 bidi 覆盖与隔离、零宽字符)、私用区与未分配码点替换为 `?`,按码点边界截到 64 字节。
+- R20-3.5.3 `--paths`:只在 stdout 是 TTY 时允许(否则 `paths_requires_tty`),与 `--json` 互斥(`mode_conflict`);`collecting` / `excluded` / `purge_pending` / `new` 行末追加 `path=<路径>`(同 R20-3.5.2 的清洗,不截断长度;`unknown` 行不追加)。
+- R20-3.5.4 `--json`(键集合固定):`{state, first_armed, rows: [{key8, name, sessions, signals, status}], summary: {collecting, excluded, new, unknown_signals, unknown_sessions}}`;`unknown` 行的 `name` 为 `null`;首次 `armed` 的 `key8` 为 `null`。
+- R20-3.5.5 `--rebuild-index [--write]`:`confirmed` / `stopped` / 失效后的 `armed` 下可用(首次 `armed` 无盐 → 退出 4 `not_confirmed`);用 rsi 口径(R20-4.1:canonical cwd)重新解析会话 cwd、用本机盐重算 key;干跑打印将写入的条目数与将变为可归属的信号数;`--write` 拿锁、整体替换 `projects.json`。旧索引有效时保留各 key 的 `first_indexed_generation`;旧索引无效时重建条目一律记 `first_indexed_generation = 0`(不算新增)。信号库里有、按 rsi 口径重算不出来的 key(例如手动 `signals collect --allow-project <父目录>` 采的,其 key 是 allow 路径的哈希)仍计入 U,**不**用新算出的 key 冒充。
+- R20-3.5.6 泄漏闸:stdout 里出现 HOME、`KIT_TMP`、状态目录、仓库根的绝对路径 → 整份作废,退出 3 `output_leak`;**豁免只限 `--paths` 行的 `path=` 字段值**。退出码:0;2;3;4(`RSI_SNAPSHOT_BUSY`、`not_confirmed`)。
+
+#### 20.3.6 `rsi confirm`(A2)
+
+- R20-3.6.1 stdin 与 stdout 都必须是 TTY(否则 `not_tty`,退出 2);状态必须是 `armed` 或 `stopped`(`off` → 退出 4;`confirmed` → 退出 0,stdout `confirm already`)。
+- R20-3.6.2 展示:做一次 `armed` 列举(R20-1.4,不读正文),打印与 `rsi projects` 相同的清单与汇总、固定说明(将读取这些项目的会话全文并脱敏后存入本机信号库;排除写法;`rsi stop` / `rsi purge` 的作用),然后要求输入 `yes`。同时在内存记下**展示指纹**:`repo` 的 `realpath` 与 `(dev, ino)`、`agents`、规范化排除项哈希集合、overlay 的有无与 sha256、kit 主版本。
+- R20-3.6.3 输入不是 `yes` → 退出 1 `RSI_CONFIRM_DECLINED`,零写入。输入 `yes` → 拿锁 → 重读配置与状态、重算展示指纹;与展示时任一项不同 → 退出 1 `RSI_CONFIRM_STALE`,零写入(用户须重新运行看新清单,待定夺 Q18)。一致才写 `state.json` 的 `confirm` 记录 `{confirmed_at, kit_major, agents, exclude_hashes, repo_dev_ino, overlay_sha256, policy_fp, baseline_pending: true}`(不存路径原文)、删停止标记、清熔断。
+- R20-3.6.4 TTY 判据只是**尽力**区分人与脚本(有 shell 的 agent 可以开伪终端),不是安全边界(设计稿 §6.3)。
+
+#### 20.3.7 `rsi stop`(A2)
+
+- R20-3.7.1 独占创建 `.state/rsi/STOP`(内容 `{at, by: "user"}`;已存在则不改,退出 0)。**不拿 `rsi/lock`**,须能在 worker 持锁时写入。不需要 TTY。配置不可用时找不到仓库:退出 0,stdout `stop noop reason=<码>`(此时 worker 在下一个检查点也会因配置不可用而放弃,R20-6.8)。
+- R20-3.7.2 三种语义分开承诺:①**停止未来调度**:标记存在期间 poke、顺带调度、`tick --write` 不再起采集;②**阻止下一次**:已预留、尚未拿到锁的 worker 拿锁后先查标记,存在即退出,不读任何会话文件;③**终止运行中**:持锁的 worker 在下一个检查点(R20-6.8)看到标记,放弃本次全部未提交结果、不推进 cursor、释放锁,日志记 `stopped`。①②在标记落盘后成立;③的时延上界是一个检查点间隔,不是零。已提交的信号不被撤回(删除用 `rsi purge`)。
+- R20-3.7.3 清除:只有 `rsi confirm`(待定夺 Q11)。
+
+#### 20.3.8 `rsi purge`(A2)
+
+- R20-3.8.1 `--project <绝对路径>` / `--excluded` / `--resume` 三选一(否则 `mode_conflict`;`--project` 非绝对路径 → `bad_path`)。命中集合 K:`--excluded` = 当前判为已排除的全部 key;`--project <p>` = 索引里任一见过的根路径落在 `p` 之内(按 R20-4.4 口径)的 key,且**每个**命中 key 当前都已被排除,否则退出 1 `RSI_PURGE_NOT_EXCLUDED`、零写入(待定夺 Q8)。
+- R20-3.8.2 干跑打印命中 key 数,将删的信号 / 会话计数行 / cursor 条目 / 索引条目数,将 taint 的暂存 run 与 promote 产物数,以及固定说明「已合进 git、发成 PR 或 `git apply` 到工作树的内容不在 kit 管辖范围」。`--write` 要求 TTY、状态为 `armed`(已有数据时)/ `confirmed` / `stopped`、拿锁。
+- R20-3.8.3 删除范围:命中 key 的信号(重写 `.state/signals/<agent>/<yyyymm>.jsonl`)、会话计数行、cursor 条目、索引条目、`counts.json` 里相应的统计、`.state/rsi/digests/` 下全部文件(P1 才会有);**不删**盐、日志(本来不含 key)、暂存 run 与 promote 产物的目录(按 N6 taint,R20-4.7)。
+- R20-3.8.4 **事务**:拿锁 → 写 `.state/rsi/purge-journal.json`(`RsiPurgeJournal`:命中 key 集合、**此刻经信号库算出的待 taint 目标集合**(暂存 run id 与 promote 产物 id)、阶段 `planned → tainted → signals_rewritten → indexed → done`)→ taint 目标集合里的每一项(R20-4.7)→ 重写信号库与会话计数(逐文件临时文件 + rename)→ cursor、索引、`counts.json` → 快照清单 → 删 journal。续做一律按 journal 里**已记下的**目标集合,不重新从信号库推导(信号可能已删)。
+- R20-3.8.5 **续做入口**:journal 存在时,①`rsi purge --resume --write`(前台;`armed` / `confirmed` / `stopped` 均可,`stopped` / `armed` 的自动写禁令对它不适用——它完成的是用户已授权的删除);②`confirmed` 下的 worker 与 `tick --write` 在做自己的事之前先续做;③hint 输出空串、`rsi status` 报 `purge.journal = present`;④R20-4.8 的读暂存区命令退出 3 `purge_incomplete`。配置为 `off` 时没有入口(找不到仓库),此时 hint 与 P1 digest 也都不输出,不构成泄漏;配置恢复后先续做(待定夺 Q21)。续做失败 → `RSI_FAIL_CLOSED reason=purge_incomplete`(熔断按 safety)。没有 journal 时 `--resume` 退出 4 `no_journal`。
+- R20-3.8.6 退出码:0 完成 / 干跑;1 `RSI_PURGE_NOT_EXCLUDED`;2;3;4(`locked`、`off`、首次 `armed` 的 `not_confirmed`、`no_journal`)。
+
+#### 20.3.9 `__rsi --background`(A3,worker)
+
+- R20-3.9.1 `src/cli.ts` 单独识别,只接受这一个精确形状;不输出;stdio 丢弃;环境经 `runSelf` 的具名白名单(需追加 `KIT_AUTO_RSI`、`KIT_RSI_CHILD`、`KIT_RSI_PI_DIR_SET`,§20.9 第 2 条)。
+- R20-3.9.2 流程:重读配置与状态 → 拿 `rsi/lock`(拿不到 → 日志 `skipped_locked`)→ 锁内:快照未完成提交则重建(R20-5.6)→ 续做 purge journal(仅 `confirmed`)→ 把所有已有 `TAINTED` 的清理补完(R20-4.7)→ 查停止标记 → 查熔断 → 再查 L0 到期 → 记 attempt(R20-6.4)→ 记下本次**运行绑定**(`repo` 的 `realpath` 与 `(dev, ino)`、`policy_fp`、`agents`、确认记录的 `confirmed_at`)→ `armed` 列举或 `confirmed` 采集 → 新的 taint → 提交(R20-6.9)→ 记结果、更新熔断 → 释放锁。
+- R20-3.9.3 worker 调用的采集、索引、taint、提交都是**不拿锁**的服务函数,参数必须带调用方持有的锁句柄(类型上不可缺省),每个提交点前 `assertHeld()`;手动 `signals collect`、`rsi tick --write` 是顶层,自己拿锁后调用同一组服务函数。
+
+### 20.4 项目索引、排除、purge 与 taint(N5 / N6 / N7)
+
+**项目根与 key**
+
+- R20-4.1 rsi 路径的「项目根」= 会话 cwd(reader 的 `cwd_hint`)经 `exclude.ts` 的 `canonical()`(最长已存在前缀的 realpath + 去尾斜杠;需导出)后的路径,即现有 `signals collect` **无 allow 名单分支**的 `projectRoot`;`project_key = projectKeyFor(salt, 项目根)`(§9)。手动 `signals collect --allow-project <绝对路径>` 命中时 `projectRoot` 是 allow 路径(父目录下多个子目录共享一个 key),这一差异保留:手动 collect 更新索引时记的是它自己用的 `projectRoot`,所以 key 与根路径仍对应;只有 `--rebuild-index` 重算不出这类 key(R20-3.5.5)。P0 不向上找 git 根(待定夺 Q3)。cwd 为空、相对路径、取不到 → 归属不明。
+
+**索引 `.state/rsi/projects.json`(`RsiProjectIndex`,0600)**
+
+- R20-4.2 只在有盐之后由持锁写入方维护(worker、`tick --write`、手动 `signals collect`、`--rebuild-index --write`、purge);首次 `armed` 下不存在,`rsi projects` / `rsi confirm` 在首次 `armed` 下现算清单、不落盘(待定夺 Q2)。
+
+```json
+{
+  "schema_version": 1,
+  "salt_fp": "3f2a9c1d7e4b",
+  "generation": 42,
+  "entries": [
+    {
+      "key": "p_0123456789abcdef",
+      "roots": [
+        {
+          "path": "/home/u/work/proj",
+          "dev": 16777230,
+          "ino": 1234567,
+          "first_seen": "2026-10-23",
+          "last_seen": "2026-10-24"
+        }
+      ],
+      "sessions": 3,
+      "signals": 17,
+      "first_indexed_generation": 40
+    }
+  ]
+}
+```
+
+- `salt_fp` = `sha256(盐)` 前 12 位,写入方对照真实盐;不符 → 整个索引按 `index_invalid`。`entries` 按 `key` 严格升序、唯一;每个 key 的 `roots` 1..8 条(保留最早一条与按 `last_seen` 最近的 7 条);`path` 是绝对路径、≤ 4096 字节、无 NUL;条目 ≤ 10000(`RSI_INDEX_MAX_ENTRIES`),满了新 key 不再入索引(其信号计入 U,计数码 `RSI_INDEX_FULL`,`warnings` 报 `index_full`)。`generation` 每次写入加一。日期只到天。
+- 索引只在本机、只给 `rsi projects --paths` 与 hint / status 的现算用;路径与目录名不进 hint、status、日志、计数投影、P1 digest。
+- R20-4.2a **新增项目 n**:`first_indexed_generation > state.json.projects_ack_generation` 且归属「采集中」的 key 数。确认后的第一次成功 L0 把 `projects_ack_generation` 设为该次写入的 `generation` 并清 `baseline_pending`(确认时看过的清单不算新增);之后由 `rsi status --ack` 推进。用 generation 而不用时间戳,时钟回拨不影响。
+
+**归属判定(N7,R20-4.3)**
+
+每个 key 现算并且**只**落入一类(优先级从高到低):
+
+1. **已排除(X)**:该 key 的任一 `roots[].path` 命中当前排除规则(R20-4.4);根路径已不存在也照算(按字面前缀)。
+2. **归属不明(U)**:索引缺失 / 损坏 / `salt_fp` 与 `counts.json` 不符;key 不在索引里;所有根路径都已不存在;最近一次见到的根路径现在的 `realpath` 与记录不逐字节相等(大小写变化、NFC / NFD 变化、经由别的符号链接);或其 `(dev, ino)` 与记录不同(换卷、删后重建)。
+3. **采集中(P)**:其余。
+
+- U 只以「信号条数」出现在 hint、`rsi status --json`、`rsi tick --json`、`log.jsonl` 里;`rsi projects` 里 U 行只有 key 前缀与计数。
+- 移动 / 改名:新根产生新 key、新条目;旧 key 落入 U(或 X)。排除按「该 key 见过的任一根路径」判。
+
+**排除比较口径(R20-4.4)**
+
+- 排除项与根路径都先 `canonical()`。`exclude_dirs` 命中 = 根路径等于排除路径或位于其下(按 `/` 段边界);`exclude_names` 命中 = 任一根路径的 basename 等于该名字。**比较时折叠大小写**(只会多排除),另加:排除路径当前存在时,根路径的任一祖先目录 `(dev, ino)` 与之相同也算命中(认出 NFD、firmlink、大小写不敏感卷上的同一目录)。设计稿 §8 的「不无条件折叠大小写」针对 allow 名单的放宽方向;rsi 路径没有 allow 名单,折叠只是更保守(待定夺 Q4)。
+- 自我排除照旧(`withSelfExclusion`:状态目录内或含 `.state/reflect/cwd` 段 → `self_state`)。
+- rsi 路径不要求「至少一条排除或 allow」(D9);手动 `signals collect` 的默认拒绝不变。
+
+**计数投影 `.state/rsi/counts.json`(`RsiCounts`,R20-4.5)**
+
+hint / status 现算所需的数据,由每个持锁写入方在提交时重算并写入:`{schema_version, salt_fp, generation, computed_at, cluster_min, per_key: {<key>: {signals_total, sessions, signals_by_day: {<YYYY-MM-DD>: n}}}, clusters: [{cluster_id, evidence_by_key: {<key>: n}}], staged: [{run_id, proposals, evidence_keys: [<key>], tainted}], unknown_keys_signals}`。`signals_by_day` 只保留最近 8 个 UTC 日;`clusters` ≤ 500、`staged` ≤ 5000;`evidence_keys` 里映射不到 key 的证据记为字面量 `"?"`(按 U 处理)。`reflect --run-llm` 新建暂存 run、`judge` 改写提案、taint 之后都在同一把锁内更新 `staged`。
+
+**排除立即对历史生效(R20-4.6)**
+
+- 判定点:hint、`rsi status`、`rsi projects`、`rsi tick --json` 的计数,R20-4.8 的暂存区即时闸,以及 P1 的 digest / ingest,**每次调用时**按当前配置 + 当前索引 + `counts.json` 现算 X / U,不使用任何缓存的排除结论。写下排除后的**下一次**调用即不再把该项目算入 P、K、N、M、n,不需要等待重采。
+- 写下排除不删除数据(信号库、会话计数、索引保留);删除只走 `rsi purge`。
+
+**taint(N6,R20-4.7)**
+
+- 目标:①暂存 run `.state/reflect/<run_id>/`,其任一提案或暂存原子的证据 `sig_id` 映射到的 key 属于已排除或 purge 命中集合;②`.state/promote/<promo_id>/`,其 `report.json` 指向的 run 是①中的 run(这些产物含证据摘录,待定夺 Q22)。映射经信号库(`sig_id` → 信号的 `project_key`);映射不到的不触发 taint,但受 R20-4.8 的归属闸约束。
+- 时机:排除写下后,下一次任何持锁的 rsi 写入(worker、`tick --write`、`purge --write`、`--rebuild-index --write`、`confirm`)在提交前完成;purge 在删信号之前按 journal 完成。
+- 动作(持 `rsi/lock`,逐项,顺序固定):①独占创建 `TAINTED`(内容 `{reason: "exclude"|"purge", at}`);②把 `proposals/*.yaml` 与 `rules/**` 里**全部**证据的 `excerpt` 置为空串(不只命中的那几条;空串合法,不改 `Proposal` / `AtomFrontmatter` schema,待定夺 Q14);promote 产物则删 `promote.patch` 与 `pr-body.md`;③删除 `apply.patch`;④保留 `report.json`、提案 id、目录与编号(`loadUsedProposalIds` 结果不变)。先落标记,崩溃在中途时读路径照样拒。
+- **续做**:每个持锁写入方在锁内**先**扫一遍所有带 `TAINTED` 的 run 与 promote 产物,把②③补到完成(不因标记已存在而跳过);这一步不依赖信号库映射。注入崩溃于①之后、②中途、③之前三处,恢复后都必须是「全部摘录为空、无 `apply.patch`」。
+- 已经合进 git、发成 PR、或被 `git apply` 到工作树的内容不在 kit 管辖范围,purge 与 taint 都清不到。
+
+**暂存区即时闸(R20-4.8)**
+
+- 适用命令:`judge --run`(含干跑)、`promote --run`、P1 的查看 / 导出命令。它们读暂存区之前先做,并在**写出任何输出、发起任何 LLM 调用之前再做一次**:
+  1. 有 `TAINTED` → 退出 1 `RSI_RUN_TAINTED`(stdout / stderr 只给 `run_id` 与原因码);
+  2. 按当前配置与索引现算该 run 的证据归属:任一属于 X → 同样 `RSI_RUN_TAINTED`(原因 `exclude`),不必等 taint 落盘;任一属于 U(含索引缺失 / 损坏、盐不符、`sig_id` 在信号库里映射不到)→ 退出 1 `RSI_RUN_ATTRIBUTION_UNKNOWN`,零 LLM 调用、零输出写入(待定夺 Q20);
+  3. purge journal 存在 → 退出 3 `purge_incomplete`。
+- 生效条件:`[rsi]` 状态为 `armed` / `confirmed` / `stopped` 时才做;没有 `[rsi]` 段或 `enabled` 不为真时**不做**(兼容现有手动流程);`[rsi]` 存在但配置不可用(`cfg_*` / `repo_invalid` / `overlay_invalid` / `exclude_invalid`)时无法判断排除,一律退出 3(待定夺 Q9)。
+- `promote --run` 因此加入锁矩阵:读暂存区到写完 `.state/promote/<id>/` 期间持 `rsi/lock`,写之前做第二次检查;`judge` 本来就持锁(R20-5.1)。
+
+### 20.5 锁与并发
+
+**资源—命令—锁矩阵(R20-5.1)**
+
+| 资源                                                                                 | 写入方(拿 `rsi/lock`)                                                                                                                                  | 只读方(不拿锁)                                                                |
+| ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------- |
+| 信号库 `.state/signals/**`、会话计数 `.state/sessions/**`、盐 `.state/salt`          | worker、`rsi tick --write`、手动 `signals collect`(非 `--dry`)、`rsi purge --write` / `--resume`                                                       | `rsi tick` 干跑、`signals collect --dry`、reflect 干跑、`attest`、`calibrate` |
+| `projects.json`、`cursor.json`、`counts.json`、`snapshot.json`、`purge-journal.json` | worker、`rsi tick --write`、手动 `signals collect`、`rsi purge --write` / `--resume`、`--rebuild-index --write`;`counts.json` 另有下一行的暂存区写入方 | hint、`rsi status`、`rsi projects`、`rsi tick` 干跑                           |
+| `state.json`(确认、熔断、attempt、计数游标)、`log.jsonl` 的整体改写                  | 上述全部写入方 + `rsi confirm`、`rsi status --ack`                                                                                                     | hint、`rsi status`、poke                                                      |
+| 暂存区 `.state/reflect/<run>/`、promote 产物 `.state/promote/<id>/`                  | `reflect --run-llm`、`judge --run-llm`、`reflect --gc --write`、`promote --run`(写路径)、taint 方                                                      | reflect 干跑、`rsi status`(只读 `counts.json`)                                |
+| LLM cwd `.state/reflect/cwd/`                                                        | `reflect --run-llm`、`judge --run-llm` 另拿现有 `reflect/llm.lock`                                                                                     | —                                                                             |
+| 停止标记 `STOP`、poke 预留标记、hint 去重标记、`log.jsonl` 单行追加                  | 独占创建 / `O_APPEND` 单行追加,**不拿锁**(`rsi stop`、poke、hint、任一写入方)                                                                          | 全部                                                                          |
+
+- R20-5.2 **锁序**:`rsi/lock` → `reflect/llm.lock`。`reflect --run-llm`、`judge --run-llm` 先拿 `rsi/lock` 并在整个 LLM 调用期间持有(上限:reflect `max_calls ≤ 3` × 600000ms ≈ 30 分钟;judge `--max-calls ≤ 10` × 600000ms ≈ 100 分钟,另加开销);这段时间 worker 拿不到锁就跳过(待定夺 Q15)。两把锁都是**试锁**(拿不到立即报占用,不排队),不会死锁。现有 `llm.lock` 用链接 mtime 判 15 分钟过期、整段回调期间不续期,所以超过 15 分钟的 judge 期间它**可能**被另一个进程回收:新版本里外层 `rsi/lock` 已使同一仓库的 reflect / judge 互斥,只剩「新旧两个版本并发」的残余(§20.9 第 7 条)。
+- R20-5.3 锁文件位置 `<realpath(stateDir)>/rsi/lock`;同一仓库经不同路径写法访问是同一把锁。
+- R20-5.4 **嵌套**:顶层(worker、`tick --write`、`signals collect`、`purge`、`confirm`、`--ack`、reflect / judge / promote / gc 的写路径)拿锁一次;内部服务函数不拿锁、只接受锁句柄并在提交点 `assertHeld()`。同一进程第二次获取 `rsi/lock` 视为编程错误(`internal`),不重入。
+
+**陈旧锁协议(R20-5.5,复用 §19.5 update 锁的规则)**
+
+- 获取:safe-fs 新增的 `createExclusive`(`O_CREAT|O_EXCL|O_NOFOLLOW`,§20.9 第 4 条),内容 `{pid, started_at, nonce, kit_version}`,0600。
+- 已存在:空文件且创建不满 10 秒 → 本次报占用;内容可解析且 pid 存活(`process.kill(pid, 0)` 成功,或报 `EPERM`——`EPERM` 算存活)→ 占用,超过 TTL 15 分钟(`RSI_LOCK_TTL_MINUTES`)只报 `locked_over_ttl`,**不杀、不删**;pid 不存在(`ESRCH`)→ 回收:删除前复读,与先前读到的逐字节相同才删,再重新独占创建;内容损坏且创建满 10 秒 → 同样复读确认后回收。
+- 每个提交点(重写信号库文件、写索引 / cursor / 计数 / 快照 / `state.json` / journal、taint 每一项、删 journal)前 `assertHeld()`:锁文件的 nonce 仍是自己的,否则立即停止、不再写,`lock_lost`。
+- 已知残余(照 §19.5 写明,不弱化):两个回收者先后删除的竞态只靠 nonce 复核缩小窗口;pid 被无关长寿进程复用时会一直报 `locked_over_ttl`,需要用户手工删 `.state/rsi/lock`(`rsi status` 的 `lock: held_over_ttl` 与这句提示是唯一的处理方式);状态目录被两台机器经云同步共用时 pid 判据无意义(不支持,`cloud_sync_suspected` 只是启发式提示)。
+
+**快照清单与恢复(R20-5.6,设计稿 §8a.8)**
+
+- `.state/rsi/snapshot.json`(`RsiSnapshot`):`{schema_version, generation, written_at, files: [{name, sha256, bytes}]}`。`name` 只能取自固定集合 `state.json`、`projects.json`、`cursor.json`、`counts.json`,或匹配 `^(signals|sessions)/(claude|codex|pi)/\d{6}\.jsonl$`;不得重复、按字节序升序、≤ 2000 项;读取方**只**按这个白名单拼路径,不按清单内容任意读文件。`generation` 只增。
+- **提交义务**:任何写了 `state.json`、`projects.json`、`cursor.json`、`counts.json` 或信号库 / 会话计数文件的持锁写入方(包括 attempt 预写、confirm、`--ack`、熔断更新、taint 后的 `counts.json` 更新),都在**最后一步**用临时文件 + rename 替换快照清单。poke、hint、`rsi stop` 不写这些文件,不更新清单。
+- 只读方:先读清单,再读自己需要的文件并核对 sha256 与字节数;不一致重读一次(重新取清单),仍不一致 → hint 输出空串,`rsi status`(`snapshot: stale`)/ `rsi projects` / `rsi tick` 干跑退出 4 `RSI_SNAPSHOT_BUSY`。只核对自己读的文件。
+- **不一致 ≠ 损坏**:「各文件都过 schema 但与清单不符」= 未完成提交(上次写入方在替换清单前崩溃);任一文件过不了 schema = 损坏。持锁写入方拿锁后先检查:未完成提交 → 按当前文件重建清单(不改任何数据文件)后继续;损坏 → 安全阻断。所以崩溃在「文件已提交、清单未替换」时,下一次任何持锁写入(或用户 `rsi tick --write`)就恢复,不会永久卡住。清单缺失 = 从未提交过,不是错误。
+
+**与 update 锁的关系(R20-5.7,如实写明)**
+
+rsi 的锁(仓库 `.state/`)与 update / sync 的锁(HOME 下 `.local/state/agent-kit/`)谁也不拿对方的,没有跨组锁序,也不构成互斥。worker 拿到 `rsi/lock` 后若看到 `update/lock` 存在且持锁 pid 存活,本次以 `skipped_update_busy` 结束(正常跳过,不计熔断)。这只是**尽力降低资源竞争**,不是互斥保证:检查之后 update 照样可以开始。worker 由 `runSelf` 的 `self` 目标起,跑的是起它的那份包;update 切换 `current` 不影响已在跑的 worker。
+
+### 20.6 节流、预算与熔断
+
+- R20-6.1 **触发白名单**:只有会话结束钩子调用的 `rsi poke` 与 R20-1.7 的顺带调度会起 worker。hint、status、projects 永不起 worker。
+- R20-6.2 **启动预留**:判定 L0 到期后,独占创建 `.state/rsi/poke/<agent>-<窗口序号>`(窗口 = `floor(now / 30 分钟)`,`RSI_POKE_WINDOW_MINUTES`);创建成功的那一个才 spawn,`EEXIST` → 空操作。顺带调度用 `agent=kit`。所以每个 agent 每 30 分钟至多起一个 worker,四类合计至多四个;多出的在锁内查到期后立即结束(`skipped_throttled`)。worker 持锁时删除早于当前窗口 2 个以上的预留标记。时钟往回走时窗口序号变小、标记可能再次创建成功——最多多起一个 worker,锁内的到期判断兜底。
+- R20-6.3 **L0 间隔**:相邻两次 L0 的完成时间 ≥ 6 小时(`RSI_L0_MIN_INTERVAL_HOURS`),时钟往回走视为到期;前台 `rsi tick --write` 不受此限(待定夺 Q6)。
+- R20-6.4 **attempt 计数时间点**:worker 拿锁并通过到期判断之后、读任何会话文件之前,把 `state.json` 的 `attempt = {started_at, nonce}` 写盘(连同快照)。正常结束时清除并写 `last_tick`。下一次拿锁时发现 `attempt` 残留 → 先记一次 `crashed`(可重试错误)。
+- R20-6.5 **结果分类**:
+
+| 类别       | 结果码                                                                                                                                                                                                                                        | 对熔断                              |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| 成功       | `ok`、`ok_partial`(触发 `RSI_LIMIT_*`,已提交部分结果)                                                                                                                                                                                         | 计数清零,熔断关闭                   |
+| 正常跳过   | `skipped_off`、`skipped_stopped`、`skipped_collect_blocked`、`skipped_throttled`、`skipped_locked`、`skipped_update_busy`、`skipped_ci`、`skipped_child`、`skipped_binding_changed`、`stopped`                                                | 不变                                |
+| 可重试错误 | `io_error`(`EIO` / `EAGAIN` / `EMFILE` 等)、`crashed`、`internal`                                                                                                                                                                             | 连续失败 + 1;达到 3 → 打开 24 小时  |
+| 安全阻断   | `state_invalid`、`cursor_invalid`、`counts_invalid`、`snapshot_invalid`、`journal_invalid`、`signal_store_corrupt`、`salt_invalid`、`redactor_init`、`write_denied`、`lock_lost`、`state_dir_unsafe`、`purge_incomplete`、`staging_too_large` | 立即打开,`kind = safety`,不自动半开 |
+
+- R20-6.6 **熔断**:`retryable` 打开后到 `until`(打开时刻 + 24h)之前自动路径空操作;到期后允许一次半开尝试,成功关闭,失败再开 24h。`safety` 只有前台 `rsi tick --write` 成功或 `rsi confirm` 才关闭,不自愈覆盖损坏的状态。`state.json` 本身过不了 schema 时无处记录熔断:自动路径按「状态不可读」空操作,`rsi status` 退出 3。
+- R20-6.7 **资源上限**(严格计数类与尽力预算类分开写;超限不报错退出,计数码进 `--json` 与日志;cursor 只推进到最后一个完整提交的文件):
+
+| 项                                        | 上限                                                           | 性质与超限行为                                                                             |
+| ----------------------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| 会话根目录项(`armed` 与 `confirmed` 都算) | 50000(`RSI_MAX_DIR_ENTRIES`)                                   | 严格。停止列举,`RSI_LIMIT_ENTRIES`;已列的照算                                              |
+| `armed` 头部预读                          | 2000 个文件,每个 ≤ 64KiB                                       | 严格(物理读 ≤ 2000 × 64KiB = 125MiB)。`RSI_LIMIT_FILES`                                    |
+| `confirmed` 单次 L0 读取的改动文件数      | 2000(`RSI_MAX_FILES_PER_TICK`)                                 | 严格。停在文件边界,`RSI_LIMIT_FILES`;未改动文件只 `lstat`,不计入                           |
+| 单次 L0 读取字节                          | 256MiB(`RSI_MAX_BYTES_PER_TICK`)                               | 每个文件读完后检查,实际读取 ≤ 256MiB + 单文件上限 512MiB;`RSI_LIMIT_BYTES`                 |
+| 单文件                                    | > 512MiB 跳过(`RSI_MAX_FILE_BYTES`,按 `lstat` 大小);单行 64MiB | 严格。`RSI_FILE_TOO_LARGE` 计数;cursor 记 `too_large`,文件变化前不再尝试                   |
+| 单行 JSON 嵌套深度                        | 256(`RSI_MAX_JSON_DEPTH`;解析前按括号计数预扫)                 | 严格。该行按超大行处理(`oversized_lines` + `RSI_LIMIT_DEPTH`),不使会话失败(§20.9 第 14 条) |
+| 单次 L0 墙钟                              | 120 秒(`RSI_MAX_TICK_MS`)                                      | **尽力**。在检查点(R20-6.8)生效,可超出一个检查点间隔;`RSI_LIMIT_TIME`                      |
+| poke / hint 自身                          | 1 秒                                                           | **尽力**(R20-3.2.1、R20-3.3.1)                                                             |
+| worker 并发                               | 1(`rsi/lock`)                                                  | 严格                                                                                       |
+| 暂存区扫描(taint、计数)                   | 5000 个 run + 5000 个 promote 产物                             | 严格。超出 → `staging_too_large`(安全阻断:taint 不能只做一部分)                            |
+| cursor 条目                               | 100000                                                         | 最久未见的先淘汰(被淘汰的文件下次按改动处理;`sig_id` 去重保证幂等)                         |
+| `log.jsonl`                               | 200 行、每行 ≤ 1KiB                                            | 持锁写入方改写时截断到最近 200 行;无锁追加可暂时超出                                       |
+| 暂存区容量                                | 50 个 run / 50MiB                                              | P1 拒收用(`RSI_STAGING_FULL`);P0 只计数                                                    |
+
+- 处理顺序确定:agent(`claude`、`codex`、`pi`)→ 文件 mtime 升序 → 路径字节序。
+- R20-6.8 **检查点**:每个会话文件开始前、每处理 1000 行、每个提交步骤前,worker 重新调用 `rsiStateOf()` 并比对本次**运行绑定**(R20-3.9.2):停止标记出现 → `stopped`;配置不可用或停止采集 → `skipped_collect_blocked`;状态不再是 `confirmed`、`repo` 身份变化、`policy_fp` 或 `agents` 变化(**包括只收紧排除**)→ `skipped_binding_changed`。三者都放弃本次全部未提交结果、不推进 cursor;下一次运行按新策略重来(收紧后的那次运行不会提交按旧策略读到的数据)。
+- R20-6.9 **cursor、全量扫描与提交**:
+  - `.state/rsi/cursor.json`(`RsiCursor`):`{schema_version, fingerprint, full_scan: {epoch, started_at, done, last_completed_at}, files: {<session_ref>: {agent, size, mtime_ms, dev, ino, project_key, epoch, status}}}`,其中 `project_key` 是 `p_…` 字符串或 `null`(归属不明),`status` ∈ `ok|too_large|read_error|excluded|self_state|unknown_project`。
+  - `fingerprint` = sha256(采集器版本、各 reader 版本、脱敏规则版本、overlay 里与脱敏有关字段的 sha256、排除策略指纹(规范化排除项哈希 + agents)、`salt_fp`、kit 主版本)的 canonical JSON。
+  - 文件「未改动」= `size`、`mtime_ms`、`dev`、`ino` 全等**且**其 `epoch` 等于当前 `full_scan.epoch`。
+  - **全量扫描续跑**:指纹变化,或距 `last_completed_at` ≥ 7 天 → `epoch + 1`、`done = false`。此后每次 L0 只读「未改动」判定为假的文件,在 2000 个 / 256MiB 上限内按处理顺序推进;读过的文件写入新 `epoch`。所有文件都到达新 `epoch` 时 `done = true`、记 `last_completed_at`。截断不会让全量扫描从头再来,也不会饿死后面的文件(测试:4001 个文件、多次 tick,最终全部覆盖、每个文件在一个 epoch 里只读一次)。
+  - **重读不迁移历史**:信号库按 `sig_id` 去重,已存在的信号行**不被改写**;脱敏规则或 overlay 词表变化后的重读只补采缺失的信号,不清洗已存的摘录,cwd 更正也不改旧信号的 `project_key`。要清掉旧摘录只能 `rsi purge`(待定夺 Q24)。
+  - **提交顺序**:信号库 → 会话计数 → 索引 → `counts.json` → `state.json` → cursor → 快照清单。cursor 只在前面全部提交成功后写(变异:cursor 先于信号库提交 → 测试红)。
+- R20-6.10 节流窗口、L0 间隔、熔断 `until`、hint 去重、7 天全量、锁 TTL 全部只经注入的时钟;测试覆盖时钟往回走与跨窗口边界;读取用可取消的注入实现,测试不把「定时器触发」当作「读取已停止」。
+
+### 20.7 可观测性与隐私
+
+- R20-7.1 **日志** `.state/rsi/log.jsonl`(0600):每行 `canonicalJsonLine` 的 `{at, trigger: poke|kit|tick|confirm|purge|stop|rebuild|status, agent?, action, code, counts?, duration_ms?}`;`counts` 只含整数;不含路径、key、目录名、会话 id、摘录、异常消息。`action` / `code` 只取本节的枚举。
+- R20-7.2 **权限与读取前校验**:
+  - `.state/rsi/` 及其子目录 0700、文件 0600,一律经 safe-fs 写。读取 `.state/rsi/*` 前校验:不是符号链接、普通文件、`nlink == 1`、属主为当前 uid、权限不宽于 0600(目录 0700);不满足 → `state_dir_unsafe`(安全阻断),**不自动收紧**。
+  - `.state/{signals,sessions}` 与盐沿用 `state-store.ts` 的现有行为(盐:链接 / 非普通文件 / 宽于 0600 → `SaltError`;信号目录与文件:写入时收紧到 0700 / 0600)。这是与 `.state/rsi/` 的有意差异,共享服务改造时保留,不改成拒绝。
+  - 暂存区与 promote 产物沿用 §17 / §18 的读取校验(`FS_SYMLINK` / `FS_NOT_REGULAR` / `FS_HARDLINK`)。`.state` 本身与其上级的链接检查由 §5 safe-fs 的写入根 realpath 校验负责。
+- R20-7.3 **输出边界**:hint ≤ 200 字节、只有计数;`rsi status` 只有枚举与计数;`rsi projects` 缺省给 key 前缀与目录名,绝对路径只在 `--paths` + TTY;stderr 只有稳定码。三处(外部可见输出、暂存与 promote 文件、`log.jsonl`)的泄漏断言见 §20.8。
+- R20-7.4 **承诺措辞**:本节与实现的提示文案不出现「立即生效」「最坏只是…」「完全隔离」这类绝对承诺,只用以下可验证的边界:
+  - 「写下排除后,下一次调用 hint / status / projects 时不再计入该项目」(R20-4.6);
+  - 「`rsi stop` 后:不再调度新的采集;已预留未开始的 worker 不读会话文件;正在运行的 worker 在下一个检查点放弃未提交结果」(R20-3.7.2);
+  - 「已提交的信号保留,直到 `rsi purge --write` 完成」;「kit 不会给出比上述输出边界更多的数据」;
+  - 不承诺会话 agent 自己不去读原始会话文件(同 UID,设计稿 §6.3)。
+- R20-7.5 **残余风险**(照写):脱敏是规则式的,有已登记的残余缺口(`redaction.md` §7),默认全部项目下漏网影响面最大;脱敏规则更新不清洗已存摘录(R20-6.9);项目索引是一份本机项目路径清单,与信号库同权限同位置,仓库在云同步目录下会被同步出去(`cloud_sync_suspected` 只按路径段启发式判断);用户可能从不运行 `rsi projects`。
+
+### 20.8 验收口径
+
+#### 20.8.1 零写入的判定方式与范围(设计稿 §8a.11)
+
+- 判据两层,缺一不可:①**写调用审计**:经 safe-fs 注入的审计桩记录到的写调用(含 `mkdir`、`createExclusive`、`appendFile`、`rename`、`remove`、`chmod`)次数为 0——这一层能抓「建了又删」「写后还原」;②**前后快照**:下列范围内没有任何文件或目录的新增、删除、修改(内容 sha256、大小、权限位、文件类型),**包括空目录、锁文件、日志、cursor、索引、计数、快照、预留 / 去重标记、临时文件**。快照只证明前后差异,所以①不能省。
+- 范围:仓库工作树(另跑 `git status --porcelain --ignored` 核对,`.state` 是 gitignored)、`.state/` 整棵(独立遍历)、假 HOME 的受管路径(`HOME_WRITE_TABLE` + `.config/agent-kit/` + `.local/state/agent-kit/`)、会话根(不比较 atime)、`KIT_TMP`(验收脚本自己的目录除外)。真实 HOME 验收沿用 §12.1 的「待人工归因」规则。每组都带一个正向对照(故意写一个文件,判据必须报出)。
+- 场景:干跑、失败、被拒、被中断(在检查点注入 SIGTERM)四种分别验。
+- 适用命令:`rsi tick`(无 `--write`)、`rsi status`(无 `--ack`)、`rsi projects`(非 `--rebuild-index --write`)、`rsi purge`(无 `--write`)、被拒的 `rsi confirm`(`DECLINED` / `STALE`)、off / 跳过情形下的 poke、输出为空串的 hint。这些命令加入 A5 命令清单,A5 环境加 `KIT_AUTO_RSI=0`(§20.9 第 16 条)。
+
+#### 20.8.2 各块验收项与必须覆盖的变异点
+
+| 块                                                                      | 机器可判验收项(引用条款)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | 必须覆盖的变异点(变异后必须有测试红)                                                                                                                                                                                                                      |
+| ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **R20**(契约)                                                           | `RsiBase`、`RsiPolicy`、`RsiState`、`RsiProjectIndex`、`RsiCounts`、`RsiCursor`、`RsiSnapshot`、`RsiPurgeJournal`、`RsiTaintMark`、`RsiStopMark`、`RsiLogLine` 的合法 / 错误示例矩阵(断言状态、阻断范围、原因码);R20-2.6 分层优先级;缺省 `enabled=false`;稳定码表与枚举一致                                                                                                                                                                                                                                                                                                                                                                                                                               | 缺省改成开启;`agents` 接受 `kimi`;L-policy 失败被当成 `off`;快照 `name` 接受白名单外路径                                                                                                                                                                  |
+| **A1**(锁)                                                              | R20-5.1 每个写入方都拿锁:并发组合(worker × 手动 collect / `tick --write` / `reflect --gc --write` / `reflect --run-llm`(stub)/ `judge`(stub)/ `promote --run` / purge)第二个报占用、无交错写;SIGKILL 后被回收;假 `isAlive` 恒真 → `locked_over_ttl` 不删;空锁文件 10 秒规则;nonce 被替换后 `assertHeld` 阻止下一次写;盐首建经 `createExclusive`,两个进程同时首建只得一个盐;每个提交步骤注入崩溃后,快照「未完成提交」都能被下一次写入方恢复                                                                                                                                                                                                                                                                | 去掉任一命令的拿锁;回收前不复读;`assertHeld` 恒真;`EPERM` 当作 pid 不存在;未完成提交被当成损坏(永久卡住)                                                                                                                                                  |
+| **A2**(tick / 索引 / 排除 / purge / status / projects / confirm / stop) | R20-3.1.1 干跑零写入(§20.8.1);`--write` 只写 `.state/{rsi,signals,sessions,salt}`;零网络;R20-1.11 两种 `armed` 的读写审计;R20-4.3 的 U 情形(索引缺项 / 损坏 / 盐不符 / 根路径消失 / 移动 / 大小写变化 / `(dev,ino)` 变化),U 在 hint、`status --json`、`log.jsonl` 只以计数出现;**写下排除后下一次 hint / status 的 P、K、N、M、n 即不含该项目(中间不跑 tick)**;purge 前后计数,journal 每阶段注入崩溃后 `--resume` 完成;大小写敏感卷(Linux tmpfs)与不敏感卷(macOS APFS 默认)各一组;confirm:非 TTY 拒、输入非 `yes` 零写入、等待输入期间改 `agents` / 排除 / `repo` / overlay → `RSI_CONFIRM_STALE` 零写入;stop 三种语义各一例;检查点处收紧排除 → `skipped_binding_changed` 且不提交;全量扫描 4001 文件覆盖 | 索引过滤取反;cursor 先于信号库提交;`armed` 判断取反;taint 漏删 `apply.patch`;taint 只清命中证据的摘录;续做跳过已有 `TAINTED` 的项;`promote --run` 去掉即时闸;排除判定改读缓存;purge 不检查 `--project` 已排除;confirm 不重算展示指纹;检查点不比对运行绑定 |
+| **A3**(poke / hint / worker)                                            | 假时钟:节流窗口、L0 6h、三类结果对熔断、半开、时钟回拨;R20-1.6 每个跳过条件零写入;R20-1.2a 真实 `dist/cli.js` 子进程四组合下 poke / hint 的 stdout、stderr 为空;poke 不读 stdin(永不关闭的管道下 2s 内退出);hint ≤ 200 字节(计数取极值)、无路径(植入种子路径与种子目录名,输出 grep 为 0)、失败输出空;poke、hint、worker、各前台入口的 import 闭包分别不含 `llm-exec` / `reflect/backends/**` / `net.ts`;`KIT_RSI_CHILD=1` 全空操作;`PI_CODING_AGENT_DIR` 已设时 worker 记 pi `not_evaluated`                                                                                                                                                                                                              | 节流比较取反;去掉预留检查(两个 poke 都 spawn);attempt 在读文件之后才写;hint 去掉字节上限;`KIT_AUTO_RSI` 判断去掉;rsi 入口改回经 `launchCurrent`                                                                                                           |
+| **隐私(N5 / N6 / N7)**                                                  | N5:首次 `armed` 下 `.state/{signals,sessions,salt}`、`projects.json`、`cursor.json` 不存在,`confirm` 后的 `tick --write` 才出现;N6:purge 与写下排除后,命中 run 的 `excerpt` 全空、`apply.patch` 不存在、`TAINTED` 存在,相关 promote 产物的 `promote.patch` 不存在,`promote --run` / `judge` 给 `RSI_RUN_TAINTED`,外部可见输出(stdout / stderr / `--json`)、暂存与 promote 文件、`log.jsonl` 三处 grep 被排除项目的种子摘录与种子路径均为 0;taint 落盘前的窗口(排除已写、未跑任何持锁命令)同样拒;N7:索引损坏时 `judge --run-llm`(stub)零调用、`RSI_RUN_ATTRIBUTION_UNKNOWN`;配置是符号链接或权限过宽 → `off`;索引损坏 → 计数全归 U,`--rebuild-index --write` 后恢复                                        | taint 顺序改成先清摘录后写标记(两步之间注入崩溃,读路径放行 → 红);即时闸去掉;U 证据放行到 judge                                                                                                                                                            |
+
+### 20.9 与现有契约的衔接 / 修订清单
+
+「先改」= 必须在对应块实现之前改既有条款(否则实现违反现行契约或撞现有测试);「随块」= 与实现同一 PR 订正。
+
+| #   | 既有条款                                                                         | 修订内容                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | 时机          |
+| --- | -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| 1   | §19.8 / §19.10 `UserConfig`(`strictObject`)                                      | 追加可选 `rsi`。**现状下用户一写 `[rsi]`,`UserConfig` 校验失败,`update` 退出 3 `config_invalid`、后台更新停摆**。推荐 `rsi: z.unknown().optional()`,由 `src/rsi/config.ts` 按 R20-2.6 分层校验,`[rsi]` 写错不连累 update(待定夺 Q1)                                                                                                                                                                                                                                                                   | **先改**(R20) |
+| 2   | §19.7 `RUN_SELF_ENV_KEYS` / `RUN_SELF_ENV_PICK_RE`                               | 追加 `KIT_AUTO_RSI`、`KIT_RSI_CHILD`、`KIT_RSI_PI_DIR_SET`(具名,不用通配)                                                                                                                                                                                                                                                                                                                                                                                                                             | **先改**(A3)  |
+| 3   | §19.7 lint 闸(`runSelf` 只许 `launcher.ts`)、`RunSelfOptions`、根入口、§7 命令表 | 现有 `launcher.ts` 经 `install.ts` 传递引入 `net.ts`,rsi 入口不能经过它(R20-1.1)。需要:①把 rsi 对 `runSelf` 的用法放进一个**零网络**桥接模块(例如 `src/update/self-spawn.ts`,不引用 `install.ts` / `registry.ts` / `provenance.ts`),lint 闸对 `runSelf` 的放行从「仅 `launcher.ts`」扩为「`launcher.ts` 与该桥接模块」;②`RunSelfOptions` 加受校验的 `cwd`(必须等于 `realpath([rsi] repo)`);③根入口按 R20-1.2a 路由;④`src/cli.ts` 识别 `__rsi --background`;⑤§7 命令表加 `rsi` 一行。lint 闸由主代理改 | **先改**(A3)  |
+| 4   | §5 safe-fs 导出表                                                                | 追加 `createExclusive(ctx, path, content, mode)`(`O_CREAT\|O_EXCL\|O_NOFOLLOW`,受 `writeRoots` 守卫);eslint 不变                                                                                                                                                                                                                                                                                                                                                                                      | **先改**(A1)  |
+| 5   | §5.2 `llm-exec` 固定环境                                                         | 追加固定 `KIT_RSI_CHILD=1`(与 `NO_COLOR=1` 同类)                                                                                                                                                                                                                                                                                                                                                                                                                                                      | **先改**(A3)  |
+| 6   | §17.7「gc 不拿跨进程锁」                                                         | `reflect --gc --write` 拿 `rsi/lock`,干跑不拿;「没有写入方会再往它里面写」加注:taint 只改写含 `proposals/` 的 run,而 gc 候选不含 `proposals/`,结论不变                                                                                                                                                                                                                                                                                                                                                | **先改**(A1)  |
+| 7   | §17.1 / §17.2 reflect、judge 真跑;`src/reflect/backends/lock.ts`                 | 先拿 `rsi/lock` 再拿 `reflect/llm.lock`(R20-5.2);拿不到 → 退出 4 `REFLECT_NOT_RUN reason=locked` / `JUDGE_NOT_RUN reason=locked`(零调用零写入)。`llm.lock` 的 mtime 过期语义不变,在 lock.ts 头注释写明「超过 15 分钟的调用期间可能被旧版本进程回收」这一残余                                                                                                                                                                                                                                          | **先改**(A1)  |
+| 8   | §7 / §10.6 `signals collect`、`state-store.ts` 头注释                            | 非 `--dry` 拿 `rsi/lock`,按 R20-6.9 更新 cursor、索引、计数、快照;删除「并发的两次 collect 会互相覆盖(P0 接受)」与「盐首建非原子」两句;权限收紧行为保留(R20-7.2)                                                                                                                                                                                                                                                                                                                                      | 随块(A1)      |
+| 9   | §8 #23 会话计数库、§10.6 信号库                                                  | 新增按 key 删除(purge)的重写路径;写入顺序遵守 R20-6.9                                                                                                                                                                                                                                                                                                                                                                                                                                                 | 随块(A2)      |
+| 10  | `exclude.ts`(F2)                                                                 | 导出 `canonical()`;rsi 路径用新的策略构造(无默认拒绝、`exclude_names`、`(dev,ino)` 祖先匹配);手动 `--allow-project` 的大小写放宽与 allow 路径作 `projectRoot` 不变                                                                                                                                                                                                                                                                                                                                    | 随块(A2)      |
+| 11  | §17.2 judge、§18.3 / §18.4 `promote --run`                                       | 追加 R20-4.8 即时闸:`RSI_RUN_TAINTED`、`RSI_RUN_ATTRIBUTION_UNKNOWN`(退出 1)、`purge_incomplete` 与配置不可用(退出 3);`promote --run` 加入锁矩阵(持 `rsi/lock`)                                                                                                                                                                                                                                                                                                                                       | **先改**(A2)  |
+| 12  | §19.3 doctor「`checks` 恒 16 项」、`DOCTOR_CHECK_IDS`                            | D17 是 P1(A6),P0 不加;届时改为 17                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | P1(A6)        |
+| 13  | §19.7 `HOME_WRITE_TABLE`(12 条)                                                  | 第 13 条 pi 扩展(可执行类)是 P1(A5),P0 不改                                                                                                                                                                                                                                                                                                                                                                                                                                                           | P1(A5)        |
+| 14  | §13 / `reader-counting-spec.md`                                                  | 单行 JSON 嵌套深度 256 的预扫与 `<line-too-deep>` 计数是 reader 行为变更;推荐放进共享基类、同时改口径文档(待定夺 Q16)                                                                                                                                                                                                                                                                                                                                                                                 | **先改**(A2)  |
+| 15  | §8 #24、§17.4a `Proposal.reflector`                                              | `provenance` 是 P1(A4),P0 不改                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | P1(A4)        |
+| 16  | §12.1 A5 命令清单与环境、§19.9                                                   | 加入 §20.8.1 列出的命令;A5 环境加 `KIT_AUTO_RSI=0`;A5 增加写调用审计桩这一层判据                                                                                                                                                                                                                                                                                                                                                                                                                      | 随块(A2 / A3) |
+| 17  | §5「state 位置」                                                                 | rsi 全部入口忽略 `KIT_STATE_DIR` / `KIT_WRITE_ROOTS`(除非设了 `KIT_TMP`)——`paths.ts` 增加 rsi 专用的上下文构造                                                                                                                                                                                                                                                                                                                                                                                        | **先改**(A1)  |
+| 18  | §7 全局选项 `--root`                                                             | rsi 命令的仓库根取 `[rsi] repo`;`--root` 不同 → `root_mismatch`                                                                                                                                                                                                                                                                                                                                                                                                                                       | 随块(A2)      |
+| 19  | §19.5 后台 worker 只对 TTY 前台命令调度                                          | rsi 的 poke 来自钩子、天然非 TTY,不复用 update 的 TTY 闸,用 R20-1.6 / R20-1.7 自己的闸;update 的闸不变                                                                                                                                                                                                                                                                                                                                                                                                | 随块(A3)      |
+| 20  | §5「确定性序列化」                                                               | 追加 `canonicalJsonLine`(单行,键序同 `canonicalJson`)                                                                                                                                                                                                                                                                                                                                                                                                                                                 | **先改**(A1)  |
+| 21  | §18.2 `promote --run` 产物                                                       | `.state/promote/<id>/` 可被 taint(删 `promote.patch`、`pr-body.md`,写 `TAINTED`);`promote --run` 的「同 id 已存在且一致 → 退出 0」对 tainted 目录改为 `RSI_RUN_TAINTED`                                                                                                                                                                                                                                                                                                                               | **先改**(A2)  |
+
+### 20.10 P1 / P2 占位(只写接口与不变量,不写细则)
+
+| 项                                                | 接口占位                                                  | P0 已定的不变量                                                                             | 依赖的待决事项 |
+| ------------------------------------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------- | -------------- |
+| `rsi digest --json`(A4)                           | 无 `--scope`(传了退出 2);≤ 48KiB、5 簇、每簇 8 条         | 摘录只限当前项目(N3);X / U 现算(R20-4.6),摘录恒 0;读前过快照协议;输出前用当前规则复扫       | 无(N3 已定)    |
+| `reflect --ingest - --digest <id> --owner @h`(A4) | stdin ≤ 64KiB、≤ 5 条提案                                 | 摘录由合并器从信号库机械复制(§16);写暂存前复核授权与排除;持 `rsi/lock`;只写暂存区、不 apply | N4             |
+| `[rsi.session]`(A4)                               | `enabled`、`agents`、`expires`(≤ 90 天)、`auto`(`s1\|s2`) | 只在 L-session 层校验,失败只禁用会话授权(R20-2.6);授权不是安全边界                          | N2             |
+| `rsi hint --format <claude-json\|codex-json>`(A5) | 钩子输出形状                                              | 文本内容与字节上限同 R20-3.3.2                                                              | N1             |
+| `rsi hooks --print / --install --agent pi`(A5)    | 片段打印;pi 扩展写入需 TTY 确认                           | 钩子不传路径与 cwd(R20-1.9);poke / hint 恒退出 0、不经启动器(R20-1.2a)                      | N1             |
+| `rsi session --print`(A5)                         | 打印可粘贴配置                                            | kit 不写用户配置(R20-2.1)                                                                   | N2             |
+| `rsi dismiss`、提醒一次、doctor D17(A6)           | `dismissed.json`;`RSI_PROPOSALS_READY`;D17                | D17 无绝对路径;P0 期间新增项目由 hint 的 n 与 `rsi status` 提示(R20-4.2a)                   | 无             |
+| S0 / S1 / S2、`rsi should-continue`(P2)           | 独占创建的每日名额                                        | 自动路径永不 spawn LLM(R20-1.1)                                                             | N2             |
+| `judge --ingest`(P2)                              | —                                                         | 厂商自报不可证明                                                                            | N4             |
+| `reflector.provenance`(A4)                        | `spawned \| session_declared`                             | 缺省兼容为 `spawned` 仅当有完整后端身份(设计稿 §8a.6)                                       | 无             |
+
+### 20.11 契约自洽性核对表
+
+| #   | 新条款                                       | 对照的既有条款 / 设计稿                                                | 结论                                                                                                                                                      |
+| --- | -------------------------------------------- | ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | R20-2.1 读 `~/.config/agent-kit/config.toml` | §5「`~` 不展开」、§19.5 文件位置                                       | 不冲突:update 已经 `getRealHome()` 读同一文件,rsi 沿用入口、校验更严                                                                                      |
+| 2   | `[rsi]` 段                                   | §19.8 `UserConfig` strict                                              | **冲突**:未修订前写 `[rsi]` 会让 update 失败。§20.9 第 1 条先改                                                                                           |
+| 3   | R20-2.5 状态目录在仓库内                     | §5「state 位置」                                                       | 一致;「忽略 `KIT_STATE_DIR`」是收窄,§20.9 第 17 条                                                                                                        |
+| 4   | R20-1.1 / R20-1.2a 零联网、不经启动器        | §19.7 lint 闸、`launcher.ts → install.ts → net.ts`                     | **冲突**:rsi 入口若经现有启动器,传递闭包含 `net.ts`,启动器还会输出 update 提示、起 update worker。按 R20-1.2a 路由并拆出零网络桥接(§20.9 第 3 条)后才一致 |
+| 5   | R20-3.9.1 worker 环境                        | §19.7 `RUN_SELF_ENV_KEYS`                                              | 需追加三键(§20.9 第 2 条),方向一致                                                                                                                        |
+| 6   | R20-5.2 reflect / judge 拿 `rsi/lock`        | §17.2 退出码表                                                         | 需新增 `reason=locked`(退出 4,NOT_RUN 语义已有)                                                                                                           |
+| 7   | R20-5.1 gc 拿锁                              | §17.7「gc 不拿跨进程锁」                                               | **冲突**,按设计稿 §12 改为拿锁(§20.9 第 6 条);§17.7 已把「加共享锁」列为待定夺,方向一致                                                                   |
+| 8   | R20-5.5 锁协议                               | §19.5 update / sync 锁                                                 | 规则一致;原语不同(safe-fs 而非 home-fs),§20.9 第 4 条                                                                                                     |
+| 9   | R20-5.2 与现有 `reflect/llm.lock`            | `src/reflect/backends/lock.ts`(链接 + mtime 15 分钟)                   | **有残余**:llm.lock 整段回调不续期,超过 15 分钟的 judge(最多约 100 分钟)期间可能被回收。新版本靠外层 `rsi/lock` 互斥;新旧版本并发仍是残余(§20.9 第 7 条)  |
+| 10  | R20-4.1 项目根                               | §9、`exclude.ts`                                                       | **部分一致**:与手动 collect 的「无 allow 名单」分支一致;allow 路径命中时手动 collect 用 allow 路径作根。R20-4.1 / R20-3.5.5 写明差异与重建边界            |
+| 11  | R20-4.4 折叠大小写                           | 设计稿 §8「不无条件折叠」                                              | **与设计稿措辞不一致**,取「只会多排除」的保守方向,列 Q4                                                                                                   |
+| 12  | R20-4.2 首次 armed 不落索引                  | 设计稿 §8a.1「项目根只进项目索引」                                     | **与设计稿不一致**:`project_key` 需要盐而首次 `armed` 不建盐;改为现算不落盘,列 Q2                                                                         |
+| 13  | R20-1.5a 失效后的 armed                      | 设计稿 §8a.1、§14 A2 的 N5 断言                                        | 设计稿未区分;N5「文件不存在」只对首次 `armed` 成立,失效后改为「不新建不修改」,列 Q19                                                                      |
+| 14  | R20-3.3.4 hint 写去重标记                    | 设计稿 §4.2「只读」与「30 分钟去重」                                   | **设计稿内部矛盾**(去重需要写),取「仅独占创建一个标记」,列 Q5                                                                                             |
+| 15  | R20-3.3.2 hint 模板                          | 设计稿 §4.2 模板、§8a.1「提示里单列新增项目 n」、§14 A2「hint 输出 U」 | 原模板加 n 与 U 后超 200 字节;删去尾句「不要主动打断用户当前任务」,保留「仅在用户要求时」;194 字节                                                        |
+| 16  | R20-3.3.1 hint 读集合                        | 设计稿 §4.2「只读 `state.json`」                                       | **与设计稿不一致**:只读 `state.json` 兑现不了「排除立即生效」与 U 判定;扩为四个 rsi 文件 + 配置 + 根路径元数据,新增 `counts.json`(R20-4.5)                |
+| 17  | R20-4.7 taint 清空全部证据摘录               | §16、`Proposal` schema;设计稿 §8a.3 ①                                  | 不冲突:空串合法;不新增 `redacted_by`(与设计稿写法不同,原因记在 `TAINTED`),列 Q14                                                                          |
+| 18  | R20-4.7 taint 改写暂存 run 与 promote 产物   | §17.7 gc;§18.2 promote 幂等                                            | gc 不冲突(tainted run 含 `proposals/`,不是候选);promote 的「同 id 已存在 → 退出 0」需改,§20.9 第 21 条                                                    |
+| 19  | R20-4.8 即时闸读 `[rsi]`                     | §17 judge、§18 promote 现不读用户配置                                  | 新依赖;无 `[rsi]` 或未启用时行为不变;配置损坏时 fail-closed 是收紧,列 Q9、Q20                                                                             |
+| 20  | R20-1.6 CI 判据                              | §19.5 / `policy.ts` `CI_ENV_KEYS`                                      | 一致,复用同一张表                                                                                                                                         |
+| 21  | R20-6.7 JSON 深度上限                        | §13 reader、口径文档                                                   | 新增 reader 行为,先改口径(§20.9 第 14 条)                                                                                                                 |
+| 22  | R20-3.0 稳定码风格                           | §19 `<CMD>_<类别> reason=`                                             | 一致;设计稿顶层码 `RSI_INDEX_INVALID` 映射为 `RSI_FAIL_CLOSED reason=index_invalid`                                                                       |
+| 23  | R20-1.7 顺带调度要求 TTY                     | §19.5 update 调度                                                      | 一致;rsi 白名单含 `check` / `build`,update 的排除集恰好排除它们,两者独立判定                                                                              |
+| 24  | R20-3.8 purge 删除信号                       | §17.3 会话计数 upsert、`ts` 钉死                                       | 不冲突:整行删除,不改其它行                                                                                                                                |
+| 25  | R20-6.9 重读不迁移历史                       | 设计稿 §12「cursor 绑定脱敏规则版本,变化即全量重读」                   | **语义比设计稿弱**:设计稿暗示重读会更新,现有 `writeSignals` 按 `sig_id` 去重保留旧行。如实写明只补采,列 Q24                                               |
+| 26  | R20-3.6 confirm 绑定展示指纹                 | 设计稿 §8a.1                                                           | 设计稿未写 TOCTOU;本节补「拿锁后重算,不同即 `RSI_CONFIRM_STALE`」,列 Q18                                                                                  |
+
+### 20.12 待主代理 / 用户定夺
+
+| #   | 问题                                        | 推荐(第一项)与备选                                                                                          | 代价                                                                                        |
+| --- | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Q1  | `UserConfig.rsi` 怎么进 schema              | **A** `z.unknown().optional()`,rsi 模块分层校验;B 直接挂 `RsiConfigSchema.optional()`                       | A:`UserConfig` 示例看不出 `[rsi]` 形状;B:`[rsi]` 写错会让 update 一起停                     |
+| Q2  | 首次 `armed` 的项目清单落不落盘             | **A** 不落盘,每次现算;B 落一份不含 key 的「待确认清单」                                                     | A:每次重扫目录(受上限);B:未确认前就把全部项目路径写进状态目录                               |
+| Q3  | 项目根是否向上找 git 根                     | **A** 不找,沿用 canonical cwd;B 找含 `.git` 的最近祖先                                                      | A:同一仓库子目录会话是多个项目;B:多读 `.git`、改变现有 `project_key`,历史失联               |
+| Q4  | 排除比较是否折叠大小写                      | **A** 折叠 + `(dev,ino)` 祖先匹配;B 按卷的真实大小写语义                                                    | A:大小写敏感卷上多排除仅大小写不同的兄弟目录;B:卷探测不可靠时可能漏排除                     |
+| Q5  | hint 30 分钟去重的写入                      | **A** 允许 hint 独占创建一个去重标记;B 不去重;C 由 worker 预计算                                            | A:hint 不再是纯只读;B:恢复 / 压缩时重复注入;C:窗口内首个会话可能拿不到提示                  |
+| Q6  | L0 6 小时与 poke 30 分钟                    | **A** poke 先判 L0 到期,不到期不预留不 spawn;B 每 30 分钟都 spawn,由 worker 判                              | A:会话结束后最长 6 小时才采到;B:多数 worker 空跑                                            |
+| Q7  | rsi 是否忽略 `KIT_STATE_DIR`                | **A** 忽略(除非 `KIT_TMP`);B 尊重                                                                           | A:用户不能把 rsi 状态放到别处;B:钩子进程与前台命令可能读写不同的状态目录                    |
+| Q8  | `purge --project` 是否要求项目已排除        | **A** 要求;B 不要求                                                                                         | A:多一步先写排除;B:用户以为删了,下次 L0 又采回来                                            |
+| Q9  | `[rsi]` 配置损坏时 judge / promote 读暂存区 | **A** fail-closed(退出 3);B 当作无排除继续                                                                  | A:配置写错会挡住手动晋升;B:配置写错期间被排除项目的摘录可能经 judge 外发                    |
+| Q10 | `RSI_RUN_TAINTED` 的退出码                  | **A** 1;B 3                                                                                                 | A:与「不变量破坏」区分;B:与其它隐私闸同码                                                   |
+| Q11 | 停止标记怎么清除                            | **A** 只有 `rsi confirm`;B 新增 `rsi start`                                                                 | A:恢复要再看一遍清单;B:多一条命令                                                           |
+| Q12 | `[rsi] agents` 缺省与可选值                 | **A** 缺省 `claude,codex,pi`,只许这三家;B 缺省空                                                            | A:装了但不想采的 agent 也会被采(可删);B:启用时多写一行                                      |
+| Q13 | 「首次 L0 完成后提示一次」放 P0 还是 P1     | **A** P1(A6),P0 由 `rsi confirm` 清单与 hint 的 n 承担;B 放 P0                                              | A:P0 期间没有「已开始采集」的单独提示;B:P0 多一个提醒机制                                   |
+| Q14 | taint 原因记在哪                            | **A** 只记在 `TAINTED`,证据 `excerpt` 置空;B 在证据里加 `redacted_by`                                       | A:单看提案看不出为何为空;B:`Proposal` / `AtomFrontmatter` schema 变更                       |
+| Q15 | reflect / judge 真跑整段持 `rsi/lock`       | **A** 持有;B 只在读信号与写暂存时短暂持有,写前重判排除                                                      | A:L0 最长推迟约 30 分钟(reflect)/ 约 100 分钟(judge);B:写暂存拿不到锁会浪费一次已外发的调用 |
+| Q16 | JSON 深度上限放哪                           | **A** 共享 reader 基类,同时改口径文档;B 只在 rsi 路径                                                       | A:手动 collect 在病态行上的计数变化;B:两条路径对同一文件计数不同                            |
+| Q17 | 首次 `armed` 首行取 cwd 的假设              | **A** A2 先对三家真实会话文件实测首行是否含 cwd,不含的 agent 在 `armed` 下记归属不明;B 放宽到前 N 行        | A:某家在确认前显示不出项目;B:违反 N5「至多读开头一行」                                      |
+| Q18 | confirm 的 TOCTOU                           | **A** 拿锁后重算展示指纹,不同即 `RSI_CONFIRM_STALE`;B 在锁内完成展示与输入                                  | A:用户偶尔要重跑一次;B:等待输入期间长时间持锁,挡住 worker                                   |
+| Q19 | 确认失效退回 `armed` 后旧数据怎么办         | **A** 保留,只读展示与 purge;B 失效即自动删除                                                                | A:失效期间旧数据仍在盘上;B:用户误删一条排除就丢掉全部历史                                   |
+| Q20 | 归属不明(U)的证据对 judge / promote         | **A** 拒绝(`RSI_RUN_ATTRIBUTION_UNKNOWN`,零 LLM 调用);B 只拒 X、放行 U                                      | A:索引损坏期间手动 judge 用不了,需先 `--rebuild-index`;B:违背 N7「一律不输出」              |
+| Q21 | purge journal 在 `stopped` / `armed` 下续做 | **A** 由前台 `rsi purge --resume --write` 续做(`confirmed` 下 worker 也自动续做);B 任何状态下 worker 都续做 | A:用户 `stop` 之后要手动续做;B:与「stopped 不做自动写入」冲突                               |
+| Q22 | promote 产物是否纳入 taint                  | **A** 纳入(删 `promote.patch` 与 `pr-body.md`,写 `TAINTED`);B 不纳入,只在说明里写明                         | A:`promote --run` 的幂等语义要改;B:被排除项目的摘录留在 `.state/promote/`                   |
+| Q23 | `armed` 头部读取的物理边界                  | **A** 一次 ≤ 64KiB 的读,首行之后的字节丢弃不解析;B 逐块读到首个换行为止                                     | A:物理上读到了首行之后的若干字节(不解析);B:多次读调用,审计更难写                            |
+| Q24 | 脱敏规则 / overlay 变化后是否重写已存信号   | **A** P0 不重写,只补采,要清洗用 purge;B 指纹变化时按 `sig_id` 原地重写                                      | A:旧摘录在新规则下仍可能含漏网内容(P1 digest 输出前复扫兜底);B:要定跨月份一致性与回滚       |
+| Q25 | 钩子触发的 poke / hint 是否转发到 `current` | **A** 不转发,跑被调用的那份包(R20-1.2a);B 拆出零网络的 current 校验后再转发                                 | A:可能跑旧版本代码;B:要把 `verifyInstalledTree` 从 `install.ts` 拆出,改动面大               |
+
+### 20.13 评审记录
+
+2026-10-23,`~/.claude/bin/pi-review.sh` 只读评审(第 1 级 Pi GPT-6.1 Sol 成功),针对本节初稿,26 条(高 12、中 12、低 2)。评审结论「建议修订后再冻结 R20」;§20.11 的 #4、#9、#10、#17 结论被指出不成立,已重写。逐条处置:
+
+| #   | 问题(严重度)                                                       | 处置                                                                                                                                                                                                                 |
+| --- | ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | 自动路径闭包要求与 launcher 接线冲突(launcher → install → net)(高) | 采纳:R20-1.1 改为按入口分别起算;§20.9 第 3 条要求零网络桥接模块;核对表 #4 改为「冲突」                                                                                                                               |
+| 2   | 公共启动器破坏 poke / hint 的静默与零写入(高)                      | 采纳:新增 R20-1.2a 入口路由与真实产物子进程验收;Q25                                                                                                                                                                  |
+| 3   | 首次确认 TOCTOU(高)                                                | 采纳:R20-3.6.2–3 展示指纹 + 拿锁重算 + `RSI_CONFIRM_STALE`;Q18                                                                                                                                                       |
+| 4   | 运行中 worker 未重验确认(高)                                       | 采纳:R20-3.9.2 运行绑定、R20-6.8 检查点比对,含「只收紧排除」也放弃                                                                                                                                                   |
+| 5   | taint 中断后无续做协议(高)                                         | 采纳:R20-4.7「续做」条与崩溃注入点;purge journal 记下目标集合(R20-3.8.4)                                                                                                                                             |
+| 6   | 索引损坏时暂存区闸缺 fail-closed(高)                               | 采纳:R20-4.8 新增 `RSI_RUN_ATTRIBUTION_UNKNOWN`,零 LLM 调用;Q20                                                                                                                                                      |
+| 7   | promote 不拿锁、导出产物不在 purge 范围(高)                        | 采纳:`promote --run` 入锁矩阵、写前二次检查;promote 产物纳入 taint;§20.9 第 21 条;Q22                                                                                                                                |
+| 8   | 快照缺提交义务与崩溃恢复(高)                                       | 采纳:R20-5.6 提交义务、「不一致 ≠ 损坏」与持锁重建                                                                                                                                                                   |
+| 9   | purge 恢复与 stopped / off / armed 冲突(高)                        | 采纳:R20-3.8.5 续做入口与 `--resume`;Q21                                                                                                                                                                             |
+| 10  | 重新 armed 时 N5 断言不可满足(高)                                  | 采纳:R20-1.5a 区分首次与失效后的 `armed`;R20-1.11 分开断言;Q19                                                                                                                                                       |
+| 11  | 配置 schema 与 fail-closed 分层矛盾(高)                            | 采纳:R20-2.6 分层解析与错误优先级;示例断言状态 / 阻断范围 / 原因码                                                                                                                                                   |
+| 12  | hint 读集合支撑不了现算(高)                                        | 采纳:R20-3.3.1 明确读集合与元数据读取;新增计数投影 `counts.json`(R20-4.5)                                                                                                                                            |
+| 13  | 「与现有 collect 完全一致」不成立(allow 路径作根)(中)              | 采纳:R20-4.1 改为「无 allow 分支」口径;R20-3.5.5 不用新 key 冒充;核对表 #10 改为「部分一致」                                                                                                                         |
+| 14  | 7 天全量在上限下饿死文件(中)                                       | 采纳:R20-6.9 epoch 续跑与 4001 文件测试                                                                                                                                                                              |
+| 15  | 指纹变化重读不等于更新脱敏 / 归属(中)                              | 采纳:R20-6.9 写明「重读不迁移历史」,指纹含 overlay 脱敏字段哈希;Q24;核对表 #25                                                                                                                                       |
+| 16  | 硬上限与 1s 的绝对措辞(中)                                         | 采纳:R20-6.7 分严格 / 尽力两类并写超量范围;R20-3.2.1 改为 2s 内退出的判据;补目录与暂存扫描上限                                                                                                                       |
+| 17  | armed 物理读取边界不一致(中)                                       | 采纳:R20-1.4 明确「一次 ≤ 64KiB 物理读、首行后丢弃不解析」;Q23                                                                                                                                                       |
+| 18  | llm.lock 不会误回收的结论不成立(中)                                | 采纳:R20-5.2 与核对表 #9 改为「有残余」,judge 上限约 100 分钟;Q15 代价同步修正                                                                                                                                       |
+| 19  | `runSelf` 缺 cwd 接口;`PI_CODING_AGENT_DIR` 丢失(中)               | 采纳:§20.9 第 3 条加 `cwd`;R20-2.9 与 §20.9 第 2 条加 `KIT_RSI_PI_DIR_SET`                                                                                                                                           |
+| 20  | 持久化 schema 不完整、快照路径可被引导(中)                         | 部分采纳:快照 `name` 白名单(R20-5.6)、cursor 的 `project_key` 写成合法形状、R20 行列全 schema 清单;各 schema 的逐字段上下界留给 R20 schema 落地时写进 `src/contracts/rsi.ts` 与带标记示例(本节是契约文字,不重复 zod) |
+| 21  | 输出与权限策略修订不完整(中)                                       | 采纳:R20-7.2 分三类资源写读取前校验与写入权限策略,标明与手动 collect 的兼容差异                                                                                                                                      |
+| 22  | `rsi projects` 输出例外与 N7 冲突(中)                              | 采纳:通用约定写明唯一例外;R20-3.5.1 按状态分别成形、unknown 无 name / path;R20-3.5.3 清洗;R20-3.5.4 固定 JSON 键;泄漏闸豁免只限 `path=` 值                                                                           |
+| 23  | 新增项目 n 缺失、时间口径不稳(中)                                  | 采纳:hint 模板加 n(194 字节);R20-4.2a 改用 generation,定义确认与重建的基线                                                                                                                                           |
+| 24  | JSONL、稳定码与 status 输出矛盾(中)                                | 采纳:`canonicalJsonLine`(§20.9 第 20 条);码表补全并改为单一枚举生成;`state_dir_unsafe` 只作 reason;status 列 tainted 而退出 0                                                                                        |
+| 25  | 零写入需区分终态与写调用(低)                                       | 采纳:§20.8.1 两层判据(写调用审计 + 快照)、`--ignored` 与正向对照                                                                                                                                                     |
+| 26  | 「只能调严」无配置项(低)                                           | 采纳:开头改为「全部常量不可配置」                                                                                                                                                                                    |
+
+评审对 §20.12 的意见:Q1–Q14、Q16–Q17 推荐方向保留;Q15 保留 A 但修正代价;建议补列的 7 项已作为 Q18–Q24 加入(另加 Q25)。本次未做第二轮评审。
