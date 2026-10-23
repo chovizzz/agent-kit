@@ -6,7 +6,7 @@
  * - env 键白名单:GIT_* / HOME / LANG / LC_* / TZ;HOME 的值必须在 KIT_TMP 之内(防指向真实 HOME)。
  * - 同步执行(确定性、测试好写)。
  * - `runSelf`(S7c-B,docs/contracts.md §19.7):独立导出,只 spawn 当前 `process.execPath` 去跑一份**已定位的本套件 `dist/cli.js`**,
- *   不是通用二进制放行;eslint 闸限定只有 `src/update/launcher.ts` 与 `test/update/launcher*.test.ts` 能引用它。
+ *   不是通用二进制放行;eslint 闸限定只有 `src/update/launcher.ts`、零网络桥接 `src/update/self-spawn.ts`(R20-A0)与 `test/update/{launcher,self-spawn}*.test.ts` 能引用它。
  */
 import { spawn, spawnSync } from 'node:child_process';
 import * as path from 'node:path';
@@ -107,6 +107,8 @@ const SHARE_REL_SEGS = ['.local', 'share', 'agent-kit'] as const;
 /**
  * runSelf 子进程环境的**具名**白名单(不含 NODE_OPTIONS / NODE_PATH / LD_* / DYLD_* 等能注入代码的变量,也不用 `KIT_*` 前缀通配)。
  * `HOME` 不从调用方 env 取,强制等于已校验的 `home`;`KIT_LAUNCHED` 强制为 `1`;`TMPDIR` 在给了受控目录时以受控目录为准。
+ * R20-A0(contracts §20.9 第 2 条):追加 `KIT_AUTO_RSI`、`KIT_RSI_CHILD`、`KIT_RSI_PI_DIR_SET`(具名,不用通配)。
+ * `KIT_RSI_PI_DIR_SET` 不原样透传调用方的值,而由 {@link childEnv} 折成 `1` 或不设:调用方环境里 `PI_CODING_AGENT_DIR` 已设置(或上一跳已折成 `1`)才为 `1`(R20-2.9)。
  */
 export const RUN_SELF_ENV_KEYS: readonly string[] = [
   'PATH',
@@ -122,6 +124,9 @@ export const RUN_SELF_ENV_KEYS: readonly string[] = [
   'KIT_AUTO_SYNC',
   'KIT_UPDATE_REGISTRY',
   'KIT_UPDATE_PIN',
+  'KIT_AUTO_RSI',
+  'KIT_RSI_CHILD',
+  'KIT_RSI_PI_DIR_SET',
   'CI',
   'GITHUB_ACTIONS',
   'GITLAB_CI',
@@ -139,9 +144,15 @@ export const RUN_SELF_ENV_KEYS: readonly string[] = [
 ];
 const RUN_SELF_ENV_RE = /^(LC_[A-Z_]+|GIT_[A-Z0-9_]+)$/;
 
+/**
+ * pi 的会话根覆盖变量。**不在** {@link RUN_SELF_ENV_KEYS} 里(它的值是路径,绝不传给子进程);只让调用方能把「它是否已设置」
+ * 交给 {@link runSelf},由后者折成 `KIT_RSI_PI_DIR_SET=1`(R20-2.9 / §20.9 第 2 条)。
+ */
+const PI_DIR_ENV = 'PI_CODING_AGENT_DIR';
+
 /** 哪些键值得让启动器从 process.env 取一份(给 pickProcessEnv 用) */
 export const RUN_SELF_ENV_PICK_RE = new RegExp(
-  `^(${RUN_SELF_ENV_KEYS.join('|')}|KIT_LAUNCHED|HOME|LC_[A-Z_]+|GIT_[A-Z0-9_]+)$`,
+  `^(${RUN_SELF_ENV_KEYS.join('|')}|${PI_DIR_ENV}|KIT_LAUNCHED|HOME|LC_[A-Z_]+|GIT_[A-Z0-9_]+)$`,
 );
 
 export type SelfTarget =
@@ -164,6 +175,12 @@ export interface RunSelfOptions {
   tmpDir?: string;
   /** 后台:detached、stdio 丢弃、不等待 */
   background?: boolean;
+  /**
+   * 子进程的固定工作目录(R20-A0,contracts §20.9 第 3 条 ②)。必须是绝对路径(否则抛 {@link RunSelfDeniedError}),
+   * 且已是规范路径(`realpath(cwd) === cwd`)的真实目录、本身不是符号链接(否则不 spawn,`cwd_invalid`)。
+   * 「必须等于 `realpath([rsi] repo)`」由调用方(rsi 桥接)保证:这里不读配置。缺省 = 继承调用方 cwd(update 的既有行为)。
+   */
+  cwd?: string;
   timeoutMs?: number;
   /** 测试注入:Node 版本(判断 --use-env-proxy) */
   nodeVersion?: string;
@@ -180,6 +197,7 @@ export type RunSelfRefusal =
   | 'entry_invalid'
   | 'candidate_invalid'
   | 'self_invalid'
+  | 'cwd_invalid'
   | 'spawn_failed';
 
 export class RunSelfDeniedError extends ExecDeniedError {}
@@ -217,6 +235,15 @@ function inside(parentReal: string, childReal: string): string | undefined {
     return undefined;
   }
   return rel;
+}
+
+function isCanonicalDir(abs: string): boolean {
+  try {
+    const st = lstatSync(abs);
+    return st.isDirectory() && !st.isSymbolicLink() && realpathSync(abs) === abs;
+  } catch {
+    return false;
+  }
 }
 
 function resolveEntry(opts: RunSelfOptions): { entry: string } | { reason: RunSelfRefusal } {
@@ -281,6 +308,12 @@ function childEnv(opts: RunSelfOptions): Record<string, string> {
   }
   out['HOME'] = opts.home;
   out['KIT_LAUNCHED'] = '1';
+  // R20-2.9:只传 PI_CODING_AGENT_DIR 的存在性,不传路径。标志只可能是 '1':调用方env里该变量已设置,或上一跳已折成 '1'
+  // (经启动器转发的前台进程再起 worker 时变量本身已被丢掉)。其余任何值一律丢弃;多出来的 '1' 只会让 pi 记 not_evaluated(偏安全)
+  delete out['KIT_RSI_PI_DIR_SET'];
+  if (src[PI_DIR_ENV] !== undefined || src['KIT_RSI_PI_DIR_SET'] === '1') {
+    out['KIT_RSI_PI_DIR_SET'] = '1';
+  }
   if (opts.tmpDir !== undefined) out['TMPDIR'] = opts.tmpDir;
   return out;
 }
@@ -293,8 +326,15 @@ function childEnv(opts: RunSelfOptions): Record<string, string> {
  * 前台:stdio 继承,同步等待;后台:detached + stdio 丢弃,立即返回;candidate:stdio 管道、固定 `--version`、有超时。
  */
 export function runSelf(opts: RunSelfOptions): RunSelfResult {
+  if (opts.cwd !== undefined && !path.isAbsolute(opts.cwd)) {
+    throw new RunSelfDeniedError('runSelf 的 cwd 必须是绝对路径');
+  }
   const resolved = resolveEntry(opts);
   if ('reason' in resolved) return { spawned: false, reason: resolved.reason };
+  if (opts.cwd !== undefined && !isCanonicalDir(opts.cwd)) {
+    return { spawned: false, reason: 'cwd_invalid' };
+  }
+  const cwdOpt = opts.cwd !== undefined ? { cwd: opts.cwd } : {};
   const env = childEnv(opts);
   const nodeVersion = opts.nodeVersion ?? process.versions.node;
   const execArgv = useEnvProxyFlag(opts.env ?? {}, nodeVersion);
@@ -305,6 +345,7 @@ export function runSelf(opts: RunSelfOptions): RunSelfResult {
       const child = spawn(process.execPath, [...execArgv, resolved.entry, ...args], {
         env,
         stdio: 'ignore',
+        ...cwdOpt,
         detached: true,
         shell: false,
         windowsHide: true,
@@ -318,6 +359,7 @@ export function runSelf(opts: RunSelfOptions): RunSelfResult {
   }
   const r = spawnSync(process.execPath, [...execArgv, resolved.entry, ...args], {
     env,
+    ...cwdOpt,
     shell: false,
     windowsHide: true,
     ...(t.kind === 'candidate'

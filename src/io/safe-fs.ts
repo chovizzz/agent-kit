@@ -130,6 +130,42 @@ export async function appendFile(
   await fsp.appendFile(abs, data, { mode: opts.mode ?? 0o644 });
 }
 
+/**
+ * 独占创建并写入(R20-A0,contracts §5 safe-fs 导出表 / §20.9 第 4 条):`O_CREAT|O_EXCL|O_NOFOLLOW`,目标已存在则失败、**不覆盖、不改动**
+ * 已有文件。错误分两类,调用方须分开处理:
+ *  - 路径守卫拒绝(`WriteDeniedError`):根外、`..` 逃逸、悬空符号链接、指向根外的链接、硬链接(nlink>1)—— fail-closed,不是「被占用」;
+ *  - 名字已被占用(`code === 'EEXIST'`):普通文件,或根内已存在目标的符号链接(O_EXCL 不跟随链接)。
+ * 受与其它写函数相同的 `writeRoots` 守卫。用途:RSI 锁、预留 / 去重标记。
+ * `mode` 必填(无缺省,避免锁文件默认 0644),创建后按 `mode` 显式 fchmod,不受 umask 影响。
+ * 独占创建不等于内容原子发布:别的进程可能短暂看到空文件,锁协议自己处理。
+ * 创建成功后写入失败时,尽力把刚创建的文件删掉再抛错(删除前核对路径上的 dev:ino 仍是本句柄的文件,否则不删,免得误删别人换上的同名锁);
+ * 核对与删除之间仍有极小窗口,属已接受残余——持锁协议靠自己的过期回收兜底,不要依赖这里的清理。
+ */
+export async function createExclusive(
+  ctx: IoContext,
+  target: string,
+  data: string | Uint8Array,
+  mode: number,
+): Promise<void> {
+  const abs = assertWritable(ctx, target);
+  const flags =
+    fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW;
+  const handle = await fsp.open(abs, flags, mode);
+  try {
+    await handle.chmod(mode);
+    await handle.writeFile(data);
+  } catch (e) {
+    const mine = await handle.stat().catch(() => undefined);
+    await handle.close().catch(() => undefined);
+    const now = await fsp.lstat(abs).catch(() => undefined);
+    if (mine !== undefined && now !== undefined && now.dev === mine.dev && now.ino === mine.ino) {
+      await fsp.rm(abs, { force: true }).catch(() => undefined);
+    }
+    throw e;
+  }
+  await handle.close();
+}
+
 /** 递归建目录;目录权限缺省 0o755(.state 传 0o700)。 */
 export async function mkdirp(ctx: IoContext, target: string, mode = 0o755): Promise<void> {
   const abs = assertWritable(ctx, target, { allowRoot: true });

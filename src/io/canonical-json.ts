@@ -46,3 +46,11 @@ function normalize(value: unknown, seen: Set<object>, where: string): unknown {
 export function canonicalJson(value: unknown): string {
   return `${JSON.stringify(normalize(value, new Set(), '$'), null, 2)}\n`;
 }
+
+/**
+ * 单行 canonical JSON(R20-A0,contracts §20.9 第 20 条;`.state/rsi/log.jsonl` 等 JSONL 用):键序规则与 {@link canonicalJson} 完全相同
+ * (码元序、拒绝同样的值),但**无缩进、无多余空白、恰一个末尾 `\n`**。字符串里的 `\n` / `\r` 经 JSON 转义,所以输出恒为一行(U+2028 / U+2029 不转义,按本项目「行分隔符只认 `\n`」的口径不构成换行,见 `readLines`)。
+ */
+export function canonicalJsonLine(value: unknown): string {
+  return `${JSON.stringify(normalize(value, new Set(), '$'))}\n`;
+}

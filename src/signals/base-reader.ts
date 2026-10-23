@@ -25,6 +25,7 @@ import type {
   SessionRef,
   TraceReader,
 } from '../contracts/reader.js';
+import { RSI_MAX_JSON_DEPTH } from '../contracts/rsi.js';
 import { addCount, newCountRecord, toCountRecord } from '../contracts/count-record.js';
 import type { CountRecord } from '../contracts/count-record.js';
 import { provisionalSessionRef, sessionRefFor } from './ids.js';
@@ -42,7 +43,33 @@ export const DEFAULT_MAX_EVENT_BYTES = 8 * 1024 * 1024;
 export const MALFORMED_KEY = '<malformed>';
 /** 单行超过硬上限(MAX_LINE_BYTES)而被丢弃正文的行;不产出事件,同时计入 oversized_lines(C8)。 */
 export const LINE_TOO_LARGE_KEY = '<line-too-large>';
+/**
+ * 单行 JSON 嵌套深度超过 {@link RSI_MAX_JSON_DEPTH} 的行(R20-A0,contracts §13 / §20.9 第 14 条 / R20-6.7,Q16-A):
+ * 解析前按括号计数预扫,超限的行不交给 `JSON.parse`、不产出事件,计入 `oversized_lines` 与本键;会话其余行照常读取。
+ */
+export const LINE_TOO_DEEP_KEY = '<line-too-deep>';
 export const NO_TYPE_KEY = '<no-type>';
+
+/**
+ * 括号计数预扫:`text` 里 `{` / `[` 的嵌套层数是否超过 `max`(字符串字面量内的括号与转义不计;多余的闭括号不让层数变负)。
+ * 只数括号、不校验 JSON 合法性:非法文本照常交给解析器去判 `<malformed>`;超限时提前返回,不必扫完整行。
+ */
+export function exceedsJsonDepth(text: string, max: number = RSI_MAX_JSON_DEPTH): boolean {
+  let depth = 0;
+  let inString = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    if (inString) {
+      // 反斜杠:跳过下一个码元(\" 不结束字符串)
+      if (c === 0x5c) i++;
+      else if (c === 0x22) inString = false;
+    } else if (c === 0x22) inString = true;
+    else if (c === 0x7b || c === 0x5b) {
+      if (++depth > max) return true;
+    } else if ((c === 0x7d || c === 0x5d) && depth > 0) depth--;
+  }
+  return false;
+}
 
 export function isJsonObject(v: unknown): v is JsonObject {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -273,7 +300,7 @@ export abstract class JsonlTraceReader<S = undefined> implements TraceReader {
     const prescan = async (): Promise<void> => {
       for await (const raw of openReadonlyLines(ref.path)) {
         const line = raw === TOO_LONG_LINE ? undefined : lineText(raw);
-        if (line === undefined) continue;
+        if (line === undefined || exceedsJsonDepth(line)) continue;
         const obj = parseObject(line);
         if (obj === undefined) continue;
         const t = normalizeTs(this.lineTimestamp(obj), this.acceptEpochMs);
@@ -313,6 +340,12 @@ export abstract class JsonlTraceReader<S = undefined> implements TraceReader {
         const lineBytes = Buffer.byteLength(line, 'utf8');
         const isOversized = lineBytes > maxEventBytes;
         if (isOversized) oversized++;
+        if (exceedsJsonDepth(line)) {
+          // 嵌套过深:不交给 JSON.parse(病态行可打爆调用栈),按超大行记账;已因字节数计过 oversized 的不重复计
+          if (!isOversized) oversized++;
+          bump(unknown, LINE_TOO_DEEP_KEY);
+          continue;
+        }
 
         const obj = parseObject(line);
         if (obj === undefined) {

@@ -84,7 +84,9 @@ function validValue(v: string): boolean {
 }
 
 /**
- * 从 `source` 里按名字白名单挑变量,再加固定的 `NO_COLOR=1`。纯函数,不读进程环境。
+ * 从 `source` 里按名字白名单挑变量,再加固定的 `NO_COLOR=1` 与 `KIT_RSI_CHILD=1`(后者 R20-A0,contracts §20.9 第 5 条 / R20-1.6:
+ * 标明这是 kit 手动 `reflect|judge --run-llm` 起的 LLM 子进程,其钩子触发的 `rsi poke|hint` 据此空操作,不递归采集)。
+ * 纯函数,不读进程环境;`KIT_RSI_CHILD` 不在 `LLM_ENV_ALLOW` 里,调用方的同名变量不会被透传,固定值覆盖。
  * `passEnv` 里的名字必须形如 `<NAME>_API_KEY`(由调用方在代码里写死,不来自配置)。
  */
 export function filterLlmEnv(
@@ -110,6 +112,7 @@ export function filterLlmEnv(
   }
   if (out['PATH'] === undefined && fallbackPath !== '') out['PATH'] = fallbackPath;
   out['NO_COLOR'] = '1';
+  out['KIT_RSI_CHILD'] = '1';
   return out;
 }
 
