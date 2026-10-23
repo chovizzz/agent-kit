@@ -55,7 +55,7 @@
 
 ## 5. 待定夺(代理不拍板)
 
-- **许可证**:`package.json` 与 `LICENSE` 是 `UNLICENSED`(「私有、不授权再分发」),但包以 `access=public` 发在公开 registry,仓库也是公开的。这与「谁都能 `npm install`」并不矛盾,但没有任何人获得使用授权。要不要改成明确的许可证(例如 MIT)由你定;改的话要同时改 `package.json` 的 `license` 与 `LICENSE` 文件(版本提升 PR 里一起做最省事)。
+- **许可证(已做)**:`package.json` 的 `license` 改为 `MIT`,`LICENSE` 换成标准 MIT 全文,版权行 `Copyright (c) 2026 chovizzz`(GitHub 仓库所有者名);`check-publish` 新增 `LICENSE_FIELD` / `LICENSE_TEXT` 两项检查。**仍待你定**:版权行要不要换成真实姓名或公司名(改的话只改 `LICENSE` 里那一行即可,检查允许版权行不同)。
 - **长期去掉 `NPM_TOKEN`**:npm 支持 Trusted Publishing(用 GitHub OIDC 免 token 发布)。首发后可以评估;本分支没有实现,因为需要先在 npm 包设置里登记工作流。
 
 ## 6. 用户亲手做的清单

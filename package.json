@@ -2,7 +2,7 @@
   "name": "@chovizzz/agent-kit",
   "version": "0.1.0-rc.0",
   "description": "Rules, skills and subagent definitions for coding agents: one neutral source, rendered per agent.",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "type": "module",
   "packageManager": "pnpm@10.33.0",
   "engines": {

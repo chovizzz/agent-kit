@@ -114,6 +114,36 @@ if (metaVersion !== pkg.version)
 if (tomlVersion !== pkg.version)
   violations.push(`kit.toml 的 version(${tomlVersion})与 package.json(${pkg.version})不一致`);
 
+// 3.6) 许可证:package.json 声明 MIT,且 LICENSE 是标准 MIT 全文(仅版权行允许不同)
+{
+  const licText = readFileSync(path.join(root, 'LICENSE'), 'utf8');
+  const COPYRIGHT_RE = /^Copyright \(c\) \d{4} \S.*$/m;
+  const MIT_BODY =
+    'MIT License\n\n<COPYRIGHT>\n\n' +
+    'Permission is hereby granted, free of charge, to any person obtaining a copy\n' +
+    'of this software and associated documentation files (the "Software"), to deal\n' +
+    'in the Software without restriction, including without limitation the rights\n' +
+    'to use, copy, modify, merge, publish, distribute, sublicense, and/or sell\n' +
+    'copies of the Software, and to permit persons to whom the Software is\n' +
+    'furnished to do so, subject to the following conditions:\n\n' +
+    'The above copyright notice and this permission notice shall be included in all\n' +
+    'copies or substantial portions of the Software.\n\n' +
+    'THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\n' +
+    'IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\n' +
+    'FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\n' +
+    'AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\n' +
+    'LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\n' +
+    'OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\n' +
+    'SOFTWARE.\n';
+  if (pkg.license !== 'MIT')
+    violations.push(
+      `LICENSE_FIELD package.json 的 license 应为 "MIT",实际 ${JSON.stringify(pkg.license)}`,
+    );
+  const copyright = COPYRIGHT_RE.exec(licText)?.[0];
+  if (copyright === undefined || licText !== MIT_BODY.replace('<COPYRIGHT>', copyright))
+    violations.push('LICENSE_TEXT LICENSE 不是标准 MIT 全文(只允许版权行不同)');
+}
+
 // 3.8) payload 完整性闸(S2)
 {
   const distBuild = path.join(root, TSC_OUT, 'src/build');
