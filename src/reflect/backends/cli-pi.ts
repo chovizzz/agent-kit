@@ -19,9 +19,9 @@ export const PI_ARGS: CliArgSet = deepFreezeArgSet({
     'contracts §17.6 R6 实测(2026-10-13,--provider openai --model gpt-6.1-sol,合成提示,回复 NOTOOLS):' +
     'noTools=verified(--no-tools);noSession=verified;inputViaStdin=verified;无可归因的全局写入。' +
     '补测(2026-10-23,pi 0.87.1,--provider openai --model gpt-6.1-sol,行为指令哨兵对照):' +
-    'noProjectSettings=verified(须带 --no-approve;不带时在已保存信任的目录下项目级 APPEND_SYSTEM.md 仍生效);' +
+    'noProjectSettings=verified(须带 --no-approve;不带时在已保存信任的目录下项目级 APPEND_SYSTEM.md 仍生效;证据限于受信任控制的项目级文件,未单测 hooks);' +
     'noProjectContext=verified(对照:去掉 --no-context-files 则 AGENTS.md/CLAUDE.md 内令牌可被读到);' +
-    'noMcp=verified(对照:去掉 --no-tools/--no-extensions 则模型自报含 mcp 工具);' +
+    'noMcp=verified(对照:去掉 --no-tools/--no-extensions 则模型自报含 mcp 工具;仅模型自报、未配置可连通 MCP);' +
     'noUserRouting=not_met(用户级 models.json 可改写 provider 的 baseUrl,--provider openai 因此实际经中转,厂商推导不保证端点)',
   claims: {
     noTools: 'verified',

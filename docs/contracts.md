@@ -1970,7 +1970,7 @@ agent-kit reflect --gc [--write] [--json]
 | ---- | ----------------------------------------------------------------- | -------------------------------------- | -------------------------------------------------------------------- |
 | A2   | 原参数(无 `--no-approve`),目录未被信任                            | 否                                     | 未信任目录下项目级文件默认不加载                                     |
 | B2   | 原参数,目录位于用户 `~/.pi/agent/trust.json` 已保存信任的目录之下 | **是**                                 | 原参数集的 noProjectSettings 在已信任目录下不成立                    |
-| C2   | B2 + `--no-approve`                                               | 否                                     | `--no-approve` 让位于已保存的信任,项目级文件被忽略                   |
+| C2   | B2 + `--no-approve`                                               | 否                                     | `--no-approve` 覆盖已保存的信任决定,项目级文件被忽略                   |
 | E2   | 对照:`--approve`                                                  | 是                                     | 证明哨兵机制本身有效                                                 |
 | D    | 对照:去掉 `--no-context-files`,AGENTS.md / CLAUDE.md 内放令牌     | 令牌被读到                             | context 文件只受 `--no-context-files` 控制(pi 文档:不受项目信任控制) |
 | D'   | kit 参数                                                          | 令牌读不到                             | noProjectContext=verified                                            |
@@ -1979,9 +1979,9 @@ agent-kit reflect --gc [--write] [--json]
 
 结论:
 
-1. **`--no-approve` 必须加**(位置紧跟 `--no-extensions`)。一句话:pi 的 `trust.json` 已保存信任会让位于 `--no-approve`;不带它,在用户已信任的目录之下项目级文件仍会生效。
-2. **claims**:noProjectSettings、noProjectContext、noMcp 改 `verified`;noTools、noSession、inputViaStdin 保持 `verified`。证据范围同第 7 条(单模型、合成提示、行为判据,未保存工具注册清单),且 noMcp 只覆盖「未配置可连通 MCP」的环境。
-3. **最低 pi 版本**:`--no-approve` 在 0.87.1 实测可用;需 pi >= 0.87,未在更低版本验证(旧版本可能不认该旗标而报错或忽略)。
+1. **`--no-approve` 必须加**(位置紧跟 `--no-extensions`)。一句话:`--no-approve` 的命令行覆盖优先于 pi 的 `trust.json` 已保存信任(已保存信任让位于它);不带它,在用户已信任的目录之下项目级文件仍会生效。
+2. **claims**:noProjectSettings、noProjectContext、noMcp 改 `verified`;noTools、noSession、inputViaStdin 保持 `verified`。证据范围同第 7 条(单模型、合成提示、行为判据,未保存工具注册清单)。其中 noProjectSettings 的证据是受项目信任控制的项目级文件(以 `.pi/APPEND_SYSTEM.md` 哨兵为代表,其余受保护资源依 pi 文档同受信任控制)的加载与否,**没有**单独验证 hooks 或用户级设置的执行;noMcp 的证据是模型自报工具清单,只覆盖「未配置可连通 MCP」的环境。这两项的 `verified` 为用户 2026-10-23 的口径,证据强度弱于 noTools,见 `docs/p1-backlog.md`。
+3. **最低 pi 版本**:`--no-approve` 在 0.87.1 实测可用;需 pi >= 0.87,未在更低版本(含 0.87.0)验证(旧版本可能不认该旗标而报错或忽略)。
 4. **noUserRouting=`not_met`**:用户级 `models.json` 可改写 provider 的 `baseUrl`,实测 `--provider openai` 因此实际经中转,而不是该厂商的默认端点。kit 的厂商判定(#18)按 provider / 模型族推导,**不保证请求实际到达的端点**。影响:跨厂商判定只在「用户未改写路由」时才成立;本版不做运行时检测(见 `docs/p1-backlog.md`),整体门因此保持 `verified:false`,放行靠 `allow_unverified`。
 5. **globalWrites 仍为空**:实测前后 `~/.pi` 文件快照无新增文件;期间仅另一个并行运行的交互 pi 会话改了它自己的会话与日志文件,不可归因于本次调用。
 

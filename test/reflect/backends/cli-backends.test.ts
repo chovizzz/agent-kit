@@ -179,7 +179,7 @@ describe('R3 适配器 happy path 与参数集', () => {
     ]);
   });
 
-  it('pi claims(2026-10-23 补测):项目级三项与 noMcp 为 verified,noUserRouting 为 not_met,整体门仍 false', () => {
+  it('pi claims(2026-10-23 补测,元数据回归):noMcp 与项目级两项为 verified,noUserRouting 为 not_met,整体门仍 false', () => {
     expect(PI_ARGS.claims).toEqual({
       noTools: 'verified',
       noMcp: 'verified',
@@ -194,7 +194,7 @@ describe('R3 适配器 happy path 与参数集', () => {
     expect(PI_ARGS.basis).toContain('--no-approve');
   });
 
-  it('三个参数集全部 verified:false,且逐项声明了核实状态(noTools 等至少一项 unresolved)', () => {
+  it('三个参数集全部 verified:false,且逐项声明了核实状态(至少一项 unresolved 或 not_met)', () => {
     const sets = listCliArgSets();
     expect(sets.map((s) => s.cli).sort()).toEqual(['claude', 'codex', 'pi']);
     for (const s of sets) {
