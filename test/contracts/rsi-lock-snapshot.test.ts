@@ -27,9 +27,20 @@ const f = (name: string, bytes = 10, sha256 = H('a')): unknown => ({ name, sha25
 describe('RsiSnapshot(R20-5.6)', () => {
   const valid: [string, unknown][] = [
     ['空清单', snap([])],
-    ['固定名 + 月文件,升序', snap([f('counts.json'), f('sessions/pi/202609.jsonl'), f('signals/claude/202610.jsonl'), f('state.json', 0)])],
+    [
+      '固定名 + 月文件,升序',
+      snap([
+        f('counts.json'),
+        f('sessions/pi/202609.jsonl'),
+        f('signals/claude/202610.jsonl'),
+        f('state.json', 0),
+      ]),
+    ],
     ['四个固定名', snap([f('counts.json'), f('cursor.json'), f('projects.json'), f('state.json')])],
-    ['恰 2000 项', snap(Array.from({ length: 2000 }, (_, i) => f(`signals/claude/${String(100000 + i)}.jsonl`)))],
+    [
+      '恰 2000 项',
+      snap(Array.from({ length: 2000 }, (_, i) => f(`signals/claude/${String(100000 + i)}.jsonl`))),
+    ],
   ];
   for (const [name, v] of valid) {
     it(`合法:${name}`, () => {
@@ -48,7 +59,10 @@ describe('RsiSnapshot(R20-5.6)', () => {
     ['name 不在白名单:多一层目录', snap([f('signals/claude/x/202610.jsonl')])],
     ['name 重复', snap([f('state.json'), f('state.json')])],
     ['name 未按字节序升序', snap([f('state.json'), f('counts.json')])],
-    ['2001 项', snap(Array.from({ length: 2001 }, (_, i) => f(`signals/claude/${String(100000 + i)}.jsonl`)))],
+    [
+      '2001 项',
+      snap(Array.from({ length: 2001 }, (_, i) => f(`signals/claude/${String(100000 + i)}.jsonl`))),
+    ],
     ['generation 为 0', snap([], { generation: 0 })],
     ['generation 为负', snap([], { generation: -1 })],
     ['generation 非整数', snap([], { generation: 1.5 })],
@@ -69,14 +83,26 @@ describe('RsiSnapshot(R20-5.6)', () => {
     expect(RSI_SNAPSHOT_MAX_FILES).toBe(2000);
     expect(isRsiSnapshotName('state.json')).toBe(true);
     expect(isRsiSnapshotName('sessions/codex/202610.jsonl')).toBe(true);
-    for (const bad of ['', '../x', 'signals/kimi/202610.jsonl', 'lock', 'snapshot.json', 'signals/claude/202610.jsonl\n']) {
+    for (const bad of [
+      '',
+      '../x',
+      'signals/kimi/202610.jsonl',
+      'lock',
+      'snapshot.json',
+      'signals/claude/202610.jsonl\n',
+    ]) {
       expect(isRsiSnapshotName(bad), JSON.stringify(bad)).toBe(false);
     }
   });
 });
 
 describe('RsiLockDoc(R20-5.5)', () => {
-  const ok = { pid: 12, started_at: '2026-10-23T12:00:00.000Z', nonce: 'ab'.repeat(8), kit_version: '0.1.0' };
+  const ok = {
+    pid: 12,
+    started_at: '2026-10-23T12:00:00.000Z',
+    nonce: 'ab'.repeat(8),
+    kit_version: '0.1.0',
+  };
   it('合法', () => expect(RsiLockDocSchema.safeParse(ok).success).toBe(true));
   for (const [name, v] of [
     ['pid 为 0(会被当成进程组)', { ...ok, pid: 0 }],
@@ -103,7 +129,9 @@ describe('稳定码枚举与 docs/contracts.md §20.3 总表一致(R20-3.0)', as
     expect([...RSI_NOT_RUN_REASONS].sort()).toEqual(rowCodes('`RSI_NOT_RUN reason=`').sort());
   });
   it('RSI_FAIL_CLOSED reason', () => {
-    expect([...RSI_FAIL_CLOSED_REASONS].sort()).toEqual(rowCodes('`RSI_FAIL_CLOSED reason=`').sort());
+    expect([...RSI_FAIL_CLOSED_REASONS].sort()).toEqual(
+      rowCodes('`RSI_FAIL_CLOSED reason=`').sort(),
+    );
   });
   it('顶层 RSI_SNAPSHOT_BUSY(退出 4)', () => {
     expect(rowCodes('顶层(4)')).toEqual([RSI_SNAPSHOT_BUSY]);

@@ -174,7 +174,10 @@ describe('R20-5.5 陈旧锁协议', () => {
     await plant(w, '');
     const mtime = (await lstat(lockFile(w))).mtimeMs;
     expect(RSI_LOCK_PARTIAL_GRACE_MS).toBe(10_000);
-    const at = (ms: number): RsiLockDeps => ({ isAlive: () => true, now: () => new Date(mtime + ms) });
+    const at = (ms: number): RsiLockDeps => ({
+      isAlive: () => true,
+      now: () => new Date(mtime + ms),
+    });
     expect(await kind(acquireRsiLock(w.io, at(RSI_LOCK_PARTIAL_GRACE_MS - 1000)))).toBe('locked');
     expect(await readText(lockFile(w))).toBe('');
     const got = await acquireRsiLock(w.io, at(RSI_LOCK_PARTIAL_GRACE_MS + 1000));
@@ -186,7 +189,10 @@ describe('R20-5.5 陈旧锁协议', () => {
     const w = await newWork('rl-corrupt-');
     await plant(w, '{"pid": "not-a-number"');
     const mtime = (await lstat(lockFile(w))).mtimeMs;
-    const at = (ms: number): RsiLockDeps => ({ isAlive: () => true, now: () => new Date(mtime + ms) });
+    const at = (ms: number): RsiLockDeps => ({
+      isAlive: () => true,
+      now: () => new Date(mtime + ms),
+    });
     expect(await kind(acquireRsiLock(w.io, at(3000)))).toBe('locked');
     expect(await readText(lockFile(w))).toBe('{"pid": "not-a-number"');
     await (await acquireRsiLock(w.io, at(11_000))).release();
@@ -253,7 +259,10 @@ describe('R20-5.5 陈旧锁协议', () => {
     const base = { now: () => new Date(started + 1000) };
     expect(await peekRsiLock(w.io, { ...base, isAlive: () => true })).toBe('held');
     expect(
-      await peekRsiLock(w.io, { isAlive: () => true, now: () => new Date(started + RSI_LOCK_TTL_MS + 1) }),
+      await peekRsiLock(w.io, {
+        isAlive: () => true,
+        now: () => new Date(started + RSI_LOCK_TTL_MS + 1),
+      }),
     ).toBe('held_over_ttl');
     expect(await peekRsiLock(w.io, { ...base, isAlive: () => false })).toBe('stale');
     expect(await exists(lockFile(w))).toBe(true);

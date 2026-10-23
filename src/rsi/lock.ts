@@ -49,12 +49,7 @@ export interface RsiLockDeps {
 
 /** 获取 / 复核失败的分类;`toStable()` 给出契约稳定码(§20.3 R20-3.0) */
 export type RsiLockErrorKind =
-  | 'locked'
-  | 'locked_over_ttl'
-  | 'lock_lost'
-  | 'state_dir_unsafe'
-  | 'write_denied'
-  | 'internal';
+  'locked' | 'locked_over_ttl' | 'lock_lost' | 'state_dir_unsafe' | 'write_denied' | 'internal';
 
 export class RsiLockError extends Error {
   readonly code = 'RSI_LOCK';

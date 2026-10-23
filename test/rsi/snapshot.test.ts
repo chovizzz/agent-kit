@@ -73,7 +73,11 @@ describe('R20-5.6 commitSnapshot', () => {
     ]);
     const sig1 = s1.files.find((f) => f.name === 'signals/claude/202610.jsonl');
     const raw = await readBytes(path.join(w.state, 'signals/claude/202610.jsonl'));
-    expect(sig1).toEqual({ name: 'signals/claude/202610.jsonl', sha256: sha(raw), bytes: raw.length });
+    expect(sig1).toEqual({
+      name: 'signals/claude/202610.jsonl',
+      sha256: sha(raw),
+      bytes: raw.length,
+    });
     expect((await lstat(snapFile(w))).mode & 0o777).toBe(0o600);
     expect(await exists(`${snapFile(w)}.tmp`)).toBe(false);
     expect((await withLock(w, (l) => commitSnapshot(w.io, l))).generation).toBe(2);
@@ -118,6 +122,34 @@ describe('R20-5.6 commitSnapshot', () => {
       { mode: 0o600 },
     );
     await expect(commitSnapshot(w.io, l)).rejects.toMatchObject({ kind: 'lock_lost' });
+    expect(await readText(snapFile(w))).toBe(before);
+    await l.release();
+  });
+
+  it('rename 是提交点:临时清单写好后锁才丢失 → lock_lost,旧清单原样保留(变异:去掉 rename 前的 assertHeld → 红)', async () => {
+    const w = await newWork('rs-lost-rename-');
+    await put(w, 'state.json', STATE);
+    const l = await acquireRsiLock(w.io);
+    await commitSnapshot(w.io, l);
+    const before = await readText(snapFile(w));
+    await put(w, 'counts.json', '{}');
+    await expect(
+      commitSnapshot(w.io, l, {
+        beforeRename: async () => {
+          await writeFile(
+            w.io,
+            rsiFile(w, 'lock'),
+            JSON.stringify({
+              pid: 99991,
+              started_at: new Date().toISOString(),
+              nonce: '2'.repeat(16),
+              kit_version: '0.1.0',
+            }),
+            { mode: 0o600 },
+          );
+        },
+      }),
+    ).rejects.toMatchObject({ kind: 'lock_lost' });
     expect(await readText(snapFile(w))).toBe(before);
     await l.release();
   });
@@ -279,7 +311,11 @@ describe('R20-5.6 未完成提交 vs 损坏', () => {
       { file: 'projects.json', bad: '[]', reason: 'index_invalid' },
       { file: 'cursor.json', bad: 'nope', reason: 'cursor_invalid' },
       { file: 'counts.json', bad: '"s"', reason: 'counts_invalid' },
-      { file: 'signals/claude/202610.jsonl', bad: `${signalLine(sig('3'))}\n{"half"`, reason: 'signal_store_corrupt' },
+      {
+        file: 'signals/claude/202610.jsonl',
+        bad: `${signalLine(sig('3'))}\n{"half"`,
+        reason: 'signal_store_corrupt',
+      },
       { file: 'signals/pi/202610.jsonl', bad: '{"a":1}\n', reason: 'signal_store_corrupt' },
       { file: 'sessions/codex/202610.jsonl', bad: 'not json\n', reason: 'signal_store_corrupt' },
     ];
@@ -305,7 +341,11 @@ describe('R20-5.6 未完成提交 vs 损坏', () => {
     expect(await withLock(w, (l) => recoverSnapshot(w.io, l))).toBe('absent');
     await withLock(w, (l) => commitSnapshot(w.io, l));
     expect(await withLock(w, (l) => recoverSnapshot(w.io, l))).toBe('consistent');
-    await put(w, 'snapshot.json', '{"schema_version":1,"generation":0,"written_at":"x","files":[]}');
+    await put(
+      w,
+      'snapshot.json',
+      '{"schema_version":1,"generation":0,"written_at":"x","files":[]}',
+    );
     await expect(withLock(w, (l) => recoverSnapshot(w.io, l))).rejects.toMatchObject({
       reason: 'snapshot_invalid',
     });

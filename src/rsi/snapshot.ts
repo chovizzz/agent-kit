@@ -119,7 +119,9 @@ export async function readSnapshot(io: IoContext): Promise<SnapshotRead> {
   try {
     st = await lstat(file);
   } catch (e) {
-    return (e as NodeJS.ErrnoException).code === 'ENOENT' ? { kind: 'missing' } : { kind: 'invalid' };
+    return (e as NodeJS.ErrnoException).code === 'ENOENT'
+      ? { kind: 'missing' }
+      : { kind: 'invalid' };
   }
   if (st.isSymbolicLink() || !st.isFile()) return { kind: 'invalid' };
   try {
@@ -150,9 +152,7 @@ async function readRegular(file: string): Promise<Buffer | 'missing' | 'unsafe'>
 }
 
 /** 当前磁盘上所有白名单文件(升序)。非普通文件 / 链接 → 视为损坏。 */
-async function scanCurrent(
-  b: Bases,
-): Promise<{ name: string; bytes: Buffer }[]> {
+async function scanCurrent(b: Bases): Promise<{ name: string; bytes: Buffer }[]> {
   const names: string[] = [];
   for (const n of RSI_SNAPSHOT_FIXED_NAMES) names.push(n);
   for (const kind of ['signals', 'sessions']) {
