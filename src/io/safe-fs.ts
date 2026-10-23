@@ -130,6 +130,34 @@ export async function appendFile(
   await fsp.appendFile(abs, data, { mode: opts.mode ?? 0o644 });
 }
 
+/**
+ * 独占创建并写入(R20-A0,contracts §5 safe-fs 导出表 / §20.9 第 4 条):`O_CREAT|O_EXCL|O_NOFOLLOW`,目标已存在(含悬空链接、
+ * 指向别处的符号链接)一律失败、**不覆盖、不改动**已有文件——错误原样抛出(`code === 'EEXIST'`,符号链接为 `ELOOP`/`EEXIST`),
+ * 调用方据此判「已被占用」。受与其它写函数相同的 `writeRoots` 守卫。用途:RSI 锁、预留 / 去重标记。
+ * `mode` 必填(无缺省,避免锁文件默认 0644),创建后按 `mode` 显式 fchmod,不受 umask 影响。
+ * 创建成功后写入失败时,把刚创建的(自己独占的)文件删掉再抛错,不留半个文件占着名额。
+ */
+export async function createExclusive(
+  ctx: IoContext,
+  target: string,
+  data: string | Uint8Array,
+  mode: number,
+): Promise<void> {
+  const abs = assertWritable(ctx, target);
+  const flags =
+    fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW;
+  const handle = await fsp.open(abs, flags, mode);
+  try {
+    await handle.chmod(mode);
+    await handle.writeFile(data);
+  } catch (e) {
+    await handle.close().catch(() => undefined);
+    await fsp.rm(abs, { force: true }).catch(() => undefined);
+    throw e;
+  }
+  await handle.close();
+}
+
 /** 递归建目录;目录权限缺省 0o755(.state 传 0o700)。 */
 export async function mkdirp(ctx: IoContext, target: string, mode = 0o755): Promise<void> {
   const abs = assertWritable(ctx, target, { allowRoot: true });

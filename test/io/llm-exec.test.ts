@@ -282,9 +282,19 @@ describe('R0-7 llm-exec:env 名字白名单', () => {
     expect(env['LC_ALL']).toBe('C');
     expect(env['TZ']).toBe('UTC');
     expect(env['NO_COLOR']).toBe('1');
+    // R20-A0(contracts §20.9 第 5 条 / R20-1.6):固定 KIT_RSI_CHILD=1,让钩子触发的 rsi poke|hint 在 kit 起的 LLM 子进程里空操作
+    expect(env['KIT_RSI_CHILD']).toBe('1');
     expect(env['PATH']).toContain(f.bin);
     for (const k of Object.keys(secrets)) expect(env[k], k).toBeUndefined();
     for (const v of Object.values(secrets)) expect(res.stdout).not.toContain(v);
+  });
+
+  it('R20-A0 §20.9#5:KIT_RSI_CHILD 是固定值,调用方来源里的同名变量(含 0 / 空)覆盖不了,passEnv 也点不到', () => {
+    for (const v of ['0', '', 'no', '1']) {
+      expect(filterLlmEnv({ KIT_RSI_CHILD: v })['KIT_RSI_CHILD']).toBe('1');
+    }
+    expect(filterLlmEnv({})['KIT_RSI_CHILD']).toBe('1');
+    expect(() => filterLlmEnv({ KIT_RSI_CHILD: '0' }, ['KIT_RSI_CHILD'])).toThrow(LlmExecDeniedError);
   });
 
   it('passEnv 必须点名且形如 <NAME>_API_KEY;路由/加载器类名字被拒', async () => {
@@ -319,11 +329,15 @@ describe('R0-7 llm-exec:env 名字白名单', () => {
 
   it('filterLlmEnv 是纯函数:相对 HOME 被拒;含 NUL/超长的值被丢弃;不读 process.env', async () => {
     expect(() => filterLlmEnv({ HOME: 'relative/home' })).toThrow(LlmExecDeniedError);
-    expect(filterLlmEnv({ LANG: 'a\0b', TZ: 'x'.repeat(5000) })).toEqual({ NO_COLOR: '1' });
+    expect(filterLlmEnv({ LANG: 'a\0b', TZ: 'x'.repeat(5000) })).toEqual({
+      NO_COLOR: '1',
+      KIT_RSI_CHILD: '1',
+    });
     expect(filterLlmEnv({ HOME: '/h' }, [], '/usr/bin')).toEqual({
       HOME: '/h',
       PATH: '/usr/bin',
       NO_COLOR: '1',
+      KIT_RSI_CHILD: '1',
     });
     const src = await readText(new URL('../../src/io/llm-exec.ts', import.meta.url).pathname);
     expect(src).not.toMatch(/process\.env/);

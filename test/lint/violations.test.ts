@@ -331,7 +331,13 @@ describe('lint 正向对照:同样的代码放到被授权的文件里不报错'
 
     it('runSelf:只有 launcher.ts 与 launcher 测试能引用(命名导入 / import * / re-export),runSync 不受影响', async () => {
       for (const code of [RS_IMP, RS_NS, RS_REX, RS_DYN]) {
-        for (const ok of ['src/update/launcher.ts', 'test/update/launcher.test.ts']) {
+        for (const ok of [
+          'src/update/launcher.ts',
+          'test/update/launcher.test.ts',
+          // R20-A0:零网络桥接及其测试(contracts §20.9 第 3 条 ①)
+          'src/update/self-spawn.ts',
+          'test/update/self-spawn.test.ts',
+        ]) {
           expect(await lintAs(code, ok), `${ok}: ${code.trim()}`).toEqual([]);
         }
         for (const bad of [
@@ -341,6 +347,11 @@ describe('lint 正向对照:同样的代码放到被授权的文件里不报错'
           'src/cli.ts',
           'cli.ts',
           'src/commands/update.ts',
+          // 放行的是具体文件,不是同名前缀 / 相邻目录:rsi 自己的入口也不得直接引用 runSelf,只能经桥接
+          'src/update/self-spawn-extra.ts',
+          'src/update/self-spawn/inner.ts',
+          'src/rsi/poke.ts',
+          'src/rsi/worker.ts',
         ]) {
           expect((await lintAs(code, bad)).length, `${bad}: ${code.trim()}`).toBeGreaterThan(0);
         }
@@ -356,6 +367,39 @@ describe('lint 正向对照:同样的代码放到被授权的文件里不报错'
       for (const where of ['src/foo.ts', 'src/update/install.ts', 'src/commands/build.ts']) {
         expect(await lintAs(RUN_SYNC, where), where).toEqual([]);
       }
+    });
+
+    it('R20-A0:self-spawn.ts 只比默认多放行 runSelf —— 不得引用 net / home-fs / 启动器 / sigstore / llm-exec / fs / 子进程模块(R20-1.1 零网络)', async () => {
+      const SIG = "import { verify } from 'sigstore';\nexport const v = verify;\n";
+      const LLM = "import { runLlm } from '../io/llm-exec.js';\nexport const r = runLlm;\n";
+      const FS = "import { readFileSync } from 'node:fs';\nexport const r = readFileSync;\n";
+      const CP = "import { spawn } from 'node:child_process';\nexport const s = spawn;\n";
+      const ENV = 'export const e = process.env;\n';
+      for (const [name, code] of Object.entries({
+        net: NET_IMP,
+        netRex: NET_REX,
+        netDyn: NET_DYN,
+        homeFs: HF_IMP,
+        homeFsDyn: HF_DYN,
+        launcher: LCH_IMP,
+        launcherDyn: LCH_DYN,
+        sigstore: SIG,
+        llm: LLM,
+        fs: FS,
+        cp: CP,
+        env: ENV,
+        fetch: FETCH,
+        https: HTTPS,
+      })) {
+        for (const where of ['src/update/self-spawn.ts', 'test/update/self-spawn.test.ts']) {
+          expect((await lintAs(code, where)).length, `${where}: ${name}`).toBeGreaterThan(0);
+        }
+      }
+      // 正向对照:同一个文件只引用 runSelf / runSync 与类型是干净的
+      expect(await lintAs(RS_IMP, 'src/update/self-spawn.ts')).toEqual([]);
+      expect(await lintAs(RUN_SYNC, 'src/update/self-spawn.ts')).toEqual([]);
+      // 这种收窄只落在桥接文件上:src/update/** 的其它文件对 net 的既有放行不变
+      expect(await lintAs(NET_IMP, 'src/update/policy.ts')).toEqual([]);
     });
 
     it('launcher.ts 本身不得引用 net / home-fs(最小权限)', async () => {

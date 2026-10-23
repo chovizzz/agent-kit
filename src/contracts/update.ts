@@ -196,6 +196,12 @@ export const UserConfigSchema = z.strictObject({
   schema_version: z.literal(1).optional(),
   /** 缺省 = 全部取默认值(`prefault` 会让内部默认值生效) */
   update: UpdateConfigSchema.prefault({}),
+  /**
+   * 自动 RSI 的 `[rsi]` 段(contracts §20.9 第 1 条 / §20.12 Q1-A,R20-A0)。这里**故意**只收 `unknown`:
+   * 内容由 `src/rsi/config.ts` 按 R20-2.6 分层校验,`[rsi]` 写错只让 rsi 自己 `off`,不连累 update / doctor(否则用户一写 `[rsi]`,
+   * 本 strictObject 校验失败,update 退出 3 `config_invalid`,后台自动更新停摆)。未知的**其它**顶层段仍被 strictObject 拒绝。
+   */
+  rsi: z.unknown().optional(),
 });
 export type UserConfig = z.infer<typeof UserConfigSchema>;
 

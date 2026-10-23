@@ -13,7 +13,8 @@ import tseslint from 'typescript-eslint';
  *      · 网络出口 `src/io/net.ts`:只许 `src/update/**`(launcher 除外)、`src/commands/update.ts` 及其测试引用;
  *        只有它自己可以 import 网络模块 / 用全局 fetch;
  *      · 启动器 `src/update/launcher.ts`:只许 `cli.ts`、`src/cli.ts`、`src/update/**`、`src/commands/update.ts` 及其测试引用;
- *        `io/exec.ts` 将新增的 `runSelf`(S7,唯一能 spawn process.execPath 的入口)只许 launcher.ts 引用。
+ *        `io/exec.ts` 将新增的 `runSelf`(S7,唯一能 spawn process.execPath 的入口)只许 launcher.ts 引用;
+ *        R20-A0 起另放行零网络桥接 src/update/self-spawn.ts(自动 RSI,contracts §20.9 第 3 条),且该文件不得引用 net / 启动器 / home-fs。
  *  - 另外禁网络模块与全局 fetch(A8 的运行期垫片是主判据,这里是便宜的第二道)、eval、动态 import、require。
  * 范围:cli.ts、src/、adapters/、test/、vitest.config.ts。ops/ 下的验收工具脚本(B17/B18)不在此列,
  * 它们本来就要读真实 HOME 做快照。
@@ -41,7 +42,8 @@ const MESSAGES = {
     '网络出口 src/io/net.ts 只许 src/update/**(launcher.ts 除外)与 src/commands/update.ts(及其测试)引用。',
   launcher:
     '启动器 src/update/launcher.ts 只许 cli.ts / src/cli.ts / src/update/** / src/commands/update.ts(及其测试)引用。',
-  runSelf: 'runSelf(spawn process.execPath)只许 src/update/launcher.ts 引用。',
+  runSelf:
+    'runSelf(spawn process.execPath)只许 src/update/launcher.ts 与零网络桥接 src/update/self-spawn.ts 引用。',
   sigstore: '`sigstore` 包(来源证明验签)只许 src/update/provenance.ts 引用。',
   env: 'HOME/环境/cwd 只经 src/io/paths.ts 的 IoContext。',
   net: 'P0 运行期零网络(A8)。',
@@ -316,6 +318,10 @@ export default tseslint.config(
   // S0:启动器。launcher.ts 本身不得引用 net.ts / home-fs(最小权限),只它能引用 runSelf。
   // 以下三块排在上面 src/update/** 之后,对 launcher.ts / install.ts 的更窄(或更宽)规则整条覆盖。
   { files: ['src/update/launcher.ts'], rules: restrictions({ allowRunSelf: true }) },
+  // R20-A0(contracts §20.1 R20-1.1、§20.9 第 3 条 ①):自动 RSI 的零网络 runSelf 桥接。poke / hint / worker 的 import 闭包不得含
+  // net.ts,所以不能经 launcher.ts(→ install.ts → net.ts)。这一块**只**多放行 runSelf;它排在上面的 `src/update/**` 之后,
+  // 把该目录给的 allowNetOut / allowLauncher 整条收回——桥接文件不得引用 net / 启动器 / home-fs / sigstore,其余限制与默认一致。
+  { files: ['src/update/self-spawn.ts'], rules: restrictions({ allowRunSelf: true }) },
   // S7a:来源证明验签。provenance.ts 是唯一可 import `sigstore` 的文件(其余权限同 src/update/**)。
   {
     files: ['src/update/provenance.ts'],
@@ -333,6 +339,8 @@ export default tseslint.config(
     files: ['test/update/launcher*.test.ts'],
     rules: restrictions({ allowLauncher: true, allowRunSelf: true }),
   },
+  // R20-A0:桥接文件的测试同样只多放行 runSelf(不放行 launcher / net)。
+  { files: ['test/update/self-spawn*.test.ts'], rules: restrictions({ allowRunSelf: true }) },
   { files: ['cli.ts', 'src/cli.ts'], rules: restrictions({ allowLauncher: true }) },
   // K6:以子进程方式跑 CLI / 验收脚本的黑盒测试(原先各自行内 eslint-disable)。只放开 child_process,fs/os/env 等照旧禁;
   // 范围是下面这几个具体文件,不放开 test/accept/**、test/ops/** 整个目录(新增的此类测试要显式登记在这里)。
