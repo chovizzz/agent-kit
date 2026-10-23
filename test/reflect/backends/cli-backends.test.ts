@@ -179,10 +179,10 @@ describe('R3 适配器 happy path 与参数集', () => {
     ]);
   });
 
-  it('pi claims(2026-10-23 补测,元数据回归):noMcp 与项目级两项为 verified,noUserRouting 为 not_met,整体门仍 false', () => {
+  it('pi claims(2026-10-23 补测,元数据回归):项目级两项为 verified,noMcp 仍 claimed,noUserRouting 为 not_met,整体门仍 false', () => {
     expect(PI_ARGS.claims).toEqual({
       noTools: 'verified',
-      noMcp: 'verified',
+      noMcp: 'claimed',
       noSession: 'verified',
       noProjectContext: 'verified',
       noProjectSettings: 'verified',

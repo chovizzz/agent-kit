@@ -19,13 +19,13 @@ export const PI_ARGS: CliArgSet = deepFreezeArgSet({
     'contracts §17.6 R6 实测(2026-10-13,--provider openai --model gpt-6.1-sol,合成提示,回复 NOTOOLS):' +
     'noTools=verified(--no-tools);noSession=verified;inputViaStdin=verified;无可归因的全局写入。' +
     '补测(2026-10-23,pi 0.87.1,--provider openai --model gpt-6.1-sol,行为指令哨兵对照):' +
-    'noProjectSettings=verified(须带 --no-approve;不带时在已保存信任的目录下项目级 APPEND_SYSTEM.md 仍生效;证据限于受信任控制的项目级文件,未单测 hooks);' +
+    'noProjectSettings=verified(须带 --no-approve;不带时在已保存信任的目录下项目级 APPEND_SYSTEM.md 仍生效;范围限定为受 pi 项目信任控制的项目级资源,以 .pi/APPEND_SYSTEM.md 实测,文档列出的其余受保护资源同机制;hooks 与用户级设置未单测);' +
     'noProjectContext=verified(对照:去掉 --no-context-files 则 AGENTS.md/CLAUDE.md 内令牌可被读到);' +
-    'noMcp=verified(对照:去掉 --no-tools/--no-extensions 则模型自报含 mcp 工具;仅模型自报、未配置可连通 MCP);' +
+    'noMcp 仍 claimed(对照仅为模型自报工具清单:去掉 --no-tools/--no-extensions 则自报含 mcp 工具;无可连通 MCP 的正负对照);' +
     'noUserRouting=not_met(用户级 models.json 可改写 provider 的 baseUrl,--provider openai 因此实际经中转,厂商推导不保证端点)',
   claims: {
     noTools: 'verified',
-    noMcp: 'verified',
+    noMcp: 'claimed',
     noSession: 'verified',
     noProjectContext: 'verified',
     noProjectSettings: 'verified',
