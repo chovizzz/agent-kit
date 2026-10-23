@@ -4,9 +4,12 @@
 # 唯一的 secrets 是 `NPM_TOKEN`(npm Automation/Granular token,需对 `@chovizzz` scope 有发布权)。
 #
 # 发布前置:
-#   1. `pnpm run check:publish -- --tag <tag>` 通过(包内容白名单 + 禁运形态 + tag/version 一致);
-#   2. 全门禁(typecheck/build/test/lint/format:check)与 `node dist/cli.js check` 通过;
-#   3. tag 形如 `vX.Y.Z` 且与 package.json 的 version 逐字一致。
+#   1. tag 指向的提交必须是 `origin/main` 的祖先(只发已合入主干的代码,拒绝从任意分支 / 孤儿提交打 tag 发版);
+#   2. 全门禁(typecheck/build/test/lint/format:check)、`node dist/cli.js check`、与 ci.yml 同一组验收脚本(含 A11 供应链)通过;
+#   3. `node scripts/check-publish.mjs --tag <tag>` 通过(包内容白名单 + 禁运形态 + payload/打包闸 + tag/version 一致);
+#   4. tag 形如 `vX.Y.Z` 且与 package.json 的 version 逐字一致。
+# 失败不会半发:`npm publish` 是最后一步且只有一条命令,前面任何一步红都不会走到它;
+# npm 对同一版本号拒绝二次发布,所以重跑同一个 tag 不会覆盖已发布内容。
 #
 # 不做的事:不自动打 tag(打 tag 是人的决定)、不推分支、不创建 release notes。
 name: release
@@ -16,9 +19,9 @@ on:
     tags:
       - 'v*'
 
+# 工作流级只给读权限;`id-token: write`(npm provenance 的 OIDC)只授给下面的发布 job。
 permissions:
   contents: read
-  id-token: write # npm provenance(公开仓库 + OIDC)
 
 concurrency:
   group: release-${{ github.ref }}
@@ -28,12 +31,27 @@ jobs:
   publish:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    # 绑定 GitHub Environment `npm-publish`:可在仓库 Settings → Environments 里给它加 required reviewers
+    # 与「只允许 tag 触发」的部署规则,并把 NPM_TOKEN 存成该环境的 secret(见 docs/npm-first-publish.md)。
+    # 环境不存在时 GitHub 会自动创建一个无保护的空环境,不影响仓库级 secret 的读取。
+    environment: npm-publish
+    permissions:
+      contents: read
+      id-token: write # npm provenance(公开仓库 + OIDC);仅发布 job
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Tag must point at a commit already on main
+        run: |
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" origin/main; then
+            echo "tag ${GITHUB_REF_NAME} (${GITHUB_SHA}) 不在 origin/main 的历史上,拒绝发布" >&2
+            exit 1
+          fi
 
       - name: Setup pnpm
         uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
@@ -69,6 +87,13 @@ jobs:
 
       - name: agent-kit check
         run: node dist/cli.js check
+
+      # 与 ci.yml 同一组验收脚本(A11 需要网络做 audit;A5/A6/A7 读真实 HOME、A12/A13 属人工或干净环境项,不在 CI)
+      - name: Acceptance scripts (A1 A2 A3 A4 A8 A9 A10 A11 A14 A15)
+        run: ops/accept-p0.sh --only A1,A2,A3,A4,A8,A9,A10,A11,A14,A15
+
+      - name: Acceptance scripts P1 (A18 A19 A23)
+        run: ops/accept-p1.sh --only A18,A19,A23
 
       - name: Build payload (prerendered rules + integrity)
         run: node scripts/build-payload.mjs
