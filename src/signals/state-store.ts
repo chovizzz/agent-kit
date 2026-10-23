@@ -61,13 +61,21 @@ async function readExistingSalt(file: string): Promise<string | undefined> {
   return salt;
 }
 
-export async function loadSalt(io: IoContext, opts: { create: boolean }): Promise<SaltResult> {
+export async function loadSalt(
+  io: IoContext,
+  opts: {
+    create: boolean;
+    /** 测试缝:已确认盐不存在、尚未创建之前调用(用来在这个窗口里让「另一个进程」先建好盐) */
+    beforeCreate?: () => Promise<void> | void;
+  },
+): Promise<SaltResult> {
   const file = saltPath(io);
   const existing = await readExistingSalt(file);
   if (existing !== undefined) return { salt: existing, persisted: true };
   if (!opts.create) return { salt: newSalt(), persisted: false };
   await mkdirp(io, io.stateDir, 0o700);
   await chmod(io, io.stateDir, 0o700);
+  await opts.beforeCreate?.();
   try {
     await createExclusive(io, file, `${newSalt()}\n`, 0o600);
   } catch (e) {

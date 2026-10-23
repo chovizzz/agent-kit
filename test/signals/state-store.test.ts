@@ -61,6 +61,19 @@ describe('盐(Q-N7)', () => {
     expect(await exists(saltPath(w.io))).toBe(true);
   });
 
+  it('R20 §20.9#8 盐首建是原子的:确认不存在之后、创建之前别人先建好 → 返回并保留别人的盐,不覆盖(变异:换回 writeFile → 红)', async () => {
+    const w = await newWork('ss-salt-race-');
+    const theirs = 'ab'.repeat(32);
+    const r = await loadSalt(w.io, {
+      create: true,
+      beforeCreate: async () => {
+        await writeFile(w.io, saltPath(w.io), `${theirs}\n`, { mode: 0o600 });
+      },
+    });
+    expect(r).toEqual({ salt: theirs, persisted: true });
+    expect(await readText(saltPath(w.io))).toBe(`${theirs}\n`);
+  });
+
   it('已存在但格式非法 / 权限宽于 0600 / 是符号链接 → SaltError,不静默重生成', async () => {
     const w = await newWork('ss-bad-');
     const good = (await loadSalt(w.io, { create: true })).salt;
