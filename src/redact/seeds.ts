@@ -2151,12 +2151,20 @@ export function buildSeeds(seed: number = SEED): Seed[] {
       ['correcthorse'],
       '纯小写单词口令(<=12 字符)被当成普通单词放行',
     ),
-    gap(
-      'gap.long_segment_concat',
+    // s10:引号段 >= 8 字符、紧贴其后的值(`NAME="长一点的段"值`)与短前缀一样按同一个词整体脱敏
+    make(
+      's10.long_segment_concat',
       'concat_multiline',
-      `${PW}="abcdefghijkl"${gapPw}`,
+      'recognized',
+      [`${PW}=`, R(`"abcdefghijkl"${gapPw}`, 'credential')],
+      ['cred_assign_ext'],
+    ),
+    gap(
+      'gap.long_segment_punct_glue',
+      'concat_multiline',
+      `${PW}="abcdefghijkl".${gapPw}`,
       [gapPw],
-      '引号段不是短前缀的拼接(`NAME="长一点的段"值`,段 >= 8 字符):段本身被当作整个值脱敏,紧贴其后的值留在输出里,apply 放行 = 静默漏出;段 <= 4 字符(短前缀)时整体脱敏',
+      '长引号段(>= 8 字符)后面紧贴 `.` `+` `:` 再接值(`NAME="长段".值`):与源码里的方法调用 / 字符串相加 / JSON 无法区分,s10 的拼接规则刻意不收,紧贴值留在输出里',
     ),
     gap(
       'gap.md_inline_code_split',
