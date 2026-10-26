@@ -176,8 +176,6 @@ describe('R20-7.2 锁文件读取前校验', () => {
     await hardlink(w.io, lockOf(w), path.join(w.dir, 'lock-alias'));
     expect(await peekRsiLock(w.io)).toBe('unknown');
     await expect(l.assertHeld()).rejects.toMatchObject({ kind: 'lock_lost' });
-    await remove(w.io, path.join(w.dir, 'lock-alias'));
-    await remove(w.io, lockOf(w));
   });
 
   it('宽权限的陈旧锁不会被回收(只读校验在回收判定之前):acquire → state_dir_unsafe,文件原样', async () => {

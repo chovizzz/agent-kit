@@ -70,7 +70,7 @@ function checkMeta(
   owner: OwnerPolicy | undefined,
 ): SafeUnsafeWhy | undefined {
   if (kind === 'file' ? !st.isFile() : !st.isDirectory()) return 'not_regular';
-  if (kind === 'file' && st.nlink !== 1) return 'hardlink';
+  if (kind === 'file' && st.nlink > 1) return 'hardlink';
   if (owner !== undefined) {
     const want = owner.uid ?? currentUid();
     if (want !== undefined && st.uid !== want) return 'owner';
@@ -118,6 +118,8 @@ export async function readFileSafe(path: string, opts: SafeReadOptions): Promise
   }
   try {
     const st = await h.stat();
+    // 打开之后、fstat 之前被别人 unlink(锁释放 / 回收):nlink 为 0,等同「文件已不存在」,不是硬链接
+    if (st.isFile() && st.nlink === 0) return { kind: 'missing' };
     const why = checkMeta(st, 'file', opts.owner);
     if (why !== undefined) return { kind: 'unsafe', why };
     if (st.size > opts.maxBytes) return { kind: 'unsafe', why: 'too_large' };
