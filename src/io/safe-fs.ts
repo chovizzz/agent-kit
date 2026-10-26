@@ -14,6 +14,17 @@ import * as path from 'node:path';
 import { findWriteRootEscape } from './paths.js';
 import type { IoContext } from './paths.js';
 
+/**
+ * 写审计(R20-A2 B1):每个导出写函数在**入口第一行**调用,早于任何校验,所以被守卫拒绝的调用也会留下记录。
+ * 记录的是 `path.resolve(repoRoot, 参数)` 的字面解析结果(不做 realpath、不碰磁盘,不会抛错)。
+ * 双路径函数记两条:目标(op 即函数名)与来源(op 为 `<函数名>.from`)。来源先记、目标后记。
+ * symlink 只记链接位置(指向的内容不是被写的路径)。
+ * 钩子不得抛错(契约);这里不 try/catch,钩子抛错属钩子的 bug,应在测试里暴露而不是被吞。
+ */
+function audit(ctx: IoContext, op: string, target: string): void {
+  ctx.writeAudit?.(op, path.resolve(ctx.repoRoot, target));
+}
+
 export class WriteDeniedError extends Error {
   readonly code = 'IO_WRITE_DENIED';
 }
@@ -131,6 +142,7 @@ export async function writeFile(
   data: string | Uint8Array,
   opts: WriteOptions = {},
 ): Promise<void> {
+  audit(ctx, 'writeFile', target);
   const abs = assertWritable(ctx, target);
   await fsp.writeFile(abs, data, { mode: opts.mode ?? 0o644 });
 }
@@ -141,6 +153,7 @@ export async function appendFile(
   data: string | Uint8Array,
   opts: WriteOptions = {},
 ): Promise<void> {
+  audit(ctx, 'appendFile', target);
   const abs = assertWritable(ctx, target);
   await fsp.appendFile(abs, data, { mode: opts.mode ?? 0o644 });
 }
@@ -162,6 +175,7 @@ export async function createExclusive(
   data: string | Uint8Array,
   mode: number,
 ): Promise<void> {
+  audit(ctx, 'createExclusive', target);
   const abs = assertWritable(ctx, target);
   const flags =
     fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW;
@@ -183,28 +197,35 @@ export async function createExclusive(
 
 /** 递归建目录;目录权限缺省 0o755(.state 传 0o700)。 */
 export async function mkdirp(ctx: IoContext, target: string, mode = 0o755): Promise<void> {
+  audit(ctx, 'mkdirp', target);
   const abs = assertWritable(ctx, target, { allowRoot: true });
   await fsp.mkdir(abs, { recursive: true, mode });
 }
 
 export async function remove(ctx: IoContext, target: string): Promise<void> {
+  audit(ctx, 'remove', target);
   const abs = assertWritable(ctx, target);
   await fsp.rm(abs, { recursive: true, force: true });
 }
 
 export async function copyFile(ctx: IoContext, from: string, to: string): Promise<void> {
+  audit(ctx, 'copyFile.from', from);
+  audit(ctx, 'copyFile', to);
   const dest = assertWritable(ctx, to);
   await fsp.copyFile(assertCopySource(ctx, from), dest);
 }
 
 /** 两端都必须在 roots 内。 */
 export async function rename(ctx: IoContext, from: string, to: string): Promise<void> {
+  audit(ctx, 'rename.from', from);
+  audit(ctx, 'rename', to);
   const src = assertWritable(ctx, from);
   const dest = assertWritable(ctx, to);
   await fsp.rename(src, dest);
 }
 
 export async function chmod(ctx: IoContext, target: string, mode: number): Promise<void> {
+  audit(ctx, 'chmod', target);
   const abs = assertWritable(ctx, target, { allowRoot: true });
   await fsp.chmod(abs, mode);
 }
@@ -214,6 +235,7 @@ export async function chmod(ctx: IoContext, target: string, mode: number): Promi
  * 测试用它拿工作目录:parent 取 `ctx.tmpDir ?? <stateDir>/test-tmp`。
  */
 export async function mkdtemp(ctx: IoContext, parent: string, prefix: string): Promise<string> {
+  audit(ctx, 'mkdtemp', parent); // 记 parent;在 prefix 校验之前,被拒也记
   // prefix 只是文件名前缀:带路径分隔符或 `..` 会让 mkdtemp 跳出已校验的 parent
   if (/[\\/]/.test(prefix) || prefix.includes('..')) {
     throw new WriteDeniedError(`mkdtemp 的 prefix 不得含路径分隔符或 '..':${prefix}`);
@@ -225,6 +247,7 @@ export async function mkdtemp(ctx: IoContext, parent: string, prefix: string): P
 
 /** 符号链接:链接位置与指向目标都必须在写入根内(不能造出指向根外的链接)。 */
 export async function symlink(ctx: IoContext, target: string, linkPath: string): Promise<void> {
+  audit(ctx, 'symlink', linkPath);
   const dest = assertWritable(ctx, linkPath);
   const tgt = path.resolve(path.dirname(dest), target);
   assertWritable(ctx, tgt, { allowRoot: true });
@@ -233,6 +256,8 @@ export async function symlink(ctx: IoContext, target: string, linkPath: string):
 
 /** 硬链接:两端都必须在写入根内。(之后写入任一端仍会被「nlink>1」规则拒绝。) */
 export async function hardlink(ctx: IoContext, existing: string, newPath: string): Promise<void> {
+  audit(ctx, 'hardlink.from', existing);
+  audit(ctx, 'hardlink', newPath);
   const src = assertWritable(ctx, existing);
   const dest = assertWritable(ctx, newPath);
   await fsp.link(src, dest);

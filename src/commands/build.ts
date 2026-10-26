@@ -17,6 +17,7 @@ import { ExitCode } from '../contracts/exit-codes.js';
 import type { Overlay } from '../contracts/config.js';
 import { outKey } from '../render/out-layout.js';
 import { canonicalJson } from '../io/canonical-json.js';
+import { deriveIoContext } from '../io/paths.js';
 import type { IoContext } from '../io/paths.js';
 import { existsSync, lstat } from '../io/read-fs.js';
 import { mkdirp, writeFile } from '../io/safe-fs.js';
@@ -57,7 +58,7 @@ function within(root: string, p: string): boolean {
 
 /** 写 out/ 只用 out/ 之内的写入根(.state、KIT_TMP 不在其中):out/ 内部的链接再也引不到它们。 */
 function narrowTo(io: IoContext, base: string): IoContext {
-  return { ...io, writeRoots: io.writeRoots.filter((r) => within(base, r)) };
+  return deriveIoContext(io, { writeRoots: io.writeRoots.filter((r) => within(base, r)) });
 }
 
 /** `.state` 及 `.state/reports` 不得是符号链接(存在时)。 */

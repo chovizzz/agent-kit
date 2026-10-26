@@ -1,6 +1,7 @@
 import { ExitCode } from './contracts/exit-codes.js';
 import { CLI_NAME, KIT_VERSION } from './contracts/meta.js';
 import { createIoContext, PathsError } from './io/paths.js';
+import type { WriteAudit } from './io/paths.js';
 import { command as attest } from './commands/attest.js';
 import { command as build } from './commands/build.js';
 import { command as calibrate } from './commands/calibrate.js';
@@ -20,8 +21,8 @@ import { command as update } from './commands/update.js';
 import { createBackgroundCommand } from './update/worker.js';
 
 /**
- * 命令注册表。**只有 B01 改本文件**:后续块替换 src/commands/<x>.ts 的内容,
- * 保持 `export const command: CommandDef`(或子 runner 的 `run`)的形状即可,不用动注册。
+ * 命令注册表。新增命令要在这里登记(导入 + 加入数组);已有命令的实现替换 src/commands/<x>.ts 的内容即可,
+ * 保持 `export const command: CommandDef`(或子 runner 的 `run`)的形状,不用动注册。
  */
 export const COMMANDS: readonly CommandDef[] = [
   build,
@@ -45,6 +46,8 @@ export interface MainEnv {
   /** 注入环境/cwd(测试用);缺省读真实进程 */
   env?: Readonly<Record<string, string | undefined>>;
   cwd?: string;
+  /** 写审计钩子(R20-A2 B1):注入后由 main() 放进它创建的 IoContext;缺省不审计 */
+  writeAudit?: WriteAudit;
   stdout?: (text: string) => void;
   stderr?: (text: string) => void;
 }
@@ -182,6 +185,7 @@ export async function main(argv: readonly string[], env: MainEnv = {}): Promise<
       ...(flags.root !== undefined ? { root: flags.root } : {}),
       ...(env.env !== undefined ? { env: env.env } : {}),
       ...(env.cwd !== undefined ? { cwd: env.cwd } : {}),
+      ...(env.writeAudit !== undefined ? { writeAudit: env.writeAudit } : {}),
     });
   } catch (e) {
     if (e instanceof PathsError) {
