@@ -11,6 +11,13 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { existsSync, lstatSync, realpathSync, statSync } from './read-fs.js';
 
+/**
+ * 写审计钩子(R20-A2 B1,contracts §20.8.1 / §20.9):safe-fs 每个导出写函数**入口处、任何校验之前**调用一次,
+ * 参数是 (op, 绝对路径)。审计的是「写 API 被调用」,所以被守卫拒绝的调用也会被记下;一个 API 内部的多次物理写只记一次。
+ * 钩子只许记录,不得抛错(命令可能吞异常,断言靠外部累计的数组)。未设置 = 与引入前逐字节一致。
+ */
+export type WriteAudit = (op: string, absPath: string) => void;
+
 export interface IoContext {
   /** 仓库根(绝对路径):--root > 自 cwd 向上找 kit.toml > cwd */
   readonly repoRoot: string;
@@ -28,6 +35,24 @@ export interface IoContext {
    * 命令层拼子进程环境只许取它(最终仍要过 `filterLlmEnv`)。
    */
   readonly hostEnv: Readonly<Record<string, string>>;
+  /** 可选写审计钩子,见 `WriteAudit`。派生新上下文一律走 `deriveIoContext`,不得丢它。 */
+  readonly writeAudit?: WriteAudit;
+}
+
+/**
+ * 由已有 IoContext 派生新上下文(收窄 writeRoots、换目录等)的**唯一**推荐入口:`writeAudit` 永远从 base 继承,
+ * overrides 不能改它(类型上排除)。凡要「在已有 ctx 基础上改几项」的地方(含后续块的 rsi 专用 IoContext)都用它,
+ * 不要手写 `{ ...io, ... }`——那样哪天字段改成非展开方式拷贝就会静默丢钩子。
+ */
+export function deriveIoContext(
+  base: IoContext,
+  overrides: Partial<Omit<IoContext, 'writeAudit'>> = {},
+): IoContext {
+  return {
+    ...base,
+    ...overrides,
+    ...(base.writeAudit !== undefined ? { writeAudit: base.writeAudit } : {}),
+  };
 }
 
 /** `hostEnv` 能带的变量名(固定集合)。与 `llm-exec` 的 `LLM_ENV_ALLOW` 逐项相同(测试钉住),不得更宽。 */
@@ -61,6 +86,8 @@ export interface CreateIoContextOptions {
   env?: Readonly<Record<string, string | undefined>>;
   /** 注入 cwd(测试用);缺省读真实 process.cwd() */
   cwd?: string;
+  /** 写审计钩子(见 `WriteAudit`);缺省不审计 */
+  writeAudit?: WriteAudit;
 }
 
 export class PathsError extends Error {
@@ -387,6 +414,7 @@ export function createIoContext(opts: CreateIoContextOptions = {}): IoContext {
     tmpDir,
     execPath: env['PATH'] ?? '/usr/bin:/bin',
     hostEnv: pickHostEnv(env, home),
+    ...(opts.writeAudit !== undefined ? { writeAudit: opts.writeAudit } : {}),
   };
   // 字面路径通过不够:按 realpath(含最长已存在前缀)再判一遍,符号链接不得让有效写入根逃出允许范围
   const escape = findWriteRootEscape(ctx, home);

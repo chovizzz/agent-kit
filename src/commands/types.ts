@@ -11,6 +11,76 @@ export interface CommandContext {
   overlayPath: string | undefined;
   stdout(text: string): void;
   stderr(text: string): void;
+  /** 是否交互终端(confirm / purge / --ack 用)。可注入;缺省见 `resolveIsTty`。 */
+  isTty?: boolean;
+  /** 读一行确认输入(不含换行;输入结束返回 undefined)。可注入;缺省见 `resolveReadLine`。 */
+  readLine?: () => Promise<string | undefined>;
+}
+
+/** 交互终端判定:注入优先;缺省 = stdin 与 stdout 都是 TTY(与 update/launcher 的判法一致)。 */
+export function resolveIsTty(ctx: Pick<CommandContext, 'isTty'>): boolean {
+  return ctx.isTty ?? (process.stdout.isTTY === true && process.stdin.isTTY === true);
+}
+
+/** 读一行:注入优先;缺省从 process.stdin 读(进程内共享同一个缓冲,多次调用不丢输入)。 */
+export function resolveReadLine(
+  ctx: Pick<CommandContext, 'readLine'>,
+): () => Promise<string | undefined> {
+  return ctx.readLine ?? (defaultReadLine ??= createLineReader(process.stdin));
+}
+
+let defaultReadLine: (() => Promise<string | undefined>) | undefined;
+
+/**
+ * 在一个可读流上造「一次读一行」的读取器:多余数据留在读取器自己的缓冲里,供下一次调用;
+ * 流结束后再调用,先吐出缓冲里剩下的内容,之后恒返回 undefined(不会永久挂起)。行尾 `\r\n` 与 `\n` 都认。
+ * 每次等待期间才 resume 流,读到一行即 pause。
+ */
+export function createLineReader(stream: NodeJS.ReadableStream): () => Promise<string | undefined> {
+  let buf = '';
+  let ended = false;
+  stream.once('end', () => {
+    ended = true;
+  });
+  const takeLine = (): string | undefined => {
+    const i = buf.indexOf('\n');
+    if (i < 0) return undefined;
+    const line = buf.slice(0, i).replace(/\r$/, '');
+    buf = buf.slice(i + 1);
+    return line;
+  };
+  return () =>
+    new Promise((resolve) => {
+      const ready = takeLine();
+      if (ready !== undefined) return resolve(ready);
+      const drainEnded = (): string | undefined => {
+        if (buf === '') return undefined;
+        const rest = buf.replace(/\r$/, '');
+        buf = '';
+        return rest;
+      };
+      if (ended || (stream as { readableEnded?: boolean }).readableEnded === true) {
+        return resolve(drainEnded());
+      }
+      const done = (v: string | undefined): void => {
+        stream.off('data', onData);
+        stream.off('end', onEnd);
+        stream.pause();
+        resolve(v);
+      };
+      const onData = (chunk: Buffer | string): void => {
+        buf += chunk.toString();
+        const line = takeLine();
+        if (line !== undefined) done(line);
+      };
+      const onEnd = (): void => {
+        ended = true;
+        done(drainEnded());
+      };
+      stream.on('data', onData);
+      stream.on('end', onEnd);
+      stream.resume();
+    });
 }
 
 export type Phase = 'P0' | 'P1' | 'P2' | 'P3' | 'P4';
