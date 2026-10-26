@@ -207,6 +207,17 @@ describe('R20-7.2 锁文件读取前校验', () => {
     await l2.release();
   });
 
+  it('新建锁后确认读取发现它不安全(被改成 0644)→ state_dir_unsafe,不是 locked(变异:确认分支不单独处理 unsafe → 红)', async () => {
+    const w = await newWork('sl-created-unsafe-');
+    await expect(
+      acquireRsiLock(w.io, {
+        beforeRead: async (file) => {
+          await chmod(w.io, file, 0o644);
+        },
+      }),
+    ).rejects.toMatchObject({ kind: 'state_dir_unsafe' });
+  });
+
   it('检查之后、读取之前锁文件被换成符号链接 / FIFO → unknown(不跟随、不挂住)', async () => {
     for (const swap of [swapToSymlink, swapToFifo]) {
       const w = await newWork('sl-race-');

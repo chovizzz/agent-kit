@@ -105,7 +105,9 @@ const NONBLOCK = fs.constants.O_NONBLOCK ?? 0;
 /**
  * 句柄级安全读取(R20-7.2 读取前校验的唯一实现):`O_NOFOLLOW | O_NONBLOCK` 打开(符号链接 → `ELOOP`;FIFO 不会挂住),
  * 对**句柄** fstat 校验(普通文件、`nlink == 1`、可选的属主 / 权限、大小上限),再有界读取。
- * 因此检查与读取之间路径被换成符号链接 / FIFO / 另一个 inode,拿到的要么是原来那个已校验的 inode,要么是 `unsafe`,绝不跟随、不挂住。
+ * 因此检查与读取之间**末级文件**被换成符号链接 / FIFO / 另一个 inode,拿到的要么是原来那个已校验的 inode,要么是 `unsafe`,不跟随末级链接、不挂住。
+ * 已知残余(不是完整路径保护):`O_NOFOLLOW` 只管末级;**父目录**在目录检查之后、`open` 之前被换成符号链接时,`open` 仍会穿过它(Node 没有 `openat` 式的逐级锚定)。
+ * 这与 fstat 只是一个时点的校验同属同 UID 进程的 TOCTOU 残余,见 `docs/contracts.md` R20-A1 订正段。
  * 只读:绝不 chmod / 修复。
  */
 export async function readFileSafe(path: string, opts: SafeReadOptions): Promise<SafeReadResult> {

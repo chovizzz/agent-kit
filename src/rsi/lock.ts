@@ -233,6 +233,7 @@ export async function acquireRsiLock(
     }
     if (created) {
       const mine = await readLock(file, deps.beforeRead);
+      if (mine.state === 'unsafe') throw new RsiLockError('state_dir_unsafe');
       if (mine.state !== 'ok' || mine.doc.nonce !== doc.nonce) throw new RsiLockError('locked');
       heldInProcess.add(file);
       let released = false;
