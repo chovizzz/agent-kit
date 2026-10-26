@@ -18,11 +18,10 @@ export class WriteDeniedError extends Error {
   readonly code = 'IO_WRITE_DENIED';
 }
 
-/** 路径本身(不跟随符号链接)是否存在 */
-function lexists(p: string): boolean {
+/** 路径本身(不跟随符号链接)此刻是不是符号链接;不存在 = false */
+function isSymlinkNow(p: string): boolean {
   try {
-    fs.lstatSync(p);
-    return true;
+    return fs.lstatSync(p).isSymbolicLink();
   } catch {
     return false;
   }
@@ -44,9 +43,10 @@ function realResolve(abs: string): string {
       try {
         real = fs.realpathSync(cur);
       } catch (e) {
-        // lstat 与 realpath 之间被别的进程删掉(并发释放锁文件):等同于不存在,按「不存在」继续向上找;
-        // 仍然存在(悬空 / 循环的符号链接)才拒绝——不放宽守卫
-        const vanished = (e as NodeJS.ErrnoException).code === 'ENOENT' && !lexists(cur);
+        // lstat 与 realpath 之间被别的进程删掉(并发释放锁文件),甚至又被别人重新创建成普通文件:
+        // 这不是符号链接,按「不存在」继续向上找(结果由父目录的真实路径 + 末段拼出)。
+        // 此刻仍是符号链接(悬空 / 循环)或其它错误码才拒绝——不放宽对链接的守卫
+        const vanished = (e as NodeJS.ErrnoException).code === 'ENOENT' && !isSymlinkNow(cur);
         if (!vanished) throw new WriteDeniedError(`悬空或不可解析的符号链接,拒绝写入:${cur}`);
       }
       if (real !== undefined) return rest.length === 0 ? real : path.join(real, ...rest.reverse());
