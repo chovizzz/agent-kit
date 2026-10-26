@@ -3,8 +3,6 @@
  * 并发压力用例(test/rsi/lock-procs.test.ts)只能概率性覆盖它;这里在 realpathSync / lstatSync
  * 里按精确目标同步改动文件系统,每次都走到该分支。单独成文件,因为 vi.mock 对整个测试文件生效。
  */
-import * as fsSync from 'node:fs';
-import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as safe from '../../src/io/safe-fs.js';
@@ -18,10 +16,13 @@ const h = vi.hoisted(() => ({
   /** 对 target 的第 n 次 lstatSync(从 1 起)调用的覆盖;不设 = 走真实实现 */
   lstatAt: undefined as undefined | { n: number; run: (actual: () => unknown) => unknown },
   lstatCalls: 0,
+  /** mock 工厂里取到的真实 fs,供钩子同步改动文件系统(测试文件不得直接 import node:fs) */
+  fs: undefined as unknown as typeof import('node:fs'),
 }));
 
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
+  h.fs = actual;
   const realpathSync = Object.assign(
     (p: string, ...rest: unknown[]) => {
       const real = () => (actual.realpathSync as (...a: unknown[]) => string)(p, ...rest);
@@ -76,7 +77,7 @@ describe('safe-fs:lstat 之后目标消失(并发释放锁)', () => {
   it('realpath 前目标被删除 → 按「不存在」处理,放行,不误报 write_denied', async () => {
     h.realpath = (real) => {
       // 同步删掉目标,再让真实 realpath 自己抛 ENOENT
-      fsSync.rmSync(lock);
+      h.fs.rmSync(lock);
       return real();
     };
     expect(safe.assertWritable(ctx, lock)).toBe(lock);
@@ -91,8 +92,8 @@ describe('safe-fs:lstat 之后目标消失(并发释放锁)', () => {
 
   it('realpath 报 ENOENT 但目标此刻是悬空符号链接 → 拒绝', async () => {
     h.realpath = (real) => {
-      fsSync.rmSync(lock);
-      fsSync.symlinkSync(path.join(dir, 'allowed', 'nowhere'), lock);
+      h.fs.rmSync(lock);
+      h.fs.symlinkSync(path.join(dir, 'allowed', 'nowhere'), lock);
       return real();
     };
     expect(() => safe.assertWritable(ctx, lock)).toThrow(WriteDeniedError);
@@ -126,7 +127,7 @@ describe('safe-fs:lstat 之后目标消失(并发释放锁)', () => {
       throw errno('ENOENT');
     };
     const vanished = safe.assertWritable(ctx, lock);
-    await fsp.rm(lock);
+    await safe.remove(ctx, lock);
     h.realpath = undefined;
     expect(safe.assertWritable(ctx, lock)).toBe(vanished);
   });
