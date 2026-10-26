@@ -18,6 +18,16 @@ export class WriteDeniedError extends Error {
   readonly code = 'IO_WRITE_DENIED';
 }
 
+/** 路径本身(不跟随符号链接)是否存在 */
+function lexists(p: string): boolean {
+  try {
+    fs.lstatSync(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function realResolve(abs: string): string {
   // 找到最深的已存在祖先(lstat 不跟随 symlink),对它做 realpath,再拼回剩余段。
   const rest: string[] = [];
@@ -30,13 +40,16 @@ function realResolve(abs: string): string {
       st = undefined;
     }
     if (st) {
-      let real: string;
+      let real: string | undefined;
       try {
         real = fs.realpathSync(cur);
-      } catch {
-        throw new WriteDeniedError(`悬空或不可解析的符号链接,拒绝写入:${cur}`);
+      } catch (e) {
+        // lstat 与 realpath 之间被别的进程删掉(并发释放锁文件):等同于不存在,按「不存在」继续向上找;
+        // 仍然存在(悬空 / 循环的符号链接)才拒绝——不放宽守卫
+        const vanished = (e as NodeJS.ErrnoException).code === 'ENOENT' && !lexists(cur);
+        if (!vanished) throw new WriteDeniedError(`悬空或不可解析的符号链接,拒绝写入:${cur}`);
       }
-      return rest.length === 0 ? real : path.join(real, ...rest.reverse());
+      if (real !== undefined) return rest.length === 0 ? real : path.join(real, ...rest.reverse());
     }
     const parent = path.dirname(cur);
     if (parent === cur) return abs;
