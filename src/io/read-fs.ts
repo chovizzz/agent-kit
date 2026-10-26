@@ -26,6 +26,152 @@ export async function readBytes(path: string): Promise<Uint8Array> {
   return fsp.readFile(path);
 }
 
+/** 句柄级安全读取的元数据快照(来自对**已打开句柄**的 fstat,不是对路径的 lstat) */
+export interface SafeMeta {
+  dev: number;
+  ino: number;
+  size: number;
+  mtimeMs: number;
+  mode: number;
+  uid: number;
+  nlink: number;
+}
+
+/** 属主与权限校验:属主须为 `uid`(缺省当前进程 uid;平台没有 getuid 时不校验),权限位不得宽于 `maxPerm`(文件 0o600、目录 0o700) */
+export interface OwnerPolicy {
+  maxPerm: number;
+  uid?: number;
+}
+
+export type SafeUnsafeWhy =
+  'link' | 'not_regular' | 'hardlink' | 'owner' | 'perm' | 'too_large' | 'io';
+
+export type SafeReadResult =
+  | { kind: 'ok'; bytes: Buffer; meta: SafeMeta }
+  | { kind: 'missing' }
+  | { kind: 'unsafe'; why: SafeUnsafeWhy };
+
+export interface SafeReadOptions {
+  /** 内容字节上限;fstat 大小或实际读到的字节超过它 → `unsafe/too_large`(有界读取,不把超大文件读进内存) */
+  maxBytes: number;
+  /** 提供时校验属主与权限;缺省只做 O_NOFOLLOW + 普通文件 + `nlink == 1` */
+  owner?: OwnerPolicy;
+  /** 测试缝:调用后紧接着 open。用来演练「检查之后、读取之前被换成符号链接 / FIFO」 */
+  beforeOpen?: () => Promise<void> | void;
+}
+
+function currentUid(): number | undefined {
+  return typeof process.getuid === 'function' ? process.getuid() : undefined;
+}
+
+function checkMeta(
+  st: fs.Stats,
+  kind: 'file' | 'dir',
+  owner: OwnerPolicy | undefined,
+): SafeUnsafeWhy | undefined {
+  if (kind === 'file' ? !st.isFile() : !st.isDirectory()) return 'not_regular';
+  if (kind === 'file' && st.nlink > 1) return 'hardlink';
+  if (owner !== undefined) {
+    const want = owner.uid ?? currentUid();
+    if (want !== undefined && st.uid !== want) return 'owner';
+    if ((st.mode & 0o777 & ~owner.maxPerm) !== 0) return 'perm';
+  }
+  return undefined;
+}
+
+const metaOf = (st: fs.Stats): SafeMeta => ({
+  dev: st.dev,
+  ino: st.ino,
+  size: st.size,
+  mtimeMs: st.mtimeMs,
+  mode: st.mode,
+  uid: st.uid,
+  nlink: st.nlink,
+});
+
+type OpenFailure = { kind: 'missing' } | { kind: 'unsafe'; why: SafeUnsafeWhy };
+
+function openFailure(e: unknown): OpenFailure {
+  const code = (e as NodeJS.ErrnoException).code;
+  if (code === 'ENOENT') return { kind: 'missing' };
+  if (code === 'ELOOP') return { kind: 'unsafe', why: 'link' };
+  if (code === 'ENOTDIR') return { kind: 'unsafe', why: 'not_regular' };
+  return { kind: 'unsafe', why: 'io' };
+}
+
+const NOFOLLOW = fs.constants.O_NOFOLLOW ?? 0;
+const NONBLOCK = fs.constants.O_NONBLOCK ?? 0;
+
+/**
+ * 句柄级安全读取(R20-7.2 读取前校验的唯一实现):`O_NOFOLLOW | O_NONBLOCK` 打开(符号链接 → `ELOOP`;FIFO 不会挂住),
+ * 对**句柄** fstat 校验(普通文件、`nlink == 1`、可选的属主 / 权限、大小上限),再有界读取。
+ * 因此检查与读取之间**末级文件**被换成符号链接 / FIFO / 另一个 inode,拿到的要么是原来那个已校验的 inode,要么是 `unsafe`,不跟随末级链接、不挂住。
+ * 已知残余(不是完整路径保护):`O_NOFOLLOW` 只管末级;**父目录**在目录检查之后、`open` 之前被换成符号链接时,`open` 仍会穿过它(Node 没有 `openat` 式的逐级锚定)。
+ * 这与 fstat 只是一个时点的校验同属同 UID 进程的 TOCTOU 残余,见 `docs/contracts.md` R20-A1 订正段。
+ * 只读:绝不 chmod / 修复。
+ */
+export async function readFileSafe(path: string, opts: SafeReadOptions): Promise<SafeReadResult> {
+  await opts.beforeOpen?.();
+  let h: fsp.FileHandle;
+  try {
+    h = await fsp.open(path, fs.constants.O_RDONLY | NOFOLLOW | NONBLOCK);
+  } catch (e) {
+    return openFailure(e);
+  }
+  try {
+    const st = await h.stat();
+    // 打开之后、fstat 之前被别人 unlink(锁释放 / 回收):nlink 为 0,等同「文件已不存在」,不是硬链接
+    if (st.isFile() && st.nlink === 0) return { kind: 'missing' };
+    const why = checkMeta(st, 'file', opts.owner);
+    if (why !== undefined) return { kind: 'unsafe', why };
+    if (st.size > opts.maxBytes) return { kind: 'unsafe', why: 'too_large' };
+    const chunks: Buffer[] = [];
+    let total = 0;
+    for (;;) {
+      const buf = Buffer.allocUnsafe(Math.min(65536, opts.maxBytes + 1 - total));
+      const { bytesRead } = await h.read(buf, 0, buf.length, null);
+      if (bytesRead === 0) break;
+      total += bytesRead;
+      if (total > opts.maxBytes) return { kind: 'unsafe', why: 'too_large' };
+      chunks.push(buf.subarray(0, bytesRead));
+    }
+    return { kind: 'ok', bytes: Buffer.concat(chunks, total), meta: metaOf(st) };
+  } catch {
+    return { kind: 'unsafe', why: 'io' };
+  } finally {
+    await h.close().catch(() => undefined);
+  }
+}
+
+export type SafeDirResult =
+  { kind: 'ok'; meta: SafeMeta } | { kind: 'missing' } | { kind: 'unsafe'; why: SafeUnsafeWhy };
+
+/** 目录的句柄级校验(`O_DIRECTORY | O_NOFOLLOW`):真实目录、可选属主 / 权限。只读,不创建、不 chmod。 */
+export async function statDirSafe(
+  path: string,
+  opts: { owner?: OwnerPolicy; beforeOpen?: () => Promise<void> | void } = {},
+): Promise<SafeDirResult> {
+  await opts.beforeOpen?.();
+  let h: fsp.FileHandle;
+  try {
+    h = await fsp.open(
+      path,
+      fs.constants.O_RDONLY | NOFOLLOW | NONBLOCK | (fs.constants.O_DIRECTORY ?? 0),
+    );
+  } catch (e) {
+    return openFailure(e);
+  }
+  try {
+    const st = await h.stat();
+    const why = checkMeta(st, 'dir', opts.owner);
+    return why === undefined ? { kind: 'ok', meta: metaOf(st) } : { kind: 'unsafe', why };
+  } catch {
+    return { kind: 'unsafe', why: 'io' };
+  } finally {
+    await h.close().catch(() => undefined);
+  }
+}
+
 export async function readDir(path: string): Promise<DirEntry[]> {
   const entries = await fsp.readdir(path, { withFileTypes: true });
   return entries

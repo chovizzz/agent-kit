@@ -18,6 +18,17 @@ export class WriteDeniedError extends Error {
   readonly code = 'IO_WRITE_DENIED';
 }
 
+/** 路径本身(不跟随符号链接)此刻是不是符号链接;不存在 = false;无法判断(权限、IO 错误等)= 拒绝 */
+function isSymlinkNow(p: string): boolean {
+  try {
+    return fs.lstatSync(p).isSymbolicLink();
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return false;
+    throw new WriteDeniedError(`无法确认路径是否为符号链接,拒绝写入:${p}`);
+  }
+}
+
 function realResolve(abs: string): string {
   // 找到最深的已存在祖先(lstat 不跟随 symlink),对它做 realpath,再拼回剩余段。
   const rest: string[] = [];
@@ -30,13 +41,17 @@ function realResolve(abs: string): string {
       st = undefined;
     }
     if (st) {
-      let real: string;
+      let real: string | undefined;
       try {
         real = fs.realpathSync(cur);
-      } catch {
-        throw new WriteDeniedError(`悬空或不可解析的符号链接,拒绝写入:${cur}`);
+      } catch (e) {
+        // lstat 与 realpath 之间被别的进程删掉(并发释放锁文件),甚至又被别人重新创建成普通文件:
+        // 这不是符号链接,按「不存在」继续向上找(结果由父目录的真实路径 + 末段拼出)。
+        // 此刻仍是符号链接(悬空 / 循环)或其它错误码才拒绝——不放宽对链接的守卫
+        const vanished = (e as NodeJS.ErrnoException).code === 'ENOENT' && !isSymlinkNow(cur);
+        if (!vanished) throw new WriteDeniedError(`悬空或不可解析的符号链接,拒绝写入:${cur}`);
       }
-      return rest.length === 0 ? real : path.join(real, ...rest.reverse());
+      if (real !== undefined) return rest.length === 0 ? real : path.join(real, ...rest.reverse());
     }
     const parent = path.dirname(cur);
     if (parent === cur) return abs;

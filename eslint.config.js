@@ -261,6 +261,8 @@ const SUBPROCESS_TESTS = [
   'test/accept/p1-lifecycle-ops.test.ts',
   'test/accept/p1-sync-update-ops.test.ts',
   'test/ops/helpers.ts',
+  // R20 A1:真进程锁测试的子进程支撑(vite 打包 child-entry 后用 node 跑)
+  'test/rsi/proc/helper.ts',
   'test/build/bundle-artifact.test.ts',
 ];
 
