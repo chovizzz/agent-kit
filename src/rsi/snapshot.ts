@@ -343,7 +343,14 @@ export async function commitSnapshot(
   if (prev.kind === 'invalid') throw new RsiSnapshotError('snapshot_invalid');
   if (prev.kind === 'unsafe') throw new RsiSnapshotError('state_dir_unsafe');
   const files = await scanCurrent(b, opts);
-  return writeManifest(io, lock, b, prev.kind === 'ok' ? prev.snapshot.generation + 1 : 1, files, opts);
+  return writeManifest(
+    io,
+    lock,
+    b,
+    prev.kind === 'ok' ? prev.snapshot.generation + 1 : 1,
+    files,
+    opts,
+  );
 }
 
 export type RecoverOutcome = 'absent' | 'consistent' | 'rebuilt';
@@ -420,7 +427,8 @@ export async function readVerified(
       const entry = listed.get(name);
       const parents = await parentsState(b, name);
       if (parents === 'unsafe') return { status: 'invalid' };
-      const got: DataRead = parents === 'missing' ? { kind: 'missing' } : await readData(b, name, opts);
+      const got: DataRead =
+        parents === 'missing' ? { kind: 'missing' } : await readData(b, name, opts);
       if (got.kind === 'unsafe') return { status: 'unsafe' };
       if (got.kind === 'corrupt') return { status: 'invalid' };
       if (got.kind === 'missing') {
@@ -428,7 +436,11 @@ export async function readVerified(
         files.set(name, null);
         continue;
       }
-      if (entry === undefined || entry.bytes !== got.bytes.length || entry.sha256 !== sha(got.bytes)) {
+      if (
+        entry === undefined ||
+        entry.bytes !== got.bytes.length ||
+        entry.sha256 !== sha(got.bytes)
+      ) {
         consistent = false;
       }
       files.set(name, got.bytes);

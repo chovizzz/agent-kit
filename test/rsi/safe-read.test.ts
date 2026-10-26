@@ -74,9 +74,9 @@ describe('R20-7.2 句柄级安全读取原语(src/io/read-fs.ts)', () => {
     await writeFile(w.io, f, 'x', { mode: 0o600 });
     const r = await readFileSafe(f, { maxBytes: 10, owner: { maxPerm: 0o600, uid: myUid() + 1 } });
     expect(r).toEqual({ kind: 'unsafe', why: 'owner' });
-    expect((await readFileSafe(f, { maxBytes: 10, owner: { maxPerm: 0o600, uid: myUid() } })).kind).toBe(
-      'ok',
-    );
+    expect(
+      (await readFileSafe(f, { maxBytes: 10, owner: { maxPerm: 0o600, uid: myUid() } })).kind,
+    ).toBe('ok');
   });
 
   it('权限宽于 0600 → unsafe/perm(0644、0620、带执行位的 0700 都拒;0400 / 0600 过);不提供 owner 策略则不看权限', async () => {
@@ -188,9 +188,9 @@ describe('R20-7.2 锁文件读取前校验', () => {
       kit_version: '0.1.0',
     });
     await writeFile(w.io, lockOf(w), stale, { mode: 0o644 });
-    await expect(
-      acquireRsiLock(w.io, { isAlive: () => false }),
-    ).rejects.toMatchObject({ kind: 'state_dir_unsafe' });
+    await expect(acquireRsiLock(w.io, { isAlive: () => false })).rejects.toMatchObject({
+      kind: 'state_dir_unsafe',
+    });
     expect(await readText(lockOf(w))).toBe(stale);
     expect(await mode(lockOf(w))).toBe(0o644);
   });
@@ -371,9 +371,7 @@ describe('R20-5.6 2000 项上限在枚举阶段执行,摘要逐文件计算', ()
     const w = await newWork('lim-');
     await fill(w, 1, RSI_SNAPSHOT_MAX_FILES);
     const reads: string[] = [];
-    const s = await withLock(w, (l) =>
-      commitSnapshot(w.io, l, { onRead: (n) => reads.push(n) }),
-    );
+    const s = await withLock(w, (l) => commitSnapshot(w.io, l, { onRead: (n) => reads.push(n) }));
     expect(s.files).toHaveLength(RSI_SNAPSHOT_MAX_FILES);
     expect(reads).toHaveLength(RSI_SNAPSHOT_MAX_FILES);
     expect(new Set(reads).size).toBe(RSI_SNAPSHOT_MAX_FILES);
@@ -396,7 +394,11 @@ describe('R20-5.6 2000 项上限在枚举阶段执行,摘要逐文件计算', ()
   it('snapshot.json 自身超过字节上限 → 解析前就判 invalid(不读内容进 JSON.parse)', async () => {
     const w = await newWork('lim-snap-');
     await put(w, 'state.json', STATE);
-    await put(w, 'snapshot.json', ' '.repeat(RSI_SNAPSHOT_MAX_BYTES + 1));
+    // 本体是合法清单、只在尾部补空白撑过上限:没有字节上限就会被当成 ok
+    await withLock(w, (l) => commitSnapshot(w.io, l));
+    const valid = await readText(rsiFile(w, 'snapshot.json'));
+    expect((await readSnapshot(w.io)).kind).toBe('ok');
+    await put(w, 'snapshot.json', valid + ' '.repeat(RSI_SNAPSHOT_MAX_BYTES));
     expect(await readSnapshot(w.io)).toEqual({ kind: 'invalid' });
     const reads: string[] = [];
     expect(await readVerified(w.io, ['state.json'], { onRead: (n) => reads.push(n) })).toEqual({
