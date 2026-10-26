@@ -132,7 +132,9 @@ export async function rsiDirReadonly(
   try {
     stateReal = await realpath(io.stateDir);
   } catch (e) {
-    return (e as NodeJS.ErrnoException).code === 'ENOENT' ? { kind: 'missing' } : { kind: 'unsafe' };
+    return (e as NodeJS.ErrnoException).code === 'ENOENT'
+      ? { kind: 'missing' }
+      : { kind: 'unsafe' };
   }
   const dir = path.join(stateReal, 'rsi');
   const st = await lstat(dir).catch((e: NodeJS.ErrnoException) => e.code ?? 'ERR');

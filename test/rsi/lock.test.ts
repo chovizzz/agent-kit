@@ -123,7 +123,10 @@ describe('R20-5.3 锁文件位置与权限', () => {
     expect((await readText(lockFile(w))).length).toBe(big.length);
     await plant(w, 'y'.repeat(10 * 1024)); // > 4096 字节(解析不接受)但在读取上限内
     const m2 = (await lstat(lockFile(w))).mtimeMs;
-    const got = await acquireRsiLock(w.io, { isAlive: () => true, now: () => new Date(m2 + 60_000) });
+    const got = await acquireRsiLock(w.io, {
+      isAlive: () => true,
+      now: () => new Date(m2 + 60_000),
+    });
     await got.release();
   });
 
