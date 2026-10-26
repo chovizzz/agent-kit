@@ -33,7 +33,7 @@ import { ExitCode, type ExitCodeValue } from '../contracts/exit-codes.js';
 import { KIT_VERSION } from '../contracts/meta.js';
 import { canonicalJson } from '../io/canonical-json.js';
 import type { IoContext } from '../io/paths.js';
-import { lstat, readBytes, realpath } from '../io/read-fs.js';
+import { lstat, readFileSafe, realpath, statDirSafe, type OwnerPolicy } from '../io/read-fs.js';
 import { chmod, createExclusive, mkdirp, remove, WriteDeniedError } from '../io/safe-fs.js';
 
 export interface RsiLockDeps {
@@ -45,6 +45,8 @@ export interface RsiLockDeps {
   kitVersion?: string;
   /** 测试缝:已判定为陈旧、尚未复读之前调用(用来在判定与删除之间换掉锁文件,演练回收竞态) */
   beforeReclaim?: () => Promise<void> | void;
+  /** 测试缝:每次读锁文件、紧接着句柄级 open 之前调用(演练「检查之后、读取之前被换成符号链接 / FIFO」) */
+  beforeRead?: (file: string) => Promise<void> | void;
 }
 
 /** 获取 / 复核失败的分类;`toStable()` 给出契约稳定码(§20.3 R20-3.0) */
@@ -117,16 +119,26 @@ export async function rsiDir(io: IoContext): Promise<string> {
   await mkdirp(io, dir, RSI_DIR_MODE);
   const st = await lstat(dir);
   if (st.isSymbolicLink() || !st.isDirectory()) throw new RsiLockError('state_dir_unsafe');
+  // 别人的目录我们既不能收紧也不该写进去
+  if (typeof process.getuid === 'function' && st.uid !== process.getuid()) {
+    throw new RsiLockError('state_dir_unsafe');
+  }
   if ((st.mode & 0o077) !== 0) await chmod(io, dir, RSI_DIR_MODE);
   return dir;
 }
 
+/** R20-7.2:`.state/rsi/` 下固定文件 / 目录的属主与权限口径(文件 0600、目录 0700;只读入口只校验,绝不收紧) */
+export const RSI_FILE_OWNER: OwnerPolicy = { maxPerm: RSI_FILE_MODE };
+export const RSI_DIR_OWNER: OwnerPolicy = { maxPerm: RSI_DIR_MODE };
+
 /**
  * **只读方**用:同样的路径解析,但绝不创建目录、不 chmod(只读命令零写入,§20.8.1)。
- * 状态目录或 `rsi/` 不存在 → `missing`;`rsi/` 是符号链接 / 不是目录 → `unsafe`。
+ * 状态目录或 `rsi/` 不存在 → `missing`;`rsi/` 是符号链接 / 不是目录 / 属主不是当前用户 / 权限宽于 0700 → `unsafe`
+ * (R20-7.2,句柄级校验,不自动收紧)。
  */
 export async function rsiDirReadonly(
   io: IoContext,
+  opts: { beforeOpen?: (file: string) => Promise<void> | void } = {},
 ): Promise<{ kind: 'ok'; dir: string } | { kind: 'missing' } | { kind: 'unsafe' }> {
   let stateReal: string;
   try {
@@ -137,9 +149,12 @@ export async function rsiDirReadonly(
       : { kind: 'unsafe' };
   }
   const dir = path.join(stateReal, 'rsi');
-  const st = await lstat(dir).catch((e: NodeJS.ErrnoException) => e.code ?? 'ERR');
-  if (typeof st === 'string') return st === 'ENOENT' ? { kind: 'missing' } : { kind: 'unsafe' };
-  if (st.isSymbolicLink() || !st.isDirectory()) return { kind: 'unsafe' };
+  const r = await statDirSafe(dir, {
+    owner: RSI_DIR_OWNER,
+    beforeOpen: () => opts.beforeOpen?.(dir),
+  });
+  if (r.kind === 'missing') return { kind: 'missing' };
+  if (r.kind === 'unsafe') return { kind: 'unsafe' };
   return { kind: 'ok', dir };
 }
 
@@ -149,26 +164,22 @@ type LockRead =
   | { state: 'ok'; doc: RsiLockDoc; raw: Buffer; ino: string }
   | { state: 'bad'; raw: Buffer; ino: string; mtimeMs: number };
 
-async function readLock(file: string): Promise<LockRead> {
-  let st;
-  try {
-    st = await lstat(file);
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { state: 'absent' };
-    return { state: 'unsafe' };
-  }
-  if (st.isSymbolicLink() || !st.isFile()) return { state: 'unsafe' };
-  const ino = `${st.dev}:${st.ino}`;
+async function readLock(
+  file: string,
+  beforeRead?: (file: string) => Promise<void> | void,
+): Promise<LockRead> {
+  // 句柄级读取(R20-7.2):O_NOFOLLOW、对句柄 fstat(普通文件 / nlink==1 / 属主 / ≤0600 / ≤64KiB)、有界读取。
   // 远大于正常内容的「锁文件」不是我们写的:不读、不比较、不回收,fail-closed(避免用空缓冲冒充「逐字节复读」)
-  if (st.size > RSI_LOCK_READ_CAP) return { state: 'unsafe' };
-  let raw: Buffer;
-  try {
-    raw = Buffer.from(await readBytes(file));
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { state: 'absent' };
-    return { state: 'unsafe' };
-  }
-  if (st.size <= RSI_LOCK_MAX_BYTES) {
+  const r = await readFileSafe(file, {
+    maxBytes: RSI_LOCK_READ_CAP,
+    owner: RSI_FILE_OWNER,
+    beforeOpen: () => beforeRead?.(file),
+  });
+  if (r.kind === 'missing') return { state: 'absent' };
+  if (r.kind === 'unsafe') return { state: 'unsafe' };
+  const raw = r.bytes;
+  const ino = `${r.meta.dev}:${r.meta.ino}`;
+  if (raw.length <= RSI_LOCK_MAX_BYTES) {
     try {
       const doc = RsiLockDocSchema.parse(JSON.parse(raw.toString('utf8')));
       return { state: 'ok', doc, raw, ino };
@@ -176,7 +187,7 @@ async function readLock(file: string): Promise<LockRead> {
       // 落到 bad
     }
   }
-  return { state: 'bad', raw, ino, mtimeMs: st.mtimeMs };
+  return { state: 'bad', raw, ino, mtimeMs: r.meta.mtimeMs };
 }
 
 function sameRead(a: LockRead, b: LockRead): boolean {
@@ -221,12 +232,12 @@ export async function acquireRsiLock(
       if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
     }
     if (created) {
-      const mine = await readLock(file);
+      const mine = await readLock(file, deps.beforeRead);
       if (mine.state !== 'ok' || mine.doc.nonce !== doc.nonce) throw new RsiLockError('locked');
       heldInProcess.add(file);
       let released = false;
       const assertHeld = async (): Promise<void> => {
-        const cur = await readLock(file);
+        const cur = await readLock(file, deps.beforeRead);
         if (cur.state !== 'ok' || cur.doc.nonce !== doc.nonce) throw new RsiLockError('lock_lost');
       };
       return {
@@ -237,7 +248,7 @@ export async function acquireRsiLock(
           if (released) return;
           released = true;
           try {
-            const cur = await readLock(file);
+            const cur = await readLock(file, deps.beforeRead);
             if (cur.state === 'ok' && cur.doc.nonce === doc.nonce) await remove(io, file);
           } finally {
             heldInProcess.delete(file);
@@ -246,7 +257,7 @@ export async function acquireRsiLock(
       };
     }
 
-    const cur = await readLock(file);
+    const cur = await readLock(file, deps.beforeRead);
     if (cur.state === 'absent') continue;
     if (cur.state === 'unsafe') throw new RsiLockError('state_dir_unsafe');
     if (cur.state === 'ok') {
@@ -259,7 +270,7 @@ export async function acquireRsiLock(
     }
     // 回收:删除前复读,逐字节相同(且仍是同一个 inode)才删
     await deps.beforeReclaim?.();
-    const again = await readLock(file);
+    const again = await readLock(file, deps.beforeRead);
     if (!sameRead(cur, again)) continue;
     await remove(io, file);
   }
@@ -287,10 +298,10 @@ export async function peekRsiLock(
 ): Promise<'free' | 'held' | 'held_over_ttl' | 'stale' | 'unknown'> {
   const alive = deps.isAlive ?? defaultAlive;
   const now = deps.now ?? ((): Date => new Date());
-  const d = await rsiDirReadonly(io);
+  const d = await rsiDirReadonly(io, { beforeOpen: deps.beforeRead });
   if (d.kind === 'missing') return 'free';
   if (d.kind === 'unsafe') return 'unknown';
-  const cur = await readLock(path.join(d.dir, 'lock'));
+  const cur = await readLock(path.join(d.dir, 'lock'), deps.beforeRead);
   if (cur.state === 'absent') return 'free';
   if (cur.state === 'unsafe') return 'unknown';
   if (cur.state === 'bad') {

@@ -2,10 +2,16 @@
  * A1 测试的真子进程支撑:把 child-entry.ts 用 vite 打成单文件(含 zod、不依赖 .ts 加载器),再用 node 跑。
  * 全部产物放在调用方给的临时目录(KIT_TMP,不在 HOME 内)。
  */
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import * as path from 'node:path';
 import { build } from 'vite';
 import { REPO_ROOT } from '../../helpers/tmp.js';
+
+/** 建一个 FIFO(Node 没有 mkfifo API;本文件已是 eslint 放行 child_process 的测试支撑,不新增放行) */
+export function mkfifo(target: string): void {
+  const r = spawnSync('mkfifo', [target], { stdio: 'ignore', env: { PATH: '/usr/bin:/bin' } });
+  if (r.status !== 0) throw new Error('mkfifo failed');
+}
 
 export interface ChildJob {
   op: 'hold' | 'try' | 'writer' | 'salt';

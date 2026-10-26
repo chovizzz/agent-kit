@@ -351,7 +351,7 @@ describe('R20-5.6 未完成提交 vs 损坏', () => {
     });
   });
 
-  it('符号链接冒充数据文件 → 视为损坏,不跟随', async () => {
+  it('符号链接冒充固定数据文件 → state_dir_unsafe(R20-7.2),不跟随', async () => {
     const w = await newWork('rs-link-');
     await put(w, 'state.json', STATE);
     await withLock(w, (l) => commitSnapshot(w.io, l));
@@ -359,9 +359,9 @@ describe('R20-5.6 未完成提交 vs 损坏', () => {
     await remove(w.io, rsiFile(w, 'state.json'));
     await symlink(w.io, rsiFile(w, 'real.json'), rsiFile(w, 'state.json'));
     await expect(withLock(w, (l) => recoverSnapshot(w.io, l))).rejects.toMatchObject({
-      reason: 'state_invalid',
+      reason: 'state_dir_unsafe',
     });
-    expect(await readVerified(w.io, ['state.json'])).toEqual({ status: 'invalid' });
+    expect(await readVerified(w.io, ['state.json'])).toEqual({ status: 'unsafe' });
   });
 });
 
@@ -378,12 +378,12 @@ describe('R20-5.6 只读方零写入、路径安全', () => {
     expect((await lstat(w.state)).mode & 0o777).toBe(0o755); // 权限也没动
   });
 
-  it('只读方遇到 rsi/ 是符号链接 → invalid;不跟随', async () => {
+  it('只读方遇到 rsi/ 是符号链接 → unsafe(state_dir_unsafe);不跟随', async () => {
     const w = await newWork('rs-ro-link-');
     await mkdirp(w.io, path.join(w.state, 'elsewhere'), 0o700);
     await symlink(w.io, path.join(w.state, 'elsewhere'), path.join(w.state, 'rsi'));
-    expect(await readSnapshot(w.io)).toEqual({ kind: 'invalid' });
-    expect(await readVerified(w.io, ['state.json'])).toEqual({ status: 'invalid' });
+    expect(await readSnapshot(w.io)).toEqual({ kind: 'unsafe' });
+    expect(await readVerified(w.io, ['state.json'])).toEqual({ status: 'unsafe' });
   });
 
   it('signals/<agent> 父目录是符号链接 → 写入方扫描视为损坏、只读方 invalid(不穿链接读文件)', async () => {
@@ -402,14 +402,14 @@ describe('R20-5.6 只读方零写入、路径安全', () => {
     });
   });
 
-  it('硬链接的数据文件(nlink>1)不读:写入方视为损坏、只读方 invalid', async () => {
+  it('硬链接的固定数据文件(nlink>1)不读:写入方 state_dir_unsafe、只读方 unsafe', async () => {
     const w = await newWork('rs-hardlink-');
     await put(w, 'state.json', STATE);
     await withLock(w, (l) => commitSnapshot(w.io, l));
     await hardlink(w.io, rsiFile(w, 'state.json'), path.join(w.state, 'alias.json'));
     await expect(withLock(w, (l) => recoverSnapshot(w.io, l))).rejects.toMatchObject({
-      reason: 'state_invalid',
+      reason: 'state_dir_unsafe',
     });
-    expect(await readVerified(w.io, ['state.json'])).toEqual({ status: 'invalid' });
+    expect(await readVerified(w.io, ['state.json'])).toEqual({ status: 'unsafe' });
   });
 });
