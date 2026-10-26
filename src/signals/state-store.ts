@@ -61,6 +61,19 @@ async function readExistingSalt(file: string): Promise<string | undefined> {
   return salt;
 }
 
+/**
+ * 文件存在、是普通文件但还是空的 = 别的进程刚 O_EXCL 创建、尚未写入内容:在有限预算内等它写完(约 1 秒)。
+ * 符号链接 / 非普通文件 / 非空内容不等,照常交给 readExistingSalt 判(不改变既有的 fail-closed 语义)。
+ * 预算用完仍为空 → 照旧报 SaltError(格式非法);这是 fail-closed,不是可靠的等待协议。
+ */
+async function settleEmptySalt(file: string): Promise<void> {
+  for (let i = 0; i < SALT_EMPTY_RETRIES; i++) {
+    const st = await lstat(file).catch(() => undefined);
+    if (st === undefined || st.isSymbolicLink() || !st.isFile() || st.size > 0) return;
+    await sleep(SALT_EMPTY_RETRY_MS);
+  }
+}
+
 export async function loadSalt(
   io: IoContext,
   opts: {
@@ -70,6 +83,7 @@ export async function loadSalt(
   },
 ): Promise<SaltResult> {
   const file = saltPath(io);
+  await settleEmptySalt(file);
   const existing = await readExistingSalt(file);
   if (existing !== undefined) return { salt: existing, persisted: true };
   if (!opts.create) return { salt: newSalt(), persisted: false };
@@ -82,12 +96,8 @@ export async function loadSalt(
     // 已被别的进程(或上一轮)建好:不覆盖,读它;其它错误照抛
     if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
   }
-  // 回读:以最终落盘的那份为准。赢家 O_EXCL 创建与写入之间别人可能读到空文件,只对「空」重试
-  for (let i = 0; i < SALT_EMPTY_RETRIES; i++) {
-    const st = await lstat(file).catch(() => undefined);
-    if (st === undefined || !st.isFile() || st.size > 0) break;
-    await sleep(SALT_EMPTY_RETRY_MS);
-  }
+  // 回读:以最终落盘的那份为准。赢家 O_EXCL 创建与写入之间别人可能读到空文件,只对「空」等待
+  await settleEmptySalt(file);
   const final = await readExistingSalt(file);
   if (final === undefined) throw new SaltError('盐文件写入后读不到');
   return { salt: final, persisted: true };

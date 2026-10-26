@@ -31,7 +31,7 @@ import { canonicalJson } from '../io/canonical-json.js';
 import type { IoContext } from '../io/paths.js';
 import { lstat, readBytes, readDir } from '../io/read-fs.js';
 import { createExclusive, remove, rename, WriteDeniedError } from '../io/safe-fs.js';
-import { rsiDir, type RsiLockHandle } from './lock.js';
+import { rsiDir, rsiDirReadonly, type RsiLockHandle } from './lock.js';
 
 /** 快照相关的 fail-closed:`reason` 是 §20.3 总表里的原因码(`RSI_FAIL_CLOSED reason=…`,退出 3) */
 export class RsiSnapshotError extends Error {
@@ -93,9 +93,37 @@ interface Bases {
   state: string;
 }
 
+/** 写入方:必要时建目录(见 {@link rsiDir}) */
 async function basesOf(io: IoContext): Promise<Bases> {
   const rsi = await rsiDir(io);
   return { rsi, state: path.dirname(rsi) };
+}
+
+/** 只读方:不建目录、不 chmod;状态目录 / `rsi/` 不存在 → `missing`(= 清单缺失) */
+async function basesReadonly(
+  io: IoContext,
+): Promise<{ kind: 'ok'; bases: Bases } | { kind: 'missing' } | { kind: 'unsafe' }> {
+  const d = await rsiDirReadonly(io);
+  if (d.kind !== 'ok') return d;
+  return { kind: 'ok', bases: { rsi: d.dir, state: path.dirname(d.dir) } };
+}
+
+/** `signals` / `signals/<agent>` 这类父目录必须是真实目录(不穿符号链接);不存在返回 `missing` */
+async function dirState(dir: string): Promise<'ok' | 'missing' | 'unsafe'> {
+  const st = await lstat(dir).catch((e: NodeJS.ErrnoException) => e.code ?? 'ERR');
+  if (typeof st === 'string') return st === 'ENOENT' ? 'missing' : 'unsafe';
+  return st.isSymbolicLink() || !st.isDirectory() ? 'unsafe' : 'ok';
+}
+
+/** 一个白名单 name 的父目录链(相对 `.state/`)是否都是真实目录 */
+async function parentsState(b: Bases, name: string): Promise<'ok' | 'missing' | 'unsafe'> {
+  if (RSI_SNAPSHOT_FIXED_NAMES.includes(name)) return 'ok'; // 固定名的父目录 = rsi/,已由 rsiDir* 检查
+  const [kind, agent] = name.split('/') as [string, string];
+  for (const d of [path.join(b.state, kind), path.join(b.state, kind, agent)]) {
+    const r = await dirState(d);
+    if (r !== 'ok') return r;
+  }
+  return 'ok';
 }
 
 /** 只按白名单拼路径:固定名在 `.state/rsi/` 下,月文件在 `.state/` 下 */
@@ -114,7 +142,10 @@ export type SnapshotRead =
   { kind: 'missing' } | { kind: 'invalid' } | { kind: 'ok'; snapshot: RsiSnapshot };
 
 export async function readSnapshot(io: IoContext): Promise<SnapshotRead> {
-  const file = snapshotPath((await basesOf(io)).rsi);
+  const b = await basesReadonly(io);
+  if (b.kind === 'missing') return { kind: 'missing' };
+  if (b.kind === 'unsafe') return { kind: 'invalid' };
+  const file = snapshotPath(b.bases.rsi);
   let st;
   try {
     st = await lstat(file);
@@ -143,7 +174,8 @@ async function readRegular(file: string): Promise<Buffer | 'missing' | 'unsafe'>
   } catch (e) {
     return (e as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'unsafe';
   }
-  if (st.isSymbolicLink() || !st.isFile()) return 'unsafe';
+  // 硬链接(nlink>1)的名字可能指向状态目录之外的 inode:与 safe-fs 的写入口径一致,一律不读
+  if (st.isSymbolicLink() || !st.isFile() || st.nlink > 1) return 'unsafe';
   try {
     return Buffer.from(await readBytes(file));
   } catch (e) {
@@ -157,6 +189,9 @@ async function scanCurrent(b: Bases): Promise<{ name: string; bytes: Buffer }[]>
   for (const n of RSI_SNAPSHOT_FIXED_NAMES) names.push(n);
   for (const kind of ['signals', 'sessions']) {
     for (const agent of AGENTS) {
+      const parents = await parentsState(b, `${kind}/${agent}/x`);
+      if (parents === 'missing') continue;
+      if (parents === 'unsafe') throw new RsiSnapshotError('signal_store_corrupt');
       let entries;
       try {
         entries = await readDir(path.join(b.state, kind, agent));
@@ -280,7 +315,10 @@ export async function readVerified(
   opts: { onMismatch?: () => Promise<void> | void } = {},
 ): Promise<VerifiedRead> {
   for (const n of names) if (!isRsiSnapshotName(n)) throw new RsiSnapshotError('internal');
-  const b = await basesOf(io);
+  const rb = await basesReadonly(io);
+  if (rb.kind === 'missing') return { status: 'no_snapshot' };
+  if (rb.kind === 'unsafe') return { status: 'invalid' };
+  const b = rb.bases;
   for (let attempt = 0; attempt < 2; attempt++) {
     const snap = await readSnapshot(io);
     if (snap.kind === 'missing') return { status: 'no_snapshot' };
@@ -290,7 +328,9 @@ export async function readVerified(
     let consistent = true;
     for (const name of names) {
       const entry = listed.get(name);
-      const got = await readRegular(fileOf(b, name));
+      const parents = await parentsState(b, name);
+      if (parents === 'unsafe') return { status: 'invalid' };
+      const got = parents === 'missing' ? 'missing' : await readRegular(fileOf(b, name));
       if (got === 'unsafe') return { status: 'invalid' };
       if (got === 'missing') {
         if (entry !== undefined) consistent = false;

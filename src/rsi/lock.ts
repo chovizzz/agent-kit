@@ -83,6 +83,9 @@ export interface RsiLockHandle {
 }
 
 /** 本进程内已持有的锁(按真实路径);同一进程第二次获取 = 编程错误(R20-5.4) */
+/** 读入比较的上限;超过它 = 不是锁(`state_dir_unsafe`)。解析仍只接受 {@link RSI_LOCK_MAX_BYTES} 以内的内容 */
+const RSI_LOCK_READ_CAP = 64 * 1024;
+
 const heldInProcess = new Set<string>();
 
 /** 存活判据(R20-5.5):发送成功或 `EPERM`(存在但无权发信号)= 存活;只有 `ESRCH` 才是「没有这个进程」。其它错误同样按存活(保守,不回收)。 */
@@ -99,16 +102,43 @@ export function makeIsAlive(kill: (pid: number, signal: 0) => unknown): (pid: nu
 const defaultAlive = makeIsAlive((pid, sig) => process.kill(pid, sig));
 const defaultRandomHex = (bytes: number): string => randomBytes(bytes).toString('hex');
 
-/** 状态目录的真实路径(必要时先建);`rsi/` 子目录必须是真实目录,权限收紧到 0700 */
+/**
+ * **写入方**用:状态目录的真实路径(必要时先建);`rsi/` 子目录必须是真实目录,权限收紧到 0700。
+ * 已存在但是符号链接 / 不是目录 → `state_dir_unsafe`(不顺着链接、不 mkdir 进去)。
+ */
 export async function rsiDir(io: IoContext): Promise<string> {
   await mkdirp(io, io.stateDir, RSI_DIR_MODE);
   const stateReal = await realpath(io.stateDir);
   const dir = path.join(stateReal, 'rsi');
+  const pre = await lstat(dir).catch(() => undefined);
+  if (pre !== undefined && (pre.isSymbolicLink() || !pre.isDirectory())) {
+    throw new RsiLockError('state_dir_unsafe');
+  }
   await mkdirp(io, dir, RSI_DIR_MODE);
   const st = await lstat(dir);
   if (st.isSymbolicLink() || !st.isDirectory()) throw new RsiLockError('state_dir_unsafe');
   if ((st.mode & 0o077) !== 0) await chmod(io, dir, RSI_DIR_MODE);
   return dir;
+}
+
+/**
+ * **只读方**用:同样的路径解析,但绝不创建目录、不 chmod(只读命令零写入,§20.8.1)。
+ * 状态目录或 `rsi/` 不存在 → `missing`;`rsi/` 是符号链接 / 不是目录 → `unsafe`。
+ */
+export async function rsiDirReadonly(
+  io: IoContext,
+): Promise<{ kind: 'ok'; dir: string } | { kind: 'missing' } | { kind: 'unsafe' }> {
+  let stateReal: string;
+  try {
+    stateReal = await realpath(io.stateDir);
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'ENOENT' ? { kind: 'missing' } : { kind: 'unsafe' };
+  }
+  const dir = path.join(stateReal, 'rsi');
+  const st = await lstat(dir).catch((e: NodeJS.ErrnoException) => e.code ?? 'ERR');
+  if (typeof st === 'string') return st === 'ENOENT' ? { kind: 'missing' } : { kind: 'unsafe' };
+  if (st.isSymbolicLink() || !st.isDirectory()) return { kind: 'unsafe' };
+  return { kind: 'ok', dir };
 }
 
 type LockRead =
@@ -127,9 +157,11 @@ async function readLock(file: string): Promise<LockRead> {
   }
   if (st.isSymbolicLink() || !st.isFile()) return { state: 'unsafe' };
   const ino = `${st.dev}:${st.ino}`;
+  // 远大于正常内容的「锁文件」不是我们写的:不读、不比较、不回收,fail-closed(避免用空缓冲冒充「逐字节复读」)
+  if (st.size > RSI_LOCK_READ_CAP) return { state: 'unsafe' };
   let raw: Buffer;
   try {
-    raw = st.size > RSI_LOCK_MAX_BYTES ? Buffer.alloc(0) : Buffer.from(await readBytes(file));
+    raw = Buffer.from(await readBytes(file));
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { state: 'absent' };
     return { state: 'unsafe' };
@@ -253,13 +285,10 @@ export async function peekRsiLock(
 ): Promise<'free' | 'held' | 'held_over_ttl' | 'stale' | 'unknown'> {
   const alive = deps.isAlive ?? defaultAlive;
   const now = deps.now ?? ((): Date => new Date());
-  let file: string;
-  try {
-    file = path.join(await realpath(io.stateDir), 'rsi', 'lock');
-  } catch {
-    return 'free';
-  }
-  const cur = await readLock(file);
+  const d = await rsiDirReadonly(io);
+  if (d.kind === 'missing') return 'free';
+  if (d.kind === 'unsafe') return 'unknown';
+  const cur = await readLock(path.join(d.dir, 'lock'));
   if (cur.state === 'absent') return 'free';
   if (cur.state === 'unsafe') return 'unknown';
   if (cur.state === 'bad') {

@@ -6,7 +6,7 @@ import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { Signal } from '../../src/contracts/signal.js';
 import { exists, lstat, readBytes, readText } from '../../src/io/read-fs.js';
-import { mkdirp, remove, symlink, writeFile } from '../../src/io/safe-fs.js';
+import { hardlink, mkdirp, remove, symlink, writeFile } from '../../src/io/safe-fs.js';
 import { acquireRsiLock, type RsiLockHandle } from '../../src/rsi/lock.js';
 import {
   RsiSnapshotError,
@@ -358,6 +358,55 @@ describe('R20-5.6 未完成提交 vs 损坏', () => {
     await put(w, 'real.json', '{}');
     await remove(w.io, rsiFile(w, 'state.json'));
     await symlink(w.io, rsiFile(w, 'real.json'), rsiFile(w, 'state.json'));
+    await expect(withLock(w, (l) => recoverSnapshot(w.io, l))).rejects.toMatchObject({
+      reason: 'state_invalid',
+    });
+    expect(await readVerified(w.io, ['state.json'])).toEqual({ status: 'invalid' });
+  });
+});
+
+describe('R20-5.6 只读方零写入、路径安全', () => {
+  it('状态目录不存在 / rsi 目录不存在:readSnapshot、readVerified 返回 missing / no_snapshot,不创建任何目录(变异:只读路径建目录 → 红)', async () => {
+    const w = await newWork('rs-ro-');
+    expect(await exists(w.state)).toBe(false);
+    expect(await readSnapshot(w.io)).toEqual({ kind: 'missing' });
+    expect(await readVerified(w.io, ['state.json'])).toEqual({ status: 'no_snapshot' });
+    expect(await exists(w.state)).toBe(false);
+    await mkdirp(w.io, w.state, 0o755);
+    expect(await readVerified(w.io, ['state.json'])).toEqual({ status: 'no_snapshot' });
+    expect(await exists(path.join(w.state, 'rsi'))).toBe(false);
+    expect((await lstat(w.state)).mode & 0o777).toBe(0o755); // 权限也没动
+  });
+
+  it('只读方遇到 rsi/ 是符号链接 → invalid;不跟随', async () => {
+    const w = await newWork('rs-ro-link-');
+    await mkdirp(w.io, path.join(w.state, 'elsewhere'), 0o700);
+    await symlink(w.io, path.join(w.state, 'elsewhere'), path.join(w.state, 'rsi'));
+    expect(await readSnapshot(w.io)).toEqual({ kind: 'invalid' });
+    expect(await readVerified(w.io, ['state.json'])).toEqual({ status: 'invalid' });
+  });
+
+  it('signals/<agent> 父目录是符号链接 → 写入方扫描视为损坏、只读方 invalid(不穿链接读文件)', async () => {
+    const w = await newWork('rs-parent-link-');
+    await put(w, 'state.json', STATE);
+    await withLock(w, (l) => commitSnapshot(w.io, l));
+    await mkdirp(w.io, path.join(w.state, 'other'), 0o700);
+    await writeFile(w.io, path.join(w.state, 'other', '202610.jsonl'), '', { mode: 0o600 });
+    await mkdirp(w.io, path.join(w.state, 'signals'), 0o700);
+    await symlink(w.io, path.join(w.state, 'other'), path.join(w.state, 'signals', 'claude'));
+    await expect(withLock(w, (l) => recoverSnapshot(w.io, l))).rejects.toMatchObject({
+      reason: 'signal_store_corrupt',
+    });
+    expect(await readVerified(w.io, ['signals/claude/202610.jsonl'])).toEqual({
+      status: 'invalid',
+    });
+  });
+
+  it('硬链接的数据文件(nlink>1)不读:写入方视为损坏、只读方 invalid', async () => {
+    const w = await newWork('rs-hardlink-');
+    await put(w, 'state.json', STATE);
+    await withLock(w, (l) => commitSnapshot(w.io, l));
+    await hardlink(w.io, rsiFile(w, 'state.json'), path.join(w.state, 'alias.json'));
     await expect(withLock(w, (l) => recoverSnapshot(w.io, l))).rejects.toMatchObject({
       reason: 'state_invalid',
     });

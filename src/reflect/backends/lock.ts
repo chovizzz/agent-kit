@@ -5,8 +5,8 @@
  * 这条指向 cwd 目录的符号链接,过期判断用链接自身的 mtime。拿不到锁**不排队等**,直接报 busy。
  *
  * R20 A1(contracts §20.5 R20-5.2、§20.9 第 7 条)残余:本锁整段回调期间**不续期**,超过 15 分钟的调用(judge 最多约 100 分钟)期间它可能被另一个进程回收。
- * 新版本里 reflect / judge 的真跑先拿外层 `rsi/lock`(`src/rsi/lock.ts`,锁序 `rsi/lock` → `reflect/llm.lock`),同一仓库的新版本进程因此互斥;
- * 只剩「新旧两个版本并发」时这一残余(旧版本进程不拿 `rsi/lock`)。本文件的 mtime 过期语义不变。
+ * 契约要求 reflect / judge 的真跑先拿外层 `rsi/lock`(`src/rsi/lock.ts`,锁序 `rsi/lock` → `reflect/llm.lock`),使同一仓库的 reflect / judge 互斥;
+ * 该接线随 A2 落地(A1 只交付库,命令入口尚未接线),在那之前这个残余没有外层锁兜底;接线之后只剩「新旧两个版本并发」时的残余。本文件的 mtime 过期语义不变。
  */
 import * as path from 'node:path';
 import type { IoContext } from '../../io/paths.js';

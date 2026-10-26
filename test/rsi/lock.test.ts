@@ -105,6 +105,34 @@ describe('R20-5.3 锁文件位置与权限', () => {
     expect(await exists(path.join(w.state, 'elsewhere', 'lock'))).toBe(false);
   });
 
+  it('rsi 是普通文件(不是目录)→ state_dir_unsafe(而不是裸的 mkdir 错误)', async () => {
+    const w = await newWork('rl-rsifile-');
+    await mkdirp(w.io, w.state, 0o700);
+    await writeFile(w.io, path.join(w.state, 'rsi'), 'x');
+    expect(await kind(acquireRsiLock(w.io))).toBe('state_dir_unsafe');
+    expect(await readText(path.join(w.state, 'rsi'))).toBe('x');
+  });
+
+  it('远大于锁内容的「锁文件」不比较不回收:state_dir_unsafe,文件原样;中等大小的损坏内容满 10 秒后按真实字节复读后回收', async () => {
+    const w = await newWork('rl-big-');
+    const big = 'x'.repeat(200 * 1024);
+    await plant(w, big);
+    const m = (await lstat(lockFile(w))).mtimeMs;
+    const late = { isAlive: () => true, now: () => new Date(m + 60_000) };
+    expect(await kind(acquireRsiLock(w.io, late))).toBe('state_dir_unsafe');
+    expect((await readText(lockFile(w))).length).toBe(big.length);
+    await plant(w, 'y'.repeat(10 * 1024)); // > 4096 字节(解析不接受)但在读取上限内
+    const m2 = (await lstat(lockFile(w))).mtimeMs;
+    const got = await acquireRsiLock(w.io, { isAlive: () => true, now: () => new Date(m2 + 60_000) });
+    await got.release();
+  });
+
+  it('peekRsiLock 与 rsiDirReadonly 零写入:状态目录不存在时返回 free,不建目录', async () => {
+    const w = await newWork('rl-peek-ro-');
+    expect(await peekRsiLock(w.io)).toBe('free');
+    expect(await exists(w.state)).toBe(false);
+  });
+
   it('锁文件本身是符号链接 → state_dir_unsafe(不跟随、不覆盖)', async () => {
     const w = await newWork('rl-symlock-');
     await mkdirp(w.io, path.join(w.state, 'rsi'), 0o700);

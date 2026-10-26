@@ -74,6 +74,22 @@ describe('盐(Q-N7)', () => {
     expect(await readText(saltPath(w.io))).toBe(`${theirs}\n`);
   });
 
+  it('别的进程刚 O_EXCL 创建、尚未写入的空盐文件:首次读取也等它写完(不是直接 SaltError)(变异:去掉初始等待 → 红)', async () => {
+    const w = await newWork('ss-salt-empty-');
+    const theirs = 'cd'.repeat(32);
+    await loadSalt(w.io, { create: true }); // 建 state 目录
+    await remove(w.io, saltPath(w.io));
+    await writeFile(w.io, saltPath(w.io), '', { mode: 0o600 });
+    const filler = new Promise<void>((resolve) =>
+      setTimeout(() => {
+        void writeFile(w.io, saltPath(w.io), `${theirs}\n`, { mode: 0o600 }).then(resolve);
+      }, 150),
+    );
+    const r = await loadSalt(w.io, { create: true });
+    await filler;
+    expect(r).toEqual({ salt: theirs, persisted: true });
+  });
+
   it('已存在但格式非法 / 权限宽于 0600 / 是符号链接 → SaltError,不静默重生成', async () => {
     const w = await newWork('ss-bad-');
     const good = (await loadSalt(w.io, { create: true })).salt;
