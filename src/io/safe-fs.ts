@@ -18,12 +18,14 @@ export class WriteDeniedError extends Error {
   readonly code = 'IO_WRITE_DENIED';
 }
 
-/** 路径本身(不跟随符号链接)此刻是不是符号链接;不存在 = false */
+/** 路径本身(不跟随符号链接)此刻是不是符号链接;不存在 = false;无法判断(权限、IO 错误等)= 拒绝 */
 function isSymlinkNow(p: string): boolean {
   try {
     return fs.lstatSync(p).isSymbolicLink();
-  } catch {
-    return false;
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return false;
+    throw new WriteDeniedError(`无法确认路径是否为符号链接,拒绝写入:${p}`);
   }
 }
 
