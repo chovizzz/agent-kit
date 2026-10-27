@@ -31,7 +31,7 @@ import {
   CrashError,
   KEY_A,
   KEY_B,
-  SECRET,
+  EXCERPT_MARK,
   addSignals,
   allText,
   countsDoc,
@@ -95,7 +95,7 @@ const markOf = async (dir: string): Promise<{ reason: string } | null> => {
 async function expectTaintedClean(s: Svc, kind: 'reflect' | 'promote', id: string): Promise<void> {
   const dir = path.join(s.state, kind, id);
   expect(await exists(path.join(dir, 'TAINTED')), `${kind}/${id} 有标记`).toBe(true);
-  expect(await allText(dir), `${kind}/${id} 无摘录`).not.toContain(SECRET);
+  expect(await allText(dir), `${kind}/${id} 无摘录`).not.toContain(EXCERPT_MARK);
   const files = await listFiles(dir);
   expect(files.filter((x) => /apply\.patch|promote\.patch|pr-body\.md/.test(x))).toEqual([]);
   expect(await exists(path.join(dir, 'report.json'))).toBe(true);
@@ -157,7 +157,7 @@ describe('taintNewlyExcluded(exclude)', () => {
       runsMarked: 0,
       promotesMarked: 0,
     });
-    expect(await allText(runDirOf(s, 'run-x'))).toContain(SECRET);
+    expect(await allText(runDirOf(s, 'run-x'))).toContain(EXCERPT_MARK);
     await setRsiToml(s, `exclude_dirs = [${JSON.stringify(rootA)}]\n`);
     expect(await withLock(s, (l) => taintNewlyExcluded(s.ctx, l, { source: 'exclude' }))).toEqual({
       runsMarked: 1,
@@ -193,7 +193,7 @@ describe('taintNewlyExcluded(exclude)', () => {
     expect(
       (await withLock(s, (l) => taintNewlyExcluded(s.ctx, l, { source: 'exclude' }))).runsMarked,
     ).toBe(0);
-    expect(await allText(runDirOf(s, 'run-x'))).toContain(SECRET);
+    expect(await allText(runDirOf(s, 'run-x'))).toContain(EXCERPT_MARK);
   });
 
   it('配置不可用:exclude_invalid 抛 fail-closed;配置被关(disabled)= 零结果', async () => {
@@ -202,7 +202,7 @@ describe('taintNewlyExcluded(exclude)', () => {
     await expect(
       withLock(s, (l) => taintNewlyExcluded(s.ctx, l, { source: 'exclude' })),
     ).rejects.toMatchObject({ reason: 'exclude_invalid' });
-    expect(await allText(runDirOf(s, 'run-x'))).toContain(SECRET);
+    expect(await allText(runDirOf(s, 'run-x'))).toContain(EXCERPT_MARK);
     await writeFile(s.f.fx, s.f.cfgFile, '[rsi]\nenabled = false\n', { mode: 0o600 });
     expect(await withLock(s, (l) => taintNewlyExcluded(s.ctx, l, { source: 'exclude' }))).toEqual({
       runsMarked: 0,
@@ -307,7 +307,7 @@ describe('崩溃注入:每个写边界崩一次,重跑幂等(R20-4.7 续做)', (
         const dir = path.join(s.state, kind, id);
         if (await exists(path.join(dir, 'TAINTED'))) {
           expect(await allText(dir), `crash #${k} ${hits[k - 1]}:${kind}/${id}`).not.toContain(
-            SECRET,
+            EXCERPT_MARK,
           );
           expect((await listFiles(dir)).filter((x) => /patch|pr-body/.test(x))).toEqual([]);
         }
@@ -323,7 +323,7 @@ describe('崩溃注入:每个写边界崩一次,重跑幂等(R20-4.7 续做)', (
       const again = await withLock(s, (l) => resumeTaint(s.ctx, l));
       expect(again.runsCompleted + again.promotesCompleted, `#${k} 幂等`).toBe(0);
       // 对照:未命中的 run 永远没被碰
-      expect(await allText(runDirOf(s, 'run-ok'))).toContain(SECRET);
+      expect(await allText(runDirOf(s, 'run-ok'))).toContain(EXCERPT_MARK);
     }
   }, 120_000);
 
@@ -422,7 +422,7 @@ describe('resumeTaint', () => {
     await stagePromote(t, 'promo-unlinked', null);
     await withLock(t, (l) => resumeTaint(t.ctx, l));
     expect(await exists(path.join(promoteDirOf(t, 'promo-unlinked'), 'TAINTED'))).toBe(false);
-    expect(await allText(promoteDirOf(t, 'promo-unlinked'))).toContain(SECRET);
+    expect(await allText(promoteDirOf(t, 'promo-unlinked'))).toContain(EXCERPT_MARK);
   });
 
   it('损坏的标记(空文件 / 半个 JSON / 是目录)也算已标记,照样清理', async () => {
@@ -432,7 +432,7 @@ describe('resumeTaint', () => {
       if (body === null) await mkdirp(s.f.fx, mark, 0o700);
       else await put(s, mark, body);
       await withLock(s, (l) => resumeTaint(s.ctx, l));
-      expect(await allText(runDirOf(s, 'run-x'))).not.toContain(SECRET);
+      expect(await allText(runDirOf(s, 'run-x'))).not.toContain(EXCERPT_MARK);
       expect(await exists(path.join(runDirOf(s, 'run-x'), 'apply.patch'))).toBe(false);
     }
   });
@@ -441,22 +441,22 @@ describe('resumeTaint', () => {
     const s = await world('resume-sweep-');
     const run = runDirOf(s, 'run-x');
     const sentinel = path.join(s.f.repo, 'sentinel.txt');
-    await put(s, sentinel, `${SECRET}-sentinel`);
+    await put(s, sentinel, `${EXCERPT_MARK}-sentinel`);
     await put(s, path.join(run, 'proposals', '2026-10-26-001.yaml'), '{{{ not yaml');
-    await put(s, path.join(run, 'proposals', 'stray.yml'), SECRET);
-    await put(s, path.join(run, 'proposals', 'x.yaml.abcd.tmp'), SECRET);
+    await put(s, path.join(run, 'proposals', 'stray.yml'), EXCERPT_MARK);
+    await put(s, path.join(run, 'proposals', 'x.yaml.abcd.tmp'), EXCERPT_MARK);
     await mkdirp(s.f.fx, path.join(run, 'proposals', 'sub'), 0o700);
-    await put(s, path.join(run, 'proposals', 'sub', 'y.yaml'), SECRET);
-    await put(s, path.join(run, 'rules', 'team', 'broken.md'), `no frontmatter ${SECRET}`);
+    await put(s, path.join(run, 'proposals', 'sub', 'y.yaml'), EXCERPT_MARK);
+    await put(s, path.join(run, 'rules', 'team', 'broken.md'), `no frontmatter ${EXCERPT_MARK}`);
     await symlink(s.f.fx, sentinel, path.join(run, 'rules', 'team', 'link.md'));
-    await put(s, path.join(run, 'notes.txt'), SECRET);
+    await put(s, path.join(run, 'notes.txt'), EXCERPT_MARK);
     await put(
       s,
       path.join(run, 'TAINTED'),
       canonicalJson({ reason: 'exclude', at: '2026-10-26T00:00:00.000Z' }),
     );
     await withLock(s, (l) => resumeTaint(s.ctx, l));
-    expect(await allText(run)).not.toContain(SECRET);
+    expect(await allText(run)).not.toContain(EXCERPT_MARK);
     const files = await listFiles(run);
     expect(files).toContain('proposals/2026-10-26-001.yaml');
     expect((await readBytes(path.join(run, 'proposals', '2026-10-26-001.yaml'))).length).toBe(0);
@@ -472,16 +472,16 @@ describe('resumeTaint', () => {
       expect(files, gone).not.toContain(gone);
     }
     // 链接 / 硬链接指向的目标一个字节没动
-    expect(await readText(sentinel)).toBe(`${SECRET}-sentinel`);
+    expect(await readText(sentinel)).toBe(`${EXCERPT_MARK}-sentinel`);
   });
 
   it('report.json 只有真实普通文件才被保留:目录 / 符号链接冒名的连同里面的东西一起清掉(run 与 promote)', async () => {
     const s = await world('resume-report-');
     const sentinel = path.join(s.f.repo, 'sentinel.txt');
-    await put(s, sentinel, `${SECRET}-sentinel`);
+    await put(s, sentinel, `${EXCERPT_MARK}-sentinel`);
     const run = runDirOf(s, 'run-x');
     await remove(s.f.fx, path.join(run, 'report.json'));
-    await put(s, path.join(run, 'report.json', 'apply.patch'), SECRET);
+    await put(s, path.join(run, 'report.json', 'apply.patch'), EXCERPT_MARK);
     await put(
       s,
       path.join(run, 'TAINTED'),
@@ -496,10 +496,10 @@ describe('resumeTaint', () => {
       canonicalJson({ reason: 'exclude', at: '2026-10-26T00:00:00.000Z' }),
     );
     await withLock(s, (l) => resumeTaint(s.ctx, l));
-    expect(await allText(run)).not.toContain(SECRET);
+    expect(await allText(run)).not.toContain(EXCERPT_MARK);
     expect(await listFiles(run)).not.toContain('report.json/apply.patch');
     expect(await exists(path.join(promo, 'report.json'))).toBe(false);
-    expect(await readText(sentinel)).toBe(`${SECRET}-sentinel`);
+    expect(await readText(sentinel)).toBe(`${EXCERPT_MARK}-sentinel`);
   });
 
   it('暂存根 reflect/ 是符号链接 → resumeTaint / taintNewlyExcluded 都 fail-closed state_dir_unsafe,不碰链接目标', async () => {
@@ -513,7 +513,7 @@ describe('resumeTaint', () => {
     await expect(
       withLock(s, (l) => taintNewlyExcluded(s.ctx, l, { source: 'exclude' })),
     ).rejects.toMatchObject({ reason: 'state_dir_unsafe' });
-    expect(await allText(`${reflect}-real`)).toContain(SECRET);
+    expect(await allText(`${reflect}-real`)).toContain(EXCERPT_MARK);
   });
 
   it('异常的 proposals/<id>.yaml(符号链接 / 同名目录)用占位保住编号:每个写点各崩一次,重跑后原名仍在、为空、无摘录', async () => {
@@ -521,11 +521,11 @@ describe('resumeTaint', () => {
       const s = await world(prefix);
       const run = runDirOf(s, 'run-x');
       const sentinel = path.join(s.f.repo, 'sentinel.txt');
-      await put(s, sentinel, `${SECRET}-sentinel`);
+      await put(s, sentinel, `${EXCERPT_MARK}-sentinel`);
       await remove(s.f.fx, path.join(run, 'proposals', '2026-10-26-001.yaml'));
       await symlink(s.f.fx, sentinel, path.join(run, 'proposals', '2026-10-26-001.yaml'));
       await remove(s.f.fx, path.join(run, 'proposals', '2026-10-26-002.yaml'));
-      await put(s, path.join(run, 'proposals', '2026-10-26-002.yaml', 'inner.txt'), SECRET);
+      await put(s, path.join(run, 'proposals', '2026-10-26-002.yaml', 'inner.txt'), EXCERPT_MARK);
       await put(
         s,
         path.join(run, 'TAINTED'),
@@ -559,8 +559,8 @@ describe('resumeTaint', () => {
         expect(st.size, `#${k} ${name} 为空`).toBe(0);
       }
       expect(await listFiles(dir), `#${k}`).toEqual(['2026-10-26-001.yaml', '2026-10-26-002.yaml']);
-      expect(await allText(runDirOf(s, 'run-x')), `#${k}`).not.toContain(SECRET);
-      expect(await readText(path.join(s.f.repo, 'sentinel.txt'))).toBe(`${SECRET}-sentinel`);
+      expect(await allText(runDirOf(s, 'run-x')), `#${k}`).not.toContain(EXCERPT_MARK);
+      expect(await readText(path.join(s.f.repo, 'sentinel.txt'))).toBe(`${EXCERPT_MARK}-sentinel`);
     }
   }, 120_000);
 
@@ -568,12 +568,12 @@ describe('resumeTaint', () => {
     const kinds = {
       hardlink: async (s: Svc, run: string): Promise<void> => {
         const sentinel = path.join(s.f.repo, 'sentinel.txt');
-        await put(s, sentinel, `${SECRET}-sentinel`);
+        await put(s, sentinel, `${EXCERPT_MARK}-sentinel`);
         await hardlink(s.f.fx, sentinel, path.join(run, 'proposals', 'linked.yaml'));
       },
       outside: async (s: Svc, run: string): Promise<void> => {
         const outside = path.join(s.f.dir, 'outside.txt'); // 在 fx 的写入根内、在服务 io 的写入根(repo)外
-        await put(s, outside, `${SECRET}-outside`);
+        await put(s, outside, `${EXCERPT_MARK}-outside`);
         await symlink(s.f.fx, outside, path.join(run, 'rules', 'team', 'out.md'));
       },
       dangling: async (s: Svc, run: string): Promise<void> => {
@@ -625,7 +625,7 @@ describe('resumeTaint', () => {
       ]);
       expect(await exists(path.join(promoteDirOf(s, 'promo-x'), 'TAINTED'))).toBe(true);
       if (name === 'outside')
-        expect(await readText(path.join(s.f.dir, 'outside.txt'))).toBe(`${SECRET}-outside`);
+        expect(await readText(path.join(s.f.dir, 'outside.txt'))).toBe(`${EXCERPT_MARK}-outside`);
     }
   });
 
@@ -644,7 +644,7 @@ describe('resumeTaint', () => {
     expect((await markOf(run))?.reason).toBe('exclude');
     expect((await listFiles(run)).sort()).toEqual([...filesBefore, 'TAINTED'].sort());
     expect((await allText(run)).replace(/\{[^{}]*"reason"[^{}]*\}\s*/, '')).toBe(textBefore);
-    expect(await allText(run)).toContain(SECRET); // 没清
+    expect(await allText(run)).toContain(EXCERPT_MARK); // 没清
     expect(await exists(path.join(run, 'apply.patch'))).toBe(true);
   });
 
@@ -668,7 +668,7 @@ describe('resumeTaint', () => {
         withLock(s, (l) => taintNewlyExcluded(s.ctx, l, { source: 'exclude' })),
         which,
       ).rejects.toMatchObject({ reason: 'staging_too_large' });
-      expect(await allText(runDirOf(s, 'run-x')), `${which}:没清理`).toContain(SECRET);
+      expect(await allText(runDirOf(s, 'run-x')), `${which}:没清理`).toContain(EXCERPT_MARK);
       expect(lockOnly(s.audit.slice(writesBefore))).toEqual([]);
     }
   }, 180_000);
@@ -684,7 +684,7 @@ describe('resumeTaint', () => {
       await mkdirp(s.f.fx, path.join(s.state, 'promote', `d${String(i).padStart(5, '0')}`), 0o700);
     // world 里已有 promo-x、promo-ok:共 5000
     await withLock(s, (l) => resumeTaint(s.ctx, l));
-    expect(await allText(runDirOf(s, 'run-x'))).not.toContain(SECRET);
+    expect(await allText(runDirOf(s, 'run-x'))).not.toContain(EXCERPT_MARK);
   }, 120_000);
 
   it('purge journal:对 taint_targets 补标记(reason=purge)并清理,不改 journal;journalResumedFrom = 阶段', async () => {
@@ -720,7 +720,7 @@ describe('resumeTaint', () => {
     await expect(withLock(s, (l) => resumeTaint(s.ctx, l))).rejects.toMatchObject({
       reason: 'purge_incomplete',
     });
-    expect(await allText(runDirOf(s, 'run-x'))).toContain(SECRET);
+    expect(await allText(runDirOf(s, 'run-x'))).toContain(EXCERPT_MARK);
     // 只有拿锁 / 建 rsi 目录的写(审计里没有任何 taint 写点)
     expect(s.audit.slice(writes).filter((x) => /reflect|promote/.test(x))).toEqual([]);
   });
@@ -738,7 +738,7 @@ describe('resumeTaint', () => {
         return resumeTaintWith(s.ctx, l);
       }),
     ).rejects.toBeInstanceOf(RsiLockError);
-    expect(await allText(runDirOf(s, 'run-x'))).toContain(SECRET);
+    expect(await allText(runDirOf(s, 'run-x'))).toContain(EXCERPT_MARK);
   });
 
   it('句柄必须属于 ctx.io 的 rsi 状态目录:持 A 的锁写 B 的状态 → internal', async () => {
@@ -752,7 +752,7 @@ describe('resumeTaint', () => {
     await expect(withLock(a, (lockA) => resumeTaint(b.ctx, lockA))).rejects.toBeInstanceOf(
       RsiFailClosedError,
     );
-    expect(await allText(runDirOf(b, 'run-x'))).toContain(SECRET);
+    expect(await allText(runDirOf(b, 'run-x'))).toContain(EXCERPT_MARK);
   });
 });
 

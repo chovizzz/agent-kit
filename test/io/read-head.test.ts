@@ -116,13 +116,13 @@ describe('readHead:一次物理读取,只返回首行', () => {
   it('检查之后被换成符号链接(beforeOpen 缝):拿到 unsafe,不跟随', async () => {
     const { dir, fx } = await dirAndCtx('rh-swap-');
     const f = path.join(dir, 'f');
-    const secret = path.join(dir, 'secret');
+    const decoy = path.join(dir, 'secret');
     await writeFile(fx, f, 'ok\n', { mode: 0o600 });
-    await writeFile(fx, secret, 'SECRET\n', { mode: 0o600 });
+    await writeFile(fx, decoy, 'SECRET\n', { mode: 0o600 });
     const r = await readHead(f, W, {
       beforeOpen: async () => {
         await remove(fx, f);
-        await symlink(fx, secret, f);
+        await symlink(fx, decoy, f);
       },
     });
     expect(r).toEqual({ kind: 'unsafe', why: 'link' });

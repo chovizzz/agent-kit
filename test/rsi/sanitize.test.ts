@@ -68,14 +68,14 @@ describe('R20-3.5.6 guardOutput', () => {
   });
 
   it('组合变换:先清洗再 JSON 转义、先转义再清洗的最终文本同样命中', () => {
-    const secret = '/tmp/a"b\u202e/c';
-    const cleanThenJson = JSON.stringify({ x: cleanPath(secret) }); // 引号已转义、bidi 已变 ?
-    expect(cleanThenJson).not.toContain(secret);
-    expect(guardOutput([{ head: cleanThenJson }], [secret]).ok).toBe(false);
-    const jsonThenClean = cleanPath(JSON.stringify({ x: secret }));
-    expect(guardOutput([{ head: jsonThenClean }], [secret]).ok).toBe(false);
+    const forbidden = '/tmp/a"b\u202e/c';
+    const cleanThenJson = JSON.stringify({ x: cleanPath(forbidden) }); // 引号已转义、bidi 已变 ?
+    expect(cleanThenJson).not.toContain(forbidden);
+    expect(guardOutput([{ head: cleanThenJson }], [forbidden]).ok).toBe(false);
+    const jsonThenClean = cleanPath(JSON.stringify({ x: forbidden }));
+    expect(guardOutput([{ head: jsonThenClean }], [forbidden]).ok).toBe(false);
     // 对照:无关内容不误报
-    expect(guardOutput([{ head: JSON.stringify({ x: '/tmp/other' }) }], [secret]).ok).toBe(true);
+    expect(guardOutput([{ head: JSON.stringify({ x: '/tmp/other' }) }], [forbidden]).ok).toBe(true);
   });
 
   it('控制字符(换行、ESC、其它 C0 / C1)与 U+2028 / U+2029 出现在 head 或 pathValue 里 → 不 ok;普通文本照常', () => {

@@ -17,7 +17,7 @@ import { makeRsiFx, rsiToml, writeCfg, type RsiFx } from './rsi-fixture.js';
 
 export const SALT = 'ab'.repeat(32);
 export const SALT_FP = createHash('sha256').update(SALT).digest('hex').slice(0, 12);
-export const SECRET = 'SECRET-EXCERPT-0451';
+export const EXCERPT_MARK = 'SECRET-EXCERPT-0451';
 
 export interface Svc {
   f: RsiFx;
@@ -198,7 +198,7 @@ export const promoteDirOf = (s: Svc, id: string): string => path.join(s.state, '
 
 /**
  * 暂存一个 run:`proposals/<pid>.yaml`(证据 sig + 摘录)、`rules/team/<atom>.md`(frontmatter 证据 ref + 摘录)、`apply.patch`(含摘录)、`report.json`。
- * 每处摘录都是 {@link SECRET},方便断言「全部摘录为空」。
+ * 每处摘录都是 {@link EXCERPT_MARK},方便断言「全部摘录为空」。
  */
 export async function stageRun(
   s: Svc,
@@ -220,7 +220,7 @@ export async function stageRun(
       evidence: sigs.map((sig) => ({
         sig: `sig_${sig}`,
         project_key: 'p_unused',
-        excerpt: SECRET,
+        excerpt: EXCERPT_MARK,
       })),
       budget_delta_bytes: 10,
       paired_retirements: [],
@@ -239,7 +239,7 @@ export async function stageRun(
       owner: 'o',
       created: '2026-10-26',
       review_by: '2027-01-26',
-      evidence: sigs.map((sig) => ({ type: 'trace', ref: `sig_${sig}`, excerpt: SECRET })),
+      evidence: sigs.map((sig) => ({ type: 'trace', ref: `sig_${sig}`, excerpt: EXCERPT_MARK })),
       verifier: { type: 'none' },
     };
     await put(
@@ -248,7 +248,7 @@ export async function stageRun(
       `---\n${stringify(fm, { lineWidth: 0 })}---\n\n**做**:do BODY-KEEP\n**为什么**:why\n**怎么验**:verify\n`,
     );
   }
-  await put(s, path.join(dir, 'apply.patch'), `diff --git a/x b/x\n+${SECRET}\n`);
+  await put(s, path.join(dir, 'apply.patch'), `diff --git a/x b/x\n+${EXCERPT_MARK}\n`);
   await put(
     s,
     path.join(dir, 'report.json'),
@@ -261,8 +261,8 @@ export async function stageRun(
 
 export async function stagePromote(s: Svc, promoId: string, runId: string | null): Promise<void> {
   const dir = promoteDirOf(s, promoId);
-  await put(s, path.join(dir, 'promote.patch'), `diff\n+${SECRET}\n`);
-  await put(s, path.join(dir, 'pr-body.md'), `body ${SECRET}\n`);
+  await put(s, path.join(dir, 'promote.patch'), `diff\n+${EXCERPT_MARK}\n`);
+  await put(s, path.join(dir, 'pr-body.md'), `body ${EXCERPT_MARK}\n`);
   await put(
     s,
     path.join(dir, 'report.json'),
