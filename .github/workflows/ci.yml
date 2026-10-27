@@ -38,6 +38,11 @@ jobs:
       - name: Install (frozen lockfile, no lifecycle scripts)
         run: pnpm install --frozen-lockfile --ignore-scripts
 
+      # 发布冻结(R20-A2 B5-0):RELEASE_FREEZE 存在时 package.json / KIT_VERSION / kit.toml 的版本必须仍是 0.1.0(冻结期不 bump)。
+      # 只防冻结期改版本号,不防发布 0.1.0 本身;解除冻结 = 删 RELEASE_FREEZE(需用户同意),本步骤随之自动变成空操作。
+      - name: Release freeze keeps version at 0.1.0
+        run: node scripts/check-freeze-version.mjs
+
       - name: Typecheck
         run: pnpm run typecheck
 

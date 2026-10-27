@@ -15,6 +15,10 @@
  *      只能是 node:* 或相对路径(AST 扫描);dist/THIRD_PARTY_LICENSES 覆盖产物里实际包含的全部第三方包;dist 无 node_modules 路径、
  *      sourcemap / 产物里无绝对路径或 HOME 泄漏;integrity.json 覆盖 dist 全部文件;bin 入口是带 shebang 的薄入口。
  *
+ * 0) 发布冻结(R20-A2 B5-0):仓库根有 `RELEASE_FREEZE`(lstat,含符号链接)→ stderr `PUBLISH_FROZEN: …`,退出 1;**先于一切**(不读 package.json、不要求 dist、不跑 npm pack)。
+ *    `--freeze-only`:只做这一项(`package.json` 的 `prepublishOnly` 调它;没冻结 → 退出 0)。`npm publish --ignore-scripts` 会跳过 prepublishOnly,
+ *    所以 release.yml 另有一步独立检查,不可删。
+ *
  * 退出码:0 通过 | 1 有违规 | 2 用法错 | 4 未执行(缺 dist 等前置)。
  */
 import { existsSync, lstatSync, readFileSync, statSync } from 'node:fs';
@@ -22,6 +26,7 @@ import * as path from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { checkBundle, readDist } from './lib/bundle-gate.mjs';
+import { freezeViolations } from './lib/freeze-gate.mjs';
 import { packFileList } from './lib/pack.mjs';
 import { TSC_OUT } from './lib/paths.mjs';
 
@@ -29,14 +34,17 @@ const EXIT = { ok: 0, violation: 1, usage: 2, notRun: 4 };
 
 function usage(msg) {
   if (msg) console.error(`check-publish: ${msg}`);
-  console.error('用法: node scripts/check-publish.mjs [--tag vX.Y.Z]');
+  console.error('用法: node scripts/check-publish.mjs [--tag vX.Y.Z | --freeze-only]');
   process.exit(EXIT.usage);
 }
 
 const argv = process.argv.slice(2);
 let tag;
+let freezeOnly = false;
 for (let i = 0; i < argv.length; i++) {
-  if (argv[i] === '--tag') {
+  if (argv[i] === '--freeze-only') {
+    freezeOnly = true;
+  } else if (argv[i] === '--tag') {
     tag = argv[i + 1];
     if (!tag) usage('--tag 需要一个值');
     i++;
@@ -45,8 +53,24 @@ for (let i = 0; i < argv.length; i++) {
   }
 }
 
+if (freezeOnly && tag !== undefined)
+  usage('--freeze-only 与 --tag 互斥(--freeze-only 不做 tag 校验)');
+
 const root = process.cwd();
 const violations = [];
+
+// 0) 发布冻结:先于一切(见文件头)。`--freeze-only` 在这里结束
+{
+  const frozen = freezeViolations(root);
+  if (frozen.length > 0) {
+    for (const v of frozen) console.error(v);
+    process.exit(EXIT.violation);
+  }
+  if (freezeOnly) {
+    console.log('check-publish: 未冻结(--freeze-only)');
+    process.exit(EXIT.ok);
+  }
+}
 
 const pkg = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
 

@@ -266,6 +266,8 @@ const SUBPROCESS_TESTS = [
   // R20 A2 B3a:零写入审计的真子进程支撑(vite 打包 ro-entry 后用 node 跑 main())
   'test/rsi/proc/ro-helper.ts',
   'test/build/bundle-artifact.test.ts',
+  // R20 A2 B5-0:发布冻结脚本在沙箱 cwd 里的真子进程测试
+  'test/build/publish-freeze.test.ts',
 ];
 
 export default tseslint.config(

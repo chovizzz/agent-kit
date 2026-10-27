@@ -20,7 +20,8 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "build:payload": "node scripts/build-payload.mjs",
-    "check:publish": "node scripts/check-publish.mjs"
+    "check:publish": "node scripts/check-publish.mjs",
+    "prepublishOnly": "node scripts/check-publish.mjs --freeze-only"
   },
   "devDependencies": {
     "@types/node": "22.20.5",

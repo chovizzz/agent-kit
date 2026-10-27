@@ -7,7 +7,8 @@
 #   1. tag 指向的提交必须是 `origin/main` 的祖先(只发已合入主干的代码,拒绝从任意分支 / 孤儿提交打 tag 发版);
 #   2. 全门禁(typecheck/build/test/lint/format:check)、`node dist/cli.js check`、与 ci.yml 同一组验收脚本(含 A11 供应链)通过;
 #   3. `node scripts/check-publish.mjs --tag <tag>` 通过(包内容白名单 + 禁运形态 + payload/打包闸 + tag/version 一致);
-#   4. tag 形如 `vX.Y.Z` 且与 package.json 的 version 逐字一致。
+#   4. tag 形如 `vX.Y.Z` 且与 package.json 的 version 逐字一致;
+#   5. 仓库根没有 `RELEASE_FREEZE`(R20-A2 B5-0 起;check-publish.mjs 与发布前一步各查一次)。
 # 前置门禁失败不会尝试发布:`npm publish` 是最后一步且只有一条命令;npm 对同一版本号拒绝二次发布,不会覆盖已发布内容。
 # publish 开始后若报红(如响应丢失),先 `npm view` 核对 registry 状态,再决定是否重跑,不要盲目重跑。
 #
@@ -100,6 +101,16 @@ jobs:
 
       - name: Publish preflight (package surface + payload integrity + tag/version match)
         run: node scripts/check-publish.mjs --tag "${GITHUB_REF_NAME}"
+
+      # 发布冻结(R20-A2 B5-0):RELEASE_FREEZE 在仓库根时一律不发布。这是发布前的第二次检查(第一次在上面的 check-publish.mjs,报 PUBLISH_FROZEN)。
+      # 不可删:下面的 `npm publish` 带 --ignore-scripts,package.json 的 prepublishOnly 在这里不会跑,这一步才是 CI 里独立的拦截。
+      # `-e` 会解引用符号链接(断链被当成不存在),所以再加 `-L`。
+      - name: Release freeze must be lifted
+        run: |
+          if [ -e RELEASE_FREEZE ] || [ -L RELEASE_FREEZE ]; then
+            echo "PUBLISH_FROZEN: RELEASE_FREEZE 存在,拒绝发布" >&2
+            exit 1
+          fi
 
       - name: Publish to npm
         # 预发布版本(带 -rc/-next 等后缀)只进 rc 标签,绝不进 latest

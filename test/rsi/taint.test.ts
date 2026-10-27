@@ -764,6 +764,7 @@ describe('taintNewlyExcluded(purge)', () => {
     const journal = {
       schema_version: 1 as const,
       created_at: '2026-10-26T00:00:00.000Z',
+      mode: 'purge' as const,
       phase: 'planned' as const,
       keys: [KEY_A],
       taint_targets: { runs: ['run-x'], promotes: ['promo-x'] },
@@ -778,11 +779,33 @@ describe('taintNewlyExcluded(purge)', () => {
     expect(await exists(path.join(runDirOf(s, 'run-ok'), 'TAINTED'))).toBe(false);
   });
 
+  it('salvage 形态的 journal(B5-0 Q-A)同样按 taint_targets 补标记:不读 keys(为空)、不看信号库', async () => {
+    const s = await world('purge-salvage-source-');
+    await setRsiToml(s, '');
+    await put(s, path.join(s.state, 'signals', 'claude', '202610.jsonl'), '');
+    const journal = {
+      schema_version: 1 as const,
+      created_at: '2026-10-26T00:00:00.000Z',
+      mode: 'salvage' as const,
+      phase: 'planned' as const,
+      keys: [],
+      taint_targets: { runs: ['run-x'], promotes: ['promo-x'] },
+    };
+    const out = await withLock(s, (l) =>
+      taintNewlyExcluded(s.ctx, l, { source: 'purge', journal }),
+    );
+    expect(out).toEqual({ runsMarked: 1, promotesMarked: 1 });
+    expect((await markOf(runDirOf(s, 'run-x')))?.reason).toBe('purge');
+    await expectTaintedClean(s, 'reflect', 'run-x');
+    expect(await exists(path.join(runDirOf(s, 'run-ok'), 'TAINTED'))).toBe(false);
+  });
+
   it('journal 里的 id 不合法(路径穿越)→ 拒绝,不碰暂存区外', async () => {
     const s = await world('purge-evil-');
     const journal = {
       schema_version: 1 as const,
       created_at: '2026-10-26T00:00:00.000Z',
+      mode: 'purge' as const,
       phase: 'planned' as const,
       keys: [KEY_A],
       taint_targets: { runs: ['../../etc'], promotes: [] },
