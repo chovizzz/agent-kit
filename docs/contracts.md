@@ -3552,7 +3552,7 @@ S7c-A 给 home-fs 追加三个原语(都走同一套「表内 + planScope + 逐�
 
 > **v3.1 修订(§21.18 第 42 条)**:`off` 行追加允许 `rsi auto clear --write` 对 HOME 登记表、`.local/state/agent-kit/rsi-personal/`、私有仓库与本机 payload 的撤销(R21-9.5);`stopped` 行追加允许 `rsi auto clear --write`、`rsi rollback --to --write`、`rsi veto`(R21-9.4)。
 
-- R20-1.4 **`armed` 零读正文**:对会话文件只允许 ①目录项列举(`readdir` / `lstat`);②**一次**从偏移 0 起、长度 ≤ 64KiB(`RSI_ARMED_HEAD_BYTES`)的物理读取。读到的字节里第一个 `\n` 之后的部分**直接丢弃**:不交给任何解析器、不保存、不计入任何输出(N5 衡量两件事:物理 I/O 为每个文件至多一次 ≤ 64KiB 的读;交给解析器的字节至多是首行)。首行用固定的轻量头部解析器取 cwd 与会话元数据,**不调用** reader 的 `read()`、不调用 `Redactor`、不读不建盐。首行取不到 cwd(没有 `\n`、不是 JSON、无 cwd 字段)→ 该会话计入归属不明,不再往下读。 (订正见 §20.14 B4 订正 #2)
+- R20-1.4 **`armed` 零读正文**:对会话文件只允许 ①目录项列举(`readdir` / `lstat`);②**一次**从偏移 0 起、长度 ≤ 64KiB(`RSI_ARMED_HEAD_BYTES`)的物理读取。读到的字节里第一个 `\n` 之后的部分**直接丢弃**:不交给任何解析器、不保存、不计入任何输出(N5 衡量两件事:物理 I/O 为每个文件至多一次 ≤ 64KiB 的读;交给解析器的字节至多是首行)。首行用固定的轻量头部解析器取 cwd 与会话元数据,**不调用** reader 的 `read()`、不调用 `Redactor`、不读不建盐。首行取不到 cwd(没有 `\n`、不是 JSON、无 cwd 字段)→ 该会话计入归属不明,不再往下读。 (订正见 §20.14 B4 订正 #2) (订正见 §20.14 B4 订正(补) B4a-2、B4a-3、B4a-4、B4a-6、B4a-8)
 - R20-1.5 **确认记录**(`state.json` 的 `confirm`)只由 `rsi confirm` 写入(R20-3.6)。以下任一成立即**无效**、退回 `armed`:①排除被放宽(确认时的任一排除项哈希不在当前集合里);②当前 `agents` 含确认时没有的 agent;③`repo` 的 `realpath` 或 `(dev, ino)` 与确认时不同;④overlay 的有无或内容 sha256 与确认时不同;⑤kit 主版本不同;⑥记录过不了 schema。收紧排除、减少 agent、新增项目都不使确认失效;新增项目在 `confirmed` 下自动纳入(D9),在 hint、`rsi status`、`rsi projects` 里单列「新增项目 n」(R20-4.2a)。
 - R20-1.5a **首次 `armed` 与失效后的 `armed`**:从未确认过的仓库,`armed` 下 `.state/{signals,sessions,salt}`、`projects.json`、`cursor.json` **不存在**(N5 的验收面);确认失效退回 `armed` 时这些文件已经存在,`armed` 的约束是**不新建、不修改、不读会话正文**,已有数据只给 `rsi status` / `rsi projects` 只读展示和 `rsi purge` 删除用,不删除旧库来「满足」N5(待定夺 Q19)。
 - R20-1.6 **跳过触发**:以下任一成立,poke、hint、顺带调度、worker 一律空操作(零写入、退出 0、stdout 为空):`KIT_AUTO_RSI=0`;`KIT_RSI_CHILD=1`(kit 手动 `reflect --run-llm` / `judge --run-llm` 起的 LLM 子进程,§20.9 第 5 条);任一 CI 变量为真(与 update 同一张 `CI_ENV_KEYS`);`KIT_LAUNCHED` 已设且不为 `0` 时**只**跳过顺带调度(同 §19.5)。`KIT_AUTO_RSI` 只能关不能开(`=1` 与未设相同)。前台命令(`rsi status|projects|confirm|stop|purge|tick`)不受 `KIT_AUTO_RSI` 影响。
@@ -3678,7 +3678,7 @@ agent-kit __rsi --background          (内部入口,不进 --help、不在 COMMA
 - R20-3.1.1 **无 `--write` = 纯计划,零写入**:算出将读的文件数、字节数、预计新增信号数、项目 P / X / U / n、cursor 指纹是否匹配,打印后退出 0。不拿锁、不建目录;盐存在则只读,不存在则用内存临时盐(`--json` 里 `salt: "ephemeral"`,此时不输出依赖 key 的计数)。读快照不一致 → 退出 4 `RSI_SNAPSHOT_BUSY`。属 A5 零写入命令集。 (订正见 §20.14 B4 订正 #4)
 - R20-3.1.2 `--write`:前台执行一次完整 L0,不受节流与 L0 间隔约束,受锁、状态机、资源上限约束;`armed` 下只做列举并更新 `state.json` / `counts.json` 的计数;`confirmed` 下采集。成功(含 `ok_partial`)清除熔断(R20-6.6)。熔断打开时照常执行——它是用户清除熔断的入口。 (订正见 §20.14 B4 订正 #4)
 - R20-3.1.3 退出码:0;2;3(`RSI_FAIL_CLOSED`);4(`off`、`stopped`、`collect_blocked`、`locked`、`locked_over_ttl`、`RSI_SNAPSHOT_BUSY`)。
-- R20-3.1.4 `--json` 键集合固定:`mode`、`state`、`reason`、`salt`、`files_planned`、`files_read`、`bytes_read`、`signals_new`、`sessions_new`、`projects`(`{collecting, excluded, new}`)、`unknown_signals`、`skipped`(`{not_regular, too_large, unchanged, excluded, self_state, unknown_project}`)、`limits_hit`(计数码数组,升序)、`cursor`(`{fingerprint_match, full_scan: {epoch, done}}`)、`duration_ms`。不含路径、key、项目名。
+- R20-3.1.4 `--json` 键集合固定:`mode`、`state`、`reason`、`salt`、`files_planned`、`files_read`、`bytes_read`、`signals_new`、`sessions_new`、`projects`(`{collecting, excluded, new}`)、`unknown_signals`、`skipped`(`{not_regular, too_large, unchanged, excluded, self_state, unknown_project}`)、`limits_hit`(计数码数组,升序)、`cursor`(`{fingerprint_match, full_scan: {epoch, done}}`)、`duration_ms`。不含路径、key、项目名。 (订正见 §20.14 B4 订正(补) B4c2-6)
 
 #### 20.3.2 `rsi poke --agent <id>`(A3,钩子专用)
 
@@ -3690,7 +3690,7 @@ agent-kit __rsi --background          (内部入口,不进 --help、不在 COMMA
 #### 20.3.3 `rsi hint --agent <id>`(A3)
 
 - R20-3.3.1 退出码恒 0;任何失败(参数、配置、快照不一致、超过 1s 尽力预算、索引损坏)输出空串。读集合**仅限**:用户配置与 overlay(排除项并集);`.state/rsi/{snapshot.json,state.json,projects.json,counts.json}`;对索引里的根路径做 `lstat` / `realpath`(元数据读取,≤ `RSI_INDEX_MAX_ENTRIES` 次,用于 R20-4.3 的 U 判定)。不读盐(用 `projects.json` 与 `counts.json` 各自的 `salt_fp` 互相核对)、不读信号库、不读会话文件、不拿锁。
-- R20-3.3.2 输出为下列模板之一加一个 `\n`,或空串;**≤ 200 字节**(含换行,`Buffer.byteLength`);不含路径、项目名、key、摘录、会话 id。每个计数显示 `min(n, 9999)`,超过写 `9999+`。 (订正见 §20.14 B4 订正 #3)
+- R20-3.3.2 输出为下列模板之一加一个 `\n`,或空串;**≤ 200 字节**(含换行,`Buffer.byteLength`);不含路径、项目名、key、摘录、会话 id。每个计数显示 `min(n, 9999)`,超过写 `9999+`。 (订正见 §20.14 B4 订正 #3) (订正见 §20.14 B4 订正(补) B4a-5)
 
 ```
 confirmed:agent-kit RSI: 新信号 N、待反思聚类 K、待审提案 M、项目 P(新增 n、排除 X、归属不明 U)。仅在用户要求时使用技能 agent-kit-rsi。
@@ -3699,7 +3699,7 @@ armed:    agent-kit RSI: 待确认,将采集 P 个项目。仅在用户要求时
 
 (`confirmed:` / `armed:` 是本表的标签,不是输出。所有计数取最大显示值时,前者含换行 194 字节、后者 106 字节。)
 
-- R20-3.3.3 计数口径(全部由 `counts.json` + 当前配置 + 当前索引现算,R20-4.6):N = 近 7 个 UTC 日内由 L0 新增、归属为「采集中」的信号数;K = 剔除 X 与 U 的证据后,仍达到 reflect 干跑聚类门槛(与 reflect 干跑同一常量)的聚类数;M = 证据全部归属「采集中」且不是 tainted 的暂存 run 里的提案数;P / X = 采集中 / 已排除项目数;n = 新增项目数(R20-4.2a);U = 归属不明信号数。 (订正见 §20.14 B4 订正 #3)
+- R20-3.3.3 计数口径(全部由 `counts.json` + 当前配置 + 当前索引现算,R20-4.6):N = 近 7 个 UTC 日内由 L0 新增、归属为「采集中」的信号数;K = 剔除 X 与 U 的证据后,仍达到 reflect 干跑聚类门槛(与 reflect 干跑同一常量)的聚类数;M = 证据全部归属「采集中」且不是 tainted 的暂存 run 里的提案数;P / X = 采集中 / 已排除项目数;n = 新增项目数(R20-4.2a);U = 归属不明信号数。 (订正见 §20.14 B4 订正 #3) (订正见 §20.14 B4 订正(补) B4c1-1)
 - R20-3.3.4 输出条件:`confirmed` 下 K ≥ 3(`RSI_HINT_MIN_CLUSTERS`)或 M ≥ 1 或 n ≥ 1;`armed` 下恒输出第二个模板;其余状态空串。同一 agent 30 分钟(`RSI_HINT_DEDUP_MINUTES`)内只输出一次:输出前独占创建 `.state/rsi/hint/<agent>-<窗口序号>`,`EEXIST` → 空串。这是 hint 唯一的写入;输出空串的调用零写入(待定夺 Q5)。
 - R20-3.3.5 P0 只有纯文本。claude / codex 钩子要求的 JSON 输出形状(`hookSpecificOutput.additionalContext`)是 P1(A5)的 `--format`;P0 传 `--format` 按参数错误处理(退出 0、空串)。
 
@@ -3708,7 +3708,7 @@ armed:    agent-kit RSI: 待确认,将采集 P 个项目。仅在用户要求时
 #### 20.3.4 `rsi status [--json] [--ack]`(A2)
 
 - R20-3.4.1 只读(`--ack` 除外),不拿锁,按快照协议读(R20-5.6)。退出码:0(含 `off`、停止采集、存在 tainted run——这些是状态,不是错误);2;3(状态文件存在但过不了 schema);4 `RSI_SNAPSHOT_BUSY`。
-- R20-3.4.2 `--json` 键集合固定:`state`、`reason`、`first_armed`(布尔,R20-1.5a)、`overlay`(`absent|ok|invalid`)、`agents`(`[{id, status: ok|not_evaluated, reason}]`)、`counts`(`{projects_collecting, projects_excluded, projects_new, unknown_signals, signals_total, signals_new_7d, clusters_pending, staged_runs, staged_proposals, tainted_runs}`)、`last_tick`(`{at, trigger, outcome, code, duration_ms, files_read, bytes_read}` 或 `null`)、`breaker`(`{state: closed|open|half_open, kind: retryable|safety|null, consecutive_failures, until}`)、`index`(`{status: ok|absent|invalid, entries}`)、`cursor`(`{status: ok|absent|invalid, fingerprint_match, full_scan: {epoch, done, last_completed_at}}`)、`snapshot`(`ok|absent|stale|invalid`)、`confirm`(`{confirmed_at, policy_fp12, invalid_reason}` 或 `null`)、`stop`(`{present, at}`)、`purge`(`{journal: absent|present}`)、`lock`(`free|held|held_over_ttl|stale|unsafe`;D7:`rsi/` 或锁文件元数据不合规时是 `unsafe`,不是读不到)、`tainted`(`[{run_id, reason}]`,`reason` ∈ `exclude|purge`;**只列 id 与原因码**,这是 `RSI_RUN_TAINTED` 拒绝面之外唯一的展示)、`warnings`(`overlay_absent`、`cloud_sync_suspected`、`index_full`、`breaker_open`)。不含路径、key、项目名。 (订正见 §20.14 B3 订正 B3a-3)
+- R20-3.4.2 `--json` 键集合固定:`state`、`reason`、`first_armed`(布尔,R20-1.5a)、`overlay`(`absent|ok|invalid`)、`agents`(`[{id, status: ok|not_evaluated, reason}]`)、`counts`(`{projects_collecting, projects_excluded, projects_new, unknown_signals, signals_total, signals_new_7d, clusters_pending, staged_runs, staged_proposals, tainted_runs}`)、`last_tick`(`{at, trigger, outcome, code, duration_ms, files_read, bytes_read}` 或 `null`)、`breaker`(`{state: closed|open|half_open, kind: retryable|safety|null, consecutive_failures, until}`)、`index`(`{status: ok|absent|invalid, entries}`)、`cursor`(`{status: ok|absent|invalid, fingerprint_match, full_scan: {epoch, done, last_completed_at}}`)、`snapshot`(`ok|absent|stale|invalid`)、`confirm`(`{confirmed_at, policy_fp12, invalid_reason}` 或 `null`)、`stop`(`{present, at}`)、`purge`(`{journal: absent|present}`)、`lock`(`free|held|held_over_ttl|stale|unsafe`;D7:`rsi/` 或锁文件元数据不合规时是 `unsafe`,不是读不到)、`tainted`(`[{run_id, reason}]`,`reason` ∈ `exclude|purge`;**只列 id 与原因码**,这是 `RSI_RUN_TAINTED` 拒绝面之外唯一的展示)、`warnings`(`overlay_absent`、`cloud_sync_suspected`、`index_full`、`breaker_open`)。不含路径、key、项目名。 (订正见 §20.14 B3 订正 B3a-3) (订正见 §20.14 B4 订正(补) B4a-6、已定决定)
 - R20-3.4.3 `--ack`:需要 stdin 与 stdout 为 TTY(否则 `not_tty`),拿锁,把 `state.json` 的 `projects_ack_generation` 设为当前索引 `generation`(「新增项目 n」清零)。
 
 #### 20.3.5 `rsi projects`(A2)
@@ -3716,8 +3716,8 @@ armed:    agent-kit RSI: 待确认,将采集 P 个项目。仅在用户要求时
 - R20-3.5.1 缺省文本:每行一项,按 `status` 分别成形:`collecting` / `excluded` / `purge_pending` / `new` 行为 `key=<p_ 后 8 位> name=<目录名> sessions=<n> signals=<n> status=<…>`;`unknown` 行为 `key=<p_ 后 8 位> sessions=<n> signals=<n> status=unknown`(**无** name、无 path,N7);末行 `projects collecting=P excluded=X new=n unknown_signals=U`。按 key 升序。首次 `armed`(无盐)的行形如 `key=- name=<目录名> sessions=<n> status=pending`(现算,R20-4.2),归属不明会话只计入末行的 `unknown_sessions=`。`purge_pending` = 已排除但信号库仍有该 key 的信号。 (订正见 §20.14 B3 订正 B3a-2、B3a-4)
 - R20-3.5.2 目录名 = 最近一次见到的根路径的 basename,清洗:C0 / C1 控制字符、Unicode 格式字符(含 bidi 覆盖与隔离、零宽字符)、私用区与未分配码点替换为 `?`,按码点边界截到 64 字节。
 - R20-3.5.3 `--paths`:只在 stdout 是 TTY 时允许(否则 `paths_requires_tty`),与 `--json` 互斥(`mode_conflict`);`collecting` / `excluded` / `purge_pending` / `new` 行末追加 `path=<路径>`(同 R20-3.5.2 的清洗,不截断长度;`unknown` 行不追加)。
-- R20-3.5.4 `--json`(键集合固定):`{state, first_armed, rows: [{key8, name, sessions, signals, status}], summary: {collecting, excluded, new, unknown_signals, unknown_sessions}}`;`unknown` 行的 `name` 为 `null`;首次 `armed` 的 `key8` 为 `null`。
-- R20-3.5.5 `--rebuild-index [--write]`:`confirmed` / `stopped` / 失效后的 `armed` 下可用(首次 `armed` 无盐 → 退出 4 `not_confirmed`);用 rsi 口径(R20-4.1:canonical cwd)重新解析会话 cwd、用本机盐重算 key;干跑打印将写入的条目数与将变为可归属的信号数;`--write` 拿锁、整体替换 `projects.json`。旧索引有效时保留各 key 的 `first_indexed_generation`;旧索引无效时重建条目一律记 `first_indexed_generation = 0`(不算新增)。信号库里有、按 rsi 口径重算不出来的 key(例如手动 `signals collect --allow-project <父目录>` 采的,其 key 是 allow 路径的哈希)仍计入 U,**不**用新算出的 key 冒充。 (订正见 §20.14 B4 订正 #10)
+- R20-3.5.4 `--json`(键集合固定):`{state, first_armed, rows: [{key8, name, sessions, signals, status}], summary: {collecting, excluded, new, unknown_signals, unknown_sessions}}`;`unknown` 行的 `name` 为 `null`;首次 `armed` 的 `key8` 为 `null`。 (订正见 §20.14 B4 订正(补) B4a-5)
+- R20-3.5.5 `--rebuild-index [--write]`:`confirmed` / `stopped` / 失效后的 `armed` 下可用(首次 `armed` 无盐 → 退出 4 `not_confirmed`);用 rsi 口径(R20-4.1:canonical cwd)重新解析会话 cwd、用本机盐重算 key;干跑打印将写入的条目数与将变为可归属的信号数;`--write` 拿锁、整体替换 `projects.json`。旧索引有效时保留各 key 的 `first_indexed_generation`;旧索引无效时重建条目一律记 `first_indexed_generation = 0`(不算新增)。信号库里有、按 rsi 口径重算不出来的 key(例如手动 `signals collect --allow-project <父目录>` 采的,其 key 是 allow 路径的哈希)仍计入 U,**不**用新算出的 key 冒充。 (订正见 §20.14 B4 订正 #10) (订正见 §20.14 B4 订正(补) B4a-8、B4c1-6)
 - R20-3.5.6 泄漏闸:stdout 里出现 HOME、`KIT_TMP`、状态目录、仓库根的绝对路径 → 整份作废,退出 3 `output_leak`;**豁免只限 `--paths` 行的 `path=` 字段值**。退出码:0;2;3;4(`RSI_SNAPSHOT_BUSY`、`not_confirmed`)。
 
 #### 20.3.6 `rsi confirm`(A2)
@@ -3756,7 +3756,7 @@ armed:    agent-kit RSI: 待确认,将采集 P 个项目。仅在用户要求时
 
 **索引 `.state/rsi/projects.json`(`RsiProjectIndex`,0600)**
 
-- R20-4.2 只在有盐之后由持锁写入方维护(worker、`tick --write`、手动 `signals collect`、`--rebuild-index --write`、purge);首次 `armed` 下不存在,`rsi projects` / `rsi confirm` 在首次 `armed` 下现算清单、不落盘(待定夺 Q2)。
+- R20-4.2 只在有盐之后由持锁写入方维护(worker、`tick --write`、手动 `signals collect`、`--rebuild-index --write`、purge);首次 `armed` 下不存在,`rsi projects` / `rsi confirm` 在首次 `armed` 下现算清单、不落盘(待定夺 Q2)。 (订正见 §20.14 B4 订正(补) B4c1-5)
 
 ```json
 {
@@ -3785,7 +3785,7 @@ armed:    agent-kit RSI: 待确认,将采集 P 个项目。仅在用户要求时
 
 - `salt_fp` = `sha256(盐)` 前 12 位,写入方对照真实盐;不符 → 整个索引按 `index_invalid`。`entries` 按 `key` 严格升序、唯一;每个 key 的 `roots` 1..8 条(保留最早一条与按 `last_seen` 最近的 7 条);`path` 是绝对路径、≤ 4096 字节、无 NUL;条目 ≤ 10000(`RSI_INDEX_MAX_ENTRIES`),满了新 key 不再入索引(其信号计入 U,计数码 `RSI_INDEX_FULL`,`warnings` 报 `index_full`)。`generation` 每次写入加一。日期只到天。
 - 索引只在本机、只给 `rsi projects --paths` 与 hint / status 的现算用;路径与目录名不进 hint、status、日志、计数投影、P1 digest。
-- R20-4.2a **新增项目 n**:`first_indexed_generation > state.json.projects_ack_generation` 且归属「采集中」的 key 数。确认后的第一次成功 L0 把 `projects_ack_generation` 设为该次写入的 `generation` 并清 `baseline_pending`(确认时看过的清单不算新增);之后由 `rsi status --ack` 推进。用 generation 而不用时间戳,时钟回拨不影响。 (订正见 §20.14 B4 订正 #7)
+- R20-4.2a **新增项目 n**:`first_indexed_generation > state.json.projects_ack_generation` 且归属「采集中」的 key 数。确认后的第一次成功 L0 把 `projects_ack_generation` 设为该次写入的 `generation` 并清 `baseline_pending`(确认时看过的清单不算新增);之后由 `rsi status --ack` 推进。用 generation 而不用时间戳,时钟回拨不影响。 (订正见 §20.14 B4 订正 #7) (订正见 §20.14 B4 订正(补) B4c2-4)
 
 **归属判定(N7,R20-4.3)** (订正见 §20.14 B3 订正 B3c-4、B3c-11)
 
@@ -3804,16 +3804,16 @@ armed:    agent-kit RSI: 待确认,将采集 P 个项目。仅在用户要求时
 - 自我排除照旧(`withSelfExclusion`:状态目录内或含 `.state/reflect/cwd` 段 → `self_state`)。
 - rsi 路径不要求「至少一条排除或 allow」(D9);手动 `signals collect` 的默认拒绝不变。
 
-**计数投影 `.state/rsi/counts.json`(`RsiCounts`,R20-4.5)**
+**计数投影 `.state/rsi/counts.json`(`RsiCounts`,R20-4.5)** (订正见 §20.14 B4 订正(补) B4c1-1、B4c1-2、B4c2-3)
 
 hint / status 现算所需的数据,由每个持锁写入方在提交时重算并写入:`{schema_version, salt_fp, generation, computed_at, cluster_min, per_key: {<key>: {signals_total, sessions, signals_by_day: {<YYYY-MM-DD>: n}}}, clusters: [{cluster_id, evidence_by_key: {<key>: n}}], staged: [{run_id, proposals, evidence_keys: [<key>], tainted}], unknown_keys_signals}`。`signals_by_day` 只保留最近 8 个 UTC 日;`clusters` ≤ 500、`staged` ≤ 5000;`evidence_keys` 里映射不到 key 的证据记为字面量 `"?"`(按 U 处理)。`reflect --run-llm` 新建暂存 run、`judge` 改写提案、taint 之后都在同一把锁内更新 `staged`。
 
-**排除立即对历史生效(R20-4.6)**
+**排除立即对历史生效(R20-4.6)** (订正见 §20.14 B4 订正(补) B4c1-2)
 
 - 判定点:hint、`rsi status`、`rsi projects`、`rsi tick --json` 的计数,R20-4.8 的暂存区即时闸,以及 P1 的 digest / ingest,**每次调用时**按当前配置 + 当前索引 + `counts.json` 现算 X / U,不使用任何缓存的排除结论。写下排除后的**下一次**调用即不再把该项目算入 P、K、N、M、n,不需要等待重采。
 - 写下排除不删除数据(信号库、会话计数、索引保留);删除只走 `rsi purge`。
 
-**taint(N6,R20-4.7)** (订正见 §20.14 B3 订正 B3c-2、B3c-3、B3c-10)
+**taint(N6,R20-4.7)** (订正见 §20.14 B3 订正 B3c-2、B3c-3、B3c-10) (订正见 §20.14 B4 订正(补) B4c1-3、B4c1-7)
 
 > **v3.1 修订(§21.18 第 15 条,V1 生效)**:taint 扩到自动产出:未生效候选永不进灰度,已生效候选进回滚;对自动产出,「立即生效」收窄为「下一次 hint 起不再注入、不再作新证据」,静态撤销单独报告完成,已进模型上下文的收不回(R21-11.5)。
 
@@ -3871,7 +3871,7 @@ rsi 的锁(仓库 `.state/`)与 update / sync 的锁(HOME 下 `.local/state/agen
 
 - R20-5.2 ~ R20-5.5 已实现:`src/rsi/lock.ts` 导出 `acquireRsiLock`(试锁)、`withRsiLock`(拿锁 → 回调 → 必释放)、`peekRsiLock`(只读,给 `rsi status` 的 `lock:` 行用)、`makeIsAlive`。获取失败抛 `RsiLockError`,`kind` 为 `locked` / `locked_over_ttl` / `lock_lost` / `state_dir_unsafe` / `write_denied` / `internal`,`toStable()` 给出 `RSI_NOT_RUN reason=locked|locked_over_ttl`(退出 4)或 `RSI_FAIL_CLOSED reason=<kind>`(退出 3)。常量(`RSI_LOCK_TTL_MINUTES`、`RSI_LOCK_PARTIAL_GRACE_MS`、`RSI_SNAPSHOT_MAX_FILES`、稳定码枚举等)与 `RsiLockDocSchema` / `RsiSnapshotSchema` 在 `src/contracts/rsi.ts`;稳定码枚举与 R20-3.0 总表的一致性由 `test/contracts/rsi-lock-snapshot.test.ts` 断言。
 - 与上文条款的差异 / 补充(实现取的形状):①pid 判据比条文更保守——只有 `ESRCH` 才算「不存在」,`EPERM` 与其它任何错误都按存活、不回收;②空文件与内容损坏两种情形统一用锁文件 mtime 判 10 秒;③回收前复读除「逐字节相同」外还要求仍是同一个 inode;④`rsi/` 目录或锁文件是符号链接 / 非普通文件 / 硬链接(nlink>1)/ 属主不是当前 uid / 权限宽于 0600(目录 0700),或锁文件远大于正常内容(> 64KiB,不读不比较不回收)→ `RSI_FAIL_CLOSED reason=state_dir_unsafe`(不顺着链接建锁、不覆盖;校验是对已打开句柄的 fstat,见 R20-7.2 一行);写入方 `rsiDir()` 对**自己的** `rsi/` 目录权限过宽时收紧到 0700(目录属主不是当前 uid 则拒绝);只读入口(`peekRsiLock`、快照读取)不建目录、不 chmod、不收紧;⑤同一进程对同一真实路径第二次获取(含经不同路径写法解析到同一把锁)→ `internal`;⑥`beforeReclaim` 是测试缝,用来演练判定与删除之间的换锁竞态。评审(Pi)提醒并确认的残余,不弱化:回收的「复读」不是条件删除,两个回收者仍可能先后删掉对方刚建的新锁;`assertHeld()` 是丢锁检测不是 fencing,检查与 rename / 写入之间仍有窗口——因此该实现是缩小双持有窗口,不是严格互斥(与 §19.5 同口径)。
-- R20-5.6 已实现:`src/rsi/snapshot.ts` 导出 `commitSnapshot`(持锁写入方的最后一步,临时文件 `snapshot.json.tmp` + rename;rename 前再 `assertHeld()`)、`recoverSnapshot`(持锁写入方拿锁后第一件事:`absent` / `consistent` / `rebuilt`,损坏抛 `RsiSnapshotError`)、`readVerified`(只读方:`ok` / `no_snapshot` / `busy` / `invalid`,不一致时重取清单重读一次)、`readSnapshot`。契约原文未写 `name` 的基准目录,实现取:四个固定名在 `.state/rsi/` 下,`signals/…` / `sessions/…` 月文件在 `.state/` 下;`generation` 首次提交为 1、之后逐次 +1;清单项只收白名单里**实际存在**的普通文件。读取前校验(R20-7.2)按两类口径:`.state/rsi/` 下的目录与固定文件(`snapshot.json`、四个固定名)——符号链接 / 非普通文件 / 硬链接 / 属主不是当前 uid / 权限宽于 0600(目录 0700)→ 写入方抛 `state_dir_unsafe`、只读方返回 `unsafe`(`readSnapshot` 的 `{kind:'unsafe'}`、`readVerified` 的 `{status:'unsafe'}`),不自动收紧;`.state/{signals,sessions}` 月文件沿用 state-store 的口径,只拒符号链接 / 非普通文件 / 硬链接(写入方视为 `signal_store_corrupt`,只读方 `invalid`),**不拒宽权限**;父目录 `signals/<agent>` 是符号链接同样视为损坏 / `invalid`。只读方遇到状态目录或 `rsi/` 不存在按「清单缺失」处理(`no_snapshot`),不创建目录。各数据文件的完整 schema(`RsiState` 等)属 A2,`recoverSnapshot` 的校验函数 `SnapshotValidator = (name, bytes: Uint8Array | null) => boolean` 可注入:`bytes === null` 表示「已提交清单里有、磁盘上现在没有」,由调用方判定它是不是必需文件(返回 `false` → 抛该文件的损坏码,如 `state.json` 缺失 → `state_invalid`,清单不改写);缺省 `structuralValidator` 对缺失一律放行(保持「cursor / counts 被 purge 重写后仍是未完成提交」的行为),只做结构检查——**A2 接入时仍须传入各文件的完整 schema 校验与「必需文件」规则**,否则 `{}` 这类形状合法的损坏、或必需文件被删,会被当成未完成提交而重新认证(固定名文件是 JSON 对象;JSONL 文件以换行结尾、每行是对象,信号库行另过 `SignalSchema`、会话计数行另过 `SessionStatSchema`);损坏时按文件映射原因码:`state.json` → `state_invalid`、`projects.json` → `index_invalid`、`cursor.json` → `cursor_invalid`、`counts.json` → `counts_invalid`、信号库 / 会话计数 → `signal_store_corrupt`;清单自身损坏 → `snapshot_invalid`。`readVerified` 的 `busy` 由命令层映射为 `RSI_SNAPSHOT_BUSY`(A2)。 (订正见 §20.14 B3 订正 B3c-5、B3c-9)
+- R20-5.6 已实现:`src/rsi/snapshot.ts` 导出 `commitSnapshot`(持锁写入方的最后一步,临时文件 `snapshot.json.tmp` + rename;rename 前再 `assertHeld()`)、`recoverSnapshot`(持锁写入方拿锁后第一件事:`absent` / `consistent` / `rebuilt`,损坏抛 `RsiSnapshotError`)、`readVerified`(只读方:`ok` / `no_snapshot` / `busy` / `invalid`,不一致时重取清单重读一次)、`readSnapshot`。契约原文未写 `name` 的基准目录,实现取:四个固定名在 `.state/rsi/` 下,`signals/…` / `sessions/…` 月文件在 `.state/` 下;`generation` 首次提交为 1、之后逐次 +1;清单项只收白名单里**实际存在**的普通文件。读取前校验(R20-7.2)按两类口径:`.state/rsi/` 下的目录与固定文件(`snapshot.json`、四个固定名)——符号链接 / 非普通文件 / 硬链接 / 属主不是当前 uid / 权限宽于 0600(目录 0700)→ 写入方抛 `state_dir_unsafe`、只读方返回 `unsafe`(`readSnapshot` 的 `{kind:'unsafe'}`、`readVerified` 的 `{status:'unsafe'}`),不自动收紧;`.state/{signals,sessions}` 月文件沿用 state-store 的口径,只拒符号链接 / 非普通文件 / 硬链接(写入方视为 `signal_store_corrupt`,只读方 `invalid`),**不拒宽权限**;父目录 `signals/<agent>` 是符号链接同样视为损坏 / `invalid`。只读方遇到状态目录或 `rsi/` 不存在按「清单缺失」处理(`no_snapshot`),不创建目录。各数据文件的完整 schema(`RsiState` 等)属 A2,`recoverSnapshot` 的校验函数 `SnapshotValidator = (name, bytes: Uint8Array | null) => boolean` 可注入:`bytes === null` 表示「已提交清单里有、磁盘上现在没有」,由调用方判定它是不是必需文件(返回 `false` → 抛该文件的损坏码,如 `state.json` 缺失 → `state_invalid`,清单不改写);缺省 `structuralValidator` 对缺失一律放行(保持「cursor / counts 被 purge 重写后仍是未完成提交」的行为),只做结构检查——**A2 接入时仍须传入各文件的完整 schema 校验与「必需文件」规则**,否则 `{}` 这类形状合法的损坏、或必需文件被删,会被当成未完成提交而重新认证(固定名文件是 JSON 对象;JSONL 文件以换行结尾、每行是对象,信号库行另过 `SignalSchema`、会话计数行另过 `SessionStatSchema`);损坏时按文件映射原因码:`state.json` → `state_invalid`、`projects.json` → `index_invalid`、`cursor.json` → `cursor_invalid`、`counts.json` → `counts_invalid`、信号库 / 会话计数 → `signal_store_corrupt`;清单自身损坏 → `snapshot_invalid`。`readVerified` 的 `busy` 由命令层映射为 `RSI_SNAPSHOT_BUSY`(A2)。 (订正见 §20.14 B3 订正 B3c-5、B3c-9) (订正见 §20.14 B4 订正(补) B4c1-4、B4c2-7)
 - 读取与上限(评审 P2 两条,已实现):①读取不再「先 lstat、再 `readFile(path)`」:`src/io/read-fs.ts` 的 `readFileSafe` 以 `O_NOFOLLOW | O_NONBLOCK` 打开,对**句柄** fstat 校验(普通文件、`nlink == 1`,提供 owner 策略时再校验属主与权限位)、大小上限内有界读取;检查与读取之间路径被换成符号链接 / FIFO,得到 `unsafe` 而不是跟随或挂住(打开后被别人 unlink 的 `nlink == 0` 按「文件不存在」处理)。目录用 `statDirSafe`(`O_DIRECTORY | O_NOFOLLOW`)。锁文件、`snapshot.json`、固定数据文件、月文件都走它;测试缝 `beforeOpen`(锁:`RsiLockDeps.beforeRead`)用来确定性演练换链。②`RSI_SNAPSHOT_MAX_FILES`(2000)在**枚举阶段**执行(只 readdir / lstat,超出 → `snapshot_invalid`,此前不读任何数据文件内容);提交摘要逐文件计算 sha256 / 字节数后即释放,恢复时校验函数一次只拿到一个文件;`snapshot.json` 解析前有 1MiB 字节上限(超出 `invalid`),单个数据文件读入内存上限 256MiB(超出按该文件损坏)。**已知残余(不增加承诺)**:`O_NOFOLLOW` 只保护末级路径分量;目录检查与 `open` 之间,若父目录(`signals/<agent>`、`rsi/`)被同 UID 进程换成符号链接,`open` 仍会穿过它(Node 没有逐级锚定的 `openat`);`fstat` 也只是一个时点的校验,不冻结内容、权限或链接数。威胁模型与设计稿 §6.3(同 UID)一致,本实现是缩小窗口、不是 fencing。`O_NOFOLLOW` / `O_NONBLOCK` / `O_DIRECTORY` 在平台缺失时退化为 0,安全支持平台 = 具备这些常量与 `process.getuid` 的 POSIX。新建锁后的确认读取若发现锁文件不安全,报 `state_dir_unsafe`(不是 `locked`)。
 - §20.9 第 8 条的「盐首建非原子」部分已实现:`loadSalt` 首建经 `createExclusive`,输家读赢家落盘的那份;首次读取与 `EEXIST` 之后的读取都对「普通文件但仍为空」有限等待(共约 1 秒,仍为空则照旧 `salt_invalid`,fail-closed,不是可靠的等待协议);盐的格式、权限、`sig_id` 算法不变;`state-store.ts` 头注释已删该句。第 7 条的 `src/reflect/backends/lock.ts` 头注释残余说明已加。
 - **未做(依赖 A2)**:§20.9 第 6、7、8、11 条里「reflect / judge / gc / promote / `signals collect` 入口拿 `rsi/lock`」的命令接线,以及第 17 条(rsi 专用 `IoContext`)。原因:R20-1.3 要求 off 状态下这些命令与现在逐字节一致、不拿锁、不创建 `.state/rsi/`,而 off 与否要由 `[rsi]` 配置分层校验(R20-2.6)与 `rsiStateOf()` 现算——它们属 A2,A1 无法判定;不经它们就接线,会让未启用 rsi 的用户多出 `.state/rsi/`。接线时用 `withRsiLock` 包住写路径即可。`state-store.ts` 头注释里「并发的两次 collect 会互相覆盖(P0 接受)」一句因此保留,待接线时删除。§20.8.2 A1 行里依赖接线的项(「去掉任一命令的拿锁」变异、worker × 各命令的并发组合)随接线补测。
@@ -3882,7 +3882,7 @@ rsi 的锁(仓库 `.state/`)与 update / sync 的锁(HOME 下 `.local/state/agen
 - R20-6.2 **启动预留**:判定 L0 到期后,独占创建 `.state/rsi/poke/<agent>-<窗口序号>`(窗口 = `floor(now / 30 分钟)`,`RSI_POKE_WINDOW_MINUTES`);创建成功的那一个才 spawn,`EEXIST` → 空操作。顺带调度用 `agent=kit`。所以每个 agent 每 30 分钟至多起一个 worker,四类合计至多四个;多出的在锁内查到期后立即结束(`skipped_throttled`)。worker 持锁时删除早于当前窗口 2 个以上的预留标记。时钟往回走时窗口序号变小、标记可能再次创建成功——最多多起一个 worker,锁内的到期判断兜底。
 - R20-6.3 **L0 间隔**:相邻两次 L0 的完成时间 ≥ 6 小时(`RSI_L0_MIN_INTERVAL_HOURS`),时钟往回走视为到期;前台 `rsi tick --write` 不受此限(待定夺 Q6)。
 - R20-6.4 **attempt 计数时间点**:worker 拿锁并通过到期判断之后、读任何会话文件之前,把 `state.json` 的 `attempt = {started_at, nonce}` 写盘(连同快照)。正常结束时清除并写 `last_tick`。下一次拿锁时发现 `attempt` 残留 → 先记一次 `crashed`(可重试错误)。
-- R20-6.5 **结果分类**:
+- R20-6.5 **结果分类**: (订正见 §20.14 B4 订正(补) B4b-3、B4c2-2)
 
 | 类别       | 结果码                                                                                                                                                                                                                                        | 对熔断                              |
 | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
@@ -3894,7 +3894,7 @@ rsi 的锁(仓库 `.state/`)与 update / sync 的锁(HOME 下 `.local/state/agen
 > **v3.1 修订(§21.18 第 16 条)**:并列新增 `auto_paused`(R21-10.1 / R21-10.2):只停新增生效、不停采集与撤销路径;本表的 `safety` 熔断停采集。两者不互相替代。
 
 - R20-6.6 **熔断**:`retryable` 打开后到 `until`(打开时刻 + 24h)之前自动路径空操作;到期后允许一次半开尝试,成功关闭,失败再开 24h。`safety` 只有前台 `rsi tick --write` 成功或 `rsi confirm` 才关闭,不自愈覆盖损坏的状态。`state.json` 本身过不了 schema 时无处记录熔断:自动路径按「状态不可读」空操作,`rsi status` 退出 3。
-- R20-6.7 **资源上限**(严格计数类与尽力预算类分开写;超限不报错退出,计数码进 `--json` 与日志;cursor 只推进到最后一个完整提交的文件): (订正见 §20.14 B3 订正 B3c-8) (订正见 §20.14 B4 订正 #5)
+- R20-6.7 **资源上限**(严格计数类与尽力预算类分开写;超限不报错退出,计数码进 `--json` 与日志;cursor 只推进到最后一个完整提交的文件): (订正见 §20.14 B3 订正 B3c-8) (订正见 §20.14 B4 订正 #5) (订正见 §20.14 B4 订正(补) B4a-2、B4a-7、B4b-1)
 
 | 项                                        | 上限                                                           | 性质与超限行为                                                                             |
 | ----------------------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
@@ -3913,8 +3913,8 @@ rsi 的锁(仓库 `.state/`)与 update / sync 的锁(HOME 下 `.local/state/agen
 | 暂存区容量                                | 50 个 run / 50MiB                                              | P1 拒收用(`RSI_STAGING_FULL`);P0 只计数                                                    |
 
 - 处理顺序确定:agent(`claude`、`codex`、`pi`)→ 文件 mtime 升序 → 路径字节序。
-- R20-6.8 **检查点**:每个会话文件开始前、每处理 1000 行、每个提交步骤前,worker 重新调用 `rsiStateOf()` 并比对本次**运行绑定**(R20-3.9.2):停止标记出现 → `stopped`;配置不可用或停止采集 → `skipped_collect_blocked`;状态不再是 `confirmed`、`repo` 身份变化、`policy_fp` 或 `agents` 变化(**包括只收紧排除**)→ `skipped_binding_changed`。三者都放弃本次全部未提交结果、不推进 cursor;下一次运行按新策略重来(收紧后的那次运行不会提交按旧策略读到的数据)。 (订正见 §20.14 B4 订正 #6)
-- R20-6.9 **cursor、全量扫描与提交**:
+- R20-6.8 **检查点**:每个会话文件开始前、每处理 1000 行、每个提交步骤前,worker 重新调用 `rsiStateOf()` 并比对本次**运行绑定**(R20-3.9.2):停止标记出现 → `stopped`;配置不可用或停止采集 → `skipped_collect_blocked`;状态不再是 `confirmed`、`repo` 身份变化、`policy_fp` 或 `agents` 变化(**包括只收紧排除**)→ `skipped_binding_changed`。三者都放弃本次全部未提交结果、不推进 cursor;下一次运行按新策略重来(收紧后的那次运行不会提交按旧策略读到的数据)。 (订正见 §20.14 B4 订正 #6) (订正见 §20.14 B4 订正(补) B4b-1、B4b-7)
+- R20-6.9 **cursor、全量扫描与提交**: (订正见 §20.14 B4 订正(补) B4b-2、B4b-4、B4b-6、B4c2-1、B4c2-2)
   - `.state/rsi/cursor.json`(`RsiCursor`):`{schema_version, fingerprint, full_scan: {epoch, started_at, done, last_completed_at}, files: {<session_ref>: {agent, size, mtime_ms, dev, ino, project_key, epoch, status}}}`,其中 `project_key` 是 `p_…` 字符串或 `null`(归属不明),`status` ∈ `ok|too_large|read_error|excluded|self_state|unknown_project`。
   - `fingerprint` = sha256(采集器版本、各 reader 版本、脱敏规则版本、overlay 里与脱敏有关字段的 sha256、排除策略指纹(规范化排除项哈希 + agents)、`salt_fp`、kit 主版本)的 canonical JSON。
   - 文件「未改动」= `size`、`mtime_ms`、`dev`、`ino` 全等**且**其 `epoch` 等于当前 `full_scan.epoch`。
@@ -3927,7 +3927,7 @@ rsi 的锁(仓库 `.state/`)与 update / sync 的锁(HOME 下 `.local/state/agen
 
 - R20-7.1 **日志** `.state/rsi/log.jsonl`(0600):每行 `canonicalJsonLine` 的 `{at, trigger: poke|kit|tick|confirm|purge|stop|rebuild|status, agent?, action, code, counts?, duration_ms?}`;`counts` 只含整数;不含路径、key、目录名、会话 id、摘录、异常消息。`action` / `code` 只取本节的枚举。
   > **v3.1 修订(§21.18 第 17 条)**:追加 `.state/rsi/audit.jsonl` 与分组账 `.state/rsi/canary-ledger.jsonl` 及其保留策略(R21-12.10、R21-6.4)。
-- R20-7.2 **权限与读取前校验**: (订正见 §20.14 B4 订正 #8、#9)
+- R20-7.2 **权限与读取前校验**: (订正见 §20.14 B4 订正 #8、#9) (订正见 §20.14 B4 订正(补) B4a-1、B4c2-5)
   - `.state/rsi/` 及其子目录 0700、文件 0600,一律经 safe-fs 写。读取 `.state/rsi/*` 前校验:不是符号链接、普通文件、`nlink == 1`、属主为当前 uid、权限不宽于 0600(目录 0700);不满足 → `state_dir_unsafe`(安全阻断),**不自动收紧**。
   - `.state/{signals,sessions}` 与盐沿用 `state-store.ts` 的现有行为(盐:链接 / 非普通文件 / 宽于 0600 → `SaltError`;信号目录与文件:写入时收紧到 0700 / 0600)。这是与 `.state/rsi/` 的有意差异,共享服务改造时保留,不改成拒绝。
   - 暂存区与 promote 产物沿用 §17 / §18 的读取校验(`FS_SYMLINK` / `FS_NOT_REGULAR` / `FS_HARDLINK`)。`.state` 本身与其上级的链接检查由 §5 safe-fs 的写入根 realpath 校验负责。
@@ -4504,6 +4504,55 @@ rsi 的锁(仓库 `.state/`)与 update / sync 的锁(HOME 下 `.local/state/agen
 - D13:`recomputeCounts` 不返回 clusters,提交侧每次重算。
 - D12:rebuild 的 cwd 一律按头部规则(与 #2 同一口径)。
 
+### B4 订正(补)(B4a / B4b / B4c1 / B4c2 实装后并入;编号按组计,条款处以「B4a-1」形式引用;与上文 B4 订正 #n 并存,不改写旧文字)
+
+**用户已确认的决定(已定决定)**:
+
+- 三个残余口径全部接受:`evidence_by_key` 取去重会话数;[A1] 在 state 写完之后 abort 时 `state.last_tick.outcome` 可能陈旧;`snapshot.json.tmp` 只在进入时与 rename 前复核。
+- D7 升级路径接受:索引丢失但 cursor 仍在时 tick 不重建索引,只能靠 `rsi projects --rebuild-index --write`;列举不完整且旧索引无效时重建不写;卡住时 `status` 要报出原因与下一步命令(B5 实现)。
+- 不可读会话根(EACCES 等)保持现状:`not_evaluated` + reason=`root_not_dir`(reason 枚举无「不可读」,fail-closed 方向正确,文案不精确),写进订正。
+
+**B4a(armed 列举、盐读取与头部解析)**
+
+1. **B4a-1(R20-7.2)**:盐统一为只读原语 `readSaltFile`(`loadSalt`、规划侧、`saltFpOf` 三处共用):普通文件、`O_NOFOLLOW`、`nlink==1`、属主为当前用户、权限不宽于 0600、≤4096 字节、内容为 64 位小写十六进制 + 至多一个末尾 LF;违规一律抛 `SaltError`,**不自动重生成盐**。与旧 `loadSalt` 的差异:旧实现 `.trim()`(首尾空白被接受),不查硬链接/属主,权限只禁 `0o077` 位;新实现全部收紧(含 CRLF、BOM、大写、63/65 位、可执行位都拒绝)。空文件只在 `loadSalt` 内有限等待。手动 `signals collect` 同受影响;失败发生在任何写入之前。
+2. **B4a-2(R20-1.4 / R20-6.7)**:列举深度:claude 与 pi 为 1(与 readers 的 walkFiles 一致),codex 为 8(方案/契约旧写 claude 8,订正);深度以下条目不计入 50000 目录项上限。
+3. **B4a-3(R20-1.4)**:codex 首行带 `payload.source.subagent` 的文件记 `notASession`,armed 计为未知;armed 计数:列举后消失或变为不安全的文件计未知会话;被 2000 上限截掉的计未知(仅覆盖已列出候选,列举不完整时不是总数);cwd 在 `.state` 内的自身会话既不是项目也不是未知。
+4. **B4a-4(R20-1.4)**:reader 与 armed 的差异都在「多计未知」方向:codex `turn_context` cwd、pi 空白首行、末行无 LF。
+5. **B4a-5(R20-3.3.2 / R20-3.5.4)**:`ArmedListing.complete?`(缺省视为 true):扫描不完整(根/目录不可读、候选 lstat 失败、条目上限、根 identity 变化、**初始不存在的根在扫描期间变成链接/文件/不可访问**)时为 false;`rsi projects` 输出固定行 `armed_list=incomplete`(JSON 为 `complete:false`),不含路径;B4c2 在 `complete===false` 时不得持久化 `state.armed_listing`。
+6. **B4a-6(R20-1.4 / R20-3.4.2)**:`L0Deps.piDirSet`:armed 与 status 的 pi 覆盖判定同一来源(命令的 env);`PI_CODING_AGENT_DIR` 已定义(含空串)或 `KIT_RSI_PI_DIR_SET=1` 视为已设;status 现在也认 `KIT_RSI_PI_DIR_SET=1`。
+7. **B4a-7(R20-6.7)**:资源残余:单个目录的 readdir 仍整层载入内存并排序,目录项上限(50000)约束处理数量而非物理列举量;病态单目录的内存占用不在上限保证之内(进入子目录前先检查剩余预算)。
+8. **B4a-8(R20-1.4 / R20-3.5.5)**:`parseHead('pi')`(armed 与 rebuild 在用)只看第 0 行;而读阶段(B4b)的 pi 预判已与 `PiReader.isClearlyNotPiSession` 同口径(首个非空白行);两者仍有差异,方向是 armed/rebuild 多计未知,登记为残余。
+
+**B4b(读阶段、cursor 与指纹)**
+
+1. **B4b-1(R20-6.8 / R20-6.7)**:行级钩子取代「每 1000 行」措辞(R20-6.8 / D6):预扫与正文合并计量,每 1000 行或每 8MiB 触发一次,读结束再报一次累计;字节数是下界近似(行的 UTF-8 字节数 + 1 个换行;CRLF 的 `\r` 不计;超过 `MAX_LINE_BYTES` 的行按 `MAX_LINE_BYTES` 计)。`bytes_read` 与 `RSI_MAX_BYTES_PER_TICK` 按 reader 物理读取累计:预扫与正文各读一遍都计入,单文件最多可计到其大小的约 2 倍;pi 头部预判的读取也计入。单文件按 `lstat` 大小 > 512MiB 在读前判 `too_large`,读中再按累计字节判一次。
+2. **B4b-2(R20-6.9)**:cursor(R20-6.9):淘汰顺序 epoch 升序 → `mtime_ms` 升序 → `session_ref` 字节序(契约旧写「最久未见」,订正);`done` 状态不回退,新文件走增量;已完成状态下时钟回拨、距 `last_completed_at` 满 7 天、缺 `last_completed_at` 都重开 epoch;`read_error`/`too_large`/`excluded` 等状态都盖当前 epoch;列举不完整时 `done` 永远到不了且不剪除条目(残余:50000 之后的会话读不到,`status` 的 `done` 一直为 false);读阶段 verdict 不是 continue(abort/time_limit)时不剪除。
+3. **B4b-3(R20-6.5)**:`ok_partial`(R20-6.5):命中任一 `RSI_LIMIT_*`(含 `RSI_LIMIT_ENTRIES`、`RSI_LIMIT_DEPTH`);只命中 `RSI_FILE_TOO_LARGE` 仍为 `ok`,该文件 cursor 记 `too_large`。
+4. **B4b-4(R20-6.9)**:指纹(R20-6.9):`sha256(canonicalJson({kitVersion, policy, overlayRedactionDigest, saltFp}))`,kitVersion 为完整 `KIT_VERSION`(D9:每次升级重扫一轮;`KIT_VERSION` 是手写常量,reader/脱敏规则改了而未升版本时指纹不变——已知风险,靠「每次改 reader 跑同夹具新旧版本 sig_id 集合相同」回归兜底);overlay 脱敏字段摘要取 `sensitive_words` 与 `internal_domains` 排序去重后的 canonical JSON 的 sha256;盐缺失/不可用或 overlay 不可用时 `fingerprint_match` 报 `null`。
+5. **B4b-5(R21-1.7)**:完整性(R21-1.7):读阶段只在内存给出 `complete`,cursor 不加状态;`<malformed>`、`<line-too-deep>`、`<line-too-large>` 与 `oversized_lines > 0` 都算不完整。
+6. **B4b-6(R20-6.9)**:excluded 文件的 cursor 条目 `project_key` 记 `null`(排除策略不回报被排除项目的根)。
+7. **B4b-7(R20-6.8)**:检查点:收紧排除经运行绑定的 `policyFp` 变化触发 `skipped_binding_changed`(经真实配置变更路径的测试证明可达);放宽排除与 agents 增加使确认失效(armed)→ 同样触发;agents 减少、重新确认(`confirmed_at` 变)也触发;state.json 过不了 schema(`stateInvalid`)归 `skipped_collect_blocked`,不归 binding_changed。
+
+**B4c1(计数、索引与 rebuild 规划)**
+
+1. **B4c1-1(R20-3.3.3 / R20-4.5)**:`signals_by_day` 窗口:`now` 所在 UTC 日及前 7 日共 8 个日(先归一到 UTC 再取日);窗口外(含未来日)只计入 `signals_total`,故 `sum(by_day) <= signals_total`;读侧 N 取近 7 日。
+2. **B4c1-2(R20-4.5 / R20-4.6)**:`per_key` 不做排除或索引过滤(排除立即生效由读侧现算,R20-4.6;`config` 不参与重算);非 `p_` 形状的键其信号并入 `unknown_keys_signals`,其会话行忽略;`unknown_keys_signals` 与读侧 U 的边界:前者只含非法形状键(这类键不进 `per_key`),读侧把它与索引外键的信号相加,不会重复计数。
+3. **B4c1-3(R20-4.7)**:`staged[].tainted` 每次按 `.state/reflect/<run_id>/TAINTED` 是否存在重算;对象存在或无法确认按在场算;父目录链是链接报 `state_dir_unsafe`;`reflect/` 目录每次重算只核对一次并缓存(元数据读次数上限约 2×5000+1)。
+4. **B4c1-4(R20-5.6)**:信号库完整性:单个月文件内重复 `sig_id` 与重复 `session_ref`(按 agent 目录)一律 `signal_store_corrupt`;跨月文件的同一 `sig_id` 不判重(事件无时间戳时 `ts` 回退到文件 mtime,会话增长后可能换月,写入方 `writeSignals` 同范围去重),`signals_total` 可能多计一次。
+5. **B4c1-5(R20-4.2)**:索引更新:同 key 同 path 且 `(dev, ino)` 一致才刷新 `last_seen`,不一致整条根不动(只有 `--rebuild-index` 重新认定);同 key 不同 path 追加为新根;超过 8 条保留 first_seen 最早 + last_seen 最近 7 条(漂移根不特殊处理,按 first_seen/last_seen 正常收敛,因其冻结、`last_seen` 不刷新而最先被砍;不改变读侧对「最近根」的判定);新 key 满 10000 后不入索引;并列时最早取数组靠前、其余取靠后;`prev.salt_fp` 与真实盐不符是调用方违约(抛 `RangeError`)。`updateIndex.full`(本次有 key 被丢)与 status 的 `index_full`(当前已满)语义不同,不要混用。
+6. **B4c1-6(R20-3.5.5)**:rebuild 规划:旧索引有效 = `readVerified` 读到 + 过 schema + 盐指纹相符;有效则合并保留旧条目(含手动 allow 采来的 key),新 key 的 `first_indexed_generation` = 旧 generation + 1,无效则从空建、条目为 0;重建重新认定漂移的 `(dev, ino)`;被排除项目的根也进索引;重建不读 `counts.json`;`RebuildPlan.index.generation` 是旧值或 0,提交侧写入时 +1;`complete` 含义同 `listArmed`,`complete===false` 且旧索引无效时不得 `--write`;盐 absent/empty 抛 `RebuildNoSaltError`(命令层映射为 `not_confirmed` 退 4),盐非法抛 `SaltError`;头部读取上限 `RSI_REBUILD_MAX_FILES = 10000`、mtime 降序,如实承诺「只重建最近 10000 个会话文件对应的项目,其余信号仍记 U」,`remainingFiles` 靠二次列举,是下界仅供参考;`RSI_LIMIT_ENTRIES` 与 `RSI_LIMIT_FILES` 同时命中时 `unknownSessions` 会偏高。
+7. **B4c1-7(R20-4.7)**:跨块约束:B4c2/B5 用 `stagedTainted` 覆盖 `staged[].tainted` 时只能写 `TAINTED` 文件的事实,不得掺入「证据属 X」的推导。
+
+**B4c2(提交、中止与盐回收)**
+
+1. **B4c2-1(R20-6.9)**:R20-6.9 提交与中止:顺序为信号库 → 会话计数 → R 重算 → 索引 → counts → state → cursor → `commitUnderLock`(日志 + 快照清单);[A0](读阶段或 C1 前中止)验收口径是 signals/sessions/projects/cursor 四类数据文件字节不变,盐首建与 taint 可能已发生;[A1](C1 之后中止)跳过 C2/C3/C6、仍做 R/C4/C5/C7,cursor 不推进;墙钟到期不阻断已经开始的有序提交(commit 阶段不返回 time_limit);每次提交都从磁盘重算 counts 的三段。
+2. **B4c2-2(R20-6.5 / R20-6.9)**:`CommitL0Result.summary.outcome` 是真实 outcome;`state.last_tick.outcome` 在 state 已写完(#5)之后才 abort 时可能陈旧(用户已确认接受),熔断以结果与日志为准;[A0] 的 `signals_new`/`sessions_new` 一律为 0(不是 null);每次提交都全量载入会话计数库(O(库) 内存/时间,有意:库带病要在写信号之前 fail-closed)。
+3. **B4c2-3(R20-4.5)**:R20-4.5:`clusters[].evidence_by_key[k]` = 该聚类证据里属于 key `k` 的去重会话数(非法形状的 key 记 `?`,读侧按 U 处理);读侧累加与 `cluster_min` 比较成立(一个会话只属于一个 project_key);`recomputeClusters` 的 slice 是上限不是过滤。
+4. **B4c2-4(R20-4.2a)**:R20-4.2a/D10:确认后第一次成功 L0 才 ack `baseline_pending`:成功(含 `ok_partial`)且本次写了索引;中止或索引不可写都不 ack;confirm 记录由磁盘决定。
+5. **B4c2-5(R20-7.2)**:D15 空盐回收:持锁、空普通文件、mtime 已满 10 秒才删除重建,删除前在同一个写点再确认一次仍是空普通文件且 mtime 仍满 10 秒;不足 10 秒报 `salt_invalid`;剩余窗口只是 lstat 与 remove 两个系统调用之间(同 UID、同锁下并发建盐,登记为残余)。
+6. **B4c2-6(R20-3.1.4)**:`L0Plan.salt` 的 `'none'`(盐不存在或为空,用临时盐)映射 `--json` 的 `"ephemeral"`,`'persisted'` 映射 `"persisted"`,映射由 B5 做;`planL0` 的 `signals_new`/`sessions_new` 为 null,`projects`/`unknown_signals`/`fingerprint_match` 为 null(D14)。
+7. **B4c2-7(R20-5.6)**:残余:`commitSnapshot` 内 `snapshot.json.tmp` 的 remove/写入只在进入时与 rename 前复核,失锁窗口内留下的 tmp 不在清单白名单内、内容(文件名 + sha256)不泄漏、下一次 recover 首行删除;`signals collect` 路径尚未接 `beforeWrite`/`rsi/lock`(A1 遗留,B5 接线);B5 接线前 `commitL0` 自己兜底一次 `needs_rebuild → recoverUnderLock`(幂等)。
+
 ## 21. 自主 RSI 契约(R21,v3.1,契约先行;V1–V6 实装后订正)
 
 > **状态:冻结(2026-10-23,第五轮评审通过)**。共五轮只读评审(Pi GPT-6.1 Sol),第五轮结论「高严重度是否全部闭合:是」「§21 能否冻结:能」;评审范围与逐轮处置见 §21.23。冻结后的改动必须以带编号的契约修订进行(原位加修订标注、在 §21.23 记录),不得静默改写。§21.22 的 Q-A–Q-P 已定。`analysis-plan v1` 附录 `§21.7a` 是冻结时已登记的待补项,由 V1.5 的契约修订补入(R21-7.13),不影响冻结。
@@ -4543,7 +4592,7 @@ rsi 的锁(仓库 `.state/`)与 update / sync 的锁(HOME 下 `.local/state/agen
 - R21-1.4 `[V1]` **零 LLM;kit 进程自身零联网**(R20-1.1 不变并细化,§21.18 第 12 条):kit 进程不 spawn LLM CLI。分三层:①**自动入口**(poke、hint、worker)的 import 闭包不含 `llm-exec`、`reflect/backends/**`、`net.ts`、`src/rsi/contrib/publish/**`、`src/rsi/exec/host/**`、`src/rsi/exec/isolated/**`;worker 对 E1 只做登记与状态推进(启用表、停用事件处理、探针到期登记,R21-16.2c、R21-16.14),**从不**执行宿主脚本、启动容器或调用运行时客户端。允许的子进程只有 R20-1.1 的 `runSelf` 桥接与私有仓库 git(R21-3.6,`protocol.allow=never`,零网络)。②**前台命令**:除下面两类外同样遵守①的闭包禁令。③**明确例外**:`rsi contrib submit` 经 git / `gh` 子进程联网(§21.17),是唯一由 kit 发起网络的 rsi 命令;`rsi exec-run`(引用 `exec/host/**`)与 `rsi isolation probe`、`rsi exec-prepare`(引用 `exec/isolated/**`)执行宿主脚本或容器——宿主脚本以用户完整权限运行、**网络不受 kit 约束**(R21-16.5),这是 v3.1 P2 接受的风险,不能写成「rsi 命令都不联网」的全称断言。会话 agent 的联网与第三方代码执行(§21.15)不属 kit 进程。
 - R21-1.5 `[V1]` **不降档放行**:闸、评估器、分组账、固定测试、隔离探针中任一不可用、超时或报内部错误 → 候选停在当前状态或进 `blocked` / `expired`,循环退回「只提示」;不存在「证据不全按通过处理」的分支(v3.1 §0 第 2 条)。变异:任一判定函数在异常时返回「通过」→ 测试红。
 - R21-1.6 `[V1]` **计时口径**(新,§21.22 Q-A):①令候选**走向更多生效**的计时(shadow → canary 的 20 会话、组样本门槛、留出组门槛、静态阶段判定点)**只按「有观测会话」计**,用户不用 agent 时不前进;②令候选**走向更少生效**的计时(`expired` 的日历上限、`blocked` 到期、`static_pending` 超时、冷却、熔断窗口、保留期、授权请求超时、投稿频率)可以按 UTC 日历计。即:日历时间流逝只会让候选停用或到期,永远不会让它生效。v3.1 中写作「N 天」而属于①的,一律读作「N 个有观测会话」(v3.1 §5.1 末段)。
-- R21-1.7 `[V1]` **「有观测会话」**:一个会话在 L0 采集后同时满足 ①会话文件被 reader 完整读完(无 `RSI_LIMIT_*` 截断、无解析失败);②属于「采集中」项目(R20-4.3);③若该会话被随机分组,分组账行能经随机会话标记关联且不属多标记会话(R21-6.4、R21-6.6)。不满足③的会话计入 C6 分母、不计入其它指标的分母。
+- R21-1.7 `[V1]` **「有观测会话」**:一个会话在 L0 采集后同时满足 ①会话文件被 reader 完整读完(无 `RSI_LIMIT_*` 截断、无解析失败);②属于「采集中」项目(R20-4.3);③若该会话被随机分组,分组账行能经随机会话标记关联且不属多标记会话(R21-6.4、R21-6.6)。不满足③的会话计入 C6 分母、不计入其它指标的分母。 (订正见 §20.14 B4 订正(补) B4b-5)
 - R21-1.8 `[V1]` **威胁模型**:防 kit 自己出错与已知注入模式,不防同 UID 的主动篡改(v3.1 R7)。kit 的输出与文档对审计、分组账只能称「kit 路径可追踪」,不得写「防篡改」「可证明」(沿用 R20-7.4 的措辞约束)。
 - R21-1.9 `[V1]` **展示标签**:任何展示自动产出正文的地方(`rsi show`、TTY 确认、注入文本、渲染进 payload 的托管块头)都带固定标签「自动产出、未经人工核验」(常量 `RSI_AUTO_LABEL`)。
 
