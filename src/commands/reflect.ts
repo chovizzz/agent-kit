@@ -11,6 +11,11 @@
  *   厂商 unknown、写出口拒绝、未知异常);4 后端不可用/未配置/超出 --max-calls。多个结果走 `combineExitCodes`。
  * - stdout 只含计数、枚举、id、哈希(`--json` 为 canonical JSON);stderr 只含稳定码,不回显异常消息或任何文本。
  * - 数字参数一律 `parseDecimalUint`。
+ * - **rsi/lock(R20-A2 B3b,契约 R20-5.1 / R20-5.2)**:谁拿锁——`--gc --write` 与 `--run-llm`(真跑),按 `lockGate` 判定:
+ *   `[rsi]` 未启用 / 状态树确定独立 → 不拿锁、不建 `.state/rsi/`(逐字节同接线前);同一状态树 → 试锁(不排队),拿不到 `REFLECT_NOT_RUN reason=locked` 退出 4;
+ *   状态目录无法证明安全 → `RSI_FAIL_CLOSED reason=state_dir_unsafe` 退出 3,不写任何东西。干跑与 `--gc`(无 `--write`)不拿锁。
+ *   真跑的锁在**构造后端之前**拿、整个 LLM 调用期间持有(锁序 `rsi/lock` → `reflect/llm.lock`),LLM 返回后先 `assertHeld()` 再写暂存区;失锁 → `RSI_FAIL_CLOSED reason=lock_lost` 退出 3。
+ *   本块只接锁:不更新 `counts.staged`、不做即时闸 / promote / signals collect 接线(B3c / B5)。
  */
 import { randomBytes } from 'node:crypto';
 import * as path from 'node:path';
@@ -31,7 +36,18 @@ import { readText, realpathSync, statSync } from '../io/read-fs.js';
 import { WriteDeniedError } from '../io/safe-fs.js';
 import { createRedactor } from '../redact/redactor.js';
 import { loadExistingAtoms, loadStagedAtoms, loadUsedProposalIds } from '../reflect/atoms-index.js';
-import type { LlmBackend } from '../reflect/backend-iface.js';
+import type {
+  LlmBackend,
+  LlmCompleteRequest,
+  LlmCompleteResult,
+} from '../reflect/backend-iface.js';
+import { loadRsiConfig } from '../rsi/config.js';
+import type { RsiConfig } from '../rsi/config.js';
+import { RsiLockError } from '../rsi/lock.js';
+import type { RsiLockHandle } from '../rsi/lock.js';
+import { RsiFailClosedError } from '../rsi/types.js';
+import { withRsiLockIfGated } from '../rsi/with-lock.js';
+import type { WithRsiLockIfGatedOptions } from '../rsi/with-lock.js';
 import { buildBackends, createSpawnBudget } from '../reflect/backends/index.js';
 import { ReflectGcError, runReflectGc } from '../reflect/gc.js';
 import type { GcResult } from '../reflect/gc.js';
@@ -57,6 +73,109 @@ export const DEFAULT_REFLECT_REDACT_TIMEOUT_MS = 5000;
 export const DRY_RUN_OWNER = '@dry-run';
 
 export type CliBackends = Readonly<Partial<Record<JudgeHopId, LlmBackend>>>;
+
+// ---------------------------------------------------------------------------
+// rsi/lock 接线(R20-A2 B3b;契约 §20.5 R20-5.1 / R20-5.2、D1、D3)。reflect 与 judge 共用
+// ---------------------------------------------------------------------------
+
+/** 两个命令工厂共有的 rsi 锁注入点(测试用;缺省 = 读真实 `[rsi]` 配置、真实锁) */
+export interface RsiLockWiring {
+  /** 缺省 `loadRsiConfig({ env: ctx.env })`(只读,不建任何目录) */
+  rsiConfig?: () => Promise<RsiConfig>;
+  /** 透传给 `withRsiLockIfGated`(`gate` / `lock`:时钟、pid、isAlive 等) */
+  lockDeps?: WithRsiLockIfGatedOptions;
+}
+
+/**
+ * 写入方拿 `rsi/lock`:`lockGate` 判 off(没有 `[rsi]` / 未启用 / 状态树确定独立)→ `fn(null)`,不建 `.state/rsi/`、不写任何东西,
+ * 行为与接线前逐字节一致;判 lock → 试锁(不排队)后 `fn(handle)`,返回即释放;判 refuse → 抛 `RsiFailClosedError`。
+ * 锁序固定 `rsi/lock` → `reflect/llm.lock`:内层 `withLlmLock` 在 `fn` 里面,本函数不碰它。
+ */
+export async function withRsiWriterLock<T>(
+  ctx: CommandContext,
+  wiring: RsiLockWiring,
+  fn: (lock: RsiLockHandle | null) => Promise<T>,
+): Promise<T> {
+  const config =
+    wiring.rsiConfig !== undefined
+      ? await wiring.rsiConfig()
+      : await loadRsiConfig(ctx.env !== undefined ? { env: ctx.env } : {});
+  return withRsiLockIfGated({ io: ctx.io, config }, fn, wiring.lockDeps);
+}
+
+/**
+ * 拿锁相关失败的命令级稳定码(只报稳定码,不带异常消息):
+ *  - 占用(`locked`)与超过 TTL 的占用(`locked_over_ttl`)→ `<PREFIX>_NOT_RUN reason=locked`,退出 4。D3 对命令级只登记 `locked`,
+ *    所以 `locked_over_ttl` 也报 `locked`(**不**抢占、不删旧锁,只是对外码合并;区分要看 `rsi status` 的 `lock:` 行);
+ *  - 其余(`state_dir_unsafe` / `lock_lost` / `write_denied` / `internal`,以及 gate 的 refuse)→ `RSI_FAIL_CLOSED reason=<原分类>`,退出 3。
+ * 不是锁错误返回 undefined,交给调用方原有的错误映射。
+ */
+export function rsiLockFailure(
+  e: unknown,
+  prefix: 'REFLECT' | 'JUDGE',
+): { line: string; exit: number } | undefined {
+  if (e instanceof RsiLockError) {
+    const s = e.toStable();
+    if (s.code === 'RSI_NOT_RUN') {
+      return { line: `${prefix}_NOT_RUN reason=locked\n`, exit: ExitCode.NOT_RUN };
+    }
+    return { line: `RSI_FAIL_CLOSED reason=${s.reason}\n`, exit: ExitCode.FAIL_CLOSED };
+  }
+  if (e instanceof RsiFailClosedError) {
+    return { line: `RSI_FAIL_CLOSED reason=${e.reason}\n`, exit: ExitCode.FAIL_CLOSED };
+  }
+  return undefined;
+}
+
+/** `guardBackend` / `guardStoreFs` 共享的失锁记录:一旦 `lost` 有值,之后不再调用后端、不再写 */
+export interface LockLossState {
+  lost: RsiLockError | undefined;
+}
+
+/** 复核锁仍是自己的;失败 → 记入 `state`(保留原分类,非锁错误按 `internal`)并返回 false */
+export async function checkHeld(lock: RsiLockHandle, state: LockLossState): Promise<boolean> {
+  if (state.lost !== undefined) return false;
+  try {
+    await lock.assertHeld();
+    return true;
+  } catch (e) {
+    state.lost = e instanceof RsiLockError ? e : new RsiLockError('internal');
+    return false;
+  }
+}
+
+/**
+ * 包一层后端:**LLM 返回后(成功、失败、抛错都一样)先 `assertHeld()` 再把结果交给调用方**(调用方随后才会写暂存区 / 提案)。
+ * 复核失败:记入 `state.lost`,返回 `{ ok:false, reason:'error' }`(runReflect / runJudge 把后端抛错吞成 backend_error,
+ * 这里不抛,免得调用方把它当成普通后端故障去写 pending 记录);`state.lost` 已有值时之后的调用直接返回失败、不再外发。
+ * 命令在 runReflect / runJudge 返回(或抛错)后必须先看 `state.lost` 并改报 `RSI_FAIL_CLOSED reason=lock_lost`。
+ */
+export function guardBackend(
+  backend: LlmBackend,
+  lock: RsiLockHandle,
+  state: LockLossState,
+): LlmBackend {
+  const failed: LlmCompleteResult = { ok: false, reason: 'error' };
+  return {
+    slot: backend.slot,
+    vendor: backend.vendor,
+    model: backend.model,
+    cli: backend.cli,
+    provider: backend.provider,
+    async complete(req: LlmCompleteRequest): Promise<LlmCompleteResult> {
+      // 外发前也复核:失锁后不再把摘录发出去(`state.lost` 一旦置位保持到命令结束)
+      if (!(await checkHeld(lock, state))) return failed;
+      let res: LlmCompleteResult;
+      try {
+        res = await backend.complete(req);
+      } catch (e) {
+        await checkHeld(lock, state);
+        throw e;
+      }
+      return (await checkHeld(lock, state)) ? res : failed;
+    },
+  };
+}
 
 // ---------------------------------------------------------------------------
 // 与 judge 共用的接线辅助
@@ -340,7 +459,7 @@ function parseArgs(argv: readonly string[]): Parsed {
 // 命令
 // ---------------------------------------------------------------------------
 
-export interface ReflectCommandDeps {
+export interface ReflectCommandDeps extends RsiLockWiring {
   /** 时钟;缺省真实时间 */
   clock?: () => Date;
   /** 随机源:返回 n 字节的十六进制串(run_id 后缀);缺省 node:crypto */
@@ -495,12 +614,28 @@ function gcLines(r: GcResult): string {
   );
 }
 
-async function runGc(ctx: CommandContext, args: Parsed, clock: () => Date): Promise<number> {
+async function runGc(
+  ctx: CommandContext,
+  args: Parsed,
+  clock: () => Date,
+  wiring: RsiLockWiring,
+): Promise<number> {
   try {
-    const res = await runReflectGc(ctx.io, clock(), { write: args.write });
+    // 干跑零写入:不读 rsi 配置、不拿锁;只有 --write(真删)才按闸门拿 rsi/lock,覆盖整个 runReflectGc
+    const res = args.write
+      ? await withRsiWriterLock(ctx, wiring, async (lock) => {
+          await lock?.assertHeld();
+          return runReflectGc(ctx.io, clock(), { write: true });
+        })
+      : await runReflectGc(ctx.io, clock(), { write: false });
     ctx.stdout(args.json ? canonicalJson(gcJson(res)) : gcLines(res));
     return ExitCode.OK;
   } catch (e) {
+    const locked = rsiLockFailure(e, 'REFLECT');
+    if (locked !== undefined) {
+      ctx.stderr(locked.line);
+      return locked.exit;
+    }
     const reason =
       e instanceof ReflectGcError || e instanceof WriteDeniedError ? e.code : 'internal';
     ctx.stderr(`REFLECT_FAIL_CLOSED reason=${reason}\n`); // 只报稳定码
@@ -547,7 +682,7 @@ export function createReflectCommand(deps: ReflectCommandDeps = {}): CommandDef 
         ctx.stderr(`agent-kit reflect: ${args.error}\n`);
         return ExitCode.USAGE;
       }
-      if (args.gc) return runGc(ctx, args, clock);
+      if (args.gc) return runGc(ctx, args, clock, deps);
       const live = args.runLlm && args.allowEgress;
 
       const loaded = await loadOverlay(ctx);
@@ -626,83 +761,97 @@ export function createReflectCommand(deps: ReflectCommandDeps = {}): CommandDef 
       }
 
       try {
-        const now = clock();
-        let backend: LlmBackend | undefined;
-        if (live) {
-          const backends = await (deps.createBackends ?? defaultCreateBackends)(ctx, {
-            overlay,
-            maxCalls,
-            now: clock,
-          });
-          const bound = JUDGE_HOP_CHAIN.filter((h) => backends[h] !== undefined);
-          let slot: JudgeHopId | undefined = args.backend;
-          if (slot === undefined) {
-            if (bound.length > 1) {
-              ctx.stderr(
-                `agent-kit reflect: 已配置 ${bound.length} 个后端槽位,须用 --backend <slot> 指定(不自动挑选:摘录将发给所选厂商)\n`,
-              );
-              return ExitCode.USAGE;
+        // 真跑(live)才拿 rsi/lock,且在**构造后端之前**拿:覆盖读已有/暂存原子、LLM 调用、写暂存区;锁序 rsi/lock → reflect/llm.lock
+        // (内层 withLlmLock 在 runReflect 的后端里,不变)。干跑不读 rsi 配置、不拿锁。
+        const loss: LockLossState = { lost: undefined };
+        const execute = async (lock: RsiLockHandle | null): Promise<number> => {
+          const now = clock();
+          let backend: LlmBackend | undefined;
+          if (live) {
+            const backends = await (deps.createBackends ?? defaultCreateBackends)(ctx, {
+              overlay,
+              maxCalls,
+              now: clock,
+            });
+            const bound = JUDGE_HOP_CHAIN.filter((h) => backends[h] !== undefined);
+            let slot: JudgeHopId | undefined = args.backend;
+            if (slot === undefined) {
+              if (bound.length > 1) {
+                ctx.stderr(
+                  `agent-kit reflect: 已配置 ${bound.length} 个后端槽位,须用 --backend <slot> 指定(不自动挑选:摘录将发给所选厂商)\n`,
+                );
+                return ExitCode.USAGE;
+              }
+              slot = bound[0];
             }
-            slot = bound[0];
+            backend = slot === undefined ? undefined : backends[slot];
+            if (backend === undefined) {
+              ctx.stderr('REFLECT_NOT_RUN reason=backend_not_configured\n'); // 未调用、未写入
+              return ExitCode.NOT_RUN;
+            }
+            // LLM 返回后先 assertHeld 再往下写暂存区(见 guardBackend);lock 为 null(闸门 off)时不包,行为不变
+            if (lock !== null) backend = guardBackend(backend, lock, loss);
+            ctx.stderr(
+              `REFLECT_EGRESS slot=${safeEnum(backend.slot) ?? '?'} vendor=${safeEnum(backend.vendor) ?? '?'}\n`,
+            );
           }
-          backend = slot === undefined ? undefined : backends[slot];
-          if (backend === undefined) {
-            ctx.stderr('REFLECT_NOT_RUN reason=backend_not_configured\n'); // 未调用、未写入
-            return ExitCode.NOT_RUN;
-          }
-          ctx.stderr(
-            `REFLECT_EGRESS slot=${safeEnum(backend.slot) ?? '?'} vendor=${safeEnum(backend.vendor) ?? '?'}\n`,
-          );
-        }
 
-        const runDeps: RunDeps = {
-          io: ctx.io,
-          redactor,
-          clock,
-          ...(backend !== undefined ? { backend } : {}),
-          existingAtoms: await loadExistingAtoms(ctx.io),
-          stagedAtoms: await loadStagedAtoms(ctx.io),
-          usedProposalIds: await loadUsedProposalIds(ctx.io),
-          kitVersion: KIT_VERSION,
+          const runDeps: RunDeps = {
+            io: ctx.io,
+            redactor,
+            clock,
+            ...(backend !== undefined ? { backend } : {}),
+            existingAtoms: await loadExistingAtoms(ctx.io),
+            stagedAtoms: await loadStagedAtoms(ctx.io),
+            usedProposalIds: await loadUsedProposalIds(ctx.io),
+            kitVersion: KIT_VERSION,
+          };
+          const result = await doReflect(runDeps, {
+            mode: live ? (deps.stub === true ? 'stub' : 'llm') : 'dry',
+            runId: newRunId(now, randomHex),
+            owner: args.owner ?? DRY_RUN_OWNER,
+            since: args.since,
+            agents: args.agents.length > 0 ? args.agents : undefined,
+            maxProposals,
+            maxCalls,
+            timeoutMs,
+            allowEgress: live,
+            teamProjectKeys: new Set(ov?.team_project_keys ?? []),
+            budgetFull: budget === 'full',
+            includePrompt: args.showPrompt,
+          });
+          if (loss.lost !== undefined) throw loss.lost; // 失锁:不打印摘要,改报 RSI_FAIL_CLOSED reason=lock_lost
+
+          const exit = combineExitCodes([result.exitCode]);
+          const bindings = overlay?.reflect?.backends ?? [];
+          const planned =
+            args.backend !== undefined
+              ? bindings.find((b) => b.slot === args.backend)
+              : bindings.length === 1
+                ? bindings[0]
+                : undefined;
+          const summary = summaryOf(result, {
+            budget,
+            plannedBackend: live || planned === undefined ? null : `${planned.slot}/${planned.cli}`,
+            exit,
+          });
+          if (args.json) ctx.stdout(canonicalJson(summary));
+          else ctx.stdout(humanLines(summary));
+          if (args.showPrompt) {
+            // 仅干跑;提示文本只到 stdout,不落盘
+            for (const p of result.prompts ?? []) ctx.stdout(`${p.system}\n\n${p.user}\n`);
+          }
+          const failure = safeEnum(result.backendFailure);
+          if (failure !== undefined) ctx.stderr(`REFLECT_NOT_RUN reason=backend_${failure}\n`);
+          return exit;
         };
-        const result = await doReflect(runDeps, {
-          mode: live ? (deps.stub === true ? 'stub' : 'llm') : 'dry',
-          runId: newRunId(now, randomHex),
-          owner: args.owner ?? DRY_RUN_OWNER,
-          since: args.since,
-          agents: args.agents.length > 0 ? args.agents : undefined,
-          maxProposals,
-          maxCalls,
-          timeoutMs,
-          allowEgress: live,
-          teamProjectKeys: new Set(ov?.team_project_keys ?? []),
-          budgetFull: budget === 'full',
-          includePrompt: args.showPrompt,
-        });
-
-        const exit = combineExitCodes([result.exitCode]);
-        const bindings = overlay?.reflect?.backends ?? [];
-        const planned =
-          args.backend !== undefined
-            ? bindings.find((b) => b.slot === args.backend)
-            : bindings.length === 1
-              ? bindings[0]
-              : undefined;
-        const summary = summaryOf(result, {
-          budget,
-          plannedBackend: live || planned === undefined ? null : `${planned.slot}/${planned.cli}`,
-          exit,
-        });
-        if (args.json) ctx.stdout(canonicalJson(summary));
-        else ctx.stdout(humanLines(summary));
-        if (args.showPrompt) {
-          // 仅干跑;提示文本只到 stdout,不落盘
-          for (const p of result.prompts ?? []) ctx.stdout(`${p.system}\n\n${p.user}\n`);
-        }
-        const failure = safeEnum(result.backendFailure);
-        if (failure !== undefined) ctx.stderr(`REFLECT_NOT_RUN reason=backend_${failure}\n`);
-        return exit;
+        return live ? await withRsiWriterLock(ctx, deps, execute) : await execute(null);
       } catch (e) {
+        const locked = rsiLockFailure(e, 'REFLECT');
+        if (locked !== undefined) {
+          ctx.stderr(locked.line);
+          return locked.exit;
+        }
         const { code, reason } = reflectErrorExit(e);
         const tag =
           code === ExitCode.USAGE ? 'USAGE' : code === ExitCode.NOT_RUN ? 'NOT_RUN' : 'FAIL_CLOSED';
