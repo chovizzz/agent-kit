@@ -9,7 +9,6 @@ import type { RsiConfigOn } from '../../src/rsi/config.js';
 import type { RsiLockHandle } from '../../src/rsi/lock.js';
 import { commitUnderLock, writeCountsProjection } from '../../src/rsi/services/commit.js';
 import { immediateGate, judgeGateCallbacks } from '../../src/rsi/services/immediate-gate.js';
-import { openRsiIo } from '../../src/rsi/services/open.js';
 import {
   detectPurgeJournal,
   resumeTaint,
@@ -26,7 +25,7 @@ const lock = {} as RsiLockHandle;
 const plan: RsiCommitPlan = { trigger: 'kit' };
 
 describe('服务层桩', () => {
-  it('全部 throw not implemented(B3a / B3c 替换)', async () => {
+  it('全部 throw not implemented(B3c 替换;openRsiIo 已由 B3a 实装,见 open.test.ts)', async () => {
     const msg = 'not implemented';
     await expect(resumeTaint(ctx, lock)).rejects.toThrow(msg);
     await expect(detectPurgeJournal(ctx)).rejects.toThrow(msg);
@@ -35,15 +34,6 @@ describe('服务层桩', () => {
     await expect(commitUnderLock(ctx, lock, plan)).rejects.toThrow(msg);
     await expect(writeCountsProjection(ctx, lock, {})).rejects.toThrow(msg);
     await expect(taintNewlyExcluded(ctx, lock, { source: 'exclude' })).rejects.toThrow(msg);
-    await expect(
-      openRsiIo({
-        argv: [],
-        overlayPath: undefined,
-        explicitRoot: undefined,
-        stdout: () => undefined,
-        stderr: () => undefined,
-      }),
-    ).rejects.toThrow(msg);
   });
 });
 

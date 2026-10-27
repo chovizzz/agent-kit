@@ -317,6 +317,63 @@ export function realpathSync(path: string): string {
   return fs.realpathSync(path);
 }
 
+/** {@link readHead} 的测试 / 审计缝 */
+export interface ReadHeadHooks {
+  /** 测试缝:调用后紧接着 open(演练检查之后被换成符号链接 / FIFO) */
+  beforeOpen?: () => Promise<void> | void;
+  /**
+   * 读审计:每发起一次**物理读取**(`read(2)`)前调用一次,参数是文件路径、偏移(恒为 0)与请求长度。
+   * `readHead` 对每个文件只发起一次读取,所以这个钩子对同一个路径至多触发一次(armed 读审计的判据,R20-1.4 / R20-1.11)。
+   */
+  onRead?: (info: { path: string; offset: 0; length: number }) => void;
+}
+
+export type ReadHeadResult =
+  /**
+   * `firstLine`:偏移 0 起的第一个 `\n` **之前**的原始字节(不含 `\n`,可能为空;行尾的 `\r` 原样保留,交给解析器处理);
+   * `null` = 这次读取的窗口里没有 `\n`(窗口外的字节不再读取)——调用方按「首行取不到」处理。
+   * 第一个 `\n` 之后的字节**不会出现在返回值里**,所以调用方没有办法把它们交给解析器(R20-1.4,结构性保证)。
+   */
+  | { kind: 'ok'; firstLine: Buffer | null }
+  | { kind: 'missing' }
+  | { kind: 'unsafe'; why: SafeUnsafeWhy };
+
+/**
+ * armed 头部读取(R20-1.4):同一个句柄级安全打开(`O_NOFOLLOW | O_NONBLOCK`、普通文件、`nlink == 1`),
+ * 从偏移 0 起**一次**读取至多 `maxBytes` 字节(调用方传 64KiB),只返回首行字节。不解码、不解析。
+ * 一次读取的含义:每个文件恰好一次 `read(2)`;短读(对普通文件只在 EOF 附近出现)不重试,窗口里没有 `\n` 就是 `null`。
+ */
+export async function readHead(
+  path: string,
+  maxBytes: number,
+  hooks: ReadHeadHooks = {},
+): Promise<ReadHeadResult> {
+  if (!Number.isInteger(maxBytes) || maxBytes < 1) throw new RangeError('maxBytes 必须是正整数');
+  await hooks.beforeOpen?.();
+  let h: fsp.FileHandle;
+  try {
+    h = await fsp.open(path, fs.constants.O_RDONLY | NOFOLLOW | NONBLOCK);
+  } catch (e) {
+    return openFailure(e);
+  }
+  try {
+    const st = await h.stat();
+    if (st.isFile() && st.nlink === 0) return { kind: 'missing' };
+    const why = checkMeta(st, 'file', undefined);
+    if (why !== undefined) return { kind: 'unsafe', why };
+    const buf = Buffer.allocUnsafe(maxBytes);
+    hooks.onRead?.({ path, offset: 0, length: maxBytes });
+    const { bytesRead } = await h.read(buf, 0, maxBytes, 0);
+    const nl = buf.subarray(0, bytesRead).indexOf(0x0a);
+    // 拷出首行,让整块读缓冲(含首行之后的字节)随即不可达
+    return { kind: 'ok', firstLine: nl < 0 ? null : Buffer.from(buf.subarray(0, nl)) };
+  } catch {
+    return { kind: 'unsafe', why: 'io' };
+  } finally {
+    await h.close().catch(() => undefined);
+  }
+}
+
 /** 单行硬上限(UTF-8 字节)。超过的行不拼接正文,readLines 以 TOO_LONG_LINE 占位产出。 */
 export const MAX_LINE_BYTES = 64 * 1024 * 1024;
 

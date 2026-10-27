@@ -263,6 +263,8 @@ const SUBPROCESS_TESTS = [
   'test/ops/helpers.ts',
   // R20 A1:真进程锁测试的子进程支撑(vite 打包 child-entry 后用 node 跑)
   'test/rsi/proc/helper.ts',
+  // R20 A2 B3a:零写入审计的真子进程支撑(vite 打包 ro-entry 后用 node 跑 main())
+  'test/rsi/proc/ro-helper.ts',
   'test/build/bundle-artifact.test.ts',
 ];
 
