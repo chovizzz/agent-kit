@@ -5,7 +5,7 @@
  */
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { exists, readBytes } from '../../src/io/read-fs.js';
+import { exists, readBytes, readText } from '../../src/io/read-fs.js';
 import { chmod, writeFile } from '../../src/io/safe-fs.js';
 import { inspectSnapshot } from '../../src/rsi/snapshot.js';
 import { productionSnapshotValidator } from '../../src/rsi/validators.js';
@@ -540,23 +540,27 @@ describe('D2 / 锁内顺序:复检先于 recover', () => {
   });
 });
 
-describe('purge journal(B5a 临时 fail-closed)', () => {
-  it('confirmed 且 journal 在场 → 3 purge_incomplete(B5c 接线前);armed 不受影响(taint 续做照常)', async () => {
+describe('purge journal(B5c 接线)', () => {
+  it('confirmed 且 journal 不合规 → 3 journal_invalid(tick 不做 salvage,journal 字节不变);合规 journal 的续做见 b5c-salvage.test.ts', async () => {
     const f = await makeTickFx('tk-jr-', { confirmed: true });
+    const file = path.join(f.rsiDir, 'purge-journal.json');
     await writeFile(
       f.io,
-      path.join(f.rsiDir, 'purge-journal.json'),
+      file,
       JSON.stringify({
         schema_version: 1,
         created_at: '2026-10-26T00:00:00.000Z',
+        mode: 'purge',
         phase: 'planned',
-        keys: ['p_' + 'a'.repeat(16)],
+        keys: [],
         taint_targets: { runs: [], promotes: [] },
       }),
       { mode: 0o600 },
     );
+    const body = await readText(file);
     const r = await tick(f, ['--write']);
-    expect([r.code, r.err]).toEqual([3, 'RSI_FAIL_CLOSED reason=purge_incomplete\n']);
+    expect([r.code, r.err]).toEqual([3, 'RSI_FAIL_CLOSED reason=journal_invalid\n']);
+    expect(await readText(file)).toBe(body);
   });
 });
 

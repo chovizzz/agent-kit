@@ -15,8 +15,7 @@ const REGISTERED: Readonly<Record<string, readonly string[]>> = {
   // B5a 已实装并删除登记:tick / status --ack / projects --rebuild-index(干跑与 --write)
   // B5b:confirm 实装
   'src/rsi/confirm.ts': ['confirm'],
-  // B5c:purge 实装
-  'src/rsi/purge.ts': ['purge'],
+  // B5c 已实装并删除登记:purge
   // A3:poke / hint(钩子专用入口,不属于 B5)
   'src/rsi/poke.ts': ['poke'],
   'src/rsi/hint.ts': ['hint'],

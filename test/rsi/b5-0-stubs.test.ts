@@ -1,5 +1,5 @@
 /**
- * R20-A2 B5-0:共享服务签名桩的冻结。签名用编译期类型断言钉住(`pnpm typecheck` 覆盖 test/,改签名会红);运行期桩一律抛 `not implemented`。
+ * R20-A2 B5-0:共享服务签名桩的冻结。签名用编译期类型断言钉住(`pnpm typecheck` 覆盖 test/,改签名会红);B5c 实装之后,运行期桩断言已删(行为测试在 b5c-*.test.ts)。
  * 实装块(B5a / B5c)替换函数体时,这里的类型断言保持不动;要改签名必须走主代理。
  * 另钉:`RSI_STATUS_WARNINGS` 与 `status.ts` 现有的 `warnings.push('…')` 字面量一致(新增的 `index_rebuild_required` 由 B5a 接线)。
  */
@@ -17,15 +17,9 @@ import * as purgeJournal from '../../src/rsi/services/purge-journal.js';
 import * as purgePlan from '../../src/rsi/services/purge-plan.js';
 import * as tickState from '../../src/rsi/services/tick-state.js';
 import type { RsiState } from '../../src/contracts/rsi.js';
-import type { RsiLockHandle } from '../../src/rsi/lock.js';
-import type { RsiServiceCtx } from '../../src/rsi/types.js';
 import * as storeRewrite from '../../src/signals/store-rewrite.js';
 import type { WriteGate } from '../../src/signals/state-store.js';
 import { REPO_ROOT } from '../helpers/tmp.js';
-
-const ctx = {} as RsiServiceCtx;
-const lock = {} as RsiLockHandle;
-const io = {} as IoContext;
 
 describe('B5 服务签名(类型断言 = 冻结)', () => {
   it('observe.ts(B5a)', () => {
@@ -106,32 +100,6 @@ describe('B5 服务签名(类型断言 = 冻结)', () => {
     expectTypeOf(storeRewrite.rewriteMonthFileWithout).returns.toEqualTypeOf<
       Promise<'unchanged' | { removed: number }>
     >();
-  });
-
-  it('运行期:B5c 的桩仍抛 not implemented(B5a 的 observe / projections / tick-state 已实装,行为测试在 b5a-*.test.ts)', async () => {
-    const gate: WriteGate = () => Promise.resolve();
-    const asyncStubs: Array<[string, () => Promise<unknown>]> = [
-      ['resolvePurgeKeys', () => purgePlan.resolvePurgeKeys(io, {} as never, { kind: 'excluded' })],
-      ['planPurgeTargets', () => purgePlan.planPurgeTargets(io, [])],
-      ['countPurge', () => purgePlan.countPurge(io, [])],
-      ['writePurgeJournal', () => purgeJournal.writePurgeJournal(ctx, lock, {} as never)],
-      ['removePurgeJournal', () => purgeJournal.removePurgeJournal(ctx, lock)],
-      [
-        'runPurgeUnderLock',
-        () =>
-          purgeEngine.runPurgeUnderLock(ctx, lock, {
-            keys: [],
-            targets: { keys: [], runs: [], promotes: [] },
-          }),
-      ],
-      ['resumePurgeUnderLock', () => purgeEngine.resumePurgeUnderLock(ctx, lock)],
-      ['salvageInvalidJournal', () => purgeEngine.salvageInvalidJournal(ctx, lock)],
-      [
-        'rewriteMonthFileWithout',
-        () => storeRewrite.rewriteMonthFileWithout(io, '/x', new Set(), () => null, gate),
-      ],
-    ];
-    for (const [name, f] of asyncStubs) await expect(f(), name).rejects.toThrow(/not implemented/);
   });
 });
 

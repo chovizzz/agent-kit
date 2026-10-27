@@ -5,7 +5,7 @@
  * stopped / collect_blocked 退 4 → `planL0`;不拿锁、不建目录、不调 recover、不建盐。`L0Plan.salt` 的 `none` 映射成 `"ephemeral"`。
  *
  * `--write`:前台执行一次完整 L0,锁内顺序固定:**无副作用复检**(`observeRsi`,直读,D2:先于 recover)→ `recoverUnderLock` →
- * (confirmed 且有 purge journal:B5c 之前没有生产写入者能建 journal,这里临时 fail-closed `purge_incomplete`)→ `resumeTaintWith` →
+ * (confirmed 且有合规 purge journal:`resumePurgeUnderLock` 续做)→ `resumeTaintWith` →
  * confirmed:`runL0UnderLock`;armed:`taintNewlyExcludedWith` + 只校正 `counts.staged[].tainted`(counts 在且盐相符,D3)+ `runArmedUnderLock`。
  * 不预写 attempt(Q-K);熔断打开时照常执行,走完的 outcome 经 `tickStateMutator` 更新;抛错路径不调 mutator(A3 交接)。
  * `stopped` / `skipped_collect_blocked` / `skipped_binding_changed`(检查点中止)提交完状态后退 4,stdout 为空。
@@ -21,6 +21,7 @@ import type { IoContext } from '../io/paths.js';
 import { SaltError, readSaltFile } from '../signals/salt-read.js';
 import { parseFlags } from './args.js';
 import { failExit } from './exit.js';
+import { RsiLockError } from './lock-error.js';
 import { bindingOf } from './l0/binding.js';
 import { recomputeStagedTainted } from './l0/counts-recompute.js';
 import { makeGate } from './l0/commit.js';
@@ -44,6 +45,8 @@ import {
   observeRsi,
   type RsiObservation,
 } from './services/observe.js';
+import { resumePurgeUnderLock } from './services/purge-engine.js';
+import { RsiStagingBlockedError } from './services/staging.js';
 import { detectPurgeJournal, resumeTaintWith, taintNewlyExcludedWith } from './services/taint.js';
 import { tickStateMutator } from './services/tick-state.js';
 import { readRsiFixed } from './services/attribution.js';
@@ -237,10 +240,21 @@ async function writeRun(
       const hooks = hooksFromGate(gate);
       // ② 恢复未完成的提交
       const recovered = await recoverUnderLock(sctx, lock, hooks);
-      // ③ purge journal:B5c 之前没有生产写入者能建 journal(静态用例证明不可达);临时 fail-closed。invalid / unreadable 交给 ④ 抛出
+      // ③ purge journal(R20-3.8.5 ②):confirmed 且合规 journal 在场 → 先续做(purge 五阶段 / salvage 三阶段,按 mode 分派);
+      //   invalid / unreadable 在这里**不处理**(salvage 只属于前台 `purge --resume --write`,后台不得静默清空暂存摘录),交给 ④ 的 resumeTaint 抛 journal_invalid / purge_incomplete
       const confirmed = obs.state.state === 'confirmed';
       const jp = await detectPurgeJournal(sctx);
-      if (confirmed && jp.state === 'present') throw new RsiFailClosedError('purge_incomplete');
+      if (confirmed && jp.state === 'present') {
+        // 续做失败 → purge_incomplete(R20-3.8.5:其它写入方遇到无法完成的 journal;熔断按 safety 由 A3 记);失锁照旧是 lock_lost
+        try {
+          await resumePurgeUnderLock(sctx, lock, { hooks });
+        } catch (e) {
+          // 失锁与更具体的阻断(暂存目录数超限 / 暂存区里有 safe-fs 无法处理的条目)保留原码,其余一律 purge_incomplete
+          if (e instanceof RsiLockError || e instanceof RsiStagingBlockedError) throw e;
+          if (e instanceof RsiFailClosedError && e.reason === 'staging_too_large') throw e;
+          throw new RsiFailClosedError('purge_incomplete');
+        }
+      }
       // ④ taint 续做
       await resumeTaintWith(sctx, lock, hooks);
       const identity = obs.identity;

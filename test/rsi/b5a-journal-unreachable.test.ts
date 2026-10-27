@@ -9,8 +9,8 @@ import { describe, expect, it } from 'vitest';
 import { readDir, readText } from '../../src/io/read-fs.js';
 import { REPO_ROOT } from '../helpers/tmp.js';
 
-/** 允许写 journal 的生产文件(B5a:空;B5c 改为 purge-journal.ts) */
-const WRITERS: readonly string[] = [];
+/** 允许写 journal 的生产文件(B5a 时为空;B5c 起只有 purge-journal.ts) */
+const WRITERS: readonly string[] = ['src/rsi/services/purge-journal.ts'];
 
 const MENTION = /purge-journal|JOURNAL_FILE|journalPath/;
 const WRITE_CALL = /\b(createExclusive|writeFile|rename|remove|appendFile|chmod|mkdirp)\(/;
