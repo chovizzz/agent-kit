@@ -265,6 +265,8 @@ const SUBPROCESS_TESTS = [
   'test/rsi/proc/helper.ts',
   // R20 A2 B3a:零写入审计的真子进程支撑(vite 打包 ro-entry 后用 node 跑 main())
   'test/rsi/proc/ro-helper.ts',
+  // R20 A2 B5b:confirm 拒绝路径零写入的真子进程支撑(vite 打包 confirm-entry 后用 node 跑 main())
+  'test/rsi/proc/confirm-helper.ts',
   'test/build/bundle-artifact.test.ts',
   // R20 A2 B5-0:发布冻结脚本在沙箱 cwd 里的真子进程测试
   'test/build/publish-freeze.test.ts',
