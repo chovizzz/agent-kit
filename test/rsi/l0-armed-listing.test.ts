@@ -380,6 +380,51 @@ describe('最终根复核覆盖所有 agent(含没有候选文件的)', () => {
     expect(created).toBe(true);
     expect(d.complete).toBe(false);
   });
+  const absentThen = (name: string, mutate: (f: L0Fx, root: string) => Promise<void>): void => {
+    it.skipIf(name.includes('不可访问') && process.getuid?.() === 0)(
+      `开始时不存在的根在策略初始化期间${name} → complete=false(null 不等于「仍不存在」)`,
+      async () => {
+        const f = await makeL0Fx('ar-absent-then-');
+        const ex = await proj(f, 'excl');
+        const cfg = { ...f.config, excludeDirs: [ex], agents: ['pi' as const] };
+        const root = rootOf(f, 'pi');
+        let done = false;
+        const probe = {
+          exists: async () => true,
+          realpath: async (p: string) => p,
+          devIno: async (p: string) => {
+            if (!done && p === ex) {
+              done = true;
+              await mutate(f, root);
+            }
+            return null;
+          },
+        };
+        try {
+          const d = await listArmedDetailed(f.io, cfg, { probe });
+          expect(done).toBe(true);
+          expect(d.complete).toBe(false);
+          expect(d.rows).toEqual([]);
+        } finally {
+          if (name.includes('不可访问')) await chmod(f.fx, path.join(f.home, '.pi'), 0o755);
+        }
+      },
+    );
+  };
+  absentThen('变成符号链接', async (f, root) => {
+    const real = path.join(f.dir, 'real-pi-root');
+    await mkdirp(f.fx, real, 0o755);
+    await mkdirp(f.fx, path.dirname(root), 0o755);
+    await symlink(f.fx, real, root);
+  });
+  absentThen('变成普通文件', async (f, root) => {
+    await mkdirp(f.fx, path.dirname(root), 0o755);
+    await writeFile(f.fx, root, 'x');
+  });
+  absentThen('变成不可访问', async (f, root) => {
+    await mkdirp(f.fx, root, 0o755);
+    await chmod(f.fx, path.join(f.home, '.pi'), 0o000);
+  });
   it('对照:根始终不存在 → 完整的空清单(不误报);根存在但始终为空 → 完整', async () => {
     const f = await makeL0Fx('ar-none-');
     const d0 = await listArmedDetailed(f.io, f.config);

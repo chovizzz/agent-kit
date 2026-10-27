@@ -81,7 +81,16 @@ export async function enumerateSessionFiles(
         const abs = path.join(dir, e.name);
         const relPath = rel === '' ? e.name : `${rel}/${e.name}`;
         if (e.isDirectory && !e.isSymbolicLink) {
-          if (depth < shape.maxDepth) await visit(abs, relPath, depth + 1);
+          if (depth < shape.maxDepth) {
+            // 进入子目录(它的 readdir 会整层载入内存)之前先看剩余预算:计数已到上限时不再进入,也不知道里面有没有东西 → 记上限命中、列举不完整
+            if (entriesSeen >= maxEntries) {
+              limitsHit.add('RSI_LIMIT_ENTRIES');
+              complete = false;
+              stop = true;
+              return;
+            }
+            await visit(abs, relPath, depth + 1);
+          }
           continue;
         }
         if (!shape.match(relPath, e.name)) continue;

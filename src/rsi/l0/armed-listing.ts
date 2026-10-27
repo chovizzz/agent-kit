@@ -116,7 +116,8 @@ export async function listArmedDetailed(
     const chain = await evaluateAgentRoot(home, agent, piSet, deps);
     const changed =
       before === null
-        ? after !== null
+        ? // 开始时不存在:`null` 也可能是符号链接 / 非目录 / 探测失败,所以结束时必须证明它**仍然不存在**
+          chain.status !== 'absent' || after !== null
         : chain.status !== 'ok' ||
           after === null ||
           before.dev !== after.dev ||

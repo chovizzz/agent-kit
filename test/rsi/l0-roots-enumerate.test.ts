@@ -198,6 +198,30 @@ describe('enumerateSessionFiles:上限、根状态与竞态', () => {
     expect([...cut.limitsHit]).toEqual(['RSI_LIMIT_ENTRIES']);
     expect(cut.files.length).toBe(2);
   });
+  it('计数恰好到上限的最后一个条目是目录:不进入(不调用它的 readdir),记 RSI_LIMIT_ENTRIES、complete=false;对照:预算够时进入并完整', async () => {
+    const f = await makeL0Fx('en-lastdir-');
+    await put(f, 'pi', '--a--/s.jsonl', 'x\n');
+    const readdirs: string[] = [];
+    const beforeStep = (step: string, p: string): void => {
+      if (step === 'readdir') readdirs.push(p);
+    };
+    const cut = await enumerateSessionFiles(f.home, f.config, false, {
+      limits: { maxDirEntries: 1 },
+      beforeStep,
+    });
+    expect(readdirs).toEqual([rootOf(f, 'pi')]);
+    expect(cut.files).toEqual([]);
+    expect([...cut.limitsHit]).toEqual(['RSI_LIMIT_ENTRIES']);
+    expect(cut.complete).toBe(false);
+    readdirs.length = 0;
+    const ok = await enumerateSessionFiles(f.home, f.config, false, {
+      limits: { maxDirEntries: 2 },
+      beforeStep,
+    });
+    expect(readdirs).toEqual([rootOf(f, 'pi'), path.join(rootOf(f, 'pi'), '--a--')]);
+    expect(ok.files.length).toBe(1);
+    expect(ok.complete).toBe(true);
+  });
   it('上限是跨 agent 共享的:先列的 claude 用完预算,后面的 codex 不再列举', async () => {
     const f = await makeL0Fx('en-shared-');
     await put(f, 'claude', `p/${uuid(1)}.jsonl`, 'x\n'); // 2 项
