@@ -8,6 +8,14 @@ import type { IoContext } from '../io/paths.js';
 import { exists, lstat, readDir, readText } from '../io/read-fs.js';
 import { chmod, mkdirp, rename, writeFile } from '../io/safe-fs.js';
 
+/** 每个写操作(mkdirp / chmod / writeFile / chmod / rename)**之前**调用的复核回调;抛错 = 不再写(典型:`rsi/lock` 失锁)。 */
+export type WriteGate = () => Promise<void>;
+
+export interface StateOutOptions {
+  /** 不传 = 行为与接线前逐字节相同(retire 不传) */
+  beforeWrite?: WriteGate;
+}
+
 export class StateOutError extends Error {
   constructor(readonly reason: string) {
     super(reason);
@@ -27,10 +35,20 @@ async function assertRegularFile(file: string): Promise<void> {
   }
 }
 
-async function put(io: IoContext, file: string, content: string): Promise<void> {
+async function put(
+  io: IoContext,
+  file: string,
+  content: string,
+  gate: WriteGate | undefined,
+): Promise<void> {
+  // 四步每一步之前都过 gate(不是只在最外层调一次):失锁后的每一个写点都零写入
+  await gate?.();
   await mkdirp(io, path.dirname(file), 0o700);
+  await gate?.();
   await chmod(io, path.dirname(file), 0o700);
+  await gate?.();
   await writeFile(io, file, content, { mode: 0o600 });
+  await gate?.();
   await chmod(io, file, 0o600);
 }
 
@@ -41,10 +59,14 @@ export async function writeStateOut(
   id: string,
   files: Readonly<Record<string, string>>,
   existsReason: string,
+  opts: StateOutOptions = {},
 ): Promise<{ wrote: boolean; existing: boolean }> {
+  const gate = opts.beforeWrite;
   const root = path.join(io.stateDir, subdir);
   const dir = path.join(root, id);
   const names = Object.keys(files);
+  // 入口先复核一次:失锁时不得把「已存在且一致」当成功报出(Pi 评审 #4);之后每个写点前再各复核一次
+  await gate?.();
   await assertRealDir(root);
   if (await exists(dir)) {
     await assertRealDir(dir);
@@ -64,7 +86,8 @@ export async function writeStateOut(
   }
   const tmp = path.join(root, `.tmp-${id}`);
   if (await exists(tmp)) throw new StateOutError('tmp_exists');
-  for (const n of names) await put(io, path.join(tmp, n), files[n] as string);
+  for (const n of names) await put(io, path.join(tmp, n), files[n] as string, gate);
+  await gate?.();
   await rename(io, tmp, dir);
   return { wrote: true, existing: false };
 }
