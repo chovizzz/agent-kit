@@ -50,6 +50,9 @@ import { assertNoPurgeInProgress } from '../rsi/services/taint.js';
 import type { ImmediateGateCheck, RsiServiceCtx } from '../rsi/types.js';
 import type { LlmBackend, LlmCompleteResult } from '../reflect/backend-iface.js';
 import { createRedactor } from '../redact/redactor.js';
+import type { RsiConfig } from '../rsi/config.js';
+import { stableOf } from '../rsi/exit.js';
+import { RsiStagingBlockedError } from '../rsi/services/staging.js';
 import { parseDecimalUint } from './args.js';
 import {
   buildCliBackends,
@@ -63,6 +66,7 @@ import {
 import type { LockLossState, RsiLockWiring } from './reflect.js';
 import { GateStop, gateExitOf, gateIoOf, isGateExit, privacyCheck } from './rsi-gate-wiring.js';
 import type { GateExit } from './rsi-gate-wiring.js';
+import { enterWriterLock, serviceCtxOf, settleStaged } from './rsi-staged-wiring.js';
 import { combineExitCodes } from './types.js';
 import type { CommandContext, CommandDef } from './types.js';
 
@@ -380,9 +384,14 @@ export function createJudgeCommand(deps: JudgeCommandDeps = {}): CommandDef {
 
       // 真跑才拿 rsi/lock,且在构造后端之前拿;干跑不读 rsi 配置、不拿锁
       const loss: LockLossState = { lost: undefined };
-      const execute = async (lock: RsiLockHandle | null): Promise<number> => {
+      const execute = async (lock: RsiLockHandle | null, cfg?: RsiConfig): Promise<number> => {
         // 锁内、改任何提案之前:purge 进行中拒绝(assertNoPurgeInProgress)
         if (lock !== null) await (deps.assertNoPurge ?? assertNoPurgeInProgress)({ io: ctx.io });
+        // B5d(方案 §8):assertNoPurge 之后、即时闸 #1 之前:recoverUnderLock → resumeTaint(补完上一次中断的提交与 taint)。
+        // 与 reflect 的顺序故意不同(reflect 在 assertNoPurge 之前,见 reflect.ts):有 purge journal 时 judge 直接拒绝、不补 taint;reflect 先补 taint 再拒绝——两者都按方案字面,不是疏漏
+        const sctx = lock !== null ? serviceCtxOf(ctx, cfg, deps.now) : undefined;
+        if (lock !== null && sctx !== undefined)
+          await enterWriterLock(sctx, lock, deps.serviceHooks);
         // 即时闸 #1:读暂存区、构造后端之前(干跑也过)。非 allow → 零外发、零落盘、零输出
         const gstate: GateRunState = { stop: undefined };
         const scope = { kind: 'judge', runId } as const;
@@ -467,6 +476,25 @@ export function createJudgeCommand(deps: JudgeCommandDeps = {}): CommandDef {
             }),
           );
         };
+        /**
+         * B5d(方案 §8):评审记录写完之后、同一把锁内更新 `counts.staged`(只写 `TAINTED` 文件事实)并提交清单;没拿锁 / 已失锁 / 没写过任何记录 → 跳过。
+         * 失败 → 稳定码退 3(由调用方先 `partial()` 告诉用户哪些提案已写盘);已经写下的 judge 记录不撤销。
+         */
+        const settle = async (): Promise<GateExit | undefined> => {
+          if (lock === null || sctx === undefined || loss.lost !== undefined) return undefined;
+          if (!done.some((o) => o.wrote)) return undefined;
+          try {
+            await settleStaged(sctx, lock, redactor, deps.serviceHooks);
+            return undefined;
+          } catch (e) {
+            // RsiSnapshotBusyError 会退 4(占线不是失败),是 stableOf 的既有口径;RsiStagingBlockedError 按自带的稳定码
+            if (e instanceof RsiStagingBlockedError) {
+              return { exit: e.exit, stderr: `RSI_FAIL_CLOSED reason=${e.reason}\n` };
+            }
+            const st = stableOf(e);
+            return { exit: st.exit, stderr: `${st.line}\n` };
+          }
+        };
         const lockedFs: StoreFs | undefined = lock !== null ? guardStoreFs(lock, loss) : undefined;
         const storeFs: StoreFs | undefined =
           callbacks !== undefined
@@ -486,9 +514,15 @@ export function createJudgeCommand(deps: JudgeCommandDeps = {}): CommandDef {
             { runId, dry: !args.runLlm, maxCalls: args.maxCalls },
           );
         } catch (e) {
-          // 闸已经停了(GateStop 或停在外发点之后的任何后续错误):不打印部分结果,按闸的码退出
+          // 闸已经停了(GateStop 或停在外发点之后的任何后续错误):不打印部分结果,按闸的码退出;**闸停之后不再写 rsi 投影**(先判闸,再 settle)
           const stopped = await outputStop();
           if (stopped !== undefined) return stopped;
+          const settledErr = await settle();
+          if (settledErr !== undefined) {
+            partial();
+            ctx.stderr(settledErr.stderr);
+            return settledErr.exit;
+          }
           partial(); // 中途失败时仍告诉用户哪些提案已处理(已写盘)
           if (loss.lost !== undefined) {
             const lost = rsiLockFailure(loss.lost, 'JUDGE');
@@ -514,7 +548,13 @@ export function createJudgeCommand(deps: JudgeCommandDeps = {}): CommandDef {
         }
 
         const stoppedAfter = await outputStop();
-        if (stoppedAfter !== undefined) return stoppedAfter;
+        if (stoppedAfter !== undefined) return stoppedAfter; // 闸停之后不再写 rsi 投影
+        const settledOk = await settle();
+        if (settledOk !== undefined) {
+          partial();
+          ctx.stderr(settledOk.stderr);
+          return settledOk.exit;
+        }
         if (loss.lost !== undefined) {
           partial();
           const lost = rsiLockFailure(loss.lost, 'JUDGE');

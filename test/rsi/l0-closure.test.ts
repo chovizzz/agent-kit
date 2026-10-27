@@ -1,7 +1,7 @@
 /**
  * B4-0:L0 规划侧模块的 import 闭包闸(B4 方案 §1.4 / §6 第一层;R20-3.1.1 零写入的静态证明)。
  *
- * 规划侧 = `src/rsi/l0/*.ts`(排除提交侧 `commit.ts` / `run.ts`)、`src/rsi/exclude-match.ts`、`src/signals/salt-read.ts`。它们的 import 传递闭包
+ * 规划侧 = `src/rsi/l0/*.ts`(排除提交侧 `commit.ts` / `run.ts` / `commit-collect.ts`)、`src/rsi/exclude-match.ts`、`src/signals/salt-read.ts`。它们的 import 传递闭包
  * (`import type` 与 `export … from` 也算)不得含:safe-fs、`lock.ts`、`with-lock.ts`、`snapshot.ts`、`state-store.ts`、`session-stats.ts`,
  * 也不得含 llm-exec / reflect 后端 / net.ts / home-fs(R20-1.1)。模块清单用目录 glob 取,B4a–B4c2 新增规划侧文件自动纳入,不用再改本文件。
  * 每个模块都要:相对说明符全部解析成功、没有动态 import / require。
@@ -33,7 +33,8 @@ const FORBIDDEN_FILES: readonly string[] = [
 ];
 const FORBIDDEN_PREFIXES: readonly string[] = ['src/reflect/backends/'];
 /** 提交侧模块:不受本闸约束(它们本来就写) */
-const COMMIT_SIDE = new Set(['commit.ts', 'run.ts']);
+// B5d:commit-collect.ts(手动 signals collect 的提交)与 commit.ts 同属提交侧,写出口在这里
+const COMMIT_SIDE = new Set(['commit.ts', 'run.ts', 'commit-collect.ts']);
 const EXTRA_PLANNING: readonly string[] = ['src/rsi/exclude-match.ts', 'src/signals/salt-read.ts'];
 
 const l0Dir = path.join(ROOT, 'src/rsi/l0');

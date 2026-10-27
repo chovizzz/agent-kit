@@ -42,6 +42,7 @@ import {
 } from './b5g-world.js';
 import type { HomeCfg } from './b5g-world.js';
 import { startHolder } from './rsi-lock-world.js';
+import { SALT } from '../rsi/services-fixture.js';
 
 const SIG_HEX = CANARY.sig.slice('sig_'.length);
 const KEY = CANARY.project;
@@ -292,8 +293,19 @@ describe('judge × 即时闸 #1(读暂存区、构造后端之前)', () => {
         expect(x.out).toEqual([]);
         expect(r.factory.n, '闸在构造后端之前').toBe(0);
         expect(r.s.totalCalls()).toBe(0);
-        expect(await snapshot(gw.w.runDir)).toEqual(before);
-        // 真跑只允许有锁文件的创建与删除;干跑零写入
+        // B5d 预期变更:真跑在锁内先 `resumeTaint`(补完上一次中断的 taint 清理),所以「已有 TAINTED 标记、摘录还没清」的夹具在真跑下会被清空摘录
+        // (标记本身保留、闸照样拦下)。其余情形(含干跑)run 目录逐字节不变。
+        const completesTaint = c.name.startsWith('TAINTED') && mode === 'live';
+        if (completesTaint) {
+          expect(await snapshot(gw.w.runDir), '正向前提:resumeTaint 真的清了摘录').not.toEqual(
+            before,
+          );
+          expect(await readText(proposalFile(gw.w))).not.toContain('CANARY_EXCERPT');
+          expect(await exists(path.join(gw.w.runDir, 'TAINTED'))).toBe(true);
+        } else {
+          expect(await snapshot(gw.w.runDir)).toEqual(before);
+        }
+        // 真跑只允许有锁文件的创建与删除(及上面 taint 续做对 run 目录的清理);干跑零写入
         if (mode === 'dry') expect(gw.audit).toEqual([]);
         else {
           const stray = gw.audit.filter(
@@ -301,7 +313,8 @@ describe('judge × 即时闸 #1(读暂存区、构造后端之前)', () => {
               !(
                 l.includes(`${path.sep}rsi${path.sep}`) ||
                 l.endsWith(`${path.sep}rsi`) ||
-                l === `mkdirp ${gw.w.state}` // 取锁前确保状态目录存在(幂等)
+                l === `mkdirp ${gw.w.state}` || // 取锁前确保状态目录存在(幂等)
+                (completesTaint && l.includes(gw.w.runDir))
               ),
           );
           expect(stray).toEqual([]);
@@ -429,6 +442,8 @@ describe('judge × 三个回调(每次现算;各有「第一次检查之后状�
       flip: boolean,
     ): Promise<{ gw: GW; r: Rig; c: ReturnType<GW['ctx']>; code: number }> => {
       const gw = await gateWorld({ proposals: 2 });
+      // B5d:有盐,judge 之后才会刷新 counts.staged(盐缺失时跳过);盐指纹与夹具 counts / 索引一致
+      await writeFile(gw.fx, path.join(gw.w.state, 'salt'), SALT, { mode: 0o600 });
       const r = rig(gw, {
         afterCall: async (k) => {
           if (k !== 2) return;
@@ -458,6 +473,15 @@ describe('judge × 三个回调(每次现算;各有「第一次检查之后状�
     expect(g.c.err.join('')).toBe(`RSI_RUN_ATTRIBUTION_UNKNOWN run_id=${RUN_ID}\n`);
     // 第一个提案已经写下 judge 记录:不撤销
     expect(await readText(proposalFile(g.gw.w, 1))).toContain('judge:');
+    // B5d:闸停之后不再写 rsi 投影(先判闸、再 settle);对照:没有闸停时同一路径会刷新 counts(generation 1 → 2)
+    const gen = async (w: Work): Promise<number> =>
+      (
+        JSON.parse(await readText(path.join(w.state, 'rsi', 'counts.json'))) as {
+          generation: number;
+        }
+      ).generation;
+    expect(await gen(ok.gw.w)).toBe(2);
+    expect(await gen(g.gw.w)).toBe(1);
   });
 });
 

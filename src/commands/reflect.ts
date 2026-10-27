@@ -45,6 +45,8 @@ import { loadRsiConfig } from '../rsi/config.js';
 import type { RsiConfig } from '../rsi/config.js';
 import { RsiLockError } from '../rsi/lock.js';
 import type { RsiLockHandle } from '../rsi/lock.js';
+import { RsiSnapshotError } from '../rsi/snapshot-read.js';
+import { RsiStagingBlockedError, type ServiceHooks } from '../rsi/services/staging.js';
 import { assertNoPurgeInProgress } from '../rsi/services/taint.js';
 import { RsiFailClosedError } from '../rsi/types.js';
 import { withRsiLockIfGated } from '../rsi/with-lock.js';
@@ -64,6 +66,7 @@ import type { BeforeWrite } from '../reflect/types.js';
 import { SignalStoreError } from '../signals/state-store.js';
 import { parseDecimalUint } from './args.js';
 import { prepareBudgetInputs } from './check-budget.js';
+import { enterWriterLock, serviceCtxOf, settleStaged } from './rsi-staged-wiring.js';
 import { combineExitCodes } from './types.js';
 import type { CommandContext, CommandDef } from './types.js';
 
@@ -92,6 +95,11 @@ export interface RsiLockWiring {
    * 缺省 = `src/rsi/services/taint.ts` 的 `assertNoPurgeInProgress`(只需 `{ io }`);测试可注入替身。只在闸门判 lock(拿到句柄)时调用。
    */
   assertNoPurge?: (ctx: { io: CommandContext['io'] }) => Promise<void>;
+  /**
+   * 测试缝(R20-A2 B5d):锁内 recover / resumeTaint / counts.staged 刷新 / 提交这几步的写点钩子(`before:<op>` 之前调用;抛错 = 在该点崩溃,
+   * 换掉锁 nonce = 在该点失锁)。只在闸门判 lock(拿到句柄)时生效。
+   */
+  serviceHooks?: ServiceHooks;
 }
 
 /**
@@ -102,13 +110,14 @@ export interface RsiLockWiring {
 export async function withRsiWriterLock<T>(
   ctx: CommandContext,
   wiring: RsiLockWiring,
-  fn: (lock: RsiLockHandle | null) => Promise<T>,
+  fn: (lock: RsiLockHandle | null, config: RsiConfig) => Promise<T>,
 ): Promise<T> {
   const config =
     wiring.rsiConfig !== undefined
       ? await wiring.rsiConfig()
       : await loadRsiConfig(ctx.env !== undefined ? { env: ctx.env } : {});
-  return withRsiLockIfGated({ io: ctx.io, config }, fn, wiring.lockDeps);
+  // 第二个参数把同一份 config 交给锁内步骤(B5d):服务层上下文与拿锁闸门同源,不再读第二遍
+  return withRsiLockIfGated({ io: ctx.io, config }, (lock) => fn(lock, config), wiring.lockDeps);
 }
 
 /**
@@ -130,7 +139,12 @@ export function rsiLockFailure(
     }
     return { line: `RSI_FAIL_CLOSED reason=${s.reason}\n`, exit: ExitCode.FAIL_CLOSED };
   }
-  if (e instanceof RsiFailClosedError) {
+  if (
+    e instanceof RsiFailClosedError ||
+    e instanceof RsiSnapshotError ||
+    e instanceof RsiStagingBlockedError // staging_unsafe_entry(resumeTaint 发现暂存区有无法处理的条目)
+  ) {
+    // RsiSnapshotError:锁内 `recoverUnderLock` 的 inspect 发现带病数据(snapshot_invalid / counts_invalid / signal_store_corrupt …),B5d 起 reflect / judge 会走到
     return { line: `RSI_FAIL_CLOSED reason=${e.reason}\n`, exit: ExitCode.FAIL_CLOSED };
   }
   return undefined;
@@ -793,8 +807,12 @@ export function createReflectCommand(deps: ReflectCommandDeps = {}): CommandDef 
         // 真跑(live)才拿 rsi/lock,且在**构造后端之前**拿:覆盖读已有/暂存原子、LLM 调用、写暂存区;锁序 rsi/lock → reflect/llm.lock
         // (内层 withLlmLock 在 runReflect 的后端里,不变)。干跑不读 rsi 配置、不拿锁。
         const loss: LockLossState = { lost: undefined };
-        const execute = async (lock: RsiLockHandle | null): Promise<number> => {
-          // 锁内、建任何暂存内容之前:purge 进行中拒绝(assertNoPurgeInProgress)
+        const execute = async (lock: RsiLockHandle | null, cfg?: RsiConfig): Promise<number> => {
+          // 锁内、建任何暂存内容之前(B5d,方案 §8):recoverUnderLock → resumeTaint(补完上一次中断的提交与 taint),然后 purge 进行中拒绝(assertNoPurgeInProgress)。
+          // 与 judge 的顺序故意不同(judge 在 assertNoPurge 之后):有 purge journal 时 reflect 先补完 taint(合法 journal 的目标也会被标记 / 清理)再拒绝;journal 不合规 / 读不出由 resumeTaint 抛 journal_invalid / purge_incomplete
+          const sctx = lock !== null ? serviceCtxOf(ctx, cfg, clock) : undefined;
+          if (lock !== null && sctx !== undefined)
+            await enterWriterLock(sctx, lock, deps.serviceHooks);
           if (lock !== null) await (deps.assertNoPurge ?? assertNoPurgeInProgress)({ io: ctx.io });
           const now = clock();
           let backend: LlmBackend | undefined;
@@ -854,6 +872,10 @@ export function createReflectCommand(deps: ReflectCommandDeps = {}): CommandDef 
             includePrompt: args.showPrompt,
           });
           if (loss.lost !== undefined) throw loss.lost; // 失锁:不打印摘要,改报 RSI_FAIL_CLOSED reason=lock_lost
+          // 暂存区写完之后、同一把锁内更新 counts.staged(只在真的暂存了 run 时;失败 / 无提案的运行不动 counts)。失败 → 稳定码退 3,不打印摘要
+          if (lock !== null && sctx !== undefined && result.staged !== undefined) {
+            await settleStaged(sctx, lock, redactor, deps.serviceHooks);
+          }
 
           const exit = combineExitCodes([result.exitCode]);
           const bindings = overlay?.reflect?.backends ?? [];
