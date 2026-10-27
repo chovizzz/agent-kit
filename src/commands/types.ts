@@ -100,6 +100,9 @@ export interface EarlyCommandContext {
   writeAudit?: WriteAudit;
   stdout(text: string): void;
   stderr(text: string): void;
+  /** 与 `CommandContext` 相同的交互注入点(confirm / purge / --ack 用);缺省见 `resolveIsTty` / `resolveReadLine` */
+  isTty?: boolean;
+  readLine?: () => Promise<string | undefined>;
 }
 
 export type Phase = 'P0' | 'P1' | 'P2' | 'P3' | 'P4';

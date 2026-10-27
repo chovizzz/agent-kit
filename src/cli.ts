@@ -50,6 +50,9 @@ export interface MainEnv {
   cwd?: string;
   /** 写审计钩子(R20-A2 B1):注入后由 main() 放进它创建的 IoContext;缺省不审计 */
   writeAudit?: WriteAudit;
+  /** 交互注入(R20-A2 B3-0):只传给 runEarly 命令(rsi),测试用;缺省由命令按真实 TTY 判 */
+  isTty?: boolean;
+  readLine?: () => Promise<string | undefined>;
   stdout?: (text: string) => void;
   stderr?: (text: string) => void;
 }
@@ -190,6 +193,8 @@ export async function main(argv: readonly string[], env: MainEnv = {}): Promise<
       ...(env.env !== undefined ? { env: env.env } : {}),
       ...(env.cwd !== undefined ? { cwd: env.cwd } : {}),
       ...(env.writeAudit !== undefined ? { writeAudit: env.writeAudit } : {}),
+      ...(env.isTty !== undefined ? { isTty: env.isTty } : {}),
+      ...(env.readLine !== undefined ? { readLine: env.readLine } : {}),
       stdout,
       stderr,
     });
