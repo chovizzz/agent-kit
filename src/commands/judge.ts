@@ -14,6 +14,11 @@
  * - 没评上且无跨厂商可用:拆成两个稳定码(P1 D4):`JUDGE_NOT_CONFIGURED`(链上没有任何已配置后端,配置问题)
  *   与 `JUDGE_SAME_VENDOR_ONLY`(有已配置后端但都与反思器同厂商);默认仍退出 0(决策 ⑩A),`--strict` 时退出 4。
  *   `--strict` 只影响这两种情形;干跑不产生 pending,故不受影响。
+ * - **rsi/lock(R20-A2 B3b,契约 R20-5.1 / R20-5.2)**:谁拿锁——只有 `--run-llm`(真跑),按 `lockGate` 判定:`[rsi]` 未启用 / 状态树确定独立 →
+ *   不拿锁、不建 `.state/rsi/`(逐字节同接线前);同一状态树 → 在**构造后端之前**试锁(不排队),整个评审期间持有(锁序 `rsi/lock` → `reflect/llm.lock`),
+ *   拿不到 `JUDGE_NOT_RUN reason=locked` 退出 4;状态目录无法证明安全 → `RSI_FAIL_CLOSED reason=state_dir_unsafe` 退出 3,不写任何东西。
+ *   每次 LLM 返回后与每次写提案前都先 `assertHeld()`;失锁 → 不再外发 / 不再写,`RSI_FAIL_CLOSED reason=lock_lost` 退出 3。
+ *   干跑不拿锁、不改(即时闸 / privacyGate / counts.staged 属 B3c / B5,本块不做)。
  * - 退出码:0 完成(含 pending=not_configured / same_vendor_only,非 --strict);1 有提案 reject / injection_suspected / 没评上且出现过评审输出校验不通过;
  *   2 用法错(含 run 不存在);3 状态损坏、提示复扫残留、厂商不可证明、写出口拒绝;
  *   4 后端不可用/全部冷却/超出 --max-calls。
@@ -30,10 +35,22 @@ import {
 } from '../judge/errors.js';
 import { runJudge } from '../judge/run.js';
 import type { JudgeBackends, JudgeReport, ProposalOutcome } from '../judge/run.js';
-import { JudgeRunNotFoundError } from '../judge/store.js';
+import { JudgeRunNotFoundError, SAFE_STORE_FS } from '../judge/store.js';
+import type { StoreFs } from '../judge/store.js';
+import type { RsiLockHandle } from '../rsi/lock.js';
+import { assertNoPurgeInProgress } from '../rsi/services/taint.js';
 import { createRedactor } from '../redact/redactor.js';
 import { parseDecimalUint } from './args.js';
-import { buildCliBackends, loadOverlay, overlayAllowsEgress } from './reflect.js';
+import {
+  buildCliBackends,
+  checkHeld,
+  guardBackend,
+  loadOverlay,
+  overlayAllowsEgress,
+  rsiLockFailure,
+  withRsiWriterLock,
+} from './reflect.js';
+import type { LockLossState, RsiLockWiring } from './reflect.js';
 import { combineExitCodes } from './types.js';
 import type { CommandContext, CommandDef } from './types.js';
 
@@ -43,7 +60,7 @@ export const MAX_CALLS_CEILING = 10;
 /** 评审提示/输出的脱敏复扫每遍时间预算(与 signals collect 同一取舍:负载抖动不应当成泄露)。 */
 export const DEFAULT_JUDGE_REDACT_TIMEOUT_MS = 250;
 
-export interface JudgeCommandDeps {
+export interface JudgeCommandDeps extends RsiLockWiring {
   /**
    * 后端工厂:返回「兜底链槽位 → 后端」。必须无副作用(干跑也会调用它来列计划,但不得 complete)。
    * `mode.live` = 用户同时给了 `--run-llm --allow-egress`;默认接线的工厂只在 live 时构造后端。
@@ -186,6 +203,31 @@ function summarize(report: JudgeReport): string {
   });
 }
 
+/** 写提案的出口:每次写 / 删 / 改名 / chmod 前先复核 `rsi/lock`;失锁 → 记入 `loss` 并抛(命令随后改报 lock_lost) */
+export function guardStoreFs(lock: RsiLockHandle, loss: LockLossState): StoreFs {
+  const held = async (): Promise<void> => {
+    if (!(await checkHeld(lock, loss))) throw loss.lost;
+  };
+  return {
+    async writeFile(io, target, data, opts) {
+      await held();
+      return SAFE_STORE_FS.writeFile(io, target, data, opts);
+    },
+    async chmod(io, target, mode) {
+      await held();
+      return SAFE_STORE_FS.chmod(io, target, mode);
+    },
+    async rename(io, from, to) {
+      await held();
+      return SAFE_STORE_FS.rename(io, from, to);
+    },
+    async remove(io, target) {
+      await held();
+      return SAFE_STORE_FS.remove(io, target);
+    },
+  };
+}
+
 export function createJudgeCommand(deps: JudgeCommandDeps = {}): CommandDef {
   const def: CommandDef = {
     name: 'judge',
@@ -210,6 +252,7 @@ export function createJudgeCommand(deps: JudgeCommandDeps = {}): CommandDef {
         return ExitCode.USAGE;
       }
 
+      const runId = args.run; // 闭包里保持 string 窄化
       const live = args.runLlm && args.allowEgress;
       const loadedOverlay = await loadOverlay(ctx);
       if (!loadedOverlay.ok) {
@@ -240,86 +283,121 @@ export function createJudgeCommand(deps: JudgeCommandDeps = {}): CommandDef {
         }
       }
 
-      let backends: JudgeBackends;
-      try {
-        backends =
-          (await deps.createBackends?.(ctx, { live, maxCalls: args.maxCalls, overlay })) ?? {};
-      } catch {
-        ctx.stderr('JUDGE_FAIL_CLOSED reason=internal\n');
-        return ExitCode.FAIL_CLOSED;
-      }
-      if (args.runLlm && Object.keys(backends).length === 0) {
-        ctx.stderr(
-          'JUDGE_NOT_CONFIGURED reason=no_backends agent-kit judge: 没有可用的评审后端(本命令不自带后端,须由接线块注入);未调用、未写入\n',
-        );
-        return ExitCode.NOT_RUN;
-      }
-
-      let report: JudgeReport;
-      const done: ProposalOutcome[] = [];
-      const partial = (): void => {
-        if (done.length === 0) return;
-        ctx.stdout(
-          summarize({
-            runId: args.run as string,
-            dry: !args.runLlm,
-            callsMade: 0,
-            callsLimit: args.maxCalls,
-            budgetExhausted: false,
-            outcomes: done,
-          }),
-        );
-      };
-      try {
-        report = await runJudge(
-          {
-            io: ctx.io,
-            redactor,
-            backends,
-            onOutcome: (o) => done.push(o),
-            ...(deps.resolveHead !== undefined ? { resolveHead: deps.resolveHead } : {}),
-            ...(deps.now !== undefined ? { now: deps.now } : {}),
-          },
-          { runId: args.run, dry: !args.runLlm, maxCalls: args.maxCalls },
-        );
-      } catch (e) {
-        partial(); // 中途失败时仍告诉用户哪些提案已处理(已写盘)
-        if (e instanceof JudgeRunNotFoundError) {
-          ctx.stderr(`agent-kit judge: ${e.code}\n`);
-          return ExitCode.USAGE;
-        }
-        if (
-          e instanceof JudgeStateError ||
-          e instanceof JudgeFailClosedError ||
-          e instanceof JudgeProviderMismatchError ||
-          e instanceof WriteDeniedError
-        ) {
-          // 只报稳定码:异常消息里不放任何提案/评审文本
-          ctx.stderr(`JUDGE_FAIL_CLOSED reason=${e.code}\n`);
+      // 真跑才拿 rsi/lock,且在构造后端之前拿;干跑不读 rsi 配置、不拿锁
+      const loss: LockLossState = { lost: undefined };
+      const execute = async (lock: RsiLockHandle | null): Promise<number> => {
+        // 锁内、改任何提案之前:purge 进行中拒绝(assertNoPurgeInProgress)
+        if (lock !== null) await (deps.assertNoPurge ?? assertNoPurgeInProgress)({ io: ctx.io });
+        let backends: JudgeBackends;
+        try {
+          backends =
+            (await deps.createBackends?.(ctx, { live, maxCalls: args.maxCalls, overlay })) ?? {};
+        } catch {
+          ctx.stderr('JUDGE_FAIL_CLOSED reason=internal\n');
           return ExitCode.FAIL_CLOSED;
         }
+        if (lock !== null) {
+          // LLM 返回后先 assertHeld(guardBackend);每次写提案前也复核(失锁后不再写 judge / judge_attempts)
+          backends = Object.fromEntries(
+            Object.entries(backends).map(([hop, b]) => [hop, guardBackend(b, lock, loss)]),
+          ) as JudgeBackends;
+        }
+        if (args.runLlm && Object.keys(backends).length === 0) {
+          ctx.stderr(
+            'JUDGE_NOT_CONFIGURED reason=no_backends agent-kit judge: 没有可用的评审后端(本命令不自带后端,须由接线块注入);未调用、未写入\n',
+          );
+          return ExitCode.NOT_RUN;
+        }
+
+        let report: JudgeReport;
+        const done: ProposalOutcome[] = [];
+        const partial = (): void => {
+          if (done.length === 0) return;
+          ctx.stdout(
+            summarize({
+              runId,
+              dry: !args.runLlm,
+              callsMade: 0,
+              callsLimit: args.maxCalls,
+              budgetExhausted: false,
+              outcomes: done,
+            }),
+          );
+        };
+        try {
+          report = await runJudge(
+            {
+              io: ctx.io,
+              redactor,
+              backends,
+              ...(lock !== null ? { storeFs: guardStoreFs(lock, loss) } : {}),
+              onOutcome: (o) => done.push(o),
+              ...(deps.resolveHead !== undefined ? { resolveHead: deps.resolveHead } : {}),
+              ...(deps.now !== undefined ? { now: deps.now } : {}),
+            },
+            { runId, dry: !args.runLlm, maxCalls: args.maxCalls },
+          );
+        } catch (e) {
+          partial(); // 中途失败时仍告诉用户哪些提案已处理(已写盘)
+          if (loss.lost !== undefined) {
+            const lost = rsiLockFailure(loss.lost, 'JUDGE');
+            ctx.stderr(lost?.line ?? 'RSI_FAIL_CLOSED reason=lock_lost\n');
+            return ExitCode.FAIL_CLOSED;
+          }
+          if (e instanceof JudgeRunNotFoundError) {
+            ctx.stderr(`agent-kit judge: ${e.code}\n`);
+            return ExitCode.USAGE;
+          }
+          if (
+            e instanceof JudgeStateError ||
+            e instanceof JudgeFailClosedError ||
+            e instanceof JudgeProviderMismatchError ||
+            e instanceof WriteDeniedError
+          ) {
+            // 只报稳定码:异常消息里不放任何提案/评审文本
+            ctx.stderr(`JUDGE_FAIL_CLOSED reason=${e.code}\n`);
+            return ExitCode.FAIL_CLOSED;
+          }
+          ctx.stderr('JUDGE_FAIL_CLOSED reason=internal\n');
+          return ExitCode.FAIL_CLOSED;
+        }
+
+        if (loss.lost !== undefined) {
+          partial();
+          const lost = rsiLockFailure(loss.lost, 'JUDGE');
+          ctx.stderr(lost?.line ?? 'RSI_FAIL_CLOSED reason=lock_lost\n');
+          return ExitCode.FAIL_CLOSED;
+        }
+        ctx.stdout(summarize(report));
+        for (const o of report.outcomes) {
+          if (o.pending === 'not_configured') {
+            ctx.stderr(
+              `JUDGE_NOT_CONFIGURED proposal=${o.proposalId} hint=没有已配置的评审后端,检查覆盖层 reflect.backends\n`,
+            );
+          } else if (o.pending === 'same_vendor_only') {
+            ctx.stderr(
+              `JUDGE_SAME_VENDOR_ONLY proposal=${o.proposalId} hint=已配置的评审后端都与反思器同厂商,需配置另一家厂商的后端\n`,
+            );
+          } else if (o.pending !== undefined) {
+            ctx.stderr(`JUDGE_PENDING proposal=${o.proposalId} reason=${o.pending}\n`);
+          }
+          if (o.injectionSuspected === true) {
+            ctx.stderr(`JUDGE_INJECTION_SUSPECTED proposal=${o.proposalId}\n`);
+          }
+        }
+        return judgeExitCode(report, { strict: args.strict });
+      };
+      try {
+        return args.runLlm ? await withRsiWriterLock(ctx, deps, execute) : await execute(null);
+      } catch (e) {
+        const locked = rsiLockFailure(e, 'JUDGE');
+        if (locked !== undefined) {
+          ctx.stderr(locked.line);
+          return locked.exit;
+        }
         ctx.stderr('JUDGE_FAIL_CLOSED reason=internal\n');
         return ExitCode.FAIL_CLOSED;
       }
-
-      ctx.stdout(summarize(report));
-      for (const o of report.outcomes) {
-        if (o.pending === 'not_configured') {
-          ctx.stderr(
-            `JUDGE_NOT_CONFIGURED proposal=${o.proposalId} hint=没有已配置的评审后端,检查覆盖层 reflect.backends\n`,
-          );
-        } else if (o.pending === 'same_vendor_only') {
-          ctx.stderr(
-            `JUDGE_SAME_VENDOR_ONLY proposal=${o.proposalId} hint=已配置的评审后端都与反思器同厂商,需配置另一家厂商的后端\n`,
-          );
-        } else if (o.pending !== undefined) {
-          ctx.stderr(`JUDGE_PENDING proposal=${o.proposalId} reason=${o.pending}\n`);
-        }
-        if (o.injectionSuspected === true) {
-          ctx.stderr(`JUDGE_INJECTION_SUSPECTED proposal=${o.proposalId}\n`);
-        }
-      }
-      return judgeExitCode(report, { strict: args.strict });
     },
   };
   return def;
