@@ -25,6 +25,7 @@ import { chmod, mkdirp, rename, writeFile } from '../io/safe-fs.js';
 import type { MergedProposal } from './merge.js';
 import { evidenceExcerptSuspicious } from './validate.js';
 import { ReflectFailClosedError } from './types.js';
+import type { BeforeWrite } from './types.js';
 
 export interface StagedFile {
   /** 仓库相对路径 */
@@ -200,14 +201,19 @@ export function stageDir(io: IoContext, runId: string): string {
   return path.join(io.stateDir, 'reflect', runId);
 }
 
-async function mkdir700(io: IoContext, dir: string): Promise<void> {
+/** 每个实际写出口(mkdirp / chmod / writeFile / rename)之前都先过 `beforeWrite`(缺省不传 = 行为不变) */
+async function mkdir700(io: IoContext, dir: string, bw?: BeforeWrite): Promise<void> {
+  await bw?.();
   await mkdirp(io, dir, 0o700);
+  await bw?.();
   await chmod(io, dir, 0o700);
 }
 
-async function put(io: IoContext, file: string, content: string): Promise<void> {
-  await mkdir700(io, path.dirname(file));
+async function put(io: IoContext, file: string, content: string, bw?: BeforeWrite): Promise<void> {
+  await mkdir700(io, path.dirname(file), bw);
+  await bw?.();
   await writeFile(io, file, content, { mode: 0o600 });
+  await bw?.();
   await chmod(io, file, 0o600);
 }
 
@@ -216,6 +222,7 @@ export async function writeReportOnly(
   io: IoContext,
   runId: string,
   report: ReflectRunReport,
+  beforeWrite?: BeforeWrite,
 ): Promise<void> {
   ReflectRunReportSchema.parse(report);
   const dir = stageDir(io, runId);
@@ -223,8 +230,8 @@ export async function writeReportOnly(
     throw new ReflectFailClosedError('STAGE_RUN_EXISTS', '运行目录已存在,拒绝覆盖');
   }
   // 中间目录 reflect/ 的权限也收紧
-  await mkdir700(io, path.join(io.stateDir, 'reflect'));
-  await put(io, path.join(dir, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
+  await mkdir700(io, path.join(io.stateDir, 'reflect'), beforeWrite);
+  await put(io, path.join(dir, 'report.json'), `${JSON.stringify(report, null, 2)}\n`, beforeWrite);
 }
 
 export async function writeStage(
@@ -232,13 +239,14 @@ export async function writeStage(
   runId: string,
   report: ReflectRunReport,
   files: readonly StagedFile[],
+  beforeWrite?: BeforeWrite,
 ): Promise<{ dir: string; patchFiles: number }> {
   ReflectRunReportSchema.parse(report);
   const dir = stageDir(io, runId);
   if (await exists(dir)) {
     throw new ReflectFailClosedError('STAGE_RUN_EXISTS', '运行目录已存在,拒绝覆盖');
   }
-  await mkdir700(io, path.join(io.stateDir, 'reflect'));
+  await mkdir700(io, path.join(io.stateDir, 'reflect'), beforeWrite);
   // 先写临时目录(点开头,加载器会跳过),全部写完再整体 rename:中途失败不会留下看似有效的半成品
   const tmp = path.join(io.stateDir, 'reflect', `.tmp-${runId}`);
   if (await exists(tmp)) {
@@ -247,11 +255,12 @@ export async function writeStage(
       '上次失败留下的临时目录仍在,请人工清理后重试',
     );
   }
-  for (const f of files) await put(io, path.join(tmp, f.path), f.content);
+  for (const f of files) await put(io, path.join(tmp, f.path), f.content, beforeWrite);
   const patchFiles = files.filter((f) => f.inPatch);
   if (patchFiles.length > 0)
-    await put(io, path.join(tmp, 'apply.patch'), buildApplyPatch(patchFiles));
-  await put(io, path.join(tmp, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
+    await put(io, path.join(tmp, 'apply.patch'), buildApplyPatch(patchFiles), beforeWrite);
+  await put(io, path.join(tmp, 'report.json'), `${JSON.stringify(report, null, 2)}\n`, beforeWrite);
+  await beforeWrite?.();
   await rename(io, tmp, dir);
   return { dir, patchFiles: patchFiles.length };
 }

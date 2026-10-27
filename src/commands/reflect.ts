@@ -54,10 +54,12 @@ import type { GcResult } from '../reflect/gc.js';
 import { runReflect } from '../reflect/run.js';
 import type { ProjectCount, RunDeps, RunOpts, RunResult } from '../reflect/run.js';
 import {
+  ReflectAbortedError,
   ReflectCallLimitError,
   ReflectFailClosedError,
   ReflectUsageError,
 } from '../reflect/types.js';
+import type { BeforeWrite } from '../reflect/types.js';
 import { SignalStoreError } from '../signals/state-store.js';
 import { parseDecimalUint } from './args.js';
 import { prepareBudgetInputs } from './check-budget.js';
@@ -84,7 +86,15 @@ export interface RsiLockWiring {
   rsiConfig?: () => Promise<RsiConfig>;
   /** 透传给 `withRsiLockIfGated`(`gate` / `lock`:时钟、pid、isAlive 等) */
   lockDeps?: WithRsiLockIfGatedOptions;
+  /**
+   * 锁内、会新建暂存内容的写入方先调(B3c 的 `assertNoPurgeInProgress(ctx)`:purge 进行中抛 `RsiFailClosedError('purge_incomplete')`)。
+   * **本地桩**:缺省什么都不做;B3c 合并后在接线处换成真实实现(`src/rsi/services/taint.ts`)。只在闸门判 lock(拿到句柄)时调用。
+   */
+  assertNoPurge?: (ctx: { io: CommandContext['io'] }) => Promise<void>;
 }
+
+/** 本地桩:B3c 合并前不检查 purge journal(见 {@link RsiLockWiring.assertNoPurge}) */
+export const assertNoPurgeStub = async (): Promise<void> => {};
 
 /**
  * 写入方拿 `rsi/lock`:`lockGate` 判 off(没有 `[rsi]` / 未启用 / 状态树确定独立)→ `fn(null)`,不建 `.state/rsi/`、不写任何东西,
@@ -114,6 +124,7 @@ export function rsiLockFailure(
   e: unknown,
   prefix: 'REFLECT' | 'JUDGE',
 ): { line: string; exit: number } | undefined {
+  if (e instanceof ReflectAbortedError) return rsiLockFailure(e.inner, prefix);
   if (e instanceof RsiLockError) {
     const s = e.toStable();
     if (s.code === 'RSI_NOT_RUN') {
@@ -144,6 +155,13 @@ export async function checkHeld(lock: RsiLockHandle, state: LockLossState): Prom
   }
 }
 
+/** 写前复核回调:每次实际写 / 删之前 `assertHeld`;失锁抛 `ReflectAbortedError(RsiLockError)`,调用链不得吞 */
+export function beforeWriteOf(lock: RsiLockHandle, state: LockLossState): BeforeWrite {
+  return async () => {
+    if (!(await checkHeld(lock, state))) throw new ReflectAbortedError(state.lost);
+  };
+}
+
 /**
  * 包一层后端:**LLM 返回后(成功、失败、抛错都一样)先 `assertHeld()` 再把结果交给调用方**(调用方随后才会写暂存区 / 提案)。
  * 复核失败:记入 `state.lost`,返回 `{ ok:false, reason:'error' }`(runReflect / runJudge 把后端抛错吞成 backend_error,
@@ -154,6 +172,7 @@ export function guardBackend(
   backend: LlmBackend,
   lock: RsiLockHandle,
   state: LockLossState,
+  onLost: 'result' | 'throw' = 'result',
 ): LlmBackend {
   const failed: LlmCompleteResult = { ok: false, reason: 'error' };
   return {
@@ -164,15 +183,21 @@ export function guardBackend(
     provider: backend.provider,
     async complete(req: LlmCompleteRequest): Promise<LlmCompleteResult> {
       // 外发前也复核:失锁后不再把摘录发出去(`state.lost` 一旦置位保持到命令结束)
-      if (!(await checkHeld(lock, state))) return failed;
+      // reflect 用 'throw':失锁走 ReflectAbortedError,runReflect 原样重抛,不写 report.json;judge 用 'result'(其写出口另有 storeFs 守卫)
+      const lostResult = (): LlmCompleteResult => {
+        if (onLost === 'throw') throw new ReflectAbortedError(state.lost);
+        return failed;
+      };
+      if (!(await checkHeld(lock, state))) return lostResult();
       let res: LlmCompleteResult;
       try {
         res = await backend.complete(req);
       } catch (e) {
         await checkHeld(lock, state);
+        if (state.lost !== undefined) return lostResult();
         throw e;
       }
-      return (await checkHeld(lock, state)) ? res : failed;
+      return (await checkHeld(lock, state)) ? res : lostResult();
     },
   };
 }
@@ -625,7 +650,13 @@ async function runGc(
     const res = args.write
       ? await withRsiWriterLock(ctx, wiring, async (lock) => {
           await lock?.assertHeld();
-          return runReflectGc(ctx.io, clock(), { write: true });
+          const out = await runReflectGc(ctx.io, clock(), {
+            write: true,
+            ...(lock !== null ? { beforeDelete: beforeWriteOf(lock, { lost: undefined }) } : {}),
+          });
+          // 返回前最后复核一次:锁已不属于自己 = lock_lost(退出 3),不输出成功摘要
+          await lock?.assertHeld();
+          return out;
         })
       : await runReflectGc(ctx.io, clock(), { write: false });
     ctx.stdout(args.json ? canonicalJson(gcJson(res)) : gcLines(res));
@@ -765,6 +796,8 @@ export function createReflectCommand(deps: ReflectCommandDeps = {}): CommandDef 
         // (内层 withLlmLock 在 runReflect 的后端里,不变)。干跑不读 rsi 配置、不拿锁。
         const loss: LockLossState = { lost: undefined };
         const execute = async (lock: RsiLockHandle | null): Promise<number> => {
+          // 锁内、建任何暂存内容之前:purge 进行中拒绝(B3c 导出 assertNoPurgeInProgress;合并前是本地桩)
+          if (lock !== null) await (deps.assertNoPurge ?? assertNoPurgeStub)({ io: ctx.io });
           const now = clock();
           let backend: LlmBackend | undefined;
           if (live) {
@@ -790,7 +823,7 @@ export function createReflectCommand(deps: ReflectCommandDeps = {}): CommandDef 
               return ExitCode.NOT_RUN;
             }
             // LLM 返回后先 assertHeld 再往下写暂存区(见 guardBackend);lock 为 null(闸门 off)时不包,行为不变
-            if (lock !== null) backend = guardBackend(backend, lock, loss);
+            if (lock !== null) backend = guardBackend(backend, lock, loss, 'throw');
             ctx.stderr(
               `REFLECT_EGRESS slot=${safeEnum(backend.slot) ?? '?'} vendor=${safeEnum(backend.vendor) ?? '?'}\n`,
             );
@@ -805,6 +838,8 @@ export function createReflectCommand(deps: ReflectCommandDeps = {}): CommandDef 
             stagedAtoms: await loadStagedAtoms(ctx.io),
             usedProposalIds: await loadUsedProposalIds(ctx.io),
             kitVersion: KIT_VERSION,
+            // 每个实际写出口(报告 / 暂存文件 / 建目录 / 最终 rename)之前复核锁;闸门 off 不传,行为不变
+            ...(lock !== null ? { beforeWrite: beforeWriteOf(lock, loss) } : {}),
           };
           const result = await doReflect(runDeps, {
             mode: live ? (deps.stub === true ? 'stub' : 'llm') : 'dry',

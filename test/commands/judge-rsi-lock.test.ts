@@ -9,6 +9,7 @@ import type { JudgeCommandDeps } from '../../src/commands/judge.js';
 import { ExitCode } from '../../src/contracts/exit-codes.js';
 import { exists, readText } from '../../src/io/read-fs.js';
 import { remove, writeFile } from '../../src/io/safe-fs.js';
+import { RsiFailClosedError } from '../../src/rsi/types.js';
 import { RsiLockError } from '../../src/rsi/lock.js';
 import type { RsiLockHandle } from '../../src/rsi/lock.js';
 import type { RsiConfig } from '../../src/rsi/config.js';
@@ -176,6 +177,44 @@ describe('judge --run-llm × rsi/lock', () => {
     const { ctx } = cmdCtx(r.w, LIVE);
     expect(await r.cmd.run(ctx)).toBe(ExitCode.FAIL_CLOSED);
     expect(r.s.totalCalls()).toBe(1);
+  });
+});
+
+describe('judge --run-llm × assertNoPurge(本地桩,待 B3c 合并后接真实实现)', () => {
+  it('purge 进行中:退出 3 purge_incomplete,零后端构造、零调用、提案不变;该检查在锁内', async () => {
+    const seen: boolean[] = [];
+    const ref: { lock: string } = { lock: '' };
+    const r = await rig({
+      deps: {
+        assertNoPurge: async () => {
+          seen.push(await exists(ref.lock));
+          throw new RsiFailClosedError('purge_incomplete');
+        },
+      },
+    });
+    ref.lock = r.lockFile;
+    const before = await snapshot(r.w.runDir);
+    const { ctx, err } = cmdCtx(r.w, LIVE);
+    expect(await r.cmd.run(ctx)).toBe(ExitCode.FAIL_CLOSED);
+    expect(err.join('')).toBe('RSI_FAIL_CLOSED reason=purge_incomplete\n');
+    expect(seen).toEqual([true]);
+    expect(r.factory.n).toBe(0);
+    expect(r.s.totalCalls()).toBe(0);
+    expect(await snapshot(r.w.runDir)).toEqual(before);
+  });
+
+  it('闸门 off 时不调 assertNoPurge', async () => {
+    const r = await rig({
+      config: OFF,
+      alias: false,
+      deps: {
+        assertNoPurge: async () => {
+          throw new Error('must not be called when gate is off');
+        },
+      },
+    });
+    const { ctx } = cmdCtx(r.w, LIVE);
+    expect(await r.cmd.run(ctx)).toBe(ExitCode.OK);
   });
 });
 

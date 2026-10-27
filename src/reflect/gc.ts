@@ -19,6 +19,7 @@ import { ReflectRunReportSchema } from '../contracts/reflect.js';
 import type { IoContext } from '../io/paths.js';
 import { lstat, readDir, readText, realpath } from '../io/read-fs.js';
 import { remove } from '../io/safe-fs.js';
+import type { BeforeWrite } from './types.js';
 
 /** 保留期(天),固定值;契约 §17.7。 */
 export const REFLECT_GC_RETENTION_DAYS = 30;
@@ -246,7 +247,7 @@ export async function planReflectGc(io: IoContext, now: Date): Promise<GcPlan> {
 export async function runReflectGc(
   io: IoContext,
   now: Date,
-  opts: { write: boolean },
+  opts: { write: boolean; beforeDelete?: BeforeWrite },
 ): Promise<GcResult> {
   let plan = await planReflectGc(io, now);
   const deleted: string[] = [];
@@ -275,6 +276,7 @@ export async function runReflectGc(
       if (!(await onlyReportJson(dir)).ok) {
         throw new ReflectGcError('GC_RECHECK_FAILED', '删除前复核:目录内容已变');
       }
+      await opts.beforeDelete?.(); // 每次实际删除前复核(rsi/lock);抛出的错误原样向上传播,不吞、不当成「跳过」
       await remove(io, dir);
       deleted.push(c.runId);
     }

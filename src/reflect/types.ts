@@ -81,3 +81,19 @@ export class ReflectFailClosedError extends Error {
 export class ReflectCallLimitError extends Error {
   readonly code = 'REFLECT_CALL_LIMIT';
 }
+
+/**
+ * 写前复核回调(R20-A2 B3b 返工):reflect 的每个实际写出口(建目录、chmod、写文件、rename)之前调用;非 rsi 路径缺省不传。
+ * 复核不过就抛 {@link ReflectAbortedError},调用链**不得吞**它。
+ */
+export type BeforeWrite = () => Promise<void>;
+
+/**
+ * 外层(命令层的 rsi 锁)要求立即中止:`inner` 是原始错误(如 `RsiLockError('lock_lost')`)。
+ * `runReflect` 的「后端抛错 → backend_error」分支必须原样重抛它,不能走 `fail()` 去写 report.json;命令层拆开 `inner` 再映射退出码。
+ */
+export class ReflectAbortedError extends Error {
+  constructor(readonly inner: unknown) {
+    super('reflect aborted by caller');
+  }
+}

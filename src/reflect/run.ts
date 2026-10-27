@@ -53,9 +53,11 @@ import { renderWithinBudget, type RenderedPrompt } from './prompt/v1.js';
 import { filesOf, simulateGuards, writeReportOnly, writeStage } from './stage.js';
 import { sha256Hex } from './text.js';
 import {
+  ReflectAbortedError,
   ReflectCallLimitError,
   ReflectFailClosedError,
   ReflectUsageError,
+  type BeforeWrite,
   type Cluster,
   type EvidenceItem,
   type ExistingAtomInfo,
@@ -84,6 +86,8 @@ export interface RunDeps {
   /** 已占用的提案编号(仓库 proposals/ + 暂存区) */
   usedProposalIds?: ReadonlySet<string> | undefined;
   kitVersion?: string | undefined;
+  /** 写前复核(rsi/lock 等):每个实际写出口之前调用,抛 `ReflectAbortedError` 即中止;缺省不传 = 行为不变 */
+  beforeWrite?: BeforeWrite | undefined;
 }
 
 export interface RunOpts {
@@ -344,7 +348,7 @@ export async function runReflect(deps: RunDeps, opts: RunOpts): Promise<RunResul
     extra: Partial<RunResult> = {},
   ): Promise<RunResult> => {
     const report = finish({ calls_made: callsMade, outcome, staged: [], observations_n: 0 });
-    await writeReportOnly(deps.io, opts.runId, report);
+    await writeReportOnly(deps.io, opts.runId, report, deps.beforeWrite);
     return { ...common, ...extra, exitCode, report };
   };
 
@@ -359,7 +363,7 @@ export async function runReflect(deps: RunDeps, opts: RunOpts): Promise<RunResul
       staged: [],
       observations_n: 0,
     });
-    await writeReportOnly(deps.io, opts.runId, report);
+    await writeReportOnly(deps.io, opts.runId, report, deps.beforeWrite);
     return { ...common, exitCode: 0, report };
   }
 
@@ -397,7 +401,8 @@ export async function runReflect(deps: RunDeps, opts: RunOpts): Promise<RunResul
         timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         maxOutputBytes: MAX_OUTPUT_BYTES,
       });
-    } catch {
+    } catch (e) {
+      if (e instanceof ReflectAbortedError) throw e; // 外层要求中止:不走 backend_error / fail() 的写报告分支
       res = { ok: false as const, reason: 'error' as const };
     }
     if (!res.ok) {
@@ -468,7 +473,7 @@ export async function runReflect(deps: RunDeps, opts: RunOpts): Promise<RunResul
         staged: [],
         observations_n: Math.min(observations.length, 10),
       });
-      await writeReportOnly(deps.io, opts.runId, report);
+      await writeReportOnly(deps.io, opts.runId, report, deps.beforeWrite);
       return { ...common, ...tail, exitCode: 0, report };
     }
     return fail('output_rejected', callsMade, 1, tail);
@@ -539,7 +544,7 @@ export async function runReflect(deps: RunDeps, opts: RunOpts): Promise<RunResul
     staged: ids,
     observations_n: Math.min(observations.length, 10),
   });
-  const w = await writeStage(deps.io, opts.runId, report, files);
+  const w = await writeStage(deps.io, opts.runId, report, files, deps.beforeWrite);
   return {
     ...common,
     ...tail,
