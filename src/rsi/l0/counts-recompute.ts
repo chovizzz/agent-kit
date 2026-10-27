@@ -12,7 +12,7 @@
  *  - 日期一律先归一到 UTC(`new Date(ts).toISOString()`)再取日,带偏移的 ts(`+08:00` / `-11:00`)按 UTC 日归档。
  *  - 信号库 / 会话计数库的月文件经 `openStreamSafe`(句柄级:`O_NOFOLLOW`、普通文件、`nlink == 1`)流式读;链接 / 硬链接 / 非普通文件 / 坏行 / 缺字段 /
  *    非法时间戳 / 重复 `session_ref` → fail-closed `signal_store_corrupt`(与 B3c 的 `loadSigKeys` 同口径,不任选一条、不跳过)。
- *  - `staged`:取 `counts.json` 里**现有**每一项的 `run_id`,逐个核对 `.state/reflect/<run_id>/TAINTED` 是否在场(≤ 5000 次元数据读);**每次**都核对,不看本次新增了多少 taint。
+ *  - `staged`:取 `counts.json` 里**现有**每一项的 `run_id`,逐个核对 `.state/reflect/<run_id>/TAINTED` 是否在场(`reflect/` 核对一次并缓存,每个 run 一次 `statDirSafe` + 一次 `lstat`:至多约 2 × 5000 + 1 次元数据读);**每次**都核对,不看本次新增了多少 taint。
  *    父目录链不是真实目录 → `state_dir_unsafe`;`TAINTED` 对象存在(任何类型)或无法确认 → 当作在场(与 `rsi status` 同口径,宁可当成被污染)。
  * 规划侧 / 只读:不写文件、不拿锁、不 import 写出口。读 `counts.json` 不走快照协议:写入方是临时文件 + rename,读到的总是完整的旧版或新版(只取 `staged[].run_id`,不用其余字段);
  * 无锁的规划方(`rebuild-plan`)只用 `recomputeSignalCounts`,不依赖 `counts.json` 是否完好。
@@ -61,7 +61,7 @@ async function realDirOrMissing(p: string): Promise<boolean> {
 async function scanStore(
   kind: 'signals' | 'sessions',
   root: string,
-  onRecord: (agent: string, rec: unknown) => boolean,
+  onRecord: (agent: string, rec: unknown, file: string) => boolean,
 ): Promise<void> {
   if (!(await realDirOrMissing(root))) return;
   for (const agent of RSI_AGENT_IDS) {
@@ -79,7 +79,9 @@ async function scanStore(
       const s = await openStreamSafe(path.join(dir, f.name));
       if (s.kind === 'missing') continue;
       if (s.kind === 'unsafe') throw corrupt();
-      const lines = new JsonlStream(MAX_LINE_BYTES, (rec) => onRecord(agent, rec));
+      const lines = new JsonlStream(MAX_LINE_BYTES, (rec) =>
+        onRecord(agent, rec, `${agent}/${f.name}`),
+      );
       try {
         for await (const chunk of s.chunks()) lines.push(chunk);
         lines.end();
@@ -120,13 +122,21 @@ async function currentStagedRunIds(io: IoContext): Promise<string[]> {
 }
 
 /** `TAINTED` 是否在场:父目录链必须是真实目录(缺失 = 不在场、不安全 = fail-closed);对象本身用 lstat,不读内容 */
-async function taintedPresent(stateDir: string, runId: string): Promise<boolean> {
+async function taintedPresent(
+  stateDir: string,
+  runId: string,
+  reflectOk: { v?: Promise<boolean> },
+): Promise<boolean> {
   const reflect = path.join(stateDir, 'reflect');
-  for (const dir of [reflect, path.join(reflect, runId)]) {
-    const d = await statDirSafe(dir);
-    if (d.kind === 'missing') return false;
+  // `reflect/` 本身每次重算只核对一次(缓存结论,含 unsafe 时的抛错);每个 run 目录各核对一次 + 一次 lstat
+  reflectOk.v ??= statDirSafe(reflect).then((d) => {
     if (d.kind === 'unsafe') throw new RsiSnapshotError('state_dir_unsafe');
-  }
+    return d.kind === 'ok';
+  });
+  if (!(await reflectOk.v)) return false;
+  const d = await statDirSafe(path.join(reflect, runId));
+  if (d.kind === 'missing') return false;
+  if (d.kind === 'unsafe') throw new RsiSnapshotError('state_dir_unsafe');
   try {
     await lstat(path.join(reflect, runId, 'TAINTED'));
     return true;
@@ -153,13 +163,23 @@ export async function recomputeSignalCounts(
   };
   let unknownKeysSignals = 0;
 
-  await scanStore('signals', path.join(io.stateDir, 'signals'), (_agent, o) => {
+  // sig_id 在一个月文件内唯一(写入方 `writeSignals` 按月文件去重);重复 = 库已损坏。范围只到单个月文件:同一 sig_id 跨月文件不判重
+  // (事件无时间戳时 ts 回退到文件 mtime,随会话增长可能换月,写入方并不阻止这种跨月重复),这是已知口径,见契约订正
+  let sigFile = '';
+  let sigSeen = new Set<string>();
+  await scanStore('signals', path.join(io.stateDir, 'signals'), (_agent, o, file) => {
+    if (file !== sigFile) {
+      sigFile = file;
+      sigSeen = new Set();
+    }
     const rec = o as { sig_id?: unknown; project_key?: unknown; ts?: unknown } | null;
     if (rec === null || typeof rec !== 'object') return false;
     if (typeof rec.sig_id !== 'string' || typeof rec.project_key !== 'string') return false;
     if (rec.project_key === '' || typeof rec.ts !== 'string') return false;
     const t = Date.parse(rec.ts);
     if (Number.isNaN(t)) return false;
+    if (sigSeen.has(rec.sig_id)) return false;
+    sigSeen.add(rec.sig_id);
     if (!RsiProjectKeySchema.safeParse(rec.project_key).success) {
       unknownKeysSignals++;
       return true;
@@ -203,8 +223,9 @@ export async function recomputeCounts(
   void config; // 与冻结签名一致;重算不依赖配置(归属 / 排除是读侧现算,R20-4.6)
   const { perKey, unknownKeysSignals } = await recomputeSignalCounts(io, now);
   const stagedTainted = new Map<string, boolean>();
+  const reflectOk: { v?: Promise<boolean> } = {};
   for (const runId of await currentStagedRunIds(io)) {
-    stagedTainted.set(runId, await taintedPresent(io.stateDir, runId));
+    stagedTainted.set(runId, await taintedPresent(io.stateDir, runId, reflectOk));
   }
   return { perKey, unknownKeysSignals, stagedTainted };
 }

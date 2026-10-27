@@ -182,6 +182,21 @@ describe('recomputeCounts:per_key / unknown_keys_signals 等于从磁盘手算',
   });
 });
 
+describe('recomputeCounts:signals_by_day 窗口', () => {
+  it('窗口必须覆盖 8 个 UTC 日(契约 R20-4.5;读侧 last7Days 只取其中 7 日,不得把窗口改成 7)', async () => {
+    const f = await makeL0Fx('cc-win8-');
+    const days = WINDOW; // 10-19..10-26
+    expect(days).toHaveLength(8);
+    await writeSignals(
+      f.io,
+      'claude',
+      days.map((d, i) => sig(100 + i, KA, `${d}T06:00:00.000Z`)),
+    );
+    const r = await recomputeCounts(f.io, f.config, NOW);
+    expect(Object.keys(r.perKey[KA]?.signals_by_day ?? {}).sort()).toEqual(days);
+  });
+});
+
 describe('recomputeCounts:staged.tainted 每次按 TAINTED 的实际存在情况核实', () => {
   const stagedItem = (run: string, tainted: boolean): Record<string, unknown> => ({
     run_id: run,
@@ -249,6 +264,26 @@ describe('recomputeCounts:staged.tainted 每次按 TAINTED 的实际存在情况
     });
   });
 
+  it('reflect/ 本身是符号链接 → state_dir_unsafe(父目录链只核对一次也照样 fail-closed);缺失 → 全部不在场', async () => {
+    const f = await makeL0Fx('cc-taint-reflect-');
+    await seed(f, {
+      counts: countsOf(
+        {},
+        { staged: [stagedItem('run-a', false), stagedItem('run-b', false)] as never },
+      ),
+    });
+    const base = path.join(f.io.stateDir, 'reflect');
+    expect([...(await recomputeCounts(f.io, f.config, NOW)).stagedTainted.values()]).toEqual([
+      false,
+      false,
+    ]);
+    await mkdirp(f.fx, path.join(f.dir, 'elsewhere2'), 0o755);
+    await symlink(f.fx, path.join(f.dir, 'elsewhere2'), base);
+    await expect(recomputeCounts(f.io, f.config, NOW)).rejects.toMatchObject({
+      reason: 'state_dir_unsafe',
+    });
+  });
+
   it('counts.json 缺失 → staged 为空;损坏 → counts_invalid', async () => {
     const f = await makeL0Fx('cc-taint-bad-');
     expect((await recomputeCounts(f.io, f.config, NOW)).stagedTainted.size).toBe(0);
@@ -295,6 +330,19 @@ describe('recomputeCounts:库带病 fail-closed(signal_store_corrupt),不任选�
     const f = await makeL0Fx('cc-ok-');
     await mixed(f);
     await expect(recomputeCounts(f.io, f.config, NOW)).resolves.toBeDefined();
+  });
+
+  it('同一月文件内重复 sig_id → corrupt;跨月文件的同一 sig_id 不判重(与写入方的去重范围一致);正向对照', async () => {
+    const f = await makeL0Fx('cc-dupsig-');
+    const line = JSON.stringify(signalObj(hex16(1), KA));
+    await mkdirp(f.io, sigDir(f), 0o700);
+    await writeFile(f.io, path.join(sigDir(f), '202610.jsonl'), `${line}\n`, { mode: 0o600 });
+    await writeFile(f.io, path.join(sigDir(f), '202609.jsonl'), `${line}\n`, { mode: 0o600 });
+    expect((await recomputeCounts(f.io, f.config, NOW)).perKey[KA]?.signals_total).toBe(2);
+    await writeFile(f.io, path.join(sigDir(f), '202610.jsonl'), `${line}\n${line}\n`, {
+      mode: 0o600,
+    });
+    await bad(recomputeCounts(f.io, f.config, NOW));
   });
 
   it('坏行 / 缺 sig_id / 缺 project_key / 非法时间戳 / 空行 / 缺尾换行 → corrupt', async () => {

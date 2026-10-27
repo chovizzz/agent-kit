@@ -199,6 +199,23 @@ describe('updateIndex:同 key 不同 path 的根收敛到 ≤ 8 条(最早一条
     expect(paths).not.toContain('/work/a1');
   });
 
+  it('漂移根((dev, ino) 不一致、被冻结)不特殊处理:第 9 条新路径进来时按 first_seen / last_seen 正常收敛,冻结的陈旧根会被砍掉;对照:同位置的根若被正常观测则保留', () => {
+    const roots = eight();
+    const drifted = { ...obs(1, '/work/a1'), ino: 99999 }; // a1 = last_seen 次旧的那条,观测到的 (dev, ino) 与记录不符
+    const r = run(indexWith([{ n: 1, roots }]), [drifted, obs(1, '/work/new', 3, 33)]);
+    const paths = r.index.entries[0]?.roots.map((x) => x.path);
+    expect(paths).toHaveLength(8);
+    expect(paths).not.toContain('/work/a1');
+    // 对照:a1 被正常观测(dev, ino 一致 → 刷新 last_seen)则保留,被砍的换成 a2
+    const ok = run(indexWith([{ n: 1, roots }]), [
+      { ...obs(1, '/work/a1'), dev: 1, ino: 1 },
+      obs(1, '/work/new', 3, 33),
+    ]);
+    const okPaths = ok.index.entries[0]?.roots.map((x) => x.path);
+    expect(okPaths).toContain('/work/a1');
+    expect(okPaths).not.toContain('/work/a2');
+  });
+
   it('first_seen 最早的那条 last_seen 最旧时也保留(与「只按 last_seen 取前 8」区分)', () => {
     const roots = eight();
     roots[0] = root('/work/a0', '2026-01-01', '2026-02-01'); // 最早、也最久没见
