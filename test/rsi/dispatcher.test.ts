@@ -169,9 +169,7 @@ describe('rsi 调用顺序(契约 R20-A2 v2 §3、§5;顺序用例随后续块�
   it.todo(
     '[B3b] reflect --gc --write / reflect --run-llm / judge --run-llm 在拿不到锁时 <前缀>_NOT_RUN reason=locked,零调用零写入 — 原因:接线在 B3b',
   );
-  it.todo(
-    '[B3c] 锁内顺序:recoverSnapshot → resumeTaint → immediateGate → 业务 → commitUnderLock;deny 路径不触发 recover — 原因:服务层是桩,B3c 实装',
-  );
+  // [B3c] 锁内顺序(recover → resumeTaint → immediateGate → 业务 → commitUnderLock;deny 路径不触发 recover)已是真用例:test/rsi/commit.test.ts「锁内顺序」
 });
 
 describe('EarlyCommandContext 的交互注入点(与 CommandContext 一致)', () => {
