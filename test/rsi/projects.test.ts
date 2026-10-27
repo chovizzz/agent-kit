@@ -192,6 +192,15 @@ describe('R20-3.5.2 / 3.5.3 目录名清洗与 --paths', () => {
     expect(r.out).not.toContain(g);
   });
 
+  it('R20-3.5.3 --paths 只要求 stdout 是 TTY:stdin 非 TTY、stdout TTY → 允许;stdout 非 TTY → 拒', async () => {
+    const { f, a } = await scenario();
+    const ok = await direct(f, ['--paths'], { stdoutIsTty: true }); // 不注入 ctx.isTty:stdin 在测试里不是 TTY
+    expect(ok.code).toBe(0);
+    expect(ok.out).toContain(`path=${a}`);
+    const no = await direct(f, ['--paths'], { stdoutIsTty: false });
+    expect([no.code, no.err]).toEqual([2, 'RSI_USAGE reason=paths_requires_tty\n']);
+  });
+
   it('其它参数用法:未知 → unknown_arg;--write 无 --rebuild-index → write_requires_mode;--rebuild-index(含 --write)是 B5 桩(64),不读配置', async () => {
     const f = await makeRoFx('pj-args-');
     for (const [argv, err] of [

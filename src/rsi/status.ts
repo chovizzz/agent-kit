@@ -32,6 +32,9 @@ import { loadRepoIdentity, rsiStateOf } from './state.js';
 import { rsiStubExit } from './stub.js';
 import type { RsiEarlyContext, RsiSubcommand } from './types.js';
 
+/** 稳定码字符集(同 `RsiLogLineSchema.code`,排除 `/`、空白与控制字符) */
+const STABLE_CODE_RE = /^[A-Za-z0-9_=.:-]{1,64}$/;
+
 export interface RsiStatusDeps {
   now?: () => Date;
   open?: OpenRsiIoDeps;
@@ -308,6 +311,12 @@ async function buildDoc(
         for (const [d, n] of Object.entries(v.signals_by_day)) if (days.has(d)) new7 += n;
       }
     }
+  } else {
+    // counts.json 缺失:回退索引条目的 signals(与 rsi projects 同口径;不读信号库);U 按统一分类结果累加
+    for (const e of entries) {
+      total += e.signals;
+      if (att.classify(e.key) === 'U') unknown += e.signals;
+    }
   }
   let clusters = 0;
   let stagedRuns = 0;
@@ -352,6 +361,10 @@ async function buildDoc(
           };
 
   const lastTick = docState?.last_tick ?? null;
+  // 从状态文件复制到输出的自由字符串只有 last_tick.code:按稳定码字符集校验(与 RsiLogLine.code 同集),不合规 fail-closed,稳定码不带内容
+  if (lastTick !== null && lastTick.code !== null && !STABLE_CODE_RE.test(lastTick.code)) {
+    throw new RsiSnapshotError('state_invalid');
+  }
   const cur = data.cursor.value;
   let match: boolean | null = null;
   if (cur !== null && deps.cursorFingerprint !== undefined) {

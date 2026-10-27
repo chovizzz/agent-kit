@@ -15,7 +15,6 @@ import * as path from 'node:path';
 import { ExitCode } from '../contracts/exit-codes.js';
 import { canonicalJson } from '../io/canonical-json.js';
 import type { IoContext } from '../io/paths.js';
-import { resolveIsTty } from '../commands/types.js';
 import { parseFlags } from './args.js';
 import { attribute, latestRoot, type Attribution, type AttributionProbe } from './attribution.js';
 import { buildRsiPolicy, type RsiConfigOn } from './config.js';
@@ -35,6 +34,8 @@ export interface ArmedListing {
 }
 
 export interface RsiProjectsDeps {
+  /** `--paths` 的 stdout-only TTY 判据(可注入;缺省 `ctx.isTty`,再缺省 `process.stdout.isTTY === true`) */
+  stdoutIsTty?: boolean;
   open?: OpenRsiIoDeps;
   probe?: AttributionProbe;
   listArmed?: (io: IoContext, config: RsiConfigOn) => Promise<ArmedListing>;
@@ -117,7 +118,9 @@ export async function runProjects(
   if (f.has('--paths') && (f.has('--json') || f.has('--rebuild-index'))) {
     return usage('mode_conflict');
   }
-  if (f.has('--paths') && !resolveIsTty(ctx)) return usage('paths_requires_tty');
+  if (f.has('--paths') && !(deps.stdoutIsTty ?? ctx.isTty ?? process.stdout.isTTY === true)) {
+    return usage('paths_requires_tty'); // R20-3.5.3:只要求 stdout 是 TTY(stdin 可以是 /dev/null)
+  }
   if (f.has('--rebuild-index')) return rsiStubExit(ctx, 'projects.rebuild_index'); // B5
   const json = f.has('--json');
   const paths = f.has('--paths');

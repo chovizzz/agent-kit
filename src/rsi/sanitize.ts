@@ -19,6 +19,7 @@ export function renderLine(l: OutLine): string {
   return l.pathValue === undefined ? l.head : `${l.head} path=${l.pathValue}`;
 }
 
+const CTRL = /[\p{Cc}\p{Zl}\p{Zp}]/u;
 const BAD = /[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Cs}\p{Zl}\p{Zp}]/u;
 
 function replaceBad(s: string): string[] {
@@ -63,6 +64,10 @@ export interface GuardResult {
 export function guardOutput(lines: readonly OutLine[], forbidden: readonly string[]): GuardResult {
   const all = forbidden.flatMap(forms);
   for (const l of lines) {
+    // 控制字符(含换行、ESC)与 U+2028 / U+2029 不得出现在行内:既防伪造行,也防终端转义
+    if (CTRL.test(l.head) || (l.pathValue !== undefined && CTRL.test(l.pathValue))) {
+      return { ok: false };
+    }
     if (l.pathValue !== undefined && (l.pathValue.includes('\n') || l.pathValue.includes('\r'))) {
       return { ok: false };
     }

@@ -6,6 +6,7 @@ import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { chmod, mkdirp, remove, symlink, writeFile } from '../../src/io/safe-fs.js';
 import { loadRsiConfig } from '../../src/rsi/config.js';
+import { runProjects } from '../../src/rsi/projects.js';
 import { runStatus, type RsiStatusDeps, type StatusDoc } from '../../src/rsi/status.js';
 import { treeOf } from './rsi-fixture.js';
 import {
@@ -649,5 +650,80 @@ describe('lock / agents / warnings', () => {
     const r = await runMain(g, ['rsi', 'status', '--json']);
     expect(doc(r.out).warnings).toEqual(['overlay_absent', 'cloud_sync_suspected']);
     expect(r.out).not.toContain('Dropbox');
+  });
+});
+
+describe('展示层:状态文件复制到输出的字符串字段(last_tick.code)只许稳定码字符集', () => {
+  const withCode = async (code: string): Promise<RoFx> => {
+    const f = await makeRoFx('st-code-');
+    await seed(f, {
+      state: baseState({
+        confirm: await validConfirm(f),
+        last_tick: {
+          completed_at: NOW,
+          trigger: 'poke',
+          outcome: 'ok',
+          code,
+          duration_ms: 1,
+          files_read: 0,
+          bytes_read: 0,
+        },
+      }),
+    });
+    return f;
+  };
+
+  it('含换行 / ESC / U+2028 / U+2029 / 斜杠 / 空格的 code → 3 state_invalid,stdout 空(文本与 --json 都是)', async () => {
+    for (const bad of [
+      'ok\nstate=confirmed',
+      'ok\u001b[31m',
+      'a\u2028b',
+      'a\u2029b',
+      'a/b',
+      'a b',
+      'tab\there',
+    ]) {
+      const f = await withCode(bad);
+      for (const argv of [[], ['--json']]) {
+        const r = await direct(f, argv);
+        expect([r.code, r.out, r.err], JSON.stringify(bad)).toEqual([
+          3,
+          '',
+          'RSI_FAIL_CLOSED reason=state_invalid\n',
+        ]);
+      }
+    }
+  });
+
+  it('对照:合规稳定码照常输出;code 为 null 也行', async () => {
+    const f = await withCode('RSI_NOT_RUN:locked.1=x-y');
+    expect(doc((await direct(f, ['--json'])).out).last_tick?.code).toBe('RSI_NOT_RUN:locked.1=x-y');
+    expect((await direct(f, [])).out).toContain('last_tick.code=RSI_NOT_RUN:locked.1=x-y\n');
+  });
+});
+
+describe('counts.json 缺失:回退索引条目的 signals(与 projects 同口径,不读信号库)', () => {
+  it('未排除项目 signals=17、counts 缺失:status 的 signals_total / unknown_signals 与 projects 一致', async () => {
+    const f = await makeRoFx('st-nocounts-');
+    const a = await mkProject(f, 'a');
+    const g = path.join(f.dir, 'work', 'gone');
+    await seed(f, {
+      state: baseState({ confirm: await validConfirm(f) }),
+      index: indexOf([
+        { key: key(1), path: a.path, dev: a.dev, ino: a.ino, signals: 17 },
+        { key: key(2), path: g, dev: 1, ino: 1, signals: 4 },
+      ]),
+    });
+    const st = doc((await direct(f, ['--json'])).out);
+    expect(st.counts.signals_total).toBe(21);
+    // 统一归属(R20-4.3):counts 缺失 → 盐无法核对 → 非 X 的 key 一律 U,所以 17 与 4 都计入未知
+    expect(st.counts.unknown_signals).toBe(21);
+    const pj = JSON.parse((await runDirect(f, runProjects, ['--json'], {})).out) as {
+      rows: { signals: number; status: string }[];
+      summary: { unknown_signals: number };
+    };
+    expect(pj.rows.map((r) => r.signals)).toEqual([17, 4]);
+    expect(pj.summary.unknown_signals).toBe(st.counts.unknown_signals);
+    expect(pj.rows.reduce((n, r) => n + r.signals, 0)).toBe(st.counts.signals_total);
   });
 });

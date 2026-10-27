@@ -78,6 +78,14 @@ describe('R20-3.5.6 guardOutput', () => {
     expect(guardOutput([{ head: JSON.stringify({ x: '/tmp/other' }) }], [secret]).ok).toBe(true);
   });
 
+  it('控制字符(换行、ESC、其它 C0 / C1)与 U+2028 / U+2029 出现在 head 或 pathValue 里 → 不 ok;普通文本照常', () => {
+    for (const ch of ['\n', '\r', '\u001b', '\u0000', '\u0085', '\u2028', '\u2029', '\t']) {
+      expect(guardOutput([{ head: `a${ch}b` }], []).ok, JSON.stringify(ch)).toBe(false);
+      expect(guardOutput([{ head: 'k', pathValue: `/x${ch}y` }], []).ok).toBe(false);
+    }
+    expect(guardOutput([{ head: 'state=armed 中文 name-1' }], []).ok).toBe(true);
+  });
+
   it('renderLine:有 pathValue 时整行 = head + " path=" + pathValue', () => {
     expect(renderLine({ head: 'a b' })).toBe('a b');
     expect(renderLine({ head: 'a b', pathValue: '/x' })).toBe('a b path=/x');
