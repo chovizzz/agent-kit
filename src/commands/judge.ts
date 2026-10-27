@@ -41,6 +41,7 @@ import type { RsiLockHandle } from '../rsi/lock.js';
 import { createRedactor } from '../redact/redactor.js';
 import { parseDecimalUint } from './args.js';
 import {
+  assertNoPurgeStub,
   buildCliBackends,
   checkHeld,
   guardBackend,
@@ -285,6 +286,8 @@ export function createJudgeCommand(deps: JudgeCommandDeps = {}): CommandDef {
       // 真跑才拿 rsi/lock,且在构造后端之前拿;干跑不读 rsi 配置、不拿锁
       const loss: LockLossState = { lost: undefined };
       const execute = async (lock: RsiLockHandle | null): Promise<number> => {
+        // 锁内、改任何提案之前:purge 进行中拒绝(B3c 的 assertNoPurgeInProgress;合并前是本地桩)
+        if (lock !== null) await (deps.assertNoPurge ?? assertNoPurgeStub)({ io: ctx.io });
         let backends: JudgeBackends;
         try {
           backends =

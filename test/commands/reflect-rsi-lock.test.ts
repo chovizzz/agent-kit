@@ -5,6 +5,8 @@
  */
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { RsiFailClosedError } from '../../src/rsi/types.js';
+import { runReflect } from '../../src/reflect/run.js';
 import { createReflectCommand } from '../../src/commands/reflect.js';
 import type { ReflectCommandDeps } from '../../src/commands/reflect.js';
 import { ExitCode } from '../../src/contracts/exit-codes.js';
@@ -188,17 +190,8 @@ describe('reflect --run-llm × rsi/lock', () => {
     expect(await r.cmd.run(ctx)).toBe(ExitCode.FAIL_CLOSED);
     expect(err.join('')).toContain('RSI_FAIL_CLOSED reason=lock_lost\n');
     expect(out).toEqual([]);
-    // 没有任何提案 / apply.patch 被暂存。已知残余:runReflect 在后端失败分支仍会写一份 outcome=not_run 的 report.json(它不可注入,
-    // 要拦须在 reflect/run.ts 加写前钩子 → 汇报「待主代理定夺」);这里钉死「只有 report.json」,有 proposals/ 就红
-    const runs = await runDirs(r.w);
-    for (const name of runs) {
-      expect((await readDir(path.join(r.w.state, 'reflect', name))).map((e) => e.name)).toEqual([
-        'report.json',
-      ]);
-      expect(await readText(path.join(r.w.state, 'reflect', name, 'report.json'))).toContain(
-        '"outcome": "not_run"',
-      );
-    }
+    // 失锁后零写入:连 report.json / 临时目录都不存在
+    expect(await runDirs(r.w)).toEqual([]);
     expect(await readText(r.lockFile)).toContain('f'.repeat(32)); // 别人的锁还在
   });
 
@@ -217,6 +210,77 @@ describe('reflect --run-llm × rsi/lock', () => {
     expect(await r.cmd.run(ctx)).toBe(ExitCode.FAIL_CLOSED);
     expect(err.join('')).toContain('RSI_FAIL_CLOSED reason=lock_lost\n');
     expect(err.join('')).not.toContain('backend_error');
+    expect(await runDirs(r.w)).toEqual([]); // 同样零写入(不走 fail() 写 report.json)
+  });
+
+  it('后端检查已过、写之前才失锁(beforeWrite 窗口):退出 3 lock_lost,零写入(含 report / 临时目录 / rename)', async () => {
+    const ref: { r?: Rig } = {};
+    const r = await rig({
+      deps: {
+        runReflect: (d, o) => {
+          const inner = d.backend as NonNullable<typeof d.backend>;
+          return runReflect(
+            {
+              ...d,
+              backend: {
+                slot: inner.slot,
+                vendor: inner.vendor,
+                model: inner.model,
+                cli: inner.cli,
+                provider: inner.provider,
+                complete: async (req) => {
+                  const res = await inner.complete(req); // 已通过 guard 的复核
+                  await remove((ref.r as Rig).w.io, (ref.r as Rig).lockFile); // 之后才失锁
+                  return res;
+                },
+              },
+            },
+            o,
+          );
+        },
+      },
+    });
+    ref.r = r;
+    const { ctx, err, out } = ctxFor(r.w, LIVE);
+    expect(await r.cmd.run(ctx)).toBe(ExitCode.FAIL_CLOSED);
+    expect(err.join('')).toContain('RSI_FAIL_CLOSED reason=lock_lost\n');
+    expect(out).toEqual([]);
+    expect(await runDirs(r.w)).toEqual([]);
+  });
+
+  it('purge 进行中(注入的 assertNoPurge 抛 purge_incomplete):退出 3,零后端构造、零写入;该检查在锁内被调用', async () => {
+    const seen: boolean[] = [];
+    let lockPath = '';
+    const r = await rig({
+      deps: {
+        assertNoPurge: async () => {
+          seen.push(await exists(lockPath));
+          throw new RsiFailClosedError('purge_incomplete');
+        },
+      },
+    });
+    lockPath = r.lockFile;
+    const { ctx, err } = ctxFor(r.w, LIVE);
+    expect(await r.cmd.run(ctx)).toBe(ExitCode.FAIL_CLOSED);
+    expect(err.join('')).toBe('RSI_FAIL_CLOSED reason=purge_incomplete\n');
+    expect(seen).toEqual([true]);
+    expect(r.factory.n).toBe(0);
+    expect(r.stub.calls).toBe(0);
+    expect(await runDirs(r.w)).toEqual([]);
+  });
+
+  it('闸门 off 时不调 assertNoPurge', async () => {
+    const r = await rig({
+      config: OFF,
+      alias: false,
+      deps: {
+        assertNoPurge: async () => {
+          throw new Error('must not be called when gate is off');
+        },
+      },
+    });
+    const { ctx } = ctxFor(r.w, LIVE);
+    expect(await r.cmd.run(ctx)).toBe(ExitCode.OK);
   });
 });
 
@@ -294,6 +358,46 @@ describe('reflect --gc --write × rsi/lock', () => {
     expect(err).toEqual([]);
     expect(await exists(dir)).toBe(false);
     expect(await exists(path.join(r.w.state, 'rsi'))).toBe(false);
+  });
+
+  it('gc 期间锁丢失:退出 3 RSI_FAIL_CLOSED reason=lock_lost,不输出成功摘要(release 前最后复核)', async () => {
+    const ref: { r?: Rig } = {};
+    const r = await rig({
+      clock: () => {
+        const rr = ref.r as Rig;
+        void remove(rr.w.io, rr.lockFile); // 锁在 gc 期间被夺走 / 删除
+        return CLOCK();
+      },
+    });
+    ref.r = r;
+    await withOldRun(r);
+    const { ctx, err, out } = ctxFor(r.w, ['--gc', '--write']);
+    expect(await r.cmd.run(ctx)).toBe(ExitCode.FAIL_CLOSED);
+    expect(err.join('')).toBe('RSI_FAIL_CLOSED reason=lock_lost\n');
+    expect(out).toEqual([]);
+  });
+
+  it('无候选可删时,返回前的最后复核也抓得到失锁:退出 3 lock_lost,不输出成功摘要', async () => {
+    const ref: { r?: Rig } = {};
+    let reads = 0;
+    const r = await rig({
+      deps: {
+        lockDeps: {
+          lock: {
+            // 读锁顺序:1 = 拿锁时,2 = gc 前的 assertHeld,3 = 返回前的最后复核(此刻锁被删);release 是第 4 次
+            beforeRead: async () => {
+              if (++reads === 3) await remove((ref.r as Rig).w.io, (ref.r as Rig).lockFile);
+            },
+          },
+        },
+      },
+    });
+    ref.r = r;
+    const { ctx, err, out } = ctxFor(r.w, ['--gc', '--write']);
+    expect(await r.cmd.run(ctx)).toBe(ExitCode.FAIL_CLOSED);
+    expect(reads).toBeGreaterThanOrEqual(3);
+    expect(err.join('')).toBe('RSI_FAIL_CLOSED reason=lock_lost\n');
+    expect(out).toEqual([]);
   });
 
   it('refuse:退出 3 state_dir_unsafe,不删', async () => {
