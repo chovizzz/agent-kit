@@ -13,9 +13,7 @@ import { REPO_ROOT } from '../helpers/tmp.js';
 /** 文件(相对仓库根)→ 该文件里登记的桩名(升序);注释写明谁负责删 */
 const REGISTERED: Readonly<Record<string, readonly string[]>> = {
   // B5a 已实装并删除登记:tick / status --ack / projects --rebuild-index(干跑与 --write)
-  // B5b:confirm 实装
-  'src/rsi/confirm.ts': ['confirm'],
-  // B5c 已实装并删除登记:purge
+  // B5b 已实装并删除登记:confirm;B5c 已实装并删除登记:purge
   // A3:poke / hint(钩子专用入口,不属于 B5)
   'src/rsi/poke.ts': ['poke'],
   'src/rsi/hint.ts': ['hint'],

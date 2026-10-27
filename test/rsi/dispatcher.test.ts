@@ -44,8 +44,8 @@ async function run(
 }
 
 const ALL = [...RSI_SUBCOMMANDS, ...RSI_P1_RESERVED_SUBCOMMANDS];
-/** 已实装(不再是桩):status / projects / stop(B3a)、tick(B5a)、purge(B5c);它们的行为测试在 status / projects / stop / open / b5c-* 各自的测试文件 */
-const IMPLEMENTED = ['status', 'projects', 'stop', 'tick', 'purge'];
+/** 已实装(不再是桩):status / projects / stop(B3a)、tick(B5a)、confirm(B5b)、purge(B5c);它们的行为测试在 status / projects / stop / open / b5b-* / b5c-* 各自的测试文件 */
+const IMPLEMENTED = ['status', 'projects', 'stop', 'tick', 'confirm', 'purge'];
 const STUBBED = ALL.filter((n) => !IMPLEMENTED.includes(n));
 
 describe('rsi 分发器', () => {
@@ -65,9 +65,9 @@ describe('rsi 分发器', () => {
   }
 
   it('多余参数不改变桩行为(桩不解析参数)', async () => {
-    const r = await run(['rsi', 'confirm', '--json', '--bogus']);
+    const r = await run(['rsi', 'poke', '--json', '--bogus']);
     expect(r.code).toBe(64);
-    expect(r.err).toBe('RSI_NOT_IMPLEMENTED subcommand=confirm\n');
+    expect(r.err).toBe('RSI_NOT_IMPLEMENTED subcommand=poke\n');
   });
 
   it('缺省 / 未知子命令 → 2 RSI_USAGE reason=unknown_subcommand,不回显输入', async () => {
@@ -91,8 +91,8 @@ describe('rsi 分发器', () => {
     // 已实装的子命令:同样的无效 KIT_WRITE_ROOTS 不让它们像普通命令那样退 3(配置 absent → status / projects 退 0、stop 退 0 noop)
     for (const sub of IMPLEMENTED) {
       const r = await run(['rsi', sub], bad);
-      // tick 在配置 off 时按契约退 4 `RSI_NOT_RUN reason=off`(不是桩的 64,也不是通用路径的 3);purge 不带模式参数 → 2 mode_conflict(参数先于配置判定)
-      expect(r.code, sub).toBe(sub === 'tick' ? 4 : sub === 'purge' ? 2 : 0);
+      // tick 在配置 off 时按契约退 4 `RSI_NOT_RUN reason=off`(不是桩的 64,也不是通用路径的 3);confirm 无 TTY 先退 2 `not_tty`(先于任何读);purge 不带模式参数 → 2 mode_conflict(参数先于配置判定)
+      expect(r.code, sub).toBe(sub === 'tick' ? 4 : sub === 'confirm' || sub === 'purge' ? 2 : 0);
     }
     expect((await run(['rsi', 'nope'], bad)).code).toBe(2);
   });
