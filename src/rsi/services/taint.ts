@@ -1,48 +1,320 @@
-/* eslint-disable @typescript-eslint/no-unused-vars -- 桩:参数是冻结的签名,由实装块使用 */
 /**
- * taint 恢复与 purge journal 探测(契约 R20-4.7、R20-3.8.4 ~ R20-3.8.5)。**B3c 实装**;本块只冻结签名。
+ * taint 恢复与 purge journal 探测(契约 R20-4.7、R20-3.8.4 ~ R20-3.8.5;R20-A2 B3c)。
+ *
+ * 动作顺序固定(每个 run / promote 目录):① 独占创建 `TAINTED`(先落标记,崩溃在中途时读路径照样拒)→ ② 清空全部摘录(run)/ 删 `promote.patch`、`pr-body.md`(promote)
+ * → ③ 删 `apply.patch`(及其它非白名单条目,见 `staging.ts`)。`report.json`、目录、提案文件名保留。每个写操作前 `lock.assertHeld()`(经 `Writer.op`),
+ * 数据文件一律临时文件 + rename。全部幂等:重跑只补没做完的。
+ *
+ * 与 `purge` 命令(B5)的分工:这里只做 journal `taint_targets` 的**标记与清理**;journal 的阶段机(planned → tainted → signals_rewritten → indexed → done)
+ * 与信号库重写由 purge 命令推进,本文件**不写 journal**。journal 读不出(`unreadable`)/ 不合规(`invalid`)时,`resumeTaint` 抛 fail-closed:
+ * 已授权删除的目标集合不可知,继续让写入方跑可能扩大泄漏(要求 B5 的 `purge --resume` 能处理这两种状态)。
+ *
+ * 已知残余(如实写明):
+ *  - 只覆盖崩溃(进程死亡)模型,不含断电后的 fsync 持久化屏障;
+ *  - `assertHeld()` 是检测不是 fencing:assert 与紧随其后的那一次写之间锁仍可能被夺走(A1 已写明);
+ *  - 清不到已合进 git / 发成 PR / `git apply` 到工作树的内容(R20-4.7);失败运行遗留的 `.tmp-<id>` 暂存目录不是 run,不在扫描范围;
+ *  - journal 存在期间新建的暂存 run 不在 journal 记下的集合里,续做不会认它:会新建暂存内容的写入方(reflect `--run-llm`)必须先过 {@link assertNoPurgeInProgress}(B3b / B5 接线)。
  */
-import type { RsiLockHandle } from '../lock.js';
-import type {
-  PurgeJournalProbe,
-  RsiServiceCtx,
-  TaintResumeOutcome,
-  TaintScanOutcome,
-  TaintScanSource,
+import { RsiPurgeJournalSchema, type RsiPurgeJournal } from '../../contracts/rsi.js';
+import type { IoContext } from '../../io/paths.js';
+import { readFileSafe } from '../../io/read-fs.js';
+import { loadRsiConfig } from '../config.js';
+import { privacyGate } from '../gate.js';
+import { RSI_FILE_OWNER, rsiDirReadonly, type RsiLockHandle } from '../lock.js';
+import {
+  RsiFailClosedError,
+  type PurgeJournalProbe,
+  type RsiServiceCtx,
+  type TaintResumeOutcome,
+  type TaintScanOutcome,
+  type TaintScanSource,
 } from '../types.js';
+import {
+  buildExcludeMatcher,
+  createClassifier,
+  loadSigKeys,
+  readCountsSaltFp,
+  readIndex,
+} from './attribution.js';
+import { assertLockBelongs } from './lock-scope.js';
+import {
+  Writer,
+  cleanPromoteDir,
+  cleanRunDir,
+  createMark,
+  isStagingId,
+  listStaging,
+  probeStagingDir,
+  promoteRunId,
+  readMark,
+  readRunEvidence,
+  type ServiceHooks,
+  type StagingKind,
+  type TaintReason,
+} from './staging.js';
+import * as path from 'node:path';
 
-/**
- * 锁内先于业务的 taint 续做(R20-4.7「续做」):扫描所有带 `TAINTED` 的暂存 run 与 promote 产物,把「全部摘录置空、删 `apply.patch` /
- * `promote.patch` / `pr-body.md`」补到完成(不因标记已存在而跳过,不依赖信号库映射);`confirmed` 下并续做 purge journal。
- * 必须传锁句柄:内部每个提交点前 `lock.assertHeld()`。负责块:B3c。
- */
-export async function resumeTaint(
-  _ctx: RsiServiceCtx,
-  _lock: RsiLockHandle,
-): Promise<TaintResumeOutcome> {
-  throw new Error('not implemented');
-}
+const JOURNAL_MAX_BYTES = 8 * 1024 * 1024;
+const JOURNAL_FILE = 'purge-journal.json';
 
-/**
- * 锁内「发现并标记新 taint」(R20-4.7 时机 / 动作):按 `source` 现算命中已排除 key(或 purge journal 已记下的集合)的暂存 run 与 promote 产物,
- * 先独占创建 `TAINTED`,再清摘录 / 删 patch。与 {@link resumeTaint} 的分工:`resumeTaint` 只补完**已有**标记的清理,本函数负责**新**命中的目标。
- * 调用点(各持锁写入方在提交前,**先 resumeTaint 再本函数**):worker / `tick --write`、`purge --write`(在删信号之前、按 journal)、
- * `--rebuild-index --write`、`confirm`。必须传锁句柄。负责块:B3c;B3a 的 `projects --rebuild-index --write` 经它完成 taint,不自己实现。
- */
-export async function taintNewlyExcluded(
-  _ctx: RsiServiceCtx,
-  _lock: RsiLockHandle,
-  _source: TaintScanSource,
-): Promise<TaintScanOutcome> {
-  throw new Error('not implemented');
+type JournalRead =
+  | { state: 'absent' }
+  | { state: 'present'; journal: RsiPurgeJournal }
+  | { state: 'invalid' }
+  | { state: 'unreadable' };
+
+async function readJournal(io: IoContext): Promise<JournalRead> {
+  let d;
+  try {
+    d = await rsiDirReadonly(io);
+  } catch {
+    return { state: 'unreadable' };
+  }
+  if (d.kind === 'missing') return { state: 'absent' };
+  if (d.kind === 'unsafe') return { state: 'unreadable' };
+  let r;
+  try {
+    r = await readFileSafe(path.join(d.dir, JOURNAL_FILE), {
+      maxBytes: JOURNAL_MAX_BYTES,
+      owner: RSI_FILE_OWNER,
+    });
+  } catch {
+    return { state: 'unreadable' };
+  }
+  if (r.kind === 'missing') return { state: 'absent' };
+  if (r.kind === 'unsafe') return { state: r.why === 'too_large' ? 'invalid' : 'unreadable' };
+  try {
+    const p = RsiPurgeJournalSchema.safeParse(JSON.parse(r.bytes.toString('utf8')));
+    return p.success ? { state: 'present', journal: p.data } : { state: 'invalid' };
+  } catch {
+    return { state: 'invalid' };
+  }
 }
 
 /**
  * 只读探测 purge journal(不拿锁、不写、不建目录)。给即时闸(R20-4.8 第 3 条)、`rsi status` 的 `purge.journal`、hint 用。
- * 「读不出」返回 `unreadable`,**不得**当 `absent`。负责块:B3c(B3a 的 status 调用它)。
+ * 「读不出」返回 `unreadable`,**不得**当 `absent`。
  */
 export async function detectPurgeJournal(
-  _ctx: Pick<RsiServiceCtx, 'io'>,
+  ctx: Pick<RsiServiceCtx, 'io'>,
 ): Promise<PurgeJournalProbe> {
-  throw new Error('not implemented');
+  const j = await readJournal(ctx.io);
+  return j.state === 'present' ? { state: 'present', phase: j.journal.phase } : { state: j.state };
+}
+
+/**
+ * 会新建暂存内容的写入方(reflect `--run-llm` 等)在锁内先调:journal 存在 / 不合规 / 读不出 → 抛 fail-closed(`purge_incomplete` / `journal_invalid`)。
+ * 原因:purge 进行中新建的 run 不在 journal 的目标集合里,信号被删后再也映射不到,taint 补不回来。
+ */
+export async function assertNoPurgeInProgress(ctx: Pick<RsiServiceCtx, 'io'>): Promise<void> {
+  const j = await readJournal(ctx.io);
+  if (j.state === 'absent') return;
+  throw new RsiFailClosedError(j.state === 'invalid' ? 'journal_invalid' : 'purge_incomplete');
+}
+
+const nowOf = (ctx: RsiServiceCtx): Date => (ctx.now ?? ((): Date => new Date()))();
+
+interface Done {
+  created: boolean;
+  changed: boolean;
+}
+
+/** 目录存在才处理:`reason` 给了则先落标记(① ),再清理(②③);`null` = 只补清理(调用方已确认标记在) */
+async function taintAndClean(
+  w: Writer,
+  kind: StagingKind,
+  id: string,
+  reason: TaintReason | null,
+  now: Date,
+): Promise<Done> {
+  if ((await probeStagingDir(w.io, kind, id)) === 'missing')
+    return { created: false, changed: false };
+  const created = reason === null ? false : await createMark(w, kind, id, reason, now);
+  const changed = kind === 'run' ? await cleanRunDir(w, id) : await cleanPromoteDir(w, id);
+  return { created, changed };
+}
+
+interface PromoteSweep {
+  /** 本次新建的标记数 */
+  marked: number;
+  /** 本次做了事(新建标记或改动了内容)的目录数 */
+  completed: number;
+}
+
+/**
+ * promote 产物的 taint 闭包:自带标记的补清理;`report.json.run_id` 指向任一已 taint 的 run 的补标并清理(原因随该 run);
+ * `report.json` 读不出 / 无法关联时,只要存在已 taint 的 run 就保守地一并 taint(opus 咨询);journal 记下的 promote 目标补标(`purge`)。
+ */
+async function sweepPromotes(
+  w: Writer,
+  taintedRuns: ReadonlyMap<string, TaintReason>,
+  journalPromotes: readonly string[],
+  now: Date,
+): Promise<PromoteSweep> {
+  const out: PromoteSweep = { marked: 0, completed: 0 };
+  const ids = new Set(await listStaging(w.io, 'promote'));
+  for (const id of journalPromotes) {
+    if ((await probeStagingDir(w.io, 'promote', id)) === 'dir') ids.add(id);
+  }
+  const fallback = [...taintedRuns.values()][0];
+  for (const id of [...ids].sort()) {
+    const own = await readMark(w.io, 'promote', id);
+    let reason: TaintReason | null = null;
+    if (!own.present) {
+      const linked = await promoteRunId(w.io, id);
+      if (linked !== undefined && taintedRuns.has(linked))
+        reason = taintedRuns.get(linked) ?? 'exclude';
+      else if (linked === undefined && fallback !== undefined) reason = fallback;
+      else if (journalPromotes.includes(id)) reason = 'purge';
+      if (reason === null) continue;
+    }
+    const r = await taintAndClean(w, 'promote', id, reason, now);
+    if (r.created) out.marked++;
+    if (r.created || r.changed) out.completed++;
+  }
+  return out;
+}
+
+/**
+ * 锁内先于业务的 taint 续做(R20-4.7「续做」)。必须传锁句柄。
+ * 扫描所有带 `TAINTED` 的暂存 run,把 ②③ 补到完成(不因标记已存在而跳过,不依赖信号库映射);journal 在则对其 `taint_targets` 补标记(`purge`)并清理;
+ * 最后做 promote 闭包。journal 不合规 / 读不出 → 抛 fail-closed。不推进 journal 阶段。
+ */
+export async function resumeTaint(
+  ctx: RsiServiceCtx,
+  lock: RsiLockHandle,
+): Promise<TaintResumeOutcome> {
+  return resumeTaintWith(ctx, lock);
+}
+
+/** `resumeTaint` + 测试缝(崩溃 / 丢锁注入点) */
+export async function resumeTaintWith(
+  ctx: RsiServiceCtx,
+  lock: RsiLockHandle,
+  hooks: ServiceHooks = {},
+): Promise<TaintResumeOutcome> {
+  await assertLockBelongs(ctx, lock);
+  const j = await readJournal(ctx.io);
+  if (j.state === 'invalid') throw new RsiFailClosedError('journal_invalid');
+  if (j.state === 'unreadable') throw new RsiFailClosedError('purge_incomplete');
+  const journal = j.state === 'present' ? j.journal : undefined;
+  const w = new Writer(ctx.io, lock, hooks);
+  const now = nowOf(ctx);
+  const tainted = new Map<string, TaintReason>();
+  let runsCompleted = 0;
+  for (const id of await listStaging(ctx.io, 'run')) {
+    const m = await readMark(ctx.io, 'run', id);
+    if (!m.present) continue;
+    tainted.set(id, m.reason);
+    const r = await taintAndClean(w, 'run', id, null, now);
+    if (r.changed) runsCompleted++;
+  }
+  for (const id of journal?.taint_targets.runs ?? []) {
+    if (tainted.has(id)) continue;
+    const r = await taintAndClean(w, 'run', id, 'purge', now);
+    const m = await readMark(ctx.io, 'run', id);
+    if (m.present) tainted.set(id, m.reason);
+    if (r.created || r.changed) runsCompleted++;
+  }
+  const p = await sweepPromotes(w, tainted, journal?.taint_targets.promotes ?? [], now);
+  return {
+    runsCompleted,
+    promotesCompleted: p.completed,
+    journalResumedFrom: journal?.phase ?? null,
+  };
+}
+
+/**
+ * 锁内「发现并标记新 taint」(R20-4.7 时机 / 动作):按 `source` 现算命中已排除 key(或 purge journal 已记下的集合)的暂存 run 与 promote 产物,
+ * 先独占创建 `TAINTED`,再清摘录 / 删 patch。`resumeTaint` 只补完**已有**标记的清理,本函数负责**新**命中的目标(调用点:先 resumeTaint 再本函数)。
+ * `exclude`:重读配置(不用 `ctx.config` 的快照);配置不可用抛对应 fail-closed;索引缺失 / 损坏则算不出 X,零结果(归属闸另管 U);映射不到的证据不触发 taint。
+ */
+export async function taintNewlyExcluded(
+  ctx: RsiServiceCtx,
+  lock: RsiLockHandle,
+  source: TaintScanSource,
+): Promise<TaintScanOutcome> {
+  return taintNewlyExcludedWith(ctx, lock, source);
+}
+
+export async function taintNewlyExcludedWith(
+  ctx: RsiServiceCtx,
+  lock: RsiLockHandle,
+  source: TaintScanSource,
+  hooks: ServiceHooks = {},
+): Promise<TaintScanOutcome> {
+  await assertLockBelongs(ctx, lock);
+  const w = new Writer(ctx.io, lock, hooks);
+  const now = nowOf(ctx);
+  const tainted = new Map<string, TaintReason>();
+  for (const id of await listStaging(ctx.io, 'run')) {
+    const m = await readMark(ctx.io, 'run', id);
+    if (m.present) tainted.set(id, m.reason);
+  }
+  let runsMarked = 0;
+  let journalPromotes: readonly string[] = [];
+  if (source.source === 'purge') {
+    journalPromotes = source.journal.taint_targets.promotes;
+    for (const id of source.journal.taint_targets.runs) {
+      if (!isStagingId(id, 'run')) throw new RsiFailClosedError('journal_invalid');
+      if (tainted.has(id)) continue;
+      const r = await taintAndClean(w, 'run', id, 'purge', now);
+      const m = await readMark(ctx.io, 'run', id);
+      if (m.present) tainted.set(id, m.reason);
+      if (r.created) runsMarked++;
+    }
+  } else {
+    runsMarked = await taintExcludedRuns(ctx, w, tainted, now);
+  }
+  const p = await sweepPromotes(w, tainted, journalPromotes, now);
+  return { runsMarked, promotesMarked: p.marked };
+}
+
+async function taintExcludedRuns(
+  ctx: RsiServiceCtx,
+  w: Writer,
+  tainted: Map<string, TaintReason>,
+  now: Date,
+): Promise<number> {
+  const cfg = await loadRsiConfig({ home: ctx.io.hostEnv['HOME'] });
+  if (cfg.status === 'off') {
+    const g = privacyGate(cfg);
+    if (g.kind === 'deny') throw new RsiFailClosedError(g.reason);
+    return 0; // 没有 [rsi]:没有排除可言
+  }
+  if (cfg.block !== null) throw new RsiFailClosedError(cfg.block);
+  const index = await readIndex(ctx.io);
+  if (index.kind !== 'ok') return 0;
+  const classify = createClassifier({
+    index,
+    countsSaltFp: await readCountsSaltFp(ctx.io),
+    matcher: await buildExcludeMatcher(cfg),
+  });
+  const evidence = new Map<string, Set<string>>();
+  const needed = new Set<string>();
+  for (const id of await listStaging(ctx.io, 'run')) {
+    if (tainted.has(id)) continue;
+    const ev = await readRunEvidence(ctx.io, id);
+    if (!ev.exists) continue;
+    evidence.set(id, ev.sigs);
+    for (const s of ev.sigs) needed.add(s);
+  }
+  const keys = await loadSigKeys(ctx.io, needed);
+  let marked = 0;
+  for (const [id, sigs] of [...evidence].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
+    let hit = false;
+    for (const s of sigs) {
+      const key = keys.get(s);
+      if (key !== undefined && (await classify(key)) === 'X') {
+        hit = true;
+        break;
+      }
+    }
+    if (!hit) continue;
+    const r = await taintAndClean(w, 'run', id, 'exclude', now);
+    const m = await readMark(ctx.io, 'run', id);
+    if (m.present) tainted.set(id, m.reason);
+    if (r.created) marked++;
+  }
+  return marked;
 }
