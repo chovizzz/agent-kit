@@ -303,8 +303,9 @@ describe('immediateGate:标记 / journal / 归属', () => {
     {
       const w = await world('gate-u5-');
       await stageRun(w.s, 'run-1', [SIG_B]);
-      // 删后重建:同路径、新 inode
-      await remove(w.s.f.fx, w.rootB);
+      // 同路径、新 inode:旧目录改名保留(它的 inode 仍被占用)再在原路径新建。不能删后重建:
+      // Linux 的 tmpfs / ext4 会立即复用刚释放的 inode 号,(dev, ino) 就没变(CI 上实测)
+      await rename(w.s.f.fx, w.rootB, `${w.rootB}-old`);
       await mkdirp(w.s.f.fx, w.rootB, 0o755);
       await wantU(w, '根路径 (dev, ino) 变了');
       await remove(w.s.f.fx, w.rootB);
