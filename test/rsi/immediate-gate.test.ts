@@ -5,12 +5,22 @@ import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { canonicalJson } from '../../src/io/canonical-json.js';
 import { exists, readText } from '../../src/io/read-fs.js';
-import { chmod, mkdirp, remove, rename, symlink, writeFile } from '../../src/io/safe-fs.js';
+import {
+  chmod,
+  hardlink,
+  mkdirp,
+  remove,
+  rename,
+  symlink,
+  writeFile,
+} from '../../src/io/safe-fs.js';
+import { loadSigKeys } from '../../src/rsi/services/attribution.js';
 import { immediateGate, judgeGateCallbacks } from '../../src/rsi/services/immediate-gate.js';
 import {
   KEY_A,
   KEY_B,
   KEY_C,
+  signalObj,
   addSignals,
   countsDoc,
   makeRoot,
@@ -418,6 +428,42 @@ describe('immediateGate:标记 / journal / 归属', () => {
       kind: 'fail_closed',
       reason: 'state_dir_unsafe',
     });
+  });
+});
+
+describe('信号库月文件:句柄级安全读取(openStreamSafe),不安全一律 signal_store_corrupt', () => {
+  it('端到端:月文件有第二个硬链接 → 即时闸 fail_closed signal_store_corrupt(不当 P 证据放行)', async () => {
+    const w = await world('gate-hardlink-month-');
+    await stageRun(w.s, 'run-1', [SIG_B]);
+    const month = path.join(w.s.state, 'signals', 'claude', '202610.jsonl');
+    const alias = path.join(w.s.f.dir, 'alias.jsonl');
+    await hardlink(w.s.f.fx, month, alias);
+    expect(await immediateGate(w.s.ctx, scopes[0])).toMatchObject({
+      kind: 'fail_closed',
+      reason: 'signal_store_corrupt',
+    });
+  });
+
+  it('枚举之后、打开之前月文件被换成符号链接 → signal_store_corrupt(O_NOFOLLOW);内容缺尾换行 / 非 UTF-8 也算损坏', async () => {
+    const w = await world('gate-swap-month-');
+    const month = path.join(w.s.state, 'signals', 'claude', '202610.jsonl');
+    const other = path.join(w.s.f.repo, 'other.jsonl');
+    await put(w.s, other, `${JSON.stringify(signalObj(SIG_B, KEY_B))}\n`);
+    await expect(
+      loadSigKeys(w.s.io, new Set([`sig_${SIG_B}`]), {
+        beforeOpen: async () => {
+          await remove(w.s.f.fx, month);
+          await symlink(w.s.f.fx, other, month);
+        },
+      }),
+    ).rejects.toMatchObject({ reason: 'signal_store_corrupt' });
+    await remove(w.s.f.fx, month);
+    await put(w.s, month, JSON.stringify(signalObj(SIG_B, KEY_B))); // 缺尾换行
+    await expect(loadSigKeys(w.s.io, new Set([`sig_${SIG_B}`]))).rejects.toMatchObject({
+      reason: 'signal_store_corrupt',
+    });
+    await put(w.s, month, `${JSON.stringify(signalObj(SIG_B, KEY_B))}\n`);
+    expect((await loadSigKeys(w.s.io, new Set([`sig_${SIG_B}`]))).get(`sig_${SIG_B}`)).toBe(KEY_B); // 对照
   });
 });
 

@@ -20,16 +20,16 @@ import {
 import type { IoContext } from '../../io/paths.js';
 import {
   MAX_LINE_BYTES,
-  TOO_LONG_LINE,
   lstat,
+  openStreamSafe,
   readDir,
   readFileSafe,
-  readLines,
   realpath,
   stat,
 } from '../../io/read-fs.js';
 import { canonical } from '../../signals/exclude.js';
 import type { RsiConfigOn } from '../config.js';
+import { JsonlStream } from '../jsonl-stream.js';
 import { RSI_FILE_OWNER, rsiDirReadonly } from '../lock.js';
 import { RsiFailClosedError } from '../types.js';
 
@@ -99,13 +99,21 @@ async function realDirOrMissing(p: string): Promise<boolean> {
   }
 }
 
+/** 测试缝:每个月文件打开之前调用(演练「枚举之后、打开之前被换成链接」) */
+export interface LoadSigKeysHooks {
+  beforeOpen?: (file: string) => Promise<void> | void;
+}
+
 /**
  * 只读流式扫 `.state/signals/<agent>/*.jsonl`,返回 `needed` 里每个 sig_id 的 `project_key`(查不到的不在结果里)。
- * 链接 / 非普通文件 / 超长行 / 非 JSON / 缺 sig_id 的行 / 同一 sig_id 映射到不同 key → fail-closed `signal_store_corrupt`(不任选一条)。
+ * 每个月文件经 B2 的 `openStreamSafe`(`O_NOFOLLOW | O_NONBLOCK`、句柄 fstat:普通文件、`nlink == 1`)打开,同一个已校验句柄读完,
+ * 喂 B2 的流式 JSONL 引擎(按字节 `\n` 切行、严格 UTF-8 / JSON、超长行 / 缺尾换行即败)。
+ * 硬链接 / 末级链接 / 非普通文件 / 读错误 / 超长行 / 非 JSON / 缺 sig_id 或 project_key 的行 / 同一 sig_id 映射到不同 key → fail-closed `signal_store_corrupt`(不任选一条)。
  */
 export async function loadSigKeys(
   io: IoContext,
   needed: ReadonlySet<string>,
+  hooks: LoadSigKeysHooks = {},
 ): Promise<Map<string, string>> {
   const found = new Map<string, string>();
   if (needed.size === 0) return found;
@@ -123,28 +131,29 @@ export async function loadSigKeys(
     for (const f of entries) {
       if (!MONTH_RE.test(f.name)) continue;
       if (!f.isFile || f.isSymbolicLink) throw corrupt();
+      const file = path.join(dir, f.name);
+      const s = await openStreamSafe(file, {
+        ...(hooks.beforeOpen !== undefined ? { beforeOpen: () => hooks.beforeOpen?.(file) } : {}),
+      });
+      if (s.kind === 'missing') continue;
+      if (s.kind === 'unsafe') throw corrupt();
+      const lines = new JsonlStream(MAX_LINE_BYTES, (o) => {
+        const rec = o as { sig_id?: unknown; project_key?: unknown } | null;
+        if (typeof rec?.sig_id !== 'string') return false;
+        if (!needed.has(rec.sig_id)) return true;
+        if (typeof rec.project_key !== 'string' || rec.project_key === '') return false;
+        const prev = found.get(rec.sig_id);
+        if (prev !== undefined && prev !== rec.project_key) return false;
+        found.set(rec.sig_id, rec.project_key);
+        return true;
+      });
       try {
-        for await (const line of readLines(path.join(dir, f.name), MAX_LINE_BYTES)) {
-          if (line === '') continue;
-          if (line === TOO_LONG_LINE) throw corrupt();
-          let o: unknown;
-          try {
-            o = JSON.parse(line);
-          } catch {
-            throw corrupt();
-          }
-          const id = (o as { sig_id?: unknown } | null)?.sig_id;
-          if (typeof id !== 'string') throw corrupt();
-          if (!needed.has(id)) continue;
-          const key = (o as { project_key?: unknown }).project_key;
-          if (typeof key !== 'string' || key === '') throw corrupt();
-          const prev = found.get(id);
-          if (prev !== undefined && prev !== key) throw corrupt();
-          found.set(id, key);
-        }
-      } catch (e) {
-        if (e instanceof RsiFailClosedError) throw e;
+        for await (const chunk of s.chunks()) lines.push(chunk);
+        lines.end();
+      } catch {
         throw corrupt();
+      } finally {
+        await s.close();
       }
     }
   }

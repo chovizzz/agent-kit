@@ -17,6 +17,7 @@ import {
   writeFile,
 } from '../../src/io/safe-fs.js';
 import { RsiLockError } from '../../src/rsi/lock.js';
+import { RsiStagingBlockedError } from '../../src/rsi/services/staging.js';
 import { RsiFailClosedError } from '../../src/rsi/types.js';
 import {
   assertNoPurgeInProgress,
@@ -76,6 +77,10 @@ async function world(prefix: string): Promise<Svc> {
   await stagePromote(s, 'promo-ok', 'run-ok');
   return s;
 }
+
+/** 去掉拿锁 / 释放锁带来的写(锁文件与 .state、.state/rsi 的建目录) */
+const lockOnly = (a: readonly string[]): string[] =>
+  a.filter((x) => !x.endsWith('/lock') && !/^mkdirp .*\/\.state(\/rsi)?$/.test(x));
 
 const markOf = async (dir: string): Promise<{ reason: string } | null> => {
   try {
@@ -545,24 +550,128 @@ describe('resumeTaint', () => {
     }
   }, 120_000);
 
-  it('硬链接的暂存文件:safe-fs 拒绝改写 / 删除硬链接 → fail-closed write_denied,标记保留,外部 inode 不动', async () => {
-    const s = await world('resume-hardlink-');
+  it('阻断状态:硬链接 / 根外符号链接 / 悬空符号链接 → staging_unsafe_entry;标记保留,预检先于任何清理(整棵树与其它已标记目录都原封不动),外部目标不动', async () => {
+    const kinds = {
+      hardlink: async (s: Svc, run: string): Promise<void> => {
+        const sentinel = path.join(s.f.repo, 'sentinel.txt');
+        await put(s, sentinel, `${SECRET}-sentinel`);
+        await hardlink(s.f.fx, sentinel, path.join(run, 'proposals', 'linked.yaml'));
+      },
+      outside: async (s: Svc, run: string): Promise<void> => {
+        const outside = path.join(s.f.dir, 'outside.txt'); // 在 fx 的写入根内、在服务 io 的写入根(repo)外
+        await put(s, outside, `${SECRET}-outside`);
+        await symlink(s.f.fx, outside, path.join(run, 'rules', 'team', 'out.md'));
+      },
+      dangling: async (s: Svc, run: string): Promise<void> => {
+        await symlink(
+          s.f.fx,
+          path.join(s.f.repo, 'nonexistent'),
+          path.join(run, 'proposals', 'dangle.yaml'),
+        );
+      },
+    };
+    for (const [name, plant] of Object.entries(kinds)) {
+      const s = await world(`resume-blocked-${name}-`);
+      const run = runDirOf(s, 'run-x');
+      await plant(s, run);
+      await put(
+        s,
+        path.join(run, 'TAINTED'),
+        canonicalJson({ reason: 'exclude', at: '2026-10-26T00:00:00.000Z' }),
+      );
+      // 另一个可清理的已标记 run:全局预检,所以它也不能被清到
+      await stageRun(s, 'run-y', [SIG_B]);
+      await put(
+        s,
+        path.join(runDirOf(s, 'run-y'), 'TAINTED'),
+        canonicalJson({ reason: 'exclude', at: '2026-10-26T00:00:00.000Z' }),
+      );
+      const snap = async (): Promise<string> =>
+        JSON.stringify([
+          await listFiles(run),
+          await allText(run),
+          await listFiles(runDirOf(s, 'run-y')),
+          await allText(runDirOf(s, 'run-y')),
+          (await listFiles(promoteDirOf(s, 'promo-x'))).filter((x) => x !== 'TAINTED'),
+        ]);
+      const before = await snap();
+      const writesBefore = s.audit.length;
+      const err = await withLock(s, (l) => resumeTaint(s.ctx, l)).catch((e: unknown) => e);
+      expect(err, name).toBeInstanceOf(RsiStagingBlockedError);
+      expect((err as RsiStagingBlockedError).toStable()).toEqual({
+        code: 'RSI_FAIL_CLOSED',
+        reason: 'staging_unsafe_entry',
+        exit: 3,
+      });
+      expect(await snap(), `${name}:无半清理`).toBe(before);
+      expect(await exists(path.join(run, 'TAINTED'))).toBe(true);
+      // 拿锁 / 释放锁之外,唯一的写是给关联 promote 补落 TAINTED(只落标记,不清理)
+      expect(lockOnly(s.audit.slice(writesBefore))).toEqual([
+        `createExclusive ${path.join(promoteDirOf(s, 'promo-x'), 'TAINTED')}`,
+      ]);
+      expect(await exists(path.join(promoteDirOf(s, 'promo-x'), 'TAINTED'))).toBe(true);
+      if (name === 'outside')
+        expect(await readText(path.join(s.f.dir, 'outside.txt'))).toBe(`${SECRET}-outside`);
+    }
+  });
+
+  it('阻断状态下 taintNewlyExcluded(exclude):命中的 run 先补落 TAINTED(读路径随即拒绝),再抛 staging_unsafe_entry;内容一个字节不清', async () => {
+    const s = await world('exclude-blocked-');
     const run = runDirOf(s, 'run-x');
     const sentinel = path.join(s.f.repo, 'sentinel.txt');
-    await put(s, sentinel, `${SECRET}-sentinel`);
+    await put(s, sentinel, 'x');
     await hardlink(s.f.fx, sentinel, path.join(run, 'proposals', 'linked.yaml'));
+    const filesBefore = await listFiles(run);
+    const textBefore = await allText(run);
+    await expect(
+      withLock(s, (l) => taintNewlyExcluded(s.ctx, l, { source: 'exclude' })),
+    ).rejects.toBeInstanceOf(RsiStagingBlockedError);
+    expect(await exists(path.join(run, 'TAINTED'))).toBe(true);
+    expect((await markOf(run))?.reason).toBe('exclude');
+    expect((await listFiles(run)).sort()).toEqual([...filesBefore, 'TAINTED'].sort());
+    expect((await allText(run)).replace(/\{[^{}]*"reason"[^{}]*\}\s*/, '')).toBe(textBefore);
+    expect(await allText(run)).toContain(SECRET); // 没清
+    expect(await exists(path.join(run, 'apply.patch'))).toBe(true);
+  });
+
+  it('R20-6.7 目录数上限:5001 个 promote / 5001 个 run 目录 → staging_too_large,且发生在任何标记 / 清理之前(已标记的 run 仍带摘录)', async () => {
+    for (const which of ['promote', 'run'] as const) {
+      const s = await world(`count-${which}-`);
+      await put(
+        s,
+        path.join(runDirOf(s, 'run-x'), 'TAINTED'),
+        canonicalJson({ reason: 'exclude', at: '2026-10-26T00:00:00.000Z' }),
+      );
+      const root = path.join(s.state, which === 'run' ? 'reflect' : 'promote');
+      for (let i = 0; i < 4999; i++)
+        await mkdirp(s.f.fx, path.join(root, `d${String(i).padStart(5, '0')}`), 0o700);
+      const writesBefore = s.audit.length;
+      await expect(
+        withLock(s, (l) => resumeTaint(s.ctx, l)),
+        which,
+      ).rejects.toMatchObject({ reason: 'staging_too_large' });
+      await expect(
+        withLock(s, (l) => taintNewlyExcluded(s.ctx, l, { source: 'exclude' })),
+        which,
+      ).rejects.toMatchObject({ reason: 'staging_too_large' });
+      expect(await allText(runDirOf(s, 'run-x')), `${which}:没清理`).toContain(SECRET);
+      expect(lockOnly(s.audit.slice(writesBefore))).toEqual([]);
+    }
+  }, 180_000);
+
+  it('R20-6.7 边界:恰好 5000 个 promote 目录放行(上限是严格的 > 5000)', async () => {
+    const s = await world('count-boundary-');
     await put(
       s,
-      path.join(run, 'TAINTED'),
+      path.join(runDirOf(s, 'run-x'), 'TAINTED'),
       canonicalJson({ reason: 'exclude', at: '2026-10-26T00:00:00.000Z' }),
     );
-    await expect(withLock(s, (l) => resumeTaint(s.ctx, l))).rejects.toMatchObject({
-      reason: 'write_denied',
-    });
-    expect(await readText(sentinel)).toBe(`${SECRET}-sentinel`);
-    expect(await exists(path.join(run, 'TAINTED'))).toBe(true);
-    expect(await exists(path.join(run, 'apply.patch'))).toBe(true); // ③ 之前就停了:不宣称完成
-  });
+    for (let i = 0; i < 4998; i++)
+      await mkdirp(s.f.fx, path.join(s.state, 'promote', `d${String(i).padStart(5, '0')}`), 0o700);
+    // world 里已有 promo-x、promo-ok:共 5000
+    await withLock(s, (l) => resumeTaint(s.ctx, l));
+    expect(await allText(runDirOf(s, 'run-x'))).not.toContain(SECRET);
+  }, 120_000);
 
   it('purge journal:对 taint_targets 补标记(reason=purge)并清理,不改 journal;journalResumedFrom = 阶段', async () => {
     const s = await world('resume-journal-');

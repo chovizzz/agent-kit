@@ -7,18 +7,25 @@
  * - **读**:一律不跟随符号链接(`lstat` / `O_NOFOLLOW`),目录层级逐级判断,不能安全判断就抛 fail-closed,不假装「没有」。
  * - **taint 清理采用白名单**(opus 咨询):已标 `TAINTED` 的 run 目录里只保留 `TAINTED`、`report.json`、`proposals/*.yaml`(摘录清空)与
  *   `rules/**` 下的 `*.md`(摘录清空);其余一律删除(含 `apply.patch`、`.tmp`、`.yml`、子目录里的杂项)。promote 目录只保留 `TAINTED` 与 `report.json`。
- *   无法解析 / 形状异常 / 硬链接的 `proposals/<id>.yaml` 换成**同名空文件**(临时文件 + rename):`loadUsedProposalIds` 只按文件名发号,删掉会让编号被重发。
+ *   无法解析 / 形状异常的 `proposals/<id>.yaml`(以及指向写入根内的符号链接、同名目录)换成**同名空文件**(临时文件 + rename):`loadUsedProposalIds` 只按文件名发号,删掉会让编号被重发。
  *   同样情形的 `rules/**` 文件直接删除。
  */
 import * as path from 'node:path';
 import { isMap, isSeq, parseDocument } from 'yaml';
 import { parseRestrictedYaml, splitFrontmatter } from '../../atoms/frontmatter.js';
 import { RunIdSchema } from '../../contracts/common.js';
-import { RsiTaintMarkSchema } from '../../contracts/rsi.js';
+import { ExitCode, type ExitCodeValue } from '../../contracts/exit-codes.js';
+import { RSI_COUNTS_MAX_STAGED, RsiTaintMarkSchema } from '../../contracts/rsi.js';
 import { canonicalJson } from '../../io/canonical-json.js';
 import type { IoContext } from '../../io/paths.js';
 import { lstat, readDir, readFileSafe, type DirEntry } from '../../io/read-fs.js';
-import { createExclusive, remove, rename, WriteDeniedError } from '../../io/safe-fs.js';
+import {
+  assertWritable,
+  createExclusive,
+  remove,
+  rename,
+  WriteDeniedError,
+} from '../../io/safe-fs.js';
 import type { RsiLockHandle } from '../lock.js';
 import { RsiFailClosedError } from '../types.js';
 
@@ -34,7 +41,7 @@ const MAX_STAGED_FILE_BYTES = 4 * 1024 * 1024;
 const MAX_WALK_DEPTH = 8;
 export const TAINT_MARK = 'TAINTED';
 
-/** 写操作的统一出口:钩子 → assertHeld → 写 → 钩子。`WriteDeniedError` 映射为 fail-closed `write_denied` */
+/** 写操作的统一出口:钩子 → assertHeld → 写 → 钩子。`WriteDeniedError` 映射为 fail-closed `write_denied`(兜底:预检之后条目被并发换成不安全的才会走到;已知的不安全条目在预检就以 `staging_unsafe_entry` 拦下,见 {@link assertCleanable}) */
 export class Writer {
   constructor(
     readonly io: IoContext,
@@ -54,6 +61,24 @@ export class Writer {
     }
     await this.hooks.point?.(`after:${name}`);
     return result;
+  }
+}
+
+/**
+ * 「需人工修复的阻断状态」:暂存目录里有 safe-fs 一定会拒绝处理的条目(硬链接、指向写入根之外 / 悬空的符号链接)。
+ * 稳定码 `RSI_FAIL_CLOSED reason=staging_unsafe_entry`(退出 3;**新原因码,契约 R20-3.0 总表与 `RSI_FAIL_CLOSED_REASONS` 待并入**)。
+ * 出现时 `TAINTED` 保留、读路径照拒;**不会**替换或删除这些条目(不放宽 safe-fs),也不做任何其它清理——预检发生在所有清理动作之前。
+ * 不携带路径(稳定码不泄漏路径),人工处理者需自行到暂存目录里找。
+ */
+export class RsiStagingBlockedError extends Error {
+  readonly code = 'RSI_FAIL_CLOSED';
+  readonly reason = 'staging_unsafe_entry' as const;
+  readonly exit: ExitCodeValue = ExitCode.FAIL_CLOSED;
+  constructor() {
+    super('rsi: fail-closed staging_unsafe_entry');
+  }
+  toStable(): { code: 'RSI_FAIL_CLOSED'; reason: 'staging_unsafe_entry'; exit: ExitCodeValue } {
+    return { code: this.code, reason: this.reason, exit: this.exit };
   }
 }
 
@@ -99,9 +124,34 @@ export async function listStaging(io: IoContext, kind: StagingKind): Promise<str
   const p = await probeDir(root);
   if (p === 'missing') return [];
   if (p === 'unsafe') throw new RsiFailClosedError('state_dir_unsafe');
-  return (await listDir(root))
+  const ids = (await listDir(root))
     .filter((e) => e.isDirectory && !e.isSymbolicLink && isStagingId(e.name, kind))
     .map((e) => e.name);
+  // R20-6.7 的严格上限:超限就停,不处理其中任何一个
+  if (ids.length > RSI_COUNTS_MAX_STAGED) throw new RsiFailClosedError('staging_too_large');
+  return ids;
+}
+
+/**
+ * 只读预检:目标目录里是否有 safe-fs 一定会拒绝改写 / 删除的条目(逐条用 safe-fs 自己的 `assertWritable` 判:硬链接、符号链接的解析目标在写入根之外或悬空、根外)。
+ * 命中即抛 {@link RsiStagingBlockedError}。顶层的 `TAINTED` 与真实普通文件的 `report.json` 我们不会动,不计入。深度超限也算阻断。
+ */
+export async function assertCleanable(io: IoContext, kind: StagingKind, id: string): Promise<void> {
+  const walk = async (abs: string, depth: number): Promise<void> => {
+    if (depth > MAX_WALK_DEPTH) throw new RsiStagingBlockedError();
+    for (const e of await listDir(abs)) {
+      if (depth === 0 && (e.name === TAINT_MARK || isReport(e))) continue;
+      const p = path.join(abs, e.name);
+      try {
+        assertWritable(io, p);
+      } catch (err) {
+        if (err instanceof WriteDeniedError) throw new RsiStagingBlockedError();
+        throw err;
+      }
+      if (e.isDirectory && !e.isSymbolicLink) await walk(p, depth + 1);
+    }
+  };
+  await walk(stagingDir(io, kind, id), 0);
 }
 
 /**
