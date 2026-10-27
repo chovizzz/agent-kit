@@ -31,9 +31,7 @@ const CODE_TABLE = sliceBetween(FULL, '**稳定码总表(R20-3.0', '#### 20.3.1'
 const OUTCOME_TABLE = sliceBetween(FULL, '- R20-6.5 **结果分类**', '- R20-6.6 **熔断**');
 
 /** 枚举有、总表没有的码(来源:§20.14 B3 订正的条款号) */
-const PENDING_DOC: Record<string, readonly string[]> = {
-  fail_closed: ['staging_unsafe_entry'], // B3c-7
-};
+const PENDING_DOC: Record<string, readonly string[]> = {};
 
 /** 该表里以 `| <head>` 开头的行必须**恰好一行**,取第 2 列(0 起第 2 个 `|` 分段) */
 function cellOf(table: string, head: string, col = 2): string {
@@ -76,7 +74,6 @@ const CATS: Cat[] = [
     name: 'fail_closed',
     head: '`RSI_FAIL_CLOSED reason=`',
     enumCodes: RSI_FAIL_CLOSED_REASONS,
-    pending: PENDING_DOC['fail_closed'] ?? [],
   },
   { name: 'counter', head: '计数码', enumCodes: RSI_COUNTER_CODES },
 ];
