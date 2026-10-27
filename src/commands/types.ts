@@ -1,5 +1,5 @@
 import { ExitCode } from '../contracts/exit-codes.js';
-import type { IoContext } from '../io/paths.js';
+import type { IoContext, WriteAudit } from '../io/paths.js';
 
 export interface CommandContext {
   /** 命令名之后的参数(全局选项 --root/--overlay/--help 已被 cli.ts 取走) */
@@ -83,6 +83,28 @@ export function createLineReader(stream: NodeJS.ReadableStream): () => Promise<s
     });
 }
 
+/**
+ * 不需要(也不应该)先建通用 `IoContext` 的命令所用的上下文(R20-A2 B3-0,v2 §5):`rsi` 的状态目录与仓库根只来自 `[rsi] repo`,
+ * 通用 `createIoContext` 会先校验 `KIT_STATE_DIR` 等对 rsi 无意义的输入,所以 `main()` 在它**之前**把这类命令分流出去。
+ * 因此这里**没有** `io`:命令自己决定何时、用什么根去建上下文(见 `src/rsi/services/open.ts`)。
+ */
+export interface EarlyCommandContext {
+  /** 命令名之后的参数(全局选项已被 cli.ts 取走) */
+  argv: readonly string[];
+  overlayPath: string | undefined;
+  /** 全局 `--root` 的原值(没给 = undefined);rsi 用它与 `[rsi] repo` 的 realpath 比较 */
+  explicitRoot: string | undefined;
+  env?: Readonly<Record<string, string | undefined>>;
+  cwd?: string;
+  /** 写审计钩子(`MainEnv.writeAudit`);派生上下文时必须经 `deriveIoContext` 继承 */
+  writeAudit?: WriteAudit;
+  stdout(text: string): void;
+  stderr(text: string): void;
+  /** 与 `CommandContext` 相同的交互注入点(confirm / purge / --ack 用);缺省见 `resolveIsTty` / `resolveReadLine` */
+  isTty?: boolean;
+  readLine?: () => Promise<string | undefined>;
+}
+
 export type Phase = 'P0' | 'P1' | 'P2' | 'P3' | 'P4';
 
 export interface CommandDef {
@@ -97,6 +119,12 @@ export interface CommandDef {
   flags?: readonly { name: string; description: string }[];
   /** 返回退出码,见 contracts/exit-codes.ts */
   run(ctx: CommandContext): Promise<number>;
+  /**
+   * 给了它,`main()` 在解析完命令与 `--help` 之后、**创建通用 `IoContext` 之前**直接调用它,不再调用 `run`
+   * (`run` 仍是必填字段,这类命令的 `run` 应当抛错:它不会被调用)。
+   * 错误边界与 `run` 相同:未捕获的异常照旧冒到进程入口。
+   */
+  runEarly?(ctx: EarlyCommandContext): Promise<number>;
 }
 
 /** `check` 的完整 flag 集合由 B01 定死,子 runner 拿到的是已解析的 CheckOptions。 */

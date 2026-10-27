@@ -504,3 +504,31 @@ export const RSI_LOCK_STATES = Object.freeze([
   'stale',
   'unsafe',
 ] as const);
+
+// ---------------------------------------------------------------------------
+// 命令分发与命令桩(B3-0)
+// ---------------------------------------------------------------------------
+/**
+ * 命令桩的 stderr 稳定码(退出 64,§7)。**只属于桩**,不是 R20-3.0 总表里的正式 RSI 码,也不进 `RSI_*_REASONS` 枚举:
+ * 子命令一旦实装,这个码就不会再出现。格式固定为 `RSI_NOT_IMPLEMENTED subcommand=<规范名>\n`。
+ */
+export const RSI_STUB_CODE = 'RSI_NOT_IMPLEMENTED';
+/** P0 子命令(R20-3.1 ~ R20-3.8、R20-6.1;`poke` / `hint` 是钩子专用入口) */
+export const RSI_SUBCOMMANDS = Object.freeze([
+  'tick',
+  'status',
+  'projects',
+  'confirm',
+  'stop',
+  'purge',
+  'poke',
+  'hint',
+] as const);
+/** P1 预留子命令(§20.3 末段):P0 注册为命令桩,退出 64;不建入口文件 */
+export const RSI_P1_RESERVED_SUBCOMMANDS = Object.freeze([
+  'digest',
+  'session',
+  'hooks',
+  'dismiss',
+  'should-continue',
+] as const);

@@ -14,6 +14,7 @@ import { command as promote } from './commands/promote.js';
 import { command as redact } from './commands/redact-cmd.js';
 import { command as reflect } from './commands/reflect.js';
 import { command as retire } from './commands/retire.js';
+import { command as rsi } from './commands/rsi.js';
 import { command as signalsCollect } from './commands/signals-collect.js';
 import { command as sync } from './commands/sync.js';
 import type { CommandContext, CommandDef } from './commands/types.js';
@@ -40,6 +41,7 @@ export const COMMANDS: readonly CommandDef[] = [
   sync,
   doctor,
   update,
+  rsi,
 ];
 
 export interface MainEnv {
@@ -48,6 +50,9 @@ export interface MainEnv {
   cwd?: string;
   /** 写审计钩子(R20-A2 B1):注入后由 main() 放进它创建的 IoContext;缺省不审计 */
   writeAudit?: WriteAudit;
+  /** 交互注入(R20-A2 B3-0):只传给 runEarly 命令(rsi),测试用;缺省由命令按真实 TTY 判 */
+  isTty?: boolean;
+  readLine?: () => Promise<string | undefined>;
   stdout?: (text: string) => void;
   stderr?: (text: string) => void;
 }
@@ -177,6 +182,22 @@ export async function main(argv: readonly string[], env: MainEnv = {}): Promise<
       ].join('\n'),
     );
     return ExitCode.OK;
+  }
+
+  // 自带上下文选择的命令(rsi):在通用路径校验(createIoContext 会校验 KIT_STATE_DIR 等)之前分流,见 EarlyCommandContext
+  if (resolved.def.runEarly !== undefined) {
+    return await resolved.def.runEarly({
+      argv: resolved.args,
+      overlayPath: flags.overlay,
+      explicitRoot: flags.root,
+      ...(env.env !== undefined ? { env: env.env } : {}),
+      ...(env.cwd !== undefined ? { cwd: env.cwd } : {}),
+      ...(env.writeAudit !== undefined ? { writeAudit: env.writeAudit } : {}),
+      ...(env.isTty !== undefined ? { isTty: env.isTty } : {}),
+      ...(env.readLine !== undefined ? { readLine: env.readLine } : {}),
+      stdout,
+      stderr,
+    });
   }
 
   let io;
