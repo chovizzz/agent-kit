@@ -22,6 +22,7 @@ import { parseFlags } from './args.js';
 import { attribute, type AttributionProbe } from './attribution.js';
 import { buildRsiPolicy, type RsiConfigOn } from './config.js';
 import { failExit } from './exit.js';
+import { currentCursorFingerprint } from './l0/fingerprint.js';
 import { evaluateAgentRoot } from './l0/roots.js';
 import { peekRsiLock, type RsiLockDeps } from './lock-read.js';
 import { emitLines, forbiddenPaths, jsonLines } from './output.js';
@@ -42,7 +43,7 @@ export interface RsiStatusDeps {
   probe?: AttributionProbe;
   lock?: RsiLockDeps;
   /** 当前 cursor 指纹(契约 R20-6.9 的定义由 B4 落地);缺省 `null` = 不比较,`fingerprint_match` 报 `null` */
-  cursorFingerprint?: () => Promise<string> | string;
+  cursorFingerprint?: () => Promise<string | null> | string | null;
 }
 
 type Agents = { id: RsiAgentId; status: 'ok' | 'not_evaluated'; reason: string | null }[];
@@ -340,8 +341,11 @@ async function buildDoc(
   }
   const cur = data.cursor.value;
   let match: boolean | null = null;
-  if (cur !== null && deps.cursorFingerprint !== undefined) {
-    match = cur.fingerprint === (await deps.cursorFingerprint());
+  if (cur !== null) {
+    const fp = await (
+      deps.cursorFingerprint ?? ((): Promise<string | null> => currentCursorFingerprint(io, config))
+    )();
+    if (fp !== null) match = cur.fingerprint === fp;
   }
   const breaker = breakerOf(docState, now);
   const warnings: string[] = [];

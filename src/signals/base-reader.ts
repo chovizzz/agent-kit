@@ -25,7 +25,7 @@ import type {
   SessionRef,
   TraceReader,
 } from '../contracts/reader.js';
-import { RSI_MAX_JSON_DEPTH } from '../contracts/rsi.js';
+import { RSI_CHECKPOINT_LINES, RSI_MAX_JSON_DEPTH } from '../contracts/rsi.js';
 import { addCount, newCountRecord, toCountRecord } from '../contracts/count-record.js';
 import type { CountRecord } from '../contracts/count-record.js';
 import { provisionalSessionRef, sessionRefFor } from './ids.js';
@@ -49,6 +49,10 @@ export const LINE_TOO_LARGE_KEY = '<line-too-large>';
  */
 export const LINE_TOO_DEEP_KEY = '<line-too-deep>';
 export const NO_TYPE_KEY = '<no-type>';
+
+/** 行级检查钩子的缺省触发间隔(R20-6.8 / `RSI_CHECKPOINT_LINES`;字节间隔保证少行大文件也能及时检查) */
+const LINE_HOOK_EVERY_LINES = RSI_CHECKPOINT_LINES;
+const LINE_HOOK_EVERY_BYTES = 8 * 1024 * 1024;
 
 /**
  * 括号计数预扫:`text` 里 `{` / `[` 的嵌套层数是否超过 `max`(字符串字面量内的括号与转义不计;多余的闭括号不让层数变负)。
@@ -284,6 +288,32 @@ export abstract class JsonlTraceReader<S = undefined> implements TraceReader {
 
     const bump = (rec: CountRecord, key: string): void => addCount(rec, key);
 
+    // 可选行级检查钩子(B4b,D6):预扫与正文共用同一组累计值;不传时 `lineTick` / `lineFlush` 是空操作
+    const hook = opts.onLines;
+    const everyLines = opts.onLinesEvery ?? LINE_HOOK_EVERY_LINES;
+    const everyBytes = opts.onLinesEveryBytes ?? LINE_HOOK_EVERY_BYTES;
+    let hookLines = 0;
+    let hookBytes = 0;
+    let reportedLines = 0;
+    let reportedBytes = 0;
+    const lineTick = async (raw: string): Promise<void> => {
+      if (hook === undefined) return;
+      hookLines++;
+      hookBytes += raw === TOO_LONG_LINE ? MAX_LINE_BYTES : Buffer.byteLength(raw, 'utf8') + 1;
+      if (hookLines - reportedLines >= everyLines || hookBytes - reportedBytes >= everyBytes) {
+        reportedLines = hookLines;
+        reportedBytes = hookBytes;
+        await hook(hookLines, hookBytes, false);
+      }
+    };
+    const lineFlush = async (): Promise<void> => {
+      if (hook === undefined) return;
+      if (hookLines === reportedLines && hookBytes === reportedBytes) return;
+      reportedLines = hookLines;
+      reportedBytes = hookBytes;
+      await hook(hookLines, hookBytes, true);
+    };
+
     const applyMeta = (m: MetaUpdate): void => {
       // R1:agent_version 是唯一原样来自 trace 的字符串,必须是版本号形状且有长度上限,否则当取不到
       if (agentVersion === null && isVersionShape(m.agent_version)) agentVersion = m.agent_version;
@@ -299,6 +329,7 @@ export abstract class JsonlTraceReader<S = undefined> implements TraceReader {
     /** 预扫:按行序第一个有效时间戳,读到即停(C3 第 2 级) */
     const prescan = async (): Promise<void> => {
       for await (const raw of openReadonlyLines(ref.path)) {
+        await lineTick(raw);
         const line = raw === TOO_LONG_LINE ? undefined : lineText(raw);
         if (line === undefined || exceedsJsonDepth(line)) continue;
         const obj = parseObject(line);
@@ -314,6 +345,13 @@ export abstract class JsonlTraceReader<S = undefined> implements TraceReader {
     // eslint-disable-next-line @typescript-eslint/no-this-alias -- 生成器内要访问受保护成员
     const self = this;
     async function* generate(): AsyncGenerator<NormEvent, void, undefined> {
+      try {
+        yield* generateInner();
+      } finally {
+        await lineFlush();
+      }
+    }
+    async function* generateInner(): AsyncGenerator<NormEvent, void, undefined> {
       const pre = await self.prepare(ref);
       if (pre) applyMeta(pre);
       await prescan();
@@ -329,6 +367,7 @@ export abstract class JsonlTraceReader<S = undefined> implements TraceReader {
       let lineNo = 0;
       for await (const rawLine of openReadonlyLines(ref.path)) {
         lineNo++;
+        await lineTick(rawLine);
         if (rawLine === TOO_LONG_LINE) {
           // 超过硬上限:正文已丢弃,无法分类。计 oversized,不进 <malformed>(jq 能解析它),不产出事件
           oversized++;
