@@ -102,7 +102,7 @@ const PROMPT_LINE = '输入 yes 确认,其它任何输入都会取消:';
 /** 一次观测的分流:`off` / `already` / `proceed`;不合规直接抛(stateInvalid、停止采集、STOP 无法确认身份) */
 type Gate = 'off' | 'already' | 'proceed';
 
-async function classify(io: IoContext, o: RsiObservation): Promise<Gate> {
+function classify(o: RsiObservation): Gate {
   if (o.state.state === 'off') return 'off';
   if (o.state.stateInvalid) throw new RsiFailClosedError('state_invalid');
   if (o.state.state === 'confirmed') return 'already';
@@ -111,24 +111,50 @@ async function classify(io: IoContext, o: RsiObservation): Promise<Gate> {
   // STOP 假身份:无法确认的身份不能当作「没变」的证据(见头注释)
   if (o.stop !== 'absent' && o.stop.sha256 === null)
     throw new RsiFailClosedError('state_dir_unsafe');
-  // 身份可算但形状不对的 STOP(硬链接 / 异属主):删除处一定会拒,所以在这里就拒(零写入),免得 commit 之后才失败、重试又循环
-  if (o.stop !== 'absent') {
-    const d = await rsiDirReadonly(io);
-    if (d.kind !== 'ok') throw new RsiFailClosedError('state_dir_unsafe');
-    const st = await lstat(path.join(d.dir, 'STOP'));
-    const uid = process.getuid?.();
-    if (
-      !st.isFile() ||
-      st.isSymbolicLink() ||
-      st.nlink !== 1 ||
-      (uid !== undefined && st.uid !== uid)
-    ) {
-      throw new RsiFailClosedError('state_dir_unsafe');
-    }
-  }
   // config 为 on 时 observeRsi 必算出 identity(off 已在前面返回):此分支只可能是编程错误
   if (o.identity === null) throw new RsiFailClosedError('internal');
   return 'proceed';
+}
+
+type Stats = Awaited<ReturnType<typeof lstat>>;
+
+/** `lstat`,STOP 在观测之后恰好被用户删掉时返回 `null`(ENOENT),不让原始异常漏出 */
+async function lstatOrGone(file: string): Promise<Stats | null> {
+  try {
+    return await lstat(file);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw e;
+  }
+}
+
+const shapeOk = (st: Stats): boolean => {
+  const uid = process.getuid?.();
+  return (
+    st.isFile() && !st.isSymbolicLink() && st.nlink === 1 && (uid === undefined || st.uid === uid)
+  );
+};
+
+/**
+ * 观测 + 分流 + STOP 形状检查。身份可算但形状不对的 STOP(硬链接 / 异属主):删除处一定会拒,所以在这里就拒(零写入),免得 commit 之后才失败、重试又循环。
+ * 形状检查的 `lstat` 若遇 ENOENT(STOP 在观测之后恰好被删),按「STOP 已不在」重新观测(至多 3 次,仍不稳定 → 3 `state_dir_unsafe`),不让原始异常漏出。
+ */
+async function observeChecked(
+  io: IoContext,
+  env: RsiEarlyContext['env'],
+): Promise<{ obs: RsiObservation; gate: Gate }> {
+  for (let i = 0; i < 3; i++) {
+    const obs = await observeRsi(io, env);
+    const gate = classify(obs);
+    if (gate !== 'proceed' || obs.stop === 'absent') return { obs, gate };
+    const d = await rsiDirReadonly(io);
+    if (d.kind !== 'ok') throw new RsiFailClosedError('state_dir_unsafe');
+    const st = await lstatOrGone(path.join(d.dir, 'STOP'));
+    if (st === null) continue;
+    if (!shapeOk(st)) throw new RsiFailClosedError('state_dir_unsafe');
+    return { obs, gate };
+  }
+  throw new RsiFailClosedError('state_dir_unsafe');
 }
 
 const cmpName = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
@@ -183,16 +209,10 @@ async function removeStopIfSame(
   const d = await rsiDirReadonly(sctx.io);
   if (d.kind !== 'ok') throw new RsiFailClosedError('state_dir_unsafe');
   const file = path.join(d.dir, 'STOP');
-  const st = await lstat(file);
-  const uid = process.getuid?.();
-  if (
-    !st.isFile() ||
-    st.isSymbolicLink() ||
-    st.nlink !== 1 ||
-    (uid !== undefined && st.uid !== uid)
-  ) {
-    throw new RsiFailClosedError('state_dir_unsafe');
-  }
+  // 观测之后 STOP 恰好被用户删掉(ENOENT):目标状态(没有 STOP)已达成,按「无需删除」处理,不报错
+  const st = await lstatOrGone(file);
+  if (st === null) return 'none';
+  if (!shapeOk(st)) throw new RsiFailClosedError('state_dir_unsafe');
   // lstat 与刚才观测的身份再核一次(把窗口缩到 lstat → remove)
   if (st.dev !== seen.dev || st.ino !== seen.ino || st.size !== seen.size) return 'kept';
   await new Writer(sctx.io, lock, hooks).op('stop-remove', () => remove(sctx.io, file));
@@ -239,8 +259,7 @@ export async function runConfirm(ctx: RsiEarlyContext, deps: RsiConfirmDeps = {}
     const now = deps.now ?? ((): Date => new Date());
 
     // ① 观测 + 展示指纹
-    const obs0 = await observeRsi(io, ctx.env);
-    const g0 = await classify(io, obs0);
+    const { obs: obs0, gate: g0 } = await observeChecked(io, ctx.env);
     if (g0 === 'off') return notRun('off');
     if (g0 === 'already') return already();
     const fp0 = displayFingerprint(obs0);
@@ -248,8 +267,7 @@ export async function runConfirm(ctx: RsiEarlyContext, deps: RsiConfirmDeps = {}
     // ② armed 列举(不读正文),再观测:列举期间配置被改 → STALE
     const l0: L0Deps = { ...(deps.l0 ?? {}), piDirSet: deps.l0?.piDirSet ?? piDirIsSet(ctx.env) };
     const listing = await (deps.listArmed ?? ((i, c) => listArmed(i, c, l0)))(io, config);
-    const obs1 = await observeRsi(io, ctx.env);
-    const g1 = await classify(io, obs1);
+    const { obs: obs1, gate: g1 } = await observeChecked(io, ctx.env);
     if (g1 === 'off') return notRun('off');
     if (g1 === 'already') return already();
     if (displayFingerprint(obs1) !== fp0) return stale();
@@ -276,8 +294,7 @@ export async function runConfirm(ctx: RsiEarlyContext, deps: RsiConfirmDeps = {}
     }
 
     // ⑤ D2 锁前廉价复检:不拿锁,真正零写入
-    const obs2 = await observeRsi(io, ctx.env);
-    const g2 = await classify(io, obs2);
+    const { obs: obs2, gate: g2 } = await observeChecked(io, ctx.env);
     if (g2 === 'off') return notRun('off');
     if (g2 === 'already') return already();
     if (displayFingerprint(obs2) !== fp0) return stale();
@@ -289,8 +306,7 @@ export async function runConfirm(ctx: RsiEarlyContext, deps: RsiConfirmDeps = {}
         if (lock === null) throw new RsiFailClosedError('internal');
         await deps.afterLock?.();
         // 无副作用复检,先于 recover(D2:拒绝时除锁文件与 rsi/ 之外零写入)
-        const obs3 = await observeRsi(io, ctx.env);
-        const g3 = await classify(io, obs3);
+        const { obs: obs3, gate: g3 } = await observeChecked(io, ctx.env);
         if (g3 === 'off') return { kind: 'off' };
         if (g3 === 'already') return { kind: 'already' };
         if (displayFingerprint(obs3) !== fp0) return { kind: 'stale' };

@@ -5,19 +5,34 @@
  */
 import * as path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { exists } from '../../src/io/read-fs.js';
-import { chmod, writeFile } from '../../src/io/safe-fs.js';
+import { exists, readText } from '../../src/io/read-fs.js';
+import { inspectSnapshot } from '../../src/rsi/snapshot.js';
+import { productionSnapshotValidator } from '../../src/rsi/validators.js';
+import { chmod, remove, writeFile } from '../../src/io/safe-fs.js';
 import { runConfirm } from '../../src/rsi/confirm.js';
 import { displayFingerprint, observeRsi } from '../../src/rsi/services/observe.js';
 import { treeOf } from './rsi-fixture.js';
 import { makeTickFx, runCmd, type TickFx } from './b5a-fixture.js';
 
-const inject = vi.hoisted(() => ({ on: false }));
+const inject = vi.hoisted(() => ({
+  on: false,
+  /** 武装后:先放行 `skip` 次对 STOP 的 lstat,下一次先执行 `hook`(可真的删掉 STOP)再抛 ENOENT(模拟「观测之后 STOP 恰好被删」) */
+  arm: null as null | { skip: number; hook: () => Promise<void> },
+}));
 vi.mock('../../src/io/read-fs.js', async (orig) => {
   const m = await orig<typeof import('../../src/io/read-fs.js')>();
   return {
     ...m,
     lstat: (async (p: string) => {
+      if (inject.arm !== null && p.endsWith('/rsi/STOP')) {
+        if (inject.arm.skip > 0) inject.arm.skip--;
+        else {
+          const { hook } = inject.arm;
+          inject.arm = null;
+          await hook();
+          throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+        }
+      }
       if (inject.on && p.endsWith('/rsi/STOP')) {
         throw Object.assign(new Error('EIO'), { code: 'EIO' });
       }
@@ -108,5 +123,59 @@ describe('STOP lstat 失败(假身份)', () => {
       'createExclusive',
       'remove',
     ]);
+  });
+});
+
+describe('STOP 在观测之后恰好被用户删掉(lstat 遇 ENOENT)——固定结果,没有未映射异常', () => {
+  it('锁前(commit 之前):形状检查的 lstat 遇 ENOENT 且 STOP 真被删了 → 按 absent 重观测:旧确认记录有效 → 0 `confirm already`,零写入,不是 3 internal', async () => {
+    const f = await stoppedFx('cfs-gone-pre-');
+    const stop = path.join(f.rsiDir, 'STOP');
+    inject.arm = { skip: 1, hook: () => remove(f.fx, stop) }; // obs0:observeStop 放行,形状 lstat 时 STOP 消失
+    try {
+      const r = await runCmd(f, runConfirm, [], {}, { isTty: true, readLine: async () => 'yes' });
+      expect([r.code, r.err, r.out]).toEqual([0, '', 'confirm already\n']);
+    } finally {
+      inject.arm = null;
+    }
+    expect(f.audit).toEqual([]);
+  });
+
+  it('锁前:ENOENT 是瞬时的(STOP 仍在)→ 重观测后正常通过,confirm 成功', async () => {
+    const f = await stoppedFx('cfs-gone-blip-');
+    inject.arm = { skip: 1, hook: async () => undefined };
+    try {
+      const r = await runCmd(f, runConfirm, [], {}, { isTty: true, readLine: async () => 'yes' });
+      expect([r.code, r.err]).toEqual([0, '']);
+    } finally {
+      inject.arm = null;
+    }
+    expect(await exists(path.join(f.rsiDir, 'STOP'))).toBe(false);
+  });
+
+  it('commit 之后:删除前的再次 lstat 遇 ENOENT(STOP 已被删)→ 视为已删:0 `confirm ok`,STOP 不在,记录已写入,快照一致;stdout / 退出码固定', async () => {
+    const f = await stoppedFx('cfs-gone-post-');
+    const stop = path.join(f.rsiDir, 'STOP');
+    const r = await runCmd(
+      f,
+      runConfirm,
+      [],
+      {
+        beforeWrite: async (op) => {
+          // snapshot-rename 之后的第一次 STOP lstat 是 removeStopIfSame 里的 observeStop(放行),第二次才是形状 lstat
+          if (op === 'snapshot-rename') inject.arm = { skip: 1, hook: () => remove(f.fx, stop) };
+        },
+      },
+      { isTty: true, readLine: async () => 'yes' },
+    );
+    inject.arm = null;
+    expect([r.code, r.err]).toEqual([0, '']);
+    expect(r.out.endsWith('confirm ok\n')).toBe(true);
+    expect(r.out).not.toContain('confirm recorded');
+    expect(await exists(stop)).toBe(false);
+    const st = JSON.parse(await readText(path.join(f.rsiDir, 'state.json'))) as {
+      confirm: { baseline_pending: boolean };
+    };
+    expect(st.confirm.baseline_pending).toBe(true);
+    expect((await inspectSnapshot(f.io, productionSnapshotValidator)) === 'consistent').toBe(true);
   });
 });
