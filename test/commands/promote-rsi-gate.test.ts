@@ -492,6 +492,39 @@ describe('promote --run × 配置来源(排除项:ctx.env 与 io 同源时按该
     expect(code).toBe(ExitCode.CHECK_FAILED);
     expect(c.err.join('')).toBe(`RSI_RUN_TAINTED reason=exclude run_id=${RUN_ID}\n`);
   });
+  it('命令侧(ctx.env)读严格的 S、io 指向宽松的 L → 按 S 拒绝(闸用的 io 的 HOME 由接线层钉成命令侧的 home)', async () => {
+    const pw = await pworld({ cfg: 'absent' });
+    const hS = await makeHome(pw.fxh, pw.homeDir, 'home-s');
+    const hL = await makeHome(pw.fxh, pw.homeDir, 'home-l');
+    await writeCfgText(
+      pw.fxh,
+      hS,
+      rsiText(pw.w.repo.dir, `exclude_dirs = [${JSON.stringify(pw.roots[0])}]\n`),
+    );
+    await writeCfgText(pw.fxh, hL, rsiText(pw.w.repo.dir));
+    const base = { KIT_TMP: pw.w.parent, KIT_STATE_DIR: pw.w.state, PATH: '/usr/bin:/bin' };
+    const io = createIoContext({
+      cwd: REPO_ROOT,
+      root: pw.w.repo.dir,
+      env: { ...base, KIT_REAL_HOME_OVERRIDE: hL.home },
+    });
+    const c = ctxFor({ ...pw.w, io }, ['--run', RUN_ID], {
+      ...base,
+      KIT_REAL_HOME_OVERRIDE: hS.home,
+    });
+    const code = await createPromoteCommand({ redactor: testRedactor() }).run(c.ctx);
+    expect(code).toBe(ExitCode.CHECK_FAILED);
+    expect(c.err.join('')).toBe(`RSI_RUN_TAINTED reason=exclude run_id=${RUN_ID}\n`);
+    expect(c.out).toEqual([]);
+    // 正向前提:S、L 都宽松时同一命令放行
+    const hS2 = await makeHome(pw.fxh, pw.homeDir, 'home-s2');
+    await writeCfgText(pw.fxh, hS2, rsiText(pw.w.repo.dir));
+    const c2 = ctxFor({ ...pw.w, io }, ['--run', RUN_ID], {
+      ...base,
+      KIT_REAL_HOME_OVERRIDE: hS2.home,
+    });
+    expect(await createPromoteCommand({ redactor: testRedactor() }).run(c2.ctx)).toBe(ExitCode.OK);
+  });
   it('removeIndex 夹具自检:索引被删后同一世界变 U(防夹具静默失效)', async () => {
     const pw = await pworld();
     await removeIndex(pw.fx, pw.w.state);

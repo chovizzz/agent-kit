@@ -61,7 +61,7 @@ import {
   withRsiWriterLock,
 } from './reflect.js';
 import type { LockLossState, RsiLockWiring } from './reflect.js';
-import { GateStop, gateExitOf, isGateExit, privacyCheck } from './rsi-gate-wiring.js';
+import { GateStop, gateExitOf, gateIoOf, isGateExit, privacyCheck } from './rsi-gate-wiring.js';
 import type { GateExit } from './rsi-gate-wiring.js';
 import { combineExitCodes } from './types.js';
 import type { CommandContext, CommandDef } from './types.js';
@@ -339,7 +339,9 @@ export function createJudgeCommand(deps: JudgeCommandDeps = {}): CommandDef {
           ctx.stderr(pc.stderr);
           return pc.exit;
         }
-        if (pc.kind === 'enforce') gateCtx = { io: ctx.io, config: pc.config };
+        if (pc.kind === 'enforce') {
+          gateCtx = { io: gateIoOf(ctx.io, pc.home), config: pc.config };
+        }
       } catch {
         ctx.stderr('RSI_FAIL_CLOSED reason=internal\n');
         return ExitCode.FAIL_CLOSED;
@@ -436,6 +438,16 @@ export function createJudgeCommand(deps: JudgeCommandDeps = {}): CommandDef {
             gstate.stop = (await evalGate(callbacks.beforeOutput)) ?? undefined;
           }
           if (gstate.stop === undefined) return undefined;
+          // 闸停与失锁同时发生:失锁(fail-closed 3)不得被闸的 1 压掉,报 lock_lost
+          if (loss.lost !== undefined) {
+            const lost = rsiLockFailure(loss.lost, 'JUDGE');
+            ctx.stderr(lost?.line ?? 'RSI_FAIL_CLOSED reason=lock_lost\n');
+            return combineExitCodes([
+              gstate.stop.exit,
+              ExitCode.FAIL_CLOSED,
+              ...done.map((o) => outcomeExit(o, args.strict)),
+            ]);
+          }
           ctx.stderr(gstate.stop.stderr);
           return combineExitCodes([
             gstate.stop.exit,

@@ -505,25 +505,20 @@ describe('judge × 配置来源一致性(§2.1;privacyCheck 用 {env},即时闸�
     expect((await onlyL.run()).code).toBe(ExitCode.OK);
   });
 
-  // 已知缺口(登记给主代理 / opus 定夺,见 B5g 汇报):即时闸(B3c 服务)按 io.hostEnv.HOME 重读配置,privacyCheck 按 ctx.env 读。
-  // 生产里两者恒同源(main() 用同一份 env 建 io 与 ctx.env),只有直接构造 ctx 才会分叉;分叉时方向 1 是放行方向(fail-open)。
-  // 用 it.fails 钉住「现在确实红」:一旦主代理统一了来源,这条会翻红,提醒把 it.fails 改回 it。
-  it.fails(
-    '方向 1:命令侧读严格的 S、闸侧读宽松的 L → 按 S 拒绝(闸不得因读到宽松的 L 而放行)【已知缺口:现状放行】',
-    async () => {
-      const t = await split({ exclude: true }, { exclude: false });
-      const r = await t.run();
-      expect(r.out).toBe('');
-      expect(r.err).toBe(`RSI_RUN_TAINTED reason=exclude run_id=${RUN_ID}\n`);
-      expect(r.code).toBe(ExitCode.CHECK_FAILED);
-    },
-  );
-
-  it('方向 2:命令侧读宽松的 S、闸侧读严格的 L → 按 L 拒绝', async () => {
-    const t = await split({ exclude: false }, { exclude: true });
+  // 接线层把即时闸用的 io 的 HOME 钉成 privacyCheck 读配置用的那个 home(gateIoOf):命令侧(ctx.env)是唯一来源。
+  it('方向 1:命令侧读严格的 S、闸侧(io)读宽松的 L → 按 S 拒绝(闸不因读到宽松的 L 而放行)', async () => {
+    const t = await split({ exclude: true }, { exclude: false });
     const r = await t.run();
     expect(r.out).toBe('');
+    expect(r.err).toBe(`RSI_RUN_TAINTED reason=exclude run_id=${RUN_ID}\n`);
     expect(r.code).toBe(ExitCode.CHECK_FAILED);
+  });
+
+  it('方向 2:命令侧读宽松的 S、io 指向严格的 L → 同样只认命令侧的 S(放行;L 不参与)', async () => {
+    const t = await split({ exclude: false }, { exclude: true });
+    const r = await t.run();
+    expect(r.code).toBe(ExitCode.OK);
+    expect(r.out).toContain('planned');
   });
 
   it('状态目录 / HOME 来源:KIT_REAL_HOME_OVERRIDE 与 HOME 指向不同目录、各放一份 config → 只读覆盖那份(真实 HOME 的配置不参与)', async () => {
@@ -569,5 +564,63 @@ describe('judge × 配置来源一致性(§2.1;privacyCheck 用 {env},即时闸�
     const r3 = rig(gw3);
     expect(await r3.cmd.run(gw3.ctx(LIVE).ctx)).toBe(ExitCode.OK);
     expect(r3.s.totalCalls()).toBeGreaterThan(0);
+  });
+});
+
+describe('judge × 闸停与失锁同时发生:失锁(3)不被闸的 1 压掉', () => {
+  const tamperLock = (gw: GW): Promise<void> =>
+    writeFile(
+      gw.fx,
+      path.join(gw.w.state, 'rsi', 'lock'),
+      JSON.stringify({
+        pid: 1,
+        started_at: new Date().toISOString(),
+        nonce: 'f'.repeat(16),
+        kit_version: '0.1.0',
+      }),
+      { mode: 0o600 },
+    );
+
+  it('正常返回路径:调用中途收紧排除并换掉锁 → 退出 3 RSI_FAIL_CLOSED reason=lock_lost,不输出', async () => {
+    const gw = await gateWorld();
+    const r = rig(gw, {
+      afterCall: async (k) => {
+        if (k !== 1) return;
+        await gw.exclude();
+        await tamperLock(gw);
+      },
+    });
+    const c = gw.ctx(LIVE);
+    expect(await r.cmd.run(c.ctx)).toBe(ExitCode.FAIL_CLOSED);
+    expect(c.err.join('')).toBe('RSI_FAIL_CLOSED reason=lock_lost\n');
+    expect(c.out).toEqual([]);
+    // 正向前提:只收紧排除(不换锁)时报闸的 1
+    const gw1 = await gateWorld();
+    const r1 = rig(gw1, { afterCall: async (k) => void (k === 1 && (await gw1.exclude())) });
+    const c1 = gw1.ctx(LIVE);
+    expect(await r1.cmd.run(c1.ctx)).toBe(ExitCode.CHECK_FAILED);
+  });
+
+  it('异常分支路径:第二个提案被改动(抛错)+ 变 U + 换掉锁 → 退出 3 lock_lost,不打印部分结果', async () => {
+    const gw = await gateWorld({ proposals: 2 });
+    const r = rig(gw, {
+      afterCall: async (k) => {
+        if (k !== 2) return;
+        await writeFile(
+          gw.fx,
+          proposalFile(gw.w, 2),
+          `${await readText(proposalFile(gw.w, 2))}# touched\n`,
+          {
+            mode: 0o600,
+          },
+        );
+        await removeIndex(gw.fx, gw.w.state);
+        await tamperLock(gw);
+      },
+    });
+    const c = gw.ctx(LIVE);
+    expect(await r.cmd.run(c.ctx)).toBe(ExitCode.FAIL_CLOSED);
+    expect(c.err.join('')).toBe('RSI_FAIL_CLOSED reason=lock_lost\n');
+    expect(c.out).toEqual([]);
   });
 });

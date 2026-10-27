@@ -56,7 +56,7 @@ import { PROMOTE_HINT_SIGNATURE, PromoteError, planPromotion } from '../lifecycl
 import type { PromoteTarget } from '../lifecycle/promote-rule.js';
 import { createRedactor } from '../redact/redactor.js';
 import { SignalStoreError } from '../signals/state-store.js';
-import { GateStop, gateExitOf, isGateExit, privacyCheck } from './rsi-gate-wiring.js';
+import { GateStop, gateExitOf, gateIoOf, isGateExit, privacyCheck } from './rsi-gate-wiring.js';
 import type { GateExit } from './rsi-gate-wiring.js';
 import { StateOutError, writeStateOut } from './state-out.js';
 import type { WriteGate } from './state-out.js';
@@ -339,7 +339,7 @@ export function createPromoteCommand(deps: PromoteCommandDeps = {}): CommandDef 
       return pc.exit;
     }
     if (pc.kind === 'legacy') return adoptCore(ctx, args, undefined, null);
-    const gctx: RsiServiceCtx = { io: ctx.io, config: pc.config };
+    const gctx: RsiServiceCtx = { io: gateIoOf(ctx.io, pc.home), config: pc.config };
     if (!args.write) return adoptCore(ctx, args, gctx, null);
     return withRsiLockIfGated(
       { io: ctx.io, config: pc.config },

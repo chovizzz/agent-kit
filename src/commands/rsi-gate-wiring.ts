@@ -11,6 +11,9 @@
  * 本文件**不**import `commands/reflect.ts`(promote 的闭包里不能出现 llm-exec)。
  */
 import { ExitCode } from '../contracts/exit-codes.js';
+import { getRealHome } from '../io/paths.js';
+import type { IoContext } from '../io/paths.js';
+import { deriveIoContext } from '../io/paths.js';
 import { loadRsiConfig, type RsiConfigOn } from '../rsi/config.js';
 import { privacyGate } from '../rsi/gate.js';
 import type { ImmediateGateResult } from '../rsi/types.js';
@@ -22,7 +25,8 @@ export interface GateExit {
   readonly stderr: string;
 }
 
-export type PrivacyCheck = { kind: 'legacy' } | { kind: 'enforce'; config: RsiConfigOn } | GateExit;
+export type PrivacyCheck =
+  { kind: 'legacy' } | { kind: 'enforce'; config: RsiConfigOn; home: string } | GateExit;
 
 /** `PrivacyCheck` 是否为拒绝(带退出码) */
 export function isGateExit(r: PrivacyCheck): r is GateExit {
@@ -42,7 +46,7 @@ export async function privacyCheck(ctx: Pick<CommandContext, 'env'>): Promise<Pr
       if (cfg.status !== 'on') {
         return { exit: ExitCode.FAIL_CLOSED, stderr: 'RSI_FAIL_CLOSED reason=internal\n' };
       }
-      return { kind: 'enforce', config: cfg };
+      return { kind: 'enforce', config: cfg, home: getRealHome(ctx.env) };
   }
 }
 
@@ -71,4 +75,13 @@ export class GateStop extends Error {
   constructor(readonly gate: GateExit) {
     super('rsi_gate_stop');
   }
+}
+
+/**
+ * 喂给即时闸 / 回调的 io:`hostEnv.HOME` 强制取 `privacyCheck` 读配置用的那个 home。
+ * 即时闸(B3c 服务,已冻结)按 `io.hostEnv.HOME` 重读配置,`privacyCheck` 按 `ctx.env`;生产里两者同源(main() 用同一份 env),
+ * 但直接构造 ctx / io 时可分叉,分叉的方向是 fail-open。这里在接线层把两者钉成同一来源。
+ */
+export function gateIoOf(io: IoContext, home: string): IoContext {
+  return deriveIoContext(io, { hostEnv: Object.freeze({ ...io.hostEnv, HOME: home }) });
 }
