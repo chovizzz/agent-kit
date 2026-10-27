@@ -114,7 +114,10 @@ describe('R20 §20.9#8 盐首建经 createExclusive', () => {
       const raw = await Promise.all(runs);
       const outs = raw.map((r) => (r[0] as { salt?: string }).salt);
       // 失败时带上 6 个子进程的原始输出,偶发红能直接看到是哪个错误码
-      expect(outs.every((s) => typeof s === 'string' && SALT_RE.test(s)), JSON.stringify(raw)).toBe(true);
+      expect(
+        outs.every((s) => typeof s === 'string' && SALT_RE.test(s)),
+        JSON.stringify(raw),
+      ).toBe(true);
       expect(new Set(outs).size).toBe(1);
       expect((await readText(path.join(w.state, 'salt'))).trim()).toBe(outs[0]);
       expect(((await lstat(path.join(w.state, 'salt'))).mode & 0o777).toString(8)).toBe('600');
