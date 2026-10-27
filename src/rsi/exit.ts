@@ -35,6 +35,16 @@ export function stableOf(e: unknown): StableExit {
   if ((e as { code?: unknown } | null)?.code === 'IO_WRITE_DENIED') {
     return { line: 'RSI_FAIL_CLOSED reason=write_denied', exit: ExitCode.FAIL_CLOSED };
   }
+  // 暂存区里 safe-fs 无法处理的条目(`RsiStagingBlockedError`,不是 RsiFailClosedError 子类,且定义在带写出口的 staging.ts,这里不能 import):
+  // 按它的稳定载体字段识别,只认固定的两个字段形状,不回显消息
+  const st = e as { code?: unknown; reason?: unknown; toStable?: unknown } | null;
+  if (
+    st?.code === 'RSI_FAIL_CLOSED' &&
+    st.reason === 'staging_unsafe_entry' &&
+    typeof st.toStable === 'function'
+  ) {
+    return { line: 'RSI_FAIL_CLOSED reason=staging_unsafe_entry', exit: ExitCode.FAIL_CLOSED };
+  }
   if (e instanceof PathsError) {
     return { line: 'RSI_FAIL_CLOSED reason=state_dir_unsafe', exit: ExitCode.FAIL_CLOSED };
   }

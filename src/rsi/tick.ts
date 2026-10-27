@@ -251,7 +251,12 @@ async function writeRun(
         } catch (e) {
           // 失锁与更具体的阻断(暂存目录数超限 / 暂存区里有 safe-fs 无法处理的条目)保留原码,其余一律 purge_incomplete
           if (e instanceof RsiLockError || e instanceof RsiStagingBlockedError) throw e;
-          if (e instanceof RsiFailClosedError && e.reason === 'staging_too_large') throw e;
+          // write_denied:续做中 safe-fs 守卫拒绝,是排障线索,不吞;signal_store_corrupt 按契约原文(续做失败 → purge_incomplete)仍归并
+          if (
+            e instanceof RsiFailClosedError &&
+            (e.reason === 'staging_too_large' || e.reason === 'write_denied')
+          )
+            throw e;
           throw new RsiFailClosedError('purge_incomplete');
         }
       }
