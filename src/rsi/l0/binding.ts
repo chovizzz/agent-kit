@@ -30,7 +30,10 @@ export function observationFrom(i: {
   const confirmed = i.state.state === 'confirmed' && i.confirm !== null;
   return {
     stopPresent: i.stopPresent,
-    collectBlocked: i.state.collectBlocked !== null || i.state.state === 'off',
+    // 「状态不可算」(state.json 过不了 schema,rsiStateOf 退回 armed + stateInvalid)与配置 off / 停止采集一样归 collect_blocked,
+    // 不能落到「绑定变化」里
+    collectBlocked:
+      i.state.collectBlocked !== null || i.state.state === 'off' || i.state.stateInvalid,
     current: confirmed
       ? bindingOf({
           identity: i.identity,

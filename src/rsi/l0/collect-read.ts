@@ -16,14 +16,19 @@ import {
 import type { SessionRef, TraceReader } from '../../contracts/reader.js';
 import type { Redactor } from '../../contracts/redact.js';
 import { readHeadLines, stat } from '../../io/read-fs.js';
-import { LINE_TOO_DEEP_KEY, LINE_TOO_LARGE_KEY, MALFORMED_KEY } from '../../signals/base-reader.js';
+import {
+  isJsonObject,
+  lineText,
+  LINE_TOO_DEEP_KEY,
+  LINE_TOO_LARGE_KEY,
+  MALFORMED_KEY,
+} from '../../signals/base-reader.js';
 import type { ExcludePolicy, ProjectDecision } from '../../signals/exclude.js';
 import { processSession, type SessionResult } from '../../signals/pipeline.js';
 import { DEFAULT_READERS } from '../../signals/readers.js';
 import { fileBytesExceeded, planBudget, resolveLimits, tickBytesExhausted } from './budget.js';
 import type { BudgetLimits } from './budget.js';
 import { buildNextCursor, planEpoch, planFullScan } from './cursor.js';
-import { parseHead } from './head-parsers.js';
 import type {
   Checkpoint,
   CheckpointVerdict,
@@ -68,6 +73,28 @@ export function isIncomplete(result: SessionResult): boolean {
     u[LINE_TOO_DEEP_KEY] !== undefined ||
     u[LINE_TOO_LARGE_KEY] !== undefined
   );
+}
+
+/** pi 头部预判一次读取里最多看的行数(64KiB 窗口里空行各占 1 字节,实际上限由窗口决定) */
+const PI_HEAD_MAX_LINES = RSI_ARMED_HEAD_BYTES;
+
+/**
+ * 与 `PiReader.isClearlyNotPiSession` 同口径:窗口内第一个非空白行若是「type 为字符串且不是 session」的对象 → 不是 Pi 会话;
+ * 解析失败 / 非对象 / 窗口里没有非空白完整行 → 放行(交给 reader)。残余:首行(含前导空行)超过 64KiB 窗口时看不到,按放行处理(reader 对
+ * 64KiB–64MiB 的首行会解析)。
+ */
+export function isClearlyNotPiHead(lines: readonly Buffer[]): boolean {
+  for (const raw of lines) {
+    const text = lineText(raw.toString('utf8'));
+    if (text === undefined) continue;
+    try {
+      const v: unknown = JSON.parse(text);
+      return isJsonObject(v) && typeof v['type'] === 'string' && v['type'] !== 'session';
+    } catch {
+      return false;
+    }
+  }
+  return false;
 }
 
 class ReadStop extends Error {
@@ -140,12 +167,18 @@ export async function collectRead(input: CollectReadInput): Promise<CollectBatch
       break;
     }
 
-    // pi:先用头部判 notASession(不读正文)
+    // pi:先用头部判 notASession(不读正文);口径与 `PiReader.isClearlyNotPiSession` 相同:首个非空白行决定,
+    // 同一次读取内跳过前导空行(`PI_HEAD_MAX_LINES` 行 / 64KiB 窗口)
     if (f.agent === 'pi') {
-      const h = await readHeadLines(f.path, RSI_ARMED_HEAD_BYTES, 1, input.deps?.hooks);
+      const h = await readHeadLines(
+        f.path,
+        RSI_ARMED_HEAD_BYTES,
+        PI_HEAD_MAX_LINES,
+        input.deps?.hooks,
+      );
       if (h.kind === 'ok') {
         bytesActual += h.bytesRead;
-        if (parseHead('pi', h.lines).notASession) {
+        if (isClearlyNotPiHead(h.lines)) {
           filesRead++;
           push(f, {
             status: 'unknown_project',
@@ -267,6 +300,7 @@ export async function collectRead(input: CollectReadInput): Promise<CollectBatch
     enumeration: input.enumeration,
     enumeratedRefs: new Set(scan.refs.values()),
     outcomes,
+    prune: verdict.kind === 'continue',
   });
   const limitList = [...limitsHit].sort();
   const partial = limitList.some((c) => c.startsWith('RSI_LIMIT_'));

@@ -452,3 +452,122 @@ describe('sig_id 稳定与「不传钩子逐字节不变」', () => {
     void buildRsiPolicy;
   });
 });
+
+describe('返工 C:pi 的 notASession 预判与 PiReader 同口径(真实 reader 作对照)', () => {
+  it('首行为空行、第二行才是非 session 对象:L0 与 reader.discover 一致排除;session / 畸形首行都放行', async () => {
+    const f = await makeL0Fx('cr-pi-blank-');
+    const a = await proj(f, 'alpha');
+    const files: Record<string, string> = {
+      'blank-then-msg.jsonl': `\n  \n${JSON.stringify({ type: 'not-a-session' })}\n`,
+      'msg.jsonl': jl({ type: 'message', cwd: a }),
+      'blank-then-session.jsonl': `\n${JSON.stringify({ type: 'session', cwd: a })}\n`,
+      'plain.jsonl': jl({ type: 'session', cwd: a }, { type: 'message', id: 'm' }),
+      'garbage.jsonl': 'not json\n',
+      'blank-then-garbage-then-msg.jsonl': `\nnot json\n${JSON.stringify({ type: 'message' })}\n`,
+      'no-type.jsonl': jl({ cwd: a }),
+    };
+    for (const [n, text] of Object.entries(files)) await put(f, 'pi', `--x--/${n}`, text);
+    // 对照:reader.discover 对目录源会排除「明显不是 Pi 会话」的文件
+    const { createPiReader } = await import('../../src/readers/pi/index.js');
+    const kept = new Set(
+      (await createPiReader().discover(rootOf(f, 'pi'))).map((r) => path.basename(r.path)),
+    );
+    const readerExcluded = Object.keys(files).filter((n) => !kept.has(n));
+    expect(readerExcluded.sort()).toEqual(['blank-then-msg.jsonl', 'msg.jsonl']); // 前提:对照确实排除了两个
+    const spy: TraceReader = {
+      agent: 'pi',
+      discover: async () => [],
+      read: (ref) => {
+        readCalls.push(path.basename(ref.path));
+        throw new Error('stop');
+      },
+    };
+    const readCalls: string[] = [];
+    const { batch } = await run(f, { readers: { pi: spy } });
+    const skippedByL0 = batch.outcomes
+      .filter((o) => o.status === 'unknown_project')
+      .map((o) => path.basename(o.file.path));
+    expect(skippedByL0.sort()).toEqual(readerExcluded.sort());
+    expect(readCalls.sort()).toEqual([...kept].sort()); // 其余都交给 reader 读(spy 抛错 → read_error)
+  });
+});
+
+describe('返工 D:读阶段中止不剪除条目', () => {
+  it('abort 时保留本次没列举到的旧条目(正向对照:正常结束时同一条目被剪除)', async () => {
+    const f = await makeL0Fx('cr-noprune-');
+    const a = await proj(f, 'alpha');
+    const p1 = await put(f, 'claude', `p/${uuid(1)}.jsonl`, goodSession(a));
+    await put(f, 'claude', `p/${uuid(2)}.jsonl`, goodSession(a));
+    const r1 = await run(f);
+    const ref1 = sessionRefFor(SALT, p1);
+    expect(r1.batch.cursorNext.files[ref1]).toBeDefined();
+    // 文件 1 从磁盘消失(经 safe-fs 的 unlink 不可用时改名到根外:这里直接用 rename 搬走)
+    const { rename } = await import('../../src/io/safe-fs.js');
+    await mkdirp(f.fx, path.join(f.dir, 'aside'), 0o755);
+    await rename(f.fx, p1, path.join(f.dir, 'aside', 'moved.jsonl'));
+    await put(f, 'claude', `p/${uuid(3)}.jsonl`, goodSession(a)); // 新文件,让本次有东西可读
+    const aborted = await run(
+      f,
+      { checkpoint: async (w) => (w === 'file' ? { kind: 'abort', outcome: 'stopped' } : CONT) },
+      r1.batch.cursorNext,
+    );
+    expect(aborted.batch.verdict.kind).toBe('abort');
+    expect(aborted.batch.cursorNext.files[ref1]).toBeDefined(); // 没剪
+    const normal = await run(f, {}, r1.batch.cursorNext);
+    expect(normal.batch.cursorNext.files[ref1]).toBeUndefined(); // 正常结束:剪除
+  });
+});
+
+describe('返工 E:无变化时 cursor 字节不变(无写放大)', () => {
+  it('含 excluded / too_large / unknown_project 条目:同 epoch 再跑一次,cursorNext 与上次逐字节相同,且这些文件不被重读', async () => {
+    const f = await makeL0Fx('cr-stable-');
+    const bad = await proj(f, 'excl');
+    const ok = await proj(f, 'fine');
+    await setExtra(f, `exclude_dirs = [${JSON.stringify(bad)}]\n`);
+    const c = await (await import('../../src/rsi/config.js')).loadRsiConfig({ env: f.env });
+    if (c.status !== 'on') throw new Error('off');
+    f.config = c;
+    await put(f, 'claude', `p/${uuid(1)}.jsonl`, goodSession(bad));
+    await put(f, 'claude', `p/${uuid(2)}.jsonl`, goodSession(ok));
+    await put(
+      f,
+      'claude',
+      `p/${uuid(3)}.jsonl`,
+      jl(...Array.from({ length: 300 }, () => claudeLine(ok))),
+    );
+    await put(f, 'claude', `p/${uuid(4)}.jsonl`, jl({ type: 'mode' }));
+    const small = { limits: { maxFileBytes: 20_000 } };
+    const r1 = await run(f, small);
+    const st = (b: CollectBatch): string[] => b.outcomes.map((o) => o.status).sort();
+    expect(st(r1.batch)).toEqual(['excluded', 'ok', 'too_large', 'unknown_project']); // 前提:四种状态都出现
+    expect(r1.batch.cursorNext.full_scan.done).toBe(true);
+    const r2 = await run(f, small, r1.batch.cursorNext);
+    expect(r2.batch.summary.files_read).toBe(0);
+    expect(r2.batch.outcomes).toEqual([]);
+    expect(r2.batch.summary.skipped.unchanged).toBe(4);
+    expect(JSON.stringify(r2.batch.cursorNext)).toBe(JSON.stringify(r1.batch.cursorNext));
+    // 进行中(未 done)的 cursor 同样:不推进就不变
+    const r3 = await run(f, { ...small, limits: { maxFileBytes: 20_000, maxFiles: 1 } });
+    expect(r3.batch.cursorNext.full_scan.done).toBe(false);
+    const r4 = await run(f, { limits: { maxFileBytes: 20_000, maxFiles: 0 } }, r3.batch.cursorNext);
+    expect(r4.batch.summary.files_read).toBe(0);
+    expect(JSON.stringify(r4.batch.cursorNext)).toBe(JSON.stringify(r3.batch.cursorNext));
+  });
+
+  it('被排除文件的读取代价:命中排除时 reader 在首个带 cwd 的事件处停,不读完整个文件', async () => {
+    const f = await makeL0Fx('cr-exclcost-');
+    const bad = await proj(f, 'excl');
+    await setExtra(f, `exclude_dirs = [${JSON.stringify(bad)}]\n`);
+    const c = await (await import('../../src/rsi/config.js')).loadRsiConfig({ env: f.env });
+    if (c.status !== 'on') throw new Error('off');
+    f.config = c;
+    const lines = jl(...Array.from({ length: 6000 }, () => claudeLine(bad)));
+    const p = await put(f, 'claude', `p/${uuid(1)}.jsonl`, lines);
+    const size = (await stat(p)).size;
+    const { batch } = await run(f);
+    expect(batch.outcomes[0]?.status).toBe('excluded');
+    // 预扫读全文(无时间戳)一遍 + 正文读到第一个事件即停:远小于 2 倍文件大小
+    expect(batch.bytesActual).toBeGreaterThanOrEqual(size);
+    expect(batch.bytesActual).toBeLessThan(size + 2000);
+  });
+});

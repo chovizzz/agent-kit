@@ -117,6 +117,8 @@ export function buildNextCursor(i: {
   /** 读完(或判 too_large)的文件;中止 / time_limit 的文件不在其中 */
   outcomes: readonly FileOutcome[];
   maxEntries?: number;
+  /** 是否做剪除(缺省 true)。读阶段中止(abort)时必须传 false:只有「列举完整且正常结束」才剪除 */
+  prune?: boolean;
 }): RsiCursor {
   const files: Record<string, Entry> = { ...(i.prev?.files ?? {}) };
   for (const o of i.outcomes) {
@@ -131,7 +133,7 @@ export function buildNextCursor(i: {
       status: o.status,
     };
   }
-  if (i.enumeration.complete) {
+  if (i.enumeration.complete && i.prune !== false) {
     for (const [ref, e] of Object.entries(files)) {
       if (i.enumeration.roots[e.agent].status === 'ok' && !i.enumeratedRefs.has(ref)) {
         delete files[ref];
