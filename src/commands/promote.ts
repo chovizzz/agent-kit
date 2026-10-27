@@ -14,6 +14,14 @@
  * - **默认干跑**:只算、只打印;`--write` 才写,且只写 `.state/promote/<promo_id>/{promote.patch, pr-body.md, report.json}`
  *   (目录 0700、文件 0600,先 `.tmp-<promo_id>` 再整体 rename),一律经 safe-fs(写出口守卫);不写 `rules/`、不改暂存区。
  * - 幂等:promo_id 由输入内容决定;目录已存在且三个文件都一致 → 退出 0 不重写;不一致 → 退出 3 `PROMOTE_RUN_EXISTS`。
+ * - **rsi 隐私闸与即时闸(R20-A2 B5g,契约 R20-4.8 / §20.9 第 11、21 条;只管 `--run`,`--rule` 不读暂存区、不在其内)**:`[rsi]` 配置为 on 时才做,
+ *   没有 `[rsi]` / 未启用 → 逐字节同接线前。顺序:`privacyCheck`(`cfg_*` 等不可用 → 退出 3 `RSI_FAIL_CLOSED`,此前零副作用)→
+ *   干跑:`immediateGate`(`planAdoption` 之前)→ `planAdoption` → `immediateGate`(输出前);
+ *   `--write`:`withRsiLockIfGated`(拿不到 → 退出 4 `PROMOTE_NOT_RUN reason=locked`;状态目录不安全 → 3)→ 锁内 `resumeTaint`(不 recover:本命令不写受快照清单管辖的文件)→
+ *   闸 #1 → `planAdoption` → 闸 #2 → `writeStateOut`(每个写操作前 `assertHeld`)→ 输出。非 allow → `RSI_RUN_TAINTED` / `RSI_RUN_ATTRIBUTION_UNKNOWN`(1)/ `RSI_FAIL_CLOSED`(3),零写入、零输出。
+ *   独立状态树(锁闸门 off)下照样 enforce(不拿锁、不 resumeTaint)。
+ * - **tainted 产物目录(契约第 21 条)**:`--write` 在「已存在」比较之前,若 `.state/promote/<promo_id>/TAINTED` 在场 → 退出 1 `RSI_RUN_TAINTED reason=<r> run_id=<promo_id>`、零写入;
+ *   **不论闸门结果、不论 `[rsi]` 是否启用**都查(没有 rsi 的用户没有 TAINTED 目录,行为不变)。原来「已存在但不一致 → 3 `PROMOTE_RUN_EXISTS`」的 tainted 目录因此改退 1。
  * - 退出码:0 完成(含已存在且一致);1 有提案被丢(任一判据不过)或没有可采纳项;2 用法(含 personal 层 `PERSONAL_LAYER_P2`、
  *   run 不存在、`--run` 与 `--rule` 同给或都不给);3 fail-closed(状态损坏、信号库损坏、脱敏扫描异常、写出口拒绝、
  *   同 id 不一致、补丁自检不过);4 本机无法核对(证据信号查不到、judge 冷却挂起)且没有硬失败;64 `--rule` 模式未实装。
@@ -33,13 +41,25 @@ import { WriteDeniedError } from '../io/safe-fs.js';
 import { createGuardGit, GitError } from '../guards/git.js';
 import type { GuardGit } from '../guards/types.js';
 import { JudgeRunNotFoundError } from '../judge/store.js';
+import { RsiLockError } from '../rsi/lock.js';
+import type { RsiLockHandle } from '../rsi/lock.js';
+import { immediateGate } from '../rsi/services/immediate-gate.js';
+import { readMark } from '../rsi/services/staging.js';
+import { resumeTaint } from '../rsi/services/taint.js';
+import { RsiFailClosedError } from '../rsi/types.js';
+import type { RsiServiceCtx } from '../rsi/types.js';
+import { withRsiLockIfGated } from '../rsi/with-lock.js';
+import type { WithRsiLockIfGatedOptions } from '../rsi/with-lock.js';
 import { JudgeStateError } from '../judge/errors.js';
 import { AdoptFailClosedError, planAdoption } from '../lifecycle/adopt.js';
 import { PROMOTE_HINT_SIGNATURE, PromoteError, planPromotion } from '../lifecycle/promote-rule.js';
 import type { PromoteTarget } from '../lifecycle/promote-rule.js';
 import { createRedactor } from '../redact/redactor.js';
 import { SignalStoreError } from '../signals/state-store.js';
+import { GateStop, gateExitOf, gateIoOf, isGateExit, privacyCheck } from './rsi-gate-wiring.js';
+import type { GateExit } from './rsi-gate-wiring.js';
 import { StateOutError, writeStateOut } from './state-out.js';
+import type { WriteGate } from './state-out.js';
 import { combineExitCodes } from './types.js';
 import type { CommandContext, CommandDef } from './types.js';
 
@@ -55,6 +75,10 @@ export interface PromoteCommandDeps {
   git?: GuardGit;
   /** 测试注入:传给 git 子进程的额外环境 */
   gitEnv?: Readonly<Record<string, string>>;
+  /** 测试缝:`planAdoption` 返回之后、闸 #2 之前调用(用来演练「第一次检查之后状态改变」);生产不传 */
+  betweenGates?: () => Promise<void>;
+  /** 测试注入:透传给 `withRsiLockIfGated`(`gate` / `lock`:时钟、pid、isAlive 等);只在 `[rsi]` 启用且 `--run --write` 时用到 */
+  lockDeps?: WithRsiLockIfGatedOptions;
 }
 
 interface Parsed {
@@ -167,7 +191,28 @@ async function readOverlay(ctx: CommandContext): Promise<Overlay | undefined> {
 async function writeOut(
   io: IoContext,
   plan: { promoId: string; patch: string; prBody: string; report: string },
+  opts: { beforeWrite?: WriteGate; checkTaint?: boolean } = {},
 ): Promise<{ wrote: boolean; existing: boolean }> {
+  const beforeWrite = opts.beforeWrite;
+  if (opts.checkTaint === true) {
+    // 契约第 21 条:tainted 的产物目录在「已存在」比较之前就拒(不论闸门结果;没有 rsi 的用户没有 TAINTED,此处只多一次 lstat)
+    let mark: Awaited<ReturnType<typeof readMark>>;
+    try {
+      mark = await readMark(io, 'promote', plan.promoId);
+    } catch (e) {
+      // 链接 / 非目录等不安全状态:沿用 writeStateOut 一贯的稳定码(逐字节同接线前)
+      if (e instanceof RsiFailClosedError) {
+        throw new Exit(ExitCode.FAIL_CLOSED, 'FAIL_CLOSED', e.reason);
+      }
+      throw e;
+    }
+    if (mark.present) {
+      throw new GateStop({
+        exit: ExitCode.CHECK_FAILED,
+        stderr: `RSI_RUN_TAINTED reason=${mark.reason} run_id=${plan.promoId}\n`,
+      });
+    }
+  }
   try {
     return await writeStateOut(
       io,
@@ -175,11 +220,26 @@ async function writeOut(
       plan.promoId,
       { 'promote.patch': plan.patch, 'pr-body.md': plan.prBody, 'report.json': plan.report },
       'PROMOTE_RUN_EXISTS',
+      beforeWrite !== undefined ? { beforeWrite } : {},
     );
   } catch (e) {
     if (e instanceof StateOutError) throw new Exit(ExitCode.FAIL_CLOSED, 'FAIL_CLOSED', e.reason);
     throw e;
   }
+}
+
+/** 拿锁 / 锁内 / 失锁相关失败的稳定码;不是这类错误返回 undefined,交给原有映射 */
+function rsiFailureOf(e: unknown): GateExit | undefined {
+  if (e instanceof RsiLockError) {
+    const st = e.toStable();
+    return st.code === 'RSI_NOT_RUN'
+      ? { exit: ExitCode.NOT_RUN, stderr: 'PROMOTE_NOT_RUN reason=locked\n' }
+      : { exit: ExitCode.FAIL_CLOSED, stderr: `RSI_FAIL_CLOSED reason=${st.reason}\n` };
+  }
+  if (e instanceof RsiFailClosedError) {
+    return { exit: ExitCode.FAIL_CLOSED, stderr: `RSI_FAIL_CLOSED reason=${e.reason}\n` };
+  }
+  return undefined;
 }
 
 export function createPromoteCommand(deps: PromoteCommandDeps = {}): CommandDef {
@@ -271,17 +331,53 @@ export function createPromoteCommand(deps: PromoteCommandDeps = {}): CommandDef 
     return ExitCode.OK;
   }
 
+  /** `--run`(采纳)入口:隐私闸 → (rsi 启用 + `--write`)拿锁 + 锁内 resumeTaint → {@link adoptCore} */
   async function adopt(ctx: CommandContext, args: Parsed): Promise<number> {
+    const pc = await privacyCheck(ctx);
+    if (isGateExit(pc)) {
+      ctx.stderr(pc.stderr);
+      return pc.exit;
+    }
+    if (pc.kind === 'legacy') return adoptCore(ctx, args, undefined, null);
+    const gctx: RsiServiceCtx = { io: gateIoOf(ctx.io, pc.home), config: pc.config };
+    if (!args.write) return adoptCore(ctx, args, gctx, null);
+    return withRsiLockIfGated(
+      { io: ctx.io, config: pc.config },
+      async (lock) => {
+        // 只 resumeTaint、不 recover:promote 不写受快照清单管辖的文件
+        if (lock !== null) await resumeTaint(gctx, lock);
+        return adoptCore(ctx, args, gctx, lock);
+      },
+      deps.lockDeps,
+    );
+  }
+
+  /** 计划与落盘。`gctx` = rsi 启用(过即时闸);`lock` = 持有的 `rsi/lock`(每个写操作前 `assertHeld`) */
+  async function adoptCore(
+    ctx: CommandContext,
+    args: Parsed,
+    gctx: RsiServiceCtx | undefined,
+    lock: RsiLockHandle | null,
+  ): Promise<number> {
     const io = ctx.io;
+    const runId = args.run as string;
+    const gate = async (): Promise<void> => {
+      if (gctx === undefined) return;
+      const r = gateExitOf(await immediateGate(gctx, { kind: 'promote', runId }));
+      if (r !== null) throw new GateStop(r);
+    };
+    await gate(); // 闸 #1:读暂存区(planAdoption)之前
     const overlay = await readOverlay(ctx);
     const redactor = makeRedactor(overlay);
 
     const plan = await planAdoption(io, {
-      runId: args.run as string,
+      runId,
       redactor,
       teamProjectKeys: overlay?.reflect?.team_project_keys ?? [],
       vendorOverrides: overlay?.reflect?.vendor_overrides ?? {},
     });
+    await deps.betweenGates?.();
+    await gate(); // 闸 #2:落盘与输出之前(干跑:输出之前)
 
     const hard = plan.dropped.filter((d) => !d.unverifiable && !d.personal).length;
     const unverifiable = plan.dropped.filter((d) => d.unverifiable).length;
@@ -289,7 +385,12 @@ export function createPromoteCommand(deps: PromoteCommandDeps = {}): CommandDef 
 
     let wrote = false;
     let existing = false;
-    if (args.write && plan.adopted.length > 0) ({ wrote, existing } = await writeOut(io, plan));
+    if (args.write && plan.adopted.length > 0) {
+      ({ wrote, existing } = await writeOut(io, plan, {
+        checkTaint: true,
+        ...(lock !== null ? { beforeWrite: (): Promise<void> => lock.assertHeld() } : {}),
+      }));
+    }
 
     const summary = {
       run_id: plan.runId,
@@ -367,6 +468,16 @@ export function createPromoteCommand(deps: PromoteCommandDeps = {}): CommandDef 
         if (args.rule !== undefined) return await promoteRule(ctx, args);
         return await adopt(ctx, args);
       } catch (e) {
+        // rsi 闸 / 锁:原样输出稳定码(`RSI_*` / `PROMOTE_NOT_RUN reason=locked`),零写入
+        if (e instanceof GateStop) {
+          ctx.stderr(e.gate.stderr);
+          return e.gate.exit;
+        }
+        const lf = rsiFailureOf(e);
+        if (lf !== undefined) {
+          ctx.stderr(lf.stderr);
+          return lf.exit;
+        }
         let x: Exit;
         if (e instanceof Exit) x = e;
         else if (e instanceof JudgeRunNotFoundError)

@@ -18,7 +18,14 @@
  *   不拿锁、不建 `.state/rsi/`(逐字节同接线前);同一状态树 → 在**构造后端之前**试锁(不排队),整个评审期间持有(锁序 `rsi/lock` → `reflect/llm.lock`),
  *   拿不到 `JUDGE_NOT_RUN reason=locked` 退出 4;状态目录无法证明安全 → `RSI_FAIL_CLOSED reason=state_dir_unsafe` 退出 3,不写任何东西。
  *   每次 LLM 返回后与每次写提案前都先 `assertHeld()`;失锁 → 不再外发 / 不再写,`RSI_FAIL_CLOSED reason=lock_lost` 退出 3。
- *   干跑不拿锁、不改(即时闸 / privacyGate / counts.staged 属 B3c / B5,本块不做)。
+ *   干跑不拿锁、不改。
+ * - **隐私闸与即时闸(R20-A2 B5g,契约 R20-4.8 / §20.9 第 11 条)**:`[rsi]` 配置为 on(armed / confirmed / stopped)时才做,没有 `[rsi]` / 未启用 → 逐字节同接线前。
+ *   顺序:参数 → `privacyCheck`(`loadRsiConfig({env})`;`cfg_*` / `repo_invalid` / `overlay_invalid` / `exclude_invalid` → 退出 3 `RSI_FAIL_CLOSED`,此前零副作用)→
+ *   (真跑)拿锁 → 锁内 `assertNoPurgeInProgress` → `immediateGate`(读暂存区、构造后端之前;干跑也过一次)→ `runJudge` → 输出前再过一次。
+ *   `runJudge` 内部的三个点用**包装器**接回调(不改 `src/judge/run.ts`):后端包装(在 `guardBackend` 外层)每次 `complete` 前过 `beforeExternalCall`、
+ *   `StoreFs` 包装在每次落盘序列开头(`writeFile` tmp 前;chmod / rename / 清 tmp 属同一次落盘,见 `gateStoreFs`)过 `beforePersist`、打印(含异常分支的部分结果)前过 `beforeOutput`;任何一次非 allow → 之后不再外发 / 不再落盘 / 不打印,
+ *   退出码取 {@link gateExitOf}(与已有结果经 `combineExitCodes` 合并)。已经写下的 judge 记录不撤销(同 B3b 失锁语义)。独立状态树(锁闸门 off)下照样 enforce。
+ *   judge 锁内的 recover / resumeTaint / counts.staged 属 B5d,本块不做。
  * - 退出码:0 完成(含 pending=not_configured / same_vendor_only,非 --strict);1 有提案 reject / injection_suspected / 没评上且出现过评审输出校验不通过;
  *   2 用法错(含 run 不存在);3 状态损坏、提示复扫残留、厂商不可证明、写出口拒绝;
  *   4 后端不可用/全部冷却/超出 --max-calls。
@@ -38,7 +45,10 @@ import type { JudgeBackends, JudgeReport, ProposalOutcome } from '../judge/run.j
 import { JudgeRunNotFoundError, SAFE_STORE_FS } from '../judge/store.js';
 import type { StoreFs } from '../judge/store.js';
 import type { RsiLockHandle } from '../rsi/lock.js';
+import { immediateGate, judgeGateCallbacks } from '../rsi/services/immediate-gate.js';
 import { assertNoPurgeInProgress } from '../rsi/services/taint.js';
+import type { ImmediateGateCheck, RsiServiceCtx } from '../rsi/types.js';
+import type { LlmBackend, LlmCompleteResult } from '../reflect/backend-iface.js';
 import { createRedactor } from '../redact/redactor.js';
 import { parseDecimalUint } from './args.js';
 import {
@@ -51,6 +61,8 @@ import {
   withRsiWriterLock,
 } from './reflect.js';
 import type { LockLossState, RsiLockWiring } from './reflect.js';
+import { GateStop, gateExitOf, gateIoOf, isGateExit, privacyCheck } from './rsi-gate-wiring.js';
+import type { GateExit } from './rsi-gate-wiring.js';
 import { combineExitCodes } from './types.js';
 import type { CommandContext, CommandDef } from './types.js';
 
@@ -228,6 +240,73 @@ export function guardStoreFs(lock: RsiLockHandle, loss: LockLossState): StoreFs 
   };
 }
 
+/** 即时闸回调的一次现算;回调自己抛(非预期错误)按 fail-closed internal,不让它变成「放行」 */
+async function evalGate(check: ImmediateGateCheck): Promise<GateExit | null> {
+  try {
+    return gateExitOf(await check());
+  } catch {
+    return gateExitOf({
+      kind: 'fail_closed',
+      code: 'RSI_FAIL_CLOSED',
+      reason: 'internal',
+      exit: ExitCode.FAIL_CLOSED,
+    });
+  }
+}
+
+/** 一次 judge 运行内共享的闸状态:一旦 `stop` 有值就不再外发 / 不再落盘 / 不再打印(保持到命令结束) */
+interface GateRunState {
+  stop: GateExit | undefined;
+}
+
+/**
+ * 后端外发前的闸(`beforeExternalCall`):每次 `complete` 前现算;非 allow → 记入 `state.stop` 并返回失败结果(不调用真后端)。
+ * 不抛:`runJudge` 会把后端抛错吞成 backend_error 继续走链、再去落盘;返回失败结果后,后续的落盘由 {@link gateStoreFs} 拦下。
+ */
+export function gateBackend(
+  backend: LlmBackend,
+  check: ImmediateGateCheck,
+  state: GateRunState,
+): LlmBackend {
+  const failed: LlmCompleteResult = { ok: false, reason: 'error' };
+  return {
+    slot: backend.slot,
+    vendor: backend.vendor,
+    model: backend.model,
+    cli: backend.cli,
+    provider: backend.provider,
+    async complete(req) {
+      if (state.stop === undefined) state.stop = (await evalGate(check)) ?? undefined;
+      if (state.stop !== undefined) return failed;
+      return backend.complete(req);
+    },
+  };
+}
+
+/**
+ * 落盘前的闸(`beforePersist`):非 allow → 抛 {@link GateStop},不落盘。
+ * 一次「落盘」= `writeProposal` 的 writeFile(tmp) → chmod → rename 序列:**只在序列开头(writeFile)过闸**。
+ * 原因:tmp 文件一旦落在 `proposals/` 里,证据扫描(`staging.ts` 的 walkFiles)就把它当「未完成的写入」报 unknown(U),
+ * 序列中途再过闸会被自己的 tmp 拦下(并留下孤儿 tmp)。chmod / rename / 失败后清 tmp 的 remove 属于同一次落盘,不再单独过闸;
+ * 序列内部的失锁复核仍由 {@link guardStoreFs}(每步 `assertHeld`)负责。
+ */
+export function gateStoreFs(
+  inner: StoreFs,
+  check: ImmediateGateCheck,
+  state: GateRunState,
+): StoreFs {
+  return {
+    async writeFile(io, target, data, opts) {
+      if (state.stop === undefined) state.stop = (await evalGate(check)) ?? undefined;
+      if (state.stop !== undefined) throw new GateStop(state.stop);
+      return inner.writeFile(io, target, data, opts);
+    },
+    chmod: (io, target, mode) => inner.chmod(io, target, mode),
+    rename: (io, from, to) => inner.rename(io, from, to),
+    remove: (io, target) => inner.remove(io, target),
+  };
+}
+
 export function createJudgeCommand(deps: JudgeCommandDeps = {}): CommandDef {
   const def: CommandDef = {
     name: 'judge',
@@ -250,6 +329,22 @@ export function createJudgeCommand(deps: JudgeCommandDeps = {}): CommandDef {
       if (args.error !== undefined || args.run === undefined) {
         ctx.stderr(`agent-kit judge: ${args.error ?? '参数错误'}\n`);
         return ExitCode.USAGE;
+      }
+
+      // 隐私闸:在读暂存区 / 构造后端 / 拿锁之前判定,此前零副作用(deny → 3)
+      let gateCtx: RsiServiceCtx | undefined;
+      try {
+        const pc = await privacyCheck(ctx);
+        if (isGateExit(pc)) {
+          ctx.stderr(pc.stderr);
+          return pc.exit;
+        }
+        if (pc.kind === 'enforce') {
+          gateCtx = { io: gateIoOf(ctx.io, pc.home), config: pc.config };
+        }
+      } catch {
+        ctx.stderr('RSI_FAIL_CLOSED reason=internal\n');
+        return ExitCode.FAIL_CLOSED;
       }
 
       const runId = args.run; // 闭包里保持 string 窄化
@@ -288,6 +383,22 @@ export function createJudgeCommand(deps: JudgeCommandDeps = {}): CommandDef {
       const execute = async (lock: RsiLockHandle | null): Promise<number> => {
         // 锁内、改任何提案之前:purge 进行中拒绝(assertNoPurgeInProgress)
         if (lock !== null) await (deps.assertNoPurge ?? assertNoPurgeInProgress)({ io: ctx.io });
+        // 即时闸 #1:读暂存区、构造后端之前(干跑也过)。非 allow → 零外发、零落盘、零输出
+        const gstate: GateRunState = { stop: undefined };
+        const scope = { kind: 'judge', runId } as const;
+        const callbacks = gateCtx !== undefined ? judgeGateCallbacks(gateCtx, scope) : undefined;
+        if (gateCtx !== undefined) {
+          let first: GateExit | null;
+          try {
+            first = gateExitOf(await immediateGate(gateCtx, scope));
+          } catch {
+            first = { exit: ExitCode.FAIL_CLOSED, stderr: 'RSI_FAIL_CLOSED reason=internal\n' };
+          }
+          if (first !== null) {
+            ctx.stderr(first.stderr);
+            return first.exit;
+          }
+        }
         let backends: JudgeBackends;
         try {
           backends =
@@ -302,6 +413,15 @@ export function createJudgeCommand(deps: JudgeCommandDeps = {}): CommandDef {
             Object.entries(backends).map(([hop, b]) => [hop, guardBackend(b, lock, loss)]),
           ) as JudgeBackends;
         }
+        if (callbacks !== undefined) {
+          // 在 guardBackend 外层:每次 complete 前先过即时闸(beforeExternalCall)
+          backends = Object.fromEntries(
+            Object.entries(backends).map(([hop, b]) => [
+              hop,
+              gateBackend(b, callbacks.beforeExternalCall, gstate),
+            ]),
+          ) as JudgeBackends;
+        }
         if (args.runLlm && Object.keys(backends).length === 0) {
           ctx.stderr(
             'JUDGE_NOT_CONFIGURED reason=no_backends agent-kit judge: 没有可用的评审后端(本命令不自带后端,须由接线块注入);未调用、未写入\n',
@@ -311,6 +431,29 @@ export function createJudgeCommand(deps: JudgeCommandDeps = {}): CommandDef {
 
         let report: JudgeReport;
         const done: ProposalOutcome[] = [];
+        /** 打印前的闸(beforeOutput):已经停了就保持停;否则现算。非 allow → 不打印任何东西,按闸的码退出(与已有结果合并) */
+        const outputStop = async (): Promise<number | undefined> => {
+          if (callbacks === undefined) return undefined;
+          if (gstate.stop === undefined) {
+            gstate.stop = (await evalGate(callbacks.beforeOutput)) ?? undefined;
+          }
+          if (gstate.stop === undefined) return undefined;
+          // 闸停与失锁同时发生:失锁(fail-closed 3)不得被闸的 1 压掉,报 lock_lost
+          if (loss.lost !== undefined) {
+            const lost = rsiLockFailure(loss.lost, 'JUDGE');
+            ctx.stderr(lost?.line ?? 'RSI_FAIL_CLOSED reason=lock_lost\n');
+            return combineExitCodes([
+              gstate.stop.exit,
+              ExitCode.FAIL_CLOSED,
+              ...done.map((o) => outcomeExit(o, args.strict)),
+            ]);
+          }
+          ctx.stderr(gstate.stop.stderr);
+          return combineExitCodes([
+            gstate.stop.exit,
+            ...done.map((o) => outcomeExit(o, args.strict)),
+          ]);
+        };
         const partial = (): void => {
           if (done.length === 0) return;
           ctx.stdout(
@@ -324,13 +467,18 @@ export function createJudgeCommand(deps: JudgeCommandDeps = {}): CommandDef {
             }),
           );
         };
+        const lockedFs: StoreFs | undefined = lock !== null ? guardStoreFs(lock, loss) : undefined;
+        const storeFs: StoreFs | undefined =
+          callbacks !== undefined
+            ? gateStoreFs(lockedFs ?? SAFE_STORE_FS, callbacks.beforePersist, gstate)
+            : lockedFs;
         try {
           report = await runJudge(
             {
               io: ctx.io,
               redactor,
               backends,
-              ...(lock !== null ? { storeFs: guardStoreFs(lock, loss) } : {}),
+              ...(storeFs !== undefined ? { storeFs } : {}),
               onOutcome: (o) => done.push(o),
               ...(deps.resolveHead !== undefined ? { resolveHead: deps.resolveHead } : {}),
               ...(deps.now !== undefined ? { now: deps.now } : {}),
@@ -338,6 +486,9 @@ export function createJudgeCommand(deps: JudgeCommandDeps = {}): CommandDef {
             { runId, dry: !args.runLlm, maxCalls: args.maxCalls },
           );
         } catch (e) {
+          // 闸已经停了(GateStop 或停在外发点之后的任何后续错误):不打印部分结果,按闸的码退出
+          const stopped = await outputStop();
+          if (stopped !== undefined) return stopped;
           partial(); // 中途失败时仍告诉用户哪些提案已处理(已写盘)
           if (loss.lost !== undefined) {
             const lost = rsiLockFailure(loss.lost, 'JUDGE');
@@ -362,6 +513,8 @@ export function createJudgeCommand(deps: JudgeCommandDeps = {}): CommandDef {
           return ExitCode.FAIL_CLOSED;
         }
 
+        const stoppedAfter = await outputStop();
+        if (stoppedAfter !== undefined) return stoppedAfter;
         if (loss.lost !== undefined) {
           partial();
           const lost = rsiLockFailure(loss.lost, 'JUDGE');
