@@ -31,7 +31,7 @@ export function cursorFingerprint(input: CursorFingerprintInput): string {
 const sortedUnique = (a: readonly string[] | undefined): string[] => [...new Set(a ?? [])].sort();
 
 /** overlay 的脱敏相关字段哈希;读不到 / 不合规 → `undefined`(调用方按「不可比」处理) */
-export async function overlayRedactionSha256Of(
+export async function overlayRedactionDigestOf(
   overlayPath: string | null,
 ): Promise<string | null | undefined> {
   if (overlayPath === null) return null;
@@ -63,7 +63,7 @@ export async function currentCursorFingerprint(
   }
   if (salt.kind !== 'ok') return null;
   if (config.overlayPath !== null && config.overlaySha256 === null) return null;
-  const ov = await overlayRedactionSha256Of(config.overlayPath);
+  const ov = await overlayRedactionDigestOf(config.overlayPath);
   if (ov === undefined) return null;
   return cursorFingerprint({
     kitVersion: KIT_VERSION,

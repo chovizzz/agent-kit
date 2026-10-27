@@ -8,7 +8,7 @@ import { loadRsiConfig, buildRsiPolicy, type RsiConfigOn } from '../../src/rsi/c
 import {
   currentCursorFingerprint,
   cursorFingerprint,
-  overlayRedactionSha256Of,
+  overlayRedactionDigestOf,
 } from '../../src/rsi/l0/fingerprint.js';
 import { exists } from '../../src/io/read-fs.js';
 import { mkdirp, writeFile } from '../../src/io/safe-fs.js';
@@ -114,10 +114,10 @@ describe('currentCursorFingerprint', () => {
     await putOverlay(f, 'sensitive_words = ["acme", "globex"]\n');
     expect(await currentCursorFingerprint(f.io, await reload(f))).not.toBe(fpA);
   });
-  it('overlayRedactionSha256Of:只取脱敏相关字段;顺序 / 重复 / 无关字段不影响,词表或域名变化才变', async () => {
+  it('overlayRedactionDigestOf:只取脱敏相关字段;顺序 / 重复 / 无关字段不影响,词表或域名变化才变', async () => {
     const f = await makeL0Fx('fp-ovsha-');
     const at = async (toml: string): Promise<string | null | undefined> =>
-      overlayRedactionSha256Of(await putOverlay(f, toml));
+      overlayRedactionDigestOf(await putOverlay(f, toml));
     const base = await at('sensitive_words = ["acme", "globex"]\n');
     expect(base).toMatch(/^[0-9a-f]{64}$/);
     expect(await at('sensitive_words = ["globex", "acme", "acme"]\ninternal_domains = []\n')).toBe(
@@ -128,7 +128,7 @@ describe('currentCursorFingerprint', () => {
     expect(
       await at('sensitive_words = ["acme", "globex"]\ninternal_domains = ["corp.example"]\n'),
     ).not.toBe(base);
-    expect(await overlayRedactionSha256Of(null)).toBeNull();
+    expect(await overlayRedactionDigestOf(null)).toBeNull();
     expect(await at('not = = toml')).toBeUndefined();
   });
   it('overlay 不合规(config.overlaySha256 为 null)→ null', async () => {
