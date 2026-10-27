@@ -75,6 +75,16 @@ export interface ReadOpts {
   salt: string;
   /** 单个事件文本的最大字节,超出截断(防超大载荷) */
   maxEventBytes?: number;
+  /**
+   * 可选行级检查钩子(R20-A2 B4b,D6)。预扫与正文两遍的每一行(含空白行、只有元数据的行)都累计到 `lines` / `bytes`
+   * (`bytes` = 行的 UTF-8 字节数 + 1 个换行;超过硬上限的行按 `MAX_LINE_BYTES` 计,是下界近似;CRLF 的 `\r` 不计)。
+   * 每累计 `onLinesEvery`(缺省 1000)行或 `onLinesEveryBytes`(缺省 8MiB)字节调用一次,`done=false`;
+   * 读取结束(含消费方提前停止)时若仍有未报告的增量,再以 `done=true` 调用一次,让调用方拿到完整的实际字节。
+   * 钩子抛错会让该次读取失败(调用方用哨兵错误中止读取)。不传 = 与引入前的行为逐字节一致。
+   */
+  onLines?: (lines: number, bytes: number, done: boolean) => Promise<void>;
+  onLinesEvery?: number;
+  onLinesEveryBytes?: number;
 }
 
 export interface SessionRead {
