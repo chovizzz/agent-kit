@@ -205,11 +205,9 @@ describe('解析器自身的反向对照(防止「一致」是解析器漏看)',
       .join('\n');
     expect(() => rowCodes(t, head)).toThrow(/0 个码/);
   });
-  it('枚举新增一个码而表没有:差集抓得到(模拟 staging_unsafe_entry 的情形)', () => {
+  it('枚举新增一个码而表没有:差集抓得到(模拟「枚举先于文档」的情形)', () => {
     const table = rowCodes(CODE_TABLE, '`RSI_FAIL_CLOSED reason=`');
-    expect(diff([...RSI_FAIL_CLOSED_REASONS, 'x_new'], table)).toEqual([
-      'staging_unsafe_entry',
-      'x_new',
-    ]);
+    expect(diff([...RSI_FAIL_CLOSED_REASONS], table)).toEqual([]); // 正向前提:现状一致,差集才有意义
+    expect(diff([...RSI_FAIL_CLOSED_REASONS, 'x_new'], table)).toEqual(['x_new']);
   });
 });
