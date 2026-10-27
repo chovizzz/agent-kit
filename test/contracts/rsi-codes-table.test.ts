@@ -17,6 +17,7 @@ import {
   RSI_USAGE_REASONS,
 } from '../../src/contracts/rsi.js';
 import { readText } from '../../src/io/read-fs.js';
+import { PENDING_DOC, PENDING_NOTE_UNWRITTEN } from './rsi-pending-doc.js';
 
 const FULL = await readText(new URL('../../docs/contracts.md', import.meta.url).pathname);
 
@@ -29,9 +30,6 @@ const sliceBetween = (md: string, from: string, to: string): string => {
 };
 const CODE_TABLE = sliceBetween(FULL, '**稳定码总表(R20-3.0', '#### 20.3.1');
 const OUTCOME_TABLE = sliceBetween(FULL, '- R20-6.5 **结果分类**', '- R20-6.6 **熔断**');
-
-/** 枚举有、总表没有的码(来源:§20.14 B3 订正的条款号) */
-const PENDING_DOC: Record<string, readonly string[]> = {};
 
 /** 该表里以 `| <head>` 开头的行必须**恰好一行**,取第 2 列(0 起第 2 个 `|` 分段) */
 function cellOf(table: string, head: string, col = 2): string {
@@ -63,7 +61,6 @@ interface Cat {
   name: string;
   head: string;
   enumCodes: readonly string[];
-  pending?: readonly string[];
 }
 const CATS: Cat[] = [
   { name: 'usage', head: '`RSI_USAGE reason=`', enumCodes: RSI_USAGE_REASONS },
@@ -86,17 +83,27 @@ describe('R20-3.0 稳定码总表 ↔ 枚举(逐行、双向)', () => {
       expect(dup(c.enumCodes), '枚举内重复').toEqual([]);
       expect(diff(table, c.enumCodes), '表里有、枚举没有').toEqual([]);
       expect(diff(c.enumCodes, table), '枚举有、表里没有 = 待并入清单').toEqual(
-        [...(c.pending ?? [])].sort(),
+        [...(PENDING_DOC[c.name] ?? [])].sort(),
       );
     });
   }
 
-  it('待并入清单里的每个码都出现在 §20.14 的订正条款里', () => {
+  it('待并入清单里的每个码都出现在 §20.14 的订正条款里(订正尚未写的码见 PENDING_NOTE_UNWRITTEN)', () => {
     const sec = FULL.slice(FULL.indexOf('### 20.14'), FULL.indexOf('## 21. 自主 RSI'));
     expect(sec.length).toBeGreaterThan(1000);
     for (const [cat, codes] of Object.entries(PENDING_DOC)) {
       expect(codes.length, cat).toBeGreaterThan(0);
-      for (const code of codes) expect(sec, `${cat}:${code}`).toContain(code);
+      for (const code of codes) {
+        const unwritten = PENDING_NOTE_UNWRITTEN[cat]?.includes(code) === true;
+        if (unwritten) {
+          // 反向:豁免的码此刻确实还没有订正条款;并入后这里变红 → 同一次提交删除豁免
+          expect(sec, `${cat}:${code} 订正已写,删掉 PENDING_NOTE_UNWRITTEN 里的豁免`).not.toMatch(
+            new RegExp(`reason=${code}\\b`),
+          );
+        } else {
+          expect(sec, `${cat}:${code}`).toContain(code);
+        }
+      }
     }
   });
 
@@ -178,7 +185,9 @@ describe('解析器自身的反向对照(防止「一致」是解析器漏看)',
   });
   it('表里删一个码:与枚举的差集立刻非空', () => {
     const t = CODE_TABLE.replace('`no_journal`', '');
-    expect(diff(RSI_NOT_RUN_REASONS, rowCodes(t, head))).toEqual(['no_journal']);
+    expect(diff(RSI_NOT_RUN_REASONS, rowCodes(t, head))).toEqual(
+      ['no_journal', ...(PENDING_DOC['not_run'] ?? [])].sort(),
+    );
   });
   it('表里加一个未知码:反向差集非空', () => {
     const t = CODE_TABLE.replace('`no_journal`', '`no_journal`、`bogus_code`');

@@ -53,6 +53,8 @@ export const RSI_NOT_RUN_REASONS = Object.freeze([
   'locked_over_ttl',
   'not_confirmed',
   'no_journal',
+  // R20-A2 B5-0(第一批拍板 Q-B):tick 的 `skipped_binding_changed` 对应的报码(退 4)。契约总表待主代理并入(见 PENDING_DOC)
+  'binding_changed',
 ] as const);
 export const RSI_FAIL_CLOSED_REASONS = Object.freeze([
   'cfg_symlink',
@@ -484,17 +486,50 @@ export const RSI_PURGE_PHASES = Object.freeze([
   'done',
 ] as const);
 
-/** `.state/rsi/purge-journal.json`:续做一律按这里**已记下的**集合,不重新从信号库推导 */
-export const RsiPurgeJournalSchema = z.strictObject({
-  schema_version: z.literal(1),
-  created_at: IsoTimestampSchema,
-  phase: z.enum(RSI_PURGE_PHASES),
-  keys: z.array(RsiProjectKeySchema).min(1).refine(sortedUnique, '升序且不重复'),
-  taint_targets: z.strictObject({
-    runs: z.array(RunIdSchema).refine(sortedUnique, '升序且不重复'),
-    promotes: z.array(RunIdSchema).refine(sortedUnique, '升序且不重复'),
-  }),
+/** salvage 形态的三个阶段(R20-A2 B5 Q-A:journal 不合规时的可重入出路;阶段表见 B5 方案 §0.5 R1) */
+export const RSI_SALVAGE_PHASES = Object.freeze(['planned', 'tainted', 'done'] as const);
+
+const PurgeTaintTargetsSchema = z.strictObject({
+  runs: z.array(RunIdSchema).refine(sortedUnique, '升序且不重复'),
+  promotes: z.array(RunIdSchema).refine(sortedUnique, '升序且不重复'),
 });
+
+/**
+ * `.state/rsi/purge-journal.json`:续做一律按这里**已记下的**集合,不重新从信号库推导。
+ * R20-A2 B5-0(Q-A):判别联合 purge | salvage(判别字段 `mode`)。
+ *  - purge:原有形态;`mode` 缺省为 `'purge'`(B5 之前写下的老文件没有该字段,仍合法);
+ *  - salvage:journal 不合规时由 `purge --resume --write` 原子替换成的合法形态,`keys` 恒为空,`taint_targets` 是全部暂存 run / promote;
+ *    老版本 kit 读到它会过不了 strict schema → 判 invalid(fail-closed,安全一侧)。
+ * 任何其它形态(未知 `mode`、两种形态的字段混用、salvage 的 `keys` 非空 / `phase` 越界)一律不合规。
+ */
+export const RsiPurgeJournalSchema = z.preprocess(
+  // 老文件没有 `mode`:仅当键**不存在**时补 `'purge'`(显式写了 `mode` 的一律原样交给判别联合;`null` / 未知值照旧不合规)
+  (v) =>
+    typeof v === 'object' &&
+    v !== null &&
+    !Array.isArray(v) &&
+    !Object.prototype.hasOwnProperty.call(v, 'mode')
+      ? { ...(v as Record<string, unknown>), mode: 'purge' }
+      : v,
+  z.discriminatedUnion('mode', [
+    z.strictObject({
+      schema_version: z.literal(1),
+      created_at: IsoTimestampSchema,
+      mode: z.literal('purge'),
+      phase: z.enum(RSI_PURGE_PHASES),
+      keys: z.array(RsiProjectKeySchema).min(1).refine(sortedUnique, '升序且不重复'),
+      taint_targets: PurgeTaintTargetsSchema,
+    }),
+    z.strictObject({
+      schema_version: z.literal(1),
+      created_at: IsoTimestampSchema,
+      mode: z.literal('salvage'),
+      phase: z.enum(RSI_SALVAGE_PHASES),
+      keys: z.array(RsiProjectKeySchema).max(0),
+      taint_targets: PurgeTaintTargetsSchema,
+    }),
+  ]),
+);
 export type RsiPurgeJournal = z.infer<typeof RsiPurgeJournalSchema>;
 
 /** `TAINTED` 标记(R20-4.7) */
@@ -565,6 +600,20 @@ export const RSI_LOCKED_NOT_RUN_CODES = Object.freeze([
   'REFLECT_NOT_RUN',
   'JUDGE_NOT_RUN',
 ] as const);
+/**
+ * `rsi status` 的 `warnings` 取值(现算;B5-0 起集中登记,原先是 `status.ts` 里的裸字符串)。`index_rebuild_required`(Q-C)由 B5a 在 `status.ts` 接线,
+ * 同时文本模式追加一行 `next=rebuild_index`({@link RSI_STATUS_NEXT_REBUILD})。
+ */
+export const RSI_STATUS_WARNINGS = Object.freeze([
+  'overlay_absent',
+  'cloud_sync_suspected',
+  'index_full',
+  'breaker_open',
+  'index_rebuild_required',
+] as const);
+export type RsiStatusWarning = (typeof RSI_STATUS_WARNINGS)[number];
+/** `rsi status` 文本模式「下一步」行的固定枚举词(`next=<词>`;不含路径) */
+export const RSI_STATUS_NEXT_REBUILD = 'rebuild_index';
 /** `rsi status` 的 `lock:` 行取值(D7:追加 `unsafe`) */
 export const RSI_LOCK_STATES = Object.freeze([
   'free',

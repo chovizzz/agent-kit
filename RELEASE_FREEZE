@@ -1,0 +1,17 @@
+publish frozen: R20-A2 B5 integration in progress (auto-RSI real write entries).
+
+Reason:   B5-0 ... B5e are merged to main one block at a time; until B5e is green and the
+          main agent has accepted it, main must not be released to npm (no tag, no npm publish).
+          package.json version stays at 0.1.0 while this file exists.
+Enforced: scripts/check-publish.mjs (PUBLISH_FROZEN, exit 1; also `--freeze-only` for prepublishOnly),
+          .github/workflows/release.yml (re-check right before `npm publish`),
+          package.json `prepublishOnly`, scripts/check-freeze-version.mjs run by .github/workflows/ci.yml.
+Residual: `npm publish --ignore-scripts` skips prepublishOnly (release.yml itself uses --ignore-scripts, so
+          its own step is the real guard there); a manual local publish with --ignore-scripts is not blocked.
+Lift:     delete this file in a separate commit after B5e acceptance AND explicit user consent.
+          Do not delete it to "unblock" an unrelated release.
+          The same commit must also drop the freeze-era assertions in test/build/publish-freeze.test.ts
+          ("real repo is frozen", "RELEASE_FREEZE at repo root", "version is 0.1.0"); keep the rest.
+          Version bump: 0.1.0 is already on npm, so the first release after the lift needs a new version. Do the bump
+          in the SAME commit that deletes this file (ci.yml's version lock turns into a no-op only once the file is
+          gone; bumping first makes CI fail on the lock, deleting first leaves a window with no guard).
