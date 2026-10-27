@@ -16,7 +16,8 @@ export interface MutationRow {
 
 export const B4C2_MUTATION_TABLE: readonly MutationRow[] = [
   {
-    clause: 'R20-6.9 提交顺序',
+    // 注:`signals collect` 非 --dry 路径尚未接 beforeWrite / rsi/lock(A1 遗留,B5 接线),本行只覆盖 rsi 持锁路径
+    clause: 'R20-6.9 提交顺序(rsi 持锁路径;signals collect 路径未接,A1 遗留,B5 接线)',
     entry: 'runL0UnderLock / commitL0',
     state: 'confirmed,首次采集',
     positive: '盐 → 信号库 → 索引 → counts → state → cursor → 清单(写点序号严格递增)',
@@ -134,7 +135,7 @@ export const B4C2_MUTATION_TABLE: readonly MutationRow[] = [
     state: '盐首建后崩溃留下空文件',
     positive: '持锁 + 满 10 秒 → 删除重建,采集继续',
     negative: '不足 10 秒 → salt_invalid 不删;不持锁不删;非空 / 违规盐不回收',
-    mutation: 'salt-reclaim-ignores-grace;salt-reclaim-without-lock',
+    mutation: 'salt-reclaim-ignores-grace;salt-reclaim-without-lock;salt-reclaim-no-recheck',
     faultPoint: '盐首建的 mkdirp / chmod / salt-create 前失锁',
     tests: ['l0-crash-matrix.test.ts'],
   },

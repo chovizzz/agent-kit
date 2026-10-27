@@ -29,7 +29,7 @@ export interface PlanL0Input {
 
 export interface L0Plan {
   mode: 'armed' | 'confirmed';
-  /** `persisted` = 真实盐;`none` = 盐不存在 / 空,用的是内存临时盐(`--json` 的 `salt: "ephemeral"`) */
+  /** `persisted` = 真实盐;`none` = 盐不存在 / 空,用的是内存临时盐。契约 `--json` 的字面值:`persisted` → `"persisted"`,`none` → `"ephemeral"`(由 B5 映射) */
   salt: 'persisted' | 'none';
   summary: L0Summary;
   /** 将读的 lstat 字节数(`confirmed`);armed 是头部读取实际字节 */

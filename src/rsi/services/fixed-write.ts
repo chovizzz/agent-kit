@@ -29,7 +29,7 @@ import { readRsiFixed } from './attribution.js';
 import { assertLockBelongs } from './lock-scope.js';
 import { Writer, type ServiceHooks } from './staging.js';
 
-/** 把 `BeforeWrite`(`(op, absPath)`)适配成服务层的 `ServiceHooks.point`(只取 `before:` 前缀的写点;路径在服务层不可得,传空串) */
+/** 把 `BeforeWrite`(`(op, absPath)`)适配成服务层的 `ServiceHooks.point`(只取 `before:` 前缀的写点;路径在服务层不可得,传空串;`after:` 前缀的写点会被丢弃,要在「某次写之后」注入只能靠写点顺序推断) */
 export function hooksFromGate(gate: BeforeWrite | undefined): ServiceHooks {
   if (gate === undefined) return {};
   return {
@@ -148,6 +148,15 @@ export async function reclaimEmptySalt(
   const st = await lstat(file);
   if (!st.isFile() || st.size !== 0) return 'not_empty';
   const w = new Writer(ctx.io, lock, hooks);
-  await w.op('salt-remove', () => remove(ctx.io, file));
-  return 'reclaimed';
+  // remove 紧邻一次再确认:Writer.op 的顺序是 钩子 → assertHeld → 回调,再确认在回调里(assertHeld 之后),所以上面的 lstat 与这里之间
+  // (钩子 / assertHeld)同锁下并发写入的内容能被看到;剩下的窗口只有这次 lstat 与 remove 两个系统调用之间(同 UID、同锁下并发建盐,已登记为残余)。
+  // 返回 not_empty 的三种情形(已有内容 / 非普通文件 / 宽限不足)调用方(ensureSalt)一律重读一遍,按读到的结果处理。
+  return w.op('salt-remove', async () => {
+    const again = await lstat(file);
+    if (!again.isFile() || again.size !== 0 || nowMs - again.mtimeMs < RSI_SALT_EMPTY_GRACE_MS) {
+      return 'not_empty' as const;
+    }
+    await remove(ctx.io, file);
+    return 'reclaimed' as const;
+  });
 }

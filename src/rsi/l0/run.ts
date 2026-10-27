@@ -6,6 +6,7 @@
  *   #pre `checkpoint('file')`(abort → [A0],此时盐可能都还没建)→ S 盐(`readSaltFile`;absent → 首建,全写点经 gate;empty → D15:持锁 + mtime 满 10 秒才删除重建,不足 10 秒 `salt_invalid`)
  *   → 指纹 → 列举 → 读 cursor → `collectRead`(零写入;abort → [A0];time_limit / 上限 → 继续,`ok_partial`)→ `taintNewlyExcluded`(隐私收紧,写 TAINTED、清暂存区,**不回滚**)
  *   → #0 `checkpoint('commit')`(权威复检,abort → [A0])→ `commitL0`(C1..C7,见 `commit.ts`)。
+ * 注:B5 接线之前,`commitL0` 自己在提交前兜底一次 `inspectSnapshot` → `needs_rebuild` 时 `recoverUnderLock`(幂等:已一致则直接返回,代价是多扫一遍摘要)。
  * `runArmedUnderLock`(D3):只 `listArmedDetailed`,**不建盐、不读正文、不写数据文件、不写 counts**;只写 state(`armed_listing` 仅完整列举时持久化)+ 日志 + 快照。
  */
 import { parse as parseToml } from 'smol-toml';
@@ -153,6 +154,7 @@ export async function runL0UnderLock(
     checkpoint: input.checkpoint,
     stateMutator: input.stateMutator,
   } as const;
+  // [A0] 不得调用 recomputeClusters(那条路径会用到 redactor.pass2,这里的桩一调用就抛 internal)
   const nullRedactor = {
     pass2: (): never => {
       throw new RsiFailClosedError('internal');

@@ -207,6 +207,26 @@ describe('D15:盐首建崩溃留下空文件', () => {
     expect(await exists(p)).toBe(false);
   });
 
+  it('remove 紧邻再确认:首次 lstat 之后(钩子里)同锁并发写入内容 → 不删、返回 not_empty、内容保留;对照:无并发写入时删除', async () => {
+    const fx = await scenario('first', 'l0d15-recheck-', { salt: false });
+    const p = await emptySalt(fx);
+    fx.s.clock.t = Date.now() + 20_000;
+    const content = `${'cd'.repeat(32)}\n`;
+    const r = await withLock(fx.s, (lock) =>
+      reclaimEmptySalt(fx.s.ctx, lock, fx.s.clock.t, {
+        point: async (name) => {
+          if (name === 'before:salt-remove') await put(fx.s, p, content);
+        },
+      }),
+    );
+    expect(r).toBe('not_empty');
+    expect(await readText(p)).toBe(content);
+    // 对照
+    await put(fx.s, p, '');
+    const ok = await withLock(fx.s, (lock) => reclaimEmptySalt(fx.s.ctx, lock, fx.s.clock.t));
+    expect(ok).toBe('reclaimed');
+  });
+
   it('盐首建的每个写点(mkdirp / chmod / salt-create)之前失锁 → lock_lost,之后零写入,盐文件不存在', async () => {
     const rec = await recordOps('first', 'l0d15-rec-', { salt: false });
     const saltOps = rec.ops

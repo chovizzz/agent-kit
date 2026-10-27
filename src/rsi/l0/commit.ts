@@ -12,12 +12,17 @@
  *  - **墙钟**:`checkpoint('commit')` 永不返回 `time_limit`;万一返回,这里按 `continue` 处理,已经开始的有序提交一定走完。
  *  - **抛错**(`lock_lost`、fail-closed 等)不调 StateMutator、不收尾,attempt 残留,下次记 `crashed`。
  *
+ * 成本:每次提交都全量载入会话计数库(`planSessionStats` 的 `where` 表,每个 agent 一次),即使 `signals_new = 0`——O(会话计数库) 的内存 / 时间,这是有意的顺序
+ * (库内容带病要在写信号之前 fail-closed),已登记为残余。
+ * [A0] 的 `signals_new` / `sessions_new` 一律是 0(不是 null):本次提交确实没有新信号 / 新会话计数,与「读阶段没跑所以不知道」的 null 不同。
+ *
  * 每次提交都从磁盘重算(任意提交点崩溃之后,下一次提交都能把投影校正回来):`per_key` / `unknown_keys_signals`(`recomputeCounts`)、`clusters`(D13-A,每次都重算,不看本次是否有新信号)、
  * `staged[].tainted`(**只取 `TAINTED` 文件的实际在场事实**,不掺入「证据属 X」的推导;每次都核对,不看本次新增了多少 taint)。
  *
  * 写点复核(B3b-4 / D16):每个写操作之前先调 `deps.beforeWrite`(测试的故障注入点),再 `lock.assertHeld()`;失锁 → `lock_lost`,之后零写入。信号库 / 会话计数 / 盐首建经
  * `WriteGate` 钩子,固定文件与 counts / 日志经 `Writer.op`,清单 rename 前 `commitSnapshot` 自己再复核。残余:`commitSnapshot` 内 `snapshot.json.tmp` 的 remove / 写入(B3 的文件)
- * 只在进入时复核一次,两次写之间失锁会留下一个未 rename 的临时文件(不被清单管辖,下次提交会先 remove)。
+ * 只在进入时复核一次,两次写之间失锁会留下一个未 rename 的临时文件(不被清单管辖,下一次 recover 首行就删除)。
+ * 其内容(文件名 + sha256,没有会话内容)也不构成泄漏。
  */
 import {
   RSI_AGENT_IDS,
@@ -99,7 +104,9 @@ export interface CommitL0Input {
 }
 
 export interface CommitL0Result {
+  /** 真实 outcome(含 #1..#5 的 abort) */
   outcome: RsiOutcome;
+  /** `summary.outcome` 同样是真实 outcome;**`state.json` 的 `last_tick.outcome` 在 #5(state 已写)之后才 abort 时可能陈旧**(是 abort 之前算出的值),熔断等以这里和日志为准 */
   summary: L0Summary;
   stage: 'a0' | 'a1' | 'full';
   /** 快照清单提交后的 generation */
@@ -156,9 +163,12 @@ export async function recomputeClusters(
   } catch (e) {
     return mapWriteError(e);
   }
-  return buildClusters(classifySignals(loaded.signals))
-    .slice(0, RSI_COUNTS_MAX_CLUSTERS)
-    .map((c) => ({ cluster_id: c.id, evidence_by_key: evidenceByKey(c.allSignals) }));
+  return (
+    buildClusters(classifySignals(loaded.signals))
+      // 截断 = 上限(counts.json schema 限 RSI_COUNTS_MAX_CLUSTERS 条),不是过滤:buildClusters 已排好序,超出的只是放不下
+      .slice(0, RSI_COUNTS_MAX_CLUSTERS)
+      .map((c) => ({ cluster_id: c.id, evidence_by_key: evidenceByKey(c.allSignals) }))
+  );
 }
 
 type IndexDoc = { status: 'ok'; value: RsiProjectIndex } | { status: 'absent' | 'invalid' };
