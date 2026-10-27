@@ -45,6 +45,7 @@ import { loadRsiConfig } from '../rsi/config.js';
 import type { RsiConfig } from '../rsi/config.js';
 import { RsiLockError } from '../rsi/lock.js';
 import type { RsiLockHandle } from '../rsi/lock.js';
+import { RsiSnapshotBusyError } from '../rsi/exit.js';
 import { RsiSnapshotError } from '../rsi/snapshot-read.js';
 import { RsiStagingBlockedError, type ServiceHooks } from '../rsi/services/staging.js';
 import { assertNoPurgeInProgress } from '../rsi/services/taint.js';
@@ -138,6 +139,10 @@ export function rsiLockFailure(
       return { line: `${prefix}_NOT_RUN reason=locked\n`, exit: ExitCode.NOT_RUN };
     }
     return { line: `RSI_FAIL_CLOSED reason=${s.reason}\n`, exit: ExitCode.FAIL_CLOSED };
+  }
+  // 占线不是失败:与 stableOf / signals-collect 同口径退 4
+  if (e instanceof RsiSnapshotBusyError) {
+    return { line: `${prefix}_NOT_RUN reason=snapshot_busy\n`, exit: ExitCode.NOT_RUN };
   }
   if (
     e instanceof RsiFailClosedError ||
