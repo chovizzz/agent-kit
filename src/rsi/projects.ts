@@ -6,8 +6,7 @@
  *  - `--paths`:只在 stdout 是 TTY 时允许,与 `--json` 互斥;`path=` 值经 `cleanPath`,是泄漏闸唯一的豁免(由本文件的渲染器以结构给出,
  *    不是从最终文本里推断);`unknown` 行不追加;
  *  - `key8` = `p_` 之后的前 8 位十六进制(「key 前缀」);summary 的 `collecting` 含 `new`(`new` 是采集中的子集,R20-4.2a);
- *  - 首次 `armed`(无索引、无确认)的清单要现算 armed 列举(B4 的服务,读会话目录与首行):经 `deps.listArmed` 注入;
- *    缺省没有这个服务 → 64 命令桩 `RSI_NOT_IMPLEMENTED subcommand=projects.armed_listing`(**B3a 的范围例外**,待主代理 / B4 接线);
+ *  - 首次 `armed`(无索引、无确认)的清单要现算 armed 列举(`l0/armed-listing.ts`:读会话目录与头部,不建盐、不读正文、不写):缺省接 `listArmed`,`deps.listArmed` 可注入;
  *  - `--rebuild-index`(含 `--write`)属 B5:64 命令桩,不读配置。
  * 本文件的 import 闭包不含 safe-fs / lock.ts / snapshot.ts / with-lock.ts / exec.ts。
  */
@@ -22,8 +21,9 @@ import { failExit } from './exit.js';
 import { emitLines, forbiddenPaths, jsonLines } from './output.js';
 import { readRsiState } from './read-state.js';
 import { cleanName, cleanPath, type OutLine } from './sanitize.js';
+import { listArmed } from './l0/armed-listing.js';
 import type { ArmedListing } from './l0/types.js';
-import { openRsiIo, type OpenRsiIoDeps } from './services/open.js';
+import { openRsiIo, piDirIsSet, type OpenRsiIoDeps } from './services/open.js';
 import { loadRepoIdentity, rsiStateOf } from './state.js';
 import { rsiStubExit } from './stub.js';
 import type { RsiEarlyContext, RsiSubcommand } from './types.js';
@@ -67,6 +67,7 @@ function textLines(
   s: Summary,
   paths: boolean,
   firstArmed: boolean,
+  incomplete = false,
 ): OutLine[] {
   const out: OutLine[] = [];
   for (const r of rows) {
@@ -87,6 +88,8 @@ function textLines(
       `projects collecting=${s.collecting} excluded=${s.excluded} new=${s.new} unknown_signals=${s.unknown_signals}` +
       (firstArmed ? ` unknown_sessions=${s.unknown_sessions}` : ''),
   });
+  // 首次 armed 的扫描不完整(根不可评估 / 目录读不了 / 触发上限 / 根被换):固定措辞,不带路径;完整时输出不变
+  if (incomplete) out.push({ head: 'armed_list=incomplete' });
   return out;
 }
 
@@ -128,6 +131,7 @@ export async function runProjects(
     if (open.kind === 'usage') return usage(open.reason);
     let state = 'off';
     let firstArmed = false;
+    let listIncomplete = false;
     let rows: Row[] = [];
     let summary: Summary = { ...ZERO };
     let forbidden: string[];
@@ -147,8 +151,15 @@ export async function runProjects(
       state = st.state;
       firstArmed = st.firstArmed;
       if (st.firstArmed && data.index.status === 'absent') {
-        if (deps.listArmed === undefined) return rsiStubExit(ctx, 'projects.armed_listing');
-        const l = await deps.listArmed(io, config);
+        const l = await (
+          deps.listArmed ??
+          ((i, c) =>
+            listArmed(i, c, {
+              piDirSet: piDirIsSet(ctx.env),
+              ...(deps.probe !== undefined ? { probe: deps.probe } : {}),
+            }))
+        )(io, config);
+        listIncomplete = l.complete === false;
         rows = l.rows
           .map((r): Row => ({
             key8: null,
@@ -246,10 +257,17 @@ export async function runProjects(
             status: r.status,
           })),
           summary,
+          ...(listIncomplete ? { complete: false } : {}),
         }),
       );
     } else {
-      lines = textLines(rows, summary, paths, firstArmed && rows.every((r) => r.key8 === null));
+      lines = textLines(
+        rows,
+        summary,
+        paths,
+        firstArmed && rows.every((r) => r.key8 === null),
+        listIncomplete,
+      );
     }
     return emitLines(ctx, deps.tamper !== undefined ? deps.tamper(lines) : lines, forbidden);
   } catch (e) {

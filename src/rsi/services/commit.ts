@@ -12,7 +12,6 @@
  *  - 只覆盖进程崩溃,不含断电的 fsync 屏障;`assertHeld` 是检测不是 fencing;
  *  - `RsiLockHandle` 是结构类型,伪造对象能过类型检查,安全边界是运行时的 `assertHeld()` 与「锁路径 = `<rsiDir>/lock`」核对。
  */
-import { createHash } from 'node:crypto';
 import * as path from 'node:path';
 import {
   RSI_COUNTS_MAX_STAGED,
@@ -22,9 +21,8 @@ import {
 } from '../../contracts/rsi.js';
 import { canonicalJson, canonicalJsonLine } from '../../io/canonical-json.js';
 import type { IoContext } from '../../io/paths.js';
-import { readFileSafe } from '../../io/read-fs.js';
 import { appendFile, createExclusive, remove, rename } from '../../io/safe-fs.js';
-import { SALT_RE } from '../../signals/ids.js';
+import { SaltError, readSaltFile } from '../../signals/salt-read.js';
 import type { RsiLockHandle } from '../lock.js';
 import {
   inspectSnapshot,
@@ -51,14 +49,15 @@ const nowOf = (ctx: RsiServiceCtx): Date => (ctx.now ?? ((): Date => new Date())
 
 /** 盐文件的指纹(`sha256(盐)` 前 12 位,R20-4.2)。缺失 / 链接 / 权限宽 / 格式非法一律 `salt_invalid`,不回退到旧 counts 的值 */
 async function saltFpOf(io: IoContext): Promise<string> {
-  const r = await readFileSafe(path.join(io.stateDir, 'salt'), {
-    maxBytes: 256,
-    owner: { maxPerm: 0o600 },
-  });
+  let r;
+  try {
+    r = await readSaltFile(io.stateDir);
+  } catch (e) {
+    if (e instanceof SaltError) throw new RsiFailClosedError('salt_invalid');
+    throw e;
+  }
   if (r.kind !== 'ok') throw new RsiFailClosedError('salt_invalid');
-  const salt = r.bytes.toString('utf8').trim();
-  if (!SALT_RE.test(salt)) throw new RsiFailClosedError('salt_invalid');
-  return createHash('sha256').update(salt).digest('hex').slice(0, 12);
+  return r.saltFp;
 }
 
 /**

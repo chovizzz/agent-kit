@@ -56,8 +56,11 @@ export async function openRsiIo(
   }
 }
 
-/** 没注入 env 时,取真实进程环境里与 rsi 只读命令有关的那一个名字(`PI_CODING_AGENT_DIR` 是否已设置,R20-2.9) */
+/**
+ * `PI_CODING_AGENT_DIR` 是否「已设」(R20-2.9;空串也算已设),以及 worker 的 `KIT_RSI_PI_DIR_SET=1` 标记。
+ * 传了 env 就只看它(命令边界的 env);没传才取真实进程环境里这两个名字。`rsi status` 与 armed 列举(经 `L0Deps.piDirSet`)用同一来源。
+ */
 export function piDirIsSet(env: Readonly<Record<string, string | undefined>> | undefined): boolean {
-  const e = env ?? pickProcessEnv(/^PI_CODING_AGENT_DIR$/);
-  return e['PI_CODING_AGENT_DIR'] !== undefined;
+  const e = env ?? pickProcessEnv(/^(PI_CODING_AGENT_DIR|KIT_RSI_PI_DIR_SET)$/);
+  return e['PI_CODING_AGENT_DIR'] !== undefined || e['KIT_RSI_PI_DIR_SET'] === '1';
 }

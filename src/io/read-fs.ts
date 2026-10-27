@@ -384,7 +384,7 @@ export type ReadHeadLinesResult =
   | { kind: 'unsafe'; why: SafeUnsafeWhy };
 
 /**
- * armed 头部读取的多行版本(D1;B4-0 冻结签名,B4a 实现):与 {@link readHead} 同一套句柄级安全打开与「一次 `read(2)`」语义,
+ * armed 头部读取的多行版本(D1):与 {@link readHead} 同一套句柄级安全打开与「一次 `read(2)`」语义,
  * 只是返回窗口内前 `maxLines` 个完整行。pi / codex 传 1,claude 传 `RSI_ARMED_CLAUDE_MAX_LINES`;`onRead` 对同一路径至多触发一次。
  * 超过 `maxLines` 的行、以及窗口里没有 `\n` 结束的尾段,都不会出现在返回值里(结构性保证)。
  */
@@ -394,8 +394,38 @@ export async function readHeadLines(
   maxLines: number,
   hooks: ReadHeadHooks = {},
 ): Promise<ReadHeadLinesResult> {
-  void [path, maxBytes, maxLines, hooks];
-  throw new Error('not implemented');
+  if (!Number.isInteger(maxBytes) || maxBytes < 1) throw new RangeError('maxBytes 必须是正整数');
+  if (!Number.isInteger(maxLines) || maxLines < 1) throw new RangeError('maxLines 必须是正整数');
+  await hooks.beforeOpen?.();
+  let h: fsp.FileHandle;
+  try {
+    h = await fsp.open(path, fs.constants.O_RDONLY | NOFOLLOW | NONBLOCK);
+  } catch (e) {
+    return openFailure(e);
+  }
+  try {
+    const st = await h.stat();
+    if (st.isFile() && st.nlink === 0) return { kind: 'missing' };
+    const why = checkMeta(st, 'file', undefined);
+    if (why !== undefined) return { kind: 'unsafe', why };
+    const buf = Buffer.allocUnsafe(maxBytes);
+    hooks.onRead?.({ path, offset: 0, length: maxBytes });
+    const { bytesRead } = await h.read(buf, 0, maxBytes, 0);
+    const lines: Buffer[] = [];
+    let start = 0;
+    while (lines.length < maxLines) {
+      const nl = buf.subarray(0, bytesRead).indexOf(0x0a, start);
+      if (nl < 0) break;
+      // 拷出这一行,让整块读缓冲(含后面不返回的字节)随即不可达
+      lines.push(Buffer.from(buf.subarray(start, nl)));
+      start = nl + 1;
+    }
+    return { kind: 'ok', lines, bytesRead };
+  } catch {
+    return { kind: 'unsafe', why: 'io' };
+  } finally {
+    await h.close().catch(() => undefined);
+  }
 }
 
 /** 单行硬上限(UTF-8 字节)。超过的行不拼接正文,readLines 以 TOO_LONG_LINE 占位产出。 */

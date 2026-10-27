@@ -17,11 +17,12 @@ import {
 } from '../contracts/rsi.js';
 import { canonicalJson } from '../io/canonical-json.js';
 import { getRealHome } from '../io/paths.js';
-import { lstat, readFileSafe, statDirSafe } from '../io/read-fs.js';
+import { readFileSafe, statDirSafe } from '../io/read-fs.js';
 import { parseFlags } from './args.js';
 import { attribute, type AttributionProbe } from './attribution.js';
 import { buildRsiPolicy, type RsiConfigOn } from './config.js';
 import { failExit } from './exit.js';
+import { evaluateAgentRoot } from './l0/roots.js';
 import { peekRsiLock, type RsiLockDeps } from './lock-read.js';
 import { emitLines, forbiddenPaths, jsonLines } from './output.js';
 import { readRsiState, type RsiReadData } from './read-state.js';
@@ -154,44 +155,16 @@ const cloudSyncSuspected = (repo: string): boolean =>
       (s) => CLOUD_SEGMENTS.includes(s.toLowerCase()) || s.toLowerCase().startsWith('onedrive'),
     );
 
-const AGENT_ROOTS: Record<RsiAgentId, readonly string[]> = {
-  claude: ['.claude', 'projects'],
-  codex: ['.codex', 'sessions'],
-  pi: ['.pi', 'agent', 'sessions'],
-};
-
-/** R20-2.7 / R20-2.9:会话根链上有符号链接、不是目录 → `not_evaluated`;pi 且 `PI_CODING_AGENT_DIR` 已设同样 */
+/** R20-2.7 / R20-2.9:会话根链上有符号链接、不是目录 → `not_evaluated`;pi 且 `PI_CODING_AGENT_DIR` 已设同样(判定在 `l0/roots.ts`,唯一实现) */
 async function evaluateAgents(config: RsiConfigOn, env: RsiEarlyContext['env']): Promise<Agents> {
   const home = getRealHome(env);
   const out: Agents = [];
   for (const id of config.agents) {
-    if (id === 'pi' && piDirIsSet(env)) {
-      out.push({ id, status: 'not_evaluated', reason: 'pi_dir_override' });
-      continue;
-    }
-    let cur = home;
-    let bad: string | null = null;
-    for (const seg of AGENT_ROOTS[id]) {
-      cur = path.join(cur, seg);
-      let st;
-      try {
-        st = await lstat(cur);
-      } catch {
-        break; // 不存在 / 读不了:没有东西可读,不算问题
-      }
-      if (st.isSymbolicLink()) {
-        bad = 'root_symlink';
-        break;
-      }
-      if (!st.isDirectory()) {
-        bad = 'root_not_dir';
-        break;
-      }
-    }
+    const r = await evaluateAgentRoot(home, id, piDirIsSet(env));
     out.push(
-      bad === null
-        ? { id, status: 'ok', reason: null }
-        : { id, status: 'not_evaluated', reason: bad },
+      r.status === 'not_evaluated'
+        ? { id, status: 'not_evaluated', reason: r.reason }
+        : { id, status: 'ok', reason: null }, // absent:没有东西可读,不算问题
     );
   }
   return out;

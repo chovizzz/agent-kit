@@ -19,12 +19,12 @@
  * 排除比较(R20-4.4):排除项与根路径先 `canonical()`,比较时折叠大小写;`exclude_dirs` = 根路径等于排除路径或位于其下(按 `/` 段边界);
  * `exclude_names` = 任一根路径**canonical 之后**的 basename 等于该名字;排除路径当前存在时,根路径的任一祖先(含自身)的 `(dev, ino)` 与之相同也算命中。
  * 非绝对路径的排除项(`block = exclude_invalid`)不参与目录比较(无法 canonical),名字项照常。
+ * 上面这套比较的**唯一**实现在 `exclude-match.ts`(B4a 抽出);L0 的采集策略(`l0/collect-policy.ts`)调用同一份,这里不再有第二份匹配代码。
  */
-import * as path from 'node:path';
 import type { RsiCounts, RsiProjectIndex } from '../contracts/rsi.js';
 import { lstat, realpath, stat } from '../io/read-fs.js';
-import { canonical } from '../signals/exclude.js';
 import type { RsiConfigOn } from './config.js';
+import { createExcludeMatcher, type ExcludeMatcher } from './exclude-match.js';
 
 export type Attribution = 'P' | 'X' | 'U';
 
@@ -85,15 +85,6 @@ export interface AttributionResult {
   classify(key: string): Attribution;
 }
 
-const fold = (s: string): string => s.toLowerCase();
-const within = (dir: string, child: string): boolean =>
-  child === dir || child.startsWith(dir.endsWith('/') ? dir : `${dir}/`);
-
-interface ExcludeSet {
-  dirs: { folded: string; devIno: { dev: number; ino: number } | null }[];
-  names: string[];
-}
-
 /** 惰性分类器:按 key 现算并在实例内记忆;`attribute()` 对全部条目调用它(批量),即时闸 / taint 只对用到的 key 调用 */
 export interface Attributor {
   indexUsable: boolean;
@@ -110,54 +101,10 @@ export async function createAttributor(input: AttributionInput): Promise<Attribu
   const saltVerified = indexUsable && counts !== null && !saltMismatch;
   const entries = new Map(indexUsable ? index.entries.map((e) => [e.key, e]) : []);
 
-  const canonCache = new Map<string, Promise<string>>();
-  const canon = (p: string): Promise<string> => {
-    let v = canonCache.get(p);
-    if (v === undefined) {
-      v = canonical(p);
-      canonCache.set(p, v);
-    }
-    return v;
-  };
-  const inoCache = new Map<string, Promise<{ dev: number; ino: number } | null>>();
-  const ino = (p: string): Promise<{ dev: number; ino: number } | null> => {
-    let v = inoCache.get(p);
-    if (v === undefined) {
-      v = probe.devIno(p);
-      inoCache.set(p, v);
-    }
-    return v;
-  };
-
-  const ex: ExcludeSet = { dirs: [], names: config.excludeNames.map(fold) };
-  if (entries.size > 0) {
-    for (const d of config.excludeDirs) {
-      if (!d.startsWith('/')) continue;
-      const c = await canon(d);
-      ex.dirs.push({ folded: fold(c), devIno: await ino(c) });
-    }
-  }
-  const anyDevIno = ex.dirs.some((d) => d.devIno !== null);
-
-  const matchesExclude = async (rootPath: string): Promise<boolean> => {
-    const c = await canon(rootPath);
-    const f = fold(c);
-    if (ex.dirs.some((d) => within(d.folded, f))) return true;
-    if (ex.names.includes(fold(path.basename(c)))) return true;
-    if (anyDevIno) {
-      for (let cur = c; ; cur = path.dirname(cur)) {
-        const di = await ino(cur);
-        if (
-          di !== null &&
-          ex.dirs.some((d) => d.devIno?.dev === di.dev && d.devIno.ino === di.ino)
-        ) {
-          return true;
-        }
-        if (path.dirname(cur) === cur) break;
-      }
-    }
-    return false;
-  };
+  // 排除匹配只有一份实现(`exclude-match.ts`);首次需要时才创建(空索引下没有条目要判,不做任何探测)
+  let matcherP: Promise<ExcludeMatcher> | undefined;
+  const matchesExclude = async (rootPath: string): Promise<boolean> =>
+    (await (matcherP ??= createExcludeMatcher(config, probe))).matchesRoot(rootPath);
 
   const memo = new Map<string, Promise<Attribution>>();
   const compute = async (e: RsiProjectIndex['entries'][number]): Promise<Attribution> => {

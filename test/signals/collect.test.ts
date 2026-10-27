@@ -1,5 +1,7 @@
 import * as path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { createIoContext } from '../../src/io/paths.js';
+import { withWriteAudit } from '../helpers/write-audit.js';
 import { collect } from '../../src/signals/collect.js';
 import { createExcludePolicy } from '../../src/signals/exclude.js';
 import { sessionRefFor } from '../../src/signals/ids.js';
@@ -17,6 +19,7 @@ import {
   failClosedSeed,
   homeSnapshot,
   newWork,
+  REPO_ROOT,
   recognizedSeeds,
   runCollect,
   selftestOverlayToml,
@@ -296,6 +299,35 @@ describe('失败路径:fail-closed(退出 3)', () => {
     expect(r.code).toBe(3);
     expect(r.out).toBe('');
     expect(await allFilesText(path.join(w.state, 'signals'))).toEqual(before);
+  });
+});
+
+describe('盐收紧(D5):旧实现 .trim() 接受、新实现拒绝的盐', () => {
+  it('首尾带空格的盐:退出 3,失败发生在任何写入之前(写审计 0 次),盐文件与信号库字节不变,不自动重生成盐', async () => {
+    const w = await newWork('co-trimsalt-');
+    await genClaude(w.io, spec(w));
+    expect((await runCollect(w, ARGS(w, ['--allow-project', 'proj-a']))).code).toBe(0);
+    const saltFile = path.join(w.state, 'salt');
+    const good = (await readText(saltFile)).trim();
+    await writeFile(w.io, saltFile, ` ${good} \n`, { mode: 0o600 });
+    const saltBefore = await readText(saltFile);
+    const sigBefore = await allFilesText(path.join(w.state, 'signals'));
+    const audit = withWriteAudit();
+    const audited: Work = {
+      ...w,
+      io: createIoContext({
+        cwd: REPO_ROOT,
+        env: { KIT_TMP: w.dir, KIT_STATE_DIR: w.state, PATH: '/usr/bin:/bin' },
+        writeAudit: audit.hook,
+      }),
+    };
+    const r = await runCollect(audited, ARGS(w, ['--allow-project', 'proj-a']));
+    expect(r.code).toBe(3);
+    expect(r.out).toBe('');
+    expect(audit.calls).toEqual([]);
+    expect(await readText(saltFile)).toBe(saltBefore);
+    expect(await allFilesText(path.join(w.state, 'signals'))).toEqual(sigBefore);
+    expect(saltBefore.trim()).toBe(good); // 正向前提:旧实现(.trim())会把它当成同一个合法盐
   });
 });
 
