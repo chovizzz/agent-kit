@@ -34,6 +34,18 @@ import {
   PayloadManifestSchema,
   PayloadIntegritySchema,
 } from '../../src/contracts/index.js';
+import {
+  RsiBaseSchema,
+  RsiCountsSchema,
+  RsiCursorSchema,
+  RsiLogLineSchema,
+  RsiPolicySchema,
+  RsiProjectIndexSchema,
+  RsiPurgeJournalSchema,
+  RsiStateSchema,
+  RsiStopMarkSchema,
+  RsiTaintMarkSchema,
+} from '../../src/contracts/rsi.js';
 
 /** docs/contracts.md 里 `schema=<名字>` 对应的 zod schema。新增契约时在这里登记。 */
 export const SCHEMAS: Readonly<Record<string, ZodType>> = {
@@ -70,4 +82,14 @@ export const SCHEMAS: Readonly<Record<string, ZodType>> = {
   UserConfig: UserConfigSchema,
   PayloadManifest: PayloadManifestSchema,
   PayloadIntegrity: PayloadIntegritySchema,
+  RsiBase: RsiBaseSchema,
+  RsiPolicy: RsiPolicySchema,
+  RsiState: RsiStateSchema,
+  RsiProjectIndex: RsiProjectIndexSchema,
+  RsiCounts: RsiCountsSchema,
+  RsiCursor: RsiCursorSchema,
+  RsiPurgeJournal: RsiPurgeJournalSchema,
+  RsiTaintMark: RsiTaintMarkSchema,
+  RsiStopMark: RsiStopMarkSchema,
+  RsiLogLine: RsiLogLineSchema,
 };

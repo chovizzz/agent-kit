@@ -3523,7 +3523,7 @@ S7c-A 给 home-fs 追加三个原语(都走同一套「表内 + planScope + 逐�
 
 条款编号形如 `R20-<小节>.<序号>`,测试与验收脚本按编号引用(`it('R20-1.4 …')`)。本节的数值全部是**不可配置的常量**(写进 `src/contracts/rsi.ts`),P0 的 `[rsi]` 没有任何调节预算、间隔、门槛的键;以后要开放,必须逐项写明字段、上下界与「调严」的方向。
 
-本节的 JSON 是说明性示例,**没有** `example` 标记(对应 schema 尚未登记,带标记会让 `test/contracts/examples.test.ts` 红);R20 schema 落地时改成带标记的合法 / 错误示例并在 `test/contracts/registry.ts` 登记,错误示例要断言「状态、阻断范围、原因码」三者,不只断言 zod 成败。
+本节正文里的 JSON 是说明性示例,**没有** `example` 标记;R20 的十个 schema(`RsiBase`、`RsiPolicy`、`RsiState`、`RsiProjectIndex`、`RsiCounts`、`RsiCursor`、`RsiPurgeJournal`、`RsiTaintMark`、`RsiStopMark`、`RsiLogLine`)的带标记合法 / 错误示例在 §20.14,已在 `test/contracts/registry.ts` 登记(`RsiSnapshot` / `RsiLockDoc` 的示例矩阵在 `test/contracts/rsi-lock-snapshot.test.ts`);错误示例断言「状态、阻断范围、原因码」三者,不只断言 zod 成败。
 
 通用约定(沿用 §17 / §18 / §19):
 
@@ -3708,7 +3708,7 @@ armed:    agent-kit RSI: 待确认,将采集 P 个项目。仅在用户要求时
 #### 20.3.4 `rsi status [--json] [--ack]`(A2)
 
 - R20-3.4.1 只读(`--ack` 除外),不拿锁,按快照协议读(R20-5.6)。退出码:0(含 `off`、停止采集、存在 tainted run——这些是状态,不是错误);2;3(状态文件存在但过不了 schema);4 `RSI_SNAPSHOT_BUSY`。
-- R20-3.4.2 `--json` 键集合固定:`state`、`reason`、`first_armed`(布尔,R20-1.5a)、`overlay`(`absent|ok|invalid`)、`agents`(`[{id, status: ok|not_evaluated, reason}]`)、`counts`(`{projects_collecting, projects_excluded, projects_new, unknown_signals, signals_total, signals_new_7d, clusters_pending, staged_runs, staged_proposals, tainted_runs}`)、`last_tick`(`{at, trigger, outcome, code, duration_ms, files_read, bytes_read}` 或 `null`)、`breaker`(`{state: closed|open|half_open, kind: retryable|safety|null, consecutive_failures, until}`)、`index`(`{status: ok|absent|invalid, entries}`)、`cursor`(`{status: ok|absent|invalid, fingerprint_match, full_scan: {epoch, done, last_completed_at}}`)、`snapshot`(`ok|absent|stale|invalid`)、`confirm`(`{confirmed_at, policy_fp12, invalid_reason}` 或 `null`)、`stop`(`{present, at}`)、`purge`(`{journal: absent|present}`)、`lock`(`free|held|held_over_ttl|stale`)、`tainted`(`[{run_id, reason}]`,`reason` ∈ `exclude|purge`;**只列 id 与原因码**,这是 `RSI_RUN_TAINTED` 拒绝面之外唯一的展示)、`warnings`(`overlay_absent`、`cloud_sync_suspected`、`index_full`、`breaker_open`)。不含路径、key、项目名。
+- R20-3.4.2 `--json` 键集合固定:`state`、`reason`、`first_armed`(布尔,R20-1.5a)、`overlay`(`absent|ok|invalid`)、`agents`(`[{id, status: ok|not_evaluated, reason}]`)、`counts`(`{projects_collecting, projects_excluded, projects_new, unknown_signals, signals_total, signals_new_7d, clusters_pending, staged_runs, staged_proposals, tainted_runs}`)、`last_tick`(`{at, trigger, outcome, code, duration_ms, files_read, bytes_read}` 或 `null`)、`breaker`(`{state: closed|open|half_open, kind: retryable|safety|null, consecutive_failures, until}`)、`index`(`{status: ok|absent|invalid, entries}`)、`cursor`(`{status: ok|absent|invalid, fingerprint_match, full_scan: {epoch, done, last_completed_at}}`)、`snapshot`(`ok|absent|stale|invalid`)、`confirm`(`{confirmed_at, policy_fp12, invalid_reason}` 或 `null`)、`stop`(`{present, at}`)、`purge`(`{journal: absent|present}`)、`lock`(`free|held|held_over_ttl|stale|unsafe`;D7:`rsi/` 或锁文件元数据不合规时是 `unsafe`,不是读不到)、`tainted`(`[{run_id, reason}]`,`reason` ∈ `exclude|purge`;**只列 id 与原因码**,这是 `RSI_RUN_TAINTED` 拒绝面之外唯一的展示)、`warnings`(`overlay_absent`、`cloud_sync_suspected`、`index_full`、`breaker_open`)。不含路径、key、项目名。
 - R20-3.4.3 `--ack`:需要 stdin 与 stdout 为 TTY(否则 `not_tty`),拿锁,把 `state.json` 的 `projects_ack_generation` 设为当前索引 `generation`(「新增项目 n」清零)。
 
 #### 20.3.5 `rsi projects`(A2)
@@ -4109,6 +4109,344 @@ rsi 的锁(仓库 `.state/`)与 update / sync 的锁(HOME 下 `.local/state/agen
 | 26  | 「只能调严」无配置项(低)                                           | 采纳:开头改为「全部常量不可配置」                                                                                                                                                                                    |
 
 评审对 §20.12 的意见:Q1–Q14、Q16–Q17 推荐方向保留;Q15 保留 A 但修正代价;建议补列的 7 项已作为 Q18–Q24 加入(另加 Q25)。本次未做第二轮评审。
+
+### 20.14 R20-A2 B2 实装订正与 schema 示例
+
+**范围**:B2 只落地库(schema、配置分层解析、状态机、rsi 专用 `IoContext`、双闸函数、流式快照接口、生产校验器、home-fs 写审计钩子)。**没有任何 rsi 命令、没有任何现有命令的接线**;现有命令行为逐字节不变。
+
+- **配置与状态**:`src/rsi/config.ts` 的 `loadRsiConfig` 按 R20-2.6 的层序解析(只读、不建目录;L-policy 对 `[rsi]` 与 overlay 的 `exclude_dirs` 取并集后一起校验,`buildRsiPolicy` 不静默丢弃不合规项),`src/rsi/state.ts` 的 `rsiStateOf` 按 R20-1.3 / R20-1.5 现算状态(六条失效判据,收紧排除 / 减少 agent 不使确认失效)。`confirm` 记录比契约列出的字段多一个 `repo_sha256`(`sha256(repo 的 realpath)`):R20-1.5 ③ 要比较 realpath 而记录不存路径原文。`state.json` 里的最近一次结果存为 `last_tick.completed_at`(R20-3.2.2 读它),`rsi status --json` 的 `last_tick.at` 由它映射。
+- **双闸(R20-4.8 / R20-5.1)**:`src/rsi/gate.ts` 的 `lockGate`(要不要拿 `rsi/lock`)与 `privacyGate`(`judge` 含干跑 / `promote` 的即时闸)各自独立。`lockGate == off` **不是**放行:`cfg_*` / `repo_invalid` 让 `lockGate` 为 `off`、`privacyGate` 为 `deny`(退出 3)。`privacyGate` 对 `absent` / `no_section` / `disabled` 为 `legacyAllowed`;`on` 且 `overlay_invalid` / `exclude_invalid` 为 `deny`;`on` 且无 block 为 `enforce`。B2 的闸是库函数:命令是否按序调用(deny / refuse 之前不构造会写盘的上下文、不建 `rsi/`、不拿锁、不恢复快照)由 B3 的接线与顺序测试负责。取舍(opus 咨询已同意 deny;对 R20-4.8 的订正:「`[rsi]` 存在但配置不可用」改为「配置文件存在但无法证明没有 `[rsi]`,或 `[rsi]` 不可用(L-file 除 absent 外的失败、L-toml、L-base、L-repo、L-overlay、L-policy)→ 退出 3」;`disabled` 走旧流程的前提是已通过 L-base;deny 时的输出应带具体原因码与修复提示,B3 实现):文件层失败(`cfg_symlink` / `cfg_owner` / `cfg_perm` / `cfg_not_regular` / `cfg_too_large` / `cfg_unreadable`)与 `cfg_parse` 读不到 `[rsi]` 段,无法证明「没有 `[rsi]`」,按 deny 处理。
+- **D1 修订稿(状态目录关系)**:rsi 状态树固定为 `<[rsi] repo>/.state`(R20-2.5);现有写入方用自己的 `ctx.io.stateDir`。`lockGate` 用**不建目录**的路径解析(最长已存在前缀的 `realpath` + 余下片段,并记该前缀各级祖先的 `(dev, ino)`):互不相同且互不为祖先 / 后代 → 独立,现有命令不拿锁、行为不变(两棵树有**共同的已存在前缀实体**时,即使路径字符串写法不同,只比较余下片段:逐段相等 → 相同,父子或忽略大小写后相同 / 前缀 → 无法证明,兄弟 → 独立);路径相同或 `(dev, ino)` 相同 → 拿锁;**无法证明**(悬空符号链接 / 循环 / 权限不足 / 中间组件不是目录 / 末端不是目录、两次解析结果不一致、父子重叠、仅忽略大小写后相同或重叠、平台不支持)→ 退出 3 `RSI_FAIL_CLOSED reason=state_dir_unsafe`,不写任何东西。这是对锁矩阵(R20-5.1)的显式订正:**启用 rsi 时各写入方共同持锁,但状态树与 rsi 状态树确定独立者除外**。残余:①解析与后续按字符串路径建目录 / 建锁之间有窗口,靠 `rsiDir()` 自己的复核缩小,不消除;②「前缀不是同一实体 → 独立」假定祖先关系会出现在 `realpath` 路径或 `(dev, ino)` 祖先链上,Linux 的 bind mount 可以隐藏这种关系(`/data/state` 与挂到 `/alias/repo` 的 `/data/state/repo`),单靠 `realpath` + `stat` 判不出;要消除就得对任何两个不同仓库都 refuse,会破坏「独立树不拿锁、行为不变」,所以作为已知残余记录,不弱化也不兜底。
+- **D3**:`SIGNALS_NOT_RUN`、`PROMOTE_NOT_RUN`、`REFLECT_NOT_RUN`、`JUDGE_NOT_RUN` 的 `reason=locked`(退出 4,零调用零写入)只登记码(`src/contracts/rsi.ts` 的 `RSI_LOCKED_NOT_RUN_CODES`),B2 不接线。**D7**:`rsi status` 的 `lock` 枚举追加 `unsafe`,`peekRsiLock` 的返回值相应由 `unknown` 改为 `unsafe`。**D8**:缺 `O_NOFOLLOW` / `O_NONBLOCK` / `O_DIRECTORY` 或 `process.getuid` 的平台,配置 `on` 时 `lockGate` 为 `refuse`(退出 3 `state_dir_unsafe`),配置 `off` 时现有命令把闸门当 `off`。
+- **rsi 专用 `IoContext`(§20.9 第 17、18 条)**:`src/rsi/io.ts` 的 `createRsiIoContext` 先复制 env 并剔除 `KIT_STATE_DIR` / `KIT_WRITE_ROOTS`(`KIT_TMP` 已设时保留),再以 `[rsi] repo` 为根构造——选择发生在通用路径校验之前,一个对 rsi 无效的 `KIT_STATE_DIR` 不影响 rsi 入口。给了 `base` 时经 `deriveIoContext` 派生(保留 `writeAudit`),所有与仓库有关的字段取新值。`--root` 与 `[rsi] repo` 的 `realpath` 不同 → `RSI_USAGE reason=root_mismatch`。真实 `main()` 路由(rsi 入口在 `createIoContext` 之前选择专用构造)随 B3 的命令分发落地。
+- **流式快照(R20-5.6 订正)**:`openStreamSafe`(`src/io/read-fs.ts`)一次安全打开、同一句柄读完;月文件的提交与恢复对**原始**字节块同时算 sha256 / 字节数并喂 JSONL 校验引擎(`src/rsi/jsonl-stream.ts`:按 `\n` 字节切行、整行 fatal UTF-8 解码、行尾 `\r` 留给 `JSON.parse`、空行 / 非法 UTF-8 / 非 JSON / 超长行 / 缺尾换行均失败)。**月文件的 256MiB 单文件载入上限取消**;固定文件(四个)仍整份载入并保留 `RSI_DATA_FILE_MAX_BYTES` 上限;`readVerified` 仍整份载入,只应传固定文件。`SnapshotValidator` 改为 `{ fixed(name, bytes | null), record(name, value) }` 且 `recoverSnapshot` 的校验器**必填**(去掉缺省结构校验;`structuralValidator` 只留在测试里)。新增只读的 `inspectSnapshot`(不建目录、不删 `snapshot.json.tmp`、不写清单,给 D2 的「拿锁后无副作用复检」用),`recoverSnapshot` 与它共用评估核心再写。快路径语义:`consistent` 时固定文件仍整体校验(月文件与清单哈希一致即信任已提交内容,残余:提交本身不校验月文件内容);清单缺失(`absent`)只说明从未提交过,**不说明目录为空**——磁盘上已有的全部数据(固定文件、月文件)先做完整校验,有损坏就抛,没有才返回 `absent`;「必需文件」只对**清单列出的**文件成立(清单缺失时没有预期文件集合)。
+- **生产校验器**:`src/rsi/validators.ts` 的 `productionSnapshotValidator`:`state.json` / `cursor.json` / `counts.json` 过各自 schema(`state.json` 与 `parseRsiStateDoc` 同一判定:只有 `confirm` 单独不合规是**状态**——退回 `armed`、原因 `schema`、可重新确认,快照校验放行;整份不合规才是损坏 `state_invalid`。否则恢复会先于 `rsi confirm` 抛错,用户没有重新确认的入口。对 R20-5.6 的订正:「任一文件过不了 schema = 损坏」的例外是 `state.json` 仅 `confirm` 过不了 `RsiConfirmSchema`、置空后整份合法;持锁写入方回写 `state.json` 时**必须原样保留**该字段(不得归一成 `null`,否则失效后的 `armed` 会被当成首次 `armed`,与 R20-1.5a 矛盾),只有 `rsi confirm` 能覆盖它;`parseRsiStateDoc` 是 `state.json` 的唯一解析入口。整份过不了 schema 时没有自动恢复入口:`rsi status` 退出 3,须人工处理 `state.json`);`projects.json` 的内容问题**不阻断**(D4,索引另算 `invalid`;链接 / 硬链接 / 权限 / 属主错误仍在读取阶段阻断);缺失仅 `projects.json` 放行(D5),其余固定文件与全部月文件缺失 = 损坏。
+- **home-fs 写审计**:`HomeFsContext` 可选 `writeAudit`(类型同 safe-fs 的 `WriteAudit`),每个导出写函数入口第一行、任何校验之前记一次 `(home.<函数名>, path.resolve(home, rel))`;双路径函数先记 `<op>.from` 再记目标;`tightenKitStateDir` 只在 `apply=true` 时记。`ApplyEnv` / `InstallEnv` 可带 `writeAudit` 透传,`sync` / `update` 命令与 update worker 从 `ctx.io.writeAudit` 取。它记录**写尝试**,不替代任何安全检查。未设置时键不存在。
+
+**示例**(带标记,`test/contracts/examples.test.ts` 逐条校验)。每个错误示例后面标出「状态 / 阻断范围 / 原因码」:
+
+`RsiBase` 合法:
+
+<!-- example:valid schema=RsiBase -->
+
+```json
+{
+  "enabled": true,
+  "repo": "/home/u/agent-kit",
+  "agents": ["claude", "pi"],
+  "exclude_dirs": ["/home/u/clients"],
+  "exclude_names": ["client-x"]
+}
+```
+
+`RsiBase` 错误:`agents` 含 `kimi`。状态 `off`、阻断范围整个 rsi(judge / promote 的即时闸 fail-closed)、原因码 `cfg_schema`:
+
+<!-- example:invalid schema=RsiBase -->
+
+```json
+{ "enabled": true, "repo": "/home/u/agent-kit", "agents": ["kimi"] }
+```
+
+`RsiPolicy` 合法:
+
+<!-- example:valid schema=RsiPolicy -->
+
+```json
+{
+  "schema_version": 1,
+  "agents": ["claude", "pi"],
+  "exclude_hashes": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+  "overlay_sha256": null,
+  "kit_major": 0
+}
+```
+
+`RsiPolicy` 错误:`agents` 未升序(同一策略会得到两个指纹)。状态 = 确认记录无法比对、阻断范围 = 退回 `armed`、原因码 = `confirm` 的 `schema` 失效:
+
+<!-- example:invalid schema=RsiPolicy -->
+
+```json
+{
+  "schema_version": 1,
+  "agents": ["pi", "claude"],
+  "exclude_hashes": [],
+  "overlay_sha256": null,
+  "kit_major": 0
+}
+```
+
+`RsiState` 合法(已确认,熔断关闭):
+
+<!-- example:valid schema=RsiState -->
+
+```json
+{
+  "schema_version": 1,
+  "confirm": {
+    "confirmed_at": "2026-10-24T08:00:00.000Z",
+    "kit_major": 0,
+    "agents": ["claude", "codex", "pi"],
+    "exclude_hashes": [],
+    "repo_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "repo_dev_ino": { "dev": 16777230, "ino": 1234567 },
+    "overlay_sha256": null,
+    "policy_fp": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "baseline_pending": true
+  },
+  "projects_ack_generation": 0,
+  "attempt": null,
+  "last_tick": null,
+  "consecutive_failures": 0,
+  "breaker": null
+}
+```
+
+`RsiState` 错误:`projects_ack_generation` 为负。状态 = `state.json` 不可读,阻断范围 = 自动路径空操作、`rsi status` 退出 3,原因码 `state_invalid`:
+
+<!-- example:invalid schema=RsiState -->
+
+```json
+{
+  "schema_version": 1,
+  "confirm": null,
+  "projects_ack_generation": -1,
+  "attempt": null,
+  "last_tick": null,
+  "consecutive_failures": 0,
+  "breaker": null
+}
+```
+
+`RsiProjectIndex` 合法:
+
+<!-- example:valid schema=RsiProjectIndex -->
+
+```json
+{
+  "schema_version": 1,
+  "salt_fp": "3f2a9c1d7e4b",
+  "generation": 42,
+  "entries": [
+    {
+      "key": "p_0123456789abcdef",
+      "roots": [
+        {
+          "path": "/home/u/work/proj",
+          "dev": 16777230,
+          "ino": 1234567,
+          "first_seen": "2026-10-23",
+          "last_seen": "2026-10-24"
+        }
+      ],
+      "sessions": 3,
+      "signals": 17,
+      "first_indexed_generation": 40
+    }
+  ]
+}
+```
+
+`RsiProjectIndex` 错误:`roots` 为空。状态 = 索引不可用,阻断范围 = 继续采集但不给摘要、所有输出把信号计入 U(索引不被覆盖),原因码 `index_invalid`:
+
+<!-- example:invalid schema=RsiProjectIndex -->
+
+```json
+{
+  "schema_version": 1,
+  "salt_fp": "3f2a9c1d7e4b",
+  "generation": 1,
+  "entries": [
+    {
+      "key": "p_0123456789abcdef",
+      "roots": [],
+      "sessions": 0,
+      "signals": 0,
+      "first_indexed_generation": 0
+    }
+  ]
+}
+```
+
+`RsiCounts` 合法:
+
+<!-- example:valid schema=RsiCounts -->
+
+```json
+{
+  "schema_version": 1,
+  "salt_fp": "3f2a9c1d7e4b",
+  "generation": 7,
+  "computed_at": "2026-10-24T08:00:00.000Z",
+  "cluster_min": 3,
+  "per_key": {
+    "p_0123456789abcdef": {
+      "signals_total": 17,
+      "sessions": 3,
+      "signals_by_day": { "2026-10-24": 5 }
+    }
+  },
+  "clusters": [{ "cluster_id": "c1", "evidence_by_key": { "p_0123456789abcdef": 4, "?": 1 } }],
+  "staged": [
+    { "run_id": "run-1", "proposals": 2, "evidence_keys": ["p_0123456789abcdef"], "tainted": false }
+  ],
+  "unknown_keys_signals": 0
+}
+```
+
+`RsiCounts` 错误:`evidence_by_key` 的键不是 key 也不是 `?`。状态 = 计数投影损坏,阻断范围 = 持锁写入方安全阻断、hint 空串,原因码 `counts_invalid`:
+
+<!-- example:invalid schema=RsiCounts -->
+
+```json
+{
+  "schema_version": 1,
+  "salt_fp": "3f2a9c1d7e4b",
+  "generation": 7,
+  "computed_at": "2026-10-24T08:00:00.000Z",
+  "cluster_min": 3,
+  "per_key": {},
+  "clusters": [{ "cluster_id": "c1", "evidence_by_key": { "not-a-key": 4 } }],
+  "staged": [],
+  "unknown_keys_signals": 0
+}
+```
+
+`RsiCursor` 合法:
+
+<!-- example:valid schema=RsiCursor -->
+
+```json
+{
+  "schema_version": 1,
+  "fingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "full_scan": {
+    "epoch": 2,
+    "started_at": "2026-10-20T00:00:00.000Z",
+    "done": true,
+    "last_completed_at": "2026-10-21T00:00:00.000Z"
+  },
+  "files": {
+    "s_0123456789abcdef": {
+      "agent": "claude",
+      "size": 1024,
+      "mtime_ms": 1790000000000.5,
+      "dev": 16777230,
+      "ino": 99,
+      "project_key": "p_0123456789abcdef",
+      "epoch": 2,
+      "status": "ok"
+    }
+  }
+}
+```
+
+`RsiCursor` 错误:文件 `status` 不在枚举内。状态 = cursor 损坏,阻断范围 = 持锁写入方安全阻断,原因码 `cursor_invalid`:
+
+<!-- example:invalid schema=RsiCursor -->
+
+```json
+{
+  "schema_version": 1,
+  "fingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "full_scan": { "epoch": 0, "started_at": null, "done": false, "last_completed_at": null },
+  "files": {
+    "s_0123456789abcdef": {
+      "agent": "claude",
+      "size": 1,
+      "mtime_ms": 1,
+      "dev": 1,
+      "ino": 1,
+      "project_key": null,
+      "epoch": 0,
+      "status": "weird"
+    }
+  }
+}
+```
+
+`RsiPurgeJournal` 合法:
+
+<!-- example:valid schema=RsiPurgeJournal -->
+
+```json
+{
+  "schema_version": 1,
+  "created_at": "2026-10-24T08:00:00.000Z",
+  "phase": "planned",
+  "keys": ["p_0123456789abcdef"],
+  "taint_targets": { "runs": ["run-1"], "promotes": [] }
+}
+```
+
+`RsiPurgeJournal` 错误:`phase` 不在五个阶段内。状态 = journal 不可读,阻断范围 = 读暂存区的命令退出 3、续做失败,原因码 `journal_invalid`:
+
+<!-- example:invalid schema=RsiPurgeJournal -->
+
+```json
+{
+  "schema_version": 1,
+  "created_at": "2026-10-24T08:00:00.000Z",
+  "phase": "half",
+  "keys": ["p_0123456789abcdef"],
+  "taint_targets": { "runs": [], "promotes": [] }
+}
+```
+
+`RsiTaintMark` 合法:
+
+<!-- example:valid schema=RsiTaintMark -->
+
+```json
+{ "reason": "exclude", "at": "2026-10-24T08:00:00.000Z" }
+```
+
+`RsiTaintMark` 错误:`reason` 不是 `exclude|purge`。状态 = 标记不可读,阻断范围 = 读路径按 tainted 拒绝(标记存在即拒,内容不合规不降级),原因码 `RSI_RUN_TAINTED`:
+
+<!-- example:invalid schema=RsiTaintMark -->
+
+```json
+{ "reason": "manual", "at": "2026-10-24T08:00:00.000Z" }
+```
+
+`RsiStopMark` 合法:
+
+<!-- example:valid schema=RsiStopMark -->
+
+```json
+{ "at": "2026-10-24T08:00:00.000Z", "by": "user" }
+```
+
+`RsiStopMark` 错误:`by` 不是 `user`。状态 = 标记内容不合规,阻断范围 = 仍按 `stopped` 处理(标记存在即停,不因内容错误恢复采集),原因码无(不是错误码):
+
+<!-- example:invalid schema=RsiStopMark -->
+
+```json
+{ "at": "2026-10-24T08:00:00.000Z", "by": "worker" }
+```
+
+`RsiLogLine` 合法:
+
+<!-- example:valid schema=RsiLogLine -->
+
+```json
+{
+  "at": "2026-10-24T08:00:00.000Z",
+  "trigger": "poke",
+  "agent": "claude",
+  "action": "spawned",
+  "code": "ok",
+  "counts": { "files_read": 0 },
+  "duration_ms": 12
+}
+```
+
+`RsiLogLine` 错误:`code` 含路径分隔符(日志不得带路径)。状态 = 该行不可写入,阻断范围 = 该行丢弃(日志不是安全依据),原因码无:
+
+<!-- example:invalid schema=RsiLogLine -->
+
+```json
+{ "at": "2026-10-24T08:00:00.000Z", "trigger": "tick", "action": "failed", "code": "/home/u/x" }
+```
 
 ## 21. 自主 RSI 契约(R21,v3.1,契约先行;V1–V6 实装后订正)
 

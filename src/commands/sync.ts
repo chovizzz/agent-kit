@@ -286,6 +286,7 @@ export function createSyncCommand(deps: SyncCommandDeps = {}): CommandDef {
           tmpDir: ctx.io.tmpDir,
           env,
           deps,
+          ...(ctx.io.writeAudit !== undefined ? { writeAudit: ctx.io.writeAudit } : {}),
         };
         if (await stateDirUnsafe(homeReal)) {
           throw new Exit(ExitCode.FAIL_CLOSED, 'FAIL_CLOSED', 'SYNC_PATH_SYMLINK');

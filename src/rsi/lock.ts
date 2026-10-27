@@ -23,6 +23,7 @@ import {
   RSI_FILE_MODE,
   RSI_LOCK_MAX_BYTES,
   RSI_LOCK_PARTIAL_GRACE_MS,
+  RSI_LOCK_STATES,
   RSI_LOCK_TTL_MS,
   RsiLockDocSchema,
   type RsiFailClosedReason,
@@ -292,19 +293,19 @@ export async function withRsiLock<T>(
   }
 }
 
-/** 只读查看当前锁状态(`rsi status` 的 `lock:` 行用;不拿锁、不写) */
+/** 只读查看当前锁状态(`rsi status` 的 `lock:` 行用;不拿锁、不写)。D7:路径 / 锁文件不安全返回 `unsafe`(原 `unknown`) */
 export async function peekRsiLock(
   io: IoContext,
   deps: RsiLockDeps = {},
-): Promise<'free' | 'held' | 'held_over_ttl' | 'stale' | 'unknown'> {
+): Promise<(typeof RSI_LOCK_STATES)[number]> {
   const alive = deps.isAlive ?? defaultAlive;
   const now = deps.now ?? ((): Date => new Date());
   const d = await rsiDirReadonly(io, { beforeOpen: deps.beforeRead });
   if (d.kind === 'missing') return 'free';
-  if (d.kind === 'unsafe') return 'unknown';
+  if (d.kind === 'unsafe') return 'unsafe';
   const cur = await readLock(path.join(d.dir, 'lock'), deps.beforeRead);
   if (cur.state === 'absent') return 'free';
-  if (cur.state === 'unsafe') return 'unknown';
+  if (cur.state === 'unsafe') return 'unsafe';
   if (cur.state === 'bad') {
     return now().getTime() - cur.mtimeMs < RSI_LOCK_PARTIAL_GRACE_MS ? 'held' : 'stale';
   }
