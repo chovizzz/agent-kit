@@ -27,7 +27,7 @@ import { BLOCK_CHECKED_ROLES, KNOWN_BLOCK_TYPES, KNOWN_ENTRY_TYPES, KNOWN_ROLES 
 import { PiTree } from './tree.js';
 
 /** `--<路径>--/<文件>.jsonl`:深度恰为 1(§2.3.1);同目录树下的非 JSONL 文件不收 */
-const SESSION_FILE = /^--[^/]+--\/[^/]+\.jsonl$/;
+export const SESSION_FILE = /^--[^/]+--\/[^/]+\.jsonl$/;
 
 /**
  * 系统消息 `sections.project_context` 里的加载文件标记。

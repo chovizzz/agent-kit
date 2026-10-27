@@ -129,7 +129,8 @@ describe('稳定码枚举与 docs/contracts.md §20.3 总表一致(R20-3.0)', as
     expect([...RSI_NOT_RUN_REASONS].sort()).toEqual(rowCodes('`RSI_NOT_RUN reason=`').sort());
   });
   it('RSI_FAIL_CLOSED reason', () => {
-    expect([...RSI_FAIL_CLOSED_REASONS].sort()).toEqual(
+    // `staging_unsafe_entry`(B3c-7)已进枚举、文档总表待并入:差集由 test/contracts/rsi-codes-table.test.ts 的待并入清单精确管理
+    expect([...RSI_FAIL_CLOSED_REASONS].filter((c) => c !== 'staging_unsafe_entry').sort()).toEqual(
       rowCodes('`RSI_FAIL_CLOSED reason=`').sort(),
     );
   });
