@@ -29,13 +29,7 @@ import {
   type TaintScanOutcome,
   type TaintScanSource,
 } from '../types.js';
-import {
-  buildExcludeMatcher,
-  createClassifier,
-  loadSigKeys,
-  readCountsSaltFp,
-  readIndex,
-} from './attribution.js';
+import { classifierFor, loadSigKeys, readIndex } from './attribution.js';
 import { assertLockBelongs } from './lock-scope.js';
 import {
   RsiStagingBlockedError,
@@ -322,11 +316,7 @@ async function findExcludedRuns(
   if (cfg.block !== null) throw new RsiFailClosedError(cfg.block);
   const index = await readIndex(ctx.io);
   if (index.kind !== 'ok') return [];
-  const classify = createClassifier({
-    index,
-    countsSaltFp: await readCountsSaltFp(ctx.io),
-    matcher: await buildExcludeMatcher(cfg),
-  });
+  const classify = await classifierFor(ctx.io, cfg);
   const evidence = new Map<string, Set<string>>();
   const needed = new Set<string>();
   for (const id of await listStaging(ctx.io, 'run')) {

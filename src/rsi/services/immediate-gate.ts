@@ -26,13 +26,7 @@ import {
   type JudgeGateCallbacks,
   type RsiServiceCtx,
 } from '../types.js';
-import {
-  buildExcludeMatcher,
-  createClassifier,
-  loadSigKeys,
-  readCountsSaltFp,
-  readIndex,
-} from './attribution.js';
+import { classifierFor, loadSigKeys } from './attribution.js';
 import { readMark, readRunEvidence } from './staging.js';
 import { detectPurgeJournal } from './taint.js';
 
@@ -89,11 +83,7 @@ async function evaluate(
   const ev = await readRunEvidence(ctx.io, scope.runId);
   if (!ev.exists) return { kind: 'allow' };
   const keys = await loadSigKeys(ctx.io, ev.sigs);
-  const classify = createClassifier({
-    index: await readIndex(ctx.io),
-    countsSaltFp: await readCountsSaltFp(ctx.io),
-    matcher: await buildExcludeMatcher(cfg),
-  });
+  const classify = await classifierFor(ctx.io, cfg);
   let unknown = ev.unknown;
   for (const sig of [...ev.sigs].sort()) {
     const key = keys.get(sig);

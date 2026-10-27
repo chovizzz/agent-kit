@@ -45,6 +45,7 @@ import { loadRsiConfig } from '../rsi/config.js';
 import type { RsiConfig } from '../rsi/config.js';
 import { RsiLockError } from '../rsi/lock.js';
 import type { RsiLockHandle } from '../rsi/lock.js';
+import { assertNoPurgeInProgress } from '../rsi/services/taint.js';
 import { RsiFailClosedError } from '../rsi/types.js';
 import { withRsiLockIfGated } from '../rsi/with-lock.js';
 import type { WithRsiLockIfGatedOptions } from '../rsi/with-lock.js';
@@ -87,14 +88,11 @@ export interface RsiLockWiring {
   /** 透传给 `withRsiLockIfGated`(`gate` / `lock`:时钟、pid、isAlive 等) */
   lockDeps?: WithRsiLockIfGatedOptions;
   /**
-   * 锁内、会新建暂存内容的写入方先调(B3c 的 `assertNoPurgeInProgress(ctx)`:purge 进行中抛 `RsiFailClosedError('purge_incomplete')`)。
-   * **本地桩**:缺省什么都不做;B3c 合并后在接线处换成真实实现(`src/rsi/services/taint.ts`)。只在闸门判 lock(拿到句柄)时调用。
+   * 锁内、会新建暂存内容的写入方先调:purge 进行中抛 `RsiFailClosedError('purge_incomplete')`(journal 不合规 → `journal_invalid`)。
+   * 缺省 = `src/rsi/services/taint.ts` 的 `assertNoPurgeInProgress`(只需 `{ io }`);测试可注入替身。只在闸门判 lock(拿到句柄)时调用。
    */
   assertNoPurge?: (ctx: { io: CommandContext['io'] }) => Promise<void>;
 }
-
-/** 本地桩:B3c 合并前不检查 purge journal(见 {@link RsiLockWiring.assertNoPurge}) */
-export const assertNoPurgeStub = async (): Promise<void> => {};
 
 /**
  * 写入方拿 `rsi/lock`:`lockGate` 判 off(没有 `[rsi]` / 未启用 / 状态树确定独立)→ `fn(null)`,不建 `.state/rsi/`、不写任何东西,
@@ -796,8 +794,8 @@ export function createReflectCommand(deps: ReflectCommandDeps = {}): CommandDef 
         // (内层 withLlmLock 在 runReflect 的后端里,不变)。干跑不读 rsi 配置、不拿锁。
         const loss: LockLossState = { lost: undefined };
         const execute = async (lock: RsiLockHandle | null): Promise<number> => {
-          // 锁内、建任何暂存内容之前:purge 进行中拒绝(B3c 导出 assertNoPurgeInProgress;合并前是本地桩)
-          if (lock !== null) await (deps.assertNoPurge ?? assertNoPurgeStub)({ io: ctx.io });
+          // 锁内、建任何暂存内容之前:purge 进行中拒绝(assertNoPurgeInProgress)
+          if (lock !== null) await (deps.assertNoPurge ?? assertNoPurgeInProgress)({ io: ctx.io });
           const now = clock();
           let backend: LlmBackend | undefined;
           if (live) {

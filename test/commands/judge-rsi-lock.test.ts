@@ -23,7 +23,13 @@ import {
   writeProposal,
 } from '../judge/helpers.js';
 import type { Stubs, Work } from '../judge/helpers.js';
-import { aliasRsiState, lockFileOf, onConfig, startHolder } from './rsi-lock-world.js';
+import {
+  aliasRsiState,
+  lockFileOf,
+  onConfig,
+  startHolder,
+  writePurgeJournal,
+} from './rsi-lock-world.js';
 
 const LIVE = ['--run', RUN_ID, '--run-llm', '--allow-egress'];
 const OFF: RsiConfig = { status: 'off', reason: 'absent' };
@@ -180,8 +186,34 @@ describe('judge --run-llm × rsi/lock', () => {
   });
 });
 
-describe('judge --run-llm × assertNoPurge(本地桩,待 B3c 合并后接真实实现)', () => {
-  it('purge 进行中:退出 3 purge_incomplete,零后端构造、零调用、提案不变;该检查在锁内', async () => {
+describe('judge --run-llm × assertNoPurge(缺省 = taint.ts 真实实现)', () => {
+  it('真 purge journal 存在:退出 3 purge_incomplete,零后端构造、零调用、提案不变、journal 原样', async () => {
+    const r = await rig();
+    const jf = await writePurgeJournal(r.w.io, r.w.state);
+    const jBefore = await readText(jf);
+    const before = await snapshot(r.w.runDir);
+    const { ctx, err } = cmdCtx(r.w, LIVE);
+    expect(await r.cmd.run(ctx)).toBe(ExitCode.FAIL_CLOSED);
+    expect(err.join('')).toBe('RSI_FAIL_CLOSED reason=purge_incomplete\n');
+    expect(r.factory.n).toBe(0);
+    expect(r.s.totalCalls()).toBe(0);
+    expect(await snapshot(r.w.runDir)).toEqual(before);
+    expect(await readText(jf)).toBe(jBefore);
+  });
+
+  it('journal 不合规 → journal_invalid;删除后同一命令放行(对照:journal absent 不影响)', async () => {
+    const r = await rig();
+    const jf = await writePurgeJournal(r.w.io, r.w.state, '{broken');
+    const { ctx, err } = cmdCtx(r.w, LIVE);
+    expect(await r.cmd.run(ctx)).toBe(ExitCode.FAIL_CLOSED);
+    expect(err.join('')).toBe('RSI_FAIL_CLOSED reason=journal_invalid\n');
+    expect(r.s.totalCalls()).toBe(0);
+    await remove(r.w.io, jf);
+    const again = cmdCtx(r.w, LIVE);
+    expect(await r.cmd.run(again.ctx)).toBe(ExitCode.OK);
+  });
+
+  it('assertNoPurge 在锁内被调用(注入替身,验证调用点仍在拿锁之后、改提案之前)', async () => {
     const seen: boolean[] = [];
     const ref: { lock: string } = { lock: '' };
     const r = await rig({
@@ -193,26 +225,15 @@ describe('judge --run-llm × assertNoPurge(本地桩,待 B3c 合并后接真实�
       },
     });
     ref.lock = r.lockFile;
-    const before = await snapshot(r.w.runDir);
-    const { ctx, err } = cmdCtx(r.w, LIVE);
+    const { ctx } = cmdCtx(r.w, LIVE);
     expect(await r.cmd.run(ctx)).toBe(ExitCode.FAIL_CLOSED);
-    expect(err.join('')).toBe('RSI_FAIL_CLOSED reason=purge_incomplete\n');
     expect(seen).toEqual([true]);
     expect(r.factory.n).toBe(0);
-    expect(r.s.totalCalls()).toBe(0);
-    expect(await snapshot(r.w.runDir)).toEqual(before);
   });
 
-  it('闸门 off 时不调 assertNoPurge', async () => {
-    const r = await rig({
-      config: OFF,
-      alias: false,
-      deps: {
-        assertNoPurge: async () => {
-          throw new Error('must not be called when gate is off');
-        },
-      },
-    });
+  it('闸门 off:即使有 journal 也不检查、不受影响', async () => {
+    const r = await rig({ config: OFF, alias: false });
+    await writePurgeJournal(r.w.io, r.w.state);
     const { ctx } = cmdCtx(r.w, LIVE);
     expect(await r.cmd.run(ctx)).toBe(ExitCode.OK);
   });

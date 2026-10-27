@@ -23,7 +23,13 @@ import {
 } from '../fixtures/reflect/world.js';
 import { EGRESS_OVERLAY, ctxFor, newR5World } from './r5-world.js';
 import type { R5World } from './r5-world.js';
-import { aliasRsiState, lockFileOf, onConfig, startHolder } from './rsi-lock-world.js';
+import {
+  aliasRsiState,
+  lockFileOf,
+  onConfig,
+  startHolder,
+  writePurgeJournal,
+} from './rsi-lock-world.js';
 
 const CLOCK = (): Date => new Date('2026-10-12T08:00:00Z');
 const LIVE = ['--run-llm', '--allow-egress', '--owner', '@tester'];
@@ -248,7 +254,36 @@ describe('reflect --run-llm × rsi/lock', () => {
     expect(await runDirs(r.w)).toEqual([]);
   });
 
-  it('purge 进行中(注入的 assertNoPurge 抛 purge_incomplete):退出 3,零后端构造、零写入;该检查在锁内被调用', async () => {
+  it('真 purge journal 存在(缺省 assertNoPurge = taint.ts 真实实现):退出 3 purge_incomplete,零后端构造、零 LLM 调用、零暂存写入;journal 原样保留', async () => {
+    const r = await rig();
+    const jf = await writePurgeJournal(r.w.io, r.w.state);
+    const before = await readText(jf);
+    const { ctx, err, out } = ctxFor(r.w, LIVE);
+    expect(await r.cmd.run(ctx)).toBe(ExitCode.FAIL_CLOSED);
+    expect(err.join('')).toBe('RSI_FAIL_CLOSED reason=purge_incomplete\n');
+    expect(out).toEqual([]);
+    expect(r.factory.n).toBe(0);
+    expect(r.stub.calls).toBe(0);
+    expect(await runDirs(r.w)).toEqual([]);
+    expect(await readText(jf)).toBe(before);
+    expect(await exists(r.lockFile)).toBe(false); // 命令返回后锁已释放
+  });
+
+  it('journal 不合规 → journal_invalid(退出 3,同样零后端 / 零暂存);journal 删除后同一命令正常跑完(对照)', async () => {
+    const r = await rig();
+    const jf = await writePurgeJournal(r.w.io, r.w.state, '{broken');
+    const { ctx, err } = ctxFor(r.w, LIVE);
+    expect(await r.cmd.run(ctx)).toBe(ExitCode.FAIL_CLOSED);
+    expect(err.join('')).toBe('RSI_FAIL_CLOSED reason=journal_invalid\n');
+    expect(r.factory.n).toBe(0);
+    expect(await runDirs(r.w)).toEqual([]);
+    await remove(r.w.io, jf);
+    const again = ctxFor(r.w, LIVE);
+    expect(await r.cmd.run(again.ctx)).toBe(ExitCode.OK);
+    expect(r.factory.n).toBe(1);
+  });
+
+  it('assertNoPurge 在锁内被调用(注入替身,验证调用点仍在拿锁之后、建后端之前)', async () => {
     const seen: boolean[] = [];
     let lockPath = '';
     const r = await rig({
@@ -260,25 +295,15 @@ describe('reflect --run-llm × rsi/lock', () => {
       },
     });
     lockPath = r.lockFile;
-    const { ctx, err } = ctxFor(r.w, LIVE);
+    const { ctx } = ctxFor(r.w, LIVE);
     expect(await r.cmd.run(ctx)).toBe(ExitCode.FAIL_CLOSED);
-    expect(err.join('')).toBe('RSI_FAIL_CLOSED reason=purge_incomplete\n');
     expect(seen).toEqual([true]);
     expect(r.factory.n).toBe(0);
-    expect(r.stub.calls).toBe(0);
-    expect(await runDirs(r.w)).toEqual([]);
   });
 
-  it('闸门 off 时不调 assertNoPurge', async () => {
-    const r = await rig({
-      config: OFF,
-      alias: false,
-      deps: {
-        assertNoPurge: async () => {
-          throw new Error('must not be called when gate is off');
-        },
-      },
-    });
+  it('闸门 off:即使有 journal 也不检查、不受影响(未启用 rsi 的用户行为不变,不建 rsi/)', async () => {
+    const r = await rig({ config: OFF, alias: false });
+    await writePurgeJournal(r.w.io, r.w.state);
     const { ctx } = ctxFor(r.w, LIVE);
     expect(await r.cmd.run(ctx)).toBe(ExitCode.OK);
   });

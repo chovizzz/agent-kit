@@ -42,6 +42,7 @@ import {
   projPath,
   promoteDirOf,
   put,
+  rm,
   runDirOf,
   setRsiToml,
   stagePromote,
@@ -101,6 +102,19 @@ async function expectTaintedClean(s: Svc, kind: 'reflect' | 'promote', id: strin
 }
 
 describe('taintNewlyExcluded(exclude)', () => {
+  it('统一口径:盐不符 / counts 缺失时 X 仍然 taint(X 与盐无关);不命中的 run 不被 taint(U 不是 X)', async () => {
+    for (const how of ['salt-mismatch', 'counts-missing'] as const) {
+      const s = await world(`taint-salt-${how}-`);
+      if (how === 'salt-mismatch') await writeCountsRaw(s, countsDoc('ffffffffffff'));
+      else await rm(s, path.join(s.rsi, 'counts.json'));
+      const okBefore = await allText(runDirOf(s, 'run-ok'));
+      const out = await withLock(s, (l) => taintNewlyExcluded(s.ctx, l, { source: 'exclude' }));
+      expect(out, how).toEqual({ runsMarked: 1, promotesMarked: 1 });
+      await expectTaintedClean(s, 'reflect', 'run-x');
+      expect(await allText(runDirOf(s, 'run-ok')), how).toBe(okBefore);
+    }
+  });
+
   it('命中 X 的 run:先标记、清空全部摘录(含非命中证据与原子正文无关部分)、删 apply.patch;promote 随之;未命中的 run 原样(正向 + 对照)', async () => {
     const s = await world('taint-basic-');
     const okBefore = await allText(runDirOf(s, 'run-ok'));

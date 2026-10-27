@@ -6,7 +6,8 @@
 import * as path from 'node:path';
 import type { RsiConfigOn } from '../../src/rsi/config.js';
 import type { IoContext } from '../../src/io/paths.js';
-import { symlink } from '../../src/io/safe-fs.js';
+import { canonicalJson } from '../../src/io/canonical-json.js';
+import { chmod, mkdirp, symlink, writeFile } from '../../src/io/safe-fs.js';
 import { makeTempDir } from '../helpers/tmp.js';
 import { buildChild, startChild } from '../rsi/proc/helper.js';
 
@@ -51,4 +52,28 @@ export async function startHolder(stateDir: string, tmp: string): Promise<Holder
       await h.exited;
     },
   };
+}
+
+/** 写一份真实的 purge journal(`<stateDir>/rsi/purge-journal.json`,0600,目录 0700);`raw` 给了就原样写(演练损坏) */
+export async function writePurgeJournal(
+  io: IoContext,
+  stateDir: string,
+  raw?: string,
+): Promise<string> {
+  const dir = path.join(stateDir, 'rsi');
+  await mkdirp(io, dir, 0o700);
+  await chmod(io, dir, 0o700);
+  const file = path.join(dir, 'purge-journal.json');
+  const body =
+    raw ??
+    canonicalJson({
+      schema_version: 1,
+      created_at: '2026-10-26T00:00:00.000Z',
+      phase: 'signals_rewritten',
+      keys: ['p_aaaaaaaaaaaaaaaa'],
+      taint_targets: { runs: [], promotes: [] },
+    });
+  await writeFile(io, file, body, { mode: 0o600 });
+  await chmod(io, file, 0o600);
+  return file;
 }

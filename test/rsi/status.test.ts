@@ -277,6 +277,36 @@ describe('R20-4.3 ~ 4.6 现算 P / X / U 与计数口径', () => {
     });
   });
 
+  it('盐不符 / counts 缺失:已排除项目仍计 excluded(X 与盐无关),其余计 U;对照:盐相符时另一项目是 P', async () => {
+    for (const how of ['mismatch', 'missing'] as const) {
+      const f = await makeRoFx(`st-xsalt-${how}-`);
+      const a = await mkProject(f, 'a');
+      const b = await mkProject(f, 'b');
+      await setExtra(f, `exclude_dirs = [${JSON.stringify(b.path)}]\n`);
+      await seed(f, {
+        state: baseState({ confirm: await validConfirm(f) }),
+        index: indexOf(
+          [
+            { key: key(1), path: a.path, dev: a.dev, ino: a.ino },
+            { key: key(2), path: b.path, dev: b.dev, ino: b.ino },
+          ],
+          5,
+          how === 'mismatch' ? 'bbbbbbbbbbbb' : SALT_FP,
+        ),
+        ...(how === 'mismatch'
+          ? {
+              counts: countsOf(
+                { [key(1)]: { total: 4 }, [key(2)]: { total: 2 } },
+                { saltFp: SALT_FP },
+              ),
+            }
+          : {}),
+      });
+      const d = doc((await direct(f, ['--json'])).out);
+      expect(d.counts, how).toMatchObject({ projects_collecting: 0, projects_excluded: 1 });
+    }
+  });
+
   it('盐指纹与 counts 不符:整个索引不可用,所有信号计 U(含已在索引里的 key)', async () => {
     const f = await makeRoFx('st-salt-');
     const a = await mkProject(f, 'a');

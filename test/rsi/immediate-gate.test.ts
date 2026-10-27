@@ -242,6 +242,27 @@ describe('immediateGate:标记 / journal / 归属', () => {
     });
   });
 
+  it('统一口径:盐不符 / counts 缺失时 X 仍 tainted(exclude),未排除的证据是 U(attribution_unknown);盐相符时同一证据是 P', async () => {
+    for (const how of ['salt-mismatch', 'counts-missing'] as const) {
+      const w = await world(`gate-xsalt-${how}-`);
+      await stageRun(w.s, 'run-x', [SIG_A]);
+      await stageRun(w.s, 'run-p', [SIG_B]);
+      expect(
+        await immediateGate(w.s.ctx, { kind: 'judge', runId: 'run-p' }),
+        '对照:盐相符 → P',
+      ).toEqual(ALLOW);
+      if (how === 'salt-mismatch') await writeCountsRaw(w.s, countsDoc('ffffffffffff'));
+      else await remove(w.s.f.fx, path.join(w.s.rsi, 'counts.json'));
+      expect(await immediateGate(w.s.ctx, { kind: 'judge', runId: 'run-x' }), how).toMatchObject({
+        kind: 'tainted',
+        reason: 'exclude',
+      });
+      expect(await immediateGate(w.s.ctx, { kind: 'judge', runId: 'run-p' }), how).toMatchObject({
+        kind: 'attribution_unknown',
+      });
+    }
+  });
+
   it('U 的各条来路:索引缺失 / 损坏 / 盐不符(index 对 counts)/ counts 缺失 / key 不在索引 / sig 映射不到 / 根路径被换 inode / 根路径不存在 / 暂存文件无法解析', async () => {
     const wantU = async (w: World, why: string): Promise<void> => {
       expect(await immediateGate(w.s.ctx, scopes[0]), why).toEqual({

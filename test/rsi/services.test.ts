@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import type { RsiConfigOn } from '../../src/rsi/config.js';
 import type { RsiLockHandle } from '../../src/rsi/lock.js';
 import { commitUnderLock, writeCountsProjection } from '../../src/rsi/services/commit.js';
-import { resumeTaint } from '../../src/rsi/services/taint.js';
+import { resumeTaint, taintNewlyExcluded } from '../../src/rsi/services/taint.js';
 import type { RsiCommitPlan, RsiServiceCtx } from '../../src/rsi/types.js';
 import { baseCtx } from '../helpers/tmp.js';
 

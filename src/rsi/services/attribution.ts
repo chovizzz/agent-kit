@@ -1,14 +1,8 @@
 /**
- * 归属判定的只读原语(契约 R20-4.3 / R20-4.4 / R20-4.6;R20-A2 B3c):信号库 `sig_id → project_key` 映射、项目 key 的 X / U / P 现算。
- * 每次调用现读配置给出的排除项、索引与信号库,**不缓存**。只给 `taint.ts` / `immediate-gate.ts` 用。
+ * 归属判定的只读原语(契约 R20-4.3 / R20-4.4 / R20-4.6;R20-A2 B3c):信号库 `sig_id → project_key` 映射、固定文件读取,
+ * 以及对统一分类器(`../attribution.ts`,B3a 同一实现)的调用。每次调用现读配置给出的排除项、索引与信号库,**不缓存**。只给 `taint.ts` / `immediate-gate.ts` 用。
  *
- * 分类(每个 key 只落入一类,优先级 X > U > P):
- *  - X:索引里该 key 的任一 `roots[].path` 命中当前排除规则(`canonical()` + 折叠大小写;`exclude_dirs` = 相等或位于其下(段边界);
- *    `exclude_names` = 任一根路径的 basename 相等;另:排除目录当前存在时,根路径的任一祖先目录 `(dev, ino)` 与之相同也算命中)。根路径已不存在也照算。
- *  - U:索引缺失 / 损坏、key 不在索引里、`salt_fp` 与 `counts.json` 不符(或 counts 读不出)、最近一次见到的根路径现在的 `realpath` 与记录不逐字节相等 /
- *    不存在、或其 `(dev, ino)` 与记录不同。
- *  - P:其余。
- * X 的判定只依赖索引里的根路径,不依赖盐是否相符:X 优先级最高,宁可多 taint。
+ * 分类口径(X > U > P)只在 `../attribution.ts` 的决策表里定义一次,这里不重复。
  */
 import * as path from 'node:path';
 import {
@@ -18,16 +12,8 @@ import {
   type RsiProjectIndex,
 } from '../../contracts/rsi.js';
 import type { IoContext } from '../../io/paths.js';
-import {
-  MAX_LINE_BYTES,
-  lstat,
-  openStreamSafe,
-  readDir,
-  readFileSafe,
-  realpath,
-  stat,
-} from '../../io/read-fs.js';
-import { canonical } from '../../signals/exclude.js';
+import { MAX_LINE_BYTES, lstat, openStreamSafe, readDir, readFileSafe } from '../../io/read-fs.js';
+import { createAttributor, type Attribution } from '../attribution.js';
 import type { RsiConfigOn } from '../config.js';
 import { JsonlStream } from '../jsonl-stream.js';
 import { RSI_FILE_OWNER, rsiDirReadonly } from '../lock.js';
@@ -161,112 +147,22 @@ export async function loadSigKeys(
 }
 
 // ---------------------------------------------------------------------------
-// 排除匹配
+// X / U / P:统一分类器(src/rsi/attribution.ts)的薄封装
 // ---------------------------------------------------------------------------
-const fold = (s: string): string => s.toLowerCase();
+export type KeyClass = Attribution;
 
-function within(dir: string, child: string): boolean {
-  if (child === dir) return true;
-  return child.startsWith(dir.endsWith('/') ? dir : `${dir}/`);
-}
-
-export interface ExcludeMatcher {
-  matches(rootPath: string): Promise<boolean>;
-}
-
-/** 由**当前**配置(调用方刚重读的)现建;`exclude_dirs` 里的相对路径(`block = exclude_invalid`)不会走到这里 */
-export async function buildExcludeMatcher(
+/** 现读索引与 counts 的盐指纹,按**当前**配置建统一分类器(惰性、按 key 记忆);本文件不再有第二份分类逻辑 */
+export async function classifierFor(
+  io: IoContext,
   cfg: Pick<RsiConfigOn, 'excludeDirs' | 'excludeNames'>,
-): Promise<ExcludeMatcher> {
-  const dirs: { folded: string; id: string | undefined }[] = [];
-  for (const d of cfg.excludeDirs) {
-    const c = await canonical(d);
-    let id: string | undefined;
-    try {
-      const st = await stat(c);
-      id = `${st.dev}:${st.ino}`;
-    } catch {
-      id = undefined;
-    }
-    dirs.push({ folded: fold(c), id });
-  }
-  const names = cfg.excludeNames.map(fold);
-  const ids = dirs.map((d) => d.id).filter((x): x is string => x !== undefined);
-  return {
-    async matches(rootPath: string): Promise<boolean> {
-      const c = await canonical(rootPath);
-      const f = fold(c);
-      if (dirs.some((d) => within(d.folded, f))) return true;
-      if (names.includes(fold(path.basename(c)))) return true;
-      if (ids.length > 0) {
-        for (let a = c; ; a = path.dirname(a)) {
-          try {
-            const st = await stat(a);
-            if (ids.includes(`${st.dev}:${st.ino}`)) return true;
-          } catch {
-            // 不存在的祖先:按字面前缀已判过
-          }
-          if (path.dirname(a) === a) break;
-        }
-      }
-      return false;
-    },
-  };
-}
-
-// ---------------------------------------------------------------------------
-// X / U / P
-// ---------------------------------------------------------------------------
-export type KeyClass = 'X' | 'U' | 'P';
-
-export interface ClassifyInputs {
-  index: IndexRead;
-  countsSaltFp: string | null;
-  matcher: ExcludeMatcher;
-}
-
-export function createClassifier(inputs: ClassifyInputs): (key: string) => Promise<KeyClass> {
-  const memo = new Map<string, KeyClass>();
-  const index = inputs.index.kind === 'ok' ? inputs.index.index : undefined;
-  const byKey = new Map(index?.entries.map((e) => [e.key, e]));
-  const saltOk =
-    index !== undefined && inputs.countsSaltFp !== null && index.salt_fp === inputs.countsSaltFp;
-  return async (key: string): Promise<KeyClass> => {
-    const hit = memo.get(key);
-    if (hit !== undefined) return hit;
-    const entry = byKey.get(key);
-    let cls: KeyClass;
-    if (entry === undefined) cls = 'U';
-    else {
-      let excluded = false;
-      for (const r of entry.roots) {
-        if (await inputs.matcher.matches(r.path)) {
-          excluded = true;
-          break;
-        }
-      }
-      if (excluded) cls = 'X';
-      else if (!saltOk) cls = 'U';
-      else cls = (await rootsStillMatch(entry.roots)) ? 'P' : 'U';
-    }
-    memo.set(key, cls);
-    return cls;
-  };
-}
-
-/** 最近一次见到(`last_seen` 最大,并列取靠后)的根路径:`realpath` 与记录逐字节相等且 `(dev, ino)` 相同 */
-async function rootsStillMatch(
-  roots: RsiProjectIndex['entries'][number]['roots'],
-): Promise<boolean> {
-  let latest = roots[0];
-  for (const r of roots) if (latest === undefined || r.last_seen >= latest.last_seen) latest = r;
-  if (latest === undefined) return false;
-  try {
-    const real = await realpath(latest.path);
-    if (real !== latest.path) return false;
-    const st = await stat(real);
-    return st.dev === latest.dev && st.ino === latest.ino;
-  } catch {
-    return false;
-  }
+): Promise<(key: string) => Promise<KeyClass>> {
+  const index = await readIndex(io);
+  const saltFp = await readCountsSaltFp(io);
+  const a = await createAttributor({
+    config: cfg as RsiConfigOn,
+    indexStatus: index.kind === 'ok' ? 'ok' : 'invalid',
+    index: index.kind === 'ok' ? index.index : null,
+    counts: saltFp === null ? null : { salt_fp: saltFp },
+  });
+  return (key) => a.classify(key);
 }
