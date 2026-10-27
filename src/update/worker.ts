@@ -53,7 +53,13 @@ async function runWorker(ctx: CommandContext, deps: WorkerDeps): Promise<WorkerO
   const env = ctx.env ?? pickProcessEnv(RUN_SELF_ENV_PICK_RE);
   const homeReal = await resolveAllowedHome(getRealHome(env), ctx.io.tmpDir, env);
   if (homeReal === undefined) return 'failed';
-  const ienv: InstallEnv = { home: homeReal, tmpDir: ctx.io.tmpDir, env, deps };
+  const ienv: InstallEnv = {
+    home: homeReal,
+    tmpDir: ctx.io.tmpDir,
+    env,
+    deps,
+    ...(ctx.io.writeAudit !== undefined ? { writeAudit: ctx.io.writeAudit } : {}),
+  };
   const now = (): Date => (deps.now ?? ((): Date => new Date()))();
   const finish = async (o: WorkerOutcome): Promise<WorkerOutcome> => {
     await writeWorkerLog(ienv, o);
@@ -98,6 +104,7 @@ async function runWorker(ctx: CommandContext, deps: WorkerDeps): Promise<WorkerO
         tmpDir: info.ienv.tmpDir,
         env: info.ienv.env,
         deps: deps.sync ?? {},
+        ...(info.ienv.writeAudit !== undefined ? { writeAudit: info.ienv.writeAudit } : {}),
       };
       return runAutoSync(
         aenv,

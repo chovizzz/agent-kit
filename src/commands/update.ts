@@ -214,7 +214,13 @@ export function createUpdateCommand(deps: UpdateCommandDeps = {}): CommandDef {
           env,
         );
         if (homeReal === undefined) throw new Exit(ExitCode.USAGE, 'USAGE', 'home_not_allowed');
-        const ienv: InstallEnv = { home: homeReal, tmpDir: ctx.io.tmpDir, env, deps };
+        const ienv: InstallEnv = {
+          home: homeReal,
+          tmpDir: ctx.io.tmpDir,
+          env,
+          deps,
+          ...(ctx.io.writeAudit !== undefined ? { writeAudit: ctx.io.writeAudit } : {}),
+        };
         return args.rollback ? await runRollback(ctx, ienv) : await runUpdate(ctx, args, ienv);
       } catch (e) {
         const x = e instanceof Exit ? e : new Exit(ExitCode.FAIL_CLOSED, 'FAIL_CLOSED', 'internal');

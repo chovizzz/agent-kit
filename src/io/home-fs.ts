@@ -28,7 +28,7 @@ import * as path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { RelPathSchema, SEMVER_RE } from '../contracts/common.js';
 import { HOME_WRITE_TABLE, isHomeWritePath } from '../contracts/sync.js';
-import { getRealHome } from './paths.js';
+import { getRealHome, type WriteAudit } from './paths.js';
 
 /** 稳定拒绝码。 */
 export const HOME_DENY = {
@@ -107,6 +107,13 @@ export interface HomeFsContext {
   readonly planScope: readonly string[];
   readonly tmpDir: string | undefined;
   readonly onStage: ((stage: HomeFsStage) => void | Promise<void>) | undefined;
+  /**
+   * 可选写审计钩子(R20-A2 B2;与 safe-fs 的 `IoContext.writeAudit` 同一约定,类型共用 `WriteAudit`):每个导出写函数**入口第一行**、
+   * 任何校验之前调用一次 `(op, 绝对路径)`。记录的是**写尝试**(被守卫拒绝的也记,它不替代任何安全检查),路径是 `path.resolve(home, rel)` 的
+   * 字面结果(不碰磁盘、不抛错;逃逸 / 绝对路径照记)。一个导出函数只记一次(内部共享的 `atomicWrite` 等不记);op 名带 `home.` 前缀,
+   * 与 safe-fs 的 op 区分。钩子只许记录、不得抛错。未设置 = 键不存在,行为与引入前逐字节一致。
+   */
+  readonly writeAudit?: WriteAudit;
 }
 
 export interface CreateHomeFsContextOptions {
@@ -120,6 +127,8 @@ export interface CreateHomeFsContextOptions {
   env?: Readonly<Record<string, string | undefined>>;
   /** 测试注入口 */
   onStage?: (stage: HomeFsStage) => void | Promise<void>;
+  /** 写审计钩子,见 `HomeFsContext.writeAudit`;缺省不审计 */
+  writeAudit?: WriteAudit;
 }
 
 // ---------------------------------------------------------------------------
@@ -430,6 +439,7 @@ export function createHomeFsContext(opts: CreateHomeFsContextOptions): HomeFsCon
     planScope: Object.freeze([...scope]),
     tmpDir: opts.tmpDir,
     onStage: opts.onStage,
+    ...(opts.writeAudit !== undefined ? { writeAudit: opts.writeAudit } : {}),
   });
   const env = opts.env === undefined ? undefined : Object.freeze({ ...opts.env });
   const canon = resolveHome(ctx, env); // HOME 不合格就在创建时失败;之后每次操作还会再验一遍
@@ -454,6 +464,10 @@ async function syncDir(dir: string): Promise<void> {
   } catch {
     // 尽力而为:目录 fsync 失败(含不支持、I/O 错误)不改变已完成的 rename / unlink 结果,也不对持久化作保证
   }
+}
+
+function audit(ctx: HomeFsContext, op: string, rel: string): void {
+  ctx.writeAudit?.(`home.${op}`, path.resolve(ctx.home, String(rel)));
 }
 
 export interface HomeWriteOptions {
@@ -534,6 +548,7 @@ export async function writeFile(
   data: string | Uint8Array,
   opts: HomeWriteOptions = {},
 ): Promise<void> {
+  audit(ctx, 'writeFile', rel);
   const mode = opts.mode ?? 0o644;
   const dirMode = opts.dirMode ?? 0o755;
   assertMode(mode);
@@ -592,6 +607,7 @@ async function atomicWrite(
 
 /** 递归建目录(目录权限缺省 0o755)。目标须严格位于 dir 条目内部、且是计划目标的祖先;缺失的上级(含条目目录本身)隐式创建。 */
 export async function mkdirp(ctx: HomeFsContext, rel: string, mode = 0o755): Promise<void> {
+  audit(ctx, 'mkdirp', rel);
   assertMode(mode);
   const info = checkDir(ctx, rel);
   await makeDirs(info, rel, info.segments.length, mode);
@@ -599,6 +615,7 @@ export async function mkdirp(ctx: HomeFsContext, rel: string, mode = 0o755): Pro
 
 /** 删除一个普通文件;不存在视为成功。目录、链接、硬链接一律拒。 */
 export async function remove(ctx: HomeFsContext, rel: string): Promise<void> {
+  audit(ctx, 'remove', rel);
   const info = checkFile(ctx, rel);
   if (info.leaf === undefined) return;
   await fsp.unlink(info.abs);
@@ -607,6 +624,7 @@ export async function remove(ctx: HomeFsContext, rel: string): Promise<void> {
 
 /** 删除一个空目录(rmdir,非空即失败,不会连带删用户文件);条目目录本身不可删。不存在视为成功。 */
 export async function removeDir(ctx: HomeFsContext, rel: string): Promise<void> {
+  audit(ctx, 'removeDir', rel);
   const info = checkDir(ctx, rel);
   if (info.leaf === undefined) return;
   await fsp.rmdir(info.abs);
@@ -615,6 +633,8 @@ export async function removeDir(ctx: HomeFsContext, rel: string): Promise<void> 
 
 /** 两端都必须是表内、计划内的文件路径;目标的父目录须已存在。 */
 export async function rename(ctx: HomeFsContext, fromRel: string, toRel: string): Promise<void> {
+  audit(ctx, 'rename.from', fromRel);
+  audit(ctx, 'rename', toRel);
   const from = checkFile(ctx, fromRel);
   const to = checkFile(ctx, toRel);
   if (from.leaf === undefined) throw enoent();
@@ -625,6 +645,7 @@ export async function rename(ctx: HomeFsContext, fromRel: string, toRel: string)
 
 /** 对已校验文件的 fd 做 fchmod(不跟随检查后换上的链接)。 */
 export async function chmod(ctx: HomeFsContext, rel: string, mode: number): Promise<void> {
+  audit(ctx, 'chmod', rel);
   assertMode(mode);
   const info = checkFile(ctx, rel);
   if (info.leaf === undefined) throw enoent();
@@ -641,6 +662,8 @@ export async function chmod(ctx: HomeFsContext, rel: string, mode: number): Prom
  * 目标按原子写落盘(缺失父目录隐式创建,权限 0o755),文件权限沿用来源。
  */
 export async function copyFile(ctx: HomeFsContext, fromRel: string, toRel: string): Promise<void> {
+  audit(ctx, 'copyFile.from', fromRel);
+  audit(ctx, 'copyFile', toRel);
   const from = checkFile(ctx, fromRel);
   const to = checkFile(ctx, toRel);
   if (from.leaf === undefined) throw enoent();
@@ -671,6 +694,7 @@ export async function createExclusive(
   data: string | Uint8Array,
   opts: HomeWriteOptions = {},
 ): Promise<void> {
+  audit(ctx, 'createExclusive', rel);
   const mode = opts.mode ?? 0o644;
   const dirMode = opts.dirMode ?? 0o755;
   assertMode(mode);
@@ -716,6 +740,8 @@ export async function renameDir(
   toRel: string,
   dirMode = 0o700,
 ): Promise<void> {
+  audit(ctx, 'renameDir.from', fromRel);
+  audit(ctx, 'renameDir', toRel);
   assertMode(dirMode);
   const from = checkDir(ctx, fromRel);
   const to = checkDir(ctx, toRel);
@@ -761,6 +787,7 @@ const VERSIONS_REL = '.local/share/agent-kit/versions';
  * 已知残余:校验与 rename 之间按路径执行,见文件头。
  */
 export async function switchCurrent(ctx: HomeFsContext, version: string | null): Promise<void> {
+  audit(ctx, 'switchCurrent', CURRENT_LINK_REL);
   assertFileInTable(CURRENT_LINK_REL);
   assertFileInScope(ctx, CURRENT_LINK_REL);
   const link = inspect(ctx, CURRENT_LINK_REL, 'file', true);
@@ -851,6 +878,7 @@ export async function tightenKitStateDir(
   ctx: HomeFsContext,
   apply: boolean,
 ): Promise<TightenStateDirResult> {
+  if (apply) audit(ctx, 'tightenKitStateDir', KIT_STATE_DIR_REL); // 干跑不写,不记
   // 复用 inspect:HOME 身份固定、逐段 lstat、精确目录名(挡大小写别名)、链接 / 非目录、realpath 复核
   let info: Inspected;
   try {

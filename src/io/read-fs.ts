@@ -103,6 +103,19 @@ const NOFOLLOW = fs.constants.O_NOFOLLOW ?? 0;
 const NONBLOCK = fs.constants.O_NONBLOCK ?? 0;
 
 /**
+ * 句柄级安全读取所依赖的平台能力是否齐全(D8):`O_NOFOLLOW`、`O_NONBLOCK`、`O_DIRECTORY` 与 `process.getuid`。
+ * 缺任何一个,`readFileSafe` 的「不跟随末级链接 / 不挂住 FIFO / 属主校验」就退化为没有保护,rsi 前台命令据此退出 3。
+ */
+export function safeOpenSupported(): boolean {
+  return (
+    NOFOLLOW !== 0 &&
+    NONBLOCK !== 0 &&
+    (fs.constants.O_DIRECTORY ?? 0) !== 0 &&
+    typeof process.getuid === 'function'
+  );
+}
+
+/**
  * 句柄级安全读取(R20-7.2 读取前校验的唯一实现):`O_NOFOLLOW | O_NONBLOCK` 打开(符号链接 → `ELOOP`;FIFO 不会挂住),
  * 对**句柄** fstat 校验(普通文件、`nlink == 1`、可选的属主 / 权限、大小上限),再有界读取。
  * 因此检查与读取之间**末级文件**被换成符号链接 / FIFO / 另一个 inode,拿到的要么是原来那个已校验的 inode,要么是 `unsafe`,不跟随末级链接、不挂住。
@@ -141,6 +154,85 @@ export async function readFileSafe(path: string, opts: SafeReadOptions): Promise
   } finally {
     await h.close().catch(() => undefined);
   }
+}
+
+export interface StreamOpenOptions {
+  /** 提供时校验属主与权限;缺省只做 O_NOFOLLOW + 普通文件 + `nlink == 1` */
+  owner?: OwnerPolicy;
+  /** 测试缝:调用后紧接着 open */
+  beforeOpen?: () => Promise<void> | void;
+  /** 单次读取的块大小(字节);缺省 64KiB。测试用小块演练跨块边界 */
+  chunkBytes?: number;
+}
+
+export type StreamOpenResult =
+  | {
+      kind: 'ok';
+      meta: SafeMeta;
+      /**
+       * 从**同一个已校验的句柄**按序读完整个文件的原始字节块(不解码、不归一化)。读完、提前 `return`、抛错都会关句柄。
+       * 读取错误(`h.read` 抛错)原样抛出,调用方按「该文件损坏 / 读失败」处理。没有字节上限:调用方自己决定要不要停。
+       */
+      chunks(): AsyncGenerator<Buffer, void, undefined>;
+      /** 幂等关闭;**从未迭代 `chunks()` 时调用方必须自己调它**(生成器没启动就不会跑它的 finally) */
+      close(): Promise<void>;
+    }
+  | { kind: 'missing' }
+  | { kind: 'unsafe'; why: SafeUnsafeWhy };
+
+/**
+ * 句柄级安全**流式**读取的打开原语(R20-A2 B2,contracts §20.5 R20-5.6 订正):与 {@link readFileSafe} 同一套打开与 fstat 校验
+ * (`O_NOFOLLOW | O_NONBLOCK`、普通文件、`nlink == 1`、可选属主 / 权限),但不把内容读进内存、不设大小上限:
+ * 校验与读取用**同一个句柄**,所以检查之后路径被换成链接 / FIFO / 另一个 inode 也不影响已打开的这一个。
+ * 用法:`const s = await openStreamSafe(p); if (s.kind==='ok') try { for await (const c of s.chunks()) … } finally { await s.close() }`。
+ */
+export async function openStreamSafe(
+  path: string,
+  opts: StreamOpenOptions = {},
+): Promise<StreamOpenResult> {
+  await opts.beforeOpen?.();
+  let h: fsp.FileHandle;
+  try {
+    h = await fsp.open(path, fs.constants.O_RDONLY | NOFOLLOW | NONBLOCK);
+  } catch (e) {
+    return openFailure(e);
+  }
+  let closed = false;
+  const close = async (): Promise<void> => {
+    if (closed) return;
+    closed = true;
+    await h.close().catch(() => undefined);
+  };
+  let st: fs.Stats;
+  try {
+    st = await h.stat();
+  } catch {
+    await close();
+    return { kind: 'unsafe', why: 'io' };
+  }
+  if (st.isFile() && st.nlink === 0) {
+    await close();
+    return { kind: 'missing' };
+  }
+  const why = checkMeta(st, 'file', opts.owner);
+  if (why !== undefined) {
+    await close();
+    return { kind: 'unsafe', why };
+  }
+  const size = Math.max(1, opts.chunkBytes ?? 65536);
+  async function* chunks(): AsyncGenerator<Buffer, void, undefined> {
+    try {
+      for (;;) {
+        const buf = Buffer.allocUnsafe(size);
+        const { bytesRead } = await h.read(buf, 0, size, null);
+        if (bytesRead === 0) return;
+        yield buf.subarray(0, bytesRead);
+      }
+    } finally {
+      await close();
+    }
+  }
+  return { kind: 'ok', meta: metaOf(st), chunks, close };
 }
 
 export type SafeDirResult =

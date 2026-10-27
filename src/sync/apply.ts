@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import { SyncTxnSchema, TXN_ID_RE, SYNC_BACKUPS_KEPT, type SyncTxn } from '../contracts/sync.js';
 import { KIT_VERSION } from '../contracts/meta.js';
 import { canonicalJson } from '../io/canonical-json.js';
+import type { WriteAudit } from '../io/paths.js';
 import {
   HOME_DENY,
   HomeExistsError,
@@ -83,6 +84,8 @@ export interface ApplyEnv {
   tmpDir: string | undefined;
   env: Readonly<Record<string, string | undefined>> | undefined;
   deps: ApplyDeps;
+  /** 可选写审计钩子(R20-A2 B2),透传给 home-fs;缺省不审计 */
+  writeAudit?: WriteAudit;
 }
 
 export const SYNC_LOCK_TTL_MS = 15 * 60 * 1000;
@@ -108,6 +111,7 @@ function mkCtx(env: ApplyEnv, scope: readonly string[]): HomeFsContext {
     tmpDir: env.tmpDir,
     ...(env.env !== undefined ? { env: env.env } : {}),
     ...(env.deps.onStage !== undefined ? { onStage: env.deps.onStage } : {}),
+    ...(env.writeAudit !== undefined ? { writeAudit: env.writeAudit } : {}),
   });
 }
 

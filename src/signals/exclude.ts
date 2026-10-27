@@ -20,7 +20,7 @@ export class ExcludeConfigError extends Error {
   readonly code = 'SIGNALS_EXCLUDE_CONFIG';
 }
 
-async function canonical(p: string): Promise<string> {
+export async function canonical(p: string): Promise<string> {
   const abs = path.resolve(p);
   // 解析「最长的已存在前缀」的 realpath,再接回不存在的尾部:
   // 项目目录被删除后(realpath 对整条路径失败),仍能通过符号链接前缀的不同写法被排除清单认出,

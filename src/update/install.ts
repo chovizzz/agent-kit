@@ -28,6 +28,7 @@ import {
 } from '../contracts/update.js';
 import type { UpdateState } from '../contracts/update.js';
 import { canonicalJson } from '../io/canonical-json.js';
+import type { WriteAudit } from '../io/paths.js';
 import { NetError } from '../io/net.js';
 import {
   CURRENT_LINK_REL,
@@ -114,6 +115,8 @@ export interface InstallEnv {
   tmpDir: string | undefined;
   env: Readonly<Record<string, string | undefined>> | undefined;
   deps: InstallDeps;
+  /** 可选写审计钩子(R20-A2 B2),透传给 home-fs;缺省不审计 */
+  writeAudit?: WriteAudit;
 }
 
 function mkCtx(env: InstallEnv, scope: readonly string[]): HomeFsContext {
@@ -123,6 +126,7 @@ function mkCtx(env: InstallEnv, scope: readonly string[]): HomeFsContext {
     tmpDir: env.tmpDir,
     ...(env.env !== undefined ? { env: env.env } : {}),
     ...(env.deps.onStage !== undefined ? { onStage: env.deps.onStage } : {}),
+    ...(env.writeAudit !== undefined ? { writeAudit: env.writeAudit } : {}),
   });
 }
 

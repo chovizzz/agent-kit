@@ -16,6 +16,7 @@ import {
 } from '../../src/rsi/snapshot.js';
 import { newWork, type Work } from '../signals/helpers.js';
 import { mkfifo } from './proc/helper.js';
+import { structuralValidator, withFixed } from './structural-validator.js';
 
 const rsiFile = (w: Work, n: string): string => path.join(w.state, 'rsi', n);
 const STATE = JSON.stringify({ schema_version: 1 });
@@ -164,17 +165,17 @@ describe('R20-7.2 句柄级安全读取原语(src/io/read-fs.ts)', () => {
 describe('R20-7.2 锁文件读取前校验', () => {
   const lockOf = (w: Work): string => rsiFile(w, 'lock');
 
-  it('锁文件权限宽于 0600 / 硬链接 → peek 为 unknown、获取为 state_dir_unsafe,且不被收紧、不被回收', async () => {
+  it('锁文件权限宽于 0600 / 硬链接 → peek 为 unsafe、获取为 state_dir_unsafe,且不被收紧、不被回收', async () => {
     const w = await newWork('sl-meta-');
     const l = await acquireRsiLock(w.io, { pid: 4242 });
     // 另一进程视角:同一把锁被改宽 / 被硬链接
     await chmod(w.io, lockOf(w), 0o644);
-    expect(await peekRsiLock(w.io)).toBe('unknown');
+    expect(await peekRsiLock(w.io)).toBe('unsafe');
     expect(await mode(lockOf(w))).toBe(0o644);
     await chmod(w.io, lockOf(w), 0o600);
     expect(await peekRsiLock(w.io, { isAlive: () => true })).toBe('held');
     await hardlink(w.io, lockOf(w), path.join(w.dir, 'lock-alias'));
-    expect(await peekRsiLock(w.io)).toBe('unknown');
+    expect(await peekRsiLock(w.io)).toBe('unsafe');
     await expect(l.assertHeld()).rejects.toMatchObject({ kind: 'lock_lost' });
   });
 
@@ -195,12 +196,12 @@ describe('R20-7.2 锁文件读取前校验', () => {
     expect(await mode(lockOf(w))).toBe(0o644);
   });
 
-  it('rsi/ 目录宽于 0700:只读 peek 为 unknown 且不 chmod;写入方 acquire 照旧收紧到 0700(已有行为)', async () => {
+  it('rsi/ 目录宽于 0700:只读 peek 为 unsafe 且不 chmod;写入方 acquire 照旧收紧到 0700(已有行为)', async () => {
     const w = await newWork('sl-dir-');
     const l = await acquireRsiLock(w.io);
     await l.release();
     await chmod(w.io, path.join(w.state, 'rsi'), 0o755);
-    expect(await peekRsiLock(w.io)).toBe('unknown');
+    expect(await peekRsiLock(w.io)).toBe('unsafe');
     expect(await mode(path.join(w.state, 'rsi'))).toBe(0o755);
     const l2 = await acquireRsiLock(w.io);
     expect(await mode(path.join(w.state, 'rsi'))).toBe(0o700);
@@ -218,7 +219,7 @@ describe('R20-7.2 锁文件读取前校验', () => {
     ).rejects.toMatchObject({ kind: 'state_dir_unsafe' });
   });
 
-  it('检查之后、读取之前锁文件被换成符号链接 / FIFO → unknown(不跟随、不挂住)', async () => {
+  it('检查之后、读取之前锁文件被换成符号链接 / FIFO → unsafe(不跟随、不挂住)', async () => {
     for (const swap of [swapToSymlink, swapToFifo]) {
       const w = await newWork('sl-race-');
       await mkdirp(w.io, path.join(w.state, 'rsi'), 0o700);
@@ -228,7 +229,7 @@ describe('R20-7.2 锁文件读取前校验', () => {
           if (file === lockOf(w) || file.endsWith(`${path.sep}lock`)) await swap(w, file);
         },
       });
-      expect(state, swap.name).toBe('unknown');
+      expect(state, swap.name).toBe('unsafe');
     }
   });
 });
@@ -243,7 +244,9 @@ describe('R20-7.2 快照与固定数据文件读取前校验', () => {
     await expect(withLock(w, (l) => commitSnapshot(w.io, l))).rejects.toMatchObject({
       reason: 'state_dir_unsafe',
     });
-    await expect(withLock(w, (l) => recoverSnapshot(w.io, l))).rejects.toMatchObject({
+    await expect(
+      withLock(w, (l) => recoverSnapshot(w.io, l, structuralValidator)),
+    ).rejects.toMatchObject({
       reason: 'state_dir_unsafe',
     });
     expect(await mode(rsiFile(w, 'state.json'))).toBe(0o644);
@@ -301,6 +304,7 @@ describe('R20-7.2 快照与固定数据文件读取前校验', () => {
 describe('R20-5.6 恢复接口看得见「清单里有、现状里缺」的文件', () => {
   const requireState = (name: string, bytes: Uint8Array | null): boolean =>
     !(name === 'state.json' && bytes === null);
+  const requiring = withFixed(structuralValidator, requireState);
 
   async function committed(prefix: string): Promise<Work> {
     const w = await newWork(prefix);
@@ -314,7 +318,7 @@ describe('R20-5.6 恢复接口看得见「清单里有、现状里缺」的文�
     const w = await committed('rm-required-');
     const before = await readText(rsiFile(w, 'snapshot.json'));
     await remove(w.io, rsiFile(w, 'state.json'));
-    await expect(withLock(w, (l) => recoverSnapshot(w.io, l, requireState))).rejects.toMatchObject({
+    await expect(withLock(w, (l) => recoverSnapshot(w.io, l, requiring))).rejects.toMatchObject({
       reason: 'state_invalid',
     });
     expect(await readText(rsiFile(w, 'snapshot.json'))).toBe(before);
@@ -325,10 +329,14 @@ describe('R20-5.6 恢复接口看得见「清单里有、现状里缺」的文�
     await remove(w.io, rsiFile(w, 'cursor.json'));
     const seen: [string, boolean][] = [];
     const outcome = await withLock(w, (l) =>
-      recoverSnapshot(w.io, l, (n, b) => {
-        seen.push([n, b === null]);
-        return requireState(n, b);
-      }),
+      recoverSnapshot(
+        w.io,
+        l,
+        withFixed(structuralValidator, (n, b) => {
+          seen.push([n, b === null]);
+          return requireState(n, b);
+        }),
+      ),
     );
     expect(outcome).toBe('rebuilt');
     expect(seen).toContainEqual(['cursor.json', true]);
@@ -337,23 +345,34 @@ describe('R20-5.6 恢复接口看得见「清单里有、现状里缺」的文�
     expect(after.kind === 'ok' && after.snapshot.files.map((f) => f.name)).toEqual(['state.json']);
   });
 
-  it('缺省校验函数保持原行为:任何文件被删都按未完成提交 rebuilt(必需文件规则由 A2 注入)', async () => {
+  it('结构校验器对缺失一律放行:任何文件被删都按未完成提交 rebuilt(必需文件规则由调用方的校验器给)', async () => {
     const w = await committed('rm-default-');
     await remove(w.io, rsiFile(w, 'state.json'));
-    expect(await withLock(w, (l) => recoverSnapshot(w.io, l))).toBe('rebuilt');
+    expect(await withLock(w, (l) => recoverSnapshot(w.io, l, structuralValidator))).toBe('rebuilt');
   });
 
-  it('清单与现状一致时不调用 validator(缺失也不触发)', async () => {
+  it('清单与现状一致时:固定文件仍整体校验(B2:快路径不绕过 schema),缺失不触发;月文件不逐行校验', async () => {
     const w = await committed('rm-consistent-');
-    let calls = 0;
+    const fixedSeen: [string, boolean][] = [];
+    let records = 0;
     const outcome = await withLock(w, (l) =>
-      recoverSnapshot(w.io, l, () => {
-        calls++;
-        return false;
+      recoverSnapshot(w.io, l, {
+        fixed: (n, b) => {
+          fixedSeen.push([n, b === null]);
+          return true;
+        },
+        record: () => {
+          records++;
+          return false;
+        },
       }),
     );
     expect(outcome).toBe('consistent');
-    expect(calls).toBe(0);
+    expect(fixedSeen).toEqual([
+      ['cursor.json', false],
+      ['state.json', false],
+    ]);
+    expect(records).toBe(0);
   });
 });
 
@@ -395,7 +414,9 @@ describe('R20-5.6 2000 项上限在枚举阶段执行,摘要逐文件计算', ()
     ).rejects.toMatchObject({ reason: 'snapshot_invalid' });
     expect(over).toEqual([]);
     await expect(
-      withLock(w, (l) => recoverSnapshot(w.io, l, undefined, { onRead: (n) => over.push(n) })),
+      withLock(w, (l) =>
+        recoverSnapshot(w.io, l, structuralValidator, { onRead: (n) => over.push(n) }),
+      ),
     ).rejects.toMatchObject({ reason: 'snapshot_invalid' });
     expect(over).toEqual([]); // 两条路径都没读过任何数据文件内容
     expect(await readText(rsiFile(w, 'snapshot.json'))).toBe(before);
@@ -418,21 +439,19 @@ describe('R20-5.6 2000 项上限在枚举阶段执行,摘要逐文件计算', ()
     expect(reads).toEqual([]);
   });
 
-  it('恢复时校验函数一次只拿到一个文件:按文件名升序逐个调用', async () => {
+  it('恢复时一次只读一个文件:按文件名升序逐个读取(固定文件整份、月文件流式),不一致时第二遍边读边校验', async () => {
     const w = await newWork('lim-seq-');
     await put(w, 'state.json', STATE);
     await withLock(w, (l) => commitSnapshot(w.io, l));
     await put(w, 'counts.json', '{}');
     await put(w, 'signals/pi/202610.jsonl', '');
-    const order: string[] = [];
+    const reads: string[] = [];
     expect(
       await withLock(w, (l) =>
-        recoverSnapshot(w.io, l, (n) => {
-          order.push(n);
-          return true;
-        }),
+        recoverSnapshot(w.io, l, structuralValidator, { onRead: (n) => reads.push(n) }),
       ),
     ).toBe('rebuilt');
-    expect(order).toEqual(['counts.json', 'signals/pi/202610.jsonl', 'state.json']);
+    const pass = ['counts.json', 'signals/pi/202610.jsonl', 'state.json'];
+    expect(reads).toEqual([...pass, ...pass]); // 第一遍算摘要 + 固定文件校验,第二遍边读边校验
   });
 });

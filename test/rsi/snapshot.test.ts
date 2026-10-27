@@ -17,6 +17,7 @@ import {
 } from '../../src/rsi/snapshot.js';
 import { signalLine } from '../../src/signals/state-store.js';
 import { newWork, type Work } from '../signals/helpers.js';
+import { structuralValidator } from './structural-validator.js';
 
 const sha = (b: Uint8Array | string): string => createHash('sha256').update(b).digest('hex');
 const rsiFile = (w: Work, n: string): string => path.join(w.state, 'rsi', n);
@@ -291,7 +292,7 @@ describe('R20-5.6 未完成提交 vs 损坏', () => {
       for (const n of ['state.json', 'counts.json', 'cursor.json']) {
         if (await exists(rsiFile(w, n))) dataBefore.set(n, sha(await readBytes(rsiFile(w, n))));
       }
-      const outcome = await withLock(w, (l) => recoverSnapshot(w.io, l));
+      const outcome = await withLock(w, (l) => recoverSnapshot(w.io, l, structuralValidator));
       expect(outcome, step.name).toBe('rebuilt');
       for (const [n, h] of dataBefore) {
         expect(sha(await readBytes(rsiFile(w, n))), `${step.name}:${n}`).toBe(h); // 数据文件未被改动
@@ -301,7 +302,9 @@ describe('R20-5.6 未完成提交 vs 损坏', () => {
       expect(await exists(`${snapFile(w)}.tmp`), step.name).toBe(false);
       const r = await readVerified(w.io, ['state.json', 'counts.json', 'cursor.json']);
       expect(r.status, step.name).toBe('ok');
-      expect(await withLock(w, (l) => recoverSnapshot(w.io, l))).toBe('consistent');
+      expect(await withLock(w, (l) => recoverSnapshot(w.io, l, structuralValidator))).toBe(
+        'consistent',
+      );
     }
   });
 
@@ -325,7 +328,9 @@ describe('R20-5.6 未完成提交 vs 损坏', () => {
       await withLock(w, (l) => commitSnapshot(w.io, l));
       const snapBefore = await readText(snapFile(w));
       await put(w, c.file, c.bad);
-      const e = await withLock(w, (l) => recoverSnapshot(w.io, l)).catch((x: unknown) => x);
+      const e = await withLock(w, (l) => recoverSnapshot(w.io, l, structuralValidator)).catch(
+        (x: unknown) => x,
+      );
       expect(e, c.file).toBeInstanceOf(RsiSnapshotError);
       expect((e as RsiSnapshotError).reason, c.file).toBe(c.reason);
       expect((e as RsiSnapshotError).code).toBe('RSI_FAIL_CLOSED');
@@ -338,15 +343,19 @@ describe('R20-5.6 未完成提交 vs 损坏', () => {
   it('清单本身损坏 → snapshot_invalid(阻断);清单缺失 → absent(不是错误);一致 → consistent', async () => {
     const w = await newWork('rs-manifest-');
     await put(w, 'state.json', STATE);
-    expect(await withLock(w, (l) => recoverSnapshot(w.io, l))).toBe('absent');
+    expect(await withLock(w, (l) => recoverSnapshot(w.io, l, structuralValidator))).toBe('absent');
     await withLock(w, (l) => commitSnapshot(w.io, l));
-    expect(await withLock(w, (l) => recoverSnapshot(w.io, l))).toBe('consistent');
+    expect(await withLock(w, (l) => recoverSnapshot(w.io, l, structuralValidator))).toBe(
+      'consistent',
+    );
     await put(
       w,
       'snapshot.json',
       '{"schema_version":1,"generation":0,"written_at":"x","files":[]}',
     );
-    await expect(withLock(w, (l) => recoverSnapshot(w.io, l))).rejects.toMatchObject({
+    await expect(
+      withLock(w, (l) => recoverSnapshot(w.io, l, structuralValidator)),
+    ).rejects.toMatchObject({
       reason: 'snapshot_invalid',
     });
   });
@@ -358,7 +367,9 @@ describe('R20-5.6 未完成提交 vs 损坏', () => {
     await put(w, 'real.json', '{}');
     await remove(w.io, rsiFile(w, 'state.json'));
     await symlink(w.io, rsiFile(w, 'real.json'), rsiFile(w, 'state.json'));
-    await expect(withLock(w, (l) => recoverSnapshot(w.io, l))).rejects.toMatchObject({
+    await expect(
+      withLock(w, (l) => recoverSnapshot(w.io, l, structuralValidator)),
+    ).rejects.toMatchObject({
       reason: 'state_dir_unsafe',
     });
     expect(await readVerified(w.io, ['state.json'])).toEqual({ status: 'unsafe' });
@@ -394,7 +405,9 @@ describe('R20-5.6 只读方零写入、路径安全', () => {
     await writeFile(w.io, path.join(w.state, 'other', '202610.jsonl'), '', { mode: 0o600 });
     await mkdirp(w.io, path.join(w.state, 'signals'), 0o700);
     await symlink(w.io, path.join(w.state, 'other'), path.join(w.state, 'signals', 'claude'));
-    await expect(withLock(w, (l) => recoverSnapshot(w.io, l))).rejects.toMatchObject({
+    await expect(
+      withLock(w, (l) => recoverSnapshot(w.io, l, structuralValidator)),
+    ).rejects.toMatchObject({
       reason: 'signal_store_corrupt',
     });
     expect(await readVerified(w.io, ['signals/claude/202610.jsonl'])).toEqual({
@@ -407,7 +420,9 @@ describe('R20-5.6 只读方零写入、路径安全', () => {
     await put(w, 'state.json', STATE);
     await withLock(w, (l) => commitSnapshot(w.io, l));
     await hardlink(w.io, rsiFile(w, 'state.json'), path.join(w.state, 'alias.json'));
-    await expect(withLock(w, (l) => recoverSnapshot(w.io, l))).rejects.toMatchObject({
+    await expect(
+      withLock(w, (l) => recoverSnapshot(w.io, l, structuralValidator)),
+    ).rejects.toMatchObject({
       reason: 'state_dir_unsafe',
     });
     expect(await readVerified(w.io, ['state.json'])).toEqual({ status: 'unsafe' });
