@@ -70,6 +70,7 @@ import {
 import type { RsiLockHandle } from '../lock.js';
 import { RsiFailClosedError, type RsiServiceCtx } from '../types.js';
 import { recomputeCounts, recomputeStagedTainted } from './counts-recompute.js';
+import { indexWritable } from '../services/index-writable.js';
 import { updateIndex } from './index-update.js';
 import { ackBaseline, carryConfirm } from './state-mutate.js';
 import type {
@@ -336,9 +337,21 @@ export async function commitL0(
     // C3 索引(D7:索引 ok 且盐指纹一致,或索引缺失且 cursor 也缺失)
     if (abort === null) {
       const idxOk = prevIndex.status === 'ok' && prevIndex.value.salt_fp === sfp;
-      const writable = idxOk || (prevIndex.status === 'absent' && prevCursor === null);
+      const writable = indexWritable(
+        prevIndex.status === 'ok'
+          ? { status: 'ok', saltFp: prevIndex.value.salt_fp }
+          : { status: prevIndex.status },
+        prevCursor !== null,
+        sfp,
+      );
       if (writable) {
-        indexGeneration = (prevIndex.status === 'ok' ? prevIndex.value.generation : 0) + 1;
+        // 新 generation = max(旧索引 generation 或 0, projects_ack_generation) + 1:索引与 cursor 都缺失(或旧索引无效)时从 1 起写,
+        // 而 ack 可能已很大,新 key 的 first_indexed_generation 会排不到 ack 之后(与 rebuild 同一缺陷)。三套 generation 互不比对,索引可跳号。
+        indexGeneration =
+          Math.max(
+            prevIndex.status === 'ok' ? prevIndex.value.generation : 0,
+            stateDoc.prev?.projects_ack_generation ?? 0,
+          ) + 1;
         const res = updateIndex({
           prev: idxOk && prevIndex.status === 'ok' ? prevIndex.value : null,
           observations: batch.observations,

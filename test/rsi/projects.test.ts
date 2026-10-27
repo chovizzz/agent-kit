@@ -201,7 +201,7 @@ describe('R20-3.5.2 / 3.5.3 目录名清洗与 --paths', () => {
     expect([no.code, no.err]).toEqual([2, 'RSI_USAGE reason=paths_requires_tty\n']);
   });
 
-  it('其它参数用法:未知 → unknown_arg;--write 无 --rebuild-index → write_requires_mode;--rebuild-index(含 --write)是 B5 桩(64),不读配置', async () => {
+  it('其它参数用法:未知 → unknown_arg;--write 无 --rebuild-index → write_requires_mode;--paths 与 --rebuild-index(含 --write)互斥 → 2 mode_conflict', async () => {
     const f = await makeRoFx('pj-args-');
     for (const [argv, err] of [
       [['--x'], 'RSI_USAGE reason=unknown_arg\n'],
@@ -215,13 +215,11 @@ describe('R20-3.5.2 / 3.5.3 目录名清洗与 --paths', () => {
       expect(r.err).toBe(err);
     }
     for (const argv of [
-      ['--rebuild-index'],
-      ['--rebuild-index', '--write'],
-      ['--rebuild-index', '--json'],
+      ['--rebuild-index', '--paths'],
+      ['--rebuild-index', '--write', '--paths'],
     ]) {
       const r = await runMain(f, ['rsi', 'projects', ...argv]);
-      expect(r.code, argv.join(' ')).toBe(64);
-      expect(r.err).toBe('RSI_NOT_IMPLEMENTED subcommand=projects.rebuild_index\n');
+      expect([r.code, r.err], argv.join(' ')).toEqual([2, 'RSI_USAGE reason=mode_conflict\n']);
       expect(r.audit).toEqual([]);
     }
   });
