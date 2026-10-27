@@ -108,6 +108,12 @@ const READONLY_ARGVS: string[][] = [
   ['rsi', 'projects', '--paths'], // 非 TTY → 退 2,同样零写入
   ['rsi', 'status', '--bogus'],
   ['rsi', 'projects', '--write'],
+  // B5a:无写入的新增变体(tick 干跑属 A5 零写入命令集;--rebuild-index 干跑;--ack 在非 TTY 下于拿锁之前就 2 退出)
+  ['rsi', 'tick'],
+  ['rsi', 'tick', '--json'],
+  ['rsi', 'projects', '--rebuild-index'],
+  ['rsi', 'projects', '--rebuild-index', '--json'],
+  ['rsi', 'status', '--ack'],
 ];
 
 describe('① 写调用审计(外部累计)+ 前后目录树', () => {
@@ -141,6 +147,28 @@ describe('① 写调用审计(外部累计)+ 前后目录树', () => {
     expect(r.audit).toEqual([]);
     expect(await treeOf(f.dir)).toEqual(before);
   });
+  it('B5a:有真盐 + 有会话时 projects --rebuild-index 干跑 / tick 干跑:退 0、输出有条目(正向前提)、写审计为 0、目录树不变', async () => {
+    const f = await populated('zw-rb-salt-');
+    const proj = await mkProject(f, 'rb');
+    await putSession(
+      f,
+      'claude',
+      `p/${'0'.repeat(8)}-0000-0000-0000-${'0'.repeat(12)}.jsonl`,
+      `${JSON.stringify({ type: 'user', cwd: proj.path, timestamp: '2026-10-01T00:00:00.000Z', message: { role: 'user', content: 'x' } })}\n`,
+    );
+    await writeFile(f.io, path.join(f.io.stateDir, 'salt'), 'ab'.repeat(32), { mode: 0o600 });
+    const before = await treeOf(f.dir);
+    const rb = await runMain(f, ['rsi', 'projects', '--rebuild-index', '--json']);
+    expect(rb.code, rb.err).toBe(0);
+    expect((JSON.parse(rb.out) as { entries: number }).entries).toBeGreaterThan(0);
+    const tk = await runMain(f, ['rsi', 'tick', '--json']);
+    expect(tk.code, tk.err).toBe(0);
+    expect((JSON.parse(tk.out) as { files_planned: number }).files_planned).toBeGreaterThan(0);
+    expect(rb.audit).toEqual([]);
+    expect(tk.audit).toEqual([]);
+    expect(await treeOf(f.dir)).toEqual(before);
+  });
+
   it('对照:同一钩子 / 同一 main() 路径下 rsi stop 会被记到 createExclusive(钩子确实接在命令上,不是空转)', async () => {
     const f = await makeRoFx('zw-hook-ctl-');
     const r = await runMain(f, ['rsi', 'stop']);
@@ -164,11 +192,15 @@ describe('② 子进程:KIT_TMP + 空写入根(KIT_WRITE_ROOTS=:)', () => {
       ['rsi', 'status'],
       ['rsi', 'projects'],
       ['rsi', 'projects', '--json'],
+      ['rsi', 'tick', '--json'],
+      ['rsi', 'projects', '--rebuild-index', '--json'],
     ]) {
       const inproc = await runMain(f, argv);
       const child = runRoChild(script, { argv, env: denied, cwd: f.dir });
       expect(child.code, argv.join(' ')).toBe(inproc.code);
-      expect(child.out).toBe(inproc.out);
+      // tick 干跑输出含 duration_ms(墙钟),两次运行必然不同:比较前抹平
+      const norm = (t: string): string => t.replace(/"duration_ms": \d+/g, '"duration_ms": 0');
+      expect(norm(child.out)).toBe(norm(inproc.out));
       expect(child.err).toBe(inproc.err);
       expect(child.err).not.toContain('write_denied');
     }

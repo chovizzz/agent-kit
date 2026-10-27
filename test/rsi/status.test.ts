@@ -108,7 +108,7 @@ async function chmodRemoveCfg(f: RoFx): Promise<void> {
 }
 
 describe('R20-3.4.1 参数与根', () => {
-  it('未知 / 重复 / --x=y / 位置参数 → 2 unknown_arg;--ack 由分发器路由到 B5 桩(64,B5a 实装后由 status-ack.ts 自己的 parseFlags 判参数)', async () => {
+  it('未知 / 重复 / --x=y / 位置参数 → 2 unknown_arg;--ack 由分发器路由到 status-ack.ts(非 TTY → 2 not_tty,`--ack --x` → 2 unknown_arg)', async () => {
     const f = await makeRoFx('st-args-');
     for (const argv of [['--x'], ['--json', '--json'], ['--json=1'], ['stray']]) {
       const r = await runMain(f, ['rsi', 'status', ...argv]);
@@ -116,13 +116,13 @@ describe('R20-3.4.1 参数与根', () => {
       expect(r.err).toBe('RSI_USAGE reason=unknown_arg\n');
       expect(r.out).toBe('');
     }
-    // B5-0:带 --ack 的 argv 一律由分发器路由到 status-ack.ts 桩(参数合法性不再由 status.ts 判:`--ack --x` 也是 64);B5a 实装后恢复 `--ack --x` → 2
-    for (const argv of [['--ack'], ['--ack', '--x']]) {
-      const ack = await runMain(f, ['rsi', 'status', ...argv]);
-      expect(ack.code, argv.join(' ')).toBe(64);
-      expect(ack.err).toBe('RSI_NOT_IMPLEMENTED subcommand=status.ack\n');
-      expect(ack.out).toBe('');
-    }
+    // B5a:带 --ack 的 argv 由分发器路由到 status-ack.ts,参数合法性由它自己的 parseFlags 判(恢复契约值)
+    const ack = await runMain(f, ['rsi', 'status', '--ack', '--x']);
+    expect([ack.code, ack.err, ack.out]).toEqual([2, 'RSI_USAGE reason=unknown_arg\n', '']);
+    const notTty = await runMain(f, ['rsi', 'status', '--ack'], { isTty: false });
+    expect([notTty.code, notTty.err, notTty.out]).toEqual([2, 'RSI_USAGE reason=not_tty\n', '']);
+    expect(ack.audit).toEqual([]);
+    expect(notTty.audit).toEqual([]);
   });
 
   it('--root 与 [rsi] repo 不符 → 2 root_mismatch,零写入、不建 rsi/', async () => {

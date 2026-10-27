@@ -119,7 +119,7 @@ async function fingerprintOf(config: RsiConfigOn, saltFp: string): Promise<strin
   });
 }
 
-async function buildRedactor(config: RsiConfigOn): Promise<Redactor> {
+export async function buildRedactor(config: RsiConfigOn): Promise<Redactor> {
   let overlay: Overlay | undefined;
   if (config.overlayPath !== null) {
     try {

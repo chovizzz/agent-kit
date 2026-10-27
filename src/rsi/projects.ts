@@ -7,7 +7,8 @@
  *    不是从最终文本里推断);`unknown` 行不追加;
  *  - `key8` = `p_` 之后的前 8 位十六进制(「key 前缀」);summary 的 `collecting` 含 `new`(`new` 是采集中的子集,R20-4.2a);
  *  - 首次 `armed`(无索引、无确认)的清单要现算 armed 列举(`l0/armed-listing.ts`:读会话目录与头部,不建盐、不读正文、不写):缺省接 `listArmed`,`deps.listArmed` 可注入;
- *  - `--rebuild-index`(含 `--write`)属 B5:64 命令桩,不读配置。
+ *  - `--rebuild-index`(干跑,B5a):`planRebuildForWrite`(只读)→ 打印将写入的条目数、将变为可归属的信号数等;盐不存在 → 4 `not_confirmed`;
+ *    `--write` 由分发器路由到 `projects-rebuild.ts`(本文件保持只读闭包);
  * 本文件的 import 闭包不含 safe-fs / lock.ts / snapshot.ts / with-lock.ts / exec.ts。
  */
 import * as path from 'node:path';
@@ -22,11 +23,17 @@ import { emitLines, forbiddenPaths, jsonLines } from './output.js';
 import { readRsiState } from './read-state.js';
 import { cleanName, cleanPath, type OutLine } from './sanitize.js';
 import { listArmed } from './l0/armed-listing.js';
-import type { ArmedListing } from './l0/types.js';
+import { planRebuildForWrite } from './l0/rebuild-gate.js';
+import { RebuildNoSaltError } from './l0/rebuild-plan.js';
+import type { ArmedListing, L0Deps } from './l0/types.js';
 import { openRsiIo, piDirIsSet, type OpenRsiIoDeps } from './services/open.js';
+import { RsiCountsSchema, RsiProjectIndexSchema, type RsiProjectIndex } from '../contracts/rsi.js';
+import { SaltError } from '../signals/salt-read.js';
+import { RsiSnapshotError, readVerified } from './snapshot-read.js';
+import { RsiSnapshotBusyError } from './exit.js';
 import { loadRepoIdentity, rsiStateOf } from './state.js';
-import { rsiStubExit } from './stub.js';
-import type { RsiEarlyContext, RsiSubcommand } from './types.js';
+import { flattenDoc } from './status.js';
+import { RsiFailClosedError, type RsiEarlyContext, type RsiSubcommand } from './types.js';
 
 // 首次 `armed` 的现算清单:类型在 `l0/types.ts`(B4-0 移入,规划侧模块不得反向依赖本文件),这里 re-export,既有 import 路径不变
 export type { ArmedListing };
@@ -37,6 +44,8 @@ export interface RsiProjectsDeps {
   open?: OpenRsiIoDeps;
   probe?: AttributionProbe;
   listArmed?: (io: IoContext, config: RsiConfigOn) => Promise<ArmedListing>;
+  /** `--rebuild-index` 干跑的 L0 测试缝(`piDirSet`、`now`、`limits`、`beforeStep`……) */
+  l0?: L0Deps;
   /** 只给测试:对渲染好的行做一次篡改(演练泄漏闸) */
   tamper?: (lines: OutLine[]) => OutLine[];
 }
@@ -101,6 +110,88 @@ const ZERO: Summary = {
   unknown_sessions: 0,
 };
 
+/** `--rebuild-index` 干跑的输出(键集合订正待并入契约):条目数、保留 / 新观测、将变为可归属的信号数(counts 缺失 / 损坏 / 盐不符为 `null`)、未知会话、剩余文件、限制、完整性、写入判定 */
+async function runRebuildDry(
+  ctx: RsiEarlyContext,
+  deps: RsiProjectsDeps,
+  json: boolean,
+): Promise<number> {
+  try {
+    const open = await openRsiIo(ctx, deps.open);
+    if (open.kind === 'usage') {
+      ctx.stderr(`RSI_USAGE reason=${open.reason}\n`);
+      return ExitCode.USAGE;
+    }
+    if (open.kind === 'off') {
+      ctx.stderr('RSI_NOT_RUN reason=off\n');
+      return ExitCode.NOT_RUN;
+    }
+    const { io, config } = open.ctx;
+    const l0: L0Deps = { ...(deps.l0 ?? {}), piDirSet: deps.l0?.piDirSet ?? piDirIsSet(ctx.env) };
+    let planned;
+    try {
+      planned = await planRebuildForWrite(io, config, l0);
+    } catch (e) {
+      if (e instanceof RebuildNoSaltError) {
+        ctx.stderr('RSI_NOT_RUN reason=not_confirmed\n');
+        return ExitCode.NOT_RUN;
+      }
+      if (e instanceof SaltError) throw new RsiFailClosedError('salt_invalid');
+      throw e;
+    }
+    const { plan, oldIndexValid, verdict } = planned;
+    // 将变为可归属的信号数:新索引里「旧索引无效,或旧索引里没有」的 key 在 counts 里的信号合计。坏 counts 不阻断重建,记 null
+    const v = await readVerified(io, ['counts.json', 'projects.json']);
+    if (v.status === 'busy') throw new RsiSnapshotBusyError();
+    if (v.status === 'unsafe') throw new RsiSnapshotError('state_dir_unsafe');
+    if (v.status === 'invalid') throw new RsiSnapshotError('snapshot_invalid');
+    const files = v.status === 'ok' ? v.files : new Map<string, Buffer | null>();
+    let counts: ReturnType<typeof RsiCountsSchema.parse> | null = null;
+    const cb = files.get('counts.json') ?? null;
+    if (cb !== null) {
+      try {
+        counts = RsiCountsSchema.parse(JSON.parse(cb.toString('utf8')));
+      } catch {
+        counts = null;
+      }
+    }
+    let oldKeys = new Set<string>();
+    const ib = files.get('projects.json') ?? null;
+    if (oldIndexValid && ib !== null) {
+      const p = RsiProjectIndexSchema.safeParse(JSON.parse(ib.toString('utf8')));
+      if (p.success) oldKeys = new Set((p.data as RsiProjectIndex).entries.map((e) => e.key));
+    }
+    let newly: number | null = null;
+    if (counts !== null && counts.salt_fp === plan.index.salt_fp) {
+      newly = 0;
+      for (const e of plan.index.entries) {
+        if (!oldKeys.has(e.key)) newly += counts.per_key[e.key]?.signals_total ?? 0;
+      }
+    }
+    const doc = {
+      entries: plan.index.entries.length,
+      kept_from_old: plan.keptFromOld,
+      observed: plan.observed,
+      newly_attributable_signals: newly,
+      unknown_sessions: plan.unknownSessions,
+      remaining_files: plan.remainingFiles,
+      limits_hit: plan.limitsHit,
+      complete: plan.complete,
+      write_verdict: verdict.write ? 'ok' : verdict.reason,
+    };
+    const lines: OutLine[] = json
+      ? jsonLines(canonicalJson(doc))
+      : flattenDoc(doc).map((head) => ({ head }));
+    return emitLines(
+      ctx,
+      lines,
+      await forbiddenPaths(ctx.env, [io.stateDir, io.repoRoot, config.repo]),
+    );
+  } catch (e) {
+    return failExit(ctx.stderr, e);
+  }
+}
+
 export async function runProjects(
   ctx: RsiEarlyContext,
   deps: RsiProjectsDeps = {},
@@ -122,8 +213,8 @@ export async function runProjects(
   if (f.has('--paths') && !(deps.stdoutIsTty ?? ctx.isTty ?? process.stdout.isTTY === true)) {
     return usage('paths_requires_tty'); // R20-3.5.3:只要求 stdout 是 TTY(stdin 可以是 /dev/null)
   }
-  if (f.has('--rebuild-index')) return rsiStubExit(ctx, 'projects.rebuild_index'); // B5
   const json = f.has('--json');
+  if (f.has('--rebuild-index')) return runRebuildDry(ctx, deps, json);
   const paths = f.has('--paths');
 
   try {

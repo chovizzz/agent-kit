@@ -23,11 +23,9 @@ import * as storeRewrite from '../../src/signals/store-rewrite.js';
 import type { WriteGate } from '../../src/signals/state-store.js';
 import { REPO_ROOT } from '../helpers/tmp.js';
 
-type Pass2 = Pick<import('../../src/contracts/redact.js').Redactor, 'pass2'>;
 const ctx = {} as RsiServiceCtx;
 const lock = {} as RsiLockHandle;
 const io = {} as IoContext;
-const redactor = {} as Pass2;
 
 describe('B5 服务签名(类型断言 = 冻结)', () => {
   it('observe.ts(B5a)', () => {
@@ -110,23 +108,9 @@ describe('B5 服务签名(类型断言 = 冻结)', () => {
     >();
   });
 
-  it('运行期:每个桩都抛 not implemented(同步桩同步抛,异步桩拒绝)', async () => {
+  it('运行期:B5c 的桩仍抛 not implemented(B5a 的 observe / projections / tick-state 已实装,行为测试在 b5a-*.test.ts)', async () => {
     const gate: WriteGate = () => Promise.resolve();
-    const sync: Array<[string, () => unknown]> = [
-      ['confirmedCheckpoint', () => observe.confirmedCheckpoint({} as never)],
-      ['armedCheckpoint', () => observe.armedCheckpoint({} as never)],
-      ['displayFingerprint', () => observe.displayFingerprint({} as never)],
-      ['indexWritable', () => projections.indexWritable({ status: 'absent' }, false, 'x')],
-      ['tickStateMutator', () => tickState.tickStateMutator({} as never)],
-      ['defaultState', () => tickState.defaultState()],
-    ];
-    for (const [name, f] of sync) expect(f, name).toThrow(/not implemented/);
     const asyncStubs: Array<[string, () => Promise<unknown>]> = [
-      ['observeRsi', () => observe.observeRsi(io, {})],
-      ['stagedProjection', () => projections.stagedProjection(io)],
-      ['recomputeAllCounts', () => projections.recomputeAllCounts(ctx, redactor)],
-      ['refreshStagedUnderLock', () => projections.refreshStagedUnderLock(ctx, lock, redactor)],
-      ['writeAllCountsUnderLock', () => projections.writeAllCountsUnderLock(ctx, lock, redactor)],
       ['resolvePurgeKeys', () => purgePlan.resolvePurgeKeys(io, {} as never, { kind: 'excluded' })],
       ['planPurgeTargets', () => purgePlan.planPurgeTargets(io, [])],
       ['countPurge', () => purgePlan.countPurge(io, [])],
@@ -152,13 +136,11 @@ describe('B5 服务签名(类型断言 = 冻结)', () => {
 });
 
 describe('status 的 warnings / next 常量', () => {
-  it('RSI_STATUS_WARNINGS = status.ts 现有的 warnings.push 字面量 + index_rebuild_required(B5a 接线);next 词固定', async () => {
+  it('RSI_STATUS_WARNINGS = status.ts 里全部 warnings.push 字面量(index_rebuild_required 已由 B5a 接线);next 词固定', async () => {
     const text = await readText(path.join(REPO_ROOT, 'src/rsi/status.ts'));
     const pushed = [...text.matchAll(/warnings\.push\('([a-z_]+)'\)/g)].map((m) => m[1] as string);
     expect(pushed.length, '正向前提:抽到了现有的 warnings.push').toBeGreaterThanOrEqual(4);
-    expect([...RSI_STATUS_WARNINGS].filter((w) => !pushed.includes(w)).sort()).toEqual([
-      'index_rebuild_required',
-    ]);
+    expect([...RSI_STATUS_WARNINGS].filter((w) => !pushed.includes(w)).sort()).toEqual([]);
     expect(pushed.filter((w) => !(RSI_STATUS_WARNINGS as readonly string[]).includes(w))).toEqual(
       [],
     );

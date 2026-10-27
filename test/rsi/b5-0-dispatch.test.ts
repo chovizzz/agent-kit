@@ -1,7 +1,7 @@
 /**
  * R20-A2 B5-0:分发器按精确 token 路由(`status --ack` → status-ack.ts;`projects --rebuild-index --write` → projects-rebuild.ts),
- * 以及这两个入口桩(退 64,stderr 只有稳定码,stdout 空,零写入)。
- * 路由是纯函数:只看 token 在不在,不判参数合法性(合法性归目标入口的 parseFlags,B5a 实装后恢复)。
+ * 以及这两个入口(B5a 实装后恢复契约退出码;零写入)。
+ * 路由是纯函数:只看 token 在不在,不判参数合法性(合法性归目标入口的 parseFlags)。
  */
 import { describe, expect, it } from 'vitest';
 import { main } from '../../src/cli.js';
@@ -76,42 +76,49 @@ describe('routeRsi(纯函数,精确 token)', () => {
   });
 });
 
-describe('两个入口桩(经真实 main())', () => {
-  it('桩的形状:owner B5,name 沿用目标命令名', () => {
+describe('两个入口(经真实 main();B5a 已实装,不再是桩)', () => {
+  it('入口形状:owner B5,name 沿用目标命令名', () => {
     expect(statusAck.name).toBe('status');
     expect(statusAck.owner).toBe('B5');
     expect(projectsRebuild.name).toBe('projects');
     expect(projectsRebuild.owner).toBe('B5');
   });
 
-  it('rsi status --ack → 64,stderr 只有稳定码,stdout 空,零写入(含 --json / 额外参数)', async () => {
-    for (const extra of [[], ['--json'], ['--bogus']]) {
+  it('rsi status --ack:路由到 status-ack.ts,按它自己的 parseFlags 判参数;非 TTY → 2 not_tty;零写入', async () => {
+    for (const [extra, err] of [
+      [[], 'RSI_USAGE reason=not_tty\n'],
+      [['--json'], 'RSI_USAGE reason=not_tty\n'],
+      [['--bogus'], 'RSI_USAGE reason=unknown_arg\n'],
+      [['--x'], 'RSI_USAGE reason=unknown_arg\n'],
+    ] as const) {
       const r = await run(['rsi', 'status', '--ack', ...extra]);
-      expect(r.code, extra.join(' ')).toBe(64);
-      expect(r.err).toBe('RSI_NOT_IMPLEMENTED subcommand=status.ack\n');
+      expect(r.code, extra.join(' ')).toBe(2);
+      expect(r.err).toBe(err);
       expect(r.out).toBe('');
       expect(r.audit).toEqual([]);
     }
-    // 对照:不带 --ack 时走真实的 status(假 HOME 下配置 absent → 退 0 有输出),说明上面的 64 确实来自路由
+    // 对照:不带 --ack 时走真实的 status(假 HOME 下配置 absent → 退 0 有输出),说明上面的结果确实来自路由
     const plain = await run(['rsi', 'status']);
     expect(plain.code).toBe(0);
     expect(plain.out).toContain('state=off');
   });
 
-  it('rsi projects --rebuild-index --write → 64,桩码 projects.rebuild_index,stdout 空,零写入', async () => {
-    for (const extra of [[], ['--json'], ['--paths']]) {
+  it('rsi projects --rebuild-index --write:路由到 projects-rebuild.ts;--paths → 2 mode_conflict;配置 absent → 4 off;零写入', async () => {
+    const paths = await run(['rsi', 'projects', '--rebuild-index', '--write', '--paths']);
+    expect([paths.code, paths.err]).toEqual([2, 'RSI_USAGE reason=mode_conflict\n']);
+    for (const extra of [[], ['--json']]) {
       const r = await run(['rsi', 'projects', '--rebuild-index', '--write', ...extra]);
-      expect(r.code, extra.join(' ')).toBe(64);
-      expect(r.err).toBe('RSI_NOT_IMPLEMENTED subcommand=projects.rebuild_index\n');
+      expect(r.code, extra.join(' ')).toBe(4);
+      expect(r.err).toBe('RSI_NOT_RUN reason=off\n');
       expect(r.out).toBe('');
       expect(r.audit).toEqual([]);
     }
   });
 
-  it('rsi projects --rebuild-index(干跑,无 --write)仍落在 projects.ts 的桩(B5a 在那里实装),码相同', async () => {
+  it('rsi projects --rebuild-index(干跑,无 --write)仍落在 projects.ts:配置 absent → 4 off,零写入', async () => {
     const r = await run(['rsi', 'projects', '--rebuild-index']);
-    expect(r.code).toBe(64);
-    expect(r.err).toBe('RSI_NOT_IMPLEMENTED subcommand=projects.rebuild_index\n');
+    expect(r.code).toBe(4);
+    expect(r.err).toBe('RSI_NOT_RUN reason=off\n');
     expect(r.out).toBe('');
     expect(r.audit).toEqual([]);
   });

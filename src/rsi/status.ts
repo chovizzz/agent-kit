@@ -1,5 +1,5 @@
 /**
- * `agent-kit rsi status [--json] [--ack]`(契约 R20-3.4;R20-A2 B3a 实装,`--ack` 属 B5)。
+ * `agent-kit rsi status [--json]`(`--ack` 见 `status-ack.ts`)(契约 R20-3.4;R20-A2 B3a 实装;`--ack` 由分发器路由到 `status-ack.ts`,本文件保持只读闭包)。
  *
  * 只读、不拿锁、不建 `rsi/`、不恢复快照:`openRsiIo`(配置 off 也退出 0,把原因码放进 `reason`)→ `readRsiState`(快照协议)→
  * `rsiStateOf`(现算状态)→ `attribute`(现算 P / X / U,R20-4.6)→ `peekRsiLock`(锁状态)→ 一次性输出(过泄漏闸)。
@@ -11,6 +11,7 @@ import * as path from 'node:path';
 import { ExitCode } from '../contracts/exit-codes.js';
 import {
   RSI_INDEX_MAX_ENTRIES,
+  RSI_STATUS_NEXT_REBUILD,
   RsiTaintMarkSchema,
   type RsiAgentId,
   type RsiState,
@@ -29,9 +30,9 @@ import { emitLines, forbiddenPaths, jsonLines } from './output.js';
 import { readRsiState, type RsiReadData } from './read-state.js';
 import type { OutLine } from './sanitize.js';
 import { openRsiIo, piDirIsSet, type OpenRsiIoDeps } from './services/open.js';
+import { readSaltFile } from '../signals/salt-read.js';
 import { RsiSnapshotError } from './snapshot-read.js';
 import { loadRepoIdentity, rsiStateOf } from './state.js';
-import { rsiStubExit } from './stub.js';
 import type { RsiEarlyContext, RsiSubcommand } from './types.js';
 
 /** 稳定码字符集(同 `RsiLogLineSchema.code`,排除 `/`、空白与控制字符) */
@@ -230,6 +231,24 @@ async function taintReason(
   throw new RsiSnapshotError('state_invalid');
 }
 
+/** 读盐失败(缺失 / 违规)一律当「没有可用的盐」:不出告警、不抛,不改变 status 现有的退出行为 */
+async function indexRebuildRequired(
+  io: Parameters<typeof peekRsiLock>[0],
+  data: RsiReadData,
+): Promise<boolean> {
+  let saltFp: string | null = null;
+  try {
+    const r = await readSaltFile(io.stateDir);
+    if (r.kind === 'ok') saltFp = r.saltFp;
+  } catch {
+    saltFp = null;
+  }
+  if (saltFp === null) return false;
+  if (data.index.status === 'absent') return data.cursor.status === 'ok';
+  if (data.index.status === 'invalid') return true;
+  return data.index.value !== null && data.index.value.salt_fp !== saltFp;
+}
+
 async function buildDoc(
   config: RsiConfigOn,
   data: RsiReadData,
@@ -353,6 +372,8 @@ async function buildDoc(
   if (cloudSyncSuspected(config.repo)) warnings.push('cloud_sync_suspected');
   if (entries.length >= RSI_INDEX_MAX_ENTRIES) warnings.push('index_full');
   if (breaker.state === 'open') warnings.push('breaker_open');
+  // D7 / Q-C:盐有效,但索引缺失而 cursor 在、或索引损坏 / 盐不符 —— tick 不会重建索引,需要 `projects --rebuild-index --write`
+  if (await indexRebuildRequired(io, data)) warnings.push('index_rebuild_required');
 
   return {
     state: st.state,
@@ -424,12 +445,11 @@ export function flattenDoc(v: unknown, prefix = ''): string[] {
 }
 
 export async function runStatus(ctx: RsiEarlyContext, deps: RsiStatusDeps = {}): Promise<number> {
-  const parsed = parseFlags(ctx.argv, ['--json', '--ack']);
+  const parsed = parseFlags(ctx.argv, ['--json']);
   if (!parsed.ok) {
     ctx.stderr('RSI_USAGE reason=unknown_arg\n');
     return ExitCode.USAGE;
   }
-  if (parsed.flags.has('--ack')) return rsiStubExit(ctx, 'status.ack'); // B5
   const json = parsed.flags.has('--json');
   try {
     const open = await openRsiIo(ctx, deps.open);
@@ -451,6 +471,10 @@ export async function runStatus(ctx: RsiEarlyContext, deps: RsiStatusDeps = {}):
     const lines: OutLine[] = json
       ? jsonLines(canonicalJson(doc))
       : flattenDoc(doc).map((head) => ({ head }));
+    // 文本模式的「下一步」行(固定枚举词,不含路径);JSON 只靠 warnings
+    if (!json && doc.warnings.includes('index_rebuild_required')) {
+      lines.push({ head: `next=${RSI_STATUS_NEXT_REBUILD}` });
+    }
     return emitLines(ctx, lines, forbidden);
   } catch (e) {
     return failExit(ctx.stderr, e);

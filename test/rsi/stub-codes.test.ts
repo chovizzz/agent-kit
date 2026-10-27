@@ -12,8 +12,7 @@ import { REPO_ROOT } from '../helpers/tmp.js';
 
 /** 文件(相对仓库根)→ 该文件里登记的桩名(升序);注释写明谁负责删 */
 const REGISTERED: Readonly<Record<string, readonly string[]>> = {
-  // B5a:tick 实装
-  'src/rsi/tick.ts': ['tick'],
+  // B5a 已实装并删除登记:tick / status --ack / projects --rebuild-index(干跑与 --write)
   // B5b:confirm 实装
   'src/rsi/confirm.ts': ['confirm'],
   // B5c:purge 实装
@@ -21,12 +20,6 @@ const REGISTERED: Readonly<Record<string, readonly string[]>> = {
   // A3:poke / hint(钩子专用入口,不属于 B5)
   'src/rsi/poke.ts': ['poke'],
   'src/rsi/hint.ts': ['hint'],
-  // B5a:`status --ack`:B5-0 起由独立入口 status-ack.ts 承接;status.ts 里的旧分支(分发器路由后在真实 CLI 下不可达)随 B5a 一并删除
-  'src/rsi/status-ack.ts': ['status.ack'],
-  'src/rsi/status.ts': ['status.ack'],
-  // B5a:`projects --rebuild-index`:--write 由 projects-rebuild.ts 承接;干跑(无 --write)仍落 projects.ts 的桩,B5a 在那里实装干跑
-  'src/rsi/projects-rebuild.ts': ['projects.rebuild_index'],
-  'src/rsi/projects.ts': ['projects.rebuild_index'],
 };
 /** 分发器里 P1 预留子命令用变量调用桩(不是字面量),不进上表;这里钉住它仍存在 */
 const DISPATCHER = 'src/commands/rsi.ts';
