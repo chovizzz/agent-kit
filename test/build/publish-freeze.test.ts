@@ -160,6 +160,14 @@ describe('接线(对真实仓库文件的文本断言)', () => {
     expect(ignore.split('\n').map((l) => l.trim())).not.toContain('*');
   });
 
+  it('package.json 的 files 白名单不含 RELEASE_FREEZE(冻结文件不进 npm 包;解除冻结时别顺手加进去)', async () => {
+    const pkg = JSON.parse(await readText(path.join(REPO_ROOT, 'package.json'))) as {
+      files: string[];
+    };
+    expect(pkg.files.length).toBeGreaterThan(0); // 正向前提:白名单存在且非空,断言才有意义
+    expect(pkg.files.filter((f) => f.includes(FREEZE_FILE))).toEqual([]);
+  });
+
   it('package.json:prepublishOnly 调 check-publish --freeze-only;version 仍是 0.1.0', async () => {
     const pkg = JSON.parse(await readText(path.join(REPO_ROOT, 'package.json'))) as {
       version: string;

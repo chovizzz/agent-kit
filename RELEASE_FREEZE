@@ -12,3 +12,6 @@ Lift:     delete this file in a separate commit after B5e acceptance AND explici
           Do not delete it to "unblock" an unrelated release.
           The same commit must also drop the freeze-era assertions in test/build/publish-freeze.test.ts
           ("real repo is frozen", "RELEASE_FREEZE at repo root", "version is 0.1.0"); keep the rest.
+          Version bump: 0.1.0 is already on npm, so the first release after the lift needs a new version. Do the bump
+          in the SAME commit that deletes this file (ci.yml's version lock turns into a no-op only once the file is
+          gone; bumping first makes CI fail on the lock, deleting first leaves a window with no guard).
