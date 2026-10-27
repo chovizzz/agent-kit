@@ -7,6 +7,7 @@ import { main } from '../../src/cli.js';
 import { COMMANDS } from '../../src/cli.js';
 import { RSI_P1_RESERVED_SUBCOMMANDS, RSI_SUBCOMMANDS } from '../../src/contracts/rsi.js';
 import { RSI_SUBCOMMAND_TABLE } from '../../src/commands/rsi.js';
+import type { EarlyCommandContext } from '../../src/commands/types.js';
 import { makeTempDir } from '../helpers/tmp.js';
 import { treeOf } from './rsi-fixture.js';
 
@@ -117,4 +118,20 @@ describe('rsi 调用顺序(契约 R20-A2 v2 §3、§5;顺序用例随后续块�
   it.todo(
     '[B3c] 锁内顺序:recoverSnapshot → resumeTaint → immediateGate → 业务 → commitUnderLock;deny 路径不触发 recover — 原因:服务层是桩,B3c 实装',
   );
+});
+
+describe('EarlyCommandContext 的交互注入点(与 CommandContext 一致)', () => {
+  it('isTty / readLine 可注入,供 confirm / --ack / purge 沿用 resolveIsTty / resolveReadLine', async () => {
+    const ctx: EarlyCommandContext = {
+      argv: [],
+      overlayPath: undefined,
+      explicitRoot: undefined,
+      stdout: () => {},
+      stderr: () => {},
+      isTty: true,
+      readLine: async () => 'yes',
+    };
+    expect(ctx.isTty).toBe(true);
+    expect(await ctx.readLine?.()).toBe('yes');
+  });
 });
