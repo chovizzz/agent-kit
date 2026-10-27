@@ -27,6 +27,14 @@ export class SignalStoreError extends Error {
   readonly code = 'SIGNALS_STORE_CORRUPT';
 }
 
+/**
+ * 写点钩子(R20-A2 B4c2,B3b-4 / D16):**每个写操作之前**调用一次(`op` 是稳定的短名,`absPath` 是要改的路径);钩子抛错 = 该写点之后零写入。
+ * 生产(rsi 持锁路径)传 `assertHeld()` 包装,测试用它在恰好第 k 个写点换掉锁的 nonce。不传 = 行为与加钩子之前逐字节一致(`signals collect`)。
+ * `absPath` 只在本文件 / `session-stats.ts` 的写点上是真实路径;rsi 服务层(`Writer.op`:固定文件 / counts / 日志 / 清单)经 `hooksFromGate` 适配,路径为空串,
+ * 文件名在 `op` 里(如 `rename:cursor.json`、`log-append`、`snapshot-rename`)。
+ */
+export type WriteGate = (op: string, absPath: string) => Promise<void>;
+
 export interface SaltResult {
   salt: string;
   /** false = 内存临时盐(--dry 且文件不存在) */
@@ -65,16 +73,21 @@ export async function loadSalt(
     create: boolean;
     /** 测试缝:已确认盐不存在、尚未创建之前调用(用来在这个窗口里让「另一个进程」先建好盐) */
     beforeCreate?: () => Promise<void> | void;
+    /** 写点钩子:`mkdirp` / `chmod` / `salt-create` 之前各调一次(盐首建的全写点复核) */
+    beforeWrite?: WriteGate;
   },
 ): Promise<SaltResult> {
   const file = saltPath(io);
   const existing = await readSettledSalt(file);
   if (existing.kind === 'ok') return { salt: existing.salt, persisted: true };
   if (!opts.create) return { salt: ephemeralSalt(), persisted: false };
+  await opts.beforeWrite?.('mkdirp', io.stateDir);
   await mkdirp(io, io.stateDir, 0o700);
+  await opts.beforeWrite?.('chmod', io.stateDir);
   await chmod(io, io.stateDir, 0o700);
   await opts.beforeCreate?.();
   try {
+    await opts.beforeWrite?.('salt-create', file);
     await createExclusive(io, file, `${newSalt()}\n`, 0o600);
   } catch (e) {
     // 已被别的进程(或上一轮)建好:不覆盖,读它;其它错误照抛
@@ -138,7 +151,9 @@ export async function writeSignals(
   io: IoContext,
   agent: AgentId,
   signals: readonly Signal[],
+  opts: { beforeWrite?: WriteGate } = {},
 ): Promise<WriteResult> {
+  const gate = opts.beforeWrite;
   const result: WriteResult = { written: 0, deduplicated: 0, files: [] };
   if (signals.length === 0) return result;
 
@@ -152,8 +167,10 @@ export async function writeSignals(
   }
 
   const dir = signalsDir(io, agent);
+  await gate?.('mkdirp', dir);
   await mkdirp(io, dir, 0o700);
   for (const d of [io.stateDir, path.join(io.stateDir, 'signals'), dir]) {
+    await gate?.('chmod', d);
     await chmod(io, d, 0o700);
   }
 
@@ -171,14 +188,21 @@ export async function writeSignals(
       fresh.push(signalLine(s));
     }
     if (fresh.length === 0) {
-      if (prev !== '') await chmod(io, file, 0o600); // 已有文件权限过宽时顺带收紧
+      if (prev !== '') {
+        await gate?.('chmod-existing', file);
+        await chmod(io, file, 0o600); // 已有文件权限过宽时顺带收紧
+      }
       continue;
     }
     const head = prev === '' || prev.endsWith('\n') ? prev : `${prev}\n`;
     const tmp = `${file}.tmp`;
+    await gate?.('write-tmp', tmp);
     await writeFile(io, tmp, `${head}${fresh.join('\n')}\n`, { mode: 0o600 });
+    await gate?.('chmod-tmp', tmp);
     await chmod(io, tmp, 0o600);
+    await gate?.('rename', file);
     await rename(io, tmp, file);
+    await gate?.('chmod-final', file);
     await chmod(io, file, 0o600);
     result.written += fresh.length;
     result.files.push(file);

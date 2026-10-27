@@ -215,6 +215,19 @@ export async function recomputeSignalCounts(
   return { perKey, unknownKeysSignals };
 }
 
+/**
+ * `recomputeCounts` 的 `staged` 段(B4c2 抽出,逻辑不变):`counts.json` 里现有每个 run 的 `TAINTED` 实际在场情况。**不读信号库**——
+ * [A0] 中止(读阶段 / 首次数据提交之前)只校正 `staged`,不应被信号库的状态挡住(库带病时仍要能记下 `stopped` 等结果)。
+ */
+export async function recomputeStagedTainted(io: IoContext): Promise<ReadonlyMap<string, boolean>> {
+  const stagedTainted = new Map<string, boolean>();
+  const reflectOk: { v?: Promise<boolean> } = {};
+  for (const runId of await currentStagedRunIds(io)) {
+    stagedTainted.set(runId, await taintedPresent(io.stateDir, runId, reflectOk));
+  }
+  return stagedTainted;
+}
+
 export async function recomputeCounts(
   io: IoContext,
   config: RsiConfigOn,
@@ -222,10 +235,5 @@ export async function recomputeCounts(
 ): Promise<RecomputedCounts> {
   void config; // 与冻结签名一致;重算不依赖配置(归属 / 排除是读侧现算,R20-4.6)
   const { perKey, unknownKeysSignals } = await recomputeSignalCounts(io, now);
-  const stagedTainted = new Map<string, boolean>();
-  const reflectOk: { v?: Promise<boolean> } = {};
-  for (const runId of await currentStagedRunIds(io)) {
-    stagedTainted.set(runId, await taintedPresent(io.stateDir, runId, reflectOk));
-  }
-  return { perKey, unknownKeysSignals, stagedTainted };
+  return { perKey, unknownKeysSignals, stagedTainted: await recomputeStagedTainted(io) };
 }

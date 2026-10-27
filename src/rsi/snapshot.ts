@@ -240,6 +240,8 @@ async function writeManifest(
   });
   const dest = snapshotPath(b.rsi);
   const tmp = `${dest}.tmp`;
+  // 残余:remove / createExclusive 两步只在 commitSnapshot 进入时复核过一次锁,rename 前再复核;失锁窗口内留下的 tmp 不在白名单、不被清单管辖,
+  // 其内容(文件名 + sha256,没有会话内容)也不构成泄漏,下一次 recover 首行就删除。
   try {
     await remove(io, tmp); // 上次崩溃留下的临时文件
     await createExclusive(io, tmp, canonicalJson(next), RSI_FILE_MODE);

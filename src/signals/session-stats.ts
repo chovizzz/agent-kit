@@ -26,7 +26,7 @@ import { lstat, readDir, readText } from '../io/read-fs.js';
 import { chmod, mkdirp, rename, writeFile } from '../io/safe-fs.js';
 import { newCountRecord } from '../contracts/count-record.js';
 import type { SessionResult } from './pipeline.js';
-import { signalMonth, SignalStoreError } from './state-store.js';
+import { signalMonth, SignalStoreError, type WriteGate } from './state-store.js';
 
 /** 键数超限时的折叠桶;合法键(与 safeKey 同字符集)。 */
 export const OTHER_KEY = '<other>';
@@ -197,20 +197,40 @@ export async function planSessionStats(
   return { dir, files, result };
 }
 
-export async function applySessionStats(io: IoContext, plan: StatPlan): Promise<StatWriteResult> {
+/**
+ * `opts.beforeWrite`(B4c2 / D16):每个写点(mkdirp、各次 chmod、写 .tmp、rename、rename 后 chmod)之前各调一次,抛错 = 该点之后零写入。
+ * 不传 = 行为与加钩子之前逐字节一致。
+ */
+export async function applySessionStats(
+  io: IoContext,
+  plan: StatPlan,
+  opts: { beforeWrite?: WriteGate } = {},
+): Promise<StatWriteResult> {
   const { dir, files, result } = plan;
+  const gate = opts.beforeWrite;
   if (result.written === 0 && result.updated === 0 && result.unchanged === 0) return result;
+  await gate?.('mkdirp', dir);
   await mkdirp(io, dir, 0o700);
-  for (const d of [io.stateDir, path.dirname(dir), dir]) await chmod(io, d, 0o700);
+  for (const d of [io.stateDir, path.dirname(dir), dir]) {
+    await gate?.('chmod', d);
+    await chmod(io, d, 0o700);
+  }
   for (const f of [...files.values()].sort((a, b) => a.file.localeCompare(b.file))) {
     if (!f.changed) {
-      if (await fileExists(f.file)) await chmod(io, f.file, 0o600); // 已有文件权限过宽时顺带收紧
+      if (await fileExists(f.file)) {
+        await gate?.('chmod-existing', f.file);
+        await chmod(io, f.file, 0o600); // 已有文件权限过宽时顺带收紧
+      }
       continue;
     }
     const tmp = `${f.file}.tmp`;
+    await gate?.('write-tmp', tmp);
     await writeFile(io, tmp, `${f.lines.join('\n')}\n`, { mode: 0o600 });
+    await gate?.('chmod-tmp', tmp);
     await chmod(io, tmp, 0o600);
+    await gate?.('rename', f.file);
     await rename(io, tmp, f.file);
+    await gate?.('chmod-final', f.file);
     await chmod(io, f.file, 0o600);
     result.files.push(f.file);
   }
@@ -221,8 +241,24 @@ export async function writeSessionStats(
   io: IoContext,
   agent: AgentId,
   stats: readonly SessionStat[],
+  opts: { beforeWrite?: WriteGate } = {},
 ): Promise<StatWriteResult> {
-  return applySessionStats(io, await planSessionStats(io, agent, stats));
+  return applySessionStats(io, await planSessionStats(io, agent, stats), opts);
+}
+
+/**
+ * 计划里(应用之后)每个 `project_key` 的会话行数(每个 `session_ref` 至多一行,计划已保证)。给测试 / 调用方与磁盘重算(`recomputeCounts` 的 `per_key[k].sessions`)
+ * 交叉核对;**提交用的权威口径仍是磁盘重算**,不是这个内存值。
+ */
+export function sessionsPerKey(plan: StatPlan): ReadonlyMap<string, number> {
+  const out = new Map<string, number>();
+  for (const f of plan.files.values()) {
+    for (const line of f.lines) {
+      const key = (JSON.parse(line) as { project_key: string }).project_key;
+      out.set(key, (out.get(key) ?? 0) + 1);
+    }
+  }
+  return out;
 }
 
 async function fileExists(file: string): Promise<boolean> {
