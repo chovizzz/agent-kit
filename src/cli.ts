@@ -14,6 +14,7 @@ import { command as promote } from './commands/promote.js';
 import { command as redact } from './commands/redact-cmd.js';
 import { command as reflect } from './commands/reflect.js';
 import { command as retire } from './commands/retire.js';
+import { command as rsi } from './commands/rsi.js';
 import { command as signalsCollect } from './commands/signals-collect.js';
 import { command as sync } from './commands/sync.js';
 import type { CommandContext, CommandDef } from './commands/types.js';
@@ -40,6 +41,7 @@ export const COMMANDS: readonly CommandDef[] = [
   sync,
   doctor,
   update,
+  rsi,
 ];
 
 export interface MainEnv {
@@ -177,6 +179,20 @@ export async function main(argv: readonly string[], env: MainEnv = {}): Promise<
       ].join('\n'),
     );
     return ExitCode.OK;
+  }
+
+  // 自带上下文选择的命令(rsi):在通用路径校验(createIoContext 会校验 KIT_STATE_DIR 等)之前分流,见 EarlyCommandContext
+  if (resolved.def.runEarly !== undefined) {
+    return await resolved.def.runEarly({
+      argv: resolved.args,
+      overlayPath: flags.overlay,
+      explicitRoot: flags.root,
+      ...(env.env !== undefined ? { env: env.env } : {}),
+      ...(env.cwd !== undefined ? { cwd: env.cwd } : {}),
+      ...(env.writeAudit !== undefined ? { writeAudit: env.writeAudit } : {}),
+      stdout,
+      stderr,
+    });
   }
 
   let io;

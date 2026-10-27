@@ -79,6 +79,8 @@ const IMPLEMENTED_COMMANDS = new Set([
   'doctor',
   // update:S7c-A 已实装(默认干跑;行为测试在 test/update/**)。
   'update',
+  // rsi:经 runEarly 分发,桩协议不同于通用桩(无参数 = 退 2,stderr 只有稳定码 RSI_NOT_IMPLEMENTED,不含「未实现」);行为测试在 test/rsi/dispatcher.test.ts。
+  'rsi',
 ]);
 
 describe('命令桩:每个命令退出 64 并说明原因(绝不静默成功)', () => {
