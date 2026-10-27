@@ -67,6 +67,11 @@ export interface L0Deps {
   /** 归属 / 排除用的 fs 探测 */
   probe?: AttributionProbe;
   now?: () => Date;
+  /**
+   * pi 会话根的覆盖(`PI_CODING_AGENT_DIR`,worker 为 `KIT_RSI_PI_DIR_SET`)是否「已设」,由命令边界按**命令传入的 env** 折算(`piDirIsSet(ctx.env)`),
+   * armed 与 `rsi status` 用同一来源。缺省(只有直接调用 L0 服务的测试 / 内部调用方)才回退读真实进程环境。
+   */
+  piDirSet?: boolean;
   /** 降低上限以便测试(缺省取契约常量) */
   limits?: Partial<{ maxDirEntries: number; armedMaxFiles: number; rebuildMaxFiles: number }>;
   /** 通用故障注入点:在每一步(列举一层目录、读一个头部……)之前调用,`step` 是稳定的短名 */
@@ -80,6 +85,12 @@ export interface L0Deps {
 export interface ArmedListing {
   rows: { name: string; sessions: number; path: string; excluded: boolean }[];
   unknownSessions: number;
+  /**
+   * 清单是否完整(缺省视为 `true`,老数据与调用方不受影响)。`false` = 扫描不完整:根不可评估、目录读不了、候选 `lstat` 失败、触发目录项上限、
+   * 或列举 / 头部读取期间根的身份变了。**后续块(B4c2 的 tick / confirm)在 `complete === false` 时不得持久化 `state.armed_listing`**,
+   * `rsi projects` 渲染时必须提示「列表不完整」,不得显示成确定的零计数。
+   */
+  complete?: boolean;
 }
 export interface ArmedListingDetailed extends ArmedListing {
   filesRead: number;

@@ -417,7 +417,7 @@ export abstract class JsonlTraceReader<S = undefined> implements TraceReader {
   }
 }
 
-function parseObject(line: string): JsonObject | undefined {
+export function parseObject(line: string): JsonObject | undefined {
   try {
     const v: unknown = JSON.parse(line);
     return isJsonObject(v) ? v : undefined;

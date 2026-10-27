@@ -288,15 +288,38 @@ describe('R20-3.5.6 泄漏闸:豁免只限 --paths 行的 path= 字段值,由渲
 });
 
 describe('R20-1.4 / R20-3.5.1 首次 armed:现算清单来自 armed 列举服务(B4)', () => {
-  it('没有列举服务 → 64 命令桩(B3a 范围例外);零写入', async () => {
-    const f = await makeRoFx('pj-armed-stub-');
+  it('不注入列举服务:接真实 armed 列举(B4a);假 HOME 里没有会话 → 空清单、退 0、零写入;不再有 projects.armed_listing 桩', async () => {
+    const f = await makeRoFx('pj-armed-real-');
     const before = await treeOf(f.dir);
     const r = await runMain(f, ['rsi', 'projects']);
-    expect(r.code).toBe(64);
-    expect(r.err).toBe('RSI_NOT_IMPLEMENTED subcommand=projects.armed_listing\n');
-    expect(r.out).toBe('');
+    expect(r.code).toBe(0);
+    expect(r.err).toBe('');
+    expect(r.out).toBe(
+      'projects collecting=0 excluded=0 new=0 unknown_signals=0 unknown_sessions=0\n',
+    );
     expect(r.audit).toEqual([]);
     expect(await treeOf(f.dir)).toEqual(before);
+  });
+
+  it('listing.complete === false → 多一行固定措辞 armed_list=incomplete(JSON 多 complete:false),退出码不变;缺省 / true → 输出与以前完全相同', async () => {
+    const f = await makeRoFx('pj-armed-inc-');
+    const mk = (complete?: boolean): RsiProjectsDeps => ({
+      listArmed: async () => ({
+        rows: [{ name: 'p', sessions: 1, path: '/x/p', excluded: false }],
+        unknownSessions: 0,
+        ...(complete === undefined ? {} : { complete }),
+      }),
+    });
+    const base = await direct(f, [], mk());
+    const inc = await direct(f, [], mk(false));
+    expect(inc.code).toBe(base.code);
+    expect(inc.out).toBe(`${base.out}armed_list=incomplete\n`);
+    expect((await direct(f, [], mk(true))).out).toBe(base.out);
+    const jb = JSON.parse((await direct(f, ['--json'], mk())).out) as Record<string, unknown>;
+    const ji = JSON.parse((await direct(f, ['--json'], mk(false))).out) as Record<string, unknown>;
+    expect('complete' in jb).toBe(false);
+    expect(ji['complete']).toBe(false);
+    expect(inc.out).not.toContain('/x/p');
   });
 
   it('注入列举服务:行为 `key=- name=… sessions=n status=pending`,汇总带 unknown_sessions;JSON 的 key8 为 null;名字清洗', async () => {

@@ -17,11 +17,10 @@ import type { Signal } from '../contracts/signal.js';
 import type { IoContext } from '../io/paths.js';
 import { lstat, readText } from '../io/read-fs.js';
 import { chmod, createExclusive, mkdirp, rename, writeFile } from '../io/safe-fs.js';
-import { SALT_RE } from './ids.js';
+import { SaltError, ephemeralSalt, readSaltFile, type SaltRead } from './salt-read.js';
 
-export class SaltError extends Error {
-  readonly code = 'SIGNALS_SALT_INVALID';
-}
+// D5:盐的读取规则只有一份(`salt-read.ts`);`SaltError` 以它为准,这里 re-export 保持既有 import 路径
+export { SaltError };
 
 /** 信号库里有无法解析的行:库已带病,不再往里追加(fail-closed)。 */
 export class SignalStoreError extends Error {
@@ -46,30 +45,16 @@ function newSalt(): string {
   return randomBytes(32).toString('hex');
 }
 
-async function readExistingSalt(file: string): Promise<string | undefined> {
-  let st;
-  try {
-    st = await lstat(file);
-  } catch {
-    return undefined;
-  }
-  if (st.isSymbolicLink()) throw new SaltError('盐文件是符号链接');
-  if (!st.isFile()) throw new SaltError('盐文件不是普通文件');
-  if ((st.mode & 0o077) !== 0) throw new SaltError('盐文件权限宽于 0600');
-  const salt = (await readText(file)).trim();
-  if (!SALT_RE.test(salt)) throw new SaltError('盐文件格式非法(应为 64 位十六进制)');
-  return salt;
-}
-
 /**
- * 文件存在、是普通文件但还是空的 = 别的进程刚 O_EXCL 创建、尚未写入内容:在有限预算内等它写完(约 1 秒)。
- * 符号链接 / 非普通文件 / 非空内容不等,照常交给 readExistingSalt 判(不改变既有的 fail-closed 语义)。
- * 预算用完仍为空 → 照旧报 SaltError(格式非法);这是 fail-closed,不是可靠的等待协议。
+ * 读盐(经共同原语 `readSaltFile`)。文件存在、是普通文件但还是空的 = 别的进程刚 O_EXCL 创建、尚未写入内容:在有限预算内等它写完(约 1 秒;等待只留在这里)。
+ * 违规(符号链接 / 非普通文件 / 硬链接 / 权限宽 / 属主不符 / 超大 / 格式非法)不等,由原语抛 SaltError。
+ * 预算用完仍为空 → SaltError(这是 fail-closed,不是可靠的等待协议)。
  */
-async function settleEmptySalt(file: string): Promise<void> {
-  for (let i = 0; i < SALT_EMPTY_RETRIES; i++) {
-    const st = await lstat(file).catch(() => undefined);
-    if (st === undefined || st.isSymbolicLink() || !st.isFile() || st.size > 0) return;
+async function readSettledSalt(file: string): Promise<SaltRead> {
+  for (let i = 0; ; i++) {
+    const r = await readSaltFile(path.dirname(file));
+    if (r.kind !== 'empty') return r;
+    if (i >= SALT_EMPTY_RETRIES) throw new SaltError('盐文件为空(等待后仍无内容)');
     await sleep(SALT_EMPTY_RETRY_MS);
   }
 }
@@ -83,10 +68,9 @@ export async function loadSalt(
   },
 ): Promise<SaltResult> {
   const file = saltPath(io);
-  await settleEmptySalt(file);
-  const existing = await readExistingSalt(file);
-  if (existing !== undefined) return { salt: existing, persisted: true };
-  if (!opts.create) return { salt: newSalt(), persisted: false };
+  const existing = await readSettledSalt(file);
+  if (existing.kind === 'ok') return { salt: existing.salt, persisted: true };
+  if (!opts.create) return { salt: ephemeralSalt(), persisted: false };
   await mkdirp(io, io.stateDir, 0o700);
   await chmod(io, io.stateDir, 0o700);
   await opts.beforeCreate?.();
@@ -97,10 +81,9 @@ export async function loadSalt(
     if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
   }
   // 回读:以最终落盘的那份为准。赢家 O_EXCL 创建与写入之间别人可能读到空文件,只对「空」等待
-  await settleEmptySalt(file);
-  const final = await readExistingSalt(file);
-  if (final === undefined) throw new SaltError('盐文件写入后读不到');
-  return { salt: final, persisted: true };
+  const final = await readSettledSalt(file);
+  if (final.kind !== 'ok') throw new SaltError('盐文件写入后读不到');
+  return { salt: final.salt, persisted: true };
 }
 
 export function signalMonth(ts: string): string {

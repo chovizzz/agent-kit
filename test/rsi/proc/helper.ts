@@ -13,6 +13,17 @@ export function mkfifo(target: string): void {
   if (r.status !== 0) throw new Error('mkfifo failed');
 }
 
+/** 设置文件的 mtime(B4a 列举 / armed 的 mtime 排序测试用;`touch -t`,秒级精度,同文件的两次调用用不同的秒) */
+export function touchAt(target: string, when: Date): void {
+  const iso = when.toISOString();
+  const stamp = `${iso.slice(0, 4)}${iso.slice(5, 7)}${iso.slice(8, 10)}${iso.slice(11, 13)}${iso.slice(14, 16)}.${iso.slice(17, 19)}`;
+  const r = spawnSync('touch', ['-h', '-t', stamp, target], {
+    stdio: 'ignore',
+    env: { PATH: '/usr/bin:/bin', TZ: 'UTC' },
+  });
+  if (r.status !== 0) throw new Error('touch failed');
+}
+
 export interface ChildJob {
   op: 'hold' | 'try' | 'writer' | 'salt';
   tmp: string;

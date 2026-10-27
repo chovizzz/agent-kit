@@ -16,6 +16,7 @@ import { runSync } from '../../src/io/exec.js';
 import { writeFile } from '../../src/io/safe-fs.js';
 import { treeOf } from './rsi-fixture.js';
 import { buildRoChild, runRoChild } from './proc/ro-helper.js';
+import { put as putSession } from './l0-fixture.js';
 import {
   ROOT,
   closureOf,
@@ -124,13 +125,22 @@ describe('① 写调用审计(外部累计)+ 前后目录树', () => {
     });
   }
 
-  it('首次 armed 的 projects 在 B4 接线前是 64 桩:本用例只证明「提前退出」路径零写入;真实 armed 列举(每文件一次 ≤64KiB 读、零写入)随 B4 补真实链路测试', async () => {
-    const f = await makeRoFx('zw-armed-stub-');
+  it('首次 armed 的 projects 走真实 armed 列举(B4a):有会话文件时写审计为 0、目录树前后一致;正向前提:清单里确实列出了项目', async () => {
+    const f = await makeRoFx('zw-armed-real-');
+    const proj = await mkProject(f, 'armed-proj');
+    await putSession(
+      f,
+      'pi',
+      '--a--/s.jsonl',
+      `${JSON.stringify({ type: 'session', cwd: proj.path })}\n{"type":"message"}\n`,
+    );
+    const before = await treeOf(f.dir);
     const r = await runMain(f, ['rsi', 'projects']);
-    expect(r.code).toBe(64);
+    expect(r.code).toBe(0);
+    expect(r.out).toContain('name=armed-proj sessions=1 status=pending');
     expect(r.audit).toEqual([]);
+    expect(await treeOf(f.dir)).toEqual(before);
   });
-
   it('对照:同一钩子 / 同一 main() 路径下 rsi stop 会被记到 createExclusive(钩子确实接在命令上,不是空转)', async () => {
     const f = await makeRoFx('zw-hook-ctl-');
     const r = await runMain(f, ['rsi', 'stop']);
