@@ -49,6 +49,8 @@ import {
   sha,
   snapshotPath,
   type Bases,
+  type InspectOutcome,
+  type RecoverOutcome,
   type SnapshotReadHooks,
 } from './snapshot-read.js';
 
@@ -63,6 +65,8 @@ export {
   type SnapshotRead,
   type SnapshotReadHooks,
   type VerifiedRead,
+  type InspectOutcome,
+  type RecoverOutcome,
 } from './snapshot-read.js';
 
 const AGENTS = ['claude', 'codex', 'pi'] as const;
@@ -274,10 +278,6 @@ export async function commitSnapshot(
     opts,
   );
 }
-
-export type RecoverOutcome = 'absent' | 'consistent' | 'rebuilt';
-/** 只读检查的结论:`needs_rebuild` = 未完成提交(各文件都过校验但与清单不符),持锁写入方的 {@link recoverSnapshot} 会按当前文件重建清单 */
-export type InspectOutcome = 'absent' | 'consistent' | 'needs_rebuild';
 
 interface Evaluation {
   outcome: InspectOutcome;

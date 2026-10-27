@@ -236,3 +236,11 @@ export async function readVerified(
   }
   return { status: 'busy' };
 }
+
+/**
+ * 持锁恢复的结论(B4-0 从 `snapshot.ts` 移到这里:规划侧模块只能 import 只读的 `snapshot-read.ts`,`import type` 也计入闭包)。
+ * `snapshot.ts` 照旧 re-export。
+ */
+export type RecoverOutcome = 'absent' | 'consistent' | 'rebuilt';
+/** 只读检查的结论:`needs_rebuild` = 未完成提交(各文件都过校验但与清单不符),持锁写入方的 `recoverSnapshot` 会按当前文件重建清单 */
+export type InspectOutcome = 'absent' | 'consistent' | 'needs_rebuild';

@@ -374,6 +374,30 @@ export async function readHead(
   }
 }
 
+export type ReadHeadLinesResult =
+  /**
+   * `lines`:窗口里前 `maxLines` 个以 `\n` 结束的**完整行**(不含 `\n`,行尾 `\r` 原样保留);没有 `\n` 结束的尾段不返回;
+   * `bytesRead`:这次物理读取实际读到的字节数(读审计与 `listArmedDetailed.bytesRead` 记账用)。
+   */
+  | { kind: 'ok'; lines: Buffer[]; bytesRead: number }
+  | { kind: 'missing' }
+  | { kind: 'unsafe'; why: SafeUnsafeWhy };
+
+/**
+ * armed 头部读取的多行版本(D1;B4-0 冻结签名,B4a 实现):与 {@link readHead} 同一套句柄级安全打开与「一次 `read(2)`」语义,
+ * 只是返回窗口内前 `maxLines` 个完整行。pi / codex 传 1,claude 传 `RSI_ARMED_CLAUDE_MAX_LINES`;`onRead` 对同一路径至多触发一次。
+ * 超过 `maxLines` 的行、以及窗口里没有 `\n` 结束的尾段,都不会出现在返回值里(结构性保证)。
+ */
+export async function readHeadLines(
+  path: string,
+  maxBytes: number,
+  maxLines: number,
+  hooks: ReadHeadHooks = {},
+): Promise<ReadHeadLinesResult> {
+  void [path, maxBytes, maxLines, hooks];
+  throw new Error('not implemented');
+}
+
 /** 单行硬上限(UTF-8 字节)。超过的行不拼接正文,readLines 以 TOO_LONG_LINE 占位产出。 */
 export const MAX_LINE_BYTES = 64 * 1024 * 1024;
 

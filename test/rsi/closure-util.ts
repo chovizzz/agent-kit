@@ -48,6 +48,13 @@ function scan(file: string, source: string, includeTypes: boolean): Scan {
       ts.isStringLiteralLike(n.moduleReference.expression)
     ) {
       specs.push(n.moduleReference.expression.text);
+    } else if (
+      ts.isImportTypeNode(n) &&
+      ts.isLiteralTypeNode(n.argument) &&
+      ts.isStringLiteralLike(n.argument.literal)
+    ) {
+      // 类型位置的 `import('x').T`:只算类型依赖
+      if (includeTypes) specs.push(n.argument.literal.text);
     } else if (ts.isCallExpression(n) && n.expression.kind === ts.SyntaxKind.ImportKeyword) {
       const a = n.arguments[0];
       if (a !== undefined && ts.isStringLiteralLike(a)) specs.push(a.text);

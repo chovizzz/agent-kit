@@ -77,12 +77,32 @@ export const RSI_FAIL_CLOSED_REASONS = Object.freeze([
   'salt_invalid',
   'redactor_init',
   'staging_too_large',
+  'staging_unsafe_entry',
   'lock_lost',
   'write_denied',
   'purge_incomplete',
   'output_leak',
   'internal',
 ] as const);
+/** 顶层码,退出 1(R20-3.0 总表「顶层(1)」行):只登记,供「契约表 ↔ 枚举」一致性测试逐行比对 */
+export const RSI_EXIT1_CODES = Object.freeze([
+  'RSI_RUN_TAINTED',
+  'RSI_RUN_ATTRIBUTION_UNKNOWN',
+  'RSI_PURGE_NOT_EXCLUDED',
+  'RSI_CONFIRM_DECLINED',
+  'RSI_CONFIRM_STALE',
+] as const);
+/** 计数码(R20-3.0 总表「计数码」行;不改退出码,只进 `--json` 与日志;顺序照总表) */
+export const RSI_COUNTER_CODES = Object.freeze([
+  'RSI_FILE_TOO_LARGE',
+  'RSI_LIMIT_FILES',
+  'RSI_LIMIT_BYTES',
+  'RSI_LIMIT_TIME',
+  'RSI_LIMIT_DEPTH',
+  'RSI_LIMIT_ENTRIES',
+  'RSI_INDEX_FULL',
+] as const);
+export type RsiCounterCode = (typeof RSI_COUNTER_CODES)[number];
 export type RsiNotRunReason = (typeof RSI_NOT_RUN_REASONS)[number];
 export type RsiFailClosedReason = (typeof RSI_FAIL_CLOSED_REASONS)[number];
 /** 顶层码 `RSI_SNAPSHOT_BUSY`(退出 4) */
@@ -144,6 +164,39 @@ export const RSI_COUNTS_MAX_CLUSTERS = 500;
 export const RSI_COUNTS_MAX_STAGED = 5000;
 /** cursor 条目上限(R20-6.7) */
 export const RSI_CURSOR_MAX_FILES = 100000;
+
+// ---------------------------------------------------------------------------
+// R20-6.7 资源上限与 B4 采集常量(B4-0 冻结;全部是不可配置的常量)
+// ---------------------------------------------------------------------------
+/** 会话根目录项(含目录)上限,`armed` 与 `confirmed` 都算;超出停止列举,`RSI_LIMIT_ENTRIES` */
+export const RSI_MAX_DIR_ENTRIES = 50000;
+/** `armed` 头部预读的文件数上限(D4:按 mtime 降序取前 N 个,其余计入 `unknown_sessions`),`RSI_LIMIT_FILES` */
+export const RSI_ARMED_MAX_FILES = 2000;
+/** `armed` 头部读取的窗口:每个文件一次偏移 0、至多这么多字节的物理读取(R20-1.4) */
+export const RSI_ARMED_HEAD_BYTES = 64 * 1024;
+/** claude 头部解析最多看的完整行数(D1;pi / codex 只看首行);同一次 `RSI_ARMED_HEAD_BYTES` 读取内,找到 cwd 即停 */
+export const RSI_ARMED_CLAUDE_MAX_LINES = 32;
+/** `confirmed` 单次 L0 读取的改动文件数上限,`RSI_LIMIT_FILES` */
+export const RSI_MAX_FILES_PER_TICK = 2000;
+/** 单次 L0 读取字节上限(按实际读取字节,文件读完后检查),`RSI_LIMIT_BYTES` */
+export const RSI_MAX_BYTES_PER_TICK = 256 * 1024 * 1024;
+/** 单文件大小上限:超过(读前按 lstat、读中按实际字节)按 `too_large` 处理,`RSI_FILE_TOO_LARGE` */
+export const RSI_MAX_FILE_BYTES = 512 * 1024 * 1024;
+/** 单次 L0 墙钟(毫秒;尽力,只在读阶段的检查点判),`RSI_LIMIT_TIME` */
+export const RSI_MAX_TICK_MS = 120_000;
+/** 行级检查点间隔(R20-6.8:每处理这么多行,含空白行与只有元数据的行) */
+export const RSI_CHECKPOINT_LINES = 1000;
+/** 全量扫描周期:距 `last_completed_at` 达到它就 `epoch + 1`(R20-6.9) */
+export const RSI_FULL_SCAN_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
+/** `rsi projects --rebuild-index` 的头部读取上限(D11:按 mtime 降序),超出报 `RSI_LIMIT_FILES` */
+export const RSI_REBUILD_MAX_FILES = 10000;
+/** 盐文件的字节上限(D5 共同只读原语;`salt` 是 64 位十六进制 + 可选换行) */
+export const RSI_SALT_MAX_BYTES = 4096;
+/** 盐文件空文件的等待 / 回收宽限(D15:持锁、空普通文件、mtime 已满这么久才可删除重建) */
+export const RSI_SALT_EMPTY_GRACE_MS = 10_000;
+/** `log.jsonl` 的行数与单行字节上限(R20-6.7) */
+export const RSI_LOG_MAX_LINES = 200;
+export const RSI_LOG_LINE_MAX_BYTES = 1024;
 
 /** 项目 key:`p_` + 16 位十六进制(§9) */
 export const RsiProjectKeySchema = z.string().regex(/^p_[0-9a-f]{16}$/);
@@ -250,6 +303,7 @@ export const RSI_TRIGGERS = Object.freeze([
   'status',
 ] as const);
 const RsiOutcomeSchema = z.enum(RSI_OUTCOMES);
+export type RsiOutcome = z.infer<typeof RsiOutcomeSchema>;
 const RsiTriggerSchema = z.enum(RSI_TRIGGERS);
 
 /** `.state/rsi/state.json`(R20-1.5 / R20-3.4.2 / R20-6.4 / R20-6.6) */
@@ -283,6 +337,21 @@ export const RsiStateSchema = z.strictObject({
       until: IsoTimestampSchema.nullable(),
     })
     .nullable(),
+  /**
+   * 首次 `armed` 列举的结果(D2,供 hint 的 `armed` 模板显示 P;B4-0 追加的**可选**字段,老文件仍合法):
+   * 绑定 `policy_fp` 与 `agents`——缺失、或与当前不一致时 hint 输出空串;`confirm` 时清空(删除该键)。
+   * 不存路径、目录名、key:只有计数。
+   */
+  armed_listing: z
+    .strictObject({
+      at: IsoTimestampSchema,
+      policy_fp: Sha256Schema,
+      agents: z.array(RsiAgentSchema).min(1).refine(sortedUnique, '升序且不重复'),
+      projects: NonNegInt,
+      excluded: NonNegInt,
+      unknown_sessions: NonNegInt,
+    })
+    .optional(),
 });
 export type RsiState = z.infer<typeof RsiStateSchema>;
 

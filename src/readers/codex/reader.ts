@@ -42,7 +42,7 @@ import {
  * 会话文件名 `rollout-*.jsonl`(§2.2.1 的正式布局是 `<source>/YYYY/MM/DD/`,这里只认文件名、
  * 不要求目录形状:验收会把样本复制到别的目录布局里,oracle 的 `find -name 'rollout-*.jsonl'` 也只看文件名)。
  */
-const ROLLOUT_NAME = /^rollout-.*\.jsonl$/;
+export const ROLLOUT_NAME = /^rollout-.*\.jsonl$/;
 
 const NONE = '(none)';
 

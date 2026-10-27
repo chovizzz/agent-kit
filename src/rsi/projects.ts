@@ -22,16 +22,14 @@ import { failExit } from './exit.js';
 import { emitLines, forbiddenPaths, jsonLines } from './output.js';
 import { readRsiState } from './read-state.js';
 import { cleanName, cleanPath, type OutLine } from './sanitize.js';
+import type { ArmedListing } from './l0/types.js';
 import { openRsiIo, type OpenRsiIoDeps } from './services/open.js';
 import { loadRepoIdentity, rsiStateOf } from './state.js';
 import { rsiStubExit } from './stub.js';
 import type { RsiEarlyContext, RsiSubcommand } from './types.js';
 
-/** 首次 `armed` 的现算清单(B4 的 armed 列举服务提供;名字 / 路径是原始值,由本文件清洗) */
-export interface ArmedListing {
-  rows: { name: string; sessions: number; path: string; excluded: boolean }[];
-  unknownSessions: number;
-}
+// 首次 `armed` 的现算清单:类型在 `l0/types.ts`(B4-0 移入,规划侧模块不得反向依赖本文件),这里 re-export,既有 import 路径不变
+export type { ArmedListing };
 
 export interface RsiProjectsDeps {
   /** `--paths` 的 stdout-only TTY 判据(可注入;缺省 `ctx.isTty`,再缺省 `process.stdout.isTTY === true`) */
