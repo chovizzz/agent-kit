@@ -14,7 +14,7 @@ import type { PipelineDeps, SessionResult } from './pipeline.js';
 import { applySessionStats, buildSessionStat, planSessionStats } from './session-stats.js';
 import type { StatWriteResult } from './session-stats.js';
 import { writeSignals } from './state-store.js';
-import type { WriteResult } from './state-store.js';
+import type { WriteGate, WriteResult } from './state-store.js';
 
 export const SAMPLE_LIMIT = 5;
 
@@ -23,6 +23,10 @@ export interface CollectInput extends PipelineDeps {
   source: string;
   io: IoContext;
   dry: boolean;
+  /**
+   * 写点钩子(R20-A2 B5d):信号库与会话计数的每个写操作之前调用一次(rsi 持锁路径传 `assertHeld()` 包装)。不传 = 行为与加钩子之前逐字节一致。
+   */
+  beforeWrite?: WriteGate;
 }
 
 /** 每个已处理会话的计数条目(供 oracle 对照;与落盘的契约类型 SessionStat 无关) */
@@ -48,6 +52,11 @@ export interface CollectOutput {
   statWrite: StatWriteResult | undefined;
   /** 会话时间取不到(无 started_at 且无事件)而没写计数行的会话数 */
   statsSkippedNoTs: number;
+  /**
+   * 每个已发现会话的处理结果(含 excluded / read_error;按路径序)。**内部类型,不进命令的 `--json` 输出**(`signals-collect.ts` 的 stdout 由显式字段组装):
+   * rsi 持锁路径的提交(索引观测)要用它。
+   */
+  results: readonly SessionResult[];
 }
 
 export async function collect(input: CollectInput): Promise<CollectOutput> {
@@ -124,8 +133,11 @@ export async function collect(input: CollectInput): Promise<CollectOutput> {
   });
   // dry 也做 plan(只读、不 apply),这样坏库在 dry 下同样暴露
   const plan = await planSessionStats(input.io, input.reader.agent, stats);
-  const write = input.dry ? undefined : await writeSignals(input.io, input.reader.agent, signals);
-  const statWrite = input.dry ? undefined : await applySessionStats(input.io, plan);
+  const gateOpt = input.beforeWrite !== undefined ? { beforeWrite: input.beforeWrite } : {};
+  const write = input.dry
+    ? undefined
+    : await writeSignals(input.io, input.reader.agent, signals, gateOpt);
+  const statWrite = input.dry ? undefined : await applySessionStats(input.io, plan, gateOpt);
 
   return {
     report,
@@ -145,5 +157,6 @@ export async function collect(input: CollectInput): Promise<CollectOutput> {
     excludedSelfSessions: results.filter((r) => r.excludeReason === 'self_state').length,
     statWrite,
     statsSkippedNoTs: processed.length - stats.length,
+    results,
   };
 }
