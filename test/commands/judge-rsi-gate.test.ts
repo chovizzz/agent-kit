@@ -302,6 +302,22 @@ describe('judge × 即时闸 #1(读暂存区、构造后端之前)', () => {
           );
           expect(await readText(proposalFile(gw.w))).not.toContain('CANARY_EXCERPT');
           expect(await exists(path.join(gw.w.runDir, 'TAINTED'))).toBe(true);
+          // B5e(B5d 评审遗留 ⑤):对清理后的目录树做精确断言,而不是靠审计里「runDir 下任意写都放行」。
+          // 白名单:TAINTED、report.json(逐字节不变)、proposals/*.yaml 与 rules/**/*.md(摘录清空);其余一个都不许剩
+          const after = await snapshot(gw.w.runDir);
+          expect(Object.keys(after).sort(), '清理后只剩白名单条目').toEqual([
+            'TAINTED',
+            expect.stringMatching(/^proposals\/[^/]+\.yaml$/),
+            'report.json',
+            expect.stringMatching(/^rules\/[^/]+\/[^/]+\.md$/),
+          ]);
+          expect(after['report.json'], 'report.json 不动').toBe(before['report.json']);
+          for (const [rel, text] of Object.entries(after)) {
+            if (rel === 'TAINTED' || rel === 'report.json') continue;
+            expect(text, `${rel} 的摘录已清空`).not.toContain('CANARY_EXCERPT');
+          }
+          // 对照:变异前的 before 里确实有摘录(断言不是对空夹具成立)
+          expect(JSON.stringify(before)).toContain('CANARY_EXCERPT');
         } else {
           expect(await snapshot(gw.w.runDir)).toEqual(before);
         }
@@ -314,7 +330,11 @@ describe('judge × 即时闸 #1(读暂存区、构造后端之前)', () => {
                 l.includes(`${path.sep}rsi${path.sep}`) ||
                 l.endsWith(`${path.sep}rsi`) ||
                 l === `mkdirp ${gw.w.state}` || // 取锁前确保状态目录存在(幂等)
-                (completesTaint && l.includes(gw.w.runDir))
+                // taint 续做对 run 目录的写:只放行白名单子树(proposals/ 与 rules/<layer>/ 下的文件级写);runDir 下其它任何写都算 stray
+                (completesTaint &&
+                  new RegExp(
+                    `^[\\w.]+ ${gw.w.runDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/(proposals|rules/[^/]+)/[^/]+$`,
+                  ).test(l))
               ),
           );
           expect(stray).toEqual([]);

@@ -60,6 +60,33 @@ export function probeCommands(cli = '{REPO}/dist/cli.js') {
   ];
 }
 
+/**
+ * R20-A2 B5e(§20.8.1 / §20.9 第 16 条):rsi 干跑 / 只读 / 被拒类命令。全部零写入;`# exit=` 是**逐行**声明的允许退出码(不全局放开)。
+ * 两轮环境:`off`(假 HOME 没有 `[rsi]` 配置)与 `armed`(假 HOME 预置合规 config.toml,`[rsi] repo` 指向被测仓库,状态为首次 armed)。
+ *  - tick / projects --rebuild-index / purge 在 off 时 4(`RSI_NOT_RUN reason=off`);armed 下 tick 干跑 0,没有盐 = 没有确认过 → rebuild / purge 4(`not_confirmed`);
+ *  - status / projects 是只读观察命令,off / armed 都 0;
+ *  - confirm 在 A5 里非 TTY → 2(`RSI_USAGE reason=not_tty`,先于任何读);被拒 confirm 与 `purge --write` 的锁后拒绝由 test/rsi/b5-zero-write.test.ts 在进程内证明。
+ * poke / hint 的行属于 A3。
+ */
+export const RSI_DRY = [
+  { argv: ['tick'], off: [4], armed: [0] },
+  { argv: ['tick', '--json'], off: [4], armed: [0] },
+  { argv: ['status'], off: [0], armed: [0] },
+  { argv: ['status', '--json'], off: [0], armed: [0] },
+  { argv: ['projects'], off: [0], armed: [0] },
+  { argv: ['projects', '--json'], off: [0], armed: [0] },
+  { argv: ['projects', '--rebuild-index'], off: [4], armed: [4] },
+  { argv: ['purge', '--excluded'], off: [4], armed: [4] },
+  { argv: ['purge', '--resume'], off: [4], armed: [4] },
+  { argv: ['confirm'], off: [2], armed: [2] },
+];
+
+export function rsiDryCommands(env, cli = '{REPO}/dist/cli.js') {
+  return RSI_DRY.map(
+    (c) => `{NODE} ${cli} --root {REPO} rsi ${c.argv.join(' ')} # exit=${c[env].join(',')}`,
+  );
+}
+
 export function commandsText(allowProject, cli = '{REPO}/dist/cli.js', extra = []) {
   return [
     `{NODE} ${cli} --root {REPO} build`,
@@ -149,7 +176,13 @@ export function interpretReport(exit, report) {
   // 第二轮补查
   const r2 = (report.rounds ?? [])[1];
   if (r2) {
-    const bad = (r2.commands ?? []).filter((c) => c.abnormal || c.code === null || c.code !== 0);
+    // 行内声明了 `# exit=…` 的命令按它判(allowed_exit);没声明的只收 0
+    const bad = (r2.commands ?? []).filter(
+      (c) =>
+        c.abnormal ||
+        c.code === null ||
+        !(Array.isArray(c.allowed_exit) ? c.allowed_exit : [0]).includes(c.code),
+    );
     if (bad.length && code === EXIT.OK) {
       code = bad.every((c) => c.code === 64) ? EXIT.NOT_RUN : EXIT.FAIL;
       reasons.push(
@@ -216,6 +249,16 @@ export async function lifecycleExtra(R, ctx, tmp) {
   return LIFECYCLE_DRY.map((a) => `{NODE} ${wrapper} ${ctx.cli} ${synth} ${a.join(' ')}`);
 }
 
+/** lstat 判存在:只有 ENOENT 才是「不存在」;悬空符号链接、权限错误等一律按「存在」(fail-closed) */
+function pathPresent(p) {
+  try {
+    fs.lstatSync(p);
+    return true;
+  } catch (e) {
+    return e?.code !== 'ENOENT';
+  }
+}
+
 async function a5(argv) {
   const R = new Reporter('A5');
   const { flags } = parseCommon(argv, {
@@ -251,55 +294,118 @@ async function a5(argv) {
   }
   const tmp = mkTmp(ctx, 'a5');
   try {
-    const cmdFile = path.join(tmp, 'commands.txt');
     const extra = await lifecycleExtra(R, ctx, tmp);
-    fs.writeFileSync(cmdFile, commandsText(flags.allowProject ?? 'social-ops-hub', ctx.cli, extra));
-    const outRoot = path.join(tmp, 'zw');
-    const args = [
-      ...DEFAULT_ARGS,
-      '--base-ref',
-      baseRef,
-      '--repo',
-      ctx.root,
-      '--commands-file',
-      cmdFile,
-      '--out-root',
-      outRoot,
-      '--tmp',
+    // 真实构建才有 rsi 入口;测试桩 CLI(没有 dist/src/rsi)不纳入 rsi 命令与第二环境
+    const hasRsi = fs.existsSync(path.join(path.dirname(path.dirname(ctx.cli)), 'package.json'));
+    if (!hasRsi)
+      R.info('未纳入 rsi 干跑命令:--cli 不在含 package.json 的包里(测试桩,不是本仓库构建的 CLI)');
+    const base = commandsText(flags.allowProject ?? 'social-ops-hub', ctx.cli, extra);
+    // rsi 状态树(被测仓库的 .state/{rsi,signals,sessions,salt}):两个环境的干跑 / 只读 / 被拒命令都不得创建它们。
+    // 用 lstat 判存在(existsSync 跟随链接,悬空符号链接会被当成「不存在」);ENOENT 之外的错误按「存在」处理(fail-closed)
+    const repoReal = fs.realpathSync(ctx.root);
+    const rsiState = ['rsi', 'signals', 'sessions', 'salt'].map((n) =>
+      path.join(repoReal, '.state', n),
+    );
+    const presentNow = () => rsiState.filter(pathPresent);
+    const preexisting = hasRsi ? presentNow() : [];
+    const names = (ps) => ps.map((p) => path.basename(p)).join(',');
+    // 第一轮环境:没有 [rsi] 配置(假 HOME 为空)→ 全部 off;rsi 命令随清单一起跑
+    await runPass(R, ctx, {
+      script,
       tmp,
-      ...(flags.home ? ['--home', flags.home] : []),
-    ];
-    const env = { ...process.env };
-    for (const k of Object.keys(env))
-      if (k.startsWith('npm_') || k === 'NODE_OPTIONS') delete env[k];
-    const r = run('bash', [script, ...args], { cwd: ctx.root, env });
-    process.stdout.write(r.stdout);
-    if (r.stderr) process.stderr.write(r.stderr);
-    if (r.spawnFailed || r.status === null) {
-      R.notRun('zero-write-check 异常终止(超时/信号)');
-      return R.exit();
-    }
-    let report = null;
-    const m = /报告:(.+)/.exec(r.stdout);
-    const dir = m ? m[1].trim() : null;
-    if (dir && fs.existsSync(path.join(dir, 'report.json'))) {
-      try {
-        report = JSON.parse(fs.readFileSync(path.join(dir, 'report.json'), 'utf8'));
-      } catch {
-        report = null;
+      baseRef,
+      label: hasRsi ? 'off' : 'default',
+      text: hasRsi ? base + rsiDryCommands('off', ctx.cli).join('\n') + '\n' : base,
+      home: flags.home,
+    });
+    if (hasRsi) {
+      // off 环境之后:事先不存在的状态树不得出现(出现 = 干跑命令写了东西 = 违规 1,不能归成「前提不满足」)
+      const createdOff = presentNow().filter((p) => !preexisting.includes(p));
+      if (createdOff.length > 0) R.fail(`off 环境的命令创建了 rsi 状态:${names(createdOff)}`);
+      else R.pass('off 环境:被测仓库 .state/{rsi,signals,sessions,salt} 没有新增');
+      // 第二环境:假 HOME 预置合规 config.toml(`[rsi] repo` = 被测仓库的 realpath,首次 armed)。
+      // 预置路径只在这一环境允许存在并逐项核对不变(zero-write --home-seed:含 ino / ctime,抓写后还原与同字节覆盖)。
+      if (preexisting.length > 0) {
+        R.notRun(
+          `armed 环境要求被测仓库 ${path.join('.state', '{rsi,signals,sessions,salt}')} 事先不存在(否则读到的不是首次 armed;已存在:${names(preexisting)}):换一份干净检出`,
+        );
+      } else if (createdOff.length === 0) {
+        const seed = path.join(tmp, 'seed-home');
+        const cfgDir = path.join(seed, '.config', 'agent-kit');
+        fs.mkdirSync(cfgDir, { recursive: true, mode: 0o755 });
+        fs.chmodSync(path.join(seed, '.config'), 0o755);
+        fs.chmodSync(cfgDir, 0o755);
+        const cfg = path.join(cfgDir, 'config.toml');
+        fs.writeFileSync(cfg, `[rsi]\nenabled = true\nrepo = ${JSON.stringify(repoReal)}\n`, {
+          mode: 0o600,
+        });
+        fs.chmodSync(cfg, 0o600);
+        await runPass(R, ctx, {
+          script,
+          tmp,
+          baseRef,
+          label: 'armed',
+          text: rsiDryCommands('armed', ctx.cli).join('\n') + '\n',
+          home: flags.home,
+          seed,
+        });
+        const created = presentNow();
+        if (created.length > 0) R.fail(`armed 环境的干跑命令创建了 rsi 状态:${names(created)}`);
+        else R.pass('armed 环境:被测仓库 .state/{rsi,signals,sessions,salt} 仍不存在');
       }
     }
-    if (!report && r.status === EXIT.OK) {
-      R.fail('zero-write-check 返回 0 但没有可解析的报告(无法核对第二轮)');
-      return R.exit();
-    }
-    const { exit, reasons } = interpretReport(r.status, report);
-    for (const why of reasons) R.info(why);
-    R.merge(exit, `zero-write-check 退出 ${r.status} => A5 ${exit}`);
   } finally {
     rmTmp(tmp);
   }
   return R.exit();
+}
+
+/** 跑一轮 zero-write-check(内部 --two-rounds)并把结果并入 R。 */
+async function runPass(R, ctx, o) {
+  const cmdFile = path.join(o.tmp, `commands-${o.label}.txt`);
+  fs.writeFileSync(cmdFile, o.text);
+  const outRoot = path.join(o.tmp, `zw-${o.label}`);
+  const args = [
+    ...DEFAULT_ARGS,
+    '--base-ref',
+    o.baseRef,
+    '--repo',
+    ctx.root,
+    '--commands-file',
+    cmdFile,
+    '--out-root',
+    outRoot,
+    '--tmp',
+    o.tmp,
+    ...(o.home ? ['--home', o.home] : []),
+    ...(o.seed ? ['--home-seed', o.seed] : []),
+  ];
+  const env = { ...process.env };
+  for (const k of Object.keys(env)) if (k.startsWith('npm_') || k === 'NODE_OPTIONS') delete env[k];
+  const r = run('bash', [o.script, ...args], { cwd: ctx.root, env });
+  process.stdout.write(r.stdout);
+  if (r.stderr) process.stderr.write(r.stderr);
+  if (r.spawnFailed || r.status === null) {
+    R.notRun(`zero-write-check(${o.label})异常终止(超时/信号)`);
+    return;
+  }
+  let report = null;
+  const m = /报告:(.+)/.exec(r.stdout);
+  const dir = m ? m[1].trim() : null;
+  if (dir && fs.existsSync(path.join(dir, 'report.json'))) {
+    try {
+      report = JSON.parse(fs.readFileSync(path.join(dir, 'report.json'), 'utf8'));
+    } catch {
+      report = null;
+    }
+  }
+  if (!report && r.status === EXIT.OK) {
+    R.fail(`zero-write-check(${o.label})返回 0 但没有可解析的报告(无法核对第二轮)`);
+    return;
+  }
+  const { exit, reasons } = interpretReport(r.status, report);
+  for (const why of reasons) R.info(why);
+  R.merge(exit, `zero-write-check(${o.label})退出 ${r.status} => A5 ${exit}`);
 }
 
 await runMain(import.meta.url, 'A5', () => a5(process.argv.slice(2)));

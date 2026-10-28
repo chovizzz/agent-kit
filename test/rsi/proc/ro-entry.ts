@@ -8,6 +8,10 @@ interface Job {
   argv: string[];
   env: Record<string, string>;
   cwd: string;
+  /** B5e:模拟 TTY(confirm / purge --write 需要);缺省不传 = 真实进程的 stdio 判断(测试里非 TTY) */
+  isTty?: boolean;
+  /** B5e:readLine 的返回(confirm 的输入);缺省不传 = 不提供 readLine */
+  line?: string;
 }
 
 const job = JSON.parse(process.argv[2] ?? '{}') as Job;
@@ -16,6 +20,8 @@ let err = '';
 const code = await main(job.argv, {
   env: job.env,
   cwd: job.cwd,
+  ...(job.isTty !== undefined ? { isTty: job.isTty } : {}),
+  ...(job.line !== undefined ? { readLine: async () => job.line } : {}),
   stdout: (t) => (out += t),
   stderr: (t) => (err += t),
 });

@@ -59,6 +59,59 @@ function tokenize(line) {
   return out;
 }
 
+/**
+ * 命令清单的一行:`<命令> [# exit=0,4]`。行尾 `# exit=<码>[,<码>…]` 只对**这一行**声明允许的退出码(替换默认集合,不全局放开);
+ * 没有声明 = 沿用默认(`--require-success` 时只收 0,否则收 0 和 64)。以 `#` 开头的整行是注释。
+ * 命令行本身按简化的 argv 语法切词(成对的单 / 双引号包住一段,没有转义、没有嵌套引号),**不是** shell 语法;`#` 只有出现在引号之外、且前面是空白时才算注释起点。
+ * 写了 `# exit=` 却不合法(空、非十进制、超出 0..255、重复码)= 清单违规(抛 CommandListError,调用方按「未执行」处理),不静默当成无声明。
+ */
+export class CommandListError extends Error {}
+const EXIT_DECL_STRICT_RE = /^\s*exit=([0-9]+(?:,[0-9]+)*)\s*$/;
+/** 引号之外、前面是空白的第一个 `#` 的下标;没有 = -1(引号里的 `#` 不算) */
+function topLevelHash(line) {
+  let q = null;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (q !== null) {
+      if (c === q) q = null;
+    } else if (c === '"' || c === "'") q = c;
+    else if (c === '#' && i > 0 && /\s/.test(line[i - 1])) return i;
+  }
+  return -1;
+}
+export function parseCommandLines(text) {
+  const out = [];
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    const h = topLevelHash(line);
+    const comment = h < 0 ? null : line.slice(h + 1);
+    if (comment === null || !/^\s*exit\s*=/.test(comment)) {
+      out.push({ text: line, allowedExit: null });
+      continue;
+    }
+    const m = EXIT_DECL_STRICT_RE.exec(comment);
+    const codes = m === null ? [] : m[1].split(',').map((x) => Number(x));
+    if (
+      m === null ||
+      codes.some((c) => !Number.isSafeInteger(c) || c > 255) ||
+      new Set(codes).size !== codes.length
+    )
+      throw new CommandListError(
+        `退出码声明不合法(# exit=0..255 的不重复十进制列表):${line.slice(0, 120)}`,
+      );
+    out.push({ text: line.slice(0, h).trimEnd(), allowedExit: codes });
+  }
+  return out;
+}
+
+/** 一条命令的退出码是否被接受:行内声明优先;否则按全局规则 */
+export function exitAccepted(o, rec) {
+  if (rec.code === null || rec.abnormal) return false;
+  if (Array.isArray(rec.allowed_exit)) return rec.allowed_exit.includes(rec.code);
+  return o.requireSuccess ? rec.code === 0 : ALLOWED_EXIT.has(rec.code);
+}
+
 export function parseArgs(argv) {
   const o = {
     repo: DEFAULT_REPO,
@@ -67,6 +120,7 @@ export function parseArgs(argv) {
     volatile: undefined,
     allowFile: undefined,
     commandsFile: undefined,
+    homeSeed: undefined,
     source: undefined,
     baseRef: 'HEAD',
     outRoot: undefined,
@@ -119,6 +173,9 @@ export function parseArgs(argv) {
         break;
       case '--commands-file':
         o.commandsFile = path.resolve(take());
+        break;
+      case '--home-seed':
+        o.homeSeed = path.resolve(take());
         break;
       case '--source':
         o.source = path.resolve(take());
@@ -188,6 +245,7 @@ export const HELP = `用法:ops/zero-write-check.sh [选项]
   --base-ref <ref>           清单基线(默认 HEAD);基线里的 managed 行被删/挪进 volatile => 拒绝
   --allow-managed-removal    允许基线 managed 行被单纯删除(挪进 volatile 永远不允许)
   --commands-file <文件>     覆盖命令清单(每行一条;占位符 {NODE} {REPO} {SOURCE} {HOME} {REALHOME} {TMP})
+  --home-seed <目录>         每轮把该目录的内容预置进假 HOME(B5e:合规 config.toml 等):预置路径只在这一轮允许存在,并逐项核对「命令前后内容 / 权限位不变」(SEEDED_PATH_CHANGED);不进 fake-home-allow.txt,所以不放宽没有预置的那一轮
   --no-net                   给被测命令加 NODE_OPTIONS=--require ops/guards/no-net.cjs
   --require-success          被测命令必须全部退出 0(默认接受 0 和 64=未实现桩)
   --require-clean-tree       开跑前工作树(过滤 .state/ out/)必须干净;默认只要求前后一致
@@ -272,11 +330,77 @@ function walkAll(dir, base, out) {
   }
 }
 
-export function fakeHomeLeftovers(fakeHome, allowText) {
+export function fakeHomeLeftovers(fakeHome, allowText, seeded = new Map()) {
   const all = [];
   walkAll(fakeHome, fakeHome, all);
   const allow = parseList(allowText).map((e) => compileEntry(e, fakeHome));
-  return all.filter((rel) => !allow.some((a) => a.covers(path.join(fakeHome, rel)))).sort();
+  return all
+    .filter((rel) => !seeded.has(rel) && !allow.some((a) => a.covers(path.join(fakeHome, rel))))
+    .sort();
+}
+
+// ---------- 预置(--home-seed) ----------
+const sha256File = (p) => crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
+const SEED_MODE_MASK = 0o7777; // 含 setuid / setgid / sticky
+
+function seedRecord(dst) {
+  const st = fs.lstatSync(dst);
+  return {
+    type: st.isDirectory() ? 'dir' : st.isFile() ? 'file' : 'other',
+    mode: st.mode & SEED_MODE_MASK,
+    ino: st.ino,
+    dev: st.dev,
+    // ctime 内核维护,utimes 改不了:同内容改写 / 写后还原 / chmod / 原子替换 / 目录里建了又删子项,都会抬高它
+    ctimeMs: st.ctimeMs,
+    ...(st.isFile() ? { size: st.size, sha256: sha256File(dst) } : {}),
+  };
+}
+
+/**
+ * 把 seedDir 的内容复制进 fakeHome(目录 / 普通文件,模式位照抄);返回 Map<相对路径, 记录>(= 前置快照)。符号链接等一律拒。
+ * 记录含 (dev, ino, ctime, 模式位含特殊位, 大小, sha256):只比最终内容抓不到「写后还原」「同字节覆盖」。目录在其子项都建好之后再取记录(子项的创建会抬高目录 ctime)。
+ */
+export function seedFakeHome(seedDir, fakeHome) {
+  const rec = new Map();
+  const walk = (rel) => {
+    for (const name of fs.readdirSync(path.join(seedDir, rel)).sort()) {
+      const r = rel === '' ? name : path.join(rel, name);
+      const src = path.join(seedDir, r);
+      const dst = path.join(fakeHome, r);
+      const st = fs.lstatSync(src);
+      const mode = st.mode & SEED_MODE_MASK;
+      if (st.isDirectory()) {
+        fs.mkdirSync(dst, { recursive: true, mode });
+        walk(r);
+        fs.chmodSync(dst, mode);
+        rec.set(r, seedRecord(dst));
+      } else if (st.isFile()) {
+        fs.copyFileSync(src, dst);
+        fs.chmodSync(dst, mode);
+        rec.set(r, seedRecord(dst));
+      } else {
+        throw new Error(`--home-seed 只收目录与普通文件:${r}`);
+      }
+    }
+  };
+  walk('');
+  return rec;
+}
+
+/** 前置快照 vs 现状:缺失、或类型 / 模式位 / (dev, ino) / ctime / 大小 / 内容任一变了的相对路径(空 = 没动) */
+export function seedChanges(fakeHome, rec) {
+  const bad = [];
+  for (const [r, want] of rec) {
+    let now;
+    try {
+      now = seedRecord(path.join(fakeHome, r));
+    } catch {
+      bad.push(r);
+      continue;
+    }
+    if (JSON.stringify(now) !== JSON.stringify(want)) bad.push(r);
+  }
+  return bad;
 }
 
 // ---------- 单轮 ----------
@@ -289,6 +413,8 @@ export function buildEnv(o, ctx) {
     KIT_ZW_RUN: ctx.nonce,
     // 启动器在零写入窗口里不得拉起后台更新 worker(S8/A26)
     KIT_AUTO_UPDATE: '0',
+    // 自动 RSI 入口(poke / hint / worker)在零写入窗口里一律空操作(R20-1.6;前台 rsi 命令不受它影响)
+    KIT_AUTO_RSI: '0',
     KIT_WRITE_ROOTS: [path.join(o.repo, 'out'), path.join(o.repo, '.state')].join(path.delimiter),
     GIT_CONFIG_GLOBAL: '/dev/null',
     GIT_CONFIG_NOSYSTEM: '1',
@@ -342,6 +468,7 @@ function runRound(o, ctx, lists, commandsText, roundNo) {
   const tmpdir = path.join(ctx.tmpRoot, `tmpdir-r${roundNo}`);
   const kitTmp = path.join(ctx.tmpRoot, `kit-tmp-r${roundNo}`);
   for (const d of [fakeHome, tmpdir, kitTmp]) fs.mkdirSync(d, { recursive: true });
+  const seeded = o.homeSeed ? seedFakeHome(o.homeSeed, fakeHome) : new Map();
   const rctx = { fakeHome, tmpdir, kitTmp, nonce: ctx.nonce };
   const env = buildEnv(o, rctx);
   const tokenMap = {
@@ -358,10 +485,7 @@ function runRound(o, ctx, lists, commandsText, roundNo) {
   const before = snap();
   const start = Date.now();
   const commands = [];
-  for (const line of commandsText
-    .split('\n')
-    .map((l) => l.trim())
-    .filter((l) => l && !l.startsWith('#'))) {
+  for (const { text: line, allowedExit } of parseCommandLines(commandsText)) {
     const argv = tokenize(expandTokens(line, tokenMap));
     const r = spawnSync(argv[0], argv.slice(1), {
       cwd: o.repo,
@@ -371,6 +495,8 @@ function runRound(o, ctx, lists, commandsText, roundNo) {
       maxBuffer: 16 * 1024 * 1024,
     });
     const abnormal = r.error !== undefined || r.signal !== null;
+    const accepted = (code) =>
+      Array.isArray(allowedExit) ? allowedExit.includes(code) : ALLOWED_EXIT.has(code);
     commands.push({
       cmd:
         path.basename(argv[0]) +
@@ -384,17 +510,17 @@ function runRound(o, ctx, lists, commandsText, roundNo) {
       signal: r.signal,
       spawn_error: r.error ? String(r.error.code ?? r.error.message) : undefined,
       stderr_tail:
-        (r.status !== null && ALLOWED_EXIT.has(r.status)) || !r.stderr
-          ? undefined
-          : r.stderr.slice(-300),
+        (r.status !== null && accepted(r.status)) || !r.stderr ? undefined : r.stderr.slice(-300),
       abnormal,
+      ...(Array.isArray(allowedExit) ? { allowed_exit: allowedExit } : {}),
     });
   }
   const after = snap();
   // 窗口末端取「结束快照之后」:命令遗留的后台子进程在快照期间落盘的写入也算在窗口里
   const end = Date.now();
   const gitAfter = gitStatusPorcelain(o.repo);
-  const leftovers = fakeHomeLeftovers(fakeHome, lists.allowText);
+  const leftovers = fakeHomeLeftovers(fakeHome, lists.allowText, seeded);
+  const seedChanged = seedChanges(fakeHome, seeded);
   const treeBefore = filterTree(gitBefore);
   const treeAfter = filterTree(gitAfter);
   const treeDelta = {
@@ -412,6 +538,8 @@ function runRound(o, ctx, lists, commandsText, roundNo) {
     after,
     diff: diffSnapshots(before, after),
     leftovers,
+    seeded,
+    seedChanged,
     treeDelta,
     gitAfterRaw: gitAfter,
   };
@@ -544,8 +672,16 @@ export function runZeroWrite(o, log = () => {}) {
   if (lists.baselineNote) report.notes.push(lists.baselineNote);
 
   const commandsText = o.commandsFile ? readText(o.commandsFile) : DEFAULT_COMMANDS;
+  try {
+    parseCommandLines(commandsText);
+  } catch (e) {
+    if (!(e instanceof CommandListError)) throw e;
+    report.exit = EXIT.NOT_RUN;
+    report.findings.push({ code: 'COMMAND_LIST_INVALID', detail: e.message });
+    return { exit: report.exit, report };
+  }
   // 零条命令 = 什么都没验证过,不能当通过(B20 ZW-6)
-  if (!commandsText.split('\n').some((l) => l.trim() && !l.trim().startsWith('#'))) {
+  if (parseCommandLines(commandsText).length === 0) {
     report.exit = EXIT.NOT_RUN;
     report.findings.push({ code: 'NO_COMMANDS', detail: '命令清单为空:没有执行任何命令' });
     return { exit: report.exit, report };
@@ -593,12 +729,15 @@ export function runZeroWrite(o, log = () => {}) {
       paths: r1.leftovers.slice(0, 50),
     });
   }
-  const bad = r1.commands.filter(
-    (c) =>
-      c.abnormal ||
-      c.code === null ||
-      (o.requireSuccess ? c.code !== 0 : !ALLOWED_EXIT.has(c.code)),
-  );
+  if (r1.seedChanged.length) {
+    hard = true;
+    report.findings.push({
+      code: 'SEEDED_PATH_CHANGED',
+      round: 1,
+      paths: r1.seedChanged.slice(0, 50),
+    });
+  }
+  const bad = r1.commands.filter((c) => !exitAccepted(o, c));
   if (bad.length) {
     hard = true;
     report.findings.push({ code: 'COMMAND_ABNORMAL_EXIT', commands: bad });
@@ -635,12 +774,15 @@ export function runZeroWrite(o, log = () => {}) {
     writeJson(path.join(outDir, 'after2.json'), r2.after);
     writeJson(path.join(outDir, 'diff2.json'), r2.diff);
     report.rounds.push(strip(r2));
-    const bad2 = r2.commands.filter(
-      (c) =>
-        c.abnormal ||
-        c.code === null ||
-        (o.requireSuccess ? c.code !== 0 : !ALLOWED_EXIT.has(c.code)),
-    );
+    if (r2.seedChanged.length) {
+      hard = true;
+      report.findings.push({
+        code: 'SEEDED_PATH_CHANGED',
+        round: 2,
+        paths: r2.seedChanged.slice(0, 50),
+      });
+    }
+    const bad2 = r2.commands.filter((c) => !exitAccepted(o, c));
     if (bad2.length) {
       hard = true;
       report.findings.push({ code: 'COMMAND_ABNORMAL_EXIT', round: 2, commands: bad2 });
@@ -695,7 +837,17 @@ export function runZeroWrite(o, log = () => {}) {
     });
   }
   for (const rd of [r1, ...(r2 ? [r2] : [])]) {
-    const now = fakeHomeLeftovers(rd.fakeHome, lists.allowText);
+    const seedNow = seedChanges(rd.fakeHome, rd.seeded);
+    if (seedNow.length > 0 && rd.seedChanged.length === 0) {
+      hard = true;
+      report.findings.push({
+        code: 'SEEDED_PATH_CHANGED',
+        round: rd.roundNo,
+        phase: 'after-settle',
+        paths: seedNow.slice(0, 50),
+      });
+    }
+    const now = fakeHomeLeftovers(rd.fakeHome, lists.allowText, rd.seeded);
     if (now.some((x) => !rd.leftovers.includes(x))) {
       hard = true;
       report.findings.push({
