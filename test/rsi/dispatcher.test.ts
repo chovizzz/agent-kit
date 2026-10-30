@@ -3,6 +3,8 @@
  * 每个子命令桩退出 64、stderr 只有稳定码、stdout 空;未知 / 缺省子命令退 2;rsi 在通用 `createIoContext` 之前分流。
  */
 import { describe, expect, it } from 'vitest';
+import * as path from 'node:path';
+
 import { main } from '../../src/cli.js';
 import { COMMANDS } from '../../src/cli.js';
 import { RSI_P1_RESERVED_SUBCOMMANDS, RSI_SUBCOMMANDS } from '../../src/contracts/rsi.js';
@@ -10,11 +12,12 @@ import { RSI_SUBCOMMAND_TABLE } from '../../src/commands/rsi.js';
 import type { EarlyCommandContext } from '../../src/commands/types.js';
 import { makeTempDir } from '../helpers/tmp.js';
 import { mkdirp, writeFile } from '../../src/io/safe-fs.js';
+import { exists } from '../../src/io/read-fs.js';
 import { createRsiIoContext } from '../../src/rsi/io.js';
 import { runProjects } from '../../src/rsi/projects.js';
 import { runStatus } from '../../src/rsi/status.js';
 import { runStop } from '../../src/rsi/stop.js';
-import { treeOf } from './rsi-fixture.js';
+import { treeOf, writeCfg } from './rsi-fixture.js';
 import { makeRoFx, runDirect, runMain } from './ro-fixture.js';
 
 interface Run {
@@ -164,12 +167,50 @@ describe('rsi 调用顺序(契约 R20-A2 v2 §3、§5;顺序用例随后续块�
     }
     expect(await treeOf(f.dir)).toEqual(before);
   });
-  it.todo(
-    '[B3b] 现有写入方:privacyGate deny / lockGate refuse 之前不建上下文、不建 rsi/、不拿锁、不恢复快照(judge 干跑 / 真跑 / promote 各一) — 原因:命令接线在 B3b',
-  );
-  it.todo(
-    '[B3b] reflect --gc --write / reflect --run-llm / judge --run-llm 在拿不到锁时 <前缀>_NOT_RUN reason=locked,零调用零写入 — 原因:接线在 B3b',
-  );
+  // [B3b] 下面两条原是 `it.todo` 占位(B3b 接线前登记)。接线已在 B3b / B5d / B5g 落地,这里改成经真实
+  // `main()` 的端到端用例;进程内的锁内顺序另见 test/rsi/commit.test.ts,持锁矩阵的逐入口版本另见
+  // test/rsi/b5-lock-matrix.test.ts。
+  it('[B3b] 现有写入方 × privacyGate deny:在读完配置后立即退出 3,不建上下文、不建 rsi/、不拿锁、不恢复快照', async () => {
+    // cfg_schema:配置里 [rsi] 不可用 => privacyGate = deny(不是 legacy)
+    const f = await makeRoFx('disp-deny-');
+    await writeCfg(f, '[rsi]\nenabled = true\nunknown_key = 1\n');
+    // 预置一个陈旧快照临时文件:若走到 recover,它会被动到
+    const rsiDir = path.join(f.repo, '.state', 'rsi');
+    const staleTmp = path.join(rsiDir, 'snapshot.json.tmp');
+    const before = await treeOf(f.dir);
+    for (const argv of [
+      ['judge', '--run', 'run-1'],
+      ['judge', '--run', 'run-1', '--run-llm', '--allow-egress'],
+      ['promote', '--run', 'run-1', '--write'],
+    ]) {
+      const r = await runMain(f, ['--root', f.repo, ...argv]);
+      expect([r.code, r.err.slice(0, 22)], argv.join(' ')).toEqual([3, 'RSI_FAIL_CLOSED reason']);
+      expect(r.audit, argv.join(' ')).toEqual([]); // 不建 rsi/、不拿锁、无任何写
+    }
+    expect(await treeOf(f.dir)).toEqual(before); // 夹具树逐字节不变(含未创建的 rsi/)
+    expect(await exists(staleTmp)).toBe(false);
+  });
+
+  it('[B3b] reflect --gc --write / reflect --run-llm / judge --run-llm:锁被占时归到 4 <前缀>_NOT_RUN reason=locked,参数错时归到 2 且零写入', async () => {
+    // 「锁被占 → 4 <前缀>_NOT_RUN reason=locked,零调用零写入」的逐入口证据(真子进程持锁、握手、放锁后的
+    // 正向对照)在 test/rsi/b5-lock-matrix.test.ts 的「R20-5.1 真子进程持锁 × 每个写入命令」里。
+    // 这里补的是分发器层的归属:三个入口的**参数校验先于锁**,所以参数错必须是 2(而不是被锁掩盖成 4),
+    // 且参数错时同样零写入 —— 这正是「拿锁发生在 run 内部、且在校验之后」的可观测证据。
+    const f = await makeRoFx('disp-args-');
+    const before = await treeOf(f.dir);
+    for (const [argv, needle] of [
+      [['reflect', '--run-llm'], '--allow-egress'],
+      [['reflect', '--run-llm', '--allow-egress'], '--owner'],
+      [['judge', '--run', 'run-1', '--run-llm'], '--allow-egress'],
+    ] as const) {
+      const r = await runMain(f, ['--root', f.repo, ...argv]);
+      expect(r.code, argv.join(' ')).toBe(2);
+      expect(r.err, argv.join(' ')).toContain(needle);
+      expect(r.audit, argv.join(' ')).toEqual([]); // 参数错也不写、不拿锁
+    }
+    expect(await treeOf(f.dir), '三个入口的参数错没有留下任何改动').toEqual(before);
+  });
+
   // [B3c] 锁内顺序(recover → resumeTaint → immediateGate → 业务 → commitUnderLock;deny 路径不触发 recover)已是真用例:test/rsi/commit.test.ts「锁内顺序」
 });
 

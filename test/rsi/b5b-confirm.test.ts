@@ -304,12 +304,17 @@ describe('R20-3.6.2 展示:与 rsi projects 首次 armed 的清单逐行相同;Q
 });
 
 describe('泄漏闸:清单里出现禁止的绝对路径', () => {
-  it('目录名里带着仓库根路径 → 整份作废:3 output_leak,stdout 为空,不读输入,零写入', async () => {
+  it('清单里出现禁止的绝对路径 → 整份作废:3 output_leak,stdout 为空,不读输入,零写入', async () => {
     const f = await mkArmed('cf-leak-');
+    // 清单行的 name 经 cleanName 截到 64 字节。本机 TMPDIR 本身就 >64 字节,所以「把 f.repo 塞进
+    // name」永远会被截断、禁止值不出现 —— 那样这条用例在较长临时根下会假绿(靠别的禁止值命中)。
+    // 因此这里不依赖夹具路径长度,而是把禁止值本身换成一个必然装得下的短串:注入短 KIT_TMP
+    // (forbiddenPaths 的成员之一),并让清单行 name 就是它。
+    const leak = '/tmp/a2leak';
     await zeroWrites(f, async () => {
-      const r = await say(f, 'yes', {
+      const r = await say({ ...f, env: { ...f.env, KIT_TMP: leak } }, 'yes', {
         listArmed: async () => ({
-          rows: [{ name: f.repo, sessions: 1, path: f.repo, excluded: false }],
+          rows: [{ name: leak, sessions: 1, path: leak, excluded: false }],
           unknownSessions: 0,
           complete: true,
         }),
