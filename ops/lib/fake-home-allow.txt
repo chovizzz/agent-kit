@@ -1,2 +1,5 @@
 # 假 HOME 允许残留的路径(相对假 HOME,语法同 managed-paths.txt;锚定在假 HOME 下)。
 # 目前为空:P0 运行期命令一个字节也不该写进 HOME。新增例外要逐条写明理由,并由主代理批准。
+# R20-A2 B5e:rsi 的 armed 轮(ops/accept/lib/a5.mjs)往假 HOME 预置一份合规的 .config/agent-kit/config.toml,
+# 经 zero-write 的 --home-seed:预置路径只在那一轮允许存在(隐式放行,**不**写进本清单,免得放宽没有预置的轮),
+# 并有前置快照(类型 / 权限位 / 内容 sha256)逐项核对命令前后不变(SEEDED_PATH_CHANGED)。本清单仍保持为空。
