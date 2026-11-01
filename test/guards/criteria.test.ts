@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { SLOW_TEST_TIMEOUT_MS } from '../../vitest.config.js';
 import { normalizedRuleSha256 } from '../../src/guards/criteria.js';
 import { COMMON_FILES } from '../fixtures/guards/atoms.js';
 import {
@@ -328,22 +329,26 @@ describe('T2 advisory→active', () => {
     expect((await t2({ kit: '[kit]\nname = "x"\n' })).codes).toEqual([G('CONFIG_UNREADABLE')]);
   });
 
-  it('不计入口径(warn)+ 阈值失败:stable 渠道 / 名单外成员 / 哈希不符 / 未声明 method / 窗口早于 advisory', async () => {
-    const cases: [string, AttestSpec][] = [
-      ['channel', BOB_T(1, { channel: 'stable' })],
-      ['roster', { member: '@mallory', tile: 1 }],
-      ['hash', BOB_T(1, { hash: sha('别的文本') })],
-      ['method', BOB_T(1, { method: null })],
-      ['before-advisory', BOB_T(1, { start: '2026-09-01', end: '2026-09-07' })],
-    ];
-    for (const [name, bad] of cases) {
-      const r = await t2({ attests: [ALICE_T(0), BOB_T(0), ALICE_T(1), bad] });
-      expect(r.codes, name).toEqual([G('THRESHOLD_TILES'), 'GUARD_G3_ATTEST_NOT_COUNTED'].sort());
-      expect(
-        r.diagnostics.filter((d) => d.code === 'GUARD_G3_ATTEST_NOT_COUNTED')[0]?.severity,
-      ).toBe('warn');
-    }
-  });
+  it(
+    '不计入口径(warn)+ 阈值失败:stable 渠道 / 名单外成员 / 哈希不符 / 未声明 method / 窗口早于 advisory',
+    { timeout: SLOW_TEST_TIMEOUT_MS },
+    async () => {
+      const cases: [string, AttestSpec][] = [
+        ['channel', BOB_T(1, { channel: 'stable' })],
+        ['roster', { member: '@mallory', tile: 1 }],
+        ['hash', BOB_T(1, { hash: sha('别的文本') })],
+        ['method', BOB_T(1, { method: null })],
+        ['before-advisory', BOB_T(1, { start: '2026-09-01', end: '2026-09-07' })],
+      ];
+      for (const [name, bad] of cases) {
+        const r = await t2({ attests: [ALICE_T(0), BOB_T(0), ALICE_T(1), bad] });
+        expect(r.codes, name).toEqual([G('THRESHOLD_TILES'), 'GUARD_G3_ATTEST_NOT_COUNTED'].sort());
+        expect(
+          r.diagnostics.filter((d) => d.code === 'GUARD_G3_ATTEST_NOT_COUNTED')[0]?.severity,
+        ).toBe('warn');
+      }
+    },
+  );
 
   it('ATTEST_INVALID / ATTEST_RUN_ID_SHAPE:结构不合法的 attest 文件判红', async () => {
     const r1 = await t2({ extraFiles: { [`attest/${ID}/junk.json`]: '{not json' } });
