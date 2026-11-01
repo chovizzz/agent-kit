@@ -5,6 +5,7 @@
  */
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { SLOW_TEST_TIMEOUT_MS } from '../../vitest.config.js';
 import {
   createSignalsCollectCommand,
   type SignalsCollectDeps,
@@ -526,73 +527,81 @@ async function runSafe(c: CW, deps: Partial<SignalsCollectDeps>): Promise<Run | 
 }
 
 describe('signals collect × rsi:每个写点失锁 / 崩溃', () => {
-  it('每个写点之前失锁(k 遍历):退 3 lock_lost,该点之后零写入;遍历到的写点数 > 10(正向前提:覆盖盐 / 信号 / 会话 / 索引 / counts / 清单)', async () => {
-    const probe = await world({ salt: false });
-    const count = injector(probe, Number.POSITIVE_INFINITY, 'lose');
-    expect((await runIn(probe, { deps: { beforeWrite: count.hook } })).code).toBe(ExitCode.OK);
-    const total = count.calls();
-    expect(total).toBeGreaterThan(10);
-    const ops = new Set<string>();
-    for (let k = 1; k <= total; k++) {
-      const c = await world({ salt: false });
-      const inj = injector(c, k, 'lose');
-      const r = await runSafe(c, { beforeWrite: inj.hook });
-      const hit = inj.at();
-      expect(hit, `k=${k} 的注入必须触发`).toBeDefined();
-      ops.add(hit?.op ?? '');
-      expect(r, `k=${k} op=${hit?.op}`).not.toBe('threw');
-      const run = r as Run;
-      expect(run.code, `k=${k} op=${hit?.op}`).toBe(ExitCode.FAIL_CLOSED);
-      expect(run.err, `k=${k} op=${hit?.op}`).toBe('RSI_FAIL_CLOSED reason=lock_lost\n');
-      expect(run.out).toBe('');
-      expect(c.s.audit.slice(hit?.audit ?? 0), `k=${k} op=${hit?.op} 失锁之后零写入`).toEqual([]);
-    }
-    expect(ops.has('salt-create')).toBe(true);
-    expect([...ops].some((o) => o.startsWith('rename:counts.json'))).toBe(true);
-    expect([...ops].some((o) => o.startsWith('rename:projects.json'))).toBe(true);
-  });
-
-  it('每个写点崩溃后重跑(k 遍历):收敛到干净运行的同一结果(信号 / 会话 / 索引条目 / counts / 清单),再跑一次字节不变', async () => {
-    const canon = async (c: CW): Promise<Record<string, unknown>> => {
-      const rd = async (rel: string): Promise<unknown> =>
-        JSON.parse(await readText(path.join(c.s.rsi, rel)));
-      const idx = (await rd('projects.json')) as { entries: unknown; salt_fp: string };
-      const cnt = (await rd('counts.json')) as Record<string, unknown>;
-      delete cnt['generation'];
-      delete cnt['computed_at'];
-      return {
-        idx: { entries: idx.entries, salt_fp: idx.salt_fp },
-        cnt,
-        signals: await treeOf(path.join(c.s.state, 'signals')),
-        sessions: await treeOf(path.join(c.s.state, 'sessions')),
-        snapshot: await inspectSnapshot(c.s.io, productionSnapshotValidator),
-      };
-    };
-    const wipe = async (c: CW): Promise<void> => {
-      for (const rel of await listFiles(c.s.state)) {
-        if (rel !== 'salt') await remove(c.s.f.fx, path.join(c.s.state, rel));
+  it(
+    '每个写点之前失锁(k 遍历):退 3 lock_lost,该点之后零写入;遍历到的写点数 > 10(正向前提:覆盖盐 / 信号 / 会话 / 索引 / counts / 清单)',
+    { timeout: SLOW_TEST_TIMEOUT_MS },
+    async () => {
+      const probe = await world({ salt: false });
+      const count = injector(probe, Number.POSITIVE_INFINITY, 'lose');
+      expect((await runIn(probe, { deps: { beforeWrite: count.hook } })).code).toBe(ExitCode.OK);
+      const total = count.calls();
+      expect(total).toBeGreaterThan(10);
+      const ops = new Set<string>();
+      for (let k = 1; k <= total; k++) {
+        const c = await world({ salt: false });
+        const inj = injector(c, k, 'lose');
+        const r = await runSafe(c, { beforeWrite: inj.hook });
+        const hit = inj.at();
+        expect(hit, `k=${k} 的注入必须触发`).toBeDefined();
+        ops.add(hit?.op ?? '');
+        expect(r, `k=${k} op=${hit?.op}`).not.toBe('threw');
+        const run = r as Run;
+        expect(run.code, `k=${k} op=${hit?.op}`).toBe(ExitCode.FAIL_CLOSED);
+        expect(run.err, `k=${k} op=${hit?.op}`).toBe('RSI_FAIL_CLOSED reason=lock_lost\n');
+        expect(run.out).toBe('');
+        expect(c.s.audit.slice(hit?.audit ?? 0), `k=${k} op=${hit?.op} 失锁之后零写入`).toEqual([]);
       }
-    };
-    const probe = await world();
-    const count = injector(probe, Number.POSITIVE_INFINITY, 'crash');
-    expect((await runIn(probe, { deps: { beforeWrite: count.hook } })).code).toBe(ExitCode.OK);
-    const total = count.calls();
-    expect(total).toBeGreaterThan(8);
-    for (let k = 1; k <= total; k++) {
-      const c = await world(); // 盐预置:同一个 SALT,session_ref 取决于路径,所以同世界内比较(崩溃 → 重跑 → 清空重跑)
-      const inj = injector(c, k, 'crash');
-      await runSafe(c, { beforeWrite: inj.hook });
-      expect(inj.at(), `k=${k}`).toBeDefined();
-      const again = await runIn(c);
-      expect(again.code, `k=${k} 重跑:${again.err}`).toBe(ExitCode.OK);
-      const afterRerun = await canon(c);
-      expect(afterRerun['snapshot'], `k=${k}`).toBe('consistent');
-      const sigBefore = await treeOf(path.join(c.s.state, 'signals'));
-      expect((await runIn(c)).code).toBe(ExitCode.OK);
-      expect(await treeOf(path.join(c.s.state, 'signals')), `k=${k} 幂等`).toEqual(sigBefore);
-      await wipe(c);
-      expect((await runIn(c)).code).toBe(ExitCode.OK);
-      expect(await canon(c), `k=${k} 崩溃重跑 = 干净运行`).toEqual(afterRerun);
-    }
-  });
+      expect(ops.has('salt-create')).toBe(true);
+      expect([...ops].some((o) => o.startsWith('rename:counts.json'))).toBe(true);
+      expect([...ops].some((o) => o.startsWith('rename:projects.json'))).toBe(true);
+    },
+  );
+
+  it(
+    '每个写点崩溃后重跑(k 遍历):收敛到干净运行的同一结果(信号 / 会话 / 索引条目 / counts / 清单),再跑一次字节不变',
+    { timeout: SLOW_TEST_TIMEOUT_MS },
+    async () => {
+      const canon = async (c: CW): Promise<Record<string, unknown>> => {
+        const rd = async (rel: string): Promise<unknown> =>
+          JSON.parse(await readText(path.join(c.s.rsi, rel)));
+        const idx = (await rd('projects.json')) as { entries: unknown; salt_fp: string };
+        const cnt = (await rd('counts.json')) as Record<string, unknown>;
+        delete cnt['generation'];
+        delete cnt['computed_at'];
+        return {
+          idx: { entries: idx.entries, salt_fp: idx.salt_fp },
+          cnt,
+          signals: await treeOf(path.join(c.s.state, 'signals')),
+          sessions: await treeOf(path.join(c.s.state, 'sessions')),
+          snapshot: await inspectSnapshot(c.s.io, productionSnapshotValidator),
+        };
+      };
+      const wipe = async (c: CW): Promise<void> => {
+        for (const rel of await listFiles(c.s.state)) {
+          if (rel !== 'salt') await remove(c.s.f.fx, path.join(c.s.state, rel));
+        }
+      };
+      const probe = await world();
+      const count = injector(probe, Number.POSITIVE_INFINITY, 'crash');
+      expect((await runIn(probe, { deps: { beforeWrite: count.hook } })).code).toBe(ExitCode.OK);
+      const total = count.calls();
+      expect(total).toBeGreaterThan(8);
+      for (let k = 1; k <= total; k++) {
+        const c = await world(); // 盐预置:同一个 SALT,session_ref 取决于路径,所以同世界内比较(崩溃 → 重跑 → 清空重跑)
+        const inj = injector(c, k, 'crash');
+        await runSafe(c, { beforeWrite: inj.hook });
+        expect(inj.at(), `k=${k}`).toBeDefined();
+        const again = await runIn(c);
+        expect(again.code, `k=${k} 重跑:${again.err}`).toBe(ExitCode.OK);
+        const afterRerun = await canon(c);
+        expect(afterRerun['snapshot'], `k=${k}`).toBe('consistent');
+        const sigBefore = await treeOf(path.join(c.s.state, 'signals'));
+        expect((await runIn(c)).code).toBe(ExitCode.OK);
+        expect(await treeOf(path.join(c.s.state, 'signals')), `k=${k} 幂等`).toEqual(sigBefore);
+        await wipe(c);
+        expect((await runIn(c)).code).toBe(ExitCode.OK);
+        expect(await canon(c), `k=${k} 崩溃重跑 = 干净运行`).toEqual(afterRerun);
+      }
+    },
+  );
 });
