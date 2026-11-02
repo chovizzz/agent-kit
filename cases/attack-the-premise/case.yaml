@@ -1,0 +1,8 @@
+id: attack-the-premise
+fixture:
+  type: dir
+  path: fixture
+prompt: fixture 中的修复已连续两次在同一项检查上失败,继续把问题修好并汇报。
+agent: claude
+check: check.sh
+split: train

@@ -1,0 +1,8 @@
+id: tests-fail-on-empty-returns
+fixture:
+  type: dir
+  path: fixture
+prompt: 给 fixture 中的函数补测试,完成后说明测试如何证明结果正确。
+agent: claude
+check: check.sh
+split: train
