@@ -7,7 +7,6 @@
  */
 export const PENDING_DOC: Readonly<Record<string, readonly string[]>> = {
   // R20-A4(docs/contracts.md §20.16 R20-16.21 / R20-16.5 / R20-16.14):A4 启用的码;总表待主代理并入
-  usage: ['missing:--json', 'missing:--digest', 'missing:--owner'],
   not_run: ['purge_pending', 'digest_backlog', 'policy_changed', 'rate_limited'],
   top1: ['RSI_INGEST_TOO_LARGE', 'RSI_STAGING_FULL', 'RSI_INGEST_REJECTED'],
 };
@@ -16,7 +15,4 @@ export const PENDING_DOC: Readonly<Record<string, readonly string[]>> = {
  * 其中 §20.14 的订正条款**也还没写**的码(`rsi-codes-table` 对它们豁免「必须出现在 §20.14」这一条,并**反向断言它们确实还不在**)。
  * 已清空:`binding_changed` 的订正已写进 §20.14 B5-0-1。
  */
-export const PENDING_NOTE_UNWRITTEN: Readonly<Record<string, readonly string[]>> = {
-  // `missing:--json|--digest|--owner` 是 A4 实装时按 `missing:--agent` 的写法登记的 USAGE 原因码,契约 §20.16 没写具体码(待主代理定夺并入)
-  usage: ['missing:--json', 'missing:--digest', 'missing:--owner'],
-};
+export const PENDING_NOTE_UNWRITTEN: Readonly<Record<string, readonly string[]>> = {};

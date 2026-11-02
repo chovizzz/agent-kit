@@ -59,7 +59,7 @@ export const A4_MUTATIONS: readonly A4Mutation[] = [
       },
     ],
     tests: [INGEST],
-    expectRed: ['别名越界 → alias_unknown', '「合法 + 非法」混合批次整批拒'],
+    expectRed: ['别名越界', '「合法 + 非法」混合批次整批拒'],
     mustKill: ['别名越界 → alias_unknown'],
   },
   {
@@ -140,7 +140,7 @@ export const A4_MUTATIONS: readonly A4Mutation[] = [
       },
     ],
     tests: [DIGEST],
-    expectRed: ['digest:after_read 之后', 'digest:before_final 之后'],
+    expectRed: ['digest:after_read', 'digest:before_final'],
     mustKill: ['digest:after_read 之后:撤销授权', 'digest:before_final 之后:rsi stop'],
   },
   {

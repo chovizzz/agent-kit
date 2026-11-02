@@ -111,7 +111,10 @@ describe('rsi 分发器', () => {
     for (const sub of IMPLEMENTED) {
       const r = await run(['rsi', sub], bad);
       // tick 在配置 off 时按契约退 4 `RSI_NOT_RUN reason=off`(不是桩的 64,也不是通用路径的 3);confirm 无 TTY 先退 2 `not_tty`(先于任何读);purge 不带模式参数 → 2 mode_conflict(参数先于配置判定)
-      expect(r.code, sub).toBe(sub === 'tick' ? 4 : sub === 'confirm' || sub === 'purge' ? 2 : 0);
+      // digest(A4):不带 --agent / --json → RSI_USAGE 退 2(R20-16.5,参数先于配置判定);同样不是通用路径的 3
+      expect(r.code, sub).toBe(
+        sub === 'tick' ? 4 : sub === 'confirm' || sub === 'purge' || sub === 'digest' ? 2 : 0,
+      );
     }
     // A3 钩子:同样不被通用路径校验挡住(退 0,不是 3),无输出
     for (const sub of HOOKS) {

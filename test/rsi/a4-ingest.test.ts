@@ -573,8 +573,11 @@ describe('严格批次与映射(R20-16.15 第 6 ~ 11 步;R20-16.17)', () => {
     const w = await makeA4World('a4-ig-conflict-');
     expect((await ingest(w, await issue(w), body(uniq(0)))).code).toBe(0);
     rejected(await ingest(w, await issue(w), body(uniq(0))), 'id_conflict');
+    // 同 agent 每日名额 ≤ 2:第三次换 codex(session 授权了 claude + codex)
     rejected(
-      await ingest(w, await issue(w), body(uniq(0, { id: 'rule-other-name-xyz' }))),
+      await ingest(w, await issue(w, 'codex'), body(uniq(0, { id: 'rule-other-name-xyz' })), {
+        agent: 'codex',
+      }),
       'duplicate',
     );
   });
@@ -754,7 +757,7 @@ describe('命令参数(经 reflect 命令:R20-16.14)', () => {
       ['--max-proposals', '2'],
       ['--max-calls', '1'],
       ['--timeout-ms', '2000'],
-      ['--backend', 'primary'],
+      ['--backend', 'codex'],
     ] as const) {
       const r = await runReflect(w, [...BASE, ...d, extra, v]);
       expect([r.code, r.err], extra).toEqual([2, 'RSI_USAGE reason=mode_conflict\n']);
