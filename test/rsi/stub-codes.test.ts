@@ -3,7 +3,7 @@
  *
  * `src/rsi/**` 与 `src/commands/rsi.ts` 里每一处 `rsiStubExit(ctx, '<桩名>')` 的字面量调用都必须登记在 {@link REGISTERED},
  * **多一处或少一处都红**:B5 各块实装命令时必须同一次提交里删掉对应登记(少登记 = 偷偷留了桩;多登记 = 桩已删但没清登记)。
- * 这样 B5-0 先登记、各块陆续删,最后全部块合并后只剩 P1 预留与 A3 的 poke / hint。
+ * 这样 B5-0 先登记、各块陆续删;A3 删掉 poke / hint 之后只剩 P1 预留(分发器里的变量调用)。
  */
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -14,9 +14,7 @@ import { REPO_ROOT } from '../helpers/tmp.js';
 const REGISTERED: Readonly<Record<string, readonly string[]>> = {
   // B5a 已实装并删除登记:tick / status --ack / projects --rebuild-index(干跑与 --write)
   // B5b 已实装并删除登记:confirm;B5c 已实装并删除登记:purge
-  // A3:poke / hint(钩子专用入口,不属于 B5)
-  'src/rsi/poke.ts': ['poke'],
-  'src/rsi/hint.ts': ['hint'],
+  // A3 已实装并删除登记:poke / hint。至此 src/rsi 下不再有字面量桩调用,只剩分发器里 P1 预留子命令的变量调用
 };
 /** 分发器里 P1 预留子命令用变量调用桩(不是字面量),不进上表;这里钉住它仍存在 */
 const DISPATCHER = 'src/commands/rsi.ts';
@@ -40,7 +38,6 @@ async function scan(): Promise<Record<string, string[]>> {
 describe('桩码出现位置登记(B5 各块实装时同步删除)', () => {
   it('src/rsi 下的字面量桩调用与登记表恰好相等', async () => {
     const found = await scan();
-    expect(Object.keys(REGISTERED).length).toBeGreaterThan(0);
     expect(found).toEqual(
       Object.fromEntries(Object.entries(REGISTERED).map(([f, n]) => [f, [...n]])),
     );

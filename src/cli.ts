@@ -153,6 +153,13 @@ export async function main(argv: readonly string[], env: MainEnv = {}): Promise<
     return ExitCode.OK;
   }
 
+  // 内部入口:自动 RSI 的后台 worker `__rsi --background`(契约 R20-3.9.1 / A3 订正)。根入口 `cli.ts` 已在加载启动器之前把它分流到零网络的
+  // `rsi/hook-entry.ts`;这里只为进程内调用 `main()` 保持一致,经**动态** import 转交(不改变本文件的静态闭包)。传原始 argv:全局选项也算多余参数(退 2)
+  if (flags.rest[0] === '__rsi') {
+    const { runHookEntry } = await import('./rsi/hook-entry.js');
+    return runHookEntry(argv, env.env !== undefined ? { env: { ...env.env } } : {});
+  }
+
   // 内部入口:后台 update worker。不在 COMMANDS 里,不进 --help;只有这一个精确形状
   const hidden =
     flags.rest[0] === '__update' && !flags.help

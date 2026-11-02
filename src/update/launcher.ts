@@ -272,5 +272,17 @@ export async function launchAndSchedule(
   } catch {
     // 后台调度失败不影响本次命令
   }
+  try {
+    // 自动 RSI 的顺带调度(R20-1.7):与 update 的调度并列、互不影响;模块本身零网络,失败一律吞掉
+    const { scheduleRsiAfterCommand } = await import('../rsi/kit-schedule.js');
+    const { hookEnv } = await import('../rsi/hook-entry.js');
+    await scheduleRsiAfterCommand({
+      argv,
+      env: hookEnv(),
+      isTty: process.stdout.isTTY === true && process.stdin.isTTY === true,
+    });
+  } catch {
+    // 同上
+  }
   return code;
 }
