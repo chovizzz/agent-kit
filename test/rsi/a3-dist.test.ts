@@ -12,6 +12,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import * as path from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { KIT_VERSION } from '../../src/contracts/meta.js';
 import { exists, readText, realpathSync } from '../../src/io/read-fs.js';
 import * as safe from '../../src/io/safe-fs.js';
 import { REPO_ROOT } from '../helpers/tmp.js';
@@ -20,6 +21,12 @@ import { newWorld } from '../update/install-world.js';
 import { installFake, putState } from '../update/launcher-world.js';
 import { treeOf } from './rsi-fixture.js';
 
+const [VMAJ, VMIN, VPATCH] = KIT_VERSION.split('.').map((x) => Number.parseInt(x, 10)) as [
+  number,
+  number,
+  number,
+];
+const NEWER_SAME_MAJOR = `${VMAJ}.${VMIN}.${VPATCH + 1}`;
 const SAFE_PATH = `${path.dirname(process.execPath)}:/usr/bin:/bin:/usr/sbin:/sbin`;
 const VITE_BIN = path.join(REPO_ROOT, 'node_modules', 'vite', 'bin', 'vite.js');
 
@@ -153,10 +160,10 @@ interface W {
 /** 假 HOME:`current` 损坏(锚点不符)+ 一条待提示的「自动同步被拒」记录;`[rsi]` 按 kind 配 */
 async function world(kind: 'off' | 'stop' | 'armed'): Promise<W> {
   const w = await newWorld();
-  // 已安装版本取一个永远不等于本包版本的值:等于时启动器不走 current,正向对照就看不到 UPDATE_CURRENT_BROKEN
-  const inst = await installFake(w, '9.9.9');
+  // 已安装版本 = 本包版本的 patch + 1:启动器只在「更高且同 major」时才去跑 current(从而发现它损坏);相同 / 更低 / 跨 major 都不碰 current
+  const inst = await installFake(w, NEWER_SAME_MAJOR);
   expect(inst.pkg.anchor).not.toBe('a'.repeat(64));
-  await putState(w, '9.9.9', 'a'.repeat(64), (s) => ({
+  await putState(w, NEWER_SAME_MAJOR, 'a'.repeat(64), (s) => ({
     ...s,
     last_auto_sync: {
       at: '2026-10-14T12:00:00.000Z',
