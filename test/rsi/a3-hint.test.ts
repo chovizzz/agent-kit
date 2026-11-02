@@ -12,6 +12,7 @@ import { exists } from '../../src/io/read-fs.js';
 import { chmod, mkdirp, writeFile } from '../../src/io/safe-fs.js';
 import { buildRsiPolicy, loadRsiConfig, policyFingerprint } from '../../src/rsi/config.js';
 import { runHint, type RunHintDeps } from '../../src/rsi/hint.js';
+import { runStatus } from '../../src/rsi/status.js';
 import { makeTickFx, type TickFx } from './b5a-fixture.js';
 import { rsiToml, treeOf, writeCfg } from './rsi-fixture.js';
 import {
@@ -22,7 +23,7 @@ import {
   indexOf,
   key,
   mkProject,
-  runMain,
+  runDirect,
   seed,
   validConfirm,
 } from './ro-fixture.js';
@@ -111,7 +112,7 @@ async function confirmedWorld(prefix: string): Promise<{ f: TickFx; projs: strin
 describe('R20-3.3.2 / R20-3.3.3 confirmed 模板与计数(与 rsi status 对拍)', () => {
   it('输出一行模板,计数等于 status --json 的对应字段', async () => {
     const { f } = await confirmedWorld('a3-hint-c-');
-    const st = await runMain(f, ['rsi', 'status', '--json']);
+    const st = await runDirect(f, runStatus, ['--json'], { now: () => new Date(NOW_MS) });
     expect(st.code).toBe(0);
     const c = (JSON.parse(st.out) as { counts: Record<string, number> }).counts;
     const out = await runHint(['--agent', 'claude'], deps(f));

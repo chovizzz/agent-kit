@@ -64,6 +64,16 @@ async function stopPresent(io: Parameters<typeof rsiDirReadonly>[0]): Promise<bo
   }
 }
 
+/** 只 lstat 判存在;无法确认 = 当作在场(宁可不起 worker) */
+async function present(file: string): Promise<boolean> {
+  try {
+    await lstat(file);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code !== 'ENOENT';
+  }
+}
+
 export async function trySpawnL0(
   input: SpawnGateInput,
   deps: SpawnGateDeps = {},
@@ -110,11 +120,19 @@ export async function trySpawnL0(
   if (!l0Due(state, t)) return noop('not_due');
   if (over()) return noop('budget');
 
-  // 启动预留(唯一的写入分支开始)
+  // 已被预留(同一窗口已有 worker)→ 只读判定即返回,不做任何写尝试(「输出 / 动作为空的调用零写入」,含失败的独占创建)
+  const markerName = `${input.agent}-${windowIndex(t)}`;
+  const ro = await rsiDirReadonly(io);
+  if (ro.kind === 'unsafe') return noop('unsafe');
+  if (ro.kind === 'ok' && (await present(path.join(ro.dir, 'poke', markerName)))) {
+    return noop('reserved');
+  }
+
+  // 启动预留(唯一的写入分支开始;独占创建仍是并发下的仲裁)
   const dir = await rsiDir(io);
   const pokeDir = path.join(dir, 'poke');
   await mkdirp(io, pokeDir, RSI_DIR_MODE);
-  const marker = path.join(pokeDir, `${input.agent}-${windowIndex(t)}`);
+  const marker = path.join(pokeDir, markerName);
   try {
     await createExclusive(
       io,

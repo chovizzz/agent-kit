@@ -286,18 +286,17 @@ export async function runHint(argv: readonly string[], deps: RunHintDeps = {}): 
     const env: Env = deps.env ?? {};
     const c = await compose(argv, env, deps, over);
     if (c === null) return '';
-    // 去重(唯一写入):30 分钟窗口内同一 agent 只输出一次
+    // 去重(唯一写入):30 分钟窗口内同一 agent 只输出一次。已有标记 → 只读判定即返回空串,不做任何写尝试
     const nowMs = (deps.now ?? ((): Date => new Date()))().getTime();
+    const markerName = `${c.agent}-${windowIndex(nowMs, RSI_HINT_DEDUP_MS)}`;
+    const ro = await rsiDirReadonly(c.io);
+    if (ro.kind === 'unsafe') return '';
+    if (ro.kind === 'ok' && (await exists(path.join(ro.dir, 'hint', markerName)))) return '';
     const dir = await rsiDir(c.io);
     const hintDir = path.join(dir, 'hint');
     await mkdirp(c.io, hintDir, RSI_DIR_MODE);
     try {
-      await createExclusive(
-        c.io,
-        path.join(hintDir, `${c.agent}-${windowIndex(nowMs, RSI_HINT_DEDUP_MS)}`),
-        '',
-        RSI_FILE_MODE,
-      );
+      await createExclusive(c.io, path.join(hintDir, markerName), '', RSI_FILE_MODE);
     } catch {
       return '';
     }
