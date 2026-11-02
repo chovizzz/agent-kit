@@ -102,7 +102,13 @@ export async function runReflectIngest(
   const agentId = agent as RsiAgentId;
 
   // 先读 stdin;> 64KiB → 退出 1,不拿锁、不动 digest、不占名额
-  const stdin = await resolveReadStdin(ctx)(RSI_INGEST_MAX_STDIN_BYTES);
+  let stdin;
+  try {
+    stdin = await resolveReadStdin(ctx)(RSI_INGEST_MAX_STDIN_BYTES);
+  } catch (e) {
+    // stdin 读取失败(流错误):契约没有专门的码,按既有的 `RSI_FAIL_CLOSED reason=internal`(退出 3)报,待主代理定夺;此时尚未拿锁 / 动 digest / 占名额
+    return failExit(ctx.stderr, e);
+  }
   if (stdin.tooLarge) {
     ctx.stderr('RSI_INGEST_TOO_LARGE\n');
     emit(ctx, a.json, {

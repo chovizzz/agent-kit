@@ -22,14 +22,16 @@ import { canonicalJson } from '../io/canonical-json.js';
 import type { IoContext } from '../io/paths.js';
 import { lstat, readDir, readFileSafe } from '../io/read-fs.js';
 import { createExclusiveSynced, fsyncDir, mkdirp, remove, rename } from '../io/safe-fs.js';
-import { RSI_FILE_OWNER } from './lock-read.js';
+import { RSI_FILE_OWNER, rsiDirReadonly } from './lock-read.js';
 import type { RsiLockHandle } from './lock.js';
 import { RsiLockError } from './lock-error.js';
-import { rsiDir } from './rsi-dir.js';
+import { assertOwnDirSafe } from './rsi-dir.js';
 
 export interface QuotaDeps {
   hooks?: { point?(name: string): Promise<void> | void };
   randomHex?: (bytes: number) => string;
+  /** 测试注入:期望的目录属主 uid(缺省当前进程 uid) */
+  uid?: number;
 }
 
 const DAY_FILE_RE = /^(\d{4}-\d{2}-\d{2})\.json$/;
@@ -39,15 +41,34 @@ async function gate(lock: RsiLockHandle, deps: QuotaDeps, name: string): Promise
   await lock.assertHeld();
 }
 
-/** `ingest-quota/` 目录:真实目录、属主当前用户(沿用 rsi 目录的口径);不存在则建 0700 */
-async function quotaDir(io: IoContext): Promise<string> {
-  const base = await rsiDir(io);
-  const dir = path.join(base, 'ingest-quota');
-  const pre = await lstat(dir).catch(() => undefined);
-  if (pre !== undefined && (pre.isSymbolicLink() || !pre.isDirectory())) {
+/**
+ * `ingest-quota/` 目录(调用方持 `rsi/lock`):**每个写出口前 `assertHeld()`**,不经 `rsiDir()` 那种无复核的 mkdir / chmod。
+ *  - 已存在:lstat 校验真实目录、属主 = 当前 uid(测试可注入 `deps.uid`)、无组 / 其他写位;确认不了 → fail-closed `state_dir_unsafe`(不指望 mkdirp 的 mode 修正已有目录);
+ *  - 不存在:建 0700 → 重新 lstat 校验 → **fsync 父目录 `rsi/`**(新目录项先持久化)→ fsync 新目录;这一切都先于名额文件的写入,更先于 digest 的消费(unlink)。
+ */
+async function quotaDir(io: IoContext, lock: RsiLockHandle, deps: QuotaDeps): Promise<string> {
+  await lock.assertHeld();
+  const rsi = await rsiDirReadonly(io);
+  if (rsi.kind !== 'ok') throw new RsiLockError('state_dir_unsafe');
+  const dir = path.join(rsi.dir, 'ingest-quota');
+  let st = await lstat(dir).catch((e: NodeJS.ErrnoException) => {
+    if (e.code === 'ENOENT') return undefined;
     throw new RsiLockError('state_dir_unsafe');
+  });
+  if (st === undefined) {
+    await gate(lock, deps, 'quota:mkdir');
+    await mkdirp(io, dir, RSI_DIR_MODE);
+    st = await lstat(dir).catch(() => {
+      throw new RsiLockError('state_dir_unsafe');
+    });
+    assertOwnDirSafe(st, deps.uid);
+    await gate(lock, deps, 'quota:fsync-parent');
+    await fsyncDir(io, rsi.dir);
+    await gate(lock, deps, 'quota:fsync-dir');
+    await fsyncDir(io, dir);
+    return dir;
   }
-  await mkdirp(io, dir, RSI_DIR_MODE);
+  assertOwnDirSafe(st, deps.uid);
   return dir;
 }
 
@@ -60,7 +81,7 @@ export async function reserveIngestQuota(
   today: string,
   deps: QuotaDeps = {},
 ): Promise<QuotaOutcome> {
-  const dir = await quotaDir(io);
+  const dir = await quotaDir(io, lock, deps);
   const file = path.join(dir, `${today}.json`);
   let cur: RsiIngestQuota = { schema_version: 1, total: 0, agents: {} };
   const r = await readFileSafe(file, {

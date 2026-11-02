@@ -228,6 +228,7 @@ export async function runIngest(input: IngestInput, deps: IngestDeps): Promise<I
   const found = step3.found;
 
   // ---- 第 4 步:先预留名额(先于消费 digest 持久化) ----
+  await point('ingest:before_quota');
   const q = await reserveIngestQuota(io, lock, agent, today, deps.quota ?? {});
   if (q === 'limited') return notRun('rate_limited'); // 不消费 digest
   await point('ingest:after_quota');

@@ -294,6 +294,71 @@ export const A4_MUTATIONS: readonly A4Mutation[] = [
     expectRed: ['A 预留后暂停超过 10 分钟'],
     mustKill: ['A 预留后暂停超过 10 分钟'],
   },
+  {
+    id: 'stdin-error-as-eof',
+    clause: 'stdin 流错误按 EOF 处理(返回已读前缀)',
+    edits: [
+      {
+        file: 'src/commands/types.ts',
+        anchor: "reject(e instanceof Error ? e : new Error('stdin error'));",
+        replacement:
+          "resolve({ text: Buffer.concat(chunks, total).toString('utf8'), tooLarge: false });",
+      },
+    ],
+    tests: [INGEST],
+    expectRed: ['流错误 → readStdinFrom reject'],
+    mustKill: ['流错误 → readStdinFrom reject'],
+  },
+  {
+    id: 'quota-dir-no-parent-fsync',
+    clause: '名额目录首建不 fsync 父目录',
+    edits: [
+      {
+        file: 'src/rsi/ingest-quota.ts',
+        anchor: 'await fsyncDir(io, rsi.dir);',
+        replacement: '',
+      },
+    ],
+    tests: [INGEST],
+    expectRed: ['首次创建 ingest-quota/'],
+    mustKill: ['首次创建 ingest-quota/'],
+  },
+  {
+    id: 'quota-dir-no-owner-check',
+    clause: '名额目录不校验属主 / 组写位',
+    edits: [
+      {
+        file: 'src/rsi/ingest-quota.ts',
+        anchor: '  assertOwnDirSafe(st, deps.uid);\n  return dir;',
+        replacement: '  return dir;',
+      },
+    ],
+    tests: [INGEST],
+    expectRed: ['已有目录组可写', '已有目录属主不是当前用户'],
+    mustKill: ['已有目录组可写', '已有目录属主不是当前用户'],
+  },
+  {
+    id: 'slot-dir-mkdir-unguarded',
+    clause: '持锁后的槽位目录访问不经 assertHeld、且可 mkdir',
+    edits: [
+      {
+        file: 'src/rsi/digest-slots.ts',
+        anchor: '  await lock.assertHeld();\n  return digestsDirReadonly(io);',
+        replacement: '  return digestsDir(io);',
+      },
+      {
+        file: 'src/rsi/digest-slots.ts',
+        anchor: "import { digestsDirReadonly } from './rsi-dir.js';",
+        replacement: "import { digestsDir, digestsDirReadonly } from './rsi-dir.js';",
+      },
+    ],
+    tests: [SLOTS],
+    expectRed: ['进入目录访问之前失锁'],
+    mustKill: [
+      '进入目录访问之前失锁(锁文件被夺走)',
+      '进入目录访问之前失锁(purge 删掉了整个 digests/)',
+    ],
+  },
 ];
 
 /** javis 实测结果(主代理执行变异后填);形状同 A3_RESULTS */

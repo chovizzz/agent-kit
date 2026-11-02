@@ -16,7 +16,7 @@ import { ProposalSchema } from '../../src/contracts/proposal.js';
 import { ReflectRunReportSchema } from '../../src/contracts/reflect.js';
 import { RSI_INGEST_REJECT_REASONS } from '../../src/contracts/rsi.js';
 import { exists, readDir, readText } from '../../src/io/read-fs.js';
-import { mkdirp, rename, symlink, writeFile } from '../../src/io/safe-fs.js';
+import { chmod, mkdirp, remove, rename, symlink, writeFile } from '../../src/io/safe-fs.js';
 import { readSlot, withDigestsLock, revokeAllSlots } from '../../src/rsi/digest-slots.js';
 import { runPurge } from '../../src/rsi/purge.js';
 import { draft, fakeKey } from '../fixtures/reflect/world.js';
@@ -35,6 +35,8 @@ import {
   type A4World,
 } from './a4-fixture.js';
 import { put } from './services-fixture.js';
+import { PassThrough } from 'node:stream';
+import { readStdinFrom } from '../../src/commands/types.js';
 
 const STOP_DOC = '{"at":"2026-10-26T00:00:00.000Z","by":"user"}';
 const cleanRedactor = { pass2: () => ({ clean: true }) } as never;
@@ -96,6 +98,8 @@ async function ingest(
     deps?: IngestCommandDeps;
     ingest?: Record<string, unknown>;
     tooLarge?: boolean;
+    /** stdin 流在交出合法 JSON 之后出错 */
+    stdinError?: boolean;
     args?: Partial<IngestArgs>;
   } = {},
 ): Promise<Ran> {
@@ -108,10 +112,10 @@ async function ingest(
     overlayPath: undefined,
     stdout: (t) => void (out += t),
     stderr: (t) => void (err += t),
-    readStdin: async () => ({
-      text: o.tooLarge === true ? '' : text,
-      tooLarge: o.tooLarge === true,
-    }),
+    readStdin: async () => {
+      if (o.stdinError === true) throw new Error('EIO');
+      return { text: o.tooLarge === true ? '' : text, tooLarge: o.tooLarge === true };
+    },
   };
   const code = await runReflectIngest(
     ctx,
@@ -533,7 +537,7 @@ describe('严格批次与映射(R20-16.15 第 6 ~ 11 步;R20-16.17)', () => {
     ],
     [
       '不可见字符',
-      () => body(uniq(0, { why: 'zero​width chars hide payloads here' })),
+      () => body(uniq(0, { why: 'soft\u00adhyphen chars hide payloads here' })),
       'hidden_chars_in_output',
     ],
     [
@@ -783,5 +787,114 @@ describe('命令参数(经 reflect 命令:R20-16.14)', () => {
     const r = await runReflect(w, [...BASE, '--digest', id, '--json']);
     expect(r.code, r.err).toBe(0);
     expect((JSON.parse(r.out) as { result: string }).result).toBe('ok');
+  });
+});
+
+describe('stdin 读取失败(契约无专门码:按 RSI_FAIL_CLOSED reason=internal 报,待主代理定夺)', () => {
+  it('流错误 → readStdinFrom reject,不把已读到的前缀当完整输入(先发合法 JSON 再出错)', async () => {
+    const s = new PassThrough();
+    const p = readStdinFrom(s, 64 * 1024);
+    s.write(body(uniq(0)));
+    s.destroy(new Error('EIO'));
+    await expect(p).rejects.toThrow('EIO');
+    // 对照:正常结束返回全文
+    const ok = new PassThrough();
+    const q = readStdinFrom(ok, 64 * 1024);
+    ok.end('{"a":1}');
+    await expect(q).resolves.toEqual({ text: '{"a":1}', tooLarge: false });
+  });
+  it('stdin 流错误:命令失败(3),不拿锁、不占名额、不消费 digest,零写入', async () => {
+    const w = await makeA4World('a4-ig-stdin-err-');
+    const id = await issue(w);
+    w.s.audit.length = 0;
+    const r = await ingest(w, id, body(uniq(0)), { stdinError: true });
+    expect([r.code, r.err]).toEqual([3, 'RSI_FAIL_CLOSED reason=internal\n']);
+    expect(w.s.audit).toEqual([]);
+    expect(await digestStillThere(w, id)).toBe(true);
+    expect(await quota(w)).toBeNull();
+    expect(await runDirs(w)).toEqual([]);
+  });
+});
+
+describe('名额目录的持久化与校验(R20-16.15 第 4 步)', () => {
+  it('首次创建 ingest-quota/:新目录 → 父目录 fsync → 名额文件与目录持久化 → 之后才 unlink digest', async () => {
+    const w = await makeA4World('a4-ig-quota-order-');
+    const id = await issue(w);
+    w.s.audit.length = 0;
+    const r = await ingest(w, id, body(uniq(0)));
+    expect(r.code, r.err).toBe(0);
+    const ops = w.s.audit;
+    const idx = (pred: (op: string, p: string) => boolean): number =>
+      ops.findIndex((a) => pred(a.slice(0, a.indexOf(' ')), a.slice(a.indexOf(' ') + 1)));
+    const mk = idx((o, p) => o === 'mkdirp' && p.endsWith('/rsi/ingest-quota'));
+    const fsParent = idx((o, p) => o === 'fsyncDir' && p.endsWith('/.state/rsi'));
+    const fsNew = idx((o, p) => o === 'fsyncDir' && p.endsWith('/rsi/ingest-quota'));
+    const file = idx((o, p) => o === 'createExclusive' && p.includes('/rsi/ingest-quota/'));
+    const unlink = idx((o, p) => o === 'remove' && p.endsWith('/rsi/digests/s00.json'));
+    expect(mk).toBeGreaterThanOrEqual(0);
+    expect(unlink).toBeGreaterThanOrEqual(0);
+    expect(mk).toBeLessThan(fsParent);
+    expect(fsParent).toBeLessThan(file);
+    expect(fsNew).toBeGreaterThan(fsParent);
+    // 名额文件写完后的目录 fsync(第二次 fsync q)也先于 digest 的 unlink
+    const lastFsQ = ops
+      .map((a, i) => [a, i] as const)
+      .filter(([a]) => a.startsWith('fsyncDir ') && a.endsWith('/rsi/ingest-quota'))
+      .map(([, i]) => i)
+      .pop() as number;
+    expect(lastFsQ).toBeGreaterThan(file);
+    expect(lastFsQ).toBeLessThan(unlink);
+  });
+  it('已有目录组可写 → 拒绝(3 state_dir_unsafe),拒绝前不写名额文件、不消费 digest', async () => {
+    const w = await makeA4World('a4-ig-quota-perm-');
+    const id = await issue(w);
+    const q = path.join(w.s.rsi, 'ingest-quota');
+    await mkdirp(w.s.f.fx, q, 0o700);
+    await chmod(w.s.f.fx, q, 0o770);
+    w.s.audit.length = 0;
+    const r = await ingest(w, id, body(uniq(0)));
+    expect([r.code, r.err]).toEqual([3, 'RSI_FAIL_CLOSED reason=state_dir_unsafe\n']);
+    expect(
+      w.s.audit.some((a) => a.startsWith('createExclusive') && a.includes('ingest-quota')),
+    ).toBe(false);
+    expect(await quota(w)).toBeNull();
+    expect(await digestStillThere(w, id)).toBe(true);
+    // 对照:收紧后通过
+    await chmod(w.s.f.fx, q, 0o700);
+    expect((await ingest(w, id, body(uniq(0)))).code).toBe(0);
+  });
+  it('已有目录属主不是当前用户(注入 uid)→ 拒绝,同样不写名额文件、不消费 digest', async () => {
+    const w = await makeA4World('a4-ig-quota-owner-');
+    const id = await issue(w);
+    await mkdirp(w.s.f.fx, path.join(w.s.rsi, 'ingest-quota'), 0o700);
+    w.s.audit.length = 0;
+    const other = (process.getuid?.() ?? 0) + 1;
+    const r = await ingest(w, id, body(uniq(0)), { ingest: { quota: { uid: other } } });
+    expect([r.code, r.err]).toEqual([3, 'RSI_FAIL_CLOSED reason=state_dir_unsafe\n']);
+    expect(
+      w.s.audit.some((a) => a.startsWith('createExclusive') && a.includes('ingest-quota')),
+    ).toBe(false);
+    expect(await digestStillThere(w, id)).toBe(true);
+  });
+  it('名额目录准备前就失锁 → lock_lost,没有 mkdir / chmod / 文件写', async () => {
+    const w = await makeA4World('a4-ig-quota-lost-');
+    const id = await issue(w);
+    const r = await ingest(w, id, body(uniq(0)), {
+      ingest: {
+        hooks: {
+          point: async (n: string) => {
+            if (n === 'ingest:before_quota') {
+              await remove(w.s.f.fx, path.join(w.s.rsi, 'lock'));
+              w.s.audit.length = 0;
+            }
+          },
+        },
+      },
+    });
+    expect([r.code, r.err]).toEqual([3, 'RSI_FAIL_CLOSED reason=lock_lost\n']);
+    expect(
+      w.s.audit.filter((a) => /^(mkdirp|chmod|writeFile|createExclusive|rename|remove)/.test(a)),
+    ).toEqual([]);
+    expect(await exists(path.join(w.s.rsi, 'ingest-quota'))).toBe(false);
   });
 });

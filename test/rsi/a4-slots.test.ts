@@ -12,7 +12,7 @@ import {
   type RsiDigestRecord,
 } from '../../src/contracts/rsi.js';
 import { exists, readDir, readText } from '../../src/io/read-fs.js';
-import { hardlink, mkdirp, remove, symlink, writeFile } from '../../src/io/safe-fs.js';
+import { chmod, hardlink, mkdirp, remove, symlink, writeFile } from '../../src/io/safe-fs.js';
 import {
   abandonSlot,
   acquireDigestsLock,
@@ -27,7 +27,8 @@ import {
   withDigestsLock,
 } from '../../src/rsi/digest-slots.js';
 import { RsiLockError, acquireRsiLock } from '../../src/rsi/lock.js';
-import { makeTempDir } from '../helpers/tmp.js';
+import { createIoContext } from '../../src/io/paths.js';
+import { REPO_ROOT, makeTempDir } from '../helpers/tmp.js';
 import { newWork, type Work } from '../signals/helpers.js';
 import { buildChild, runChild, startChild, mkfifo, touchAt } from './proc/helper.js';
 
@@ -418,4 +419,60 @@ describe('真进程多进程争用(R20-16.25:正常争用下清理与预留不�
     expect(slots.filter((s) => s === 19)).toHaveLength(1);
     expect(slots.filter((s) => s === null)).toHaveLength(1);
   }, 60_000);
+});
+
+describe('持锁后的目录访问不得写(R20-16.10:拿锁之前的目录初始化与持锁后的业务访问分开)', () => {
+  /** 带写审计的 io(同一个状态目录) */
+  function auditedIo(w: Work, audit: string[]) {
+    return createIoContext({
+      cwd: REPO_ROOT,
+      env: { KIT_TMP: w.dir, KIT_STATE_DIR: w.state, PATH: '/usr/bin:/bin' },
+      writeAudit: (op, p) => void audit.push(`${op} ${p}`),
+    });
+  }
+  const WRITES = /^(mkdirp|chmod|writeFile|createExclusive|rename|remove|fsyncDir)/;
+  for (const [name, wipe] of [
+    ['锁文件被夺走', (w: Work) => remove(w.io, path.join(dirOf(w), 'lock'))],
+    ['purge 删掉了整个 digests/', (w: Work) => remove(w.io, dirOf(w))],
+  ] as const) {
+    it(`进入目录访问之前失锁(${name})→ lock_lost,没有新的 mkdir / chmod / 文件写;目录不被重建`, async () => {
+      const w = await newWork('a4-slot-dirlost-');
+      const audit: string[] = [];
+      const io = auditedIo(w, audit);
+      const lock = await acquireDigestsLock(io);
+      try {
+        await wipe(w);
+        audit.length = 0;
+        const e = await reserveSlot(io, lock, NOW).catch((x: unknown) => x);
+        expect((e as RsiLockError).kind).toBe('lock_lost');
+        expect(audit.filter((a) => WRITES.test(a))).toEqual([]);
+        if (name !== '锁文件被夺走') expect(await exists(dirOf(w))).toBe(false);
+        for (const f of [
+          () => cleanupSlots(io, lock, NOW),
+          () => revokeAllSlots(io, lock),
+          () => findDigest(io, lock, 'd_0123456789abcdef'),
+        ]) {
+          expect(((await f().catch((x: unknown) => x)) as RsiLockError).kind).toBe('lock_lost');
+        }
+        expect(audit.filter((a) => WRITES.test(a))).toEqual([]);
+      } finally {
+        await lock.release();
+      }
+    });
+  }
+  it('持锁时目录被换成别人可写的(组可写)→ state_dir_unsafe(只读校验,不 chmod 修正)', async () => {
+    const w = await newWork('a4-slot-dirperm-');
+    const audit: string[] = [];
+    const io = auditedIo(w, audit);
+    const lock = await acquireDigestsLock(io);
+    try {
+      await chmod(w.io, dirOf(w), 0o770);
+      audit.length = 0;
+      const e = await reserveSlot(io, lock, NOW).catch((x: unknown) => x);
+      expect((e as RsiLockError).kind).toBe('state_dir_unsafe');
+      expect(audit.filter((a) => WRITES.test(a))).toEqual([]);
+    } finally {
+      await lock.release();
+    }
+  });
 });

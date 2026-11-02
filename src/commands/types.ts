@@ -33,28 +33,44 @@ export function resolveReadStdin(
 }
 
 function defaultReadStdin(maxBytes: number): Promise<StdinRead> {
-  return new Promise((resolve) => {
+  return readStdinFrom(process.stdin, maxBytes);
+}
+
+/**
+ * 从可读流有界读取:读满上限即停(`tooLarge`);**流错误 → reject**(不得把已读到的前缀当成完整输入,否则被截断的 JSON 可能恰好合法)。
+ * 导出供测试用 `PassThrough` 演练。
+ */
+export function readStdinFrom(stream: NodeJS.ReadableStream, maxBytes: number): Promise<StdinRead> {
+  return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let total = 0;
-    const stream = process.stdin;
-    const done = (r: StdinRead): void => {
+    const cleanup = (): void => {
       stream.off('data', onData);
       stream.off('end', onEnd);
-      stream.off('error', onEnd);
+      stream.off('error', onError);
       stream.pause();
-      resolve(r);
     };
     const onData = (c: Buffer | string): void => {
       const b = typeof c === 'string' ? Buffer.from(c) : c;
       total += b.length;
-      if (total > maxBytes) return done({ text: '', tooLarge: true });
+      if (total > maxBytes) {
+        cleanup();
+        resolve({ text: '', tooLarge: true });
+        return;
+      }
       chunks.push(b);
     };
-    const onEnd = (): void =>
-      done({ text: Buffer.concat(chunks, total).toString('utf8'), tooLarge: false });
+    const onEnd = (): void => {
+      cleanup();
+      resolve({ text: Buffer.concat(chunks, total).toString('utf8'), tooLarge: false });
+    };
+    const onError = (e: unknown): void => {
+      cleanup();
+      reject(e instanceof Error ? e : new Error('stdin error'));
+    };
     stream.on('data', onData);
     stream.on('end', onEnd);
-    stream.on('error', onEnd);
+    stream.on('error', onError);
     stream.resume();
   });
 }

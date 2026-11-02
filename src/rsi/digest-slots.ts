@@ -31,7 +31,7 @@ import { createExclusiveSynced, fsyncDir, remove, rename } from '../io/safe-fs.j
 import { RsiLockError } from './lock-error.js';
 import { RSI_FILE_OWNER, rsiDirReadonly } from './lock-read.js';
 import { acquireRsiLock, type RsiLockDeps, type RsiLockHandle } from './lock.js';
-import { digestsDir } from './rsi-dir.js';
+import { digestsDirReadonly } from './rsi-dir.js';
 
 /** 测试缝:每个写出口之前调用(`reserve:create`、`publish:tmp`、`publish:rename`、`unlink:<slot>` …);抛错 = 在该点崩溃 */
 export interface SlotHooks {
@@ -98,8 +98,10 @@ export type SlotContent =
 
 const sha256Hex = (b: Uint8Array): string => createHash('sha256').update(b).digest('hex');
 
-async function dirOf(io: IoContext): Promise<string> {
-  return digestsDir(io);
+/** 持锁后的目录访问:先 `assertHeld()`(锁没了 → lock_lost,例如 purge 删掉了 digests/),再只读校验;绝不 mkdir / chmod */
+async function dirOf(io: IoContext, lock: RsiLockHandle): Promise<string> {
+  await lock.assertHeld();
+  return digestsDirReadonly(io);
 }
 
 /** 读一个槽位(`readFileSafe`:`O_NOFOLLOW|O_NONBLOCK`、句柄 fstat、普通文件、`nlink == 1`、属主当前 uid、mode ≤ 0600、解析前 64KiB 上限) */
@@ -172,7 +174,7 @@ export async function cleanupSlots(
   now: Date,
   deps: SlotDeps = {},
 ): Promise<number> {
-  const dir = await dirOf(io);
+  const dir = await dirOf(io, lock);
   let n = 0;
   let touched = await removeStaleTmp(io, dir, lock, deps);
   for (let i = 0; i < RSI_DIGEST_SLOT_COUNT; i++) {
@@ -205,7 +207,7 @@ export async function reserveSlot(
   deps: SlotDeps = {},
 ): Promise<Reservation | null> {
   await cleanupSlots(io, lock, now, deps);
-  const dir = await dirOf(io);
+  const dir = await dirOf(io, lock);
   const token = (deps.randomHex ?? defaultRandom)(8);
   const body = canonicalJson({ reserved: token, at: now.toISOString() });
   for (let i = 0; i < RSI_DIGEST_SLOT_COUNT; i++) {
@@ -232,7 +234,7 @@ export async function publishSlot(
   record: RsiDigestRecord,
   deps: SlotDeps = {},
 ): Promise<'published' | 'lost'> {
-  const dir = await dirOf(io);
+  const dir = await dirOf(io, lock);
   const cur = await readSlot(dir, r.slot);
   if (cur.kind !== 'reserved' || cur.reserved !== r.token) return 'lost';
   const tmp = path.join(dir, `.tmp-${r.token}`);
@@ -262,7 +264,7 @@ export async function abandonSlot(
   r: Reservation,
   deps: SlotDeps = {},
 ): Promise<boolean> {
-  const dir = await dirOf(io);
+  const dir = await dirOf(io, lock);
   const cur = await readSlot(dir, r.slot);
   if (cur.kind !== 'reserved' || cur.reserved !== r.token) return false;
   await unlinkSlot(io, dir, lock, deps, r.slot);
@@ -276,7 +278,7 @@ export async function revokeAllSlots(
   lock: RsiLockHandle,
   deps: SlotDeps = {},
 ): Promise<number> {
-  const dir = await dirOf(io);
+  const dir = await dirOf(io, lock);
   let n = 0;
   for (const e of await readDir(dir)) {
     const slot = RSI_DIGEST_SLOT_NAME_RE.test(e.name);
@@ -298,10 +300,10 @@ export interface FoundDigest {
 /** R20-16.13:按 `digest_id` 逐个读 20 个槽位查找(路径由内部构造,不接受外部路径);预留文件不参与匹配;读不过的槽位视为无效(不匹配) */
 export async function findDigest(
   io: IoContext,
-  _lock: RsiLockHandle,
+  lock: RsiLockHandle,
   digestId: string,
 ): Promise<FoundDigest | null> {
-  const dir = await dirOf(io);
+  const dir = await dirOf(io, lock);
   for (let i = 0; i < RSI_DIGEST_SLOT_COUNT; i++) {
     const c = await readSlot(dir, i);
     if (c.kind === 'digest' && c.record.digest_id === digestId) {
@@ -321,7 +323,7 @@ export async function removeDigestIfSame(
   expect: FoundDigest,
   deps: SlotDeps = {},
 ): Promise<'removed' | 'gone'> {
-  const dir = await dirOf(io);
+  const dir = await dirOf(io, lock);
   const cur = await readSlot(dir, expect.slot);
   if (
     cur.kind !== 'digest' ||
@@ -355,7 +357,7 @@ export async function invalidateDigests(
       return 0;
     }
     lock = await acquireRsiLock(io, deps.lock ?? {}, { sub: 'digests' });
-    const dir = await dirOf(io);
+    const dir = await dirOf(io, lock);
     let n = 0;
     for (let i = 0; i < RSI_DIGEST_SLOT_COUNT; i++) {
       const c = await readSlot(dir, i);
