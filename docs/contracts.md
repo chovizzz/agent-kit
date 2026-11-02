@@ -4683,11 +4683,11 @@ rsi 的锁(仓库 `.state/`)与 update / sync 的锁(HOME 下 `.local/state/agen
 
 ### 20.15 `rsi hooks` 与 kit 钩子写入(N1,契约先行;A5 实装后订正)
 
-用户 2026-11-02 定 **N1 = B**:kit 合并写 claude / codex 的钩子配置。本节定死这条写入路径的全部边界;现行条款里与之冲突的地方逐条加了「N1 订正」标注指回本节(§19.2 F8、§19.7、R20-1.3、R20-1.8、§20.9 第 13 条、§20.10,以及已冻结 §21 的 R21-6.2、R21-15.5、§21.18 第 29 行、§21.19 第 9 行,冻结后订正记录见 §21.23 末尾)。方案经两轮评审:Pi 方案评审 10 条全部采纳(§20.15-12)。本节**只写契约**,代码随 A5。
+用户 2026-11-02 定 **N1 = B**:kit 合并写 claude / codex 的钩子配置。本节定死这条写入路径的全部边界;现行条款里与之冲突的地方逐条加了「N1 订正」标注指回本节(§19.2 F8、§19.7、R20-1.3、R20-1.8、§20.9 第 13 条、§20.10,以及已冻结 §21 的 R21-6.2、R21-15.5、§21.18 第 29 行、§21.21 第 9 行,冻结后订正记录见 §21.23 末尾)。评审记录见 §20.15-10。本节**只写契约**,代码随 A5。
 
 #### 20.15-1 范围与入口
 
-- R20-15.1 唯一入口:`agent-kit rsi hooks (--print | --install | --uninstall | --restore <txn_id>) --agent <claude|codex|pi> [--write] [--json]`。四个模式互斥(否则 `RSI_USAGE reason=mode_conflict`);`--print` 不接受 `--write`;`--install` / `--uninstall` / `--restore` 不带 `--write` 是干跑。
+- R20-15.1 唯一入口:`agent-kit rsi hooks (--print | --install | --uninstall | --restore <txn_id> | --discard-residue <txn_id> | --prune-backups) [--agent <claude|codex|pi>] [--write] [--json]`。六个模式互斥(否则 `RSI_USAGE reason=mode_conflict`);除 `--prune-backups` 外都必须给 `--agent`(`--prune-backups` 给了 `--agent` 即 `unknown_arg`);`--print` 不接受 `--write`;其余模式不带 `--write` 是干跑(只打印将做的事,零写调用)。`--json` 键集见 R20-15.25。
 - R20-15.2 写对象只有三个,固定、不可配置:`~/.claude/settings.json`(claude)、`~/.codex/hooks.json`(codex)、`~/.pi/agent/extensions/agent-kit-rsi.ts`(pi,独立文件,不合并)。不写 `settings.local.json`、项目级任何文件、`~/.codex/config.toml`(codex 的钩子信任由用户自己做,kit 只在输出里提示)。
 - R20-15.3 **自动路径永不调用**:poke / hint / worker / 顺带调度 / sync / autosync / update / §21 任何自动环节都不得引用钩子写原语(lint 闸,R20-15.6)。R20-1.8 不变,只追加「`rsi hooks --write` 是写 agent 钩子配置的唯一入口,且是前台、TTY、逐次确认」。
 - R20-15.4 状态无关:钩子管理**不要求** `[rsi] enabled` 或有效的 `[rsi] repo`,在 `off` / `armed` / `confirmed` / `stopped` 下都能前台执行,且**不改变**任何 rsi 状态、不建 `.state/rsi/`、不顺带启用采集或会话授权(R20-1.3 订正)。
@@ -4702,7 +4702,7 @@ rsi 的锁(仓库 `.state/`)与 update / sync 的锁(HOME 下 `.local/state/agen
 
 - R20-15.8 每个 agent 的安装形状写成**形状表**(`src/contracts/rsi-hooks.ts`,版本化 `shape_version`):事件名、matcher、hook 类型、精确命令、超时、输出格式(`hint --format`)、失败与退出码处理、信任步骤、适用的 agent 版本范围、证据级别(`公开文档` / `实测运行` / `实测结构` / `假设`)。
 - R20-15.9 只有证据级别为 `公开文档` 或 `实测运行` 的形状开放 `--write`;其余(当前预计 codex 全部)只开放 `--print`,`--install --write` 退 4 `RSI_HOOKS_NOT_RUN reason=shape_unverified`。本机 agent 版本不在形状表的适用范围 → 同码。
-- R20-15.10 普通 hint 与 R21 的 `--canary` hint 在形状表里是**固定的一种组合**(claude:`SessionStart` matcher `startup` 只装 canary 形状或只装普通形状,由 `[rsi.auto]` 状态在安装时决定并写进账本),禁止两种同时装入造成双调用。安装钩子**不等于**通过 R21-6.5 的真实会话准入。
+- R20-15.10 普通 hint 与 R21 的 `--canary` hint 在形状表里是**固定的一种组合**(claude:`SessionStart` matcher `startup` 只装 canary 形状或只装普通形状,由 `[rsi.auto]` 状态在安装时决定并写进账本),禁止两种同时装入造成双调用。安装钩子**不等于**通过 R21-6.5 的真实会话准入。**形状迁移**(`[rsi.auto]` 开 / 关后再次 `--install`):账本已登记且指纹一致的另一种形状 → 计划显示 remove + add,在**同一个事务**里提交;未登记的互斥形状(例如用户手贴的普通 hint)→ 不删、也不新增第二种,退 4 `reason=conflicting_shape_unowned`,提示人工处理。
 
 #### 20.15-4 kit 条目的归属
 
@@ -4712,7 +4712,7 @@ rsi 的锁(仓库 `.state/`)与 update / sync 的锁(HOME 下 `.local/state/agen
 
 #### 20.15-5 读取与合并规则
 
-- R20-15.14 读取:路径链每段属主为当前 uid、不是符号链接、组与其他人不可写、无 setuid / setgid / sticky 之外的特殊位;目标为普通文件、`nlink == 1`、≤ 1 MiB;以不跟随链接的 fd 打开并核对 fstat 与路径 lstat 一致,上限在读时强制。不满足 → 退 3 `RSI_FAIL_CLOSED reason=hooks_target_unsafe`。文件不存在:claude 按 `{}`;codex 按形状表的空形态(未核实 → 只能 `--print`)。
+- R20-15.14 读取:**HOME 本身及其祖先**按既有 `getRealHome()` 信任协议处理(不要求祖先属于当前 uid);**HOME 以下**的每一段:属主为当前 uid、不是符号链接、组与其他人不可写、无 setuid / setgid;目标为普通文件、`nlink == 1`、≤ 1 MiB;以不跟随链接的 fd 打开并核对 fstat 与路径 lstat 一致(dev、ino、mode、uid),上限在读时强制。不满足 → 退 3 `RSI_FAIL_CLOSED reason=hooks_target_unsafe`。文件不存在:claude 按 `{}`;codex 按形状表的空形态(未核实 → 只能 `--print`)。父目录:agent 根(`~/.claude`、`~/.codex`、`~/.pi/agent`)不存在 → 退 4 `reason=agent_not_installed`,kit 不替 agent 建根目录;只允许在已存在的 agent 根之下建缺失的最后几段(pi 的 `extensions/`),以 0700 不跟随链接创建并逐段复核。
 - R20-15.15 严格 JSON(无注释、无尾逗号、无重复键);根必须是对象,`hooks` 若存在必须是对象,目标事件若存在必须是数组,数组元素必须是形状表认得的包装对象 → 否则 `reason=config_unparsable` / `config_shape_unsupported`,零写入。
 - R20-15.16 **格式保真闸**(受限格式支持,不承诺多数文件能过):原文去掉末尾换行后必须等于 `JSON.stringify(JSON.parse(原文), null, 2)`;不等 → `reason=config_not_canonical`,零写入,提示改用 `--print`。写出时保留原文件「有无末尾换行」。
 - R20-15.17 其它任何键与非 kit 条目:不改、不重排;验收断言「非 kit 节点在新文件里的字节片段与原文件逐字相同」。
@@ -4720,34 +4720,38 @@ rsi 的锁(仓库 `.state/`)与 update / sync 的锁(HOME 下 `.local/state/agen
 #### 20.15-6 计划、确认与事务
 
 - R20-15.18 计划:干跑与 `--write` 先生成同一份计划 `{agent, path, before_exists, before_sha256, ops:[{op: add|remove, event, entry_fingerprint}], shape_version}`。`--write` 打印计划摘要(只含键路径、事件名与 kit 条目,不回显任何非 kit 内容)、告知「将把整份配置备份到 kit 私有状态目录」,要求输入 `yes`;输入不是 `yes` 或 EOF → 退 1 `RSI_HOOKS_DECLINED`,零写入。
-- R20-15.19 确认绑定计划:读到 `yes` 之后拿锁、按 R20-15.14 重读、重算计划;与展示时任一字段不同 → 退 4 `reason=stale_plan`,零写入(不静默重规划后执行)。
+- R20-15.19 确认绑定计划与顺序:确认(读到 `yes`)之后才拿锁;拿锁后**先**按 R20-15.22 处理残留事务,再按 R20-15.14 重读、重算计划;与展示时任一字段不同(含残留处理改变了目标)→ 退 4 `reason=stale_plan`,本次计划不提交,用户须重新运行看新计划(不静默重规划后执行)。
 - R20-15.20 锁:用 sync 的锁(`~/.local/state/agent-kit/sync/lock`,与 sync / autosync 互斥),拿不到 → 退 4 `reason=locked`;每个写出口(journal、备份、临时文件、rename、账本、修剪)之前 `assertHeld`,丢锁 → 退 3 `lock_lost`,不再写。**残余(登记,不弱化)**:sync 锁不与 Claude Code / codex 自己改写配置文件互斥;最后一次复核到 rename 之间被它们改写会丢失更新,只能缩小窗口,不是 CAS。
-- R20-15.21 事务(位置 `~/.local/state/agent-kit/hooks/`,目录 0700、文件 0600):①写 journal `txn/<txn_id>.json`(`txn_id` = UTC 时间戳 + 16 位随机十六进制;内容:目标、写前存在性、before / after 哈希、原权限、备份路径与哈希、计划)并 fsync 文件与目录 → ②备份原文件到 `backups/<txn_id>/<agent>`(无原文件则记「不存在」,不建备份文件)并 fsync、核对备份哈希 = before → ③提交前复核 R20-15.14 的全部安全条件 + 存在性 + 内容哈希仍是 before(否则 `reason=config_changed_during_write`,删临时文件、journal 记 aborted)→ ④同目录临时文件(全程 0600,写完 fsync)→ rename → 按原权限 chmod(原权限比 0600 宽时才放宽)→ fsync 目录 → ⑤追加账本 `ledger.json`(读-改-写 + 临时文件 + rename)→ ⑥删 journal。无变化的操作(幂等安装、已不存在的卸载)不建 journal、不建备份、不改账本。
-- R20-15.22 残留 journal:下一次任何 `rsi hooks --write` 先处理:目标哈希 = after → 补账本、删 journal;= before → 删 journal(未生效);第三种值 → 退 4 `reason=txn_residue_unknown`,零写入,提示用户核对后用 `--restore`。
-- R20-15.23 `--restore <txn_id>`:`txn_id` 必须匹配严格格式,路径由内部构造;只在当前文件哈希 = 账本里该事务的 after 时才把备份放回(之后有人改过 → `reason=config_changed_since_install`,零写入);备份哈希必须 = 该事务的 before(否则退 3 `hooks_backup_invalid`);restore 本身按 R20-15.21 作为事务执行(有自己的 journal 与备份)。
-- R20-15.24 备份保留:最多 10 份且不超过 30 个 UTC 日,修剪只删无在途 journal 引用的完整备份;`rsi hooks --prune-backups --write` 是用户清理入口(同样 TTY 确认)。
+- R20-15.21 事务(位置 `~/.local/state/agent-kit/hooks/`,安全协议见 R20-15.21a):①写 journal `txn/<txn_id>.json`(`txn_id` = UTC 时间戳 + `-` + 16 位随机十六进制;内容:agent、操作类型、写前存在性、before / after 哈希、原权限、计划、**待提交的账本变更与预期 `ledger.generation`**)→ fsync journal 文件与 `txn/` 目录(首次建目录时连同新建的各级目录一起 fsync)→ ②备份原文件到 `backups/<txn_id>/<agent>` 并 fsync 文件与新建目录、核对备份哈希 = before(写前不存在 → 不建备份文件,journal 记 `before_exists=false`)→ ③提交前复核 R20-15.14 的全部安全条件 + 存在性 + 内容哈希仍是 before(否则 `reason=config_changed_during_write`:删临时文件、journal 改记 `aborted` 并 fsync,备份保留到 R20-15.24 修剪)→ ④同目录临时文件(0600)写完 fsync → **在 rename 之前**把临时文件权限设为最终权限(原文件权限;原权限宽于 0600 才放宽)→ rename → fsync 目标目录 → ⑤按 journal 里的账本变更提交账本(临时文件 + rename + fsync 目录;账本记 `applied_txns`,同一 `txn_id` 只生效一次;`generation` 加 1)→ ⑥删 journal 并 fsync `txn/`。无变化的操作(幂等安装、已不存在的卸载)不建 journal、不建备份、不改账本。
+- R20-15.21a 私有状态区安全协议:`~/.local/state/agent-kit/hooks/` 及其下 `txn/`、`backups/`、`ledger.json`:每段不是符号链接、属主为当前 uid、目录 0700 且无组 / 他人权限、文件 0600 普通文件且 `nlink == 1`,fd 读取并核对身份,读上限(账本 / journal 各 256 KiB、备份 1 MiB),账本与 journal 过严格 schema;不满足 → 退 3 `hooks_ledger_invalid` / `hooks_backup_invalid` / `hooks_target_unsafe`,**不自动 chmod 修复**。journal 里出现的任何路径都不作为读写依据:目标、备份路径一律由固定 agent 与严格格式的 `txn_id` 在内部推导,与 journal 记录不符 → `hooks_ledger_invalid`。
+- R20-15.22 残留 journal:下一次任何 `rsi hooks --write`(拿锁后、计算计划前)先处理,逐个按 `txn_id` 升序:目标哈希 = after → 核对备份哈希 = before(写前存在时)、目标权限 = journal 记的最终权限(不符则在锁内补设)、fsync 目标目录、若账本 `applied_txns` 不含该 `txn_id` 则提交 journal 里的账本变更、删 journal;= before → journal 记 `aborted`、删 journal(未生效);第三种值 → 退 4 `reason=txn_residue_unknown`,不动目标。第三种值的唯一出口是 `--discard-residue <txn_id> --write`(TTY 确认):只在用户确认「保留当前文件现状」后删除该 journal、在账本里把该事务记 `discarded`(不写目标文件);此后该事务的 `--restore` 不可用,kit 条目的归属按账本既有记录(未提交的变更不生效)。
+- R20-15.23 `--restore <txn_id>`:`txn_id` 必须匹配严格格式,路径由内部构造;生成**专用计划** `{kind: restore, source_txn, target_exists_after, target_sha256_after, backup_sha256}`,同样经确认与 R20-15.19 绑定;前提:当前文件哈希 = 账本里该事务的 after(否则 `reason=config_changed_since_install`,零写调用)、备份哈希 = 该事务的 before(否则退 3 `hooks_backup_invalid`)。效果:源事务写前存在 → 放回备份;写前不存在 → **受保护的删除**(删前复核哈希仍为 after)。账本做源事务的**逆变更**(撤回其新增的归属、恢复其移除的归属),源事务记 `restored`。restore 本身按 R20-15.21 作为事务执行(自己的 journal、备份、`generation` 加 1)。
+- R20-15.24 备份保留:最多 10 份且不超过 30 个 UTC 日,修剪只删无在途 journal 引用、且对应事务不是「可 restore」最新一次的完整备份;修剪在每次成功事务的⑥之后顺带做。`rsi hooks --prune-backups` 干跑列出将删的备份数与 `txn_id`(不回显内容),`--write` 需 TTY 确认,拿 sync 锁,只删备份目录、不动账本里的事务记录(对应事务的 restore 随之不可用,账本记 `backup_pruned`)。
 
 #### 20.15-7 输出、隐私与稳定码
 
-- R20-15.25 输出例外:`--print` 与计划预览可以输出**形状表生成的固定内容**(钩子片段、pi 扩展源码、键路径、事件名);除此之外遵守 §20 通用约定(不回显用户配置内容、绝对路径只限 `~/` 相对写法)。`--json` 固定键集:`{mode, agent, shape_version, verified, plan:{before_exists, ops}, result, txn_id}`。交互提示与确认文案走 stderr。
+- R20-15.24a 写入承诺分四级,每个失败分支只能宣称它那一级:①**零写调用**:参数错误、`--print`、干跑、`shape_unverified`、`agent_not_installed`、`config_unparsable` / `config_shape_unsupported` / `config_not_canonical` / `foreign_kit_entry` / `ambiguous_entry` / `conflicting_shape_unowned` / `duplicate_in_local` / `duplicate_check_failed`(都在确认与拿锁之前判出)、`RSI_HOOKS_DECLINED`;②**仅锁基础设施**:`locked`、`stale_plan`(残留处理没有写任何东西时);③**仅既有事务的恢复**:拿锁后处理残留 journal 所做的写(R20-15.22),之后本次计划被拒;④**本次目标未提交**:`config_changed_during_write`(journal 与备份已写、目标未改)。验收的写调用审计按这四级逐分支断言(R20-15.31)。
+- R20-15.25 输出例外:`--print` 与计划预览可以输出**形状表生成的固定内容**(钩子片段、pi 扩展源码、键路径、事件名);除此之外遵守 §20 通用约定(不回显用户配置内容、绝对路径只限 `~/` 相对写法)。`--json` 固定键集:`{mode, agent, shape_version, verified, plan:{kind, before_exists, ops}, result, txn_id, write_level}`(`write_level` ∈ R20-15.24a 的四级或 `committed`;`--prune-backups` 的 `agent` 与 `shape_version` 为 `null`)。交互提示与确认文案走 stderr。
 - R20-15.26 隐私:备份是用户整份配置的副本(可能含凭据);备份内容、配置内容不得进入 stdout / stderr / `--json` / 账本 / journal 正文以外的任何日志或异常消息。验收植入秘密哨兵,断言只在私有备份文件里出现。
 - R20-15.27 只读重复检测(Q-N1-c):安装前只读检查 claude 的 `settings.local.json`(其是否被加载按形状表核实)中是否已有同形状条目;确认存在 → `reason=duplicate_in_local`,零写入;检测本身失败 → 不当作「未发现」,同样拒绝安装(`duplicate_check_failed`)。**只挡安装,不挡卸载**。不读项目 cwd,不输出冲突条目全文。不宣称全局去重(项目级 / 插件来源不在检查范围)。
-- R20-15.28 退出码:0 成功(含干跑与 `--print` **成功生成**计划 / 片段);1 `RSI_HOOKS_DECLINED`;2 `RSI_USAGE`(含非 TTY 的 `not_tty`);3 `RSI_FAIL_CLOSED reason=hooks_target_unsafe|hooks_backup_invalid|hooks_ledger_invalid|lock_lost|internal`;4 `RSI_HOOKS_NOT_RUN reason=locked|shape_unverified|config_unparsable|config_shape_unsupported|config_not_canonical|foreign_kit_entry|ambiguous_entry|stale_plan|config_changed_during_write|config_changed_since_install|txn_residue_unknown|duplicate_in_local|duplicate_check_failed`。参数错误、安全拒绝、无法解析都不得以 0 退出。新码在 A5 实装时并入 R20-3.0 总表与枚举(同一提交)。
+- R20-15.28 退出码:0 成功(含干跑与 `--print` **成功生成**计划 / 片段);1 `RSI_HOOKS_DECLINED`;2 `RSI_USAGE`(含非 TTY 的 `not_tty`);3 `RSI_FAIL_CLOSED reason=hooks_target_unsafe|hooks_backup_invalid|hooks_ledger_invalid|lock_lost|internal`;4 `RSI_HOOKS_NOT_RUN reason=locked|agent_not_installed|shape_unverified|config_unparsable|config_shape_unsupported|config_not_canonical|foreign_kit_entry|ambiguous_entry|conflicting_shape_unowned|stale_plan|config_changed_during_write|config_changed_since_install|txn_residue_unknown|duplicate_in_local|duplicate_check_failed`。参数错误、安全拒绝、无法解析都不得以 0 退出。新码在 A5 实装时并入 R20-3.0 总表与枚举(同一提交)。
 
 #### 20.15-8 与已冻结 §21 的衔接
 
-- R20-15.29 R21-15.5 的安装票基线:票绑定 hooks 账本的代次(`ledger.generation`);**票在途期间发生任何 `rsi hooks --write` 事务 → 票作废,须重新出票**;不对 kit 命令做宽泛剔除。kit 的 `--restore` 与第三方扩展停用不得交叉整文件覆盖,仍遵守 R21-15.6「只撤销可归属差异」。
+- R20-15.29 R21-15.5 的安装票基线:出票与 verify 都在 sync 锁下进行,并且:`hooks/txn/` 下存在任何 journal(在途或残留)→ 拒绝出票 / 消费(`RSI_CAPABILITY_NOT_RUN reason=hooks_txn_pending`,码随 V5 并入 §21.12);票绑定出票时的 `ledger.generation` 与目标配置基线哈希,verify 时任一不同 → 票作废、须重出票。由于 R20-15.21 在目标被改之前已持久化 journal,而 `generation` 在任何成功事务(含 restore、`--discard-residue`)后都加 1,「配置可能已被 kit 改过」总有持久化的失效依据;改动后又恢复到相同哈希的情形也因 `generation` 变化而作废。不对 kit 命令做宽泛剔除;kit 的 `--restore` 与第三方扩展停用不得交叉整文件覆盖,仍遵守 R21-15.6「只撤销可归属差异」。
 - R20-15.30 R21-6.2 的 `--canary` 钩子由 `rsi hooks --install` 按 R20-15.10 写入(不再依赖用户手贴),其余不变。
 
 #### 20.15-9 验收与必须覆盖的变异点(A5)
 
-- R20-15.31 矩阵:文件状态(不存在 / `{}` / 规范 / 不规范 / 不可解析 / 错误根类型 / 重复键 / 无末尾换行 / 混合包装 / 同命令不同 matcher / 用户在 kit 条目加字段 / 符号链接 / 硬链接 / 组可写 / 属主不符)× 操作(install / uninstall / restore / 干跑 / print)× 交错(确认期间被改、提交前被改、失锁、在 journal / 备份 / rename / 账本各提交点注入崩溃、restore 备份损坏、pi 外来文件)。断言:非 kit 字节片段不变、备份与账本、幂等、零写入用写调用审计(不只看最终树)、秘密哨兵。
+- R20-15.31 矩阵:文件状态(不存在 / `{}` / 规范 / 不规范 / 不可解析 / 错误根类型 / 重复键 / 无末尾换行 / 混合包装 / 同命令不同 matcher / 用户在 kit 条目加字段 / 符号链接 / 硬链接 / 组可写 / 属主不符)× 操作(install / uninstall / restore / 干跑 / print)× 交错(确认期间被改、提交前被改、失锁、在 journal / 备份 / chmod / rename / 账本 / 删 journal 各提交点注入崩溃并在新进程里恢复、restore 备份损坏、pi 外来文件、残留 journal 与 V5 出票 / verify 交错、私有状态区换成链接 / 宽权限 / 伪造 journal、hint 与 canary 形状迁移两个方向)。断言:非 kit 字节片段不变、备份与账本、幂等(同一 `txn_id` 账本只生效一次)、写调用审计按 R20-15.24a 四级逐分支(不只看最终树)、秘密哨兵、恢复后权限与目录持久化。fsync 用可注入的计数桩证明调用顺序(真实掉电不在验收范围,如实登记)。
 - R20-15.32 A5 零写入清单加 `rsi hooks --print --agent claude|codex|pi` 与 `rsi hooks --install --agent claude`(干跑),off / armed 两环境 `# exit=0`。
 - R20-15.33 必杀变异:去掉格式保真闸;去掉提交前复核;卸载改为按命令串删除;通用 home-fs 可写 kit-hooks;忽略包装差异;失锁仍提交;账本未提交却返回成功;确认后静默重规划。
 
 #### 20.15-10 评审记录
 
 2026-11-02 方案评审(Pi GPT-6.1 Sol,只读):10 条(高 5、中 5)全部采纳——专用写原语与反向测试(R20-15.6–15.7);完整形状归属与最小节点删除(R20-15.11–15.13);V5 票绑定账本代次、在途作废(R20-15.29);journal / fsync 顺序 / 残留恢复 / restore 事务(R20-15.21–15.23);fd 级读取与逐写出口 `assertHeld`(R20-15.14、15.20);格式闸限定与卸载语义改为「非 kit 片段不变」(R20-15.16–15.17);备份隐私与双保留上限(R20-15.24、15.26);确认绑定计划、状态无关、输出例外、退出码(R20-15.4、15.18–15.19、15.25、15.28);形状核实作为写能力闸(R20-15.8–15.10);验收矩阵与变异(R20-15.31–15.33)。Q-N1-a = 退 1 `RSI_HOOKS_DECLINED`;Q-N1-b = 保留保守格式闸;Q-N1-c = 只读重复检测、只挡安装(R20-15.27)。
+
+2026-11-02 条文评审(第二轮,Pi GPT-6.1 Sol):上一轮 10 条全部落文;新提 8 条(高 3、中 4、低 1)全部采纳——事务持久化顺序、rename 前设权限、账本按 `txn_id` 幂等(R20-15.21–15.22);私有状态区安全协议与 journal 路径不作依据(R20-15.21a);安装票与残留 journal / `generation` 的绑定(R20-15.29);restore 专用计划、受保护删除、账本逆变更与 `--discard-residue` 出口(R20-15.22–15.23);写入承诺四级(R20-15.24a);hint / canary 形状迁移(R20-15.10);路径安全从 HOME 以下起算、不替 agent 建根目录(R20-15.14);`--prune-backups` 契约与交叉引用订正(R20-15.1、15.24)。
 
 ## 21. 自主 RSI 契约(R21,v3.1,契约先行;V1–V6 实装后订正)
 
@@ -5429,4 +5433,4 @@ v3.1 已把用户决定列全;以下是落契约时新发现的契约细节取�
 
 **第五轮评审**(2026-10-23,第 1 级 Pi GPT-6.1 Sol;范围:第四轮 5 条与其涉及条款)。第四轮 5 条全部闭合;限定范围内未发现新的高、中、低严重度问题。结论原文:「高严重度是否全部闭合:是」「§21 能否冻结:能(本轮限定范围内无冻结前必须修复项)」。据此 §21 状态改为**冻结**(节首状态行)。评审自述:结论只针对指定范围,不表示对 §21 其它条款重新做了全量评审——第一轮是全量评审,第二至五轮是逐轮收窄的定向复核。
 
-**冻结后订正 N1(2026-11-02)**:用户拍板 N1 = B(kit 合并写 claude / codex 钩子配置)。按节首规则原位加标注:N1-1(R21-15.5 安装票)、N1-2(R21-6.2 `--canary` 钩子安装方式)、N1-3 / N1-4(§21.18 第 45、29 行)、N1-5(§21.19 第 9 行)。规则正文在 §20.15;方案评审见 §20.15-10。其余 §21 条款不受影响。
+**冻结后订正 N1(2026-11-02)**:用户拍板 N1 = B(kit 合并写 claude / codex 钩子配置)。按节首规则原位加标注:N1-1(R21-15.5 安装票)、N1-2(R21-6.2 `--canary` 钩子安装方式)、N1-3 / N1-4(§21.18 第 45、29 行)、N1-5(§21.21 第 9 行)。规则正文在 §20.15;方案评审见 §20.15-10。其余 §21 条款不受影响。
