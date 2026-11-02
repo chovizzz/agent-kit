@@ -78,8 +78,9 @@ export const A3_MUTATIONS: readonly A3Mutation[] = [
       },
     ],
     tests: [POKE, DIST],
+    // 端到端用例里第二次 poke 先被 6h 间隔挡住(worker 刚完成),到不了预留检查,所以它杀不了这条变异:只列在允许红的集合里,不算必杀
     expectRed: ['同一窗口', '端到端'],
-    mustKill: ['同一窗口', '端到端'],
+    mustKill: ['同一窗口'],
   },
   {
     id: 'attempt-after-read',
@@ -151,4 +152,69 @@ export interface A3MutationResult {
 }
 
 /** javis 上的实测结果(执行器输出后登记;没有结果的变异不算数) */
-export const A3_RESULTS: readonly A3MutationResult[] = [];
+export const A3_RESULTS: readonly A3MutationResult[] = [
+  // 2026-11-02 javis 私有检出 @ 10b6e1c:基线 127 例全绿、0 skipped;每条还原后逐文件 sha256 一致;javis HOME 下 .local/state/agent-kit 前后不变
+  {
+    id: 'throttle-flipped',
+    killedBy: [
+      '上次完成不足 6h → 空操作;恰 6h → spawn;时钟回拨 → spawn',
+      'R20-6.3 L0 到期(假时钟) > 恰 6 小时 → 到期;差 1 毫秒 → 不到期(节流比较取反 → 红)',
+      '不到 6h:skipped_throttled(日志一行),不写 attempt、不读会话、不建盐',
+    ],
+    failed: 3,
+    skipped: 0,
+    restored: true,
+  },
+  {
+    id: 'reservation-check-removed',
+    killedBy: [
+      '同一窗口的第二个 poke:EEXIST → 空操作、不 spawn、零写入(去掉预留检查 → 两个都 spawn → 红)',
+    ],
+    failed: 1,
+    skipped: 0,
+    restored: true,
+  },
+  {
+    id: 'attempt-after-read',
+    killedBy: [
+      'attempt 在读任何会话文件之前已落盘(读阶段第一步时 state.json 里就有;移到读之后 → 红)',
+    ],
+    failed: 1,
+    skipped: 0,
+    restored: true,
+  },
+  {
+    id: 'hint-cap-removed',
+    killedBy: ['200 字节放行、201 字节 → 空串;多字节 UTF-8 按字节算(字节上限去掉 → 红)'],
+    failed: 1,
+    skipped: 0,
+    restored: true,
+  },
+  {
+    id: 'auto-rsi-check-removed',
+    killedBy: [
+      '空串情形(全部零写入) > KIT_AUTO_RSI=0',
+      'armed × KIT_AUTO_RSI=0',
+      'confirmed × KIT_AUTO_RSI=0',
+      'KIT_AUTO_RSI="0" → 跳过(四类自动入口一致)',
+      '锁外跳过(零写入) > KIT_AUTO_RSI=0',
+    ],
+    failed: 5,
+    skipped: 0,
+    restored: true,
+  },
+  {
+    id: 'entry-through-launcher',
+    killedBy: [
+      'R20-1.2a 四组合 × off / STOP > off × 非 TTY',
+      'R20-1.2a 四组合 × off / STOP > off × TTY',
+      'R20-1.2a 四组合 × off / STOP > stop × 非 TTY',
+      'R20-1.2a 四组合 × off / STOP > stop × TTY',
+      '钩子参数带 --help / --version / 全局选项:仍不进启动器、无输出(__rsi 退 2)',
+      '端到端:armed + 到期 → poke 真的起 worker',
+    ],
+    failed: 6,
+    skipped: 0,
+    restored: true,
+  },
+];
