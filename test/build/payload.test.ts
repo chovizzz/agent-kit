@@ -1,3 +1,4 @@
+import { KIT_VERSION } from '../../src/contracts/meta.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import { PayloadIntegritySchema, PayloadManifestSchema } from '../../src/contracts/payload.js';
 import type { PayloadManifest } from '../../src/contracts/payload.js';
@@ -22,7 +23,8 @@ import { atomMd, fullFiles, makeSandbox, resetBuildDeps, runBuild, writeRepo } f
 
 afterEach(resetBuildDeps);
 
-const VERSION = '0.1.0';
+/** 与仓库 kit.toml / package.json 同一版本(版本锁保证三处一致);不写死,发版 bump 后用例不变 */
+const VERSION = KIT_VERSION;
 const STUB_DIST = { 'dist/cli.js': '#!/usr/bin/env node\n', 'package.json': '{"version":"x"}\n' };
 
 /** org-rule 为 must、team-rule 为 should:strength 取错字段时两边会一起露馅。 */

@@ -302,6 +302,12 @@ export interface RegistrySpec {
   npmjs?: { distTags?: Record<string, string>; unreachable?: boolean };
 }
 
+/**
+ * 用例里「本进程自己的版本」(未安装过任何版本时的当前版本)。registry 夹具里的版本号都是相对它写的(0.1.1 / 0.2.0 是「更新」、0.0.9 是「降级」),
+ * 所以固定在这里,不跟随包版本号(发版 bump 后用例语义不变)。
+ */
+export const TEST_OWN_VERSION = '0.1.0';
+
 export interface World {
   dir: string;
   home: string;
@@ -409,7 +415,7 @@ export async function runUpdate(
     env,
   };
   const deps: UpdateCommandDeps = { now: FIXED_NOW, verifier: okVerifier, ...o.deps };
-  const code = await createUpdateCommand(deps).run(ctx);
+  const code = await createUpdateCommand({ ownVersion: TEST_OWN_VERSION, ...deps }).run(ctx);
   return { code, out: out.join(''), err: err.join('') };
 }
 

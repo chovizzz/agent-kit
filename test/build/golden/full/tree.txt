@@ -4,11 +4,11 @@ name: diff-reviewer
 description: 只读评审者
 tools: Read, Grep, Glob, Bash
 ---
-<!-- 生成文件,勿手改;源:agent-kit-core@0.1.0 -->
+<!-- 生成文件,勿手改;源:agent-kit-core@0.2.0 -->
 
 你是只读的评审者。
 @@@ claude/home/.claude/rules/agent-kit/org.md 227
-<!-- 生成文件,勿手改;源:agent-kit-core@0.1.0 -->
+<!-- 生成文件,勿手改;源:agent-kit-core@0.2.0 -->
 ## agent-kit 规则(org 层)
 
 ### [should] 示例规则
@@ -19,7 +19,7 @@ tools: Read, Grep, Glob, Bash
 
 **怎么验**: 用某种方式验证。
 @@@ claude/home/.claude/rules/agent-kit/team.md 228
-<!-- 生成文件,勿手改;源:agent-kit-core@0.1.0 -->
+<!-- 生成文件,勿手改;源:agent-kit-core@0.2.0 -->
 ## agent-kit 规则(team 层)
 
 ### [should] 示例规则
@@ -34,11 +34,11 @@ tools: Read, Grep, Glob, Bash
 name: my-skill
 description: 示例技能。
 ---
-<!-- 生成文件,勿手改;源:agent-kit-core@0.1.0 -->
+<!-- 生成文件,勿手改;源:agent-kit-core@0.2.0 -->
 
 技能正文。
 @@@ claude/project/.claude/rules/agent-kit/project.md 231
-<!-- 生成文件,勿手改;源:agent-kit-core@0.1.0 -->
+<!-- 生成文件,勿手改;源:agent-kit-core@0.2.0 -->
 ## agent-kit 规则(project 层)
 
 ### [should] 示例规则
@@ -65,7 +65,7 @@ description: 示例技能。
 name: my-skill
 description: 示例技能。
 ---
-<!-- 生成文件,勿手改;源:agent-kit-core@0.1.0 -->
+<!-- 生成文件,勿手改;源:agent-kit-core@0.2.0 -->
 
 技能正文。
 @@@ codex/home/.codex/AGENTS.md 481
@@ -91,7 +91,7 @@ description: 示例技能。
 **怎么验**: 用某种方式验证。
 <!-- agent-kit:end -->
 @@@ codex/home/.codex/agents/diff-reviewer.toml 187
-# 生成文件,勿手改;源:agent-kit-core@0.1.0
+# 生成文件,勿手改;源:agent-kit-core@0.2.0
 name = "diff-reviewer"
 description = "只读评审者"
 sandbox_mode = "read-only"
@@ -113,7 +113,7 @@ developer_instructions = "你是只读的评审者。"
 name: my-skill
 description: 示例技能。
 ---
-<!-- 生成文件,勿手改;源:agent-kit-core@0.1.0 -->
+<!-- 生成文件,勿手改;源:agent-kit-core@0.2.0 -->
 
 技能正文。
 @@@ kimi/home/.kimi-code/AGENTS.md 481
@@ -148,7 +148,7 @@ tools:
   - Glob
   - Bash
 ---
-<!-- 生成文件,勿手改;源:agent-kit-core@0.1.0 -->
+<!-- 生成文件,勿手改;源:agent-kit-core@0.2.0 -->
 
 你是只读的评审者。
 @@@ kimi/project/AGENTS.md 313
@@ -173,7 +173,7 @@ tools:
       "confidence": "documented",
       "mode": "owned",
       "path": "claude/home/.claude/agents/diff-reviewer.md",
-      "sha256": "dce282decfd5dacbbbfcaf95da3ed26b1b9bc49b0370a62f958f08f072bbe1c9",
+      "sha256": "2b896eb2634e0cd2cc97a6e962157903be058a02ea24c185299bedc3063933e9",
       "sourceRefs": [
         "agent:diff-reviewer"
       ],
@@ -190,7 +190,7 @@ tools:
       "confidence": "assumed",
       "mode": "owned",
       "path": "claude/home/.claude/rules/agent-kit/org.md",
-      "sha256": "d9fec6af3c41cfe1323c89d0d48335d0baa2094831f7a7c88af514d252f2ddb3",
+      "sha256": "be2cf37df173992fce0b4817ac75fba83f6652cfdae8c70994b09f278f0c5112",
       "sourceRefs": [],
       "target": "home"
     },
@@ -205,7 +205,7 @@ tools:
       "confidence": "assumed",
       "mode": "owned",
       "path": "claude/home/.claude/rules/agent-kit/team.md",
-      "sha256": "b2a8586418dbb83f18f0d85a00be393df539199a7b191ba091e62423235b3757",
+      "sha256": "e7dd1b4dd63ff404f7c5d04225a08b047cd6c0eb2f5e9e5ca13b9b24fd579add",
       "sourceRefs": [],
       "target": "home"
     },
@@ -215,7 +215,7 @@ tools:
       "confidence": "documented",
       "mode": "owned",
       "path": "claude/home/.claude/skills/my-skill/SKILL.md",
-      "sha256": "0b7eb608a3ac49b96999723d81888a1ba8720d7fff72ab78d5ef2f6b89da6634",
+      "sha256": "2e6575b96e9d74ec62819bcead4a0111b1d238e2d90fdcef47d8c3cfd26954cd",
       "sourceRefs": [
         "skill:my-skill"
       ],
@@ -233,7 +233,7 @@ tools:
       "confidence": "documented",
       "mode": "owned",
       "path": "claude/project/.claude/rules/agent-kit/project.md",
-      "sha256": "74e0c9d9ba5e44a3e613ec24c09373187ed7564d561f41c955d5eff819e1197d",
+      "sha256": "541c2e8960fbf69199e5622a312fc5892b21ada3ee718aafaeaee3aa1104b1c7",
       "sourceRefs": [],
       "target": "project"
     },
@@ -258,7 +258,7 @@ tools:
       "confidence": "documented",
       "mode": "owned",
       "path": "codex/home/.agents/skills/my-skill/SKILL.md",
-      "sha256": "0b7eb608a3ac49b96999723d81888a1ba8720d7fff72ab78d5ef2f6b89da6634",
+      "sha256": "2e6575b96e9d74ec62819bcead4a0111b1d238e2d90fdcef47d8c3cfd26954cd",
       "sourceRefs": [
         "skill:my-skill"
       ],
@@ -289,7 +289,7 @@ tools:
       "confidence": "documented",
       "mode": "owned",
       "path": "codex/home/.codex/agents/diff-reviewer.toml",
-      "sha256": "a2d31a7703e1817a1310e3b6e3c3fb505f5f22fd9559ee0ae9b50b3bf6f2d9c9",
+      "sha256": "1d6c2204125bfbcf1d0c14fa2907a591cfbbd971232a45c476486275e10b05b6",
       "sourceRefs": [
         "agent:diff-reviewer"
       ],
@@ -316,7 +316,7 @@ tools:
       "confidence": "documented",
       "mode": "owned",
       "path": "kimi/home/.agents/skills/my-skill/SKILL.md",
-      "sha256": "0b7eb608a3ac49b96999723d81888a1ba8720d7fff72ab78d5ef2f6b89da6634",
+      "sha256": "2e6575b96e9d74ec62819bcead4a0111b1d238e2d90fdcef47d8c3cfd26954cd",
       "sourceRefs": [
         "skill:my-skill"
       ],
@@ -347,7 +347,7 @@ tools:
       "confidence": "documented",
       "mode": "owned",
       "path": "kimi/home/.kimi-code/agents/diff-reviewer.md",
-      "sha256": "0a3f7f1117cf319f65836deaad60fb6204500e34695d39df1316c9698c754055",
+      "sha256": "660b0780d203f23495c6996027fa9dc64df36e84cc3edcab23c34e669b8942ac",
       "sourceRefs": [
         "agent:diff-reviewer"
       ],
@@ -408,7 +408,7 @@ tools:
       "confidence": "documented",
       "mode": "owned",
       "path": "pi/home/.agents/skills/my-skill/SKILL.md",
-      "sha256": "0b7eb608a3ac49b96999723d81888a1ba8720d7fff72ab78d5ef2f6b89da6634",
+      "sha256": "2e6575b96e9d74ec62819bcead4a0111b1d238e2d90fdcef47d8c3cfd26954cd",
       "sourceRefs": [
         "skill:my-skill"
       ],
@@ -449,7 +449,7 @@ tools:
       "target": "project"
     }
   ],
-  "kit_version": "0.1.0",
+  "kit_version": "0.2.0",
   "schema_version": 1,
   "skippedLayers": [
     {
@@ -497,7 +497,7 @@ tools:
 name: my-skill
 description: 示例技能。
 ---
-<!-- 生成文件,勿手改;源:agent-kit-core@0.1.0 -->
+<!-- 生成文件,勿手改;源:agent-kit-core@0.2.0 -->
 
 技能正文。
 @@@ pi/home/.pi/agent/AGENTS.md 481

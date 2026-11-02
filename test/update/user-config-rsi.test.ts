@@ -22,6 +22,7 @@ import {
   treeOf,
   writeRegistry,
   type World,
+  TEST_OWN_VERSION,
 } from './install-world.js';
 import { put } from './launcher-world.js';
 
@@ -163,7 +164,12 @@ describe('R20-A0 §20.9#1 worker(后台自动更新)不受 [rsi] 影响', () => 
       stderr: () => undefined,
       env: { ...w.env, KIT_REAL_HOME_OVERRIDE: w.home, KIT_LAUNCHED: '1' },
     };
-    await createBackgroundCommand({ now: FIXED_NOW, verifier: okVerifier, noSmoke: true }).run(ctx);
+    await createBackgroundCommand({
+      ownVersion: TEST_OWN_VERSION,
+      now: FIXED_NOW,
+      verifier: okVerifier,
+      noSmoke: true,
+    }).run(ctx);
   }
   const LOG = '.local/state/agent-kit/update/log';
   const lastLog = async (w: World): Promise<string> =>

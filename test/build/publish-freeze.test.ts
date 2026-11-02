@@ -81,10 +81,9 @@ describe('check-publish.mjs:PUBLISH_FROZEN', () => {
     expect(node(CHECK_PUBLISH, ['--freeze-only'], dir).status).toBe(0);
   });
 
-  it('真实仓库根现在就是冻结的:--freeze-only 退 1', () => {
+  it('解除冻结后:真实仓库根 --freeze-only 退 0(解除 = 删 RELEASE_FREEZE,见 docs/release-checklist.md)', () => {
     const r = node(CHECK_PUBLISH, ['--freeze-only'], REPO_ROOT);
-    expect(r.status).toBe(1);
-    expect(r.stderr).toContain('PUBLISH_FROZEN');
+    expect(r.status, r.stderr).toBe(0);
   });
 });
 
@@ -151,10 +150,7 @@ describe('check-freeze-version.mjs(ci.yml 的版本锁)', () => {
 });
 
 describe('接线(对真实仓库文件的文本断言)', () => {
-  it('RELEASE_FREEZE 在仓库根、写明原因与解除条件、没有被 .gitignore 忽略', async () => {
-    const text = await readText(path.join(REPO_ROOT, FREEZE_FILE));
-    expect(text).toContain('Reason:');
-    expect(text).toContain('Lift:');
+  it('RELEASE_FREEZE 没有被 .gitignore 忽略(以后再冻结时文件必须进版本库)', async () => {
     const ignore = await readText(path.join(REPO_ROOT, '.gitignore'));
     expect(ignore.split('\n').filter((l) => /RELEASE_FREEZE/.test(l))).toEqual([]);
     expect(ignore.split('\n').map((l) => l.trim())).not.toContain('*');
@@ -168,13 +164,12 @@ describe('接线(对真实仓库文件的文本断言)', () => {
     expect(pkg.files.filter((f) => f.includes(FREEZE_FILE))).toEqual([]);
   });
 
-  it('package.json:prepublishOnly 调 check-publish --freeze-only;version 仍是 0.1.0', async () => {
+  it('package.json:prepublishOnly 调 check-publish --freeze-only', async () => {
     const pkg = JSON.parse(await readText(path.join(REPO_ROOT, 'package.json'))) as {
       version: string;
       scripts: Record<string, string>;
     };
     expect(pkg.scripts['prepublishOnly']).toBe('node scripts/check-publish.mjs --freeze-only');
-    expect(pkg.version).toBe('0.1.0');
   });
 
   it('release.yml:发布前有独立的冻结步骤(含 -L,晚于 check-publish、早于 npm publish),且 npm publish 仍带 --ignore-scripts', async () => {
