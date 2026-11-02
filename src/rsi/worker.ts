@@ -323,7 +323,9 @@ export async function runWorker(deps: RsiWorkerRunDeps = {}): Promise<WorkerResu
     const r = await underLock(sctx, lock, env, deps, now, nowMs, track);
     // 截断放在本轮全部追加之后(Pi 代码评审 #5 / 复核 #2):只要本轮在锁内成功追加过日志就截断,结束时 ≤ 200 行;
     // 真正零业务写入的分支(锁内拒绝、不可记录)没有追加过,不碰日志
-    if (track.logged) await compactLog(io, lock).catch(() => undefined);
+    // 不可记录的结局(失锁、写出口拒绝、状态目录不安全……)不截断,保持「连日志也不写」;残余见契约 A3-9
+    const unrecordable = r.kind === 'ran' && !r.recorded;
+    if (track.logged && !unrecordable) await compactLog(io, lock).catch(() => undefined);
     return r;
   } finally {
     await lock.release().catch(() => undefined);
@@ -377,8 +379,8 @@ async function underLock(
       if (s.prev.attempt !== null) {
         const ho = breakerView(s.prev, nowMs()) === 'half_open';
         const next = applyBreaker({ ...s.prev, attempt: null }, 'crashed', now(), ho);
+        track.logged = true; // 先置位:追加可能已发生而随后的清单提交失败(Pi 复核 #2)
         await commitState(mctx, lock, next, s.rawConfirm, { action: 'failed', code: 'crashed' });
-        track.logged = true;
       }
     }
 
@@ -397,8 +399,8 @@ async function underLock(
     const s1 = await stateForWrite(io);
     const view = breakerView(s1.prev, nowMs());
     if (view === 'open') {
-      await commitLogOnly(rctx, lock, { action: 'skipped', code: 'breaker_open' });
       track.logged = true;
+      await commitLogOnly(rctx, lock, { action: 'skipped', code: 'breaker_open' });
       return { kind: 'refused_in_lock', why: 'breaker_open' };
     }
     halfOpen = view === 'half_open';
@@ -442,6 +444,7 @@ async function underLock(
         checkpoint: confirmedCheckpoint({ io, env, binding, nowMs, startedAtMs }),
         stateMutator,
       };
+      track.logged = true; // L0 提交(commitL0)最后一步追加本轮结果;先置位,见上
       outcome = (await runL0UnderLock(rctx, lock, input, runDeps)).outcome;
     } else {
       await taintNewlyExcludedWith(rctx, lock, { source: 'exclude' }, hooks);
@@ -464,10 +467,11 @@ async function underLock(
         }),
         stateMutator,
       };
+      track.logged = true;
       outcome = (await runArmedUnderLock(rctx, lock, input, runDeps)).outcome;
     }
     await pruneReservations(io, lock, nowMs());
-    track.logged = true; // L0 提交路径(commitL0)最后一步追加了本轮结果
+
     return { kind: 'ran', outcome, recorded: true };
   } catch (e) {
     return finish(mctx, lock, outcomeOfError(e), halfOpen, now, track, true);
@@ -490,16 +494,16 @@ async function finish(
   if (!isRecordable(outcome)) return { kind: 'ran', outcome, recorded: false };
   try {
     if (!fromError) {
-      await commitLogOnly(sctx, lock, { action: 'skipped', code: outcome });
       track.logged = true;
+      await commitLogOnly(sctx, lock, { action: 'skipped', code: outcome });
       return { kind: 'ran', outcome, recorded: true };
     }
     // 先做无副作用的全量复验(Pi 代码评审 #2):数据文件已损坏 → 放弃记账、零写入;通过之后才改写 state.json
     await inspectSnapshot(sctx.io, productionSnapshotValidator);
     const s = await stateForWrite(sctx.io);
     const next = applyBreaker({ ...s.prev, attempt: null }, outcome, now(), halfOpen);
-    await commitState(sctx, lock, next, s.rawConfirm, { action: 'failed', code: outcome });
     track.logged = true;
+    await commitState(sctx, lock, next, s.rawConfirm, { action: 'failed', code: outcome });
     return { kind: 'ran', outcome, recorded: true };
   } catch {
     return { kind: 'ran', outcome, recorded: false };
