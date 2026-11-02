@@ -173,6 +173,10 @@ export const A4_MUTATIONS: readonly A4Mutation[] = [
       '暂存 .state/reflect/<run_id>/',
       'digest 已删、暂存未写就崩溃',
       '第 3 步之后槽位被 --revoke',
+      // 2026-11-02 javis 变异实测补登:这三条也断言「digest 已被消费」,变异后同样变红
+      '正向对照:49 个 run 时可以写',
+      '> 5 条提案 → too_many_proposals',
+      '首次创建 ingest-quota/',
     ],
     mustKill: ['digest 已删、暂存未写就崩溃'],
   },
@@ -193,7 +197,16 @@ export const A4_MUTATIONS: readonly A4Mutation[] = [
       },
     ],
     tests: [INGEST],
-    expectRed: ['名额先于消费 digest 持久化', 'agent 第 3 次'],
+    expectRed: [
+      '名额先于消费 digest 持久化',
+      'agent 第 3 次',
+      // 2026-11-02 javis 变异实测补登:这几条断言「名额写在 digest 消费之前 / 拒绝时 digest 未被消费」
+      '当日名额文件损坏只封当日',
+      '首次创建 ingest-quota/',
+      '已有目录组可写',
+      '已有目录属主不是当前用户',
+      '名额目录准备前就失锁',
+    ],
     mustKill: ['名额先于消费 digest 持久化', 'agent 第 3 次'],
   },
   {
@@ -353,7 +366,11 @@ export const A4_MUTATIONS: readonly A4Mutation[] = [
       },
     ],
     tests: [SLOTS],
-    expectRed: ['进入目录访问之前失锁'],
+    expectRed: [
+      '进入目录访问之前失锁',
+      // 2026-11-02 javis 变异实测补登:持锁后不得 chmod 修正目录权限
+      '持锁时目录被换成别人可写的',
+    ],
     mustKill: [
       '进入目录访问之前失锁(锁文件被夺走)',
       '进入目录访问之前失锁(purge 删掉了整个 digests/)',
@@ -362,4 +379,218 @@ export const A4_MUTATIONS: readonly A4Mutation[] = [
 ];
 
 /** javis 实测结果(主代理执行变异后填);形状同 A3_RESULTS */
-export const A4_RESULTS: readonly A4Result[] = [];
+export const A4_RESULTS: readonly A4Result[] = [
+  // 2026-11-02 javis 私有检出 @ 610bc0f:基线 158 例全绿、0 skipped;20 条变异全部被杀、无 skipped、每条还原后逐文件 sha256 一致;
+  // javis HOME 下 .local/state/agent-kit 前后不变。首轮有 3 条(digest-not-consumed、quota-after-consume、slot-dir-mkdir-unguarded)多红了表外的相关用例,已补进 expectRed(只补登记,不改变异与用例)。
+  {
+    id: 'skip-alias-check',
+    killedBy: [
+      '别名越界 → alias_unknown(整批拒、零暂存)',
+      '「合法 + 非法」混合批次整批拒:合法那条也不暂存(严格批次,不是单条丢弃)',
+    ],
+    failed: 2,
+    skipped: 0,
+    restored: true,
+  },
+  {
+    id: 'adopt-agent-excerpt',
+    killedBy: ['agent 自带的证据摘录被丢弃:落盘摘录 = 信号库原文,agent 的文本不进任何暂存文件'],
+    failed: 1,
+    skipped: 0,
+    restored: true,
+  },
+  {
+    id: 'skip-session-expiry',
+    killedBy: [
+      '会话授权 已过期 → 4 RSI_SESSION_DENIED reason=expired;零写入,stdout 空',
+      '会话授权 超过 90 天 → 4 RSI_SESSION_DENIED reason=expired;零写入,stdout 空',
+      '授权关 / 失效后用旧 digest:已过期 → 4 RSI_SESSION_DENIED reason=expired,不占名额',
+      '④ 今天 < expires ≤ 今天 + 90 天,否则 expired(边界:今天、昨天、+90、+91)',
+      '已过期 → expired;配置仍是 on,状态仍是 confirmed(L0 的入口条件不变)',
+      '超过 90 天 → expired;配置仍是 on,状态仍是 confirmed(L0 的入口条件不变)',
+    ],
+    failed: 6,
+    skipped: 0,
+    restored: true,
+  },
+  {
+    id: 'xu-after-cluster',
+    killedBy: [
+      '仅靠 X 或 U 证据才过门槛的簇不入选;正向对照:换成采集中的 other 项目,簇入选且 other_evidence 计 1',
+    ],
+    failed: 1,
+    skipped: 0,
+    restored: true,
+  },
+  {
+    id: 'skip-output-rescan',
+    killedBy: [
+      '规则更新后信号库里的种子命中(被选中的摘录)→ digest 整份拒:3 RSI_DIGEST_REJECTED rescan_hit,无 digest 文件、stdout 空',
+    ],
+    failed: 1,
+    skipped: 0,
+    restored: true,
+  },
+  {
+    id: 'skip-output-leak-gate',
+    killedBy: ['植入 HOME 路径 → output_leak(退出 3,无文件、无输出)'],
+    failed: 1,
+    skipped: 0,
+    restored: true,
+  },
+  {
+    id: 'digest-skip-final-review',
+    killedBy: [
+      'digest:after_read 之后:撤销授权',
+      'digest:after_read 之后:新增排除(当前项目)',
+      'digest:after_read 之后:rsi stop',
+      'digest:after_read 之后:purge 开始(journal 出现)',
+      'digest:after_read 之后:项目根目录被删后重建(新 inode)',
+      'digest:after_read 之后:项目根换成符号链接',
+      'digest:before_final 之后:撤销授权',
+      'digest:before_final 之后:新增排除(当前项目)',
+      'digest:before_final 之后:rsi stop',
+      'digest:before_final 之后:purge 开始(journal 出现)',
+      'digest:before_final 之后:项目根目录被删后重建(新 inode)',
+      'digest:before_final 之后:项目根换成符号链接',
+    ],
+    failed: 12,
+    skipped: 0,
+    restored: true,
+  },
+  {
+    id: 'ingest-skip-final-review',
+    killedBy: [
+      '最终复核:撤销授权',
+      '最终复核:新增排除(当前项目)',
+      '最终复核:rsi stop',
+      '最终复核:purge 开始(journal 出现)',
+      '最终复核:项目根目录被删后重建(新 inode)',
+      '最终复核:项目根换成符号链接',
+    ],
+    failed: 6,
+    skipped: 0,
+    restored: true,
+  },
+  {
+    id: 'digest-not-consumed',
+    killedBy: [
+      '暂存 .state/reflect/<run_id>/(提案 + 原子 + report.json),不 apply;来源字段按 R20-16.19;摘录 = 信号库原文',
+      '50MiB → RSI_STAGING_FULL,零暂存(digest 与名额已消耗)',
+      'digest 已删、暂存未写就崩溃 → 无暂存残留;重试同一 digest 得 digest_invalid',
+      '第 3 步之后槽位被 --revoke 再被新 digest 复用 → 第 5 步 digest_invalid(名额照计),新 digest 不受影响且仍可用',
+      '> 5 条提案 → too_many_proposals(digest 已消费,名额已计)',
+      '首次创建 ingest-quota/:新目录 → 父目录 fsync → 名额文件与目录持久化 → 之后才 unlink digest',
+    ],
+    failed: 6,
+    skipped: 0,
+    restored: true,
+  },
+  {
+    id: 'quota-after-consume',
+    killedBy: [
+      'agent 第 3 次 → 4 rate_limited,且不消费 digest;全局第 5 次同样',
+      '当日名额文件损坏只封当日(不改写它);次日使用新文件、恢复',
+      '名额先于消费 digest 持久化:两步之间崩溃 → 名额多计一次、digest 仍可用一次',
+      '首次创建 ingest-quota/:新目录 → 父目录 fsync → 名额文件与目录持久化 → 之后才 unlink digest',
+      '已有目录组可写 → 拒绝(3 state_dir_unsafe),拒绝前不写名额文件、不消费 digest',
+      '已有目录属主不是当前用户(注入 uid)→ 拒绝,同样不写名额文件、不消费 digest',
+      '名额目录准备前就失锁 → lock_lost,没有 mkdir / chmod / 文件写',
+    ],
+    failed: 7,
+    skipped: 0,
+    restored: true,
+  },
+  {
+    id: 'strict-batch-to-drop',
+    killedBy: [
+      'pattern 不安全(量词过多) → pattern_unsafe(整批拒、零暂存)',
+      '回显 → echo_detected(整批拒、零暂存)',
+      'id 冲突 / 重复:同一原子 id 再交 → id_conflict;换 id 但内容相同 → duplicate',
+    ],
+    failed: 3,
+    skipped: 0,
+    restored: true,
+  },
+  {
+    id: 'unknown-equality-pass',
+    killedBy: [
+      'unknown 等式漏洞:vendor=unknown 且推导也是 unknown → REFLECTOR_UNVERIFIABLE(不再因「两边相等」放行)',
+    ],
+    failed: 1,
+    skipped: 0,
+    restored: true,
+  },
+  {
+    id: 'slot-read-unsafe',
+    killedBy: [
+      '安全读取:符号链接 / FIFO / 硬链接 / 超大文件 → invalid(不跟随、不挂住);清理跳过不删;查找不命中',
+    ],
+    failed: 1,
+    skipped: 0,
+    restored: true,
+  },
+  {
+    id: 'lock-order-guard-removed',
+    killedBy: ['持槽位锁时再取 rsi/lock → internal(锁序 rsi/lock → digests/lock);反序合法'],
+    failed: 1,
+    skipped: 0,
+    restored: true,
+  },
+  {
+    id: 'slot-assert-held-removed',
+    killedBy: [
+      '失锁后:消费的 unlink 不再执行,槽位文件原样保留',
+      '失锁后:预留的创建、发布的 rename 都不再执行',
+    ],
+    failed: 2,
+    skipped: 0,
+    restored: true,
+  },
+  {
+    id: 'publish-token-check-removed',
+    killedBy: [
+      'A 预留后暂停超过 10 分钟 → 槽位被回收并由 B 预留 / 发布;A 恢复后发布与放弃都不改动 B 的文件',
+    ],
+    failed: 1,
+    skipped: 0,
+    restored: true,
+  },
+  {
+    id: 'stdin-error-as-eof',
+    killedBy: ['流错误 → readStdinFrom reject,不把已读到的前缀当完整输入(先发合法 JSON 再出错)'],
+    failed: 1,
+    skipped: 0,
+    restored: true,
+  },
+  {
+    id: 'quota-dir-no-parent-fsync',
+    killedBy: [
+      '首次创建 ingest-quota/:新目录 → 父目录 fsync → 名额文件与目录持久化 → 之后才 unlink digest',
+    ],
+    failed: 1,
+    skipped: 0,
+    restored: true,
+  },
+  {
+    id: 'quota-dir-no-owner-check',
+    killedBy: [
+      '已有目录组可写 → 拒绝(3 state_dir_unsafe),拒绝前不写名额文件、不消费 digest',
+      '已有目录属主不是当前用户(注入 uid)→ 拒绝,同样不写名额文件、不消费 digest',
+    ],
+    failed: 2,
+    skipped: 0,
+    restored: true,
+  },
+  {
+    id: 'slot-dir-mkdir-unguarded',
+    killedBy: [
+      '进入目录访问之前失锁(锁文件被夺走)→ lock_lost,没有新的 mkdir / chmod / 文件写;目录不被重建',
+      '进入目录访问之前失锁(purge 删掉了整个 digests/)→ lock_lost,没有新的 mkdir / chmod / 文件写;目录不被重建',
+      '持锁时目录被换成别人可写的(组可写)→ state_dir_unsafe(只读校验,不 chmod 修正)',
+    ],
+    failed: 3,
+    skipped: 0,
+    restored: true,
+  },
+];
