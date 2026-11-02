@@ -23,6 +23,7 @@ import {
   treeOf,
   writeRegistry,
   type World,
+  TEST_OWN_VERSION,
 } from './install-world.js';
 import { put, putState } from './launcher-world.js';
 import { newWorld as newSyncWorld, stdFixture, writePayloadFixture } from '../sync/world.js';
@@ -63,6 +64,7 @@ async function runWorker(
     env: { ...w.env, KIT_REAL_HOME_OVERRIDE: w.home, KIT_LAUNCHED: '1', ...o.env },
   };
   const code = await createBackgroundCommand({
+    ownVersion: TEST_OWN_VERSION,
     now: FIXED_NOW,
     verifier: okVerifier,
     noSmoke: true,
@@ -91,7 +93,12 @@ describe('worker:开关', () => {
       stderr: (t) => void out.push(t),
       env: { ...w.env, KIT_REAL_HOME_OVERRIDE: w.home, KIT_LAUNCHED: '1' },
     };
-    await createBackgroundCommand({ now: FIXED_NOW, verifier: okVerifier, noSmoke: true }).run(ctx);
+    await createBackgroundCommand({
+      ownVersion: TEST_OWN_VERSION,
+      now: FIXED_NOW,
+      verifier: okVerifier,
+      noSmoke: true,
+    }).run(ctx);
     expect(out).toEqual([]);
     expect(await readText(path.join(w.home, LOG))).toMatch(/^\S+ ok\n$/);
   });
@@ -274,7 +281,12 @@ describe('worker:真实入口的环境(main(argv) 不注入 env)', () => {
     try {
       vi.stubEnv('KIT_AUTO_UPDATE', '0');
       const bare = async (): Promise<number> =>
-        createBackgroundCommand({ now: FIXED_NOW, verifier: okVerifier, noSmoke: true }).run({
+        createBackgroundCommand({
+          ownVersion: TEST_OWN_VERSION,
+          now: FIXED_NOW,
+          verifier: okVerifier,
+          noSmoke: true,
+        }).run({
           argv: ['--background'],
           io: w.io,
           overlayPath: undefined,
@@ -303,7 +315,12 @@ describe('worker:真实入口的环境(main(argv) 不注入 env)', () => {
     vi.stubEnv('KIT_UPDATE_PIN', '不是版本号');
     stubNoCiEnv();
     try {
-      await createBackgroundCommand({ now: FIXED_NOW, verifier: okVerifier, noSmoke: true }).run({
+      await createBackgroundCommand({
+        ownVersion: TEST_OWN_VERSION,
+        now: FIXED_NOW,
+        verifier: okVerifier,
+        noSmoke: true,
+      }).run({
         argv: ['--background'],
         io: w.io,
         overlayPath: undefined,
@@ -323,7 +340,11 @@ describe('update 命令:真实入口的环境', () => {
     const w = await setup();
     const err: string[] = [];
     const run = async (): Promise<number> =>
-      createUpdateCommand({ now: FIXED_NOW, verifier: okVerifier }).run({
+      createUpdateCommand({
+        ownVersion: TEST_OWN_VERSION,
+        now: FIXED_NOW,
+        verifier: okVerifier,
+      }).run({
         argv: ['--home', w.home],
         io: w.io,
         overlayPath: undefined,

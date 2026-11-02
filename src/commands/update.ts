@@ -57,6 +57,8 @@ import { emptyState, markBad, recordCheck } from '../update/state.js';
 import type { CommandContext, CommandDef } from './types.js';
 
 export interface UpdateCommandDeps extends InstallDeps {
+  /** 本进程自己的版本(未安装过任何版本时的「当前版本」;缺省 KIT_VERSION,同启动器的 `LauncherDeps.ownVersion`)。测试注入,使用例不随包版本号变化 */
+  ownVersion?: string;
   /** 测试注入:直接给 RegistrySource(跳过 KIT_UPDATE_REGISTRY / 配置的解析) */
   source?: RegistrySource;
   /** 测试注入:真实 registry 的 fetch */
@@ -303,7 +305,7 @@ export function createUpdateCommand(deps: UpdateCommandDeps = {}): CommandDef {
     let d: Decision;
     try {
       d = decideUpdate({
-        installed: state.installed?.version ?? KIT_VERSION,
+        installed: state.installed?.version ?? deps.ownVersion ?? KIT_VERSION,
         maxSeen: state.max_seen_version,
         badVersions: state.bad_versions,
         channel: settings.cfg.channel,
@@ -390,7 +392,7 @@ export function createUpdateCommand(deps: UpdateCommandDeps = {}): CommandDef {
     wrote: boolean,
     extra: Record<string, string | number | boolean | null> = {},
   ): void {
-    const current = state.installed?.version ?? KIT_VERSION;
+    const current = state.installed?.version ?? deps.ownVersion ?? KIT_VERSION;
     const remaining = remainingHours(plan, settings);
     if (args.json) {
       ctx.stdout(

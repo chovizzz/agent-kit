@@ -153,9 +153,10 @@ interface W {
 /** 假 HOME:`current` 损坏(锚点不符)+ 一条待提示的「自动同步被拒」记录;`[rsi]` 按 kind 配 */
 async function world(kind: 'off' | 'stop' | 'armed'): Promise<W> {
   const w = await newWorld();
-  const inst = await installFake(w, '0.2.0');
+  // 已安装版本取一个永远不等于本包版本的值:等于时启动器不走 current,正向对照就看不到 UPDATE_CURRENT_BROKEN
+  const inst = await installFake(w, '9.9.9');
   expect(inst.pkg.anchor).not.toBe('a'.repeat(64));
-  await putState(w, '0.2.0', 'a'.repeat(64), (s) => ({
+  await putState(w, '9.9.9', 'a'.repeat(64), (s) => ({
     ...s,
     last_auto_sync: {
       at: '2026-10-14T12:00:00.000Z',

@@ -2,6 +2,7 @@
  * R20 A1(docs/contracts.md §20.5):`rsi/lock` 的获取、陈旧锁协议、nonce 复核、路径与权限。
  * 条款号写在用例名里(`R20-5.x`)。进程级(SIGKILL、并发写、盐并发首建)见 lock-procs.test.ts。
  */
+import { KIT_VERSION } from '../../src/contracts/meta.js';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
@@ -55,7 +56,7 @@ describe('R20-5.3 锁文件位置与权限', () => {
     expect(j['pid']).toBe(4242);
     expect(j['nonce']).toMatch(/^[0-9a-f]{16}$/);
     expect(typeof j['started_at']).toBe('string');
-    expect(j['kit_version']).toBe('0.1.0');
+    expect(j['kit_version']).toBe(KIT_VERSION);
     expect((await lstat(lockFile(w))).mode & 0o777).toBe(0o600);
     expect((await lstat(path.join(w.state, 'rsi'))).mode & 0o777).toBe(0o700);
     await lock.assertHeld();
