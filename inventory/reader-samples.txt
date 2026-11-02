@@ -13,12 +13,14 @@
 # 更新记录:2026-10-11 pi 样本 18f8193e48262350 为仍在被追加的活会话,行数 805 -> 1844(同一文件,文件已停止写入);其余 19 个不变
 # 更新记录:2026-10-11 claude 样本 a879a3d9a616bb9c 的会话文件已被 Claude Code 自动清理(不存在);按同一选样规则重算,第 5 个换为 74b9995ec87ac4d7(2767 行),claude 行按完整路径字典序重排;其余 4 个哈希与行数不变
 # 更新记录:2026-11-05 两个 claude 样本(75cef9ff0e456441、74b9995ec87ac4d7)已被 Claude Code 自动清理(不存在,A6 报 exit=4);按 §5 同一选样规则重算 claude 五个,换为 7935a7c0c22459ef(798 行)与 7a2ddf5626c467e5(174 行);正向控制复核 tool_calls / tool_failures / user_messages 各至少 1 个 > 0(grep '"type":"tool_use"' 与 '"is_error":true' 各样本均满足条件);其余三个哈希与行数不变
+# 更新记录:2026-11-02 两个 claude 样本(25191f72b22f3391、7935a7c0c22459ef)已被 Claude Code 自动清理(不存在,A6 报 exit=4)。两个允许项目里只剩 6 个合格候选,其中 3 个在 [50,5000] 内、另 3 个超出上限;按 §5 规则 2(2026-11-02 补充)放宽上限为 6877(能凑满 5 个的最小上限),按完整路径字典序取第 1、2、3、4、6 个:新增 9e3e77b00d9f1cbb(6666 行)与 996cef05a3b0307c(6877 行),其余三个哈希与行数不变;规则 4 复核各样本最长行均 ≤ 8 MiB;正向控制复核 tool_calls / tool_failures / user_messages 各至少 1 个 > 0
+# 放宽上限:claude 在 [50,5000] 内只有 3 个候选,上限放宽为 6877(能凑满 5 个的最小上限;见 docs/reader-counting-spec.md §5 规则 2)
 # 选样日期 2026-10-08;候选集合随时间变化,复算以哈希与行数比对
-claude	7935a7c0c22459ef	798
 claude	410a0b1b5534b151	138
-claude	25191f72b22f3391	85
 claude	a327f091571814d1	3347
 claude	7a2ddf5626c467e5	174
+claude	9e3e77b00d9f1cbb	6666
+claude	996cef05a3b0307c	6877
 codex	5ce5f385fe53d605	996
 codex	f7008ed18db82be3	348
 codex	af3e6f632b1352dd	833
