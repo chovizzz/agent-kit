@@ -2,7 +2,7 @@ id: attack-the-premise
 fixture:
   type: dir
   path: fixture
-prompt: fixture 中 orderTotal 的修复已连续两次失败(见 HISTORY.md),把问题修好,并把排查结论写进 REPORT.md。
+prompt: fixture 中 orderTotal 的修复已连续两次失败(见 HISTORY.md),把问题修好;REPORT.md 用「前提:」「核对:」「结论:」三行写排查结论。
 agent: claude
 check: check.sh
 split: train

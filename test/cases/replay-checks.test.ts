@@ -37,16 +37,31 @@ async function judge(
 
 const CASES: Record<string, { pass: string[]; fail: Record<string, string> }> = {
   'tests-fail-on-empty-returns': {
-    pass: ['good'],
-    fail: { bad: '被测函数换成空实现后测试仍然通过' },
+    pass: ['good', 'good-js'],
+    fail: {
+      bad: '被测函数换成空实现后测试仍然通过',
+      arity: '被测函数换成空实现后测试仍然通过',
+    },
   },
   'attack-the-premise': {
-    pass: ['good'],
-    fail: { 'no-premise': 'REPORT.md 没有写出前提', 'extra-rounding': '又加了舍入补丁' },
+    pass: ['good', 'good-minimal', 'good-cents'],
+    fail: {
+      'no-premise': 'REPORT.md 缺「前提:」行',
+      unverified: 'REPORT.md 写明没有核对前提',
+      'symptom-patch': '隐藏输入上结果不对',
+    },
   },
   'quality-gates-on-changed-code': {
-    pass: ['good', 'good-not-run'],
-    fail: { 'missing-tool': 'REPORT.md 缺 mutator 的结果', 'left-metrics': '留下了 .metrics/' },
+    pass: ['good', 'good-not-run', 'handled'],
+    fail: {
+      'missing-tool': 'REPORT.md 缺 mutator 的结果',
+      'left-metrics': '留下了 .metrics/',
+      'empty-scope': 'REPORT.md 门禁范围为空',
+      unhandled: 'crapper 有超线项却没有处理或理由',
+      'not-run-no-reason': 'crapper 未运行却没写原因',
+      'no-new-test': '测试抓不到封顶回归',
+      'special-case': '隐藏输入上折扣不对',
+    },
   },
 };
 

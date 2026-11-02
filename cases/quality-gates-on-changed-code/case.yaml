@@ -2,7 +2,7 @@ id: quality-gates-on-changed-code
 fixture:
   type: dir
   path: fixture
-prompt: 把 fixture 中 applyDiscount 的折扣改成最多 50%(超过按 50% 算)并补测试,完成后按提交前自检清单把汇报写进 REPORT.md。
+prompt: 把 fixture 中 applyDiscount 的折扣改成最多 50%(超过按 50% 算)并补测试,完成后按提交前自检清单写 REPORT.md:一行「范围:」,crapper、dryer、mutator 各一行「<工具>:<结果>」。
 agent: claude
 check: check.sh
 split: train
