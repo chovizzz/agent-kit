@@ -204,6 +204,8 @@ async function world(kind: 'off' | 'stop' | 'armed'): Promise<W> {
     HOME: w.home,
     KIT_REAL_HOME_OVERRIDE: w.home,
     KIT_TMP: tmp,
+    // 离线:任何经启动器的路径(正向对照、变异「入口改回经启动器」)若调度 update worker,也只连本地假 registry,不出网
+    KIT_UPDATE_REGISTRY: `file://${w.reg}`,
     A3_WRITE_LOG: logs.write,
     A3_LOAD_LOG: logs.load,
     A3_SPAWN_LOG: logs.spawn,
@@ -309,10 +311,13 @@ describe('R20-1.2a 四组合 × off / STOP:钩子不经启动器、不输出、�
           expect(await loadedForbidden(w), args.join(' ')).toEqual([]);
         }
         // 正向对照:同一世界里非钩子命令经启动器,确实打出 current 损坏的提示(TTY 下另有自动同步提示),并加载了启动器
+        // KIT_AUTO_UPDATE=0:不让启动器调度 update worker(否则 TTY 下会起一个无人等待的 `__update --background`);提示照样打出
         await reset(w);
-        const c = tty ? runTty(w, ['rsi', 'status']) : await runPiped(w, ['rsi', 'status']);
+        const cw: W = { ...w, env: { ...w.env, KIT_AUTO_UPDATE: '0' } };
+        const c = tty ? runTty(cw, ['rsi', 'status']) : await runPiped(cw, ['rsi', 'status']);
         expect(c.out + c.err).toContain('UPDATE_CURRENT_BROKEN');
         if (tty) expect(c.out).toContain('AUTO_SYNC_DECLINED');
+        expect(await read(w.logs.spawn), '正向对照不起任何子进程').toBe('');
         expect((await loadedForbidden(w)).some((h) => h.endsWith('src/update/launcher.ts'))).toBe(
           true,
         );

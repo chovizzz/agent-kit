@@ -19,6 +19,8 @@ import {
 } from '../../src/rsi/services/breaker.js';
 import { defaultState } from '../../src/rsi/services/tick-state.js';
 import { autoSkip } from '../../src/rsi/skip.js';
+import { evaluateAgentRoot } from '../../src/rsi/l0/roots.js';
+import { piDirIsSet } from '../../src/rsi/services/open.js';
 import { armedTemplate, confirmedTemplate, finalizeHint, showCount } from '../../src/rsi/hint.js';
 import { hookShapeOf } from '../../src/rsi/hook-entry.js';
 import { kitScheduleEligible } from '../../src/rsi/kit-schedule.js';
@@ -266,5 +268,19 @@ describe('参数与形状', () => {
     ]) {
       expect(kitScheduleEligible(a), a.join(' ')).toBe(false);
     }
+  });
+});
+
+describe('R20-2.9 / §20.8.2:worker 环境 KIT_RSI_PI_DIR_SET=1 → pi 记 not_evaluated(pi_dir_override)', () => {
+  it('worker 的列举与 rsi status 共用同一判定(l0/roots.ts);只认折叠后的存在性标志 = "1"', async () => {
+    expect(piDirIsSet({ KIT_RSI_PI_DIR_SET: '1' })).toBe(true);
+    expect(piDirIsSet({ KIT_RSI_PI_DIR_SET: '0' })).toBe(false);
+    expect(piDirIsSet({})).toBe(false);
+    expect(
+      await evaluateAgentRoot('/nonexistent-home', 'pi', piDirIsSet({ KIT_RSI_PI_DIR_SET: '1' })),
+    ).toEqual({
+      status: 'not_evaluated',
+      reason: 'pi_dir_override',
+    });
   });
 });
