@@ -32,7 +32,7 @@
 4. **L1 重新定义为「会话授权」**:用户一次性授权,允许会话内的 agent ①用 `agent-kit rsi digest` 读脱敏摘要,②用 `agent-kit reflect --ingest` 提交提案。授权写明范围(项目、agent)、期限,随时可撤销。它授权的是「会话 agent 能读什么、能交什么」,不再是 CLI 参数集。
 5. **受控入口**:agent 只给提案正文。证据只能按别名引用摘要里的条目,摘录由 kit 从信号库原样复制(沿用 §16「摘录机械复制」)。schema、话术、不可见字符、注入重扫、路径守卫模拟都由 kit 跑,只写 `.state/reflect/<run>/`,绝不 apply。
 6. **「agent 自动去优化」分三档**:S0 只提示;S1 用户要求(或同意)时 agent 按技能跑一遍;S2 用户任务结束后由钩子让 agent 自动跑一遍,每天每个 agent ≤1 次,只有 claude 和 pi 做得到。推荐默认 S1,S2 按 agent 单独开(决定 N2)。
-7. **怎么教 agent**:技能 `agent-kit-rsi` 走现有 sync 通道(`.claude/skills/`、`.agents/skills/`,属 instructions 类,`auto_sync=safe` 可以自动更新)。钩子是唯一的可执行部分:pi 扩展由 `rsi hooks --install` 在 TTY 确认后写入;claude、codex 的钩子只打印片段,由用户自己贴。
+7. **怎么教 agent**:技能 `agent-kit-rsi` 走现有 sync 通道(`.claude/skills/`、`.agents/skills/`,属 instructions 类,`auto_sync=safe` 可以自动更新)。钩子是唯一的可执行部分:pi 扩展由 `rsi hooks --install` 在 TTY 确认后写入;claude、codex 的钩子只打印片段,由用户自己贴。**(2026-11-02 N1 = B 取代:claude / codex 的钩子条目也由 `rsi hooks --install --write` 在 TTY 确认后合并写入,codex 在形状核实前只打印片段;契约见 contracts §20.15。)**
 8. **D9「默认全部项目、可排除」是本方案最大的隐私风险,单列在 §8**。要点:
    - 新增本机项目索引,让排除对历史信号立即生效。
    - 摘要只含当前项目的摘录,其他项目只给计数(已定 N3)。
