@@ -3997,6 +3997,20 @@ rsi 的锁(仓库 `.state/`)与 update / sync 的锁(HOME 下 `.local/state/agen
 - 第 20 条:已实现(R20-A0)—— `canonicalJsonLine`。
 - 其余未做,原因:第 6、7、8 条(reflect / judge / gc / `signals collect` 加 `rsi/lock`)、第 11、21 条(`promote --run` 即时闸 / taint,依赖锁与暂存区 taint)、第 17 条(rsi 专用 `IoContext` 构造,依赖 `[rsi] repo` 解析,与 `src/rsi/config.ts` 同块)—— 依赖 RSI 锁(A1)或 rsi 配置 / 状态机;第 9、10、16、18 条与第 19 条 —— 随 A2 / A3 的实现块订正;第 12、13、15 条 —— P1。
 
+**R20-A2 实装对照(A2 收口,2026-11-01 核对;以 `main` = `ecb43fd` 的代码与测试为证,上一段「其余未做」中属 A2 的条目至此已全部落地)**:
+
+- 第 6 条:已实现(A2 B3b / B5d)—— `reflect --gc --write` 在 `[rsi]` 启用时拿 `rsi/lock`,干跑不拿;证据 `test/commands/reflect-rsi-lock.test.ts`、`test/rsi/b5-lock-matrix.test.ts`。
+- 第 7 条:已实现(A2 B3b / B5d)—— reflect / judge 真跑先拿 `rsi/lock` 再拿 `reflect/llm.lock`,拿不到退 4 `<PREFIX>_NOT_RUN reason=locked`;证据 `test/commands/reflect-rsi-lock.test.ts`、`test/commands/judge-rsi-lock.test.ts`、`b5-lock-matrix.test.ts`。
+- 第 8 条:已实现(A2 B5d)—— 非 `--dry` 的 `signals collect` 拿 `rsi/lock`、盐在锁内、按 R20-6.9 更新索引 / 计数 / 快照;`state-store.ts` 头注释两句已删(见 B5d-1 / B5d-2);证据 `b5-lock-matrix.test.ts`、`test/rsi/l0-commit.test.ts`。
+- 第 9 条:已实现(A2 B5c)—— 按 key 重写信号库与会话计数(逐文件临时文件 + rename),写入顺序服从 R20-6.9;证据 `test/rsi/b5c-store-rewrite.test.ts`、`test/rsi/b5c-engine.test.ts`。
+- 第 10 条:已实现(A2 B4)—— `exclude.ts` 导出 `canonical()`,rsi 策略由 `src/rsi/exclude-match.ts` 构造(无默认拒绝、`exclude_names`、`(dev,ino)` 祖先匹配),手动 `--allow-project` 行为不变;证据 `test/rsi/exclude-match.test.ts`。
+- 第 11 条:已实现(A2 B5g)—— judge / `promote --run` 的 R20-4.8 即时闸与 `promote --run` 拿锁;证据 `test/rsi/immediate-gate.test.ts`、`test/commands/judge-rsi-gate.test.ts`、`test/commands/promote-rsi-gate.test.ts`。
+- 第 16 条:A2 部分已实现(B5e-2 / B5e-3)—— A5 清单加入 tick / status / projects / `--rebuild-index` / purge 干跑 / confirm 行与 off / armed 两环境、`KIT_AUTO_RSI=0`、写调用审计;**poke / hint 两行随 A3**。
+- 第 17 条:已实现(A2 B3a)—— `src/rsi/io.ts` 的 rsi 专用上下文忽略 `KIT_STATE_DIR` / `KIT_WRITE_ROOTS`(设了 `KIT_TMP` 除外),选择发生在通用路径校验之前;证据 `test/rsi/open.test.ts`、`test/rsi/io.test.ts`。
+- 第 18 条:已实现(A2 B3a)—— rsi 仓库根只取 `[rsi] repo`,`--root` 的 realpath 不同 → 退出 2 `RSI_USAGE reason=root_mismatch`;证据 `test/rsi/open.test.ts`、`test/rsi/dispatcher.test.ts`。
+- 第 21 条:已实现(A2 B5g / B5c)—— `.state/promote/<id>/` 可被 taint,tainted 目录上 `promote --run` 给 `RSI_RUN_TAINTED`;证据 `test/rsi/taint.test.ts`、`test/commands/promote-rsi-gate.test.ts`。
+- 仍属 A3:第 3 条③④⑤、第 16 条 poke / hint 行、第 19 条。仍属 P1:第 12、13、15 条。
+
 ### 20.10 P1 / P2 占位(只写接口与不变量,不写细则)
 
 > **v3.1 修订(§21.18 第 18 条、§21.19)**:开启自动循环(`[rsi.auto] enabled`)时 claude / pi 的会话授权缺省为 S2(R21-2.3);`judge --ingest` 与 N4 对个人层不再需要,只影响 §18 手动路径;其余占位不变。
