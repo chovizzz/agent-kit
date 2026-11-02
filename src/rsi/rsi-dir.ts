@@ -31,3 +31,24 @@ export async function rsiDir(io: IoContext): Promise<string> {
   if ((st.mode & 0o077) !== 0) await chmod(io, dir, RSI_DIR_MODE);
   return dir;
 }
+
+/**
+ * `.state/rsi/digests/` 的**写侧**目录准备(R20-16.10 / R20-16.13,按 R20-15.21a 同类协议):先过 {@link rsiDir},再要求 `digests/` 是真实目录、
+ * 属主是当前用户、无组 / 其他写位(缺失则建为 0700;权限宽于 0700 的自己的目录收紧)。符号链接 / 非目录 / 别人的目录 → `state_dir_unsafe`。
+ */
+export async function digestsDir(io: IoContext): Promise<string> {
+  const base = await rsiDir(io);
+  const dir = path.join(base, 'digests');
+  const pre = await lstat(dir).catch(() => undefined);
+  if (pre !== undefined && (pre.isSymbolicLink() || !pre.isDirectory())) {
+    throw new RsiLockError('state_dir_unsafe');
+  }
+  await mkdirp(io, dir, RSI_DIR_MODE);
+  const st = await lstat(dir);
+  if (st.isSymbolicLink() || !st.isDirectory()) throw new RsiLockError('state_dir_unsafe');
+  if (typeof process.getuid === 'function' && st.uid !== process.getuid()) {
+    throw new RsiLockError('state_dir_unsafe');
+  }
+  if ((st.mode & 0o077) !== 0) await chmod(io, dir, RSI_DIR_MODE);
+  return dir;
+}

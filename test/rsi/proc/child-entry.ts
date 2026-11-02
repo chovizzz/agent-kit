@@ -8,10 +8,12 @@ import { createIoContext } from '../../../src/io/paths.js';
 import { readText } from '../../../src/io/read-fs.js';
 import { writeFile } from '../../../src/io/safe-fs.js';
 import { loadSalt } from '../../../src/signals/state-store.js';
+import { acquireDigestsLock, reserveSlot, withDigestsLock } from '../../../src/rsi/digest-slots.js';
 
 interface Job {
-  op: 'hold' | 'try' | 'writer' | 'salt';
+  op: 'hold' | 'try' | 'writer' | 'salt' | 'dhold' | 'dreserve';
   cwd: string;
+  nowMs?: number;
   tmp: string;
   state: string;
   id?: string;
@@ -78,6 +80,26 @@ async function main(): Promise<void> {
       }
     }
     out({ done: true });
+    return;
+  }
+  if (job.op === 'dhold') {
+    // A4:持槽位锁 digests/lock,一直持有等被外部杀
+    const lock = await acquireDigestsLock(io);
+    out({ held: true, pid: process.pid, nonce: lock.nonce });
+    setInterval(() => undefined, 1000);
+    return;
+  }
+  if (job.op === 'dreserve') {
+    // A4:等屏障 → 预留一个槽位(槽位锁:最多等 2s);输出占到的槽位号,满了是 null
+    while (Date.now() < (job.startAt ?? 0)) await sleep(1);
+    try {
+      const r = await withDigestsLock(io, (lock) =>
+        reserveSlot(io, lock, new Date(job.nowMs ?? Date.now())),
+      );
+      out({ slot: r === null ? null : r.slot });
+    } catch (e) {
+      out({ error: e instanceof RsiLockError ? e.kind : 'other' });
+    }
     return;
   }
   if (job.op === 'salt') {

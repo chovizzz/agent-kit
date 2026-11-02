@@ -346,6 +346,13 @@ function normVendor(v: string): string {
   return v.trim().toLowerCase();
 }
 
+/**
+ * 提案的来源(R20-16.18):`spawned` = kit 经 backends 调用 LLM(`reflect --run-llm`);`session_declared` = 会话 agent 经 `reflect --ingest` 交回、厂商由调用方自报(kit 证明不了)。
+ * 字段缺失的旧提案按原规则判(有完整后端身份才可证明,§17.4a)。
+ */
+export const REFLECTOR_PROVENANCE = ['spawned', 'session_declared'] as const;
+export type ReflectorProvenance = (typeof REFLECTOR_PROVENANCE)[number];
+
 export const ProposalSchema = z
   .strictObject({
     /** `YYYY-MM-DD-NNN` */
@@ -396,6 +403,8 @@ export const ProposalSchema = z
       stub: z.literal(true).optional(),
       /** K1 追加:引导窗口落账(reflect 写,不可手填) */
       guidance: ReflectorGuidanceSchema.optional(),
+      /** A4 追加(R20-16.18):提案来源;LLM 路径显式写 `spawned`,ingest 写 `session_declared` */
+      provenance: z.enum(REFLECTOR_PROVENANCE).optional(),
     }),
     /** 由运行裁判的一方写入;裁判运行前缺省 */
     judge: JudgeRecordSchema.optional(),

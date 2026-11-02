@@ -48,7 +48,7 @@ async function run(
 
 const ALL = [...RSI_SUBCOMMANDS, ...RSI_P1_RESERVED_SUBCOMMANDS];
 /** 已实装(不再是桩):status / projects / stop(B3a)、tick(B5a)、confirm(B5b)、purge(B5c);它们的行为测试在 status / projects / stop / open / b5b-* / b5c-* 各自的测试文件 */
-const IMPLEMENTED = ['status', 'projects', 'stop', 'tick', 'confirm', 'purge'];
+const IMPLEMENTED = ['status', 'projects', 'stop', 'tick', 'confirm', 'purge', 'digest'];
 /** A3 实装的钩子:经分发器(进程内 main)同样恒退 0、无输出;行为测试在 a3-poke / a3-hint / a3-entry / a3-dist */
 const HOOKS = ['poke', 'hint'];
 const STUBBED = ALL.filter((n) => !IMPLEMENTED.includes(n) && !HOOKS.includes(n));

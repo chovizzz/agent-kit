@@ -14,7 +14,7 @@ import type { Atom } from '../contracts/atom.js';
 import { RunIdSchema } from '../contracts/common.js';
 import type { JudgeRecord, Proposal } from '../contracts/proposal.js';
 import type { Redactor } from '../contracts/redact.js';
-import { UNKNOWN_VENDOR, deriveVendor, isCrossVendor } from '../contracts/vendor.js';
+import { UNKNOWN_VENDOR, deriveVendor, isCrossVendorOf } from '../contracts/vendor.js';
 import { isUnsafePath } from '../guards/paths.js';
 import { canonicalText } from '../io/canonical-text.js';
 import { findDuplicate, type DedupeTarget, type DedupeThresholds } from '../reflect/dedupe.js';
@@ -411,6 +411,11 @@ export function checkC5(input: C5Input): CheckResult {
   const p = input.proposal;
   const hits: Hit[] = [];
   if (p.reflector.stub === true) hits.push({ reason: 'STUB_PROPOSAL', field: 'reflector.stub' });
+  // R20-16.20 ①③:会话自报来源的提案,厂商不可证明——不得凭跨厂商证明晋升(N4 的人工确认路径属后续 judge --ingest 块)
+  const sessionDeclared = p.reflector.provenance === 'session_declared';
+  if (sessionDeclared) {
+    hits.push({ reason: 'REFLECTOR_SESSION_DECLARED', field: 'reflector.provenance' });
+  }
   if (p.reflector.backend === undefined) {
     hits.push({ reason: 'REFLECTOR_BACKEND_MISSING', field: 'reflector.backend' });
   } else {
@@ -434,7 +439,12 @@ export function checkC5(input: C5Input): CheckResult {
     });
   } else {
     if (j.verdict !== 'accept') hits.push({ reason: 'VERDICT_NOT_ACCEPT', field: 'judge.verdict' });
-    if (!isCrossVendor(normVendor(p.reflector.vendor), normVendor(j.vendor))) {
+    if (
+      !isCrossVendorOf(
+        { vendor: normVendor(p.reflector.vendor), provenance: p.reflector.provenance },
+        normVendor(j.vendor),
+      )
+    ) {
       hits.push({ reason: 'VENDOR_NOT_CROSS', field: 'judge.vendor' });
     }
     const last = j.hops[j.hops.length - 1];

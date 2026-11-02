@@ -45,13 +45,72 @@ function monthOfSince(since: string): string {
   return since.slice(0, 7).replace('-', '');
 }
 
+/**
+ * 装载的第 2 步(会话级外部内容、失败结果摘录清空、不可见字符与 pass2 复扫、确定性排序):入参是已通过 schema / 结构字段检查的候选。
+ * `loadSignals`(从 `.state/signals` 读文件)与 `rsi digest`(从快照协议核对过的字节读)共用,口径不得分叉。会累加 `stats`。`opts.pass2 === false`(digest 用)时不在这里丢弃 pass2 命中的信号:命中会留到输出前的整份复扫,由那里整份拒绝(R20-16.24)。
+ */
+export function finalizeCandidates(
+  candidates: readonly LoadedSignal[],
+  redactor: Pick<Redactor, 'pass2'>,
+  stats: LoadStats,
+  opts: { pass2?: boolean } = {},
+): LoadedSignal[] {
+  const signals: LoadedSignal[] = [];
+  // 会话级外部内容:同一会话里只要有一条信号是外部的,整个会话的摘录都视为外部(后来才发生的 WebFetch 不能让先前行逃过)
+  const externalSessions = new Set(
+    candidates.filter((c) => c.external_content).map((c) => c.session_ref),
+  );
+  for (const s of candidates) {
+    let excerpt = s.excerpt_redacted;
+    if (s.external_content || externalSessions.has(s.session_ref)) {
+      if (excerpt !== '') stats.external_excerpt_forced++;
+      excerpt = '';
+    } else if (s.event_kind === 'tool_result_failed') {
+      if (excerpt !== '') stats.failed_excerpt_dropped++;
+      excerpt = '';
+    }
+    if (excerpt !== '' && hasInvisible(excerpt)) {
+      stats.dropped_residual++;
+      continue;
+    }
+    if (excerpt !== '' && opts.pass2 !== false) {
+      let clean = false;
+      try {
+        clean = redactor.pass2(excerpt).clean;
+      } catch {
+        clean = false; // 扫描抛错按 fail-closed:丢弃
+      }
+      if (!clean) {
+        stats.dropped_residual++;
+        continue;
+      }
+    }
+    signals.push({ ...s, excerpt_redacted: excerpt });
+    stats.loaded++;
+  }
+  // 确定性顺序:会话内按序号,其余按 sig_id
+  signals.sort((a, b) =>
+    a.session_ref !== b.session_ref
+      ? a.session_ref < b.session_ref
+        ? -1
+        : 1
+      : a.event_index !== b.event_index
+        ? a.event_index - b.event_index
+        : a.sig_id < b.sig_id
+          ? -1
+          : a.sig_id > b.sig_id
+            ? 1
+            : 0,
+  );
+  return signals;
+}
+
 export async function loadSignals(
   io: IoContext,
   redactor: Pick<Redactor, 'pass2'>,
   opts: LoadOptions = {},
 ): Promise<LoadResult> {
   const stats = emptyStats();
-  const signals: LoadedSignal[] = [];
   const candidates: LoadedSignal[] = [];
   const root = path.join(io.stateDir, 'signals');
   const sinceMs = opts.since === undefined ? undefined : Date.parse(`${opts.since}T00:00:00Z`);
@@ -63,7 +122,7 @@ export async function loadSignals(
     throw new RangeError('until 必须是 ISO 时间戳');
   }
   const wanted = opts.agents === undefined ? AGENT_IDS : opts.agents;
-  if (!(await exists(root))) return { signals, stats };
+  if (!(await exists(root))) return { signals: [], stats };
 
   for (const agentEntry of await readDir(root)) {
     if (!agentEntry.isDirectory) continue;
@@ -106,51 +165,6 @@ export async function loadSignals(
       }
     }
   }
-  // 会话级外部内容:同一会话里只要有一条信号是外部的,整个会话的摘录都视为外部(后来才发生的 WebFetch 不能让先前行逃过)
-  const externalSessions = new Set(
-    candidates.filter((c) => c.external_content).map((c) => c.session_ref),
-  );
-  for (const s of candidates) {
-    let excerpt = s.excerpt_redacted;
-    if (s.external_content || externalSessions.has(s.session_ref)) {
-      if (excerpt !== '') stats.external_excerpt_forced++;
-      excerpt = '';
-    } else if (s.event_kind === 'tool_result_failed') {
-      if (excerpt !== '') stats.failed_excerpt_dropped++;
-      excerpt = '';
-    }
-    if (excerpt !== '' && hasInvisible(excerpt)) {
-      stats.dropped_residual++;
-      continue;
-    }
-    if (excerpt !== '') {
-      let clean = false;
-      try {
-        clean = redactor.pass2(excerpt).clean;
-      } catch {
-        clean = false; // 扫描抛错按 fail-closed:丢弃
-      }
-      if (!clean) {
-        stats.dropped_residual++;
-        continue;
-      }
-    }
-    signals.push({ ...s, excerpt_redacted: excerpt });
-    stats.loaded++;
-  }
-  // 确定性顺序:会话内按序号,其余按 sig_id
-  signals.sort((a, b) =>
-    a.session_ref !== b.session_ref
-      ? a.session_ref < b.session_ref
-        ? -1
-        : 1
-      : a.event_index !== b.event_index
-        ? a.event_index - b.event_index
-        : a.sig_id < b.sig_id
-          ? -1
-          : a.sig_id > b.sig_id
-            ? 1
-            : 0,
-  );
+  const signals = finalizeCandidates(candidates, redactor, stats);
   return { signals, stats };
 }

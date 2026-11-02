@@ -71,6 +71,10 @@ export interface ProposalOpts {
   backend?: string | null;
   stub?: boolean;
   reflectorModel?: string;
+  /** A4:覆盖 reflector.provider / vendor(缺省 anthropic);`provenance` 写进 reflector.provenance(任意字符串,含非法值) */
+  reflectorProvider?: string;
+  reflectorVendor?: string;
+  provenance?: string;
   layer?: string;
   targets?: string[];
   evidenceExcerpt?: string;
@@ -95,12 +99,13 @@ export function proposalYaml(atom: string, o: ProposalOpts = {}): string {
     paired_retirements: [],
     cases: [],
     reflector: {
-      provider: 'anthropic',
-      vendor: 'anthropic',
+      provider: o.reflectorProvider ?? 'anthropic',
+      vendor: o.reflectorVendor ?? 'anthropic',
       model: o.reflectorModel ?? 'claude-x',
       run_id: 'run-20261008T000000Z-aaaaaa',
       ...(o.backend === null ? {} : { backend: o.backend ?? 'claude' }),
       ...(o.stub ? { stub: true } : {}),
+      ...(o.provenance !== undefined ? { provenance: o.provenance } : {}),
       ...(o.guidance !== undefined ? { guidance: o.guidance } : {}),
     },
   };

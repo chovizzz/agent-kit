@@ -21,6 +21,7 @@ import * as path from 'node:path';
 import { RSI_PURGE_PHASES, type RsiCursor, type RsiPurgeJournal } from '../../contracts/rsi.js';
 import type { Redactor } from '../../contracts/redact.js';
 import { lstat } from '../../io/read-fs.js';
+import { remove } from '../../io/safe-fs.js';
 import { projectKeyOf, listMonthFiles } from '../../signals/store-scan.js';
 import { rewriteMonthFileWithout } from '../../signals/store-rewrite.js';
 import type { WriteGate } from '../../signals/state-store.js';
@@ -73,15 +74,32 @@ function monthGate(ctx: RsiServiceCtx, lock: RsiLockHandle, hooks: ServiceHooks)
   };
 }
 
-/** P1 才会有的 `.state/rsi/digests/`:P0 下出现 = 未知条目,fail-closed `internal`(R20-3.8.3 要求删它,但 P0 没有它的清理实现,不假装删过) */
-async function assertNoDigests(ctx: RsiServiceCtx): Promise<void> {
+/**
+ * R20-3.8.3 / R20-16.12 ③:purge 删除整个 `.state/rsi/digests/`(槽位文件、预留、槽位锁一并,让所有未过期的 digest 作废;幂等,不在场则什么也不做)。
+ * 持 `rsi/lock`(调用方保证)。`digests/` 是符号链接 / 不是目录 → fail-closed `state_dir_unsafe`(不跟随、不删)。持槽位锁的 digest 进程之后的
+ * `assertHeld()` 会发现锁文件不在而失败(`lock_lost`),不会再发布——这是撤销的预期效果。
+ */
+async function purgeDigests(
+  ctx: RsiServiceCtx,
+  lock: RsiLockHandle,
+  hooks: ServiceHooks,
+): Promise<void> {
+  const dir = path.join(ctx.io.stateDir, 'rsi', 'digests');
   try {
-    await lstat(path.join(ctx.io.stateDir, 'rsi', 'digests'));
+    const st = await lstat(dir);
+    if (st.isSymbolicLink() || !st.isDirectory()) throw new RsiFailClosedError('state_dir_unsafe');
   } catch (e) {
+    if (e instanceof RsiFailClosedError) throw e;
     if ((e as NodeJS.ErrnoException).code === 'ENOENT') return;
     throw new RsiFailClosedError('state_dir_unsafe');
   }
-  throw new RsiFailClosedError('internal');
+  await hooks.point?.('before:digests:remove');
+  await lock.assertHeld();
+  try {
+    await remove(ctx.io, dir);
+  } catch {
+    throw new RsiFailClosedError('write_denied');
+  }
 }
 
 async function rewriteStores(
@@ -276,7 +294,7 @@ export async function runPurgeUnderLock(
   deps: PurgeDeps = {},
 ): Promise<PurgeResult> {
   await assertNoPurgeInProgress(ctx);
-  await assertNoDigests(ctx);
+  await purgeDigests(ctx, lock, deps.hooks ?? {});
   // 预检:counts 重算要用脱敏器(overlay 不合规 → overlay_invalid)。放在写 journal 之前,免得删完信号才发现算不了 counts、留下一个卡死的 journal
   const redactor = await buildRedactor(ctx.config);
   const journal: PurgeJournal = {
@@ -318,7 +336,7 @@ export async function resumePurgeUnderLock(
     };
   }
   if (r.journal.phase === 'done') return advancePurge(ctx, lock, r.journal, deps);
-  await assertNoDigests(ctx);
+  await purgeDigests(ctx, lock, deps.hooks ?? {});
   // 与 runPurgeUnderLock 同理:counts 重算要脱敏器,在动手前就确认它能建(overlay 中途失效不要等信号删完才发现)
   const redactor =
     rank(r.journal.phase) < rank('indexed') ? await buildRedactor(ctx.config) : undefined;

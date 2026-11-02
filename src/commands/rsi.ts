@@ -15,6 +15,7 @@
 import { ExitCode } from '../contracts/exit-codes.js';
 import { RSI_P1_RESERVED_SUBCOMMANDS } from '../contracts/rsi.js';
 import { subcommand as confirm } from '../rsi/confirm.js';
+import { subcommand as digest } from '../rsi/digest.js';
 import { subcommand as hint } from '../rsi/hint.js';
 import { subcommand as poke } from '../rsi/poke.js';
 import { subcommand as projects } from '../rsi/projects.js';
@@ -37,6 +38,7 @@ export const RSI_SUBCOMMAND_TABLE: readonly RsiSubcommand[] = [
   purge,
   poke,
   hint,
+  digest,
 ];
 
 /**

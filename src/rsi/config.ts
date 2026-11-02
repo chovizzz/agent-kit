@@ -80,6 +80,11 @@ export interface RsiConfigOn {
   block: RsiBlockReason | null;
   /** `rsi status` 的 `warnings`:`overlay_absent`(没给 overlay) */
   warnings: string[];
+  /**
+   * `[rsi.session]` 的原样 TOML 表(R20-16.1):L-base 只验「表或缺省」,严格校验与日期判断在 `session.ts`(L-session 层,每次现读现判)。
+   * 表缺失 = 字段缺省(只在配置里有 `[rsi.session]` 表时才出现,既有配置的结果形状不变)。
+   */
+  session?: Record<string, unknown> | null;
 }
 export type RsiConfig = RsiConfigOff | RsiConfigOn;
 
@@ -238,6 +243,7 @@ export async function loadRsiConfig(opts: LoadRsiConfigOptions = {}): Promise<Rs
     excludeNames: uniq(names),
     block,
     warnings: cfg.overlay === undefined ? ['overlay_absent'] : [],
+    ...(cfg.session !== undefined ? { session: cfg.session } : {}),
   };
 }
 

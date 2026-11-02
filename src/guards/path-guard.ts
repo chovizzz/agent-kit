@@ -1,5 +1,6 @@
 import type { Diagnostic } from '../contracts/diagnostics.js';
 import { parseRestrictedYaml } from '../atoms/frontmatter.js';
+import { REFLECTOR_PROVENANCE } from '../contracts/proposal.js';
 import { err } from './diff.js';
 import { isRegularMode } from './paths.js';
 import type { Change, GuardGit } from './types.js';
@@ -116,6 +117,8 @@ export function checkUnlabeledProposalDeletes(changes: readonly Change[]): Diagn
 }
 
 const REFLECTOR_BACKENDS: readonly string[] = ['claude', 'codex', 'pi'];
+/** 与提案 schema 同一集合(`REFLECTOR_PROVENANCE`),CI 守卫对原始 YAML 值逐个比对 */
+const REFLECTOR_PROVENANCES: readonly string[] = REFLECTOR_PROVENANCE;
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -124,7 +127,9 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 /**
  * `kit:reflector` PR 新增的提案(`proposals/**.yaml`,头部侧新增的普通文件)的来源核验(contracts #24,CI 侧判据):
  * - `reflector.backend` 必填且为 `claude|codex|pi`(CI 才能用 provider/model 重算 `deriveVendor`)→ 缺 / 非法 GUARD_PROPOSAL_BACKEND_MISSING;
+ * - `reflector.provenance` 存在但不在枚举内 → GUARD_PROPOSAL_PROVENANCE_INVALID(A4,R20-16.20 ④);`session_declared` 本身可以进 proposals/(只是证据);
  * - `reflector.stub: true` 的提案一律拒收 → GUARD_PROPOSAL_STUB;
+ * - `reflector.provenance` 存在但不在枚举内 → GUARD_PROPOSAL_PROVENANCE_INVALID(A4);
  * - 读不出(YAML 语法错 / 顶层非映射 / 非普通文件)→ GUARD_PROPOSAL_UNPARSEABLE(fail-closed)。
  * 只看新增文件;既有提案的修改 / 删除由 PROPOSAL_MODIFIED / DELETED 管。只在 `kit:reflector` 下调用。
  */
@@ -156,6 +161,19 @@ export function checkReflectorProposalOrigin(
           '提案缺 reflector.backend(或不是 claude|codex|pi),CI 无法重算反思器厂商',
         ),
       );
+    }
+    // R20-16.20 ④:`provenance` 存在但不在枚举内 → 拒;`session_declared` 的提案可以随 kit:reflector PR 进入 proposals/(它只是证据,晋升仍需 judge 与人工)
+    if (isRecord(r) && 'provenance' in r) {
+      const pv = r['provenance'];
+      if (typeof pv !== 'string' || !REFLECTOR_PROVENANCES.includes(pv)) {
+        out.push(
+          err(
+            'GUARD_PROPOSAL_PROVENANCE_INVALID',
+            c.path,
+            '提案的 reflector.provenance 不在枚举内(spawned | session_declared)',
+          ),
+        );
+      }
     }
     if (isRecord(r) && r['stub'] === true) {
       out.push(err('GUARD_PROPOSAL_STUB', c.path, 'reflector.stub: true 的提案不得合并(桩产物)'));

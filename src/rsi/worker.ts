@@ -51,6 +51,7 @@ import {
   type RsiObservation,
 } from './services/observe.js';
 import { openRsiIo, piDirIsSet, type OpenRsiIoDeps } from './services/open.js';
+import { invalidateAllAgents } from './session-invalidate.js';
 import { resumePurgeUnderLock } from './services/purge-engine.js';
 import { mapPurgeResumeError } from './services/purge-resume-map.js';
 import { RsiStagingBlockedError } from './services/staging.js';
@@ -319,6 +320,8 @@ export async function runWorker(deps: RsiWorkerRunDeps = {}): Promise<WorkerResu
     return { kind: 'skipped_pre_lock', why: 'lock_error' };
   }
   try {
+    // R20-16.12 ② 观察性作废:worker 读到会话授权非 ok / 策略指纹变过 → 删受影响的已发布 digest(尽力;锁序 rsi/lock → digests/lock)
+    await invalidateAllAgents(io, env, now());
     const track = { logged: false };
     const r = await underLock(sctx, lock, env, deps, now, nowMs, track);
     // 截断放在本轮全部追加之后(Pi 代码评审 #5 / 复核 #2):只要本轮在锁内成功追加过日志就截断,结束时 ≤ 200 行;

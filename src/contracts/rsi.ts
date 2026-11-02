@@ -55,6 +55,11 @@ export const RSI_NOT_RUN_REASONS = Object.freeze([
   'no_journal',
   // R20-A2 B5-0(第一批拍板 Q-B):tick 的 `skipped_binding_changed` 对应的报码(退 4)。契约总表待主代理并入(见 PENDING_DOC)
   'binding_changed',
+  // R20-A4(R20-16.21 / R20-16.15 第 4 步;`rate_limited` 与 R21-12.9 共用同一枚举项)。总表待主代理并入(见 test/contracts/rsi-pending-doc.ts)
+  'purge_pending',
+  'digest_backlog',
+  'policy_changed',
+  'rate_limited',
 ] as const);
 export const RSI_FAIL_CLOSED_REASONS = Object.freeze([
   'cfg_symlink',
@@ -93,6 +98,10 @@ export const RSI_EXIT1_CODES = Object.freeze([
   'RSI_PURGE_NOT_EXCLUDED',
   'RSI_CONFIRM_DECLINED',
   'RSI_CONFIRM_STALE',
+  // R20-A4(R20-16.21):ingest 的退出 1 码
+  'RSI_INGEST_TOO_LARGE',
+  'RSI_STAGING_FULL',
+  'RSI_INGEST_REJECTED',
 ] as const);
 /** 计数码(R20-3.0 总表「计数码」行;不改退出码,只进 `--json` 与日志;顺序照总表) */
 export const RSI_COUNTER_CODES = Object.freeze([
@@ -615,6 +624,10 @@ export const RSI_USAGE_REASONS = Object.freeze([
   'write_requires_mode',
   'bad_path',
   'root_mismatch',
+  // R20-A4(R20-16.5 `--json` 必填;R20-16.14 `--digest` / `--owner` 必填):契约未写具体码,按既有 `missing:--agent` 的写法登记,待主代理并入总表
+  'missing:--json',
+  'missing:--digest',
+  'missing:--owner',
 ] as const);
 /**
  * 现有写入方拿不到 `rsi/lock` 时的命令级码(D3,§20.9 第 7 条):`<前缀>_NOT_RUN reason=locked`,退出 4,零调用零写入。
@@ -667,12 +680,185 @@ export const RSI_SUBCOMMANDS = Object.freeze([
   'purge',
   'poke',
   'hint',
+  /** R20-A4:`rsi digest`(会话授权下的脱敏摘要) */
+  'digest',
 ] as const);
 /** P1 预留子命令(§20.3 末段):P0 注册为命令桩,退出 64;不建入口文件 */
 export const RSI_P1_RESERVED_SUBCOMMANDS = Object.freeze([
-  'digest',
   'session',
   'hooks',
   'dismiss',
   'should-continue',
 ] as const);
+
+// ---------------------------------------------------------------------------
+// A4(会话授权、`rsi digest`、`reflect --ingest`;docs/contracts.md §20.16)
+// ---------------------------------------------------------------------------
+/** R20-16.21:顶层码。`RSI_SESSION_DENIED` 退出 4、`RSI_DIGEST_REJECTED` 退出 3(其余 A4 顶层码在 {@link RSI_EXIT1_CODES}) */
+export const RSI_SESSION_DENIED = 'RSI_SESSION_DENIED';
+export const RSI_DIGEST_REJECTED = 'RSI_DIGEST_REJECTED';
+/** `RSI_DIGEST_REJECTED reason=`(R20-16.11 ①) */
+export const RSI_DIGEST_REJECT_REASONS = Object.freeze(['rescan_hit', 'output_leak'] as const);
+/** R20-16.3:会话授权的非 `ok` 判定,即 `RSI_SESSION_DENIED reason=` 的封闭集合 */
+export const RSI_SESSION_REASONS = Object.freeze([
+  'off',
+  'invalid',
+  'expired',
+  'agent_not_authorized',
+] as const);
+export type RsiSessionReason = (typeof RSI_SESSION_REASONS)[number];
+/** R20-16.3 ④:`expires` 至多是今天 + 90 天 */
+export const RSI_SESSION_MAX_DAYS = 90;
+
+const uniqueItems = (a: readonly string[]): boolean => new Set(a).size === a.length;
+
+/**
+ * `[rsi.session]` 的 L-session 层(R20-16.2;strictObject,只做静态校验)。有效期范围与「`agents` ⊆ `[rsi] agents`」属 R20-16.3 的第二阶段判定,不在这里。
+ * `auto` 缺省 `s1`;A4 只校验、不消费。L-base 的 `RsiBaseSchema.session` 占位保持不变。
+ */
+export const RsiSessionSchema = z.strictObject({
+  enabled: z.boolean(),
+  agents: z.array(RsiAgentSchema).min(1).refine(uniqueItems, '不得重复'),
+  expires: IsoDateSchema,
+  auto: z.enum(['s1', 's2']).default('s1'),
+});
+export type RsiSession = z.infer<typeof RsiSessionSchema>;
+
+// --- digest(R20-16.5 ~ R20-16.13) ---
+export const RSI_DIGEST_SLOT_COUNT = 20;
+/** digest 24 小时过期(R20-16.12) */
+export const RSI_DIGEST_TTL_MS = 24 * 60 * 60_000;
+/** 预留超过这么久仍未发布即可被清理(R20-16.10 ①) */
+export const RSI_DIGEST_RESERVE_TTL_MS = 10 * 60_000;
+/** 槽位锁获取:最多等 2 秒,每 50ms 试一次(R20-16.10) */
+export const RSI_DIGEST_LOCK_WAIT_MS = 2000;
+export const RSI_DIGEST_LOCK_POLL_MS = 50;
+/** digest 输出上限、簇数、每簇摘录数(R20-16.8) */
+export const RSI_DIGEST_MAX_BYTES = 48 * 1024;
+export const RSI_DIGEST_MAX_CLUSTERS = 5;
+export const RSI_DIGEST_MAX_EVIDENCE_PER_CLUSTER = 8;
+/** 槽位文件 / 名额文件读取上限(R20-16.13、R20-16.15 第 4 步) */
+export const RSI_DIGEST_FILE_MAX_BYTES = 64 * 1024;
+/** digest 的 `reason`(R20-16.9) */
+export const RSI_DIGEST_REASONS = Object.freeze([
+  'ok',
+  'no_project',
+  'project_excluded',
+  'attribution_unknown',
+  'no_clusters',
+] as const);
+export type RsiDigestReason = (typeof RSI_DIGEST_REASONS)[number];
+/**
+ * 摘录的固定不可信标记(设计稿 §8a.5;R20-16.9)。摘录原样放在两个标记之间;含标记文本本身的摘录不会进入 digest(丢弃该条证据),
+ * 所以标记之间的内容不可能伪造闭合标记。
+ */
+export const RSI_EXCERPT_MARK_OPEN = '<untrusted-excerpt>';
+export const RSI_EXCERPT_MARK_CLOSE = '</untrusted-excerpt>';
+
+export const RsiDigestIdSchema = z.string().regex(/^d_[0-9a-f]{16}$/);
+export const RsiDigestAliasSchema = z.string().regex(/^e[1-9][0-9]{0,2}$/);
+/** 槽位里的 digest 记录(R20-16.13);`project_key` 为 null = cwd 解析不出(`no_project`) */
+export const RsiDigestRecordSchema = z.strictObject({
+  digest_id: RsiDigestIdSchema,
+  created_at: IsoTimestampSchema,
+  expires_at: IsoTimestampSchema,
+  agent: RsiAgentSchema,
+  project_key: RsiProjectKeySchema.nullable(),
+  aliases: z
+    .record(RsiDigestAliasSchema, z.string().regex(/^sig_[0-9a-f]{16}$/))
+    .refine(
+      (r) => Object.keys(r).length <= RSI_DIGEST_MAX_CLUSTERS * RSI_DIGEST_MAX_EVIDENCE_PER_CLUSTER,
+      '别名条数超过上限',
+    ),
+  session_policy_fp: Sha256Schema,
+  snapshot_generation: NonNegInt,
+});
+export type RsiDigestRecord = z.infer<typeof RsiDigestRecordSchema>;
+/** 槽位里的预留文件(R20-16.10 ①) */
+export const RsiDigestReservationSchema = z.strictObject({
+  reserved: z.string().regex(/^[0-9a-f]{16}$/),
+  at: IsoTimestampSchema,
+});
+export type RsiDigestReservation = z.infer<typeof RsiDigestReservationSchema>;
+/** 槽位文件名(R20-16.10:`digests/` 下只有这些合法文件名) */
+export const RSI_DIGEST_SLOT_NAME_RE = /^s(0[0-9]|1[0-9])\.json$/;
+export const slotName = (n: number): string => `s${String(n).padStart(2, '0')}.json`;
+
+// --- ingest(R20-16.14 ~ R20-16.17) ---
+export const RSI_INGEST_MAX_STDIN_BYTES = 64 * 1024;
+export const RSI_INGEST_MAX_PROPOSALS = 5;
+/** 每个声明的 agent 每 UTC 日 ≤ 2 次、全局 ≤ 4 次(R20-16.15 第 4 步) */
+export const RSI_INGEST_QUOTA_PER_AGENT = 2;
+export const RSI_INGEST_QUOTA_GLOBAL = 4;
+/** 名额日文件(R20-16.15 第 4 步):`.state/rsi/ingest-quota/<YYYY-MM-DD>.json` */
+export const RsiIngestQuotaSchema = z.strictObject({
+  schema_version: z.literal(1),
+  /** 当日全局已预留次数(≤ {@link RSI_INGEST_QUOTA_GLOBAL}) */
+  total: NonNegInt,
+  agents: z.strictObject({
+    claude: NonNegInt.optional(),
+    codex: NonNegInt.optional(),
+    pi: NonNegInt.optional(),
+  }),
+});
+export type RsiIngestQuota = z.infer<typeof RsiIngestQuotaSchema>;
+
+/**
+ * R20-16.17:`g0_<子码>` 的封闭集合 = ingest 拒绝 `reason`(落实 R21-12.9「A4 落地时登记」)。
+ * 顺序照契约;`RSI_INGEST_REJECTED reason=<子码>` 与 `--json` 的 `reason` 只取这个集合。
+ */
+export const RSI_INGEST_REJECT_REASONS = Object.freeze([
+  'digest_invalid',
+  'digest_expired',
+  'digest_agent_mismatch',
+  'digest_policy_changed',
+  'too_many_proposals',
+  'alias_unknown',
+  'evidence_stale',
+  'project_excluded',
+  'attribution_unknown',
+  'output_too_large',
+  'not_json_object',
+  'schema_invalid',
+  'placeholder_in_output',
+  'output_residual',
+  'hidden_chars_in_output',
+  'injection_suspected_local',
+  'id_conflict',
+  'pattern_unsafe',
+  'echo_detected',
+  'duplicate',
+  'path_guard',
+  'rescan_hit',
+  'policy_changed',
+] as const);
+export type RsiIngestRejectReason = (typeof RSI_INGEST_REJECT_REASONS)[number];
+/** `--json` 的 `result`(R20-16.16) */
+export const RSI_INGEST_RESULTS = Object.freeze(['ok', 'rejected', 'not_run'] as const);
+
+/**
+ * validator(`src/reflect/validate.ts`)的拒绝 `code` → 子码的**显式映射表**(R20-16.17)。同名原样映射。
+ * 单测钉死「validator 的全部拒绝 code 都在这里、映射值都属于 {@link RSI_INGEST_REJECT_REASONS}」;运行时遇到未登记的值映射为 `schema_invalid`(兜底,不替代静态覆盖)。
+ */
+export const VALIDATOR_CODE_TO_REJECT: Readonly<Record<string, RsiIngestRejectReason>> =
+  Object.freeze({
+    output_too_large: 'output_too_large',
+    not_json_object: 'not_json_object',
+    schema_invalid: 'schema_invalid',
+    placeholder_in_output: 'placeholder_in_output',
+    output_residual: 'output_residual',
+    hidden_chars_in_output: 'hidden_chars_in_output',
+    injection_suspected_local: 'injection_suspected_local',
+  });
+/** validator 的 `dropped` 类别 → 子码(严格批次下任一类别计数非零即整批拒;`evidence_alias_unknown → alias_unknown`) */
+export const VALIDATOR_DROPPED_TO_REJECT: Readonly<Record<string, RsiIngestRejectReason>> =
+  Object.freeze({
+    evidence_alias_unknown: 'alias_unknown',
+    id_conflict: 'id_conflict',
+    pattern_unsafe: 'pattern_unsafe',
+    echo_detected: 'echo_detected',
+  });
+
+/** 暂存区容量(R20-6.7 / R20-16.15 第 2、11 步):50 个 run / 50MiB(按现有 `.state/reflect/` 计) */
+export const RSI_STAGING_MAX_RUNS = 50;
+export const RSI_STAGING_MAX_BYTES = 50 * 1024 * 1024;

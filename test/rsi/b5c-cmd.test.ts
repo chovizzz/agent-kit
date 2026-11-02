@@ -440,11 +440,14 @@ describe('--write:新 purge', () => {
     expect(sc.cf.audit.filter((a) => a.op !== 'mkdirp' && a.path !== lockFile)).toEqual([]);
   });
 
-  it('digests 目录在场 → 3 internal(P0 没有它的清理实现),journal 不写', async () => {
+  it('digests 目录在场(A4:R20-3.8.3 / R20-16.12 ③)→ purge --write 整个删掉它(槽位文件与槽位锁一并),purge 照常完成', async () => {
     const sc = await makeSc('cmd-w-digests-');
-    await mkdirp(sc.s.f.fx, path.join(sc.s.rsi, 'digests'), 0o700);
+    const digests = path.join(sc.s.rsi, 'digests');
+    await mkdirp(sc.s.f.fx, digests, 0o700);
+    await writeFile(sc.s.f.fx, path.join(digests, 's00.json'), '{}', { mode: 0o600 });
     const r = await purge(sc, ['--excluded', '--write']);
-    expect([r.code, r.err]).toEqual([3, 'RSI_FAIL_CLOSED reason=internal\n']);
+    expect([r.code, r.err]).toEqual([0, '']);
+    expect(await exists(digests)).toBe(false);
     expect(await readPurgeJournal(sc.s.io)).toEqual({ state: 'absent' });
   });
 

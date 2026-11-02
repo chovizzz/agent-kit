@@ -30,7 +30,7 @@ import type { IoContext } from '../io/paths.js';
 import { createExclusive, remove, WriteDeniedError } from '../io/safe-fs.js';
 import { RsiLockError } from './lock-error.js';
 import { readLock, type LockRead, type RsiLockDeps, defaultAlive } from './lock-read.js';
-import { rsiDir } from './rsi-dir.js';
+import { digestsDir, rsiDir } from './rsi-dir.js';
 
 // 拆分(R20-A2 B3a):错误类型 / 只读部分 / 写侧目录准备各在独立文件,这里 re-export,既有 import 路径不变
 export { RsiLockError, type RsiLockErrorKind } from './lock-error.js';
@@ -43,6 +43,12 @@ export {
   type RsiLockDeps,
 } from './lock-read.js';
 export { rsiDir } from './rsi-dir.js';
+
+/** 要取的锁:缺省 `rsi/lock`;`sub: 'digests'` = 槽位锁 `rsi/digests/lock`(R20-16.10,同一套 A1 实现) */
+export interface RsiLockTarget {
+  sub?: 'digests';
+}
+const DIGESTS_LOCK_SUFFIX = `${path.sep}digests${path.sep}lock`;
 
 export interface RsiLockHandle {
   readonly path: string;
@@ -73,15 +79,21 @@ function sameRead(a: LockRead, b: LockRead): boolean {
 export async function acquireRsiLock(
   io: IoContext,
   deps: RsiLockDeps = {},
+  target: RsiLockTarget = {},
 ): Promise<RsiLockHandle> {
   const alive = deps.isAlive ?? defaultAlive;
   const now = deps.now ?? ((): Date => new Date());
-  const dir = await rsiDir(io).catch((e: unknown) => {
+  const prepare = target.sub === 'digests' ? digestsDir : rsiDir;
+  const dir = await prepare(io).catch((e: unknown) => {
     if (e instanceof WriteDeniedError) throw new RsiLockError('write_denied');
     throw e;
   });
   const file = path.join(dir, 'lock');
   if (heldInProcess.has(file)) throw new RsiLockError('internal'); // 不重入
+  // 锁序 `rsi/lock` → `digests/lock`(R20-16.10):本进程持有槽位锁时再取 `rsi/lock` = 编程错误
+  if (target.sub === undefined && [...heldInProcess].some((f) => f.endsWith(DIGESTS_LOCK_SUFFIX))) {
+    throw new RsiLockError('internal');
+  }
   const doc: RsiLockDoc = {
     pid: deps.pid ?? process.pid,
     started_at: now().toISOString(),

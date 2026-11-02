@@ -11,7 +11,7 @@ import { LifecycleCoreConfigSchema } from '../contracts/config.js';
 import { JUDGE_HOP_CHAIN } from '../contracts/proposal.js';
 import type { JudgeHopId, JudgeOutput, Proposal } from '../contracts/proposal.js';
 import type { Redactor } from '../contracts/redact.js';
-import { deriveVendor, isCrossVendor } from '../contracts/vendor.js';
+import { deriveVendor, isCrossVendor, isCrossVendorOf } from '../contracts/vendor.js';
 import { loadKitConfig } from '../build/config.js';
 import { createGuardGit } from '../guards/git.js';
 import type { IoContext } from '../io/paths.js';
@@ -141,7 +141,7 @@ function assertExistingJudge(p: Proposal): void {
   if (!last || !prefixOk(j.hops))
     throw new JudgeStateError('JUDGE_STATE_INVALID: 既有 judge 的链不合法');
   assertJudgeProvider(j.provider, last.hop);
-  if (!isCrossVendor(p.reflector.vendor, j.vendor)) {
+  if (!isCrossVendorOf(p.reflector, j.vendor)) {
     throw new JudgeStateError('JUDGE_STATE_INVALID: 既有 judge 不是可证明的跨厂商评审');
   }
 }
@@ -379,7 +379,7 @@ export async function runJudge(deps: JudgeDeps, opts: JudgeOptions): Promise<Jud
         hops.push({ ...rec, result: 'skipped:same-vendor' });
         continue;
       }
-      if (vendorUnproven(backend) || !isCrossVendor(p.reflector.vendor, backend.vendor)) {
+      if (vendorUnproven(backend) || !isCrossVendorOf(p.reflector, backend.vendor)) {
         hops.push({ ...rec, result: 'error:vendor_unknown' });
         continue;
       }

@@ -496,6 +496,7 @@ export async function runReflect(deps: RunDeps, opts: RunOpts): Promise<RunResul
     input_digest: digest as string,
     kit_version: deps.kitVersion,
     stub: mode === 'stub' || backend.cli === 'stub',
+    provenance: 'spawned', // R20-16.18:LLM 路径(kit 经 backends 调用)显式写 spawned
   };
   // 基线读到窗口内的坏记录:不写残缺基线,整批作废(SignalStoreError 等读库损坏照常向上抛 → 退出 3)
   let guidance;
@@ -554,7 +555,7 @@ export async function runReflect(deps: RunDeps, opts: RunOpts): Promise<RunResul
   };
 }
 
-function toTarget(a: ExistingAtomInfo): DedupeTarget {
+export function toTarget(a: ExistingAtomInfo): DedupeTarget {
   return {
     id: a.id,
     do: a.do,

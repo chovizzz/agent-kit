@@ -324,8 +324,8 @@ const REJECT_CODE_RE = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/;
 export const ReflectRunReportSchema = z
   .strictObject({
     run_id: RunIdSchema,
-    /** dry = 干跑(零调用零写入);stub = 假 LLM;llm = 真调用 */
-    mode: z.enum(['dry', 'stub', 'llm']),
+    /** dry = 干跑(零调用零写入);stub = 假 LLM;llm = 真调用;ingest = 会话 agent 经 `reflect --ingest` 交回(A4,R20-16.15;零调用) */
+    mode: z.enum(['dry', 'stub', 'llm', 'ingest']),
     signals_loaded: count,
     signals_dropped: z.strictObject({
       schema: count,
