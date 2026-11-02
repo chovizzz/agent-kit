@@ -66,7 +66,8 @@ export function probeCommands(cli = '{REPO}/dist/cli.js') {
  *  - tick / projects --rebuild-index / purge 在 off 时 4(`RSI_NOT_RUN reason=off`);armed 下 tick 干跑 0,没有盐 = 没有确认过 → rebuild / purge 4(`not_confirmed`);
  *  - status / projects 是只读观察命令,off / armed 都 0;
  *  - confirm 在 A5 里非 TTY → 2(`RSI_USAGE reason=not_tty`,先于任何读);被拒 confirm 与 `purge --write` 的锁后拒绝由 test/rsi/b5-zero-write.test.ts 在进程内证明。
- * poke / hint 的行属于 A3。
+ * R20-A3:钩子 poke / hint 与 worker `__rsi --background` 也在两个环境里跑(A5 命令环境固定 `KIT_AUTO_RSI=0` → 跳过路径,恒 0、零写入);
+ * 钩子行**不带** `--root`(钩子形状不接受全局选项;带了也只是空操作),由根入口在加载启动器之前分流到零网络入口。
  */
 export const RSI_DRY = [
   { argv: ['tick'], off: [4], armed: [0] },
@@ -79,12 +80,22 @@ export const RSI_DRY = [
   { argv: ['purge', '--excluded'], off: [4], armed: [4] },
   { argv: ['purge', '--resume'], off: [4], armed: [4] },
   { argv: ['confirm'], off: [2], armed: [2] },
+  { argv: ['poke', '--agent', 'claude'], off: [0], armed: [0], hook: true },
+  { argv: ['hint', '--agent', 'claude'], off: [0], armed: [0], hook: true },
 ];
 
+/** 内部 worker 入口(不在 `rsi` 下):同样在两个环境里跑,KIT_AUTO_RSI=0 → 跳过,恒 0 */
+export const RSI_WORKER_ROW = { argv: ['__rsi', '--background'], off: [0], armed: [0] };
+
 export function rsiDryCommands(env, cli = '{REPO}/dist/cli.js') {
-  return RSI_DRY.map(
-    (c) => `{NODE} ${cli} --root {REPO} rsi ${c.argv.join(' ')} # exit=${c[env].join(',')}`,
-  );
+  return [
+    ...RSI_DRY.map((c) =>
+      c.hook === true
+        ? `{NODE} ${cli} rsi ${c.argv.join(' ')} # exit=${c[env].join(',')}`
+        : `{NODE} ${cli} --root {REPO} rsi ${c.argv.join(' ')} # exit=${c[env].join(',')}`,
+    ),
+    `{NODE} ${cli} ${RSI_WORKER_ROW.argv.join(' ')} # exit=${RSI_WORKER_ROW[env].join(',')}`,
+  ];
 }
 
 export function commandsText(allowProject, cli = '{REPO}/dist/cli.js', extra = []) {

@@ -270,6 +270,8 @@ const SUBPROCESS_TESTS = [
   'test/build/bundle-artifact.test.ts',
   // R20 A2 B5-0:发布冻结脚本在沙箱 cwd 里的真子进程测试
   'test/build/publish-freeze.test.ts',
+  // R20 A3:真实发布产物(vite 构建的 dist/cli.js)上的钩子入口四组合、stdin 不关闭、端到端起 worker
+  'test/rsi/a3-dist.test.ts',
 ];
 
 export default tseslint.config(

@@ -200,6 +200,32 @@ export const RSI_SALT_EMPTY_GRACE_MS = 10_000;
 export const RSI_LOG_MAX_LINES = 200;
 export const RSI_LOG_LINE_MAX_BYTES = 1024;
 
+// ---------------------------------------------------------------------------
+// A3 常量(R20-3.2 / R20-3.3 / R20-6.2 / R20-6.3 / R20-6.5 / R20-6.6;全部不可配置)
+// ---------------------------------------------------------------------------
+/** poke / 顺带调度的启动预留窗口(R20-6.2):窗口序号 = floor(now / 30 分钟) */
+export const RSI_POKE_WINDOW_MINUTES = 30;
+export const RSI_POKE_WINDOW_MS = RSI_POKE_WINDOW_MINUTES * 60_000;
+/** worker 持锁时删除早于当前窗口这么多个以上的预留标记(R20-6.2) */
+export const RSI_POKE_RESERVATION_KEEP_WINDOWS = 2;
+/** poke / hint 自身的尽力预算(R20-3.2.1 / R20-3.3.1) */
+export const RSI_POKE_BUDGET_MS = 1000;
+export const RSI_HINT_BUDGET_MS = 1000;
+/** 相邻两次 L0 完成时间的最小间隔(R20-6.3) */
+export const RSI_L0_MIN_INTERVAL_HOURS = 6;
+export const RSI_L0_MIN_INTERVAL_MS = RSI_L0_MIN_INTERVAL_HOURS * 60 * 60_000;
+/** 可重试失败连续达到这么多次 → 熔断打开(R20-6.5) */
+export const RSI_BREAKER_MAX_FAILURES = 3;
+/** retryable 熔断的打开时长(R20-6.6) */
+export const RSI_BREAKER_OPEN_HOURS = 24;
+export const RSI_BREAKER_OPEN_MS = RSI_BREAKER_OPEN_HOURS * 60 * 60_000;
+/** hint:confirmed 下输出的聚类门槛 K(R20-3.3.4)、去重窗口、字节上限与计数显示上限(R20-3.3.2) */
+export const RSI_HINT_MIN_CLUSTERS = 3;
+export const RSI_HINT_DEDUP_MINUTES = 30;
+export const RSI_HINT_DEDUP_MS = RSI_HINT_DEDUP_MINUTES * 60_000;
+export const RSI_HINT_MAX_BYTES = 200;
+export const RSI_HINT_COUNT_CAP = 9999;
+
 /** 项目 key:`p_` + 16 位十六进制(§9) */
 export const RsiProjectKeySchema = z.string().regex(/^p_[0-9a-f]{16}$/);
 /** 计数投影里「映射不到 key 的证据」的字面量(R20-4.5,按 U 处理) */

@@ -5,6 +5,7 @@
  * 本机时钟(注入的 nowMs)只用于检查节流。任何缺失 / 不可解析 / 为负一律 fail-closed。
  * 每个拒绝都有稳定原因码(`code`)与次级细分(`detail`),不同原因不合并。
  */
+import { isCiEnv, truthyEnv } from '../contracts/ci-env.js';
 import { SEMVER_RE } from '../contracts/common.js';
 import {
   UPDATE_CHECK_INTERVAL_HOURS,
@@ -124,23 +125,8 @@ export const GATE_OFF_REASONS = [
 export type GateOffReason = (typeof GATE_OFF_REASONS)[number];
 export type Gate = { enabled: true } | { enabled: false; reason: GateOffReason };
 
-const CI_ENV_KEYS = [
-  'CI',
-  'GITHUB_ACTIONS',
-  'GITLAB_CI',
-  'BUILDKITE',
-  'CIRCLECI',
-  'TF_BUILD',
-  'JENKINS_URL',
-];
 /** 交互式启动检查不适用的命令(CI 也会用) */
 export const NO_UPDATE_CHECK_COMMANDS: readonly string[] = ['check', 'build'];
-
-function truthyEnv(v: string | undefined): boolean {
-  if (v === undefined) return false;
-  const t = v.trim().toLowerCase();
-  return t !== '' && t !== '0' && t !== 'false';
-}
 
 export function autoUpdateGate(input: {
   env: Readonly<Record<string, string | undefined>>;
@@ -153,7 +139,7 @@ export function autoUpdateGate(input: {
   const flag = input.env['KIT_AUTO_UPDATE']?.trim().toLowerCase();
   if (flag === '0' || flag === 'false' || flag === 'off' || flag === 'no') return off('env_off');
   if (truthyEnv(input.env['KIT_LAUNCHED'])) return off('launched');
-  if (CI_ENV_KEYS.some((k) => truthyEnv(input.env[k]))) return off('ci');
+  if (isCiEnv(input.env)) return off('ci');
   if (!input.isTTY) return off('not_tty');
   if (!input.autoInstall) return off('config_off');
   if (input.command !== undefined && NO_UPDATE_CHECK_COMMANDS.includes(input.command)) {

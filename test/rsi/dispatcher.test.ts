@@ -49,7 +49,9 @@ async function run(
 const ALL = [...RSI_SUBCOMMANDS, ...RSI_P1_RESERVED_SUBCOMMANDS];
 /** 已实装(不再是桩):status / projects / stop(B3a)、tick(B5a)、confirm(B5b)、purge(B5c);它们的行为测试在 status / projects / stop / open / b5b-* / b5c-* 各自的测试文件 */
 const IMPLEMENTED = ['status', 'projects', 'stop', 'tick', 'confirm', 'purge'];
-const STUBBED = ALL.filter((n) => !IMPLEMENTED.includes(n));
+/** A3 实装的钩子:经分发器(进程内 main)同样恒退 0、无输出;行为测试在 a3-poke / a3-hint / a3-entry / a3-dist */
+const HOOKS = ['poke', 'hint'];
+const STUBBED = ALL.filter((n) => !IMPLEMENTED.includes(n) && !HOOKS.includes(n));
 
 describe('rsi 分发器', () => {
   it('rsi 已登记进 COMMANDS;P0 子命令表与常量一致,每个子命令有独立入口文件', () => {
@@ -68,10 +70,24 @@ describe('rsi 分发器', () => {
   }
 
   it('多余参数不改变桩行为(桩不解析参数)', async () => {
-    const r = await run(['rsi', 'poke', '--json', '--bogus']);
+    const stub = STUBBED[0] as string;
+    const r = await run(['rsi', stub, '--json', '--bogus']);
     expect(r.code).toBe(64);
-    expect(r.err).toBe('RSI_NOT_IMPLEMENTED subcommand=poke\n');
+    expect(r.err).toBe(`RSI_NOT_IMPLEMENTED subcommand=${stub}\n`);
   });
+
+  for (const sub of HOOKS) {
+    it(`rsi ${sub}(A3 钩子)经分发器:恒退 0、stdout / stderr 空、写审计零调用(配置缺失;非法参数同样)`, async () => {
+      for (const argv of [
+        ['rsi', sub, '--agent', 'claude'],
+        ['rsi', sub, '--json', '--bogus'],
+        ['rsi', sub],
+      ]) {
+        const r = await run(argv);
+        expect(r, argv.join(' ')).toEqual({ code: 0, out: '', err: '', audit: [] });
+      }
+    });
+  }
 
   it('缺省 / 未知子命令 → 2 RSI_USAGE reason=unknown_subcommand,不回显输入', async () => {
     for (const argv of [['rsi'], ['rsi', 'nope'], ['rsi', 'bad\nstuff'], ['rsi', '--x']]) {
@@ -96,6 +112,11 @@ describe('rsi 分发器', () => {
       const r = await run(['rsi', sub], bad);
       // tick 在配置 off 时按契约退 4 `RSI_NOT_RUN reason=off`(不是桩的 64,也不是通用路径的 3);confirm 无 TTY 先退 2 `not_tty`(先于任何读);purge 不带模式参数 → 2 mode_conflict(参数先于配置判定)
       expect(r.code, sub).toBe(sub === 'tick' ? 4 : sub === 'confirm' || sub === 'purge' ? 2 : 0);
+    }
+    // A3 钩子:同样不被通用路径校验挡住(退 0,不是 3),无输出
+    for (const sub of HOOKS) {
+      const r = await run(['rsi', sub, '--agent', 'claude'], bad);
+      expect({ code: r.code, out: r.out, err: r.err }, sub).toEqual({ code: 0, out: '', err: '' });
     }
     expect((await run(['rsi', 'nope'], bad)).code).toBe(2);
   });
