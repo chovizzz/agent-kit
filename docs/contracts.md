@@ -2706,6 +2706,7 @@ agent-kit sync [--agent <id>]… [--write] [--overwrite-drifted] [--json] [--hom
 - **`--uninstall`**:同样受 agent 集合约束——只去掉所选 agent 的请求;一个条目的 `agents` 去掉后为空,才删除该登记过且未漂移的独占文件 / 托管块(`created_file=true` 且删块后只剩空白的文件一并删除);仍被其它 agent 请求的条目与文件原样保留。漂移而保留下来的条目**保留其登记信息**,不丢所有权。只有登记表的所有条目都已安全移除时才删登记表。不带 `--agent` 即默认集合 `claude,codex,pi`;全部 agent 的条目都装过时,用 `--agent` 列全才能卸干净。装 → 卸(同一 agent 集合)之后受管路径树哈希与装之前逐字节一致。
 - **`--adopt`**:登记表丢失时,只认领「内容 sha 等于某个已知 payload 版本里同路径文件 sha」的文件。
 - **永远不碰**:`~/.claude/CLAUDE.md`、`settings*.json`、hooks、`~/.codex/config.toml`、点开头的条目(`.social-hub-skills.json` 等)、登记表里没有的条目、`.json` 文件。
+  > **N1 订正(§20.15,2026-11-02)**:本条对 sync 仍然成立(sync / autosync 永不写这些文件)。`~/.claude/settings.json` 与 `~/.codex/hooks.json` 里的 kit 钩子条目只由前台、TTY 确认的 `rsi hooks --write` 经专用原语写入(R20-15.1–15.6)。
 - **启动提示**:交互式命令启动时,payload 与登记表有差异则 stderr 一行 `SYNC_PENDING add=N update=M remove=K`(退出码不受影响)。
 
 退出码:
@@ -2913,6 +2914,8 @@ agent-kit update [--write] [--now] [--major] [--rollback] [--json] [--home <dir>
 | `.pi/agent/AGENTS.md`        | file | adapter | pi              |
 
 S7c-A 给 home-fs 追加三个原语(都走同一套「表内 + planScope + 逐段 lstat」校验):`createExclusive`(独占创建,已存在 → `HomeExistsError`,锁用)、`renameDir`(目录改名,目标须不存在,改名前后核对目录身份 dev:ino;残余:POSIX 目录 rename 会覆盖空的目标目录而 Node 无 no-replace 选项,故只在调用方持 update 锁时成立)、`switchCurrent(ctx, version | null)`(`current` 位置固定为 `.local/share/agent-kit/current`;目标由原语按 semver 拼成相对串 `versions/<version>`,调用方不能传路径;`versions/<version>` 须是真实目录、`versions` 与各上级不得是链接;临时符号链接 → rename 覆盖 → `readlink` 精确比对并核对 `realpath(current)` 严格位于 `realpath(versions)` 内;既有 `current` 必须是符号链接,是文件 / 目录则拒,指向别处的链接被覆盖即自愈)。`dev:ino` 复核只用于缩小窗口,不作为身份保证:Linux(ext4 等)会立即复用刚释放的 inode 号,「删除后同号重建」能通过这一步复核。安全性由 rename 后的 `readlink` / `realpath` 复核和启动时的 `verifyInstalledTree` 保证;同用户并发改写属于 §5 已接受的残余。
+
+> **N1 订正(R20-15.5–15.7)**:本表增加归属 `kit-hooks` 的三条(`.claude/settings.json`、`.codex/hooks.json` 为新类型 `json-merge`,`.pi/agent/extensions/agent-kit-rsi.ts` 为 `file`),条数 12 → 15,随 A5 实装;通用 home-fs 原语对这三条一律拒绝,只有 `src/rsi/hooks/**` 的专用原语可写;`PayloadFile` / `SyncLedger` / `SyncTxn` 仍只收 adapter 条目。
 
 语义:`file` 条目要求路径相等;`dir` 条目本身不可写,只能写严格位于其内部、且在本次计划(`planScope`)里点名的文件(`isHomeWritePath`)。**adapter 的 `dir` 条目内部另禁点开头的路径段与 `.json` 结尾的文件**(只检查目录以下的段,`.claude/…` 等 HOME 根下的点目录不受影响;kit 状态目录的 `ledger.json` / `state.json` 不适用)。登记表 / 事务 / `PayloadFile(target=home)` 的路径在 schema 层就必须落在 adapter 条目内,因此上述禁写在 schema 层即成立。home-fs(S1)另加:路径任一中间段是符号链接即拒;`HOME` 必须是 `getRealHome()` 或 `KIT_TMP` 之内的 `--home`。`~/.config/agent-kit/` 是只读的用户配置,不在表内。
 
@@ -3551,6 +3554,8 @@ S7c-A 给 home-fs 追加三个原语(都走同一套「表内 + planScope + 逐�
 | `armed`     | 配置可用、无停止标记、没有**有效**确认记录(R20-1.5)                            | 会话根的目录项;每个会话文件的头部预读(R20-1.4);已有的 `.state/**` 只读 | `.state/rsi/{state.json,log.jsonl,snapshot.json,counts.json,lock}`、poke 预留与 hint 去重标记、`rsi purge --write` / `--resume` |
 | `confirmed` | 配置可用、无停止标记、确认记录有效                                             | 会话文件全文(经 reader,受 §20.6 上限)                                  | `.state/rsi/**`、`.state/{signals,sessions,salt}`、暂存 run 与 `.state/promote/**` 的 taint 改写(R20-4.7)                       |
 
+> **N1 订正(R20-15.4)**:`rsi hooks` 的前台管理在四种状态下都可执行,不改变状态、不建 `.state/rsi/`、不顺带启用采集。
+
 > **v3.1 修订(§21.18 第 42 条)**:`off` 行追加允许 `rsi auto clear --write` 对 HOME 登记表、`.local/state/agent-kit/rsi-personal/`、私有仓库与本机 payload 的撤销(R21-9.5);`stopped` 行追加允许 `rsi auto clear --write`、`rsi rollback --to --write`、`rsi veto`(R21-9.4)。
 
 - R20-1.4 **`armed` 零读正文**:对会话文件只允许 ①目录项列举(`readdir` / `lstat`);②**一次**从偏移 0 起、长度 ≤ 64KiB(`RSI_ARMED_HEAD_BYTES`)的物理读取。读到的字节里第一个 `\n` 之后的部分**直接丢弃**:不交给任何解析器、不保存、不计入任何输出(N5 衡量两件事:物理 I/O 为每个文件至多一次 ≤ 64KiB 的读;交给解析器的字节至多是首行)。首行用固定的轻量头部解析器取 cwd 与会话元数据,**不调用** reader 的 `read()`、不调用 `Redactor`、不读不建盐。首行取不到 cwd(没有 `\n`、不是 JSON、无 cwd 字段)→ 该会话计入归属不明,不再往下读。 (订正见 §20.14 B4 订正 #2) (订正见 §20.14 B4 订正(补) B4a-2、B4a-3、B4a-4、B4a-6、B4a-8)
@@ -3559,6 +3564,7 @@ S7c-A 给 home-fs 追加三个原语(都走同一套「表内 + planScope + 逐�
 - R20-1.6 **跳过触发**:以下任一成立,poke、hint、顺带调度、worker 一律空操作(零写入、退出 0、stdout 为空):`KIT_AUTO_RSI=0`;`KIT_RSI_CHILD=1`(kit 手动 `reflect --run-llm` / `judge --run-llm` 起的 LLM 子进程,§20.9 第 5 条);任一 CI 变量为真(与 update 同一张 `CI_ENV_KEYS`);`KIT_LAUNCHED` 已设且不为 `0` 时**只**跳过顺带调度(同 §19.5)。`KIT_AUTO_RSI` 只能关不能开(`=1` 与未设相同)。前台命令(`rsi status|projects|confirm|stop|purge|tick`)不受 `KIT_AUTO_RSI` 影响。
 - R20-1.7 **顺带调度白名单**:只有 `build`、`check`、`sync`、`reflect`(不带 `--run-llm`、不带 `--gc`)在命令结束后顺带调度,且 stdin 与 stdout 都是 TTY;`doctor`、`update`、`rsi *`、`__update`、`__rsi`、只带 `--version` / `--help` 的调用、任何读取用户配置失败的情况一律不调度(设计稿 §4.1,评审 v2 #15)。与 update 的 `scheduleBackground` 并列、互不影响,失败不改变用户命令的退出码。顺带调度的代码同样在零网络的桥接模块里(R20-1.1)。
 - R20-1.8 **自动路径永不做**:apply、`promote`、`attest`、`retire`、`judge`、sync 写全局、开 PR、对外通知、改用户配置 / 覆盖层 / `team_project_keys`、`rsi purge`、`rsi confirm`。
+  > **N1 订正(R20-15.3)**:追加「写 agent 钩子配置」。唯一入口是前台、TTY、逐次确认的 `rsi hooks --write`。
   > **v3.1 修订(§21.18 第 13 条,V1 生效)**:对个人层,apply(写私有仓库)、生效(注入 / 本机 safe sync)、回滚、退役改为允许;其余照旧永不,并追加推送任何远端、发版、建 tag、改 agent 配置、`rsi auto resume`、打开 `[rsi.auto] exec` 等(完整表见 R21-1.3)。只有前台 `rsi contrib submit` 在逐次确认后开草稿 PR。
 - R20-1.9 **钩子参数不可信**:poke / hint / worker **不读 stdin**(钩子会把含会话路径的 JSON 写到 stdin;不读、不解析、不等待其关闭),不使用调用方 cwd,不接受路径类参数。worker 的会话根、仓库、状态目录只来自 §20.2 的固定来源。
 
@@ -3987,6 +3993,8 @@ rsi 的锁(仓库 `.state/`)与 update / sync 的锁(HOME 下 `.local/state/agen
 | 20  | §5「确定性序列化」                                                               | 追加 `canonicalJsonLine`(单行,键序同 `canonicalJson`)                                                                                                                                                                                                                                                                                                                                                                                                                                                 | **先改**(A1)                                             |
 | 21  | §18.2 `promote --run` 产物                                                       | `.state/promote/<id>/` 可被 taint(删 `promote.patch`、`pr-body.md`,写 `TAINTED`);`promote --run` 的「同 id 已存在且一致 → 退出 0」对 tainted 目录改为 `RSI_RUN_TAINTED`                                                                                                                                                                                                                                                                                                                               | **先改**(A2) (订正见 §20.14 B5 订正 B5g-4)               |
 
+> **N1 订正(R20-15.5)**:上表第 13 条的 pi 扩展并入 `kit-hooks` 三条之一(`.pi/agent/extensions/agent-kit-rsi.ts`),与 claude / codex 的 `json-merge` 两条一起随 A5 入表。
+
 **R20-A0 实装对照(第 0 块:与锁、状态机无关的前置修订;本块不含 `src/rsi/**`、RSI 锁、命令面)**:
 
 - 第 1 条:已实现(R20-A0)—— `UserConfig.rsi: z.unknown().optional()`(Q1-A);`test/update/user-config-rsi.test.ts` 钉死旧配置 / 合法 `[rsi]` / 非法 `[rsi]` 下 `update`(含 `--write`)与后台 worker 的退出码与稳定码一致,其它未知段与 `[update]` 写错仍是 `config_invalid`。
@@ -4021,6 +4029,8 @@ rsi 的锁(仓库 `.state/`)与 update / sync 的锁(HOME 下 `.local/state/agen
 - 第 19 条:已实现(A3)—— poke 不经任何 TTY 闸;顺带调度用 R20-1.6 / R20-1.7 自己的闸(`src/rsi/kit-schedule.ts`),由启动器在 update 的 `scheduleBackground` 之后调用,两者互不影响;update 的闸不变。
 
 ### 20.10 P1 / P2 占位(只写接口与不变量,不写细则)
+
+> **N1 订正(§20.15)**:下表 `rsi hooks` 一行的「claude / codex 只打印片段」由 §20.15 取代:claude / codex / pi 都有 `--print` / `--install` / `--uninstall` / `--restore`,`--write` 受形状核实闸(R20-15.9);`hint --format` 的输出形状写进形状表(R20-15.8)。
 
 > **v3.1 修订(§21.18 第 18 条、§21.19)**:开启自动循环(`[rsi.auto] enabled`)时 claude / pi 的会话授权缺省为 S2(R21-2.3);`judge --ingest` 与 N4 对个人层不再需要,只影响 §18 手动路径;其余占位不变。
 
@@ -4671,6 +4681,74 @@ rsi 的锁(仓库 `.state/`)与 update / sync 的锁(HOME 下 `.local/state/agen
 13. **A3-13(R20-6.8:锁内执行配置,A3 代码评审发现,同时修了 `rsi tick --write`)**:命令打开上下文时读到的配置在拿锁之前可能已被改写(收紧的排除 / overlay 不需要锁)。此前运行绑定与检查点用锁内重新观测的配置,而采集 / 列举 / taint 用打开时的那份,两者错配时检查点永远比对一致、采集却按旧策略读——违反 R20-6.8 的隐私边界。现在 worker 与 `tick --write` 都在拿锁后的第一次观测处(先于恢复、purge 续做、taint、残留 attempt 记账等任何维护写入)核对仓库根并换上这份最新配置,维护与采集都用它;worker 在 STOP 复检处再观测一次,本轮采集、绑定与检查点用这第二次观测的配置(同一份快照)。仓库根变了(io 与锁不再对应)→ worker 锁内拒绝、零业务写入,tick 退 4 `RSI_NOT_RUN reason=binding_changed`。验收:`a3-worker.test.ts`「#1」两例(拿锁后收紧排除 → 不采被排除项目的会话)与「复核 #1」(拿锁前换仓库 → 残留 attempt 不被消费、不写日志)。
 14. **A3-12(未验收、不宣称)**:真实环境动作(在用户本机装钩子、对真实会话跑 poke / worker、`rsi confirm`)一个都没做,全部验收用假 HOME 与临时仓库;钩子安装与 `--format` 是 P1(A5);发布仍受 `RELEASE_FREEZE` 约束,解除需用户明确同意。
 
+### 20.15 `rsi hooks` 与 kit 钩子写入(N1,契约先行;A5 实装后订正)
+
+用户 2026-11-02 定 **N1 = B**:kit 合并写 claude / codex 的钩子配置。本节定死这条写入路径的全部边界;现行条款里与之冲突的地方逐条加了「N1 订正」标注指回本节(§19.2 F8、§19.7、R20-1.3、R20-1.8、§20.9 第 13 条、§20.10,以及已冻结 §21 的 R21-6.2、R21-15.5、§21.18 第 29 行、§21.19 第 9 行,冻结后订正记录见 §21.23 末尾)。方案经两轮评审:Pi 方案评审 10 条全部采纳(§20.15-12)。本节**只写契约**,代码随 A5。
+
+#### 20.15-1 范围与入口
+
+- R20-15.1 唯一入口:`agent-kit rsi hooks (--print | --install | --uninstall | --restore <txn_id>) --agent <claude|codex|pi> [--write] [--json]`。四个模式互斥(否则 `RSI_USAGE reason=mode_conflict`);`--print` 不接受 `--write`;`--install` / `--uninstall` / `--restore` 不带 `--write` 是干跑。
+- R20-15.2 写对象只有三个,固定、不可配置:`~/.claude/settings.json`(claude)、`~/.codex/hooks.json`(codex)、`~/.pi/agent/extensions/agent-kit-rsi.ts`(pi,独立文件,不合并)。不写 `settings.local.json`、项目级任何文件、`~/.codex/config.toml`(codex 的钩子信任由用户自己做,kit 只在输出里提示)。
+- R20-15.3 **自动路径永不调用**:poke / hint / worker / 顺带调度 / sync / autosync / update / §21 任何自动环节都不得引用钩子写原语(lint 闸,R20-15.6)。R20-1.8 不变,只追加「`rsi hooks --write` 是写 agent 钩子配置的唯一入口,且是前台、TTY、逐次确认」。
+- R20-15.4 状态无关:钩子管理**不要求** `[rsi] enabled` 或有效的 `[rsi] repo`,在 `off` / `armed` / `confirmed` / `stopped` 下都能前台执行,且**不改变**任何 rsi 状态、不建 `.state/rsi/`、不顺带启用采集或会话授权(R20-1.3 订正)。
+
+#### 20.15-2 写入表与 home-fs 授权
+
+- R20-15.5 `HOME_WRITE_TABLE` 增加三条,归属 **`kit-hooks`**(新归属,类 = 可执行类):`.claude/settings.json`(新类型 `json-merge`)、`.codex/hooks.json`(`json-merge`)、`.pi/agent/extensions/agent-kit-rsi.ts`(`file`)。第三条即 §20.9 第 13 条的 pi 扩展,不另行重复入表;表的条数由 12 变 15(§21.18 第 45 条随之订正)。
+- R20-15.6 **通用 home-fs 写 / 删 / rename / createExclusive 原语对 `kit-hooks` 条目一律拒绝**;只有专用原语 `hooksApply(ctx, agent, op)`(`op` 由计划生成,不收路径、不收全文)能写它们,且只许 `src/rsi/hooks/**` 引用(eslint 授权闸新增一行;sync / autosync / update / `src/rsi/{poke,hint,worker,kit-schedule}.ts` 与 §21 的 `src/rsi/{auto,capability,contrib,exec}/**` 引用即红)。`PayloadFile`、`SyncLedger`、`SyncTxn` 的路径 schema 仍只接受 adapter 条目,不随总表扩容。§19.7「adapter dir 内禁 `.json`」不放宽(新增的是独立条目,不是 adapter dir 内的例外)。
+- R20-15.7 反向测试必须存在且为红绿对:sync payload 写这三条路径 → 拒;通用 home-fs 原语写 → 拒;自动入口(poke / hint / worker / kit-schedule)的 import 闭包不含 `src/rsi/hooks/**`。
+
+#### 20.15-3 形状核实是写能力的闸
+
+- R20-15.8 每个 agent 的安装形状写成**形状表**(`src/contracts/rsi-hooks.ts`,版本化 `shape_version`):事件名、matcher、hook 类型、精确命令、超时、输出格式(`hint --format`)、失败与退出码处理、信任步骤、适用的 agent 版本范围、证据级别(`公开文档` / `实测运行` / `实测结构` / `假设`)。
+- R20-15.9 只有证据级别为 `公开文档` 或 `实测运行` 的形状开放 `--write`;其余(当前预计 codex 全部)只开放 `--print`,`--install --write` 退 4 `RSI_HOOKS_NOT_RUN reason=shape_unverified`。本机 agent 版本不在形状表的适用范围 → 同码。
+- R20-15.10 普通 hint 与 R21 的 `--canary` hint 在形状表里是**固定的一种组合**(claude:`SessionStart` matcher `startup` 只装 canary 形状或只装普通形状,由 `[rsi.auto]` 状态在安装时决定并写进账本),禁止两种同时装入造成双调用。安装钩子**不等于**通过 R21-6.5 的真实会话准入。
+
+#### 20.15-4 kit 条目的归属
+
+- R20-15.11 kit 条目 = 形状表里的**完整版本化形状**(事件、matcher、类型、精确命令、kit 生成的全部字段);只比较命令串不够。
+- R20-15.12 区分两件事:「所需条目已存在」(安装幂等,不写)与「kit 新增、可由 kit 卸载」。后者在账本里记:事件位置、完整条目指纹(canonical JSON 的 sha256)、写入事务 `txn_id`。卸载**只删账本里登记过、且指纹仍一致的最小节点**;不删混有用户 hook 的包装对象;删后留下的空数组 / 空对象保留(精确还原原字节由 `--restore` 负责)。
+- R20-15.13 拒绝而不猜:同命令但包装形状不同、用户在 kit 条目上加了字段、同一形状出现多处无法唯一定位、命令前缀是 `agent-kit rsi` 却不在形状表里 → `reason=foreign_kit_entry` / `ambiguous_entry`,零写入,改用 `--print`。pi:同名文件已存在而账本无归属记录 → 不覆盖(`foreign_kit_entry`);有记录但内容漂移 → 不卸载(`config_changed_since_install`)。
+
+#### 20.15-5 读取与合并规则
+
+- R20-15.14 读取:路径链每段属主为当前 uid、不是符号链接、组与其他人不可写、无 setuid / setgid / sticky 之外的特殊位;目标为普通文件、`nlink == 1`、≤ 1 MiB;以不跟随链接的 fd 打开并核对 fstat 与路径 lstat 一致,上限在读时强制。不满足 → 退 3 `RSI_FAIL_CLOSED reason=hooks_target_unsafe`。文件不存在:claude 按 `{}`;codex 按形状表的空形态(未核实 → 只能 `--print`)。
+- R20-15.15 严格 JSON(无注释、无尾逗号、无重复键);根必须是对象,`hooks` 若存在必须是对象,目标事件若存在必须是数组,数组元素必须是形状表认得的包装对象 → 否则 `reason=config_unparsable` / `config_shape_unsupported`,零写入。
+- R20-15.16 **格式保真闸**(受限格式支持,不承诺多数文件能过):原文去掉末尾换行后必须等于 `JSON.stringify(JSON.parse(原文), null, 2)`;不等 → `reason=config_not_canonical`,零写入,提示改用 `--print`。写出时保留原文件「有无末尾换行」。
+- R20-15.17 其它任何键与非 kit 条目:不改、不重排;验收断言「非 kit 节点在新文件里的字节片段与原文件逐字相同」。
+
+#### 20.15-6 计划、确认与事务
+
+- R20-15.18 计划:干跑与 `--write` 先生成同一份计划 `{agent, path, before_exists, before_sha256, ops:[{op: add|remove, event, entry_fingerprint}], shape_version}`。`--write` 打印计划摘要(只含键路径、事件名与 kit 条目,不回显任何非 kit 内容)、告知「将把整份配置备份到 kit 私有状态目录」,要求输入 `yes`;输入不是 `yes` 或 EOF → 退 1 `RSI_HOOKS_DECLINED`,零写入。
+- R20-15.19 确认绑定计划:读到 `yes` 之后拿锁、按 R20-15.14 重读、重算计划;与展示时任一字段不同 → 退 4 `reason=stale_plan`,零写入(不静默重规划后执行)。
+- R20-15.20 锁:用 sync 的锁(`~/.local/state/agent-kit/sync/lock`,与 sync / autosync 互斥),拿不到 → 退 4 `reason=locked`;每个写出口(journal、备份、临时文件、rename、账本、修剪)之前 `assertHeld`,丢锁 → 退 3 `lock_lost`,不再写。**残余(登记,不弱化)**:sync 锁不与 Claude Code / codex 自己改写配置文件互斥;最后一次复核到 rename 之间被它们改写会丢失更新,只能缩小窗口,不是 CAS。
+- R20-15.21 事务(位置 `~/.local/state/agent-kit/hooks/`,目录 0700、文件 0600):①写 journal `txn/<txn_id>.json`(`txn_id` = UTC 时间戳 + 16 位随机十六进制;内容:目标、写前存在性、before / after 哈希、原权限、备份路径与哈希、计划)并 fsync 文件与目录 → ②备份原文件到 `backups/<txn_id>/<agent>`(无原文件则记「不存在」,不建备份文件)并 fsync、核对备份哈希 = before → ③提交前复核 R20-15.14 的全部安全条件 + 存在性 + 内容哈希仍是 before(否则 `reason=config_changed_during_write`,删临时文件、journal 记 aborted)→ ④同目录临时文件(全程 0600,写完 fsync)→ rename → 按原权限 chmod(原权限比 0600 宽时才放宽)→ fsync 目录 → ⑤追加账本 `ledger.json`(读-改-写 + 临时文件 + rename)→ ⑥删 journal。无变化的操作(幂等安装、已不存在的卸载)不建 journal、不建备份、不改账本。
+- R20-15.22 残留 journal:下一次任何 `rsi hooks --write` 先处理:目标哈希 = after → 补账本、删 journal;= before → 删 journal(未生效);第三种值 → 退 4 `reason=txn_residue_unknown`,零写入,提示用户核对后用 `--restore`。
+- R20-15.23 `--restore <txn_id>`:`txn_id` 必须匹配严格格式,路径由内部构造;只在当前文件哈希 = 账本里该事务的 after 时才把备份放回(之后有人改过 → `reason=config_changed_since_install`,零写入);备份哈希必须 = 该事务的 before(否则退 3 `hooks_backup_invalid`);restore 本身按 R20-15.21 作为事务执行(有自己的 journal 与备份)。
+- R20-15.24 备份保留:最多 10 份且不超过 30 个 UTC 日,修剪只删无在途 journal 引用的完整备份;`rsi hooks --prune-backups --write` 是用户清理入口(同样 TTY 确认)。
+
+#### 20.15-7 输出、隐私与稳定码
+
+- R20-15.25 输出例外:`--print` 与计划预览可以输出**形状表生成的固定内容**(钩子片段、pi 扩展源码、键路径、事件名);除此之外遵守 §20 通用约定(不回显用户配置内容、绝对路径只限 `~/` 相对写法)。`--json` 固定键集:`{mode, agent, shape_version, verified, plan:{before_exists, ops}, result, txn_id}`。交互提示与确认文案走 stderr。
+- R20-15.26 隐私:备份是用户整份配置的副本(可能含凭据);备份内容、配置内容不得进入 stdout / stderr / `--json` / 账本 / journal 正文以外的任何日志或异常消息。验收植入秘密哨兵,断言只在私有备份文件里出现。
+- R20-15.27 只读重复检测(Q-N1-c):安装前只读检查 claude 的 `settings.local.json`(其是否被加载按形状表核实)中是否已有同形状条目;确认存在 → `reason=duplicate_in_local`,零写入;检测本身失败 → 不当作「未发现」,同样拒绝安装(`duplicate_check_failed`)。**只挡安装,不挡卸载**。不读项目 cwd,不输出冲突条目全文。不宣称全局去重(项目级 / 插件来源不在检查范围)。
+- R20-15.28 退出码:0 成功(含干跑与 `--print` **成功生成**计划 / 片段);1 `RSI_HOOKS_DECLINED`;2 `RSI_USAGE`(含非 TTY 的 `not_tty`);3 `RSI_FAIL_CLOSED reason=hooks_target_unsafe|hooks_backup_invalid|hooks_ledger_invalid|lock_lost|internal`;4 `RSI_HOOKS_NOT_RUN reason=locked|shape_unverified|config_unparsable|config_shape_unsupported|config_not_canonical|foreign_kit_entry|ambiguous_entry|stale_plan|config_changed_during_write|config_changed_since_install|txn_residue_unknown|duplicate_in_local|duplicate_check_failed`。参数错误、安全拒绝、无法解析都不得以 0 退出。新码在 A5 实装时并入 R20-3.0 总表与枚举(同一提交)。
+
+#### 20.15-8 与已冻结 §21 的衔接
+
+- R20-15.29 R21-15.5 的安装票基线:票绑定 hooks 账本的代次(`ledger.generation`);**票在途期间发生任何 `rsi hooks --write` 事务 → 票作废,须重新出票**;不对 kit 命令做宽泛剔除。kit 的 `--restore` 与第三方扩展停用不得交叉整文件覆盖,仍遵守 R21-15.6「只撤销可归属差异」。
+- R20-15.30 R21-6.2 的 `--canary` 钩子由 `rsi hooks --install` 按 R20-15.10 写入(不再依赖用户手贴),其余不变。
+
+#### 20.15-9 验收与必须覆盖的变异点(A5)
+
+- R20-15.31 矩阵:文件状态(不存在 / `{}` / 规范 / 不规范 / 不可解析 / 错误根类型 / 重复键 / 无末尾换行 / 混合包装 / 同命令不同 matcher / 用户在 kit 条目加字段 / 符号链接 / 硬链接 / 组可写 / 属主不符)× 操作(install / uninstall / restore / 干跑 / print)× 交错(确认期间被改、提交前被改、失锁、在 journal / 备份 / rename / 账本各提交点注入崩溃、restore 备份损坏、pi 外来文件)。断言:非 kit 字节片段不变、备份与账本、幂等、零写入用写调用审计(不只看最终树)、秘密哨兵。
+- R20-15.32 A5 零写入清单加 `rsi hooks --print --agent claude|codex|pi` 与 `rsi hooks --install --agent claude`(干跑),off / armed 两环境 `# exit=0`。
+- R20-15.33 必杀变异:去掉格式保真闸;去掉提交前复核;卸载改为按命令串删除;通用 home-fs 可写 kit-hooks;忽略包装差异;失锁仍提交;账本未提交却返回成功;确认后静默重规划。
+
+#### 20.15-10 评审记录
+
+2026-11-02 方案评审(Pi GPT-6.1 Sol,只读):10 条(高 5、中 5)全部采纳——专用写原语与反向测试(R20-15.6–15.7);完整形状归属与最小节点删除(R20-15.11–15.13);V5 票绑定账本代次、在途作废(R20-15.29);journal / fsync 顺序 / 残留恢复 / restore 事务(R20-15.21–15.23);fd 级读取与逐写出口 `assertHeld`(R20-15.14、15.20);格式闸限定与卸载语义改为「非 kit 片段不变」(R20-15.16–15.17);备份隐私与双保留上限(R20-15.24、15.26);确认绑定计划、状态无关、输出例外、退出码(R20-15.4、15.18–15.19、15.25、15.28);形状核实作为写能力闸(R20-15.8–15.10);验收矩阵与变异(R20-15.31–15.33)。Q-N1-a = 退 1 `RSI_HOOKS_DECLINED`;Q-N1-b = 保留保守格式闸;Q-N1-c = 只读重复检测、只挡安装(R20-15.27)。
+
 ## 21. 自主 RSI 契约(R21,v3.1,契约先行;V1–V6 实装后订正)
 
 > **状态:冻结(2026-10-23,第五轮评审通过)**。共五轮只读评审(Pi GPT-6.1 Sol),第五轮结论「高严重度是否全部闭合:是」「§21 能否冻结:能」;评审范围与逐轮处置见 §21.23。冻结后的改动必须以带编号的契约修订进行(原位加修订标注、在 §21.23 记录),不得静默改写。§21.22 的 Q-A–Q-P 已定。`analysis-plan v1` 附录 `§21.7a` 是冻结时已登记的待补项,由 V1.5 的契约修订补入(R21-7.13),不影响冻结。
@@ -4846,6 +4924,7 @@ rsi 的锁(仓库 `.state/`)与 update / sync 的锁(HOME 下 `.local/state/agen
 
 - R21-6.1 `[V1]` 参与 agent:claude 与 pi;codex 不参与(M4),codex 的 hint 永不进入分组路径。
 - R21-6.2 `[V1]` **分组调用**:分组只发生在 hint 以 `--canary` 调用时(新参数,R20-3.3 修订);该调用只由 `rsi hooks` 安装的「每会话开始一次」钩子发出(claude:`SessionStart` 且 matcher 为 `startup`,恢复 / 压缩不发;pi:`before_agent_start` 中每会话首次触发的形状,以 V1 准入实测为准,R21-6.5)。`--canary` 调用**不受** R20-3.3.4 的 30 分钟去重约束(计数行去重与分组是两套机制,计数行照旧去重)。hint 用注入的随机源,以概率 `RSI_CANARY_P`(canary 期 0.5;adopted 期注入 0.8 / 留出 0.2)决定组别。
+  > **冻结后订正 N1-2(2026-11-02,R20-15.10 / R20-15.30)**:`--canary` 钩子由 `rsi hooks --install` 写入(claude `SessionStart` matcher `startup`,与普通 hint 形状二选一、不得同时装),不再依赖用户手贴;安装不等于通过 R21-6.5 的准入。
 - R21-6.3 `[V1]` **关联标记**(每个被随机的会话都输出,两组相同):一行 `RSI_MARK_PREFIX` + 空格 + 随机会话标记(`rsm_` + 16 位十六进制),≤ 64 字节,不含任何候选内容。**treat 组**在标记行之后追加:R21-1.9 标签一行、候选内容哈希前 12 位一行、候选正文;标记行 + 追加部分 ≤ 1536 字节(M11)。**control 组**只有标记行。不含路径、项目名、摘录。
 - R21-6.4 `[V1]` **分组账** `.state/rsi/canary-ledger.jsonl`(`RsiCanaryLedgerLine`,0600,`O_APPEND` 单行、不拿锁,与 R20-5.1 末行同类),行为两种 `kind` 的联合:`assign` = `{kind, at, agent, marker, candidate_id, arm: "treat"|"control"|"excluded", reason, p, background_fp, background_fp_ex, policy_fp, case_set_sha256, overlaps_preset, hint_version}`,`reason` 在 treat / control 为 `null`,在 excluded 取封闭枚举 `paused | not_admitted | policy_mismatch | agent_not_injected | revoked | rng_error | permit_unreadable`(`marker` 在 excluded 行为 `null`,因为未输出标记);`stop` = `{kind, at, candidate_id, reason, revocation_ref}`(R21-9.1 第二段):`revocation_ref` 在普通 stop 行为 `null`;在撤销对账写的 stop 行(`reason=revocation_reconciled`)为必填的 16 位十六进制(对应凭据行的 sha256 前 16 位),同一 `revocation_ref` 至多一行,`reason=revocation_reconciled` 而 `revocation_ref` 为 `null` 的行过不了 schema。`arm=excluded` 表示「未随机」(准入未过、暂停、策略指纹不符、失败兜底),`p=0`,不进分析、计入 C6 分母说明。`at` 只到秒;无路径、无项目 key。`background_fp` = 当前本机已同步 payload 的 `payload_sha256`(§19.8)前 16 位;`background_fp_ex` = 去掉当前候选托管块后的同一哈希(静态前后配对用,R21-8.4)。
 - R21-6.5 `[V1]` **准入**:某 agent 开分组之前,必须在真实会话里实测一次:①标记进了会话记录且被 reader 取回;②「每会话开始一次」的钩子形状确实每会话只触发一次(§10.3 动作 2)。未通过的 agent 的 `--canary` 调用一律 `arm=excluded`。准入结果记 `.state/rsi/canary-admission.json`。
@@ -5039,6 +5118,7 @@ agent-kit rsi exec-confirm <id>                                           [V6a]
 - R21-15.4a `[V5]` **受控入口**:本地能力清点 `rsi capability inventory --agent <a>`(kit 读已装扩展清单与配置,零第三方代码执行,只输出 id 与枚举);候选提交经 `reflect --ingest` 的 `kind=extension_candidate`(§21.18 第 3 条);授权请求 `rsi capability authorize <cand_id>`(TTY,展示来源、版本、完整闭包、权限三栏、检查结论;输入 `yes` 才写授权记录);停用 `rsi capability disable <adoption_id>`。`CapabilityGap`、`ExtensionCandidate` 只由 worker 与 ingest 写;`ExtensionAdoption` 只由 `authorize` / `verify` / `disable` 写。
 - R21-15.4b `[V5]` **授权记录** `ExtensionAuthorization`(`strictObject`,`.local/state/agent-kit/rsi/authorizations/<auth_id>.json`):`{auth_id, candidate_id, agent, scope, manifest_sha256, closure_sha256, allow_install_scripts, policy_version, granted_at, expires_at}`,`scope` 只取 `user`,`expires_at` = 授权后 14 个 UTC 日;过期未用 → 作废,需重新授权。
 - R21-15.5 `[V5]` **安装票** `rsi capability ticket <auth_id>`(票状态 `issued → consumed | expired | voided`,出票与消费都以独占创建落盘,同一授权至多一张有效票;票 24 小时过期):绑定目标 agent、作用域(只用户级)、制品清单哈希、预期配置差异、授权记录、策略版本;单次使用;出票时记配置基线哈希、不长期持锁;安装前重新校验清单;安装器禁止重新解析或下载;安装脚本默认禁用,需执行的在授权时单列。`rsi capability verify <ticket>`:把票从 `issued` 原子地改为 `consumed`,做安装前后基线比对;与预期差异一致 → `ExtensionAdoption.state=trial`;不一致(含基线之后出现的无关配置改动)→ `manual_recovery_required`;对已 `consumed` 的票再次 verify 返回同一结论、不重复写入(幂等)。kit 不写 agent 配置(F8 不变),只读做基线;配置备份 0700 / 0600,`uninstalled` 后 30 个 UTC 日删除。
+  > **冻结后订正 N1-1(2026-11-02,§20.15 / R20-15.29)**:「kit 不写 agent 配置(F8 不变)」改为「kit 只经前台、TTY 确认的 `rsi hooks --write` 写 §20.15 列出的 kit 钩子条目;其余 agent 配置仍只读」。安装票绑定 hooks 账本代次,票在途期间发生任何 `rsi hooks --write` 事务即作废、须重出票;不对 kit 命令做宽泛剔除。
 - R21-15.6 `[V5]` **停用状态机**:`disable_requested → disabled → cleanup_pending → uninstalled | manual_recovery_required`。`uninstalled` 只表示「可归属的配置差异已撤销」,`rsi status` 对每个 `uninstalled` 常驻一句「部署恢复不等于安全事件恢复」;**不存在 `restored` 状态**(v3.1 第三轮 M9;§3.6 安装票段的「`restored` 后 30 天删除」读作 `uninstalled`,§21.22 Q-G)。停用由会话 agent 以「不加载、**不执行其卸载脚本**」的方式移除(可测:带卸载脚本哨兵的样本包,停用后哨兵不存在),kit 核对;agent 起不来 / 停用失败 → 停在 `disable_requested`,下一次任何 kit 命令提示手动处理并给出要删的条目;只撤销可归属的配置差异,遇到无关改动即停,不整文件覆盖。
 - R21-15.7 `[V5]` 观察:`adopted` = 20 个有观测会话无硬失败且目标能力被调用 ≥ 3 次;不是安全证明。
 - R21-15.7a `[V5]` **记录正文**:`capabilities/<agent>/<capability>.md` 的普通记录(三种写法:「本机已安装且验证」「仅推荐候选」「未安装时的替代做法」)是 `category=capability_note` 的候选,走完整的 G0–G9 与灰度,与扩展是否安装相互独立。
@@ -5155,6 +5235,8 @@ agent-kit rsi exec-confirm <id>                                           [V6a]
 | 44  | R20-3.3.1 / R20-3.3.4 hint 参数与去重 | 只接受 `--agent`(P1 `--format`);同一 agent 30 分钟只输出一次                        | 新增 `--canary`(只由「每会话开始一次」的钩子形状传入,R21-6.2);`--canary` 的分组路径不受 30 分钟去重,计数行去重不变;`rsi hooks` 的片段相应追加(v2 A5)                                                                                                                                                                                                                                                                                                            | V1       | 否(规划;hint 未实现)                                                                                                           |
 | 45  | §19.7 `HOME_WRITE_TABLE` 条数         | 12 条;§20.9 第 13 条(v2 A5)另加第 13 条 pi 扩展                                     | 本节**不新增**条目;条数按 v2 A5 是否落地为 12 或 13,与本节无关                                                                                                                                                                                                                                                                                                                                                                                                  | —        | 否                                                                                                                             |
 
+> **冻结后订正 N1-3 / N1-4(2026-11-02,R20-15.5)**:上表第 45 行的条数改为 12 条 + `kit-hooks` 三条 = 15 条(第 13 条的 pi 扩展即其中之一,不重复计入);第 29 行「F8 不变;kit 只读 agent 配置」改为「F8 对 sync 不变;kit 只经 `rsi hooks --write` 写 kit 钩子条目(§20.15),其余只读」。
+
 ### 21.19 与 §20 / R20-A0 的衔接
 
 **§20 条款的去留**:
@@ -5240,6 +5322,8 @@ agent-kit rsi exec-confirm <id>                                           [V6a]
 | 25  | R21-4.1 `canary → adopted` 标 V2     | v3.1 §10.2 V1.5「判定」                              | 一致方向:V1.5 只记录 `would_adopt`,真正的 adopted 与 stable 同期开放,避免 V1.5 产生无处可去的 adopted;列 Q-N                                                    |
 | 26  | R21-5.3 配额常量                     | v3.1 §3.5「配置只能调严」                            | **比设计稿更严**:配额不开放任何配置键(R20 开头「全部常量不可配置」);档位 lite 是唯一的「调严」途径                                                              |
 | 27  | R21-7.2 / R21-7.4 统计方法           | v3.1 §5.3(置换检验、OBF 型 spending,未写分配)        | 本节补定:MH 率比、几何均值比、四项 Bonferroni 平分、Lan–DeMets 信息时间;区间构造留给 V1.5 的 `analysis-plan v1` 附表,附表前不判通过;列 Q-O                      |
+
+> **冻结后订正 N1-5(2026-11-02)**:上表第 9 行「kit 不写 agent 配置」改为「kit 只经 `rsi hooks --write` 写 kit 钩子条目(§20.15);第三方扩展的配置仍不写」。
 
 ### 21.22 已定细节取舍(Q-A–Q-P,主代理按推荐,2026-10-23)
 
@@ -5344,3 +5428,5 @@ v3.1 已把用户决定列全;以下是落契约时新发现的契约细节取�
 修订后做第五轮评审。
 
 **第五轮评审**(2026-10-23,第 1 级 Pi GPT-6.1 Sol;范围:第四轮 5 条与其涉及条款)。第四轮 5 条全部闭合;限定范围内未发现新的高、中、低严重度问题。结论原文:「高严重度是否全部闭合:是」「§21 能否冻结:能(本轮限定范围内无冻结前必须修复项)」。据此 §21 状态改为**冻结**(节首状态行)。评审自述:结论只针对指定范围,不表示对 §21 其它条款重新做了全量评审——第一轮是全量评审,第二至五轮是逐轮收窄的定向复核。
+
+**冻结后订正 N1(2026-11-02)**:用户拍板 N1 = B(kit 合并写 claude / codex 钩子配置)。按节首规则原位加标注:N1-1(R21-15.5 安装票)、N1-2(R21-6.2 `--canary` 钩子安装方式)、N1-3 / N1-4(§21.18 第 45、29 行)、N1-5(§21.19 第 9 行)。规则正文在 §20.15;方案评审见 §20.15-10。其余 §21 条款不受影响。
