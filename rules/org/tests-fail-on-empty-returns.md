@@ -11,7 +11,7 @@ created: 2026-11-01
 review_by: 2027-02-01
 evidence:
   - type: external
-    ref: 'https://github.com/unclebob/ub-mode/blob/57a8bdd28e45ed41900ace0bafa2ff76dd9ed70f/SKILL.md'
+    ref: 'sha256:4120873db2e3681ea9b7de4d7105fc9d3406657c9ada91ce77b9b3c4962f3202'
     excerpt: 如果所有函数都什么也不返回时测试仍能通过,就删掉这个测试
 verifier:
   type: replay

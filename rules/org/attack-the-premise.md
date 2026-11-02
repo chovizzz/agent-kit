@@ -11,7 +11,7 @@ created: 2026-11-01
 review_by: 2027-02-01
 evidence:
   - type: external
-    ref: 'https://github.com/unclebob/ub-mode/blob/57a8bdd28e45ed41900ace0bafa2ff76dd9ed70f/SKILL.md'
+    ref: 'sha256:4120873db2e3681ea9b7de4d7105fc9d3406657c9ada91ce77b9b3c4962f3202'
     excerpt: 同一前提下的两次修复都过不了同一道检查时,先把前提写成一句话并拆掉,再试下一个修复
 verifier:
   type: replay
