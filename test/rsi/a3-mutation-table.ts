@@ -153,7 +153,7 @@ export interface A3MutationResult {
 
 /** javis 上的实测结果(执行器输出后登记;没有结果的变异不算数) */
 export const A3_RESULTS: readonly A3MutationResult[] = [
-  // 2026-11-02 javis 私有检出 @ 10b6e1c:基线 127 例全绿、0 skipped;每条还原后逐文件 sha256 一致;javis HOME 下 .local/state/agent-kit 前后不变
+  // 2026-11-02 javis 私有检出 @ 5415f8a(首轮 @ 10b6e1c 结果相同):基线 129 例全绿、0 skipped;每条还原后逐文件 sha256 一致、git 干净;javis HOME 下 .local/state/agent-kit 前后不变
   {
     id: 'throttle-flipped',
     killedBy: [
