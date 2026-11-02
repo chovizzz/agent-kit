@@ -235,24 +235,29 @@ async function writeRun(
       const obs = await observeRsi(io, ctx.env);
       const why = refusal(obs);
       if (why !== null) return { kind: 'refused' as const, why };
+      // 锁内执行配置 = 这次观测(A3 Pi 代码评审 #1,同 worker):绑定、检查点与采集用同一份配置;仓库根变了 → RSI_NOT_RUN reason=binding_changed(退 4,零业务写入)
+      if (obs.config.status !== 'on' || obs.config.repo !== sctx.config.repo) {
+        return { kind: 'refused' as const, why: 'binding_changed' as const };
+      }
+      const rctx: RsiServiceCtx = { ...sctx, config: obs.config };
       const gate = makeGate(lock, deps.run?.beforeWrite);
       const hooks = hooksFromGate(gate);
       // ② 恢复未完成的提交
-      const recovered = await recoverUnderLock(sctx, lock, hooks);
+      const recovered = await recoverUnderLock(rctx, lock, hooks);
       // ③ purge journal(R20-3.8.5 ②):confirmed 且合规 journal 在场 → 先续做(purge 五阶段 / salvage 三阶段,按 mode 分派);
       //   invalid / unreadable 在这里**不处理**(salvage 只属于前台 `purge --resume --write`,后台不得静默清空暂存摘录),交给 ④ 的 resumeTaint 抛 journal_invalid / purge_incomplete
       const confirmed = obs.state.state === 'confirmed';
-      const jp = await detectPurgeJournal(sctx);
+      const jp = await detectPurgeJournal(rctx);
       if (confirmed && jp.state === 'present') {
         // 续做失败 → purge_incomplete(R20-3.8.5:其它写入方遇到无法完成的 journal;熔断按 safety 由 A3 记);失锁照旧是 lock_lost
         try {
-          await resumePurgeUnderLock(sctx, lock, { hooks });
+          await resumePurgeUnderLock(rctx, lock, { hooks });
         } catch (e) {
           throw mapPurgeResumeError(e);
         }
       }
       // ④ taint 续做
-      await resumeTaintWith(sctx, lock, hooks);
+      await resumeTaintWith(rctx, lock, hooks);
       const identity = obs.identity;
       if (identity === null) throw new RsiFailClosedError('internal');
       const l0: L0Deps = {
@@ -272,7 +277,7 @@ async function writeRun(
           checkpoint: confirmedCheckpoint({ io, env: ctx.env, binding, nowMs, startedAtMs }),
           stateMutator,
         };
-        const r = await runL0UnderLock(sctx, lock, input, runDeps);
+        const r = await runL0UnderLock(rctx, lock, input, runDeps);
         return {
           kind: 'ran' as const,
           state: 'confirmed' as const,
@@ -281,8 +286,8 @@ async function writeRun(
         };
       }
       // armed(首次 / 失效后):taint 之后只校正 staged.tainted;只列举,不建盐、不读正文、不写 counts 的其余段
-      const t = await taintNewlyExcludedWith(sctx, lock, { source: 'exclude' }, hooks);
-      if (t.runsMarked + t.promotesMarked > 0) await correctStagedTainted(sctx, lock, hooks);
+      const t = await taintNewlyExcludedWith(rctx, lock, { source: 'exclude' }, hooks);
+      if (t.runsMarked + t.promotesMarked > 0) await correctStagedTainted(rctx, lock, hooks);
       const binding = bindingOf({ identity, confirmedAt: null });
       const input: RunL0Input = {
         trigger: 'tick',
@@ -302,7 +307,7 @@ async function writeRun(
         }),
         stateMutator,
       };
-      const r = await runArmedUnderLock(sctx, lock, input, runDeps);
+      const r = await runArmedUnderLock(rctx, lock, input, runDeps);
       return {
         kind: 'ran' as const,
         state: 'armed' as const,

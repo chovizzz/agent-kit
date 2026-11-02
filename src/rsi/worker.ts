@@ -58,6 +58,8 @@ import { detectPurgeJournal, resumeTaintWith, taintNewlyExcludedWith } from './s
 import { defaultState, tickStateMutator } from './services/tick-state.js';
 import { autoSkip } from './skip.js';
 import { RsiSnapshotError } from './snapshot-read.js';
+import { inspectSnapshot } from './snapshot.js';
+import { productionSnapshotValidator } from './validators.js';
 import { RsiFailClosedError, type RsiServiceCtx } from './types.js';
 
 type Env = Readonly<Record<string, string | undefined>>;
@@ -317,7 +319,15 @@ export async function runWorker(deps: RsiWorkerRunDeps = {}): Promise<WorkerResu
     return { kind: 'skipped_pre_lock', why: 'lock_error' };
   }
   try {
-    return await underLock(sctx, lock, env, deps, now, nowMs);
+    const r = await underLock(sctx, lock, env, deps, now, nowMs);
+    // 截断放在本轮全部追加之后(Pi 代码评审 #5):持锁写入方改写后 ≤ 200 行;不可记录 / 锁内拒绝(零业务写入)的分支不碰日志
+    if (
+      (r.kind === 'ran' && r.recorded) ||
+      (r.kind === 'refused_in_lock' && r.why === 'breaker_open')
+    ) {
+      await compactLog(io, lock).catch(() => undefined);
+    }
+    return r;
   } finally {
     await lock.release().catch(() => undefined);
   }
@@ -356,7 +366,6 @@ async function underLock(
       }
     }
     await resumeTaintWith(sctx, lock, hooks);
-    await compactLog(io, lock);
 
     // 残留 attempt:上一次在读阶段崩溃 → 先记一次 crashed(R20-6.4),再按更新后的熔断决定本轮(Pi 评审 R2)
     {
@@ -372,6 +381,12 @@ async function underLock(
     const obs2 = await observeRsi(io, env);
     const why2 = refusalOf(obs2);
     if (why2 !== null) return { kind: 'refused_in_lock', why: why2 };
+    // 本轮的执行配置 = 锁内最新观测(Pi 代码评审 #1):运行绑定、检查点与实际采集 / 列举 / taint 用同一份配置快照。
+    // 打开上下文时的配置可能已过期(收紧的排除 / overlay 在拿锁前写下);仓库根变了则 io 与锁都不再对应 → 拒绝本轮
+    if (obs2.config.status !== 'on' || obs2.config.repo !== sctx.config.repo) {
+      return { kind: 'refused_in_lock', why: 'repo_changed' };
+    }
+    const rctx: RsiServiceCtx = { ...sctx, config: obs2.config };
 
     // 熔断
     const s1 = await stateForWrite(io);
@@ -421,9 +436,9 @@ async function underLock(
         checkpoint: confirmedCheckpoint({ io, env, binding, nowMs, startedAtMs }),
         stateMutator,
       };
-      outcome = (await runL0UnderLock(sctx, lock, input, runDeps)).outcome;
+      outcome = (await runL0UnderLock(rctx, lock, input, runDeps)).outcome;
     } else {
-      await taintNewlyExcludedWith(sctx, lock, { source: 'exclude' }, hooks);
+      await taintNewlyExcludedWith(rctx, lock, { source: 'exclude' }, hooks);
       const binding = bindingOf({ identity, confirmedAt: null });
       const input: RunL0Input = {
         trigger: WORKER_TRIGGER,
@@ -443,7 +458,7 @@ async function underLock(
         }),
         stateMutator,
       };
-      outcome = (await runArmedUnderLock(sctx, lock, input, runDeps)).outcome;
+      outcome = (await runArmedUnderLock(rctx, lock, input, runDeps)).outcome;
     }
     await pruneReservations(io, lock, nowMs());
     return { kind: 'ran', outcome, recorded: true };
@@ -454,7 +469,7 @@ async function underLock(
 
 /**
  * 结束记账:跳过类只写日志一行;失败类按可记录性写熔断(state.json + 日志 + 清单);不可记录 → 零写入。
- * 记账本身失败(含提交前复验发现数据损坏)→ 放弃记账、零额外写入。
+ * 失败类先做无副作用的全量复验,不通过(数据损坏)→ 放弃记账、零写入;通过后开始写,之后若再失败(如 I/O)是部分提交,由下一个持锁写入方的 recover 收拾。
  */
 async function finish(
   sctx: RsiServiceCtx,
@@ -470,6 +485,8 @@ async function finish(
       await commitLogOnly(sctx, lock, { action: 'skipped', code: outcome });
       return { kind: 'ran', outcome, recorded: true };
     }
+    // 先做无副作用的全量复验(Pi 代码评审 #2):数据文件已损坏 → 放弃记账、零写入;通过之后才改写 state.json
+    await inspectSnapshot(sctx.io, productionSnapshotValidator);
     const s = await stateForWrite(sctx.io);
     const next = applyBreaker({ ...s.prev, attempt: null }, outcome, now(), halfOpen);
     await commitState(sctx, lock, next, s.rawConfirm, { action: 'failed', code: outcome });

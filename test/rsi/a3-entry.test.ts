@@ -61,7 +61,11 @@ describe('src/cli.ts main():__rsi 动态转交到 hook-entry(进程内调用与�
       return { code, out, err };
     };
     expect(await run(['__rsi', '--background'])).toEqual({ code: 0, out: '', err: '' });
-    expect(await run(['--root', '/tmp', '__rsi', '--background'])).toEqual({ code: 2, out: '', err: '' });
+    expect(await run(['--root', '/tmp', '__rsi', '--background'])).toEqual({
+      code: 2,
+      out: '',
+      err: '',
+    });
     expect(await run(['__rsi', 'x'])).toEqual({ code: 2, out: '', err: '' });
   });
 });

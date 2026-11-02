@@ -14,10 +14,11 @@ import { mkdirp, remove, writeFile } from '../../src/io/safe-fs.js';
 import { windowIndex } from '../../src/rsi/services/breaker.js';
 import { runWorker, type RsiWorkerRunDeps } from '../../src/rsi/worker.js';
 import { makeTempDir } from '../helpers/tmp.js';
-import { foreignLock, makeTickFx, rsiJson, type TickFx } from './b5a-fixture.js';
+import { foreignLock, makeTickFx, rsiJson, runCmd, type TickFx } from './b5a-fixture.js';
+import { runTick } from '../../src/rsi/tick.js';
 import { jl, put as putSession, uuid } from './l0-fixture.js';
 import { buildChild, runChild } from './proc/helper.js';
-import { treeOf } from './rsi-fixture.js';
+import { rsiToml, treeOf, writeCfg } from './rsi-fixture.js';
 import { NOW, baseState, seed } from './ro-fixture.js';
 
 const T = Date.parse(NOW);
@@ -407,18 +408,82 @@ describe('R20-5.7 / R20-6.2 锁占用、update 忙、预留清理', () => {
     expect(left).toEqual([`claude-${w}`, `claude-${w - 1}`, `pi-${w - 2}`, 'notes.txt'].sort());
   });
 
-  it('log.jsonl 截断到最近 200 行(R20-6.7)', async () => {
-    const f = await makeTickFx('a3-w-log-');
-    const line = (i: number): string =>
-      `${JSON.stringify({ action: 'skipped', at: iso(T - 1000 * (300 - i)), code: `c${i}`, trigger: 'poke' })}\n`;
-    let body = '';
-    for (let i = 0; i < 250; i++) body += line(i);
-    await writeFile(f.io, path.join(f.rsiDir, 'log.jsonl'), body, { mode: 0o600 });
-    await runWorker(wdeps(f));
-    const lines = await logLines(f);
-    expect(lines.length).toBeLessThanOrEqual(201);
-    expect(lines[0]?.['code']).toBe('c50');
-    expect(lines.at(-1)).toMatchObject({ action: 'completed' });
+  it('log.jsonl 截断到最近 200 行(R20-6.7):在本轮全部追加之后截断,结束时恰好 200 行', async () => {
+    for (const [initial, over] of [
+      [199, {}],
+      [200, {}],
+      [250, {}],
+      [200, { update: true }],
+    ] as [number, { update?: boolean }][]) {
+      const f = await makeTickFx('a3-w-log-');
+      const line = (i: number): string =>
+        `${JSON.stringify({ action: 'skipped', at: iso(T - 1000 * (300 - i)), code: `c${i}`, trigger: 'poke' })}\n`;
+      let body = '';
+      for (let i = 0; i < initial; i++) body += line(i);
+      await writeFile(f.io, path.join(f.rsiDir, 'log.jsonl'), body, { mode: 0o600 });
+      if (over.update === true) {
+        const dir = path.join(f.home, '.local', 'state', 'agent-kit', 'update');
+        await mkdirp(f.fx, dir, 0o700);
+        await writeFile(f.fx, path.join(dir, 'lock'), JSON.stringify({ pid: 4242 }), {
+          mode: 0o600,
+        });
+      }
+      await runWorker(wdeps(f, T, { isAlive: (p) => p === 4242 }));
+      const lines = await logLines(f);
+      const label = `${initial}${over.update === true ? '+update_busy' : ''}`;
+      expect(lines.length, label).toBe(Math.min(initial + 1, 200));
+      expect(lines.at(-1), label).toMatchObject({
+        action: over.update === true ? 'skipped' : 'completed',
+      });
+      if (initial + 1 > 200) expect(lines[0]?.['code'], label).toBe(`c${initial + 1 - 200}`);
+    }
+  });
+});
+
+describe('Pi 代码评审修正', () => {
+  it('#1 打开上下文之后、锁内观测之前收紧排除:本轮按新排除执行,不采被排除项目的会话', async () => {
+    const f = await makeTickFx('a3-w-stale-', { confirmed: true });
+    const r = await runWorker(
+      wdeps(f, T, {
+        afterLock: () =>
+          writeCfg(f, rsiToml(f, `exclude_dirs = [${JSON.stringify(path.join(f.dir, 'work'))}]\n`)),
+      }),
+    );
+    expect(r).toMatchObject({ kind: 'ran', outcome: 'ok' });
+    const sig = path.join(f.io.stateDir, 'signals', 'claude');
+    const files = (await exists(sig)) ? await readDir(sig) : [];
+    let text = '';
+    for (const e of files) text += await readText(path.join(sig, e.name));
+    expect(text).toBe('');
+  });
+
+  it('#1(同一模式在 rsi tick --write 里):拿锁之后收紧排除 → 本轮按新排除执行', async () => {
+    const f = await makeTickFx('a3-w-stale-tick-', { confirmed: true });
+    const r = await runCmd(f, runTick, ['--write'], {
+      afterLock: () =>
+        writeCfg(f, rsiToml(f, `exclude_dirs = [${JSON.stringify(path.join(f.dir, 'work'))}]\n`)),
+    });
+    expect(r.code).toBe(0);
+    const sig = path.join(f.io.stateDir, 'signals', 'claude');
+    const files = (await exists(sig)) ? await readDir(sig) : [];
+    let text = '';
+    for (const e of files) text += await readText(path.join(sig, e.name));
+    expect(text).toBe('');
+  });
+
+  it('#2 失败记账前先全量复验:counts.json 已损坏(安全阻断)→ 不改 state.json、不写日志、不提交清单', async () => {
+    const f = await makeTickFx('a3-w-corrupt-', {
+      confirmed: true,
+      state: { consecutive_failures: 1 },
+    });
+    await seed(f, { raw: { 'counts.json': '{"schema_version":1}' } });
+    const before = await treeOf(f.io.stateDir);
+    f.audit.length = 0;
+    const r = await runWorker(wdeps(f));
+    expect(r).toEqual({ kind: 'ran', outcome: 'counts_invalid', recorded: false });
+    const writes = f.audit.filter((c) => c.op !== 'mkdirp' && !c.path.endsWith('/lock'));
+    expect(writes).toEqual([]);
+    expect(await treeOf(f.io.stateDir)).toEqual(before);
   });
 });
 
