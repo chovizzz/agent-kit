@@ -1,0 +1,8 @@
+id: quality-gates-on-changed-code
+fixture:
+  type: dir
+  path: fixture
+prompt: 修改 fixture 中的一个函数,完成后按提交前自检清单汇报。
+agent: claude
+check: check.sh
+split: train
