@@ -1870,6 +1870,8 @@ agent-kit judge   --run <run_id> [--run-llm --allow-egress] [--max-calls N(1..10
 - **干跑的 `project_key` 计数(S10-rc34,供用户填 `reflect.team_project_keys`)**:干跑且至少装载到一条信号时,`--json` 摘要**只增加一个可选键** `project_key_counts`:`[{project_key, sessions, signals}]`,按 `project_key` 升序;`sessions` = 该 key 下不同 `session_ref` 数(同 key 多会话各计一次),`signals` = 装载通过的信号条数;**只有加盐哈希 id 与计数,不含路径/文本**;形状不是 `p_<16 位十六进制>` 的 key(被篡改的信号库)不列出。无信号或真跑时该键缺省,其余键与旧形状逐字节不变;文本输出在末尾新增一段 `project_keys(…)` 逐行列出同样内容。本契约与脱敏文档对计数小的 key 没有 k-匿名/合并显示的规定,故不设阈值(待定夺)。`signals collect --dry` 不加此输出:其盐可能是临时盐,算出的 `project_key` 与落盘信号不一致,填进白名单会失效。
 - stdout:人类可读摘要;`--json` 为 canonical JSON(基础键集合固定,另含上条列出的可选键),**只含计数、枚举、id、哈希**,绝不含摘录/提示/任何文本。stderr 只含稳定码(`REFLECT_USAGE|NOT_RUN|FAIL_CLOSED reason=<码>`)或用法提示(用法错可能回显用户自己输入的参数名/值,如 `未知参数:--x`),不带异常消息、不带任何信号/提示/LLM 文本。
 
+> **A4 订正 #6(§20.16)**:追加两个入口:`agent-kit rsi digest --agent <a> --json`(R20-16.5–16.13)与 `agent-kit reflect --ingest - --digest <id> --agent <a> --owner @h [--json]`(R20-16.14–16.17)。ingest 只写暂存区、不 apply、不调用任何 LLM;提案的 `reflector.provenance = session_declared`(R20-16.19)。§21.18 第 3 条所说「§17.1 ingest 修订」即指本标注。
+
 ### 17.2 退出码
 
 | 码  | `reflect`                                                                                                                     | `judge`                                                                                    |
@@ -3532,6 +3534,7 @@ S7c-A 给 home-fs 追加三个原语(都走同一套「表内 + planScope + 逐�
 通用约定(沿用 §17 / §18 / §19):
 
 - stdout 只含计数、枚举、id、哈希前缀;`--json` 为 canonical JSON、键集合固定。**唯一例外**:`rsi projects` 与 `rsi confirm` 输出经清洗的目录名(R20-3.5.2),`rsi projects --paths` 输出经清洗的绝对路径(R20-3.5.3)。stderr 只含稳定码 `RSI_<类别> reason=<码>` 或本节的顶层稳定码,不回显异常消息、文件内容、绝对路径、用户名、项目名。
+  > **A4 订正 #1(R20-16.8–16.11)**:追加一个受限例外:`rsi digest --json` 输出当前项目「采集中」证据的 `excerpt_redacted` 原文(不可信标记包裹),仅限经 X / U 剔除、项目过滤、当前规则复扫与路径泄漏闸之后的内容;其它项目只给计数。
 - 单行日志用 `canonicalJsonLine`(与 `canonicalJson` 同键序规则,但无缩进、无多余空白、恰一个末尾 `\n`;§20.9 第 20 条)。
 - 数字参数用 `parseDecimalUint`;未知参数、重复的单值参数、`--x=y` 写法一律退出 2 `RSI_USAGE reason=unknown_arg`(poke / hint 例外,见 R20-3.2.1 / R20-3.3.1)。
 - 退出码沿用 §2,多结果用 `combineExitCodes`(3 > 2 > 1 > 4 > 64 > 0)。
@@ -3677,6 +3680,8 @@ agent-kit __rsi --background          (内部入口,不进 --help、不在 COMMA
 | `RSI_FAIL_CLOSED reason=`               | 配置:`cfg_symlink`、`cfg_owner`、`cfg_perm`、`cfg_not_regular`、`cfg_too_large`、`cfg_unreadable`、`cfg_parse`、`cfg_schema`、`repo_invalid`、`overlay_invalid`、`exclude_invalid`;状态:`state_invalid`、`state_dir_unsafe`、`index_invalid`、`cursor_invalid`、`counts_invalid`、`snapshot_invalid`、`journal_invalid`、`signal_store_corrupt`、`salt_invalid`、`redactor_init`、`staging_too_large`、`staging_unsafe_entry`;运行:`lock_lost`、`write_denied`、`purge_incomplete`、`output_leak`、`internal` | 3    |
 | 计数码(不改退出码,只进 `--json` 与日志) | `RSI_FILE_TOO_LARGE`、`RSI_LIMIT_FILES`、`RSI_LIMIT_BYTES`、`RSI_LIMIT_TIME`、`RSI_LIMIT_DEPTH`、`RSI_LIMIT_ENTRIES`、`RSI_INDEX_FULL`                                                                                                                                                                                                                                                                                                                                                                        | —    |
 | P1 预留(不实现)                         | `RSI_INGEST_TOO_LARGE`、`RSI_STAGING_FULL`、`RSI_DIGEST_*`、`RSI_SESSION_*`                                                                                                                                                                                                                                                                                                                                                                                                                                   | —    |
+
+> **A4 订正 #2(R20-16.21)**:上表 P1 预留的 `RSI_INGEST_TOO_LARGE`、`RSI_STAGING_FULL`、`RSI_DIGEST_*`(落实为 `RSI_DIGEST_REJECTED`)、`RSI_SESSION_*`(落实为 `RSI_SESSION_DENIED`)随 A4 启用,另增 `RSI_INGEST_REJECTED`;`RSI_NOT_RUN reason=` 追加 `purge_pending`、`digest_backlog`、`policy_changed`。
 
 配置类原因码只在**前台命令确实需要读配置并因此无法继续**时以 `RSI_FAIL_CLOSED` 报出(例如 R20-4.8 的暂存区即时闸);`rsi status` 遇到同样的配置问题退出 0、在 `reason` 字段里报码;自动入口一律静默空操作。设计稿里的顶层码 `RSI_INDEX_INVALID` 在本节写作 `RSI_FAIL_CLOSED reason=index_invalid`(与 §19 风格一致)。
 
@@ -3965,6 +3970,8 @@ rsi 的锁(仓库 `.state/`)与 update / sync 的锁(HOME 下 `.local/state/agen
 | **A3**(poke / hint / worker)                                            | 假时钟:节流窗口、L0 6h、三类结果对熔断、半开、时钟回拨;R20-1.6 每个跳过条件零写入;R20-1.2a 真实 `dist/cli.js` 子进程四组合下 poke / hint 的 stdout、stderr 为空;poke 不读 stdin(永不关闭的管道下 2s 内退出);hint ≤ 200 字节(计数取极值)、无路径(植入种子路径与种子目录名,输出 grep 为 0)、失败输出空;poke、hint、worker、各前台入口的 import 闭包分别不含 `llm-exec` / `reflect/backends/**` / `net.ts`;`KIT_RSI_CHILD=1` 全空操作;`PI_CODING_AGENT_DIR` 已设时 worker 记 pi `not_evaluated`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | 节流比较取反;去掉预留检查(两个 poke 都 spawn);attempt 在读文件之后才写;hint 去掉字节上限;`KIT_AUTO_RSI` 判断去掉;rsi 入口改回经 `launchCurrent`                                                                                                                                                                                                 |
 | **隐私(N5 / N6 / N7)**                                                  | N5:首次 `armed` 下 `.state/{signals,sessions,salt}`、`projects.json`、`cursor.json` 不存在,`confirm` 后的 `tick --write` 才出现;N6:purge 与写下排除后,命中 run 的 `excerpt` 全空、`apply.patch` 不存在、`TAINTED` 存在,相关 promote 产物的 `promote.patch` 不存在,`promote --run` / `judge` 给 `RSI_RUN_TAINTED`,外部可见输出(stdout / stderr / `--json`)、暂存与 promote 文件、`log.jsonl` 三处 grep 被排除项目的种子摘录与种子路径均为 0;taint 落盘前的窗口(排除已写、未跑任何持锁命令)同样拒;N7:索引损坏时 `judge --run-llm`(stub)零调用、`RSI_RUN_ATTRIBUTION_UNKNOWN`;配置是符号链接或权限过宽 → `off`;索引损坏 → 计数全归 U,`--rebuild-index --write` 后恢复                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | taint 顺序改成先清摘录后写标记(两步之间注入崩溃,读路径放行 → 红);即时闸去掉;U 证据放行到 judge                                                                                                                                                                                                                                                  |
 
+> **A4 订正 #3**:A4 的验收项与必须覆盖的变异点见 R20-16.22–16.27。
+
 ### 20.9 与现有契约的衔接 / 修订清单
 
 「先改」= 必须在对应块实现之前改既有条款(否则实现违反现行契约或撞现有测试);「随块」= 与实现同一 PR 订正。
@@ -3992,6 +3999,8 @@ rsi 的锁(仓库 `.state/`)与 update / sync 的锁(HOME 下 `.local/state/agen
 | 19  | §19.5 后台 worker 只对 TTY 前台命令调度                                          | rsi 的 poke 来自钩子、天然非 TTY,不复用 update 的 TTY 闸,用 R20-1.6 / R20-1.7 自己的闸;update 的闸不变                                                                                                                                                                                                                                                                                                                                                                                                | 随块(A3)                                                 |
 | 20  | §5「确定性序列化」                                                               | 追加 `canonicalJsonLine`(单行,键序同 `canonicalJson`)                                                                                                                                                                                                                                                                                                                                                                                                                                                 | **先改**(A1)                                             |
 | 21  | §18.2 `promote --run` 产物                                                       | `.state/promote/<id>/` 可被 taint(删 `promote.patch`、`pr-body.md`,写 `TAINTED`);`promote --run` 的「同 id 已存在且一致 → 退出 0」对 tainted 目录改为 `RSI_RUN_TAINTED`                                                                                                                                                                                                                                                                                                                               | **先改**(A2) (订正见 §20.14 B5 订正 B5g-4)               |
+
+> **A4 订正 #5(R20-16.18–16.20)**:上表第 15 条的 `provenance` 随 A4 落地:取值 `spawned | session_declared`,LLM 路径显式写 `spawned`;`session_declared` 一律视为厂商不可证明;`vendor` 或推导结果为 `unknown` 一律 `REFLECTOR_UNVERIFIABLE`。
 
 > **N1 订正(R20-15.5)**:上表第 13 条的 pi 扩展并入 `kit-hooks` 三条之一(`.pi/agent/extensions/agent-kit-rsi.ts`),与 claude / codex 的 `json-merge` 两条一起随 A5 入表。
 
@@ -4031,6 +4040,8 @@ rsi 的锁(仓库 `.state/`)与 update / sync 的锁(HOME 下 `.local/state/agen
 ### 20.10 P1 / P2 占位(只写接口与不变量,不写细则)
 
 > **N1 订正(§20.15)**:下表 `rsi hooks` 一行的「claude / codex 只打印片段」由 §20.15 取代:claude / codex / pi 都有 `--print` / `--install` / `--uninstall` / `--restore`,`--write` 受形状核实闸(R20-15.9);`hint --format` 的输出形状写进形状表(R20-15.8)。
+
+> **A4 订正 #4(§20.16)**:下表 `rsi digest`、`reflect --ingest`、`[rsi.session]`、`reflector.provenance` 四行的细则见 §20.16;`[rsi.session]` 的 L-base 占位保持宽松,严格校验在 L-session 的 `RsiSessionSchema`(R20-16.1)。
 
 > **v3.1 修订(§21.18 第 18 条、§21.19)**:开启自动循环(`[rsi.auto] enabled`)时 claude / pi 的会话授权缺省为 S2(R21-2.3);`judge --ingest` 与 N4 对个人层不再需要,只影响 §18 手动路径;其余占位不变。
 
@@ -4765,6 +4776,80 @@ rsi 的锁(仓库 `.state/`)与 update / sync 的锁(HOME 下 `.local/state/agen
 
 2026-11-02 条文评审(第八轮,Pi GPT-6.1 Sol,限定范围):`discarding` bootstrap 已闭合;新提 1 条(中)采纳——bootstrap journal 任意状态都先补建账本,`aborted` / 目标回到 before 时提交只记 `aborted` 的空账本再删 journal,第三种值保留 journal 等 `--discard-residue`(R20-15.21);验收补「改记 `aborted` 后再次崩溃」(R20-15.31)。
 
+### 20.16 会话授权、`rsi digest` 与 `reflect --ingest`(A4,契约先行;A4 实装后订正)
+
+本节把 §20.10 占位表的 `rsi digest`、`reflect --ingest`、`[rsi.session]`、`reflector.provenance` 四行写成细则(设计稿 §6、§7.1、§7.2、§8a.3–8a.11、§9;决定 N2、N3、N4)。冲突的现行条款原位加「A4 订正」标注指回本节(§17.1、§20 通用约定、§20.3 稳定码表、§20.8.2、§20.9 第 15 条、§20.10,以及已冻结 §21 的 R21-12.9、§21.18 第 3 条)。**会话授权不是安全边界**(设计稿 §6.3):与 kit 同 UID 的 agent 本来就能读原始会话文件;授权只决定 kit 是否主动把脱敏摘录交给会话、是否接收会话交回的提案。
+
+#### 20.16-1 会话授权 `[rsi.session]`
+
+- R20-16.1 位置:用户配置 `[rsi.session]`(R20-2.1 的唯一入口;kit 只读不写)。L-base 的 `RsiBaseSchema.session` **保持「表或缺省」的宽松占位不变**;严格校验只在 L-session 层用独立的 `RsiSessionSchema` 做(R20-2.6),动态的日期判断不进任何共享 schema。L-session 失败只禁用会话授权,L0、worker、其它命令照常。
+- R20-16.2 `RsiSessionSchema`(strictObject,只做静态校验):`enabled`(布尔);`agents`(非空数组,元素 ∈ `claude|codex|pi`,不得重复);`expires`(`YYYY-MM-DD`,须是真实存在的日历日期);`auto`(`s1|s2`,缺省 `s1`;A4 只校验、不消费,消费方是 P2 / §21)。有效期范围与「`agents` ⊆ `[rsi] agents`」不在 schema 里,由 R20-16.3 的第二阶段判定。
+- R20-16.3 判定(每次 digest / ingest 调用现读现判,不缓存;本次调用开始时取一次 UTC 今天并全程沿用),按顺序取第一个命中:①表缺失,或表内 `enabled` 恰为 `false` → `off`(其余字段不校验);②过不了 `RsiSessionSchema`(含 `enabled` 非布尔、日期格式或日历非法、未知字段)→ `invalid`;③`agents` 不是 `[rsi] agents` 的子集 → `invalid`;④不满足「今天 < `expires` ≤ 今天 + 90 天」→ `expired`;⑤声明的 `--agent` 不在 `agents` → `agent_not_authorized`;⑥否则 `ok`。非 `ok` → 退出 4 `RSI_SESSION_DENIED reason=<判定>`,零写入(R20-16.12 的观察性作废除外)。
+- R20-16.4 授权策略指纹 `session_policy_fp` = sha256(canonical JSON:`[rsi.session]` 规范化后的值、`[rsi] agents`、排除项集合的哈希、overlay 有无与内容 sha256、`[rsi] repo` 的 `(dev, ino)`)。digest 记录它;ingest 用它判断「授权或排除自 digest 以来是否变过」(R20-16.15)。
+
+#### 20.16-2 `rsi digest --agent <a> --json`
+
+- R20-16.5 形状:`--json` 必填(只有 JSON 形态);`--agent` 必填且 ∈ `claude|codex|pi`;另有 `--revoke`(R20-16.12),与其它参数互斥。`--scope` 或任何未知参数 → 退出 2 `RSI_USAGE`(N3)。前置:状态须为 `confirmed`(`off` / `armed` / `stopped` 按 R20-3.0 原码退出 4);会话授权 `ok`;不存在 purge journal(否则退出 4 `RSI_NOT_RUN reason=purge_pending`)。
+- R20-16.6 **不拿 `rsi/lock`**,按快照协议读(R20-5.6;不一致重读一次仍不一致 → 退出 4 `RSI_SNAPSHOT_BUSY`)。当前项目 = cwd 经 `canonical()`(R20-4.1)的项目 key;cwd 解析不出 → `reason=no_project`;该 key 被排除 → `project_excluded`;归属不明 → `attribution_unknown`:这三种情况输出空 `clusters`(摘录数为 0),仍写 digest 记录并消耗名额(R20-16.10),以便 agent 看到原因。
+- R20-16.7 **先剔除 X / U,再聚类**:X(被排除项目)与 U(归属不明)的证据按当前配置 + 当前索引 + `counts.json` 现算(R20-4.6),在 classify / cluster、门槛判定、证据数排序与任何计数**之前**从证据集合中整体剔除;它们不影响任何簇的入选、排序与计数。剩余证据 = 当前项目「采集中」的证据 + 其它「采集中」项目的证据。复用 reflect 干跑的 classify / cluster 与门槛。
+- R20-16.8 每簇证据分两类:当前项目的证据给摘录(信号库 `excerpt_redacted` 原样,不在 digest 改写);其它采集中项目的证据只给计数 `other_evidence`(N3)。取舍(§8a.7):簇按(当前项目证据数降序、簇 id 升序)稳定排序;只有当前项目证据数 ≥ 1 的簇才入选;最多 5 簇、每簇最多 8 条摘录;单条摘录 ≤ 2KiB(collect 时已截断,不在此改写);整份输出 > 48KiB 时从末尾整簇丢弃,`truncated.clusters_dropped = n`;没有可给的簇 → 空 `clusters` + `reason=no_clusters`。
+- R20-16.9 输出 canonical JSON,键集合固定:`{digest_id, expires_at, agent, reason, clusters: [{alias, kind, evidence: [{alias, excerpt}], other_evidence}], truncated: {clusters_dropped}}`。证据别名 `e1…eN` 在整份 digest 内唯一,簇别名 `c1…`;`excerpt` 用固定的不可信标记包裹(§8a.5,标记文本登记在 `src/contracts/rsi.ts`)。输出**不含**路径、项目名、项目 key、会话 id、`sig_id`。`reason` ∈ `ok|no_project|project_excluded|attribution_unknown|no_clusters`。
+- R20-16.10 **槽位与槽位锁**:存活上限用 20 个固定槽位 `s00.json` … `s19.json`(`.state/rsi/digests/` 下只有这些合法文件名)实现;同一槽位的全部生命周期操作(预留、发布、放弃、清理、`--revoke`、ingest 读取与消费)**只在持有槽位锁 `digests/lock` 时进行**,持锁期间只做目录列举、`readFileSafe` 读、写临时文件、rename、unlink 与 fsync,不做聚类、复扫等计算(持锁时长为毫秒级)。槽位锁用 A1 的锁库(R20-5.2–5.5 同一实现:nonce、TTL 回收、`isAlive`、每个写出口前 `assertHeld()`),路径 `<realpath(stateDir)>/rsi/digests/lock`;锁序 `rsi/lock` → `digests/lock`,任何持有 `digests/lock` 的代码都不得再取 `rsi/lock`。获取:最多等 2 秒(每 50ms 试一次),仍拿不到 → 退出 4 `locked`(`--revoke` 同样)。**协议**:①预留(持锁):先清理(删内容已过期的槽位、删「预留超过 10 分钟仍未发布」的槽位),再取序号最小的空位写入预留文件 `{reserved: <token>, at}`(token = 16 位随机十六进制,同时记在本进程内存);无空位 → 退出 4 `RSI_NOT_RUN reason=digest_backlog`。②计算与复扫、最终复核(不持锁)。③发布(持锁):读本槽位,内容必须仍是本进程的预留 token(否则说明已被回收,放弃:退出 4 `RSI_NOT_RUN reason=policy_changed`,不碰该槽位);是 → 临时文件写完 → fsync → rename 覆盖本槽位 → fsync 目录。④放弃(持锁):只在本槽位内容仍是本进程 token 时删除。检查与 rename / unlink 在同一次持锁内完成,**在锁互斥成立时**旧持有者不能覆盖或删除新持有者的文件。**保证强度如实继承 A1**:A1 锁在陈旧锁回收时有已登记的双持有窗口(§20.5「A1 实装后订正」:回收前复读不是条件删除,`assertHeld()` 不是 fencing),在锁可被回收(R20-5.5:持有 pid 已不存在,或锁文件为空 / 内容损坏超过 10 秒宽限——后者不要求原进程已死,例如创建锁文件后、写完内容前被暂停)且两个进程并发回收、精确交错时可能出现。该窗口内可能发生的后果限于:①某个 digest 或预留被误删或被覆盖(可用性,对应 agent 重新 `rsi digest` 即可);②一次 `--revoke` 或清理对某份 digest 未生效(撤销本就是尽力,R20-16.12)。**隐私闸不依赖槽位锁的严格互斥**(其中策略指纹比对发生在第 3 步持槽位锁期间,但其有效性不以互斥为前提):ingest 的授权策略指纹、逐条归属复核、严格批次、复扫与提交前最终复核(R20-16.15 第 1、8、9、11、12 步)照常执行;digest 的输出复扫与最终复核(R20-16.11)同样不经槽位锁。
+- R20-16.11 **输出前复扫与最终复核**(设计稿 §8a.3、§9):①对整份输出 JSON 文本跑当前规则的 pass2,并过路径泄漏闸(`guardOutput`:HOME、`KIT_TMP`、状态目录、仓库根的绝对路径);任一命中 → 退出 3 `RSI_DIGEST_REJECTED reason=rescan_hit|output_leak`,不写 digest 文件、不输出任何字节。②随后**最终复核**:重读用户配置(L-base + L-session)、状态(含 `STOP`)、purge journal 是否存在、快照清单代次,重算 `session_policy_fp`,并对当前项目**重新执行 R20-4.3 / R20-4.4 的元数据归属判定**(根路径身份 `(dev, ino)` 与归属结果);与开始时任一不同 → 退出 4 `RSI_NOT_RUN reason=policy_changed`(可重试),不写、不输出。③通过后写 digest 文件(R20-16.13),**写成功后才输出**;写失败 → 退出 3 `RSI_FAIL_CLOSED reason=internal`,不输出。最终复核到输出之间仍有尽力窗口(用户在此期间改配置),只能缩小、不能消除;已进入会话上下文的数据收不回(设计稿 §8a.3)。
+- R20-16.12 **作废**:digest 一次性(ingest 成功或被拒都消费它,R20-16.16)、24 小时过期。另有三条作废路径:①`rsi digest --revoke`:持槽位锁删除全部槽位文件(含预留),不拿 `rsi/lock`、不需要 TTY、不看授权状态(须能在 worker 持 `rsi/lock` 时执行),退出 0;被删预留的 digest 在发布时发现 token 不符而放弃(R20-16.10③);②**观察性作废**:digest、ingest、worker 任一次读到某 agent 的会话授权非 `ok`,或 `session_policy_fp` 与某 digest 记录的不同,即在持槽位锁时删除受影响的已发布 digest(尽力:拿不到槽位锁就跳过,不改变本次结果);③purge 删除整个 `digests/`(R20-3.8.3)。**边界如实写明**:用户把授权关掉再原样打开、期间没有任何 kit 调用时,kit 观察不到这次撤销;此时旧 digest 仍受 24 小时过期与 `--revoke` 约束,不宣称更强保证。
+- R20-16.13 digest 文件:槽位文件 `s<NN>.json`(R20-16.10);`digest_id` = `d_` + 16 位随机十六进制(严格格式),只存在文件内容里;ingest 在持有槽位锁时按 `digest_id` 逐个读 20 个槽位查找(路径由内部构造,不接受外部路径),预留文件(`reserved`)不参与匹配。内容 `RsiDigestRecord`:`{digest_id, created_at, expires_at, agent, project_key, aliases: {e1: sig_id, …}, session_policy_fp, snapshot_generation}`。读取一律经 `readFileSafe`(`O_NOFOLLOW | O_NONBLOCK`、句柄 fstat、普通文件、`nlink == 1`、属主为当前 uid、mode 0600、解析前 64KiB 上限);`digests/` 目录本身按 R20-15.21a 同类协议校验(非链接、属主、无组 / 其他写位)。读不过 → 该文件视为无效(ingest 退出 1 `digest_invalid`;清理时跳过不删,记日志)。
+
+#### 20.16-3 `reflect --ingest - --digest <id> --agent <a> --owner @h [--json]`
+
+- R20-16.14 形状:`--ingest` 只接受 `-`(stdin);`--digest`、`--agent`、`--owner` 必填;与 `--run-llm` / `--gc` / `--agent` 以外的 reflect 模式参数互斥(`mode_conflict`)。stdin 是单个 JSON 对象(与 `validateReflectorOutput` 输入同形)。先读 stdin,> 64KiB → 退出 1 `RSI_INGEST_TOO_LARGE`(不拿锁、不动 digest、不占名额)。前置:状态 `confirmed`;拿 `rsi/lock`(try-lock;拿不到 → 退出 4 `locked`,不动 digest)。
+- R20-16.15 **锁内顺序**(每步失败的去向写在括号里):
+  1. 重读配置与会话授权(非 `ok` → 退出 4 `RSI_SESSION_DENIED`,触发 R20-16.12② 观察性作废,不占名额);`STOP` 存在或 purge journal 存在 → 退出 4 原码。
+  2. 暂存容量预检(R20-6.7:50 个 run / 50MiB,按现有 `.state/reflect/` 计):已满 → 退出 1 `RSI_STAGING_FULL`(不动 digest、不占名额)。
+  3. 持槽位锁读 digest(R20-16.13 协议;拿不到槽位锁 → 退出 4 `locked`,不动 digest):不存在 / 读不过 → `digest_invalid`;过期 → `digest_expired`;`agent` 不符 → `digest_agent_mismatch`;`session_policy_fp` 与当前不同 → `digest_policy_changed`。这四种 → 退出 1 `RSI_INGEST_REJECTED`;后两种同时删除该 digest。均不占名额。
+  4. **先预留名额**(UTC 日;每个声明的 agent ≤ 2、全局 ≤ 4):按日分文件 `.state/rsi/ingest-quota/<YYYY-MM-DD>.json`(日期取本次调用的 UTC 今天;不存在 = 当日零次);读经 `readFileSafe`,写经同目录临时文件 → fsync → rename → fsync 目录。超额 → 退出 4 `RSI_NOT_RUN reason=rate_limited`(不消费 digest)。当日文件读不过或过不了 schema → 只封禁当日(退出 4 `rate_limited`),不改写它;次日自然使用新文件。每次成功预留后删除早于今天的名额文件(尽力,失败不影响结果)。名额先于消费持久化:两步之间崩溃只会多耗一次名额,不会少计。
+  5. **消费 digest**:持槽位锁重读第 3 步找到的槽位,内容的 `digest_id` 与 sha256 必须仍与第 3 步一致(否则该 digest 已被撤销或清理:整批拒 `digest_invalid`,名额照计,不碰该槽位);一致 → 删除该槽位并 fsync 目录。此后本次无论成败,digest 都已作废。
+  6. 解析 stdin;提案 > 5 条 → `RSI_INGEST_TOO_LARGE`。
+  7. 证据只能是该 digest 的别名(不在 `aliases` 里 → `alias_unknown`)。提案里的证据**保持别名形态**走完第 9 步校验;本步只由 digest 记录建立受信任的「别名 → 信号」映射(信号取自信号库),第 10 步由合并器按别名机械解析。agent 提供的 `excerpt` 及任何证据文本字段一律丢弃。
+  8. **逐条复核**每个被引用的 `sig_id`:信号仍在库(否则 `evidence_stale`);其 `project_key` = digest 的 `project_key`(否则 `evidence_stale`);该项目当前仍「采集中」(现算 X / U;否则 `project_excluded` / `attribution_unknown`)。
+  9. `validateReflectorOutput` 全量校验(`allowedAliases` = digest 的别名集合,`excerpts` 取自第 7 步的映射),输出上限参数化为 64KiB(LLM 路径仍为 32KiB);**严格批次**:返回 `ok:false` 按其 `code` 映射子码;返回 `ok:true` 但任一 `dropped` 计数非零(`evidence_alias_unknown`、`id_conflict`、`pattern_unsafe`、`echo_detected` 等)→ 整批拒,子码取首个非零类别(按类别名字典序)。LLM 路径的单条丢弃行为不变。
+  10. `mergeProposals`:按别名解析为 `sig_id`,摘录由合并器从信号库 `excerpt_redacted` 机械复制(§16);查重 / 提案 id 冲突;路径守卫模拟(`kit:reflector` 只许新增);层判定沿用 `team_project_keys`。
+  11. 生成完整暂存产物(提案、`apply.patch`、`report.json`)于内存;对其完整文本复扫(pass2 + 路径泄漏闸;命中 → `rescan_hit`);容量终检:现有 + 本批 > 上限 → 退出 1 `RSI_STAGING_FULL`。
+  12. **提交前最终复核**:重读用户配置、会话授权、`STOP`、状态,重算 `session_policy_fp`,并对 digest 的 `project_key` 重新执行 R20-4.3 / R20-4.4 的元数据归属判定(根路径身份与归属结果);与第 1、8 步的结果任一不同 → 整批拒 `policy_changed`。
+  13. `writeStage` 写 `.state/reflect/<run_id>/`,**不 apply**;每个写出口前 `assertHeld()`。`report.json` 的证据结构与 LLM 路径一致(含 `sig_id`),保证 purge 的 taint 目标计算能找到本 run(R20-3.8.4)。
+- R20-16.16 第 6–12 步的任何拒绝:整批拒,零暂存写入,退出 1 `RSI_INGEST_REJECTED reason=<子码>`;stderr 只有稳定码。`--json` 键集合固定:`{result: ok|rejected|not_run, reason, run_id, proposals}`(`run_id` 与 `proposals`(提案 id 列表)只在 `ok` 时非空)。
+- R20-16.17 **`g0_` 子码表**(落实 R21-12.9「A4 落地时登记」):ingest 拒绝 `reason` 的封闭集合,登记在 `src/contracts/rsi.ts` 的同一份枚举:`digest_invalid`、`digest_expired`、`digest_agent_mismatch`、`digest_policy_changed`、`too_many_proposals`、`alias_unknown`、`evidence_stale`、`project_excluded`、`attribution_unknown`、`output_too_large`、`not_json_object`、`schema_invalid`、`placeholder_in_output`、`output_residual`、`hidden_chars_in_output`、`injection_suspected_local`、`id_conflict`、`pattern_unsafe`、`echo_detected`、`duplicate`、`path_guard`、`rescan_hit`、`policy_changed`。validator 的拒绝 `code` 与 `dropped` 类别经**显式映射表**换成上述子码(同一文件登记):同名的原样映射;`evidence_alias_unknown → alias_unknown`。单测钉死「validator 的全部拒绝 code 与全部 dropped 类别都在映射表里,映射值都属于本枚举」;validator 新增 code 或类别而未登记 → 该单测红。运行时遇到未登记的值映射为 `schema_invalid`,只作兜底,不替代静态覆盖。
+
+#### 20.16-4 来源字段 `reflector.provenance`
+
+- R20-16.18 `Proposal.reflector` 追加 `provenance: spawned | session_declared`(可选)。LLM 路径(kit 经 backends 调用)从 A4 起显式写 `spawned`;字段缺失的旧提案按原规则判(有完整后端身份才可证明,§17.4a)。
+- R20-16.19 ingest 写入的 `reflector`:`backend` = 声明的 agent;`provider: "session"`;`model: "undeclared"`;`vendor: "unknown"`(`UNKNOWN_VENDOR`);`provenance: session_declared`;`run_id`;`kit_version`;`input_digest` = 被消费 digest 记录的 sha256。不写 `prompt_id`、`prompt_sha256`、`stub`、`guidance`。kit **证明不了**是哪个模型写的提案。
+- R20-16.20 守卫(CI `criteria.ts` 与本地 `promote` 同一口径,CI 不得比本地宽):①`provenance = session_declared` → `REFLECTOR_SESSION_DECLARED`(厂商不可证明;不得凭跨厂商证明晋升 `advisory`;N4 的人工确认路径属于后续 `judge --ingest` 块);②**unknown 等式漏洞**:`vendor = unknown` 或 `deriveVendor(backend, provider, model) = unknown` 一律 `REFLECTOR_UNVERIFIABLE`,不再只比较两者是否相等;③`isCrossVendor`、`checkC5` 对 `session_declared` 一律视为不可证明;④`checkReflectorProposalOrigin`:`provenance` 存在但不在枚举内 → `GUARD_PROPOSAL_PROVENANCE_INVALID`;`session_declared` 的提案可以随 `kit:reflector` PR 进入 `proposals/`(它只是证据,晋升仍需 judge 与人工)。
+
+#### 20.16-5 稳定码与退出码
+
+- R20-16.21 启用 §20.3 表中 P1 预留的 `RSI_INGEST_TOO_LARGE`(1)、`RSI_STAGING_FULL`(1)、`RSI_DIGEST_REJECTED`(3)、`RSI_SESSION_DENIED`(4),新增 `RSI_INGEST_REJECTED`(1);`RSI_NOT_RUN reason=` 追加 `purge_pending`、`digest_backlog`、`policy_changed`(`rate_limited` 与 R21-12.9 共用同一枚举项)。digest 退出码:0;2;3;4。ingest 退出码:0;1;2;3(`RSI_FAIL_CLOSED`:锁失效、写暂存失败等);4。
+
+#### 20.16-6 验收与必须覆盖的变异点(A4)
+
+- R20-16.22 夹具矩阵(各自精确码):授权关 / 缺表 / schema 错 / agents 非子集 / 过期 / 超 90 天 / agent 未授权;且每种都断言 L0(`tick --write`)照常可跑(分层失败)。digest:`--scope` 退出 2;非 `confirmed`;purge journal 在;快照忙;backlog 满;cwd 解析不出 / 被排除 / 归属不明时摘录为 0。ingest:超 64KiB;锁被占;容量已满 / 本批写入后越界;digest 不存在 / 过期 / agent 不符 / 策略指纹变化;名额(agent 第 3 次、全局第 5 次;当日名额文件损坏只封当日、次日恢复);超 5 条;别名越界;agent 自带摘录被丢弃(落盘摘录 = 信号库原文);话术;不可见字符;回显;id 冲突;「合法 + 非法」混合批次整批拒;排除后 / purge 后 / 授权关后用旧 digest 被拒。
+- R20-16.23 N3 与 X / U:其它项目只有计数、摘录 0;**X / U 不影响任何簇的入选、排序与 `other_evidence` 计数**(构造仅靠 X 证据才过门槛的簇,断言不入选)。
+- R20-16.24 输出复扫:规则更新后信号里的种子命中 → digest 整份拒、无文件、stdout 为空;植入 HOME 路径 → `output_leak`。截断:> 48KiB 整簇丢弃、`clusters_dropped` 正确、排序稳定。
+- R20-16.25 确定性交错(注入点):digest 读完快照后、输出前分别发生撤销授权 / 新增排除 / `rsi stop` / purge / 项目根目录被删后重建 / 项目根换成符号链接 → `policy_changed` 或原码,无输出、无文件;ingest 第 8 步之后、第 13 步之前同样六种 → 整批拒、零暂存。崩溃注入:名额已持久化、digest 未删 → 恢复后名额多计一次、digest 仍可用一次;digest 已删、暂存未写 → 无残留。安全读取:digest / 名额文件换成符号链接、FIFO、硬链接、超大文件 → 无效,不跟随、不挂住。槽位:19 个槽位已占、两个 digest 并发预留 → 恰一个成功、另一个 `digest_backlog`;预留后崩溃留下的预留文件 10 分钟后被清理;ABA 交错——A 预留后暂停超 10 分钟、槽位被回收并由 B 预留 / 发布,A 恢复后发布与放弃都不改动 B 的文件;清理者读到过期 digest 后、删除前槽位被复用(在锁互斥成立时不可达;用真实 A1 锁实现做多进程争用,断言正常争用下清理与预留不交错;陈旧锁回收的双持有窗口按上条登记为残余,不做「不可达」断言,另以注入双持有的确定性测试证明其后果只限 R20-16.10 列出的两类、隐私闸照常拒绝,注入场景包括「持锁 pid 已死」与「活进程创建空锁后暂停超过 10 秒」两种);ingest 第 3 步后槽位被 `--revoke` 再被新 digest 复用 → 第 5 步 `digest_invalid`,新 digest 不受影响。锁序:持 `digests/lock` 的代码路径取 `rsi/lock` → 单测红。
+- R20-16.26 守卫:`session_declared` → `REFLECTOR_SESSION_DECLARED`;改成 `spawned` 但缺后端身份 → `REFLECTOR_UNVERIFIABLE`;`vendor=unknown` 且推导也为 unknown → `REFLECTOR_UNVERIFIABLE`;非法 `provenance` → `GUARD_PROPOSAL_PROVENANCE_INVALID`;字段缺失、身份完整的旧提案行为不变。
+- R20-16.27 变异表(cp 备份 / 还原,每条必须红):跳过别名检查;采用 agent 摘录;跳过授权期限;X / U 剔除挪到聚类之后;跳过输出复扫;跳过最终复核;digest 不消费;名额在消费之后才写;严格批次退回单条丢弃;unknown 等式放行;`readFileSafe` 换成 `readFile`。
+
+#### 20.16-7 评审记录
+
+2026-11-02 方案评审(Pi GPT-6.1 Sol,只读):9 条(高 2、中 6、低 1)全部采纳——digest 输出前与 ingest 提交前的最终复核及尽力窗口的如实表述(R20-16.11、16.15 第 12 步、16.25);先剔除 X / U 再聚类与计数(R20-16.7、16.23);digest 绑定 `session_policy_fp`、三条作废路径与边界(R20-16.4、16.12);名额先于消费持久化(R20-16.15 第 4–5 步);暂存容量预检与终检(第 2、11 步);严格批次(第 9 步);L-base 占位不动、独立 `RsiSessionSchema`(R20-16.1);digest / 名额文件走 `readFileSafe`(R20-16.13);§20 通用输出约定加 A4 例外(见该处标注)。
+
+2026-11-02 条文评审(第一轮,Pi GPT-6.1 Sol):方案评审 9 条已落实;新提 6 条(高 1、中 5)全部采纳——最终复核重新执行项目归属判定(R20-16.11②、16.15 第 12 步、16.25);存活上限改为 20 个固定槽位的独占预留协议(R20-16.10、16.13);名额按 UTC 日分文件、损坏只封当日(R20-16.15 第 4 步);证据保持别名形态过 validator、合并器按别名解析(第 7、9、10 步);拒绝码与 dropped 类别的显式映射表与静态覆盖单测(R20-16.17);会话授权两阶段判定、取值唯一(R20-16.2、16.3)。
+
+2026-11-02 条文评审(第二轮,Pi GPT-6.1 Sol,限定范围):5 条闭合;新提 1 条(中)采纳——槽位生命周期的 ABA 竞争:全部槽位操作只在槽位锁 `digests/lock`(A1 锁库、毫秒级持有、锁序 `rsi/lock` → `digests/lock`)内进行,发布 / 放弃 / 消费在同一次持锁内核对本次 token 或内容哈希(R20-16.10、16.12、16.13、16.15 第 3、5 步),验收补 ABA 交错(R20-16.25)。
+
+2026-11-02 条文评审(第三轮,Pi GPT-6.1 Sol,限定范围):新提 1 条(中)采纳其备选建议——槽位锁沿用 A1 锁库,明确继承其陈旧锁回收的尽力保证,登记该窗口的后果只限可用性与尽力撤销、隐私闸不经槽位锁(R20-16.10);验收改为真实锁争用 + 注入双持有的后果断言,不再宣称「不可达」(R20-16.25)。未改用 `flock`:Node 无原生接口,需引入原生依赖。
+
+2026-11-02 条文评审(第四轮,Pi GPT-6.1 Sol,限定范围):后果范围判为准确;新提 1 条(中)采纳——双持有窗口的触发条件改为「锁可被回收(pid 已死,或空 / 损坏锁超过 10 秒宽限,不要求原进程已死)+ 并发回收 + 精确交错」,措辞改为「隐私闸不依赖槽位锁的严格互斥」,验收补「活进程创建空锁后暂停」注入(R20-16.10、16.25)。
+
 ## 21. 自主 RSI 契约(R21,v3.1,契约先行;V1–V6 实装后订正)
 
 > **状态:冻结(2026-10-23,第五轮评审通过)**。共五轮只读评审(Pi GPT-6.1 Sol),第五轮结论「高严重度是否全部闭合:是」「§21 能否冻结:能」;评审范围与逐轮处置见 §21.23。冻结后的改动必须以带编号的契约修订进行(原位加修订标注、在 §21.23 记录),不得静默改写。§21.22 的 Q-A–Q-P 已定。`analysis-plan v1` 附录 `§21.7a` 是冻结时已登记的待补项,由 V1.5 的契约修订补入(R21-7.13),不影响冻结。
@@ -5107,6 +5192,7 @@ agent-kit rsi exec-confirm <id>                                           [V6a]
 - R21-12.7 `[V1]` `rsi rollback --to <日期>`:按生效逆序逐个回滚该 UTC 日之后进入 `canary` 及更后状态的候选。
 - R21-12.8 `[V1]` `rsi show` 输出正文(按上面的输出例外);`report` 只输出 id、枚举、计数与 UTC 日期。
 - R21-12.9 `[V1]` **稳定码追加**(`src/contracts/rsi.ts` 的同一份枚举;动态后缀一律是封闭集合):`RSI_USAGE reason=` 追加 `bad_date`、`unknown_id`、`bad_marker`;`RSI_NOT_RUN reason=` 追加 `not_diverged`、`phase_not_available`、`rate_limited`、`ticket_expired`、`no_runtime`;顶层(1)追加 `RSI_AUTO_RESUME_BLOCKED`、`RSI_CONTRIB_DEGRADED`(V4)、`RSI_EXEC_DECLINED`(V6a);顶层(4)追加 `RSI_EXEC_NOT_RUN`(V6a,`reason` 取 R21-16.2b 守卫的封闭码表);`RSI_FAIL_CLOSED reason=` 追加 `personal_repo_invalid`、`candidate_invalid`、`ledger_line_invalid`、`txn_invalid`、`probe_error`。G0 的 `g0_<子码>` 子码集合 = ingest 受控入口的原因码表(A4 落地时登记在同一文件);`harm_<指标>` 只取 `c1|c2|c3|c4|c6`。熔断码(R21-10.2)只进 `--json` 与日志,不作 stderr 顶层码。
+  > **冻结后订正 A4-1(2026-11-02,R20-16.17)**:`g0_<子码>` 的封闭集合即 R20-16.17 列出的 ingest 拒绝 `reason`,登记在 `src/contracts/rsi.ts`;`rate_limited` 与 ingest 名额共用同一枚举项(R20-16.15 第 4 步)。
 - R21-12.10 `[V1]` **审计** `.state/rsi/audit.jsonl`(`RsiAuditLine`,0600):每个转移、每次同步、每次评估查看(含置换种子)、每次 E1 运行、每次投稿结果一行 `canonicalJsonLine` 的 `{at, kind, id, dim?, agent?, from?, to?, reason?, hashes?, counts?, seed?, exec?}`,其中 `exec` = `{started_at, ended_at, exit_code, duration_ms, cpu_ms, max_rss_kib, post_check: pass|undeclared_write|unchecked|error}`;无路径、无文本;保留 365 个 UTC 日、上限 20000 行,超出先按月汇总再删;分组账保留到候选终态后 90 个 UTC 日,之后只留聚合计数(修订 R20-7.1,§21.18 第 17 条)。
 
 ### 21.13 可见性:`rsi status` 追加键、周报与 `rsi report`
@@ -5250,6 +5336,8 @@ agent-kit rsi exec-confirm <id>                                           [V6a]
 | 43  | §20 通用约定 / R20-7.3 输出边界       | stdout 只含计数、枚举、id、哈希前缀(唯一例外 `rsi projects`)                        | 追加 §21.12「输出边界的例外」所列六处(除 hint 外都要求 TTY),仍过清洗与泄漏闸                                                                                                                                                                                                                                                                                                                                                                                    | V1 起    | 否(规划)                                                                                                                       |
 | 44  | R20-3.3.1 / R20-3.3.4 hint 参数与去重 | 只接受 `--agent`(P1 `--format`);同一 agent 30 分钟只输出一次                        | 新增 `--canary`(只由「每会话开始一次」的钩子形状传入,R21-6.2);`--canary` 的分组路径不受 30 分钟去重,计数行去重不变;`rsi hooks` 的片段相应追加(v2 A5)                                                                                                                                                                                                                                                                                                            | V1       | 否(规划;hint 未实现)                                                                                                           |
 | 45  | §19.7 `HOME_WRITE_TABLE` 条数         | 12 条;§20.9 第 13 条(v2 A5)另加第 13 条 pi 扩展                                     | 本节**不新增**条目;条数按 v2 A5 是否落地为 12 或 13,与本节无关                                                                                                                                                                                                                                                                                                                                                                                                  | —        | 否                                                                                                                             |
+
+> **冻结后订正 A4-2(2026-11-02)**:第 3 行「§17.1 / v2 §7.2 ingest」所指的 §17.1 条款,在 A4 前并不存在(引用悬空);现由 §17.1 的「A4 订正 #6」标注与 §20.16 补齐。V1 的「ingest 后候选进闸队列(`proposed`)」仍归 V1,A4 只写暂存区。
 
 > **冻结后订正 N1-3 / N1-4(2026-11-02,R20-15.5)**:上表第 45 行的条数改为 12 条 + `kit-hooks` 三条 = 15 条(第 13 条的 pi 扩展即其中之一,不重复计入);第 29 行「F8 不变;kit 只读 agent 配置」改为「F8 对 sync 不变;kit 只经 `rsi hooks --write` 写 kit 钩子条目(§20.15),其余只读」。
 
@@ -5446,3 +5534,5 @@ v3.1 已把用户决定列全;以下是落契约时新发现的契约细节取�
 **第五轮评审**(2026-10-23,第 1 级 Pi GPT-6.1 Sol;范围:第四轮 5 条与其涉及条款)。第四轮 5 条全部闭合;限定范围内未发现新的高、中、低严重度问题。结论原文:「高严重度是否全部闭合:是」「§21 能否冻结:能(本轮限定范围内无冻结前必须修复项)」。据此 §21 状态改为**冻结**(节首状态行)。评审自述:结论只针对指定范围,不表示对 §21 其它条款重新做了全量评审——第一轮是全量评审,第二至五轮是逐轮收窄的定向复核。
 
 **冻结后订正 N1(2026-11-02)**:用户拍板 N1 = B(kit 合并写 claude / codex 钩子配置)。按节首规则原位加标注:N1-1(R21-15.5 安装票)、N1-2(R21-6.2 `--canary` 钩子安装方式)、N1-3 / N1-4(§21.18 第 45、29 行)、N1-5(§21.21 第 9 行)。规则正文在 §20.15;方案评审见 §20.15-10。其余 §21 条款不受影响。
+
+**冻结后订正 A4(2026-11-02)**:A4 契约(§20.16)落地。按节首规则原位加标注:A4-1(R21-12.9 `g0_` 子码表位置)、A4-2(§21.18 第 3 行悬空引用补齐)。规则正文在 §20.16;方案评审见 §20.16-7。
