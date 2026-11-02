@@ -4783,8 +4783,8 @@ rsi 的锁(仓库 `.state/`)与 update / sync 的锁(HOME 下 `.local/state/agen
 #### 20.16-1 会话授权 `[rsi.session]`
 
 - R20-16.1 位置:用户配置 `[rsi.session]`(R20-2.1 的唯一入口;kit 只读不写)。L-base 的 `RsiBaseSchema.session` **保持「表或缺省」的宽松占位不变**;严格校验只在 L-session 层用独立的 `RsiSessionSchema` 做(R20-2.6),动态的日期判断不进任何共享 schema。L-session 失败只禁用会话授权,L0、worker、其它命令照常。
-- R20-16.2 `RsiSessionSchema`(strictObject):`enabled`(布尔,缺省 false);`agents`(非空数组,元素 ∈ `claude|codex|pi`,须 ⊆ `[rsi] agents`,不得重复);`expires`(`YYYY-MM-DD`,按 UTC 日解释,须满足「今天 < expires ≤ 今天 + 90 天」);`auto`(`s1|s2`,缺省 `s1`;A4 只校验、不消费,消费方是 P2 / §21)。
-- R20-16.3 判定(每次 digest / ingest 调用现读现判,不缓存):`ok`;`off`(表缺失或 `enabled=false`);`invalid`(过不了 schema,含 agents 不是 `[rsi] agents` 子集);`expired`(过期或超出 90 天);`agent_not_authorized`(声明的 `--agent` 不在 `agents`)。非 `ok` → 退出 4 `RSI_SESSION_DENIED reason=<判定>`,零写入(R20-16.12 的观察性作废除外)。
+- R20-16.2 `RsiSessionSchema`(strictObject,只做静态校验):`enabled`(布尔);`agents`(非空数组,元素 ∈ `claude|codex|pi`,不得重复);`expires`(`YYYY-MM-DD`,须是真实存在的日历日期);`auto`(`s1|s2`,缺省 `s1`;A4 只校验、不消费,消费方是 P2 / §21)。有效期范围与「`agents` ⊆ `[rsi] agents`」不在 schema 里,由 R20-16.3 的第二阶段判定。
+- R20-16.3 判定(每次 digest / ingest 调用现读现判,不缓存;本次调用开始时取一次 UTC 今天并全程沿用),按顺序取第一个命中:①表缺失,或表内 `enabled` 恰为 `false` → `off`(其余字段不校验);②过不了 `RsiSessionSchema`(含 `enabled` 非布尔、日期格式或日历非法、未知字段)→ `invalid`;③`agents` 不是 `[rsi] agents` 的子集 → `invalid`;④不满足「今天 < `expires` ≤ 今天 + 90 天」→ `expired`;⑤声明的 `--agent` 不在 `agents` → `agent_not_authorized`;⑥否则 `ok`。非 `ok` → 退出 4 `RSI_SESSION_DENIED reason=<判定>`,零写入(R20-16.12 的观察性作废除外)。
 - R20-16.4 授权策略指纹 `session_policy_fp` = sha256(canonical JSON:`[rsi.session]` 规范化后的值、`[rsi] agents`、排除项集合的哈希、overlay 有无与内容 sha256、`[rsi] repo` 的 `(dev, ino)`)。digest 记录它;ingest 用它判断「授权或排除自 digest 以来是否变过」(R20-16.15)。
 
 #### 20.16-2 `rsi digest --agent <a> --json`
@@ -4794,10 +4794,10 @@ rsi 的锁(仓库 `.state/`)与 update / sync 的锁(HOME 下 `.local/state/agen
 - R20-16.7 **先剔除 X / U,再聚类**:X(被排除项目)与 U(归属不明)的证据按当前配置 + 当前索引 + `counts.json` 现算(R20-4.6),在 classify / cluster、门槛判定、证据数排序与任何计数**之前**从证据集合中整体剔除;它们不影响任何簇的入选、排序与计数。剩余证据 = 当前项目「采集中」的证据 + 其它「采集中」项目的证据。复用 reflect 干跑的 classify / cluster 与门槛。
 - R20-16.8 每簇证据分两类:当前项目的证据给摘录(信号库 `excerpt_redacted` 原样,不在 digest 改写);其它采集中项目的证据只给计数 `other_evidence`(N3)。取舍(§8a.7):簇按(当前项目证据数降序、簇 id 升序)稳定排序;只有当前项目证据数 ≥ 1 的簇才入选;最多 5 簇、每簇最多 8 条摘录;单条摘录 ≤ 2KiB(collect 时已截断,不在此改写);整份输出 > 48KiB 时从末尾整簇丢弃,`truncated.clusters_dropped = n`;没有可给的簇 → 空 `clusters` + `reason=no_clusters`。
 - R20-16.9 输出 canonical JSON,键集合固定:`{digest_id, expires_at, agent, reason, clusters: [{alias, kind, evidence: [{alias, excerpt}], other_evidence}], truncated: {clusters_dropped}}`。证据别名 `e1…eN` 在整份 digest 内唯一,簇别名 `c1…`;`excerpt` 用固定的不可信标记包裹(§8a.5,标记文本登记在 `src/contracts/rsi.ts`)。输出**不含**路径、项目名、项目 key、会话 id、`sig_id`。`reason` ∈ `ok|no_project|project_excluded|attribution_unknown|no_clusters`。
-- R20-16.10 名额与存活上限:`.state/rsi/digests/` 下存活(未过期、未消费)的 digest 至多 20 份;每次 digest 开始时先删已过期的(读与删都走 R20-16.13 的安全读取协议);删后仍 ≥ 20 → 退出 4 `RSI_NOT_RUN reason=digest_backlog`。
-- R20-16.11 **输出前复扫与最终复核**(设计稿 §8a.3、§9):①对整份输出 JSON 文本跑当前规则的 pass2,并过路径泄漏闸(`guardOutput`:HOME、`KIT_TMP`、状态目录、仓库根的绝对路径);任一命中 → 退出 3 `RSI_DIGEST_REJECTED reason=rescan_hit|output_leak`,不写 digest 文件、不输出任何字节。②随后**最终复核**:重读用户配置(L-base + L-session)、状态(含 `STOP`)、purge journal 是否存在、快照清单代次,重算 `session_policy_fp`;与开始时任一不同 → 退出 4 `RSI_NOT_RUN reason=policy_changed`(可重试),不写、不输出。③通过后写 digest 文件(R20-16.13),**写成功后才输出**;写失败 → 退出 3 `RSI_FAIL_CLOSED reason=internal`,不输出。最终复核到输出之间仍有尽力窗口(用户在此期间改配置),只能缩小、不能消除;已进入会话上下文的数据收不回(设计稿 §8a.3)。
+- R20-16.10 存活上限用**固定槽位**实现,不依赖锁:`.state/rsi/digests/` 下只有 20 个合法文件名 `s00.json` … `s19.json`。预留 = 按序号对槽位做独占创建(`O_CREAT | O_EXCL`,0600,空文件);第一个创建成功的槽位归本次 digest,全部 `EEXIST` → 先按下条清理一次再重试一轮,仍无空位 → 退出 4 `RSI_NOT_RUN reason=digest_backlog`。发布 = 同目录临时文件写完 → fsync → rename 覆盖本槽位 → fsync 目录。任何失败或拒绝(R20-16.11 ①②③)都删除本次预留的槽位。清理:内容已过期的槽位删除;空文件(已预留未发布)且 mtime 早于 10 分钟的删除(崩溃残留);其余不动。读方遇到空文件视为「未发布」,不当作无效。并发 digest 因此至多同时持有 20 个槽位。
+- R20-16.11 **输出前复扫与最终复核**(设计稿 §8a.3、§9):①对整份输出 JSON 文本跑当前规则的 pass2,并过路径泄漏闸(`guardOutput`:HOME、`KIT_TMP`、状态目录、仓库根的绝对路径);任一命中 → 退出 3 `RSI_DIGEST_REJECTED reason=rescan_hit|output_leak`,不写 digest 文件、不输出任何字节。②随后**最终复核**:重读用户配置(L-base + L-session)、状态(含 `STOP`)、purge journal 是否存在、快照清单代次,重算 `session_policy_fp`,并对当前项目**重新执行 R20-4.3 / R20-4.4 的元数据归属判定**(根路径身份 `(dev, ino)` 与归属结果);与开始时任一不同 → 退出 4 `RSI_NOT_RUN reason=policy_changed`(可重试),不写、不输出。③通过后写 digest 文件(R20-16.13),**写成功后才输出**;写失败 → 退出 3 `RSI_FAIL_CLOSED reason=internal`,不输出。最终复核到输出之间仍有尽力窗口(用户在此期间改配置),只能缩小、不能消除;已进入会话上下文的数据收不回(设计稿 §8a.3)。
 - R20-16.12 **作废**:digest 一次性(ingest 成功或被拒都消费它,R20-16.16)、24 小时过期。另有三条作废路径:①`rsi digest --revoke`:删除全部 digest 文件,不拿锁、不需要 TTY、不看授权状态(与 `rsi stop` 同类,须能在 worker 持锁时执行),退出 0;②**观察性作废**:digest、ingest、worker 任一次读到某 agent 的会话授权非 `ok`,或 `session_policy_fp` 与某 digest 记录的不同,即删除受影响的 digest(尽力,失败不改变本次结果);③purge 删除整个 `digests/`(R20-3.8.3)。**边界如实写明**:用户把授权关掉再原样打开、期间没有任何 kit 调用时,kit 观察不到这次撤销;此时旧 digest 仍受 24 小时过期与 `--revoke` 约束,不宣称更强保证。
-- R20-16.13 digest 文件:`.state/rsi/digests/<digest_id>.json`,`digest_id` = `d_` + 16 位随机十六进制(严格格式,路径由内部构造;已存在则重抽)。写法:同目录临时文件(0600)写完 → fsync → rename → fsync 目录。内容 `RsiDigestRecord`:`{digest_id, created_at, expires_at, agent, project_key, aliases: {e1: sig_id, …}, session_policy_fp, snapshot_generation}`。读取一律经 `readFileSafe`(`O_NOFOLLOW | O_NONBLOCK`、句柄 fstat、普通文件、`nlink == 1`、属主为当前 uid、mode 0600、解析前 64KiB 上限);`digests/` 目录本身按 R20-15.21a 同类协议校验(非链接、属主、无组 / 其他写位)。读不过 → 该文件视为无效(ingest 退出 1 `digest_invalid`;清理时跳过不删,记日志)。
+- R20-16.13 digest 文件:槽位文件 `s<NN>.json`(R20-16.10);`digest_id` = `d_` + 16 位随机十六进制(严格格式),只存在文件内容里;ingest 按 `digest_id` 逐个读 20 个槽位查找(路径由内部构造,不接受外部路径)。内容 `RsiDigestRecord`:`{digest_id, created_at, expires_at, agent, project_key, aliases: {e1: sig_id, …}, session_policy_fp, snapshot_generation}`。读取一律经 `readFileSafe`(`O_NOFOLLOW | O_NONBLOCK`、句柄 fstat、普通文件、`nlink == 1`、属主为当前 uid、mode 0600、解析前 64KiB 上限);`digests/` 目录本身按 R20-15.21a 同类协议校验(非链接、属主、无组 / 其他写位)。读不过 → 该文件视为无效(ingest 退出 1 `digest_invalid`;清理时跳过不删,记日志)。
 
 #### 20.16-3 `reflect --ingest - --digest <id> --agent <a> --owner @h [--json]`
 
@@ -4806,18 +4806,18 @@ rsi 的锁(仓库 `.state/`)与 update / sync 的锁(HOME 下 `.local/state/agen
   1. 重读配置与会话授权(非 `ok` → 退出 4 `RSI_SESSION_DENIED`,触发 R20-16.12② 观察性作废,不占名额);`STOP` 存在或 purge journal 存在 → 退出 4 原码。
   2. 暂存容量预检(R20-6.7:50 个 run / 50MiB,按现有 `.state/reflect/` 计):已满 → 退出 1 `RSI_STAGING_FULL`(不动 digest、不占名额)。
   3. 读 digest(R20-16.13 协议):不存在 / 读不过 → `digest_invalid`;过期 → `digest_expired`;`agent` 不符 → `digest_agent_mismatch`;`session_policy_fp` 与当前不同 → `digest_policy_changed`。这四种 → 退出 1 `RSI_INGEST_REJECTED`;后两种同时删除该 digest。均不占名额。
-  4. **先预留名额**(UTC 日;每个声明的 agent ≤ 2、全局 ≤ 4;`.state/rsi/ingest-quota.json`,读经 `readFileSafe`,写经同目录临时文件 → fsync → rename → fsync 目录):超额 → 退出 4 `RSI_NOT_RUN reason=rate_limited`(不消费 digest)。名额文件读不过或过不了 schema → 按「当天名额已满」处理(退出 4 `rate_limited`),下一个 UTC 日由下一次成功写入覆盖。名额先于消费持久化:两步之间崩溃只会多耗一次名额,不会少计。
+  4. **先预留名额**(UTC 日;每个声明的 agent ≤ 2、全局 ≤ 4):按日分文件 `.state/rsi/ingest-quota/<YYYY-MM-DD>.json`(日期取本次调用的 UTC 今天;不存在 = 当日零次);读经 `readFileSafe`,写经同目录临时文件 → fsync → rename → fsync 目录。超额 → 退出 4 `RSI_NOT_RUN reason=rate_limited`(不消费 digest)。当日文件读不过或过不了 schema → 只封禁当日(退出 4 `rate_limited`),不改写它;次日自然使用新文件。每次成功预留后删除早于今天的名额文件(尽力,失败不影响结果)。名额先于消费持久化:两步之间崩溃只会多耗一次名额,不会少计。
   5. **消费 digest**:删除 digest 文件并 fsync 目录。此后本次无论成败,digest 都已作废。
   6. 解析 stdin;提案 > 5 条 → `RSI_INGEST_TOO_LARGE`。
-  7. 证据只能是该 digest 的别名(不在 `aliases` 里 → `alias_unknown`);kit 把别名换成 `sig_id`;agent 提供的 `excerpt` 及任何证据文本字段一律丢弃。
+  7. 证据只能是该 digest 的别名(不在 `aliases` 里 → `alias_unknown`)。提案里的证据**保持别名形态**走完第 9 步校验;本步只由 digest 记录建立受信任的「别名 → 信号」映射(信号取自信号库),第 10 步由合并器按别名机械解析。agent 提供的 `excerpt` 及任何证据文本字段一律丢弃。
   8. **逐条复核**每个被引用的 `sig_id`:信号仍在库(否则 `evidence_stale`);其 `project_key` = digest 的 `project_key`(否则 `evidence_stale`);该项目当前仍「采集中」(现算 X / U;否则 `project_excluded` / `attribution_unknown`)。
-  9. `validateReflectorOutput` 全量校验,输出上限参数化为 64KiB(LLM 路径仍为 32KiB);**严格批次**:返回 `ok:false` 按其 `code` 映射子码;返回 `ok:true` 但任一 `dropped` 计数非零(`evidence_alias_unknown`、`id_conflict`、`pattern_unsafe`、`echo_detected` 等)→ 整批拒,子码取首个非零类别(按类别名字典序)。LLM 路径的单条丢弃行为不变。
-  10. `mergeProposals`:摘录由合并器从信号库 `excerpt_redacted` 机械复制(§16);查重 / 提案 id 冲突;路径守卫模拟(`kit:reflector` 只许新增);层判定沿用 `team_project_keys`。
+  9. `validateReflectorOutput` 全量校验(`allowedAliases` = digest 的别名集合,`excerpts` 取自第 7 步的映射),输出上限参数化为 64KiB(LLM 路径仍为 32KiB);**严格批次**:返回 `ok:false` 按其 `code` 映射子码;返回 `ok:true` 但任一 `dropped` 计数非零(`evidence_alias_unknown`、`id_conflict`、`pattern_unsafe`、`echo_detected` 等)→ 整批拒,子码取首个非零类别(按类别名字典序)。LLM 路径的单条丢弃行为不变。
+  10. `mergeProposals`:按别名解析为 `sig_id`,摘录由合并器从信号库 `excerpt_redacted` 机械复制(§16);查重 / 提案 id 冲突;路径守卫模拟(`kit:reflector` 只许新增);层判定沿用 `team_project_keys`。
   11. 生成完整暂存产物(提案、`apply.patch`、`report.json`)于内存;对其完整文本复扫(pass2 + 路径泄漏闸;命中 → `rescan_hit`);容量终检:现有 + 本批 > 上限 → 退出 1 `RSI_STAGING_FULL`。
-  12. **提交前最终复核**:重读用户配置、会话授权、`STOP`、状态,重算 `session_policy_fp`;与第 1 步不同 → 整批拒 `policy_changed`。
+  12. **提交前最终复核**:重读用户配置、会话授权、`STOP`、状态,重算 `session_policy_fp`,并对 digest 的 `project_key` 重新执行 R20-4.3 / R20-4.4 的元数据归属判定(根路径身份与归属结果);与第 1、8 步的结果任一不同 → 整批拒 `policy_changed`。
   13. `writeStage` 写 `.state/reflect/<run_id>/`,**不 apply**;每个写出口前 `assertHeld()`。`report.json` 的证据结构与 LLM 路径一致(含 `sig_id`),保证 purge 的 taint 目标计算能找到本 run(R20-3.8.4)。
 - R20-16.16 第 6–12 步的任何拒绝:整批拒,零暂存写入,退出 1 `RSI_INGEST_REJECTED reason=<子码>`;stderr 只有稳定码。`--json` 键集合固定:`{result: ok|rejected|not_run, reason, run_id, proposals}`(`run_id` 与 `proposals`(提案 id 列表)只在 `ok` 时非空)。
-- R20-16.17 **`g0_` 子码表**(落实 R21-12.9「A4 落地时登记」):ingest 拒绝 `reason` 的封闭集合,登记在 `src/contracts/rsi.ts` 的同一份枚举:`digest_invalid`、`digest_expired`、`digest_agent_mismatch`、`digest_policy_changed`、`too_many_proposals`、`alias_unknown`、`evidence_stale`、`project_excluded`、`attribution_unknown`、`output_too_large`、`not_json_object`、`schema_invalid`、`placeholder_in_output`、`output_residual`、`hidden_chars_in_output`、`injection_suspected_local`、`id_conflict`、`pattern_unsafe`、`echo_detected`、`duplicate`、`path_guard`、`rescan_hit`、`policy_changed`。validator 新增 code 时须同时登记,未登记的 code 映射为 `schema_invalid` 并由单测钉死「枚举 ⊇ validator 全部 code」。
+- R20-16.17 **`g0_` 子码表**(落实 R21-12.9「A4 落地时登记」):ingest 拒绝 `reason` 的封闭集合,登记在 `src/contracts/rsi.ts` 的同一份枚举:`digest_invalid`、`digest_expired`、`digest_agent_mismatch`、`digest_policy_changed`、`too_many_proposals`、`alias_unknown`、`evidence_stale`、`project_excluded`、`attribution_unknown`、`output_too_large`、`not_json_object`、`schema_invalid`、`placeholder_in_output`、`output_residual`、`hidden_chars_in_output`、`injection_suspected_local`、`id_conflict`、`pattern_unsafe`、`echo_detected`、`duplicate`、`path_guard`、`rescan_hit`、`policy_changed`。validator 的拒绝 `code` 与 `dropped` 类别经**显式映射表**换成上述子码(同一文件登记):同名的原样映射;`evidence_alias_unknown → alias_unknown`。单测钉死「validator 的全部拒绝 code 与全部 dropped 类别都在映射表里,映射值都属于本枚举」;validator 新增 code 或类别而未登记 → 该单测红。运行时遇到未登记的值映射为 `schema_invalid`,只作兜底,不替代静态覆盖。
 
 #### 20.16-4 来源字段 `reflector.provenance`
 
@@ -4831,16 +4831,18 @@ rsi 的锁(仓库 `.state/`)与 update / sync 的锁(HOME 下 `.local/state/agen
 
 #### 20.16-6 验收与必须覆盖的变异点(A4)
 
-- R20-16.22 夹具矩阵(各自精确码):授权关 / 缺表 / schema 错 / agents 非子集 / 过期 / 超 90 天 / agent 未授权;且每种都断言 L0(`tick --write`)照常可跑(分层失败)。digest:`--scope` 退出 2;非 `confirmed`;purge journal 在;快照忙;backlog 满;cwd 解析不出 / 被排除 / 归属不明时摘录为 0。ingest:超 64KiB;锁被占;容量已满 / 本批写入后越界;digest 不存在 / 过期 / agent 不符 / 策略指纹变化;名额(agent 第 3 次、全局第 5 次;名额文件损坏);超 5 条;别名越界;agent 自带摘录被丢弃(落盘摘录 = 信号库原文);话术;不可见字符;回显;id 冲突;「合法 + 非法」混合批次整批拒;排除后 / purge 后 / 授权关后用旧 digest 被拒。
+- R20-16.22 夹具矩阵(各自精确码):授权关 / 缺表 / schema 错 / agents 非子集 / 过期 / 超 90 天 / agent 未授权;且每种都断言 L0(`tick --write`)照常可跑(分层失败)。digest:`--scope` 退出 2;非 `confirmed`;purge journal 在;快照忙;backlog 满;cwd 解析不出 / 被排除 / 归属不明时摘录为 0。ingest:超 64KiB;锁被占;容量已满 / 本批写入后越界;digest 不存在 / 过期 / agent 不符 / 策略指纹变化;名额(agent 第 3 次、全局第 5 次;当日名额文件损坏只封当日、次日恢复);超 5 条;别名越界;agent 自带摘录被丢弃(落盘摘录 = 信号库原文);话术;不可见字符;回显;id 冲突;「合法 + 非法」混合批次整批拒;排除后 / purge 后 / 授权关后用旧 digest 被拒。
 - R20-16.23 N3 与 X / U:其它项目只有计数、摘录 0;**X / U 不影响任何簇的入选、排序与 `other_evidence` 计数**(构造仅靠 X 证据才过门槛的簇,断言不入选)。
 - R20-16.24 输出复扫:规则更新后信号里的种子命中 → digest 整份拒、无文件、stdout 为空;植入 HOME 路径 → `output_leak`。截断:> 48KiB 整簇丢弃、`clusters_dropped` 正确、排序稳定。
-- R20-16.25 确定性交错(注入点):digest 读完快照后、输出前分别发生撤销授权 / 新增排除 / `rsi stop` / purge → `policy_changed` 或原码,无输出、无文件;ingest 第 8 步之后、第 13 步之前同样四种 → 整批拒、零暂存。崩溃注入:名额已持久化、digest 未删 → 恢复后名额多计一次、digest 仍可用一次;digest 已删、暂存未写 → 无残留。安全读取:digest / 名额文件换成符号链接、FIFO、硬链接、超大文件 → 无效,不跟随、不挂住。
+- R20-16.25 确定性交错(注入点):digest 读完快照后、输出前分别发生撤销授权 / 新增排除 / `rsi stop` / purge / 项目根目录被删后重建 / 项目根换成符号链接 → `policy_changed` 或原码,无输出、无文件;ingest 第 8 步之后、第 13 步之前同样六种 → 整批拒、零暂存。崩溃注入:名额已持久化、digest 未删 → 恢复后名额多计一次、digest 仍可用一次;digest 已删、暂存未写 → 无残留。安全读取:digest / 名额文件换成符号链接、FIFO、硬链接、超大文件 → 无效,不跟随、不挂住。槽位:19 个槽位已占、两个 digest 并发预留 → 恰一个成功、另一个 `digest_backlog`;预留后崩溃留下的空槽位 10 分钟后被清理。
 - R20-16.26 守卫:`session_declared` → `REFLECTOR_SESSION_DECLARED`;改成 `spawned` 但缺后端身份 → `REFLECTOR_UNVERIFIABLE`;`vendor=unknown` 且推导也为 unknown → `REFLECTOR_UNVERIFIABLE`;非法 `provenance` → `GUARD_PROPOSAL_PROVENANCE_INVALID`;字段缺失、身份完整的旧提案行为不变。
 - R20-16.27 变异表(cp 备份 / 还原,每条必须红):跳过别名检查;采用 agent 摘录;跳过授权期限;X / U 剔除挪到聚类之后;跳过输出复扫;跳过最终复核;digest 不消费;名额在消费之后才写;严格批次退回单条丢弃;unknown 等式放行;`readFileSafe` 换成 `readFile`。
 
 #### 20.16-7 评审记录
 
 2026-11-02 方案评审(Pi GPT-6.1 Sol,只读):9 条(高 2、中 6、低 1)全部采纳——digest 输出前与 ingest 提交前的最终复核及尽力窗口的如实表述(R20-16.11、16.15 第 12 步、16.25);先剔除 X / U 再聚类与计数(R20-16.7、16.23);digest 绑定 `session_policy_fp`、三条作废路径与边界(R20-16.4、16.12);名额先于消费持久化(R20-16.15 第 4–5 步);暂存容量预检与终检(第 2、11 步);严格批次(第 9 步);L-base 占位不动、独立 `RsiSessionSchema`(R20-16.1);digest / 名额文件走 `readFileSafe`(R20-16.13);§20 通用输出约定加 A4 例外(见该处标注)。
+
+2026-11-02 条文评审(第一轮,Pi GPT-6.1 Sol):方案评审 9 条已落实;新提 6 条(高 1、中 5)全部采纳——最终复核重新执行项目归属判定(R20-16.11②、16.15 第 12 步、16.25);存活上限改为 20 个固定槽位的独占预留协议(R20-16.10、16.13);名额按 UTC 日分文件、损坏只封当日(R20-16.15 第 4 步);证据保持别名形态过 validator、合并器按别名解析(第 7、9、10 步);拒绝码与 dropped 类别的显式映射表与静态覆盖单测(R20-16.17);会话授权两阶段判定、取值唯一(R20-16.2、16.3)。
 
 ## 21. 自主 RSI 契约(R21,v3.1,契约先行;V1–V6 实装后订正)
 
