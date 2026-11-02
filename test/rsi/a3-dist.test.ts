@@ -250,7 +250,17 @@ function runTty(w: W, args: string[]): Ran {
   const t0 = Date.now();
   const r = spawnSync(
     'python3',
-    [ptyRun, process.execPath, '--import', preload, path.join(pkg, 'dist', 'cli.js'), ...args],
+    // -B:不写字节码缓存(macOS 系统 python 否则往 $HOME/Library/Caches 写);-I:隔离模式,不读用户 site / PYTHON* 环境
+    [
+      '-B',
+      '-I',
+      ptyRun,
+      process.execPath,
+      '--import',
+      preload,
+      path.join(pkg, 'dist', 'cli.js'),
+      ...args,
+    ],
     { cwd: w.repo, env: w.env, encoding: 'utf8', timeout: 30_000 },
   );
   return {

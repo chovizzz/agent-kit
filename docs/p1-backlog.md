@@ -129,7 +129,8 @@
   ✅ **R20-A0(第 0 块,已实现 2026-10-23,分支 verify/s10-r20-a0)**:§20.9 第 1、2、4、5、14、20 条与第 3 条 ①②(已实现(R20-A0))—— `UserConfig` 接受 `[rsi]`(此前一写 `[rsi]` 就让 `update` 退出 3、后台更新停摆)、`safe-fs.createExclusive`、`runSelf` 的 RSI 环境键 / `PI_CODING_AGENT_DIR` 存在性折叠 / 受校验的 `cwd`、零网络桥接 `src/update/self-spawn.ts`(+ import 闭包测试、lint 授权块只多放行 `runSelf`)、`KIT_RSI_CHILD=1`、reader JSON 深度 256、`canonicalJsonLine`。
   ✔ A1(锁,verify/s10-r20-a1):`src/rsi/lock.ts`(`rsi/lock` 试锁 / 陈旧锁协议 / nonce 与 `assertHeld`)、`src/rsi/snapshot.ts`(快照清单提交 / 恢复 / 只读核对)、盐首建改 `createExclusive` 已实现并有变异测试;**命令接线(reflect / judge / gc / promote / `signals collect` 拿 `rsi/lock`)与 §20.9 第 17 条留给 A2**(依赖 `[rsi]` 配置与 `rsiStateOf()`,off 下不得拿锁 / 建 `.state/rsi/`)。详见 contracts §20.5「R20-A1 实装后订正」。
   ✔ A2(L0 / 索引 / 排除 / purge / status / projects / confirm / stop,PR #18–#32,P0 15/15 于 `ecb43fd` 验收):§20.9 第 6–11、17、18、21 条已落地,逐条证据见 contracts §20.9「R20-A2 实装对照」。
-  ☐ 仍待做:A3 —— 第 3 条 ③④⑤(根入口路由、`__rsi --background`、§7 加 `rsi` 行)、第 16 条 poke / hint 的 A5 行、第 19 条;P1 —— 第 12、13、15 条。
+  ✔ A3(poke / hint / worker、根入口分流、顺带调度、熔断与节流,分支 `verify/s10-r20-a3`):§20.9 第 3 条③④⑤、第 16 条 poke / hint 行、第 19 条已落地,订正见 contracts §20.14「A3 实装订正」;真实环境动作与钩子安装(P1 A5)未做。
+  ☐ 仍待做:P1 —— 第 12、13、15 条(A4–A6)。
 - ☐ **自主 RSI(v3.1,去掉人工采纳的个人层全自动循环)**(用户 2026-10-23 拍板 U1–U3、T0、M1–M5、M9–M15、P1–P3):设计稿 [`design-autonomous-rsi.md`](design-autonomous-rsi.md)(覆盖 v2 的「永不自动采纳 / 生效」部分);
   **契约已写,按分期待实现**(`contracts.md` §21,2026-10-23;既有条款修订清单见 §21.18,§20 的去留见 §21.19,落契约时新发现的细节取舍 Q-A–Q-P 已由主代理按推荐定下,见 §21.22;§21 **已冻结**(2026-10-23,五轮评审,第五轮通过;`§21.7a` 统计附录由 V1.5 补))。
   分期(串行,带契约 / schema 变更的期不并行):V1 个人层「规则 / 踩坑」最小闭环(判定默认关)→ V1.5 只记录 + 功效模拟 → V2 本机静态生效 → V3 方法 / 技能 / 子代理 + 声明式固定测试 → V4 框架改进投稿(`rsi contrib submit`)→ V5 能力缺口与第三方扩展 → V6a E1 本体 → V6b 隔离探针与真机验证;
