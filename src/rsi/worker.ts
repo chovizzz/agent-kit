@@ -319,14 +319,11 @@ export async function runWorker(deps: RsiWorkerRunDeps = {}): Promise<WorkerResu
     return { kind: 'skipped_pre_lock', why: 'lock_error' };
   }
   try {
-    const r = await underLock(sctx, lock, env, deps, now, nowMs);
-    // 截断放在本轮全部追加之后(Pi 代码评审 #5):持锁写入方改写后 ≤ 200 行;不可记录 / 锁内拒绝(零业务写入)的分支不碰日志
-    if (
-      (r.kind === 'ran' && r.recorded) ||
-      (r.kind === 'refused_in_lock' && r.why === 'breaker_open')
-    ) {
-      await compactLog(io, lock).catch(() => undefined);
-    }
+    const track = { logged: false };
+    const r = await underLock(sctx, lock, env, deps, now, nowMs, track);
+    // 截断放在本轮全部追加之后(Pi 代码评审 #5 / 复核 #2):只要本轮在锁内成功追加过日志就截断,结束时 ≤ 200 行;
+    // 真正零业务写入的分支(锁内拒绝、不可记录)没有追加过,不碰日志
+    if (track.logged) await compactLog(io, lock).catch(() => undefined);
     return r;
   } finally {
     await lock.release().catch(() => undefined);
@@ -340,32 +337,39 @@ async function underLock(
   deps: RsiWorkerRunDeps,
   now: () => Date,
   nowMs: () => number,
+  track: { logged: boolean },
 ): Promise<WorkerResult> {
   const { io } = sctx;
   await deps.afterLock?.();
   const obs = await observeRsi(io, env);
   const why = refusalOf(obs);
   if (why !== null) return { kind: 'refused_in_lock', why };
+  // 执行配置 = 锁内最新观测(Pi 代码评审 #1 / 复核 #1):在任何维护写入之前就核对仓库根并换上新配置,维护(恢复、purge 续做的脱敏器、taint)
+  // 与本轮采集都不再用打开上下文时那份可能已过期的配置;仓库根变了(io 与锁不再对应)→ 锁内拒绝、零业务写入
+  if (obs.config.status !== 'on' || obs.config.repo !== sctx.config.repo) {
+    return { kind: 'refused_in_lock', why: 'repo_changed' };
+  }
+  const mctx: RsiServiceCtx = { ...sctx, config: obs.config };
   const isAlive = deps.isAlive ?? makeIsAlive((pid, sig) => process.kill(pid, sig));
   if (await updateBusy(io.hostEnv['HOME'], isAlive)) {
-    return finish(sctx, lock, 'skipped_update_busy', false, now);
+    return finish(mctx, lock, 'skipped_update_busy', false, now, track);
   }
 
   let halfOpen = false;
   try {
     const gateW = makeGate(lock, deps.run?.beforeWrite);
     const hooks = hooksFromGate(gateW);
-    const recovered = await recoverUnderLock(sctx, lock, hooks);
+    const recovered = await recoverUnderLock(mctx, lock, hooks);
     const confirmed = obs.state.state === 'confirmed';
-    const jp = await detectPurgeJournal(sctx);
+    const jp = await detectPurgeJournal(mctx);
     if (confirmed && jp.state === 'present') {
       try {
-        await resumePurgeUnderLock(sctx, lock, { hooks });
+        await resumePurgeUnderLock(mctx, lock, { hooks });
       } catch (e) {
         throw mapPurgeResumeError(e);
       }
     }
-    await resumeTaintWith(sctx, lock, hooks);
+    await resumeTaintWith(mctx, lock, hooks);
 
     // 残留 attempt:上一次在读阶段崩溃 → 先记一次 crashed(R20-6.4),再按更新后的熔断决定本轮(Pi 评审 R2)
     {
@@ -373,7 +377,8 @@ async function underLock(
       if (s.prev.attempt !== null) {
         const ho = breakerView(s.prev, nowMs()) === 'half_open';
         const next = applyBreaker({ ...s.prev, attempt: null }, 'crashed', now(), ho);
-        await commitState(sctx, lock, next, s.rawConfirm, { action: 'failed', code: 'crashed' });
+        await commitState(mctx, lock, next, s.rawConfirm, { action: 'failed', code: 'crashed' });
+        track.logged = true;
       }
     }
 
@@ -392,7 +397,8 @@ async function underLock(
     const s1 = await stateForWrite(io);
     const view = breakerView(s1.prev, nowMs());
     if (view === 'open') {
-      await commitLogOnly(sctx, lock, { action: 'skipped', code: 'breaker_open' });
+      await commitLogOnly(rctx, lock, { action: 'skipped', code: 'breaker_open' });
+      track.logged = true;
       return { kind: 'refused_in_lock', why: 'breaker_open' };
     }
     halfOpen = view === 'half_open';
@@ -400,12 +406,12 @@ async function underLock(
     // L0 到期(锁内兜底;节流比较取反 → A3 变异表必杀)
     if (!l0Due(s1.prev, nowMs())) {
       await pruneReservations(io, lock, nowMs());
-      return finish(sctx, lock, 'skipped_throttled', false, now);
+      return finish(rctx, lock, 'skipped_throttled', false, now, track);
     }
 
     // 预写 attempt:一定在读任何会话文件之前落盘(R20-6.4;变异:移到读之后 → 必杀)
     await commitState(
-      sctx,
+      rctx,
       lock,
       { ...s1.prev, attempt: { started_at: now().toISOString(), nonce: lock.nonce } },
       s1.rawConfirm,
@@ -461,9 +467,10 @@ async function underLock(
       outcome = (await runArmedUnderLock(rctx, lock, input, runDeps)).outcome;
     }
     await pruneReservations(io, lock, nowMs());
+    track.logged = true; // L0 提交路径(commitL0)最后一步追加了本轮结果
     return { kind: 'ran', outcome, recorded: true };
   } catch (e) {
-    return finish(sctx, lock, outcomeOfError(e), halfOpen, now, true);
+    return finish(mctx, lock, outcomeOfError(e), halfOpen, now, track, true);
   }
 }
 
@@ -477,12 +484,14 @@ async function finish(
   outcome: RsiOutcome,
   halfOpen: boolean,
   now: () => Date,
+  track: { logged: boolean },
   fromError = false,
 ): Promise<WorkerResult> {
   if (!isRecordable(outcome)) return { kind: 'ran', outcome, recorded: false };
   try {
     if (!fromError) {
       await commitLogOnly(sctx, lock, { action: 'skipped', code: outcome });
+      track.logged = true;
       return { kind: 'ran', outcome, recorded: true };
     }
     // 先做无副作用的全量复验(Pi 代码评审 #2):数据文件已损坏 → 放弃记账、零写入;通过之后才改写 state.json
@@ -490,6 +499,7 @@ async function finish(
     const s = await stateForWrite(sctx.io);
     const next = applyBreaker({ ...s.prev, attempt: null }, outcome, now(), halfOpen);
     await commitState(sctx, lock, next, s.rawConfirm, { action: 'failed', code: outcome });
+    track.logged = true;
     return { kind: 'ran', outcome, recorded: true };
   } catch {
     return { kind: 'ran', outcome, recorded: false };

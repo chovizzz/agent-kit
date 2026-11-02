@@ -471,6 +471,65 @@ describe('Pi 代码评审修正', () => {
     expect(text).toBe('');
   });
 
+  it('复核 #1:拿锁前 [rsi] repo 换成另一个合法仓库 → 锁内拒绝,先于任何维护写入(残留 attempt 不被消费、不写日志)', async () => {
+    const f = await makeTickFx('a3-w-repo-', {
+      confirmed: true,
+      state: { attempt: { started_at: iso(T - 60_000), nonce: '2'.repeat(16) } },
+    });
+    const other = path.join(f.dir, 'other-repo');
+    await mkdirp(f.fx, other, 0o755);
+    await writeFile(f.fx, path.join(other, 'kit.toml'), '[kit]\n', { mode: 0o644 });
+    const stBefore = await readText(path.join(f.rsiDir, 'state.json'));
+    const logBefore = await logLines(f);
+    f.audit.length = 0;
+    const r = await runWorker(
+      wdeps(f, T, { afterLock: () => writeCfg(f, rsiToml(f, '', { repo: other })) }),
+    );
+    expect(r).toEqual({ kind: 'refused_in_lock', why: 'repo_changed' });
+    expect(await readText(path.join(f.rsiDir, 'state.json'))).toBe(stBefore);
+    expect(await logLines(f)).toEqual(logBefore);
+    const ops = f.audit
+      .map((c) => `${c.op} ${path.basename(c.path)}`)
+      .filter((o) => !o.startsWith('mkdirp'));
+    expect(ops).toEqual(['createExclusive lock', 'remove lock']);
+  });
+
+  it('复核 #2:补记 crashed 之后在复检处被 STOP 拒绝 → 仍按「本轮追加过日志」截断,结束时恰 200 行', async () => {
+    const f = await makeTickFx('a3-w-crash-stop-', {
+      confirmed: true,
+      state: { attempt: { started_at: iso(T - 60_000), nonce: '3'.repeat(16) } },
+    });
+    let body = '';
+    for (let i = 0; i < 200; i++) {
+      body += `${JSON.stringify({ action: 'skipped', at: iso(T - 1000 * (300 - i)), code: `c${i}`, trigger: 'poke' })}\n`;
+    }
+    await writeFile(f.io, path.join(f.rsiDir, 'log.jsonl'), body, { mode: 0o600 });
+    // 在恢复阶段的写点(`before:recover`,经 beforeWrite)写下 STOP:第一次锁内观测之后、第二次之前
+    let stopped = false;
+    const r = await runWorker(
+      wdeps(f, T, {
+        run: {
+          beforeWrite: async () => {
+            if (!stopped) {
+              stopped = true;
+              await writeFile(
+                f.fx,
+                path.join(f.rsiDir, 'STOP'),
+                '{"at":"2026-10-24T00:00:00.000Z","by":"user"}',
+                { mode: 0o600 },
+              );
+            }
+          },
+        },
+      }),
+    );
+    expect(stopped).toBe(true);
+    expect(r).toEqual({ kind: 'refused_in_lock', why: 'stopped' });
+    const lines = await logLines(f);
+    expect(lines.at(-1)).toMatchObject({ action: 'failed', code: 'crashed' });
+    expect(lines).toHaveLength(200);
+  });
+
   it('#2 失败记账前先全量复验:counts.json 已损坏(安全阻断)→ 不改 state.json、不写日志、不提交清单', async () => {
     const f = await makeTickFx('a3-w-corrupt-', {
       confirmed: true,
