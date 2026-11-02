@@ -272,6 +272,8 @@ const SUBPROCESS_TESTS = [
   'test/build/publish-freeze.test.ts',
   // R20 A3:真实发布产物(vite 构建的 dist/cli.js)上的钩子入口四组合、stdin 不关闭、端到端起 worker
   'test/rsi/a3-dist.test.ts',
+  // 回放用例 check.sh 的正负对照(bash 子进程,写入只落在 makeTempDir 的临时目录)
+  'test/cases/replay-checks.test.ts',
 ];
 
 export default tseslint.config(
