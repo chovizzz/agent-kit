@@ -198,6 +198,8 @@ const RSI_TABLE = {
   'purge --excluded': { off: 4, armed: 4 },
   'purge --resume': { off: 4, armed: 4 },
   confirm: { off: 2, armed: 2 },
+  'poke --agent claude': { off: 0, armed: 0 },
+  'hint --agent claude': { off: 0, armed: 0 },
 };
 
 function rsiStub(extra = ''): string {

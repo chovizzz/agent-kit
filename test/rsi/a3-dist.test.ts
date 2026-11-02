@@ -35,10 +35,14 @@ const log = (f, line) => { if (f) { try { origAppend.call(fs, f, line + '\n'); }
 const C = fs.constants;
 const writes = (fl) => typeof fl === 'string' ? /[wax+]/.test(fl)
   : typeof fl === 'number' ? (fl & (C.O_WRONLY | C.O_RDWR | C.O_CREAT | C.O_APPEND | C.O_TRUNC)) !== 0 : false;
+const own = new Set([W, L, S].filter(Boolean));
 const wrap = (obj, name, pred) => {
   const o = obj[name];
   if (typeof o !== 'function') return;
-  obj[name] = function (...a) { if (!pred || pred(a)) log(W, name + ' ' + String(a[0])); return o.apply(this, a); };
+  obj[name] = function (...a) {
+    if (!own.has(String(a[0])) && (!pred || pred(a))) log(W, name + ' ' + String(a[0]));
+    return o.apply(this, a);
+  };
 };
 for (const n of ['writeFile', 'appendFile', 'mkdir', 'rename', 'rm', 'rmdir', 'unlink', 'symlink', 'link', 'chmod', 'lchmod', 'copyFile', 'truncate', 'utimes', 'cp', 'mkdtemp']) {
   wrap(fs.promises, n); wrap(fs, n); wrap(fs, n + 'Sync');
@@ -61,6 +65,34 @@ if (typeof mod.registerHooks === 'function') {
 }
 `;
 
+/** 伪终端驱动:python3 `pty.spawn` 在 macOS 上子进程退出后会挂住,改用 openpty + subprocess,轮询子进程并把主端读空 */
+const PTY_RUN = String.raw`
+import os, select, subprocess, sys, time
+m, s = os.openpty()
+p = subprocess.Popen(sys.argv[1:], stdin=s, stdout=s, stderr=s, close_fds=True, start_new_session=True)
+os.close(s)
+out = b""
+deadline = time.time() + 15
+def drain():
+    global out
+    while True:
+        r, _, _ = select.select([m], [], [], 0.05)
+        if not r: return
+        try:
+            c = os.read(m, 65536)
+        except OSError:
+            return
+        if not c: return
+        out += c
+while p.poll() is None:
+    drain()
+    if time.time() > deadline:
+        p.kill(); p.wait(); sys.stdout.buffer.write(out); sys.exit(124)
+drain()
+sys.stdout.buffer.write(out)
+sys.exit(p.returncode)
+`;
+
 /** 钩子路径加载的代码里不得出现这些模块(rolldown 不压缩,保留 `//#region <源路径>`) */
 const FORBIDDEN_REGIONS = [
   'src/update/launcher.ts',
@@ -74,6 +106,7 @@ const FORBIDDEN_REGIONS = [
 let sb: Sandbox;
 let pkg: string;
 let preload: string;
+let ptyRun: string;
 
 beforeAll(async () => {
   sb = await makeSandbox('a3-dist-');
@@ -98,6 +131,8 @@ beforeAll(async () => {
   expect(v.status, v.stderr).toBe(0);
   preload = path.join(sb.dir, 'a3-preload.mjs');
   await safe.writeFile(sb.wctx, preload, PRELOAD);
+  ptyRun = path.join(sb.dir, 'a3-pty.py');
+  await safe.writeFile(sb.wctx, ptyRun, PTY_RUN);
 }, 300_000);
 
 interface Logs {
@@ -155,6 +190,10 @@ async function world(kind: 'off' | 'stop' | 'armed'): Promise<W> {
       { mode: 0o600 },
     );
   }
+  // KIT_TMP 必须与 HOME / 仓库互不为祖先(否则 rsi 的上下文按 state_dir_unsafe 拒绝,钩子会因为错误的原因空操作)
+  const tmp = path.join(w.dir, 'tmp');
+  await safe.mkdirp(w.fx, tmp, 0o700);
+  await safe.chmod(w.fx, tmp, 0o700);
   const logs: Logs = {
     write: path.join(w.dir, 'writes.log'),
     load: path.join(w.dir, 'loads.log'),
@@ -164,7 +203,7 @@ async function world(kind: 'off' | 'stop' | 'armed'): Promise<W> {
     PATH: SAFE_PATH,
     HOME: w.home,
     KIT_REAL_HOME_OVERRIDE: w.home,
-    KIT_TMP: w.dir,
+    KIT_TMP: tmp,
     A3_WRITE_LOG: logs.write,
     A3_LOAD_LOG: logs.load,
     A3_SPAWN_LOG: logs.spawn,
@@ -185,17 +224,14 @@ interface Ran {
 }
 
 /** 非 TTY:stdin 是永不关闭的管道;超时(默认 5s)即杀并返回 status=null */
-function runPiped(w: W, args: string[], timeoutMs = 5000): Promise<Ran> {
+function runPiped(w: W, args: string[], timeoutMs = 5000, withPreload = true): Promise<Ran> {
   const t0 = Date.now();
-  const child = spawn(
-    process.execPath,
-    ['--import', preload, path.join(pkg, 'dist', 'cli.js'), ...args],
-    {
-      cwd: w.repo,
-      env: w.env,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    },
-  );
+  const pre = withPreload ? ['--import', preload] : [];
+  const child = spawn(process.execPath, [...pre, path.join(pkg, 'dist', 'cli.js'), ...args], {
+    cwd: w.repo,
+    env: w.env,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
   let out = '';
   let err = '';
   child.stdout.on('data', (d: Buffer) => (out += d.toString('utf8')));
@@ -209,23 +245,20 @@ function runPiped(w: W, args: string[], timeoutMs = 5000): Promise<Ran> {
   });
 }
 
-/** TTY:python3 pty 起一个真伪终端(stdin / stdout / stderr 都是它);输出合并在 out */
+/** TTY:python3 openpty 起一个真伪终端(stdin / stdout / stderr 都是它);输出合并在 out */
 function runTty(w: W, args: string[]): Ran {
   const t0 = Date.now();
   const r = spawnSync(
     'python3',
-    [
-      '-c',
-      'import os,pty,sys\nst=pty.spawn(sys.argv[1:])\nsys.exit(os.waitstatus_to_exitcode(st))',
-      process.execPath,
-      '--import',
-      preload,
-      path.join(pkg, 'dist', 'cli.js'),
-      ...args,
-    ],
-    { cwd: w.repo, env: w.env, encoding: 'utf8', timeout: 20_000 },
+    [ptyRun, process.execPath, '--import', preload, path.join(pkg, 'dist', 'cli.js'), ...args],
+    { cwd: w.repo, env: w.env, encoding: 'utf8', timeout: 30_000 },
   );
-  return { status: r.status, out: r.stdout ?? '', err: r.stderr ?? '', ms: Date.now() - t0 };
+  return {
+    status: r.status,
+    out: (r.stdout ?? '').replace(/\r\n/g, '\n'),
+    err: r.stderr ?? '',
+    ms: Date.now() - t0,
+  };
 }
 
 async function loadedForbidden(w: W): Promise<string[]> {
@@ -282,7 +315,7 @@ describe('R20-1.9 / R20-3.2.1 不读 stdin:stdin 永不关闭时 2s 内退出', 
   it('poke、hint、worker(STOP 世界:不会起真 worker,不留孤儿进程)', async () => {
     const w = await world('stop');
     for (const args of [...HOOKS, ['__rsi', '--background']]) {
-      const r = await runPiped(w, args, 4000);
+      const r = await runPiped(w, args, 4000, false); // 计时不带 preload(它给每次模块加载记日志)
       expect(r.status, args.join(' ')).toBe(0);
       expect(r.ms, args.join(' ')).toBeLessThan(2000);
     }
