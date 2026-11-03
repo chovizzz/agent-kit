@@ -423,6 +423,69 @@ export const A6_MUTATIONS: readonly A6Mutation[] = [
     expectRed: ['恰好 1000 个子项仍然已知'],
     mustKill: ['恰好 1000 个子项仍然已知'],
   },
+  // A6 订正 #1(20.17-11 ⑤):提醒放弃日志与 GC 计划子码
+  {
+    id: 'notice-log-no-dedup',
+    clause: '提醒放弃日志去掉 30 分钟同码去重(刷屏)',
+    edits: [
+      {
+        file: 'src/rsi/notice.ts',
+        anchor: 'if (age >= 0 && age < RSI_NOTICE_LOG_DEDUP_MS) return;',
+        replacement: 'void age;',
+      },
+    ],
+    tests: [NOTICE],
+    expectRed: ['去重:30 分钟内同码只记一行'],
+    mustKill: ['去重:30 分钟内同码只记一行'],
+  },
+  {
+    id: 'notice-log-on-skip',
+    clause: '跳过分支也写放弃日志',
+    edits: [
+      {
+        file: 'src/rsi/notice.ts',
+        anchor: "if (out.kind === 'skipped' && out.why === 'error') return 'internal';",
+        replacement: "if (out.kind === 'skipped') return 'internal';",
+      },
+    ],
+    tests: [NOTICE],
+    expectRed: ['跳过分支与「没有要说的」不写日志'],
+    mustKill: ['跳过分支与「没有要说的」不写日志'],
+  },
+  {
+    id: 'notice-log-unsafe-still-writes',
+    clause: 'log.jsonl 不安全(权限过宽 / 符号链接)仍追加',
+    edits: [
+      {
+        file: 'src/rsi/notice.ts',
+        anchor: "if (r.kind !== 'ok' && r.kind !== 'missing') return;",
+        replacement: 'void 0;',
+      },
+    ],
+    tests: [NOTICE],
+    expectRed: ['只读校验:rsi/ 不存在不建、不写'],
+    mustKill: ['只读校验:rsi/ 不存在不建、不写'],
+  },
+  {
+    id: 'gc-plan-error-always-internal',
+    clause: 'GC 计划子码映射写死成 internal',
+    edits: [
+      {
+        file: 'src/rsi/status.ts',
+        anchor: "return GC_PLAN_ERROR_MAP[e.code] ?? 'internal';",
+        replacement: "return 'internal';",
+      },
+    ],
+    tests: [HINT],
+    expectRed: [
+      'gc_plan_error 由 ReflectGcError.code 白名单映射',
+      'gc_candidates 来自只读的 GC 计划',
+    ],
+    mustKill: [
+      'gc_plan_error 由 ReflectGcError.code 白名单映射',
+      'gc_candidates 来自只读的 GC 计划',
+    ],
+  },
 ];
 
 /** 实测结果(主代理在 javis 上执行变异后填写;A6 实装块不执行,故留空) */

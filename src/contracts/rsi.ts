@@ -614,10 +614,38 @@ export const RSI_LOG_ACTIONS = Object.freeze([
   'failed',
 ] as const);
 
+/**
+ * `log.jsonl` 行的触发源(R20-7.1;A6 订正 #1 追加 `notice`)。只用于日志行:`state.json` 的 `last_tick.trigger` 仍用 {@link RSI_TRIGGERS},
+ * 不因此放宽(提醒不是 tick)。
+ */
+export const RSI_LOG_TRIGGERS = Object.freeze([...RSI_TRIGGERS, 'notice'] as const);
+/** 提醒放弃时日志行的 `code`(A6 订正 #1;`trigger=notice`、`action=skipped`) */
+export const RSI_NOTICE_LOG_CODES = Object.freeze([
+  'locked',
+  'over_budget',
+  'write_failed',
+  'not_eligible',
+  'internal',
+] as const);
+export type RsiNoticeLogCode = (typeof RSI_NOTICE_LOG_CODES)[number];
+/** 同一 `code` 的提醒放弃日志在此窗口内只记一行(防刷屏,A6 订正 #1) */
+export const RSI_NOTICE_LOG_DEDUP_MS = 30 * 60 * 1000;
+/** 提醒去重时读 `log.jsonl` 的字节上限(R20-6.7:200 行 × 1 KiB 之外留余量) */
+export const RSI_NOTICE_LOG_READ_MAX_BYTES = 256 * 1024;
+
+/** `rsi status` 的 `gc_plan_error`(A6 订正 #1):GC 计划失败的子码,由 `ReflectGcError.code` 白名单映射,未知 → `internal` */
+export const RSI_GC_PLAN_ERRORS = Object.freeze([
+  'reference_scan_failed',
+  'root_unreadable',
+  'root_not_real_dir',
+  'internal',
+] as const);
+export type RsiGcPlanError = (typeof RSI_GC_PLAN_ERRORS)[number];
+
 /** `.state/rsi/log.jsonl` 的一行(R20-7.1):不含路径、key、目录名、会话 id、摘录、异常消息 */
 export const RsiLogLineSchema = z.strictObject({
   at: IsoTimestampSchema,
-  trigger: RsiTriggerSchema,
+  trigger: z.enum(RSI_LOG_TRIGGERS),
   agent: RsiAgentSchema.optional(),
   action: z.enum(RSI_LOG_ACTIONS),
   /** 稳定码或结果码;字符集排除 `/`,路径进不来 */

@@ -16,6 +16,7 @@ import {
   RsiTaintMarkSchema,
   type RsiAgentId,
   type RsiState,
+  type RsiGcPlanError,
 } from '../contracts/rsi.js';
 import { canonicalJson } from '../io/canonical-json.js';
 import { getRealHome } from '../io/paths.js';
@@ -28,7 +29,7 @@ import { currentCursorFingerprint } from './l0/fingerprint.js';
 import { evaluateAgentRoot } from './l0/roots.js';
 import { peekRsiLock, type RsiLockDeps } from './lock-read.js';
 import { noticeFull, readDismissed, readNotice, scanPending } from './pending.js';
-import { planReflectGc } from '../reflect/gc-plan.js';
+import { planReflectGc, ReflectGcError } from '../reflect/gc-plan.js';
 import { emitLines, forbiddenPaths, jsonLines } from './output.js';
 import { readRsiState, type RsiReadData } from './read-state.js';
 import type { OutLine } from './sanitize.js';
@@ -79,6 +80,8 @@ export interface StatusDoc {
   };
   /** A6(R20-17.18):目录数口径;status 同样不扫字节,显式说明未检测 */
   staging: { run_limit_reached: boolean; bytes_checked: false };
+  /** A6 订正 #1:GC 计划失败的子码(与 warning `gc_plan_failed` 同时出现);计划成功或未执行 = `null` */
+  gc_plan_error: RsiGcPlanError | null;
   last_tick: {
     at: string;
     trigger: string;
@@ -138,6 +141,7 @@ function offDoc(reason: string): StatusDoc {
       gc_candidates: 0,
     },
     staging: { run_limit_reached: false, bytes_checked: false },
+    gc_plan_error: null,
     last_tick: null,
     breaker: { state: 'closed', kind: null, consecutive_failures: 0, until: null },
     index: { status: 'absent', entries: 0 },
@@ -385,10 +389,12 @@ export async function buildStatusDoc(
     scanWarnings.push('notice_full');
   }
   let gcCandidates: number | null = null;
+  let gcPlanError: RsiGcPlanError | null = null;
   try {
     gcCandidates = (await planReflectGc(io, now)).candidates.length;
-  } catch {
+  } catch (e) {
     gcCandidates = null;
+    gcPlanError = gcPlanErrorOf(e);
     scanWarnings.push('gc_plan_failed');
   }
 
@@ -451,6 +457,7 @@ export async function buildStatusDoc(
       gc_candidates: gcCandidates,
     },
     staging: { run_limit_reached: scan.runDirs >= RSI_STAGING_MAX_RUNS, bytes_checked: false },
+    gc_plan_error: gcPlanError,
     last_tick:
       lastTick === null
         ? null
@@ -482,6 +489,18 @@ export async function buildStatusDoc(
     tainted,
     warnings: [...warnings, ...scanWarnings],
   };
+}
+
+/** `ReflectGcError.code` → 小写子码(白名单;未知码与非 ReflectGcError 一律 `internal`,不输出异常消息) */
+const GC_PLAN_ERROR_MAP: Readonly<Record<string, RsiGcPlanError>> = {
+  GC_REFERENCE_SCAN_FAILED: 'reference_scan_failed',
+  GC_ROOT_UNREADABLE: 'root_unreadable',
+  GC_ROOT_NOT_REAL_DIR: 'root_not_real_dir',
+};
+export function gcPlanErrorOf(e: unknown): RsiGcPlanError {
+  if (!(e instanceof ReflectGcError) || !Object.hasOwn(GC_PLAN_ERROR_MAP, e.code))
+    return 'internal';
+  return GC_PLAN_ERROR_MAP[e.code] ?? 'internal';
 }
 
 /** 非 `--json`:`key=value` 逐行,嵌套键用 `a.b`,数组按元素展开为 `a[i].b`,空数组 `a=` */
