@@ -11,7 +11,12 @@
 import * as fs from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
-import { findWriteRootEscape } from './paths.js';
+import {
+  HOME_WRITE_TABLE,
+  HOOKS_PRIVATE_STATE_REL,
+  isKitHooksReserved,
+} from '../contracts/sync.js';
+import { findWriteRootEscape, getRealHome } from './paths.js';
 import type { IoContext } from './paths.js';
 
 /**
@@ -80,6 +85,31 @@ function within(root: string, target: string, allowEqual: boolean): boolean {
 export interface AssertOptions {
   /** 允许目标等于 root 本身(仅 mkdirp) */
   allowRoot?: boolean;
+  /** 操作作用于整棵子树(递归删除、rename 的来源):目标是 kit-hooks 保留路径的祖先也拒绝 */
+  subtree?: boolean;
+}
+
+/**
+ * A5 验收评审采纳(§20.15-11 第 3 条):kit-hooks 三个目标与 `hooks/` 私有状态子树归 `hooks-fs.ts` 独占,
+ * 普通写出口同样拒绝——否则把 KIT_TMP / KIT_STATE_DIR 指进该子树,`rsi stop` 之类就能经 safe-fs 写进去。
+ * 按真实 HOME 下的 realpath 判定(保留判断本身已做 ASCII 大小写折叠);`subtree` 时目标是保留路径的祖先也拒绝。
+ */
+function assertNotKitHooks(real: string, abs: string, subtree: boolean): void {
+  const home = realResolve(getRealHome());
+  if (!within(home, real, false)) return;
+  const rel = path.relative(home, real).split(path.sep).join('/');
+  if (isKitHooksReserved(rel)) {
+    throw new WriteDeniedError(`写入被拒绝:kit 钩子保留路径只能由 rsi hooks 写:${abs}`);
+  }
+  if (!subtree) return;
+  const lower = `${rel.toLowerCase()}/`;
+  const reserved = [
+    HOOKS_PRIVATE_STATE_REL,
+    ...HOME_WRITE_TABLE.filter((e) => e.owner === 'kit-hooks').map((e) => e.path),
+  ];
+  if (reserved.some((r) => r.toLowerCase().startsWith(lower))) {
+    throw new WriteDeniedError(`写入被拒绝:目标包含 kit 钩子保留路径:${abs}`);
+  }
 }
 
 /** 校验并返回解析后的绝对路径(未做 realpath 的那份,供调用 fs 用)。 */
@@ -98,6 +128,7 @@ export function assertWritable(ctx: IoContext, target: string, opts: AssertOptio
   if (!ok) {
     throw new WriteDeniedError(`写入被拒绝:目标不在允许的根目录内:${abs}`);
   }
+  assertNotKitHooks(real, abs, opts.subtree === true);
   // 硬链接:root 内的一个名字可能指向 root 外的 inode,写它等于改写外部文件。
   try {
     const st = fs.lstatSync(real); // 用解析后的真实路径:经 symlink 指向的硬链接别名同样要拦
@@ -247,7 +278,7 @@ export async function mkdirp(ctx: IoContext, target: string, mode = 0o755): Prom
 
 export async function remove(ctx: IoContext, target: string): Promise<void> {
   audit(ctx, 'remove', target);
-  const abs = assertWritable(ctx, target);
+  const abs = assertWritable(ctx, target, { subtree: true });
   await fsp.rm(abs, { recursive: true, force: true });
 }
 
@@ -262,8 +293,8 @@ export async function copyFile(ctx: IoContext, from: string, to: string): Promis
 export async function rename(ctx: IoContext, from: string, to: string): Promise<void> {
   audit(ctx, 'rename.from', from);
   audit(ctx, 'rename', to);
-  const src = assertWritable(ctx, from);
-  const dest = assertWritable(ctx, to);
+  const src = assertWritable(ctx, from, { subtree: true });
+  const dest = assertWritable(ctx, to, { subtree: true });
   await fsp.rename(src, dest);
 }
 

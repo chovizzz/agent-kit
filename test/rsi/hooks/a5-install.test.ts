@@ -816,9 +816,11 @@ describe('读取安全(R20-15.14):不安全的目标 → 3 hooks_target_unsafe,�
     await hx.rm('.claude/settings.json');
 
     await hx.put('.claude/settings.json', '{}\n');
-    await hx.hard('.claude/settings.json', '.claude/settings.hard.json');
-    await expectUnsafe(hx, await hx.write(['--install', '--agent', 'claude']));
-    await hx.rm('.claude/settings.hard.json');
+    // 硬链接用独立夹具:safe-fs 拒绝删除 nlink>1 的文件,清理不了,就不在同一个假 HOME 里接着测
+    const hh = await claudeHx('a5-unsafe-hard-');
+    await hh.put('.claude/settings.json', '{}\n');
+    await hh.hard('.claude/settings.json', '.claude/settings.hard.json');
+    await expectUnsafe(hh, await hh.write(['--install', '--agent', 'claude']));
 
     await hx.chmod('.claude/settings.json', 0o664);
     await expectUnsafe(hx, await hx.write(['--install', '--agent', 'claude']));

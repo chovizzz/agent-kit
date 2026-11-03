@@ -493,6 +493,20 @@ export const A5_MUTATIONS: readonly A5Mutation[] = [
     expectRed: ['只有残留 tmp、没有 journal'],
     mustKill: ['只有残留 tmp、没有 journal'],
   },
+  {
+    id: 'safe-fs-writes-kit-hooks',
+    clause: '主代理验收评审补:普通写出口 safe-fs 可写 kit-hooks 保留路径(§20.15-11 第 3 条)',
+    edits: [
+      {
+        file: 'src/io/safe-fs.ts',
+        anchor: 'assertNotKitHooks(real, abs, opts.subtree === true);',
+        replacement: 'void assertNotKitHooks;',
+      },
+    ],
+    tests: ['io/safe-fs-kit-hooks.test.ts'],
+    expectRed: ['私有子树时', '大小写别名', '递归删除', 'kit-hooks 目标文件'],
+    mustKill: ['私有子树时', '递归删除'],
+  },
 ];
 
 /** 主代理在 javis 上执行变异后填写(形状同 A4_RESULTS);A5 实装块不执行变异 */
