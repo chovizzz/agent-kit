@@ -182,11 +182,32 @@ export async function appendFile(
   ctx: IoContext,
   target: string,
   data: string | Uint8Array,
-  opts: WriteOptions = {},
+  opts: WriteOptions & {
+    /**
+     * 不跟随末级符号链接(`O_WRONLY|O_APPEND|O_CREAT|O_NOFOLLOW`,末级是链接 → `ELOOP` 抛出)。
+     * 用于「先只读校验、再追加」的调用方(A6 订正 #1 的提醒放弃日志),封住校验与追加之间换成链接的末级窗口;缺省保持原行为。
+     */
+    noFollow?: boolean;
+  } = {},
 ): Promise<void> {
   audit(ctx, 'appendFile', target);
   const abs = assertWritable(ctx, target);
-  await fsp.appendFile(abs, data, { mode: opts.mode ?? 0o644 });
+  if (opts.noFollow !== true) {
+    await fsp.appendFile(abs, data, { mode: opts.mode ?? 0o644 });
+    return;
+  }
+  const NOFOLLOW = fs.constants.O_NOFOLLOW ?? 0;
+  if (NOFOLLOW === 0) throw new WriteDeniedError('写入被拒绝:平台不支持 O_NOFOLLOW');
+  const h = await fsp.open(
+    abs,
+    fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_CREAT | NOFOLLOW,
+    opts.mode ?? 0o644,
+  );
+  try {
+    await h.write(typeof data === 'string' ? Buffer.from(data, 'utf8') : data);
+  } finally {
+    await h.close();
+  }
 }
 
 /**

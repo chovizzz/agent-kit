@@ -288,7 +288,8 @@ export async function logNoticeGiveUp(
   const line = canonicalJsonLine(
     RsiLogLineSchema.parse({ at: now.toISOString(), trigger: 'notice', action: 'skipped', code }),
   );
-  await appendFile(io, file, line, { mode: 0o600 });
+  // noFollow:校验(readFileSafe)与追加之间末级被换成符号链接 → ELOOP,不写(A6 订正 #1 评审 M1)
+  await appendFile(io, file, line, { mode: 0o600, noFollow: true });
 }
 
 async function runNoticeCore(

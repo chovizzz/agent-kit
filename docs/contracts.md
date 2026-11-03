@@ -4999,9 +4999,9 @@ A6 实装(`src/rsi/{pending,dismiss,notice,project-stats}.ts`、`src/reflect/gc-
 
 #### 20.17-11 A6 订正 #1(提醒放弃日志、GC 计划子码;用户 2026-11-03 拍板)
 
-- ① **提醒放弃日志**:提醒在「本应提醒却没提醒成」时追加一行 `log.jsonl`:`{at, trigger: notice, action: skipped, code}`,`code ∈ locked | over_budget | write_failed | not_eligible | internal`(`not_eligible` = 锁内复检时触发条件已不满足;`internal` = 配置就绪之后的意外异常)。跳过分支(R20-17.12 的非 TTY、环境跳过、钩子命令、配置不可用、锁外判定不满足触发条件,含 `notice.json` 损坏)与「没有要说的」**不写**。
+- ① **提醒放弃日志**:提醒在「本应提醒却没提醒成」时追加一行 `log.jsonl`:`{at, trigger: notice, action: skipped, code}`,`code ∈ locked | over_budget | write_failed | not_eligible | internal`(`not_eligible` = 锁内复检时触发条件已不满足;`internal` = 配置就绪之后的意外异常,含记账已完成而 stderr 写失败——此时 `notice.json` 已记、不会重复提示)。跳过分支(R20-17.12 的非 TTY、环境跳过、钩子命令、配置不可用、锁外判定不满足触发条件,含 `notice.json` 损坏)与「没有要说的」**不写**。
 - ② **写法**:锁已释放(或从未拿到)之后,无锁 `O_APPEND` 单行追加(R20-5.1 锁矩阵);只在 `rsi/` 通过只读安全校验(`rsiDirReadonly`)时写,不建目录、不修权限、0600;日志写失败吞掉,不改命令退出码与 stderr。超时(`over_budget`)同样写这一行,不受 R20-17.15 预算约束(用户选「每次放弃都记一行」)。
-- ③ **去重**:写前以句柄级安全读取(属主 / 权限 / 非链接,≤ 256 KiB)读 `log.jsonl`,30 分钟内已有同 `code` 的 `trigger=notice` 行 → 不追加;读不了 / 不安全 → 不写(宁可少记)。由此提醒的读集合追加 `log.jsonl`(只在放弃分支读)。
+- ③ **去重**:写前以句柄级安全读取(属主 / 权限 / 非链接,≤ 256 KiB)读 `log.jsonl`,30 分钟内已有同 `code` 的 `trigger=notice` 行 → 不追加;读不了 / 不安全 → 不写(宁可少记;超过 256 KiB 视同读不了,直到持锁写入方按 R20-6.7 截断);行内 `at` 无法解析或晚于当前时间 → 视为不重复。追加以 `O_NOFOLLOW` 打开(校验与追加之间末级被换成符号链接 → 不写)。由此提醒的读集合追加 `log.jsonl`(只在放弃分支读)。
 - ④ **GC 计划子码**:`rsi status` 新增顶层键 `gc_plan_error: reference_scan_failed | root_unreadable | root_not_real_dir | internal | null`,与 warning `gc_plan_failed` 同时出现;由 `ReflectGcError.code` 白名单映射(未知码、非 `ReflectGcError` → `internal`),不输出异常消息。warning 名与 `RSI_STATUS_WARNINGS` 不变;status 键集测试同提交更新。
 - ⑤ **验收**:每个放弃分支恰好 1 行且过 `RsiLogLineSchema`、无路径;30 分钟内同码重复放弃不追加,不同码各 1 行;跳过分支零写(不建 `log.jsonl`);`rsi/` 缺失 / 不安全零写;`log.jsonl` 不安全(符号链接 / 权限过宽)零写;日志失败不改结果;GC 三种失败各对应子码、未知 → `internal`、成功 → `null`、异常消息不出现在输出里。变异:去掉去重 → 红;跳过分支也写 → 红;`rsi/` 不安全仍写 → 红;子码映射写死 `internal` → 红。
 
