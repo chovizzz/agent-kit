@@ -790,7 +790,7 @@ describe('命令参数(经 reflect 命令:R20-16.14)', () => {
   });
 });
 
-describe('stdin 读取失败(契约无专门码:按 RSI_FAIL_CLOSED reason=internal 报,待主代理定夺)', () => {
+describe('stdin 读取失败(A4i-1:RSI_FAIL_CLOSED reason=stdin_unreadable)', () => {
   it('流错误 → readStdinFrom reject,不把已读到的前缀当完整输入(先发合法 JSON 再出错)', async () => {
     const s = new PassThrough();
     const p = readStdinFrom(s, 64 * 1024);
@@ -808,7 +808,7 @@ describe('stdin 读取失败(契约无专门码:按 RSI_FAIL_CLOSED reason=inter
     const id = await issue(w);
     w.s.audit.length = 0;
     const r = await ingest(w, id, body(uniq(0)), { stdinError: true });
-    expect([r.code, r.err]).toEqual([3, 'RSI_FAIL_CLOSED reason=internal\n']);
+    expect([r.code, r.err]).toEqual([3, 'RSI_FAIL_CLOSED reason=stdin_unreadable\n']);
     expect(w.s.audit).toEqual([]);
     expect(await digestStillThere(w, id)).toBe(true);
     expect(await quota(w)).toBeNull();
