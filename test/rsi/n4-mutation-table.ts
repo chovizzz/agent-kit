@@ -725,4 +725,437 @@ export const N4_MUTATIONS: readonly N4Mutation[] = [
 ];
 
 /** 主代理在 javis 上执行变异后填写(实装块不执行,故留空) */
-export const N4_RESULTS: readonly N4Result[] = [];
+// 2026-11-03 javis 私有检出 @ 864451e:基线 226 例全绿、0 skipped;40 条变异全部被杀、无 skipped / 套件错误,每条还原后检出干净;javis HOME 的 agent 配置与 kit 状态前后不变。
+// 首轮(@ 8c03095)22/37 通过:judge-/reflector-unknown-vendor-passes 存活(夹具被合理性检查先拦,内置厂商校验测不到 → 改用 pi + 无法归族模型串,并新增反思器侧 2 条夹具);
+// fingerprint-not-recomputed 的必杀改为提案文件被改(规则文件被改先由 rule_hash 核对落 STALE);其余 14 条只是多红了表外相关用例(已补登 expectRed)。
+export const N4_RESULTS: readonly N4Result[] = [
+  {
+    id: 'skip-tty-gate',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'TTY 门(R20-18.5) > --write 且打不开控制终端 → 退出 2 JUDGE_USAGE reason=not_tty;stdin 未读、暂存区字节不变;干跑在无 TTY 下可跑',
+    ],
+    restored: true,
+  },
+  {
+    id: 'vendor-compare-skipped',
+    failed: 5,
+    skipped: 0,
+    killedBy: [
+      'R20-18.6 第 2 步:厂商名比对(单次机会、逐字节全等) > 前缀 → 放弃(invalid),零写入,不取锁',
+      'R20-18.6 第 2 步:厂商名比对(单次机会、逐字节全等) > 子串 → 放弃(invalid),零写入,不取锁',
+      'R20-18.6 第 2 步:厂商名比对(单次机会、逐字节全等) > y → 放弃(invalid),零写入,不取锁',
+      'R20-18.6 第 2 步:厂商名比对(单次机会、逐字节全等) > yes → 放弃(invalid),零写入,不取锁',
+      'R20-18.6 第 2 步:厂商名比对(单次机会、逐字节全等) > 内部空白 → 放弃(invalid),零写入,不取锁',
+    ],
+    restored: true,
+  },
+  {
+    id: 'vendor-compare-substring',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'R20-18.6 第 2 步:厂商名比对(单次机会、逐字节全等) > 前缀 → 放弃(invalid),零写入,不取锁',
+      'R20-18.6 第 2 步:厂商名比对(单次机会、逐字节全等) > 子串 → 放弃(invalid),零写入,不取锁',
+    ],
+    restored: true,
+  },
+  {
+    id: 'vendor-compare-self',
+    failed: 5,
+    skipped: 0,
+    killedBy: [
+      'R20-18.6 第 2 步:厂商名比对(单次机会、逐字节全等) > 前缀 → 放弃(invalid),零写入,不取锁',
+      'R20-18.6 第 2 步:厂商名比对(单次机会、逐字节全等) > 子串 → 放弃(invalid),零写入,不取锁',
+      'R20-18.6 第 2 步:厂商名比对(单次机会、逐字节全等) > y → 放弃(invalid),零写入,不取锁',
+      'R20-18.6 第 2 步:厂商名比对(单次机会、逐字节全等) > yes → 放弃(invalid),零写入,不取锁',
+      'R20-18.6 第 2 步:厂商名比对(单次机会、逐字节全等) > 内部空白 → 放弃(invalid),零写入,不取锁',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rule-hash-not-checked',
+    failed: 4,
+    skipped: 0,
+    killedBy: [
+      '输出通道与退出码(R20-18.22) > 校验拒绝 → 退出 1 JUDGE_INGEST_REJECTED reason=<子码>;stderr 不回显 payload / 异常文本',
+      'R20-18.4 默认干跑:不要求 TTY、零写入 > 校验不过同样走 rejected(使 agent 能看到原因)',
+      'R20-18.9 payload 校验:每个子码一个夹具(严格批次,零写入) > run 状态类:proposal_unknown / proposal_unsupported / rule_hash_mismatch / already_judged',
+      'R20-18.9 payload 校验:每个子码一个夹具(严格批次,零写入) > 严格批次:合法 + 非法混合 → 整批拒,零写入(合法那条也没写)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'run-id-not-checked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'R20-18.9 payload 校验:每个子码一个夹具(严格批次,零写入) > payload 形状 / 声明 / run 类',
+    ],
+    restored: true,
+  },
+  {
+    id: 'fingerprint-not-recomputed',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'R20-18.6 第 4 步:锁内指纹复核(STALE,零写入) > 提案文件在展示后被改(含 judge 被并发写入)→ STALE',
+      'R20-18.11 --confirm-reflector > 指纹不含 payload 项:展示后改提案 → STALE',
+    ],
+    restored: true,
+  },
+  {
+    id: 'overwrite-existing-judge',
+    failed: 3,
+    skipped: 0,
+    killedBy: [
+      'R20-18.8 覆盖规则 > 重放同一 payload → already_judged(不做幂等「成功」)',
+      'R20-18.8 覆盖规则 > 已有 spawned 裁决 → already_judged,--replace 也拒(绝不覆盖可证明的裁决)',
+      'R20-18.8 覆盖规则 > --replace 替换既有 session_confirmed:完整确认后替换,旧 binding 消失;确认屏列出旧记录摘要;不带 --replace 则拒',
+    ],
+    restored: true,
+  },
+  {
+    id: 'replace-allows-spawned',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'R20-18.8 覆盖规则 > 已有 spawned 裁决 → already_judged,--replace 也拒(绝不覆盖可证明的裁决)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'unconfirmed-reflector-passes',
+    failed: 5,
+    skipped: 0,
+    killedBy: [
+      'R20-18.17 vendorEvidence 真值表 > session_declared 无确认 + proven 裁判',
+      'R20-18.17 vendorEvidence 真值表 > 单侧入口:反思器压制规则——self_confirmed 时不发 BACKEND_MISSING / VENDOR_MISMATCH(A4 写的 provider=session / model=undeclared 必然命中)',
+      'R20-18.19 CI(judgeChecks)与本地(checkC5)同口径:CI 不比本地宽 > session_declared 无确认 + proven 裁判:本地不过 ⇒ CI 有 error;本地的每个厂商类 reason 在 CI 都有映射码',
+      'R20-18.19 CI(judgeChecks)与本地(checkC5)同口径:CI 不比本地宽 > 反思器 self_confirmed:CI 不发 REFLECTOR_UNVERIFIABLE(压制),但 session_declared 无确认时发(R20-16.20 ② 保持)',
+      'R20-18.19 CI(judgeChecks)与本地(checkC5)同口径:CI 不比本地宽 > 穷尽性:C5 观察到的每个 reason 都在 C5_REASONS 里,C5_REASONS 的每一项都在 C5_CI_CODES 里(往 C5 加 reason 不接 CI → 红)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'judge-binding-not-recomputed',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'R20-18.17 vendorEvidence 真值表 > 裁判确认 binding 被改(verdict 被改成 accept 之外的值而 binding 不动)',
+      'R20-18.17 vendorEvidence 真值表 > spawned 专属码不对 session_confirmed 发出;session_confirmed 无效时只发 JUDGE_CONFIRM_INVALID',
+    ],
+    restored: true,
+  },
+  {
+    id: 'reflector-binding-not-recomputed',
+    failed: 1,
+    skipped: 0,
+    killedBy: ['R20-18.17 vendorEvidence 真值表 > 反思器确认 binding 被改'],
+    restored: true,
+  },
+  {
+    id: 'same-vendor-passes',
+    failed: 10,
+    skipped: 0,
+    killedBy: [
+      'R20-18.17 vendorEvidence 真值表 > session_declared 无确认 + proven 裁判',
+      'R20-18.17 vendorEvidence 真值表 > 反思器确认 binding 被改',
+      'R20-18.17 vendorEvidence 真值表 > 反思器确认不合理(claude 后端却确认为 openai 厂商 + claude 模型串)',
+      'R20-18.17 vendorEvidence 真值表 > 裁判确认 binding 被改(verdict 被改成 accept 之外的值而 binding 不动)',
+      'R20-18.17 vendorEvidence 真值表 > 裁判自报 vendor=unknown',
+      'R20-18.17 vendorEvidence 真值表 > 裁判自报非内置厂商',
+      'R20-18.17 vendorEvidence 真值表 > 反思器确认为非内置厂商(pi 后端 + 无法归族的模型串)',
+      'R20-18.17 vendorEvidence 真值表 > 反思器确认为 unknown(pi 后端 + 无法归族的模型串)',
+      'R20-18.17 vendorEvidence 真值表 > 同厂商:self_confirmed 反思器 openai + 自报裁判 openai',
+      'R20-18.19 CI(judgeChecks)与本地(checkC5)同口径:CI 不比本地宽 > 反思器 self_confirmed:CI 不发 REFLECTOR_UNVERIFIABLE(压制),但 session_declared 无确认时发(R20-16.20 ② 保持)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'judge-unknown-vendor-passes',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'R20-18.17 vendorEvidence 真值表 > 裁判自报 vendor=unknown',
+      'R20-18.17 vendorEvidence 真值表 > 裁判自报非内置厂商',
+    ],
+    restored: true,
+  },
+  {
+    id: 'reflector-unknown-vendor-passes',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'R20-18.17 vendorEvidence 真值表 > 反思器确认为非内置厂商(pi 后端 + 无法归族的模型串)',
+      'R20-18.17 vendorEvidence 真值表 > 反思器确认为 unknown(pi 后端 + 无法归族的模型串)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'declared-conflict-removed',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'R20-18.9 payload 校验:每个子码一个夹具(严格批次,零写入) > payload 形状 / 声明 / run 类',
+    ],
+    restored: true,
+  },
+  {
+    id: 'label-lost-judge',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'promote --run:端到端 > N4:裁判侧是人工确认的自报 → 四处标注 SELF_REPORT_LABEL_JUDGE、不出现 VENDOR_PROVEN_LABEL;promo_id 随层级变化;同一证据重跑同 id',
+      'N4 vendor_evidence(promote --rule) > 裁判侧自报:SELF_REPORT_LABEL_JUDGE 出现、VENDOR_PROVEN_LABEL 不出现;self_reported = [judge];promo_id 与 proven 世界不同',
+    ],
+    restored: true,
+  },
+  {
+    id: 'report-self-reported-lost',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'promote --run:端到端 > N4:裁判侧是人工确认的自报 → 四处标注 SELF_REPORT_LABEL_JUDGE、不出现 VENDOR_PROVEN_LABEL;promo_id 随层级变化;同一证据重跑同 id',
+      'N4 vendor_evidence(promote --rule) > 裁判侧自报:SELF_REPORT_LABEL_JUDGE 出现、VENDOR_PROVEN_LABEL 不出现;self_reported = [judge];promo_id 与 proven 世界不同',
+    ],
+    restored: true,
+  },
+  {
+    id: 'promo-id-ignores-evidence',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'N4 vendor_evidence(promote --rule) > 裁判侧自报:SELF_REPORT_LABEL_JUDGE 出现、VENDOR_PROVEN_LABEL 不出现;self_reported = [judge];promo_id 与 proven 世界不同',
+    ],
+    restored: true,
+  },
+  {
+    id: 'ci-pair-check-dropped',
+    failed: 10,
+    skipped: 0,
+    killedBy: [
+      'R20-18.19 CI(judgeChecks)与本地(checkC5)同口径:CI 不比本地宽 > session_declared 无确认 + proven 裁判:本地不过 ⇒ CI 有 error;本地的每个厂商类 reason 在 CI 都有映射码',
+      'R20-18.19 CI(judgeChecks)与本地(checkC5)同口径:CI 不比本地宽 > 反思器确认 binding 被改:本地不过 ⇒ CI 有 error;本地的每个厂商类 reason 在 CI 都有映射码',
+      'R20-18.19 CI(judgeChecks)与本地(checkC5)同口径:CI 不比本地宽 > 反思器确认不合理(claude 后端却确认为 openai 厂商 + claude 模型串):本地不过 ⇒ CI 有 error;本地的每个厂商类 reason 在 CI 都有映射码',
+      'R20-18.19 CI(judgeChecks)与本地(checkC5)同口径:CI 不比本地宽 > 裁判确认 binding 被改(verdict 被改成 accept 之外的值而 binding 不动):本地不过 ⇒ CI 有 error;本地的每个厂商类 reason 在 CI 都有映射码',
+      'R20-18.19 CI(judgeChecks)与本地(checkC5)同口径:CI 不比本地宽 > 裁判自报 vendor=unknown:本地不过 ⇒ CI 有 error;本地的每个厂商类 reason 在 CI 都有映射码',
+      'R20-18.19 CI(judgeChecks)与本地(checkC5)同口径:CI 不比本地宽 > 裁判自报非内置厂商:本地不过 ⇒ CI 有 error;本地的每个厂商类 reason 在 CI 都有映射码',
+      'R20-18.19 CI(judgeChecks)与本地(checkC5)同口径:CI 不比本地宽 > 反思器确认为非内置厂商(pi 后端 + 无法归族的模型串):本地不过 ⇒ CI 有 error;本地的每个厂商类 reason 在 CI 都有映射码',
+      'R20-18.19 CI(judgeChecks)与本地(checkC5)同口径:CI 不比本地宽 > 反思器确认为 unknown(pi 后端 + 无法归族的模型串):本地不过 ⇒ CI 有 error;本地的每个厂商类 reason 在 CI 都有映射码',
+      'R20-18.19 CI(judgeChecks)与本地(checkC5)同口径:CI 不比本地宽 > 同厂商:self_confirmed 反思器 openai + 自报裁判 openai:本地不过 ⇒ CI 有 error;本地的每个厂商类 reason 在 CI 都有映射码',
+      'R20-18.19 CI(judgeChecks)与本地(checkC5)同口径:CI 不比本地宽 > 反思器 self_confirmed:CI 不发 REFLECTOR_UNVERIFIABLE(压制),但 session_declared 无确认时发(R20-16.20 ② 保持)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'legacy-provenance-rejected',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'R20-18.13 判别联合与缺省补键 > 旧记录(无 provenance)继续合法且按 spawned 解析;显式 spawned 同样合法',
+      'R20-18.13 判别联合与缺省补键 > spawned 的 superRefine 原样保留:hops 链、最后一跳 ok',
+    ],
+    restored: true,
+  },
+  {
+    id: 'legacy-provenance-as-session',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'R20-18.13 判别联合与缺省补键 > 旧记录(无 provenance)继续合法且按 spawned 解析;显式 spawned 同样合法',
+      'R20-18.13 判别联合与缺省补键 > spawned 的 superRefine 原样保留:hops 链、最后一跳 ok',
+    ],
+    restored: true,
+  },
+  {
+    id: 'confirmed-on-spawned-accepted',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'R20-18.14 reflector.confirmed > 只允许出现在 session_declared 提案上;出现在 spawned / 缺省提案上 → schema 失败',
+    ],
+    restored: true,
+  },
+  {
+    id: 'auto-entry-imports-judge-ingest',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'R20-1.1 import 闭包:从各入口分别起算 > 随块生效:src/rsi/ 下已存在的真实入口文件同样要求闭包干净',
+    ],
+    restored: true,
+  },
+  {
+    id: 'typed-content-echoed',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '输出通道与退出码(R20-18.22) > 放弃 → 退出 1 JUDGE_CONFIRM_DECLINED;用户键入的内容不出现在 stdout / stderr',
+    ],
+    restored: true,
+  },
+  {
+    id: 'parse-output-bypassed',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'R20-18.9 payload 校验:每个子码一个夹具(严格批次,零写入) > output 类:映射到各自的子码',
+      'R20-18.9 payload 校验:每个子码一个夹具(严格批次,零写入) > predicted 时 prediction 必填且形状合法(prediction_invalid);非 predicted 时 agent 给的 prediction 被丢弃',
+    ],
+    restored: true,
+  },
+  {
+    id: 'strict-batch-degraded',
+    failed: 3,
+    skipped: 0,
+    killedBy: [
+      'R20-18.4 默认干跑:不要求 TTY、零写入 > 校验不过同样走 rejected(使 agent 能看到原因)',
+      'R20-18.9 payload 校验:每个子码一个夹具(严格批次,零写入) > run 状态类:proposal_unknown / proposal_unsupported / rule_hash_mismatch / already_judged',
+      'R20-18.9 payload 校验:每个子码一个夹具(严格批次,零写入) > 严格批次:合法 + 非法混合 → 整批拒,零写入(合法那条也没写)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'store-reflector-fields-modified',
+    failed: 6,
+    skipped: 0,
+    killedBy: [
+      'R20-18.6 / 18.8 写入:happy path > team 提案:裁判侧 + 反思器侧都由用户键入;只改 judge 与 reflector.confirmed;judge_attempts 不存在;其余字节不变',
+      'R20-18.6 第 2 步:厂商名比对(单次机会、逐字节全等) > 同 run 前提防回归:两个不同 input_digest 的 session_declared 提案 → 拒一次覆盖(schema_invalid),零写入',
+      'R20-18.11 --confirm-reflector > 写入只改 reflector.confirmed(judge 原样);不限层;不允许空行跳过',
+      'R20-18.11 --confirm-reflector > --proposal 限定子集;不在候选里 → proposal_unknown;键入厂商与已有 judge 同厂商 → same_vendor',
+      'applyIngestFields > confirmed:reflector 里只追加 confirmed 一个键,其余字段与键序原样;judge_attempts 保留',
+      'applyIngestFields > 已有 confirmed(无效的旧值)被替换',
+    ],
+    restored: true,
+  },
+  {
+    id: 'store-assert-disabled',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'assertOnlyIngestKeysChanged:reflector 其余字段改动即抛(具体原因) > vendor / model / provenance / provider / run_id / 新增键 / 删除键 → 抛',
+    ],
+    restored: true,
+  },
+  {
+    id: 'screen-leak-gate-bypassed',
+    failed: 1,
+    skipped: 0,
+    killedBy: ['R20-18.7 锁与闸 > 确认屏过不了泄漏闸(含禁止值)→ output_leak,不读输入'],
+    restored: true,
+  },
+  {
+    id: 'stdout-polluted',
+    failed: 5,
+    skipped: 0,
+    killedBy: [
+      'TTY 门(R20-18.5) > --write 且打不开控制终端 → 退出 2 JUDGE_USAGE reason=not_tty;stdin 未读、暂存区字节不变;干跑在无 TTY 下可跑',
+      '输出通道与退出码(R20-18.22) > --write --json:stdout 只有固定键集合的 JSON;确认屏全在终端句柄;stderr 为空;退出 0',
+      '输出通道与退出码(R20-18.22) > 放弃 → 退出 1 JUDGE_CONFIRM_DECLINED;用户键入的内容不出现在 stdout / stderr',
+      '输出通道与退出码(R20-18.22) > --confirm-reflector 无候选 → 退出 0 nothing_to_confirm,零写入',
+      '输出通道与退出码(R20-18.22) > 干跑文本输出:每条提案一行(枚举 + freeze=deferred),不含 payload 自由文本',
+    ],
+    restored: true,
+  },
+  {
+    id: 'c5-reason-not-wired',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'R20-18.19 CI(judgeChecks)与本地(checkC5)同口径:CI 不比本地宽 > 穷尽性:C5 观察到的每个 reason 都在 C5_REASONS 里,C5_REASONS 的每一项都在 C5_CI_CODES 里(往 C5 加 reason 不接 CI → 红)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'cross-vendor-of-referenced-outside',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'R20-18.17 单一实现:isCrossVendorOf 除 vendor.ts 外 src/ 与 cli.ts 里不再有引用 > import 图 / 引用扫描',
+    ],
+    restored: true,
+  },
+  {
+    id: 'self-confirmed-reflector-not-suppressed',
+    failed: 15,
+    skipped: 0,
+    killedBy: [
+      'R20-18.17 vendorEvidence 真值表 > self_confirmed 反思器 + proven 裁判',
+      'R20-18.17 vendorEvidence 真值表 > self_confirmed + self_confirmed(不要求至少一侧可证明,Q-N4-2 = A)',
+      'R20-18.17 vendorEvidence 真值表 > session_declared 无确认 + proven 裁判',
+      'R20-18.17 vendorEvidence 真值表 > 反思器确认 binding 被改',
+      'R20-18.17 vendorEvidence 真值表 > 反思器确认不合理(claude 后端却确认为 openai 厂商 + claude 模型串)',
+      'R20-18.17 vendorEvidence 真值表 > 反思器确认为非内置厂商(pi 后端 + 无法归族的模型串)',
+      'R20-18.17 vendorEvidence 真值表 > 反思器确认为 unknown(pi 后端 + 无法归族的模型串)',
+      'R20-18.17 vendorEvidence 真值表 > 同厂商:self_confirmed 反思器 openai + 自报裁判 openai',
+      'R20-18.17 vendorEvidence 真值表 > model:proven 取反思器记录的 model / 裁判最后一跳的 model;self_confirmed 取键入 / 声明值',
+      'R20-18.17 vendorEvidence 真值表 > 单侧入口:反思器压制规则——self_confirmed 时不发 BACKEND_MISSING / VENDOR_MISMATCH(A4 写的 provider=session / model=undeclared 必然命中)',
+      'R20-18.19 CI(judgeChecks)与本地(checkC5)同口径:CI 不比本地宽 > 反思器 self_confirmed:CI 不发 REFLECTOR_UNVERIFIABLE(压制),但 session_declared 无确认时发(R20-16.20 ② 保持)',
+      'R20-18.21 judge --run-llm 接入 > 行为翻转:反思器侧确认(anthropic)后可评审;产出 spawned,磁盘上显式带 provenance: spawned;证据 = self_confirmed 反思器 + proven 裁判',
+      'R20-18.21 judge --run-llm 接入 > 确认的厂商参与同厂商判定:反思器确认为 openai → codex 跳 skipped:same-vendor,改由下一家评审',
+      'R20-18.21 judge --run-llm 接入 > 全链无成功时写的 judge_attempts 以有效反思器厂商记 same-vendor 跳,自己的 schema 接受(否则确认后 judge --run-llm 的产出会被自己拒绝)',
+      'R20-18.21 judge --run-llm 接入 > 既有 session_confirmed 裁决:judge --run-llm 跳过(not_measurable 口径),不调用,outcome 标注来源',
+    ],
+    restored: true,
+  },
+  {
+    id: 'ci-unverifiable-not-suppressed',
+    failed: 3,
+    skipped: 0,
+    killedBy: [
+      'R20-18.19 CI(judgeChecks)与本地(checkC5)同口径:CI 不比本地宽 > self_confirmed 反思器 + proven 裁判:本地不过 ⇒ CI 有 error;本地的每个厂商类 reason 在 CI 都有映射码',
+      'R20-18.19 CI(judgeChecks)与本地(checkC5)同口径:CI 不比本地宽 > self_confirmed + self_confirmed(不要求至少一侧可证明,Q-N4-2 = A):本地不过 ⇒ CI 有 error;本地的每个厂商类 reason 在 CI 都有映射码',
+      'R20-18.19 CI(judgeChecks)与本地(checkC5)同口径:CI 不比本地宽 > 反思器 self_confirmed:CI 不发 REFLECTOR_UNVERIFIABLE(压制),但 session_declared 无确认时发(R20-16.20 ② 保持)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'calibration-counts-self-reported',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'R20-18.19 ④ 校准账排除自报记录 > 历史里有 session_confirmed 记录:不进任何键、不产生 unreadable / unavailable、seen 为空',
+    ],
+    restored: true,
+  },
+  {
+    id: 'calibration-self-reported-no-warn',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'R20-18.19 ③④ 自报裁决的 T2(advisory → active) > session_confirmed 裁判:K4 冻结核验同形放行(无 ACCEPTANCE_*),但发 CALIBRATION_SELF_REPORTED(warn),有效块数 +STRICT_EXTRA_TILES → THRESHOLD_TILES',
+    ],
+    restored: true,
+  },
+  {
+    id: 'c8-misses-declared-model',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'R20-18.19 ⑤ C8 复扫清单 > C8 复扫清单含 judge.declared.model:声明的模型串里带口令 → REDACTION_RESIDUAL,字段指向 judge.declared.model',
+    ],
+    restored: true,
+  },
+  {
+    id: 'c8-misses-confirmed-model',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'R20-18.19 ⑤ C8 复扫清单 > C8 复扫清单含 reflector.confirmed.model:用户键入的反思器模型串里带口令 → 字段指向 reflector.confirmed.model',
+    ],
+    restored: true,
+  },
+  {
+    id: 'superrefine-uses-raw-vendor',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'R20-18.14 reflector.confirmed > judge_attempts 的同厂商比较用有效反思器厂商(confirmed.vendor),否则确认后写出的 judge_attempts 会被自己的 schema 拒绝',
+      'R20-18.21 judge --run-llm 接入 > 全链无成功时写的 judge_attempts 以有效反思器厂商记 same-vendor 跳,自己的 schema 接受(否则确认后 judge --run-llm 的产出会被自己拒绝)',
+    ],
+    restored: true,
+  },
+];
