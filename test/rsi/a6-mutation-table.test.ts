@@ -38,8 +38,20 @@ describe('A6 变异表', () => {
     }
   });
 
-  it('A6_RESULTS 在实装块留空(变异由主代理在 javis 上执行后填写)', () => {
-    expect(A6_RESULTS).toEqual([]);
+  it('A6_RESULTS(主代理在 javis 上执行后填写):与变异表一一对应,每条都被杀(failed > 0、无 skipped)、已还原,且 mustKill 都在 killedBy 里', () => {
+    expect(A6_RESULTS.map((r) => r.id)).toEqual(A6_MUTATIONS.map((m) => m.id));
+    for (const r of A6_RESULTS) {
+      const m = A6_MUTATIONS.find((x) => x.id === r.id);
+      expect(r.failed, r.id).toBeGreaterThan(0);
+      expect(r.failed, r.id).toBe(r.killedBy.length);
+      expect([r.skipped, r.restored], r.id).toEqual([0, true]);
+      for (const k of m?.mustKill ?? []) {
+        expect(
+          r.killedBy.some((n) => n.includes(k) || k.includes(n)),
+          `${r.id}: ${k}`,
+        ).toBe(true);
+      }
+    }
   });
 
   it('锚点在源码里恰好出现一次;替换不同于锚点;杀手测试存在;mustKill ⊆ expectRed', async () => {
