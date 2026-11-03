@@ -59,6 +59,9 @@ export const RSI_HOOKS_NOT_RUN_REASONS = Object.freeze([
   'txn_residue_unknown',
   'duplicate_in_local',
   'duplicate_check_failed',
+  // A5 订正 #2(用户 2026-11-03 拍板):取代 A5 实装时暂借的 agent_not_installed / txn_residue_unknown
+  'agent_dir_overridden',
+  'residue_not_discardable',
 ] as const);
 export type RsiHooksNotRunReason = (typeof RSI_HOOKS_NOT_RUN_REASONS)[number];
 

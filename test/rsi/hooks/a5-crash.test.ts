@@ -397,13 +397,13 @@ describe('首次建账本(bootstrap)窗口:标记 ledger.established × 账本 �
     expect(r2.err).toBe('RSI_FAIL_CLOSED reason=hooks_ledger_invalid\n');
   });
 
-  it('--discard-residue 只接管所选的那一个;非「第三种值」/ 不存在 / 别的 agent 的 journal → 退 4 txn_residue_unknown,不记 discarded', async () => {
+  it('--discard-residue 只接管所选的那一个;非「第三种值」/ 不存在 / 别的 agent 的 journal → 退 4 residue_not_discardable,不记 discarded', async () => {
     const { hx, id } = await bootstrapCrash(); // 目标 = after,不是第三种值
     const j1 = await hx.write(['--discard-residue', id, '--agent', 'claude']);
     expect(j1.code).toBe(4);
-    expect(lastLine(j1.err)).toBe('RSI_HOOKS_NOT_RUN reason=txn_residue_unknown');
+    expect(lastLine(j1.err)).toBe('RSI_HOOKS_NOT_RUN reason=residue_not_discardable');
     const dry = await hx.run(['--discard-residue', id, '--agent', 'claude']);
-    expect(dry.err).toBe('RSI_HOOKS_NOT_RUN reason=txn_residue_unknown\n');
+    expect(dry.err).toBe('RSI_HOOKS_NOT_RUN reason=residue_not_discardable\n');
     expect(dry.audit).toEqual([]);
     const none = await hx.run([
       '--discard-residue',
@@ -411,9 +411,9 @@ describe('首次建账本(bootstrap)窗口:标记 ledger.established × 账本 �
       '--agent',
       'claude',
     ]);
-    expect(none.err).toBe('RSI_HOOKS_NOT_RUN reason=txn_residue_unknown\n');
+    expect(none.err).toBe('RSI_HOOKS_NOT_RUN reason=residue_not_discardable\n');
     const other = await hx.run(['--discard-residue', id, '--agent', 'codex']);
-    expect(other.err).toBe('RSI_HOOKS_NOT_RUN reason=txn_residue_unknown\n');
+    expect(other.err).toBe('RSI_HOOKS_NOT_RUN reason=residue_not_discardable\n');
     expect(await hx.journals()).toEqual([id]);
   });
 });

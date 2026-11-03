@@ -774,14 +774,14 @@ describe('codex 与 pi', () => {
     }
   });
 
-  it('PI_CODING_AGENT_DIR 已设:pi 的 install / uninstall 不碰固定位置(暂借 agent_not_installed,缺口待定夺)', async () => {
+  it('PI_CODING_AGENT_DIR 已设:pi 的 install / uninstall 不碰固定位置 → agent_dir_overridden(A5 订正 #2)', async () => {
     const hx = await makeHx('a5-pi-dir-');
     await hx.agentRoot('pi');
     const r = await hx.write(['--install', '--agent', 'pi'], {
       envExtra: { PI_CODING_AGENT_DIR: '/somewhere/else' },
     });
     expect(r.code).toBe(4);
-    expect(r.err).toBe('RSI_HOOKS_NOT_RUN reason=agent_not_installed\n');
+    expect(r.err).toBe('RSI_HOOKS_NOT_RUN reason=agent_dir_overridden\n');
     expect(r.audit).toEqual([]);
   });
 

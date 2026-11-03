@@ -277,7 +277,7 @@ export const A5_MUTATIONS: readonly A5Mutation[] = [
       '提交整个事务',
       '进行中 + 目标 = after',
       // 2026-11-02 javis 变异实测补登:同一变异多红的相关用例(只补登记,不改变异与用例)
-      '--discard-residue 只接管所选的那一个;非「第三种值」/ 不存在 / 别的 agent 的 journal → 退 4 txn_residue_unknown,不记 discarded',
+      '--discard-residue 只接管所选的那一个;非「第三种值」/ 不存在 / 别的 agent 的 journal → 退 4 residue_not_discardable,不记 discarded',
       '30 个 UTC 日:过期的非受保护备份被修剪,受保护备份即使过期也留着;干跑只列 id 与数量',
       'aborted 的 bootstrap journal(标记在、账本缺)→ 提交只记 aborted 的空账本,再删 journal',
       'discarding(--discard-residue 在 journal 改记后崩溃)→ 下一次任何 --write 补完:只提交 discarded 记录,不提交原计划归属',
@@ -766,7 +766,7 @@ export const A5_RESULTS: readonly A5Result[] = [
   {
     id: 'bootstrap-marker-skipped',
     killedBy: [
-      '--discard-residue 只接管所选的那一个;非「第三种值」/ 不存在 / 别的 agent 的 journal → 退 4 txn_residue_unknown,不记 discarded',
+      '--discard-residue 只接管所选的那一个;非「第三种值」/ 不存在 / 别的 agent 的 journal → 退 4 residue_not_discardable,不记 discarded',
       '30 个 UTC 日:过期的非受保护备份被修剪,受保护备份即使过期也留着;干跑只列 id 与数量',
       'aborted 的 bootstrap journal(标记在、账本缺)→ 提交只记 aborted 的空账本,再删 journal',
       'discarding(--discard-residue 在 journal 改记后崩溃)→ 下一次任何 --write 补完:只提交 discarded 记录,不提交原计划归属',
