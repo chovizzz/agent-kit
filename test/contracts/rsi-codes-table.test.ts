@@ -11,6 +11,7 @@ import {
   RSI_COUNTER_CODES,
   RSI_EXIT1_CODES,
   RSI_FAIL_CLOSED_REASONS,
+  RSI_INFO_LINE_CODES,
   RSI_NOT_RUN_REASONS,
   RSI_OUTCOMES,
   RSI_SNAPSHOT_BUSY,
@@ -71,6 +72,8 @@ const CATS: Cat[] = [
   { name: 'not_run', head: '`RSI_NOT_RUN reason=`', enumCodes: RSI_NOT_RUN_REASONS },
   { name: 'top4', head: '顶层(4)', enumCodes: [RSI_SNAPSHOT_BUSY] },
   { name: 'top1', head: '顶层(1)', enumCodes: RSI_EXIT1_CODES },
+  // R20-A6(R20-17.23):顶层(0)信息行
+  { name: 'top0', head: '顶层(0)', enumCodes: RSI_INFO_LINE_CODES },
   {
     name: 'fail_closed',
     head: '`RSI_FAIL_CLOSED reason=`',

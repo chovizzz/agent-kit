@@ -53,6 +53,10 @@ const REAL_ENTRY_CANDIDATES: readonly string[] = [
   'src/rsi/confirm.ts',
   'src/rsi/stop.ts',
   'src/rsi/purge.ts',
+  // A6:提醒一次(自动路径调用,闭包不得含 llm-exec / 后端 / net / 启动器)与 rsi dismiss
+  'src/rsi/notice.ts',
+  'src/rsi/dismiss.ts',
+  'src/rsi/pending.ts',
   // A4:会话授权下的脱敏摘要入口
   'src/rsi/digest.ts',
   // A5:`rsi session --print`(纯输出)与 `rsi hooks`(前台写 kit 钩子;闭包同样不得含 net / llm-exec / 启动器)

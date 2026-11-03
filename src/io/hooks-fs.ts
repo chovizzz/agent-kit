@@ -1,5 +1,5 @@
 /**
- * kit 钩子写出口(第四个写出口,contracts §20.15 R20-15.6;A5)。**只许 `src/rsi/hooks/**` 与对应测试 import**(eslint 授权闸)。
+ * kit 钩子写出口(第四个写出口,contracts §20.15 R20-15.6;A5)。A6 起读取部分在 `hooks-read.ts`(`HooksRead`),本类继承它。**只许 `src/rsi/hooks/**` 与对应测试 import**(eslint 授权闸)。
  *
  * 与 `home-fs.ts` 的分工:通用 home-fs 对 `kit-hooks` 条目一律拒绝(三个 agent 目标 + 整个 `hooks/` 私有状态子树),
  * 只有本文件能写它们。本文件**不收调用方的路径**:目标路径由固定 agent 推导(`.claude/settings.json`、`.codex/hooks.json`、
@@ -26,59 +26,38 @@ import {
   HOOKS_STATE_DOC_MAX_BYTES,
   HOOKS_STATE_REL,
   HOOKS_TARGET_MAX_BYTES,
-  HOOKS_TXN_ID_RE,
 } from '../contracts/rsi-hooks.js';
 import type { RsiAgentId } from '../contracts/rsi.js';
+import {
+  HOOKS_AGENT_ROOT_RELS,
+  HOOKS_DIR_INDEX,
+  HOOKS_TARGET_RELS,
+  HooksFsError,
+  HooksRead,
+  ZONE_CODE,
+  isErr,
+  type HooksFsErrorCode,
+  type TargetRead,
+  type Zone,
+} from './hooks-read.js';
 import type { WriteAudit } from './paths.js';
 
-/** 固定写对象(R20-15.2):与 `HOME_WRITE_TABLE` 的 `kit-hooks` 三条逐项相等(测试钉住) */
-export const HOOKS_TARGET_RELS: Readonly<Record<RsiAgentId, string>> = Object.freeze({
-  claude: '.claude/settings.json',
-  codex: '.codex/hooks.json',
-  pi: '.pi/agent/extensions/agent-kit-rsi.ts',
-});
-/** agent 根目录(kit 不替 agent 建根目录,R20-15.14) */
-export const HOOKS_AGENT_ROOT_RELS: Readonly<Record<RsiAgentId, string>> = Object.freeze({
-  claude: '.claude',
-  codex: '.codex',
-  pi: '.pi/agent',
-});
+// 读取侧符号从只读模块 re-export(A6 拆分;既有 import 路径不变)
+export {
+  HOOKS_AGENT_ROOT_RELS,
+  HOOKS_TARGET_RELS,
+  HooksFsError,
+  type HooksFsErrorCode,
+  type TargetRead,
+};
+
 /** 目标所在目录里 kit 可以(在 agent 根已存在时)建的缺失最后几段 */
 const TARGET_PARENT_DIRS: Readonly<Record<RsiAgentId, readonly string[]>> = Object.freeze({
   claude: [],
   codex: [],
   pi: ['extensions'],
 });
-/** 只读的「本地覆盖」文件(R20-15.27):仅 claude */
-const AUX_RELS: Readonly<Partial<Record<RsiAgentId, string>>> = Object.freeze({
-  claude: '.claude/settings.local.json',
-});
 
-export type HooksFsErrorCode =
-  | 'hooks_target_unsafe'
-  | 'hooks_ledger_invalid'
-  | 'hooks_backup_invalid'
-  | 'io'
-  /** 目标在读写之间被改(内容 / 存在性与预期不符) */
-  | 'target_changed';
-
-export class HooksFsError extends Error {
-  readonly code: HooksFsErrorCode;
-  constructor(code: HooksFsErrorCode, detail = '') {
-    super(detail === '' ? code : `${code}: ${detail}`);
-    this.name = 'HooksFsError';
-    this.code = code;
-  }
-}
-
-type Zone = 'target' | 'ledger' | 'backup';
-const ZONE_CODE: Record<Zone, HooksFsErrorCode> = {
-  target: 'hooks_target_unsafe',
-  ledger: 'hooks_ledger_invalid',
-  backup: 'hooks_backup_invalid',
-};
-
-const O_NOFOLLOW_RO = fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK;
 const O_DIR_RO = fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW;
 const O_EXCL_W =
   fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW;
@@ -95,31 +74,16 @@ export interface HooksFsOptions {
   uid?: number;
 }
 
-export interface TargetRead {
-  bytes: Buffer;
-  /** 权限位(& 0o777) */
-  mode: number;
-}
-
 export interface TargetExpect {
   exists: boolean;
   sha256: string | null;
-}
-
-function isErr(e: unknown, code: string): boolean {
-  return (e as NodeJS.ErrnoException | null)?.code === code;
 }
 
 function sha256Hex(b: Buffer): string {
   return createHash('sha256').update(b).digest('hex');
 }
 
-/** `hooks` 目录在 {@link HOOKS_STATE_REL} 各段中的下标:从它起(含)按私有状态区规则检查 */
-const HOOKS_DIR_INDEX = HOOKS_STATE_REL.split('/').length - 1;
-
-export class HooksFs {
-  readonly home: string;
-  private readonly uid: number | undefined;
+export class HooksFs extends HooksRead {
   private readonly audit: WriteAudit | undefined;
   private readonly trace: ((e: string) => void) | undefined;
   private guardFn: (() => Promise<void>) | undefined;
@@ -129,8 +93,7 @@ export class HooksFs {
   targetRenamed = false;
 
   constructor(opts: HooksFsOptions) {
-    this.home = fs.realpathSync(opts.home);
-    this.uid = opts.uid ?? (typeof process.getuid === 'function' ? process.getuid() : undefined);
+    super({ home: opts.home, ...(opts.uid !== undefined ? { uid: opts.uid } : {}) });
     this.audit = opts.writeAudit;
     this.trace = opts.trace;
     this.guardFn = opts.guard;
@@ -139,241 +102,6 @@ export class HooksFs {
   /** 拿到锁之后才设置(拿锁本身不经本类) */
   setGuard(g: (() => Promise<void>) | undefined): void {
     this.guardFn = g;
-  }
-
-  // -------------------------------------------------------------------------
-  // 路径推导(只读固定名字;不接受外部路径)
-  // -------------------------------------------------------------------------
-  private abs(...segs: string[]): string {
-    return path.join(this.home, ...segs);
-  }
-  private stateSegs(...sub: string[]): string[] {
-    return [...HOOKS_STATE_REL.split('/'), ...sub];
-  }
-  private static strictId(txnId: string, zone: Zone): void {
-    if (!HOOKS_TXN_ID_RE.test(txnId)) throw new HooksFsError(ZONE_CODE[zone], 'bad txn id');
-  }
-
-  // -------------------------------------------------------------------------
-  // 元数据检查
-  // -------------------------------------------------------------------------
-  private ownerOk(st: fs.Stats): boolean {
-    return this.uid === undefined || st.uid === this.uid;
-  }
-
-  /** HOME 以下的非叶子段 / 目录(目标侧规则):目录、属主、组与其他人不可写、无 setuid/setgid */
-  private checkPlainDir(st: fs.Stats, zone: Zone, what: string): void {
-    if (st.isSymbolicLink() || !st.isDirectory()) {
-      throw new HooksFsError(ZONE_CODE[zone], `${what}: not a plain directory`);
-    }
-    if (!this.ownerOk(st)) throw new HooksFsError(ZONE_CODE[zone], `${what}: owner`);
-    if ((st.mode & 0o022) !== 0)
-      throw new HooksFsError(ZONE_CODE[zone], `${what}: group/other writable`);
-    if ((st.mode & 0o6000) !== 0) throw new HooksFsError(ZONE_CODE[zone], `${what}: setuid/setgid`);
-  }
-
-  /** 私有状态区目录:恰为 0700 */
-  private checkPrivateDir(st: fs.Stats, zone: Zone, what: string): void {
-    this.checkPlainDir(st, zone, what);
-    if ((st.mode & 0o777) !== 0o700) throw new HooksFsError(ZONE_CODE[zone], `${what}: mode`);
-  }
-
-  private async lstatOrNull(abs: string, zone: Zone): Promise<fs.Stats | null> {
-    try {
-      return await fsp.lstat(abs);
-    } catch (e) {
-      if (isErr(e, 'ENOENT')) return null;
-      if (isErr(e, 'ENOTDIR')) throw new HooksFsError(ZONE_CODE[zone], 'ENOTDIR');
-      throw new HooksFsError('io', 'lstat');
-    }
-  }
-
-  /**
-   * 逐段检查 `segs`(HOME 相对)直到第一个不存在的段。非叶子段按 `plain` 规则(`privateFrom` 起的段按私有状态区规则)。
-   * 返回已存在的最深段数量与叶子的 lstat(叶子存在时)。
-   */
-  private async walk(
-    segs: readonly string[],
-    zone: Zone,
-    privateFrom: number,
-  ): Promise<{ present: number; leaf: fs.Stats | null }> {
-    let cur = this.home;
-    for (let i = 0; i < segs.length; i++) {
-      cur = path.join(cur, segs[i] as string);
-      const st = await this.lstatOrNull(cur, zone);
-      if (st === null) return { present: i, leaf: null };
-      if (st.isSymbolicLink())
-        throw new HooksFsError(ZONE_CODE[zone], `${segs.slice(0, i + 1).join('/')}: symlink`);
-      if (i === segs.length - 1) return { present: segs.length, leaf: st };
-      if (i >= privateFrom) this.checkPrivateDir(st, zone, segs.slice(0, i + 1).join('/'));
-      else this.checkPlainDir(st, zone, segs.slice(0, i + 1).join('/'));
-    }
-    return { present: segs.length, leaf: null };
-  }
-
-  /** 读一个已通过 walk 的叶子:fd 级核对 */
-  private async readLeaf(
-    segs: readonly string[],
-    zone: Zone,
-    opts: { max: number; privateFile: boolean },
-  ): Promise<TargetRead | null> {
-    const privateFrom = opts.privateFile ? HOOKS_DIR_INDEX : Number.MAX_SAFE_INTEGER;
-    const w = await this.walk(segs, zone, privateFrom);
-    if (w.leaf === null) return null;
-    const abs = this.abs(...segs);
-    const pre = w.leaf;
-    if (!pre.isFile()) throw new HooksFsError(ZONE_CODE[zone], 'not a regular file');
-    let fh: fsp.FileHandle;
-    try {
-      fh = await fsp.open(abs, O_NOFOLLOW_RO);
-    } catch (e) {
-      if (isErr(e, 'ELOOP')) throw new HooksFsError(ZONE_CODE[zone], 'symlink');
-      if (isErr(e, 'ENOENT')) throw new HooksFsError('target_changed', 'vanished');
-      throw new HooksFsError('io', 'open');
-    }
-    try {
-      const st = await fh.stat();
-      const again = await this.lstatOrNull(abs, zone);
-      if (again === null) throw new HooksFsError('target_changed', 'vanished');
-      if (
-        !st.isFile() ||
-        st.nlink !== 1 ||
-        !this.ownerOk(st) ||
-        (st.mode & 0o6000) !== 0 ||
-        st.dev !== again.dev ||
-        st.ino !== again.ino ||
-        st.mode !== again.mode ||
-        st.uid !== again.uid ||
-        st.dev !== pre.dev ||
-        st.ino !== pre.ino
-      ) {
-        throw new HooksFsError(ZONE_CODE[zone], 'file identity/metadata');
-      }
-      if (zone === 'target' && (st.mode & 0o022) !== 0) {
-        throw new HooksFsError(ZONE_CODE[zone], 'group/other writable');
-      }
-      if (opts.privateFile && (st.mode & 0o777) !== 0o600) {
-        throw new HooksFsError(ZONE_CODE[zone], 'mode');
-      }
-      if (st.size > opts.max) throw new HooksFsError(ZONE_CODE[zone], 'too large');
-      // 上限在读时强制:多读 1 字节判超
-      const buf = Buffer.alloc(opts.max + 1);
-      let n = 0;
-      for (;;) {
-        const r = await fh.read(buf, n, buf.length - n, n);
-        if (r.bytesRead === 0) break;
-        n += r.bytesRead;
-        if (n > opts.max) throw new HooksFsError(ZONE_CODE[zone], 'too large');
-      }
-      return { bytes: Buffer.from(buf.subarray(0, n)), mode: st.mode & 0o777 };
-    } finally {
-      await fh.close();
-    }
-  }
-
-  // -------------------------------------------------------------------------
-  // 目标与 agent 根(只读)
-  // -------------------------------------------------------------------------
-  /** agent 根是否存在(不存在 → false;存在但不是普通目录 / 链接 / 属主不符 → `hooks_target_unsafe`) */
-  async agentRootExists(agent: RsiAgentId): Promise<boolean> {
-    const segs = HOOKS_AGENT_ROOT_RELS[agent].split('/');
-    const w = await this.walk(segs, 'target', Number.MAX_SAFE_INTEGER);
-    if (w.leaf === null) return false;
-    this.checkPlainDir(w.leaf, 'target', segs.join('/'));
-    return true;
-  }
-
-  /** 读目标;不存在 → null。安全条件不满足 → `hooks_target_unsafe` */
-  async readTarget(agent: RsiAgentId): Promise<TargetRead | null> {
-    return this.readLeaf(HOOKS_TARGET_RELS[agent].split('/'), 'target', {
-      max: HOOKS_TARGET_MAX_BYTES,
-      privateFile: false,
-    });
-  }
-
-  /** 读「本地覆盖」文件(R20-15.27);该 agent 没有则 null */
-  async readAux(agent: RsiAgentId): Promise<TargetRead | null> {
-    const rel = AUX_RELS[agent];
-    if (rel === undefined) return null;
-    return this.readLeaf(rel.split('/'), 'target', {
-      max: HOOKS_TARGET_MAX_BYTES,
-      privateFile: false,
-    });
-  }
-
-  // -------------------------------------------------------------------------
-  // 私有状态区(只读)
-  // -------------------------------------------------------------------------
-  private async readState(sub: string[], zone: Zone, max: number): Promise<Buffer | null> {
-    const r = await this.readLeaf(this.stateSegs(...sub), zone, { max, privateFile: true });
-    return r === null ? null : r.bytes;
-  }
-
-  async readLedger(): Promise<Buffer | null> {
-    return this.readState(['ledger.json'], 'ledger', HOOKS_STATE_DOC_MAX_BYTES);
-  }
-
-  async ledgerMarkerExists(): Promise<boolean> {
-    return (await this.readState(['ledger.established'], 'ledger', 0)) !== null;
-  }
-
-  async readJournal(txnId: string): Promise<Buffer | null> {
-    HooksFs.strictId(txnId, 'ledger');
-    return this.readState(['txn', `${txnId}.json`], 'ledger', HOOKS_STATE_DOC_MAX_BYTES);
-  }
-
-  async readBackup(txnId: string, agent: RsiAgentId): Promise<Buffer | null> {
-    HooksFs.strictId(txnId, 'backup');
-    return this.readState(['backups', txnId, agent], 'backup', HOOKS_BACKUP_MAX_BYTES);
-  }
-
-  /** 列目录名(目录必须通过私有区检查;不存在 → 空数组) */
-  private async listState(sub: string[], zone: Zone): Promise<string[]> {
-    const segs = this.stateSegs(...sub);
-    const w = await this.walk(segs, zone, HOOKS_DIR_INDEX);
-    if (w.leaf === null) return [];
-    this.checkPrivateDir(w.leaf, zone, segs.join('/'));
-    try {
-      return (await fsp.readdir(this.abs(...segs))).sort();
-    } catch {
-      throw new HooksFsError('io', 'readdir');
-    }
-  }
-
-  /** `txn/` 下的 journal 的 `txn_id`(升序)与残留 `*.tmp` 的名字;出现任何别的名字 → `hooks_ledger_invalid` */
-  async listTxnDir(): Promise<{ journals: string[]; tmps: string[] }> {
-    const names = await this.listState(['txn'], 'ledger');
-    const journals: string[] = [];
-    const tmps: string[] = [];
-    for (const n of names) {
-      const m = /^(.+)\.json$/.exec(n);
-      if (m !== null && HOOKS_TXN_ID_RE.test(m[1] as string)) journals.push(m[1] as string);
-      else if (/^.+\.json\.tmp$/.test(n)) tmps.push(n);
-      else throw new HooksFsError('hooks_ledger_invalid', 'unexpected entry in txn/');
-    }
-    return { journals, tmps };
-  }
-
-  /** 是否有残留的 tmp(`txn/*.tmp` 或 `ledger.json.tmp`):幂等命令的快捷返回据此仍进入锁内清理 */
-  async hasStrayTmps(): Promise<boolean> {
-    if ((await this.listTxnDir()).tmps.length > 0) return true;
-    const lt = this.abs(...this.stateSegs('ledger.json.tmp'));
-    return (await this.lstatOrNull(lt, 'ledger')) !== null;
-  }
-
-  /** `backups/` 下的备份目录 `txn_id`(升序);别的名字 → `hooks_backup_invalid` */
-  async listBackupIds(): Promise<string[]> {
-    const names = await this.listState(['backups'], 'backup');
-    for (const n of names) {
-      if (!HOOKS_TXN_ID_RE.test(n))
-        throw new HooksFsError('hooks_backup_invalid', 'unexpected entry');
-    }
-    return names;
-  }
-
-  async stateDirExists(): Promise<boolean> {
-    const w = await this.walk(this.stateSegs(), 'ledger', HOOKS_DIR_INDEX);
-    return w.leaf !== null;
   }
 
   // -------------------------------------------------------------------------

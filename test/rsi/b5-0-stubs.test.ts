@@ -106,7 +106,9 @@ describe('B5 服务签名(类型断言 = 冻结)', () => {
 describe('status 的 warnings / next 常量', () => {
   it('RSI_STATUS_WARNINGS = status.ts 里全部 warnings.push 字面量(index_rebuild_required 已由 B5a 接线);next 词固定', async () => {
     const text = await readText(path.join(REPO_ROOT, 'src/rsi/status.ts'));
-    const pushed = [...text.matchAll(/warnings\.push\('([a-z_]+)'\)/g)].map((m) => m[1] as string);
+    const pushed = [...text.matchAll(/(?:warnings|scanWarnings)\.push\('([a-z_]+)'\)/g)].map(
+      (m) => m[1] as string,
+    );
     expect(pushed.length, '正向前提:抽到了现有的 warnings.push').toBeGreaterThanOrEqual(4);
     expect([...RSI_STATUS_WARNINGS].filter((w) => !pushed.includes(w)).sort()).toEqual([]);
     expect(pushed.filter((w) => !(RSI_STATUS_WARNINGS as readonly string[]).includes(w))).toEqual(

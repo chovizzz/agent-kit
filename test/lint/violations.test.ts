@@ -44,6 +44,8 @@ const EXPECTED: Readonly<Record<string, { rule: string; message: string }>> = {
   'hooks-fs-import.ts': { rule: 'no-restricted-imports', message: '钩子写出口' },
   'hooks-fs-reexport.ts': { rule: 'no-restricted-imports', message: '钩子写出口' },
   'hooks-fs-dynamic-import.ts': { rule: 'no-restricted-syntax', message: '钩子写出口' },
+  // A6(R20-17.20):doctor 直接 import 钩子写出口
+  'doctor-hooks-fs-import.ts': { rule: 'no-restricted-imports', message: '钩子写出口' },
   'net-import.ts': { rule: 'no-restricted-imports', message: '网络出口' },
   'net-reexport.ts': { rule: 'no-restricted-imports', message: '网络出口' },
   'net-dynamic-import.ts': { rule: 'no-restricted-syntax', message: '网络出口' },
@@ -289,6 +291,12 @@ describe('lint 正向对照:同样的代码放到被授权的文件里不报错'
           'src/rsi/exec/x.ts',
           'src/commands/rsi.ts',
           'test/rsi/a4-digest.test.ts',
+          // A6(R20-17.20):doctor 不得 import hooks-fs;只读出口 hooks-read.ts 自己也不得反向 import 写出口
+          'src/doctor/checks.ts',
+          'src/doctor/collect.ts',
+          'src/doctor/rsi-face.ts',
+          'src/commands/doctor.ts',
+          'src/io/hooks-read.ts',
         ]) {
           expect((await lintAs(code, bad)).length, `${bad}: ${code.trim()}`).toBeGreaterThan(0);
         }
@@ -301,6 +309,20 @@ describe('lint 正向对照:同样的代码放到被授权的文件里不报错'
       expect((await lintAs(FS, 'src/rsi/hooks/txn.ts')).length).toBeGreaterThan(0);
       // 反向:src/rsi/hooks/** 不得借此引用 home-fs
       expect((await lintAs(HF_IMP, 'src/rsi/hooks/txn.ts')).length).toBeGreaterThan(0);
+      // A6(R20-17.20):只读出口 hooks-read.ts 自己可用 fs(读取),但不得碰子进程 / 网络;doctor 经它读钩子区是允许的
+      expect(await lintAs(FS, 'src/io/hooks-read.ts')).toEqual([]);
+      expect((await lintAs(HTTPS, 'src/io/hooks-read.ts')).length).toBeGreaterThan(0);
+      expect((await lintAs(FETCH, 'src/io/hooks-read.ts')).length).toBeGreaterThan(0);
+      const HR_IMP =
+        "import { HooksRead } from '../io/hooks-read.js';\nexport const r = HooksRead;\n";
+      for (const ok of [
+        'src/doctor/rsi-face.ts',
+        'src/doctor/collect.ts',
+        'src/rsi/hooks/inspect.ts',
+      ]) {
+        expect(await lintAs(HR_IMP, ok), ok).toEqual([]);
+      }
+      expect((await lintAs(FS, 'src/doctor/rsi-face.ts')).length).toBeGreaterThan(0); // doctor 仍不得直接碰 fs
     });
 
     it('net:只有 update 模块(launcher 除外)、commands/update.ts 与对应测试能引用;只有 net.ts 能用网络模块 / fetch', async () => {

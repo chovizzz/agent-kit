@@ -16,7 +16,8 @@ import tseslint from 'typescript-eslint';
  *        `io/exec.ts` 将新增的 `runSelf`(S7,唯一能 spawn process.execPath 的入口)只许 launcher.ts 引用;
  *        R20-A0 起另放行零网络桥接 src/update/self-spawn.ts(自动 RSI,contracts §20.9 第 3 条),且该文件不得引用 net / 启动器 / home-fs。
  *  - A5(contracts §20.15 R20-15.6):kit 钩子写出口 `src/io/hooks-fs.ts`(第四个写出口)只许 `src/rsi/hooks/**` 及其测试引用;
- *    sync / autosync / update / `src/rsi/{poke,hint,worker,kit-schedule}.ts` / §21 的 `src/rsi/{auto,capability,contrib,exec}/**` 引用即红。
+ *    sync / autosync / update / `src/rsi/{poke,hint,worker,kit-schedule}.ts` / §21 的 `src/rsi/{auto,capability,contrib,exec}/**` / doctor(`src/doctor/**`、`src/commands/doctor.ts`)引用即红;
+ *    A6(R20-17.20)新增只读出口 `src/io/hooks-read.ts`(doctor D17 经它读钩子区),它自己可用 fs。
  *  - 另外禁网络模块与全局 fetch(A8 的运行期垫片是主判据,这里是便宜的第二道)、eval、动态 import、require。
  * 范围:cli.ts、src/、adapters/、test/、vitest.config.ts。ops/ 下的验收工具脚本(B17/B18)不在此列,
  * 它们本来就要读真实 HOME 做快照。
@@ -327,6 +328,8 @@ export default tseslint.config(
   { files: ['test/sync/apply*.test.ts'], rules: restrictions({ allowHomeFs: true }) },
   // A5(R20-15.6):kit 钩子写出口。hooks-fs.ts 自己可用 fs;能引用它的只有 src/rsi/hooks/** 与对应测试(同样必须由 restrictions({...}) 生成完整规则)。
   { files: ['src/io/hooks-fs.ts'], rules: restrictions({ allowFs: true }) },
+  // A6(R20-17.20):钩子区的只读出口 hooks-read.ts(只含读取;doctor 只许 import 它)自己可用 fs,但不得引用 hooks-fs / 子进程 / 网络 / 环境。
+  { files: ['src/io/hooks-read.ts'], rules: restrictions({ allowFs: true }) },
   { files: [`src/rsi/hooks/**/*.${EXT}`], rules: restrictions({ allowHooksFs: true }) },
   {
     files: [`test/rsi/hooks/**/*.${EXT}`, 'test/io/hooks-fs*.test.ts'],

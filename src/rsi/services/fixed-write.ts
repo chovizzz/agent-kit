@@ -7,7 +7,12 @@
  */
 import * as path from 'node:path';
 import {
+  RSI_ACCOUNT_FILE_MAX_BYTES,
   RSI_SALT_EMPTY_GRACE_MS,
+  RsiDismissedSchema,
+  RsiNoticeSchema,
+  type RsiDismissed,
+  type RsiNotice,
   RsiCursorSchema,
   RsiProjectIndexSchema,
   RsiStateSchema,
@@ -55,6 +60,56 @@ async function writeFixed(
   await w.op(`tmp-remove:${name}`, () => remove(ctx.io, tmp)); // 上次崩溃留下的临时文件
   await w.op(`tmp-write:${name}`, () => createExclusive(ctx.io, tmp, body, 0o600));
   await w.op(`rename:${name}`, () => rename(ctx.io, tmp, dest)); // rename 是提交点
+}
+
+/** 记账写入的截止时间已过(提醒的 200ms 预算,R20-17.15):此后不再有任何写尝试 */
+export class AccountingDeadlineError extends Error {
+  constructor() {
+    super('rsi: accounting write deadline exceeded');
+    this.name = 'AccountingDeadlineError';
+  }
+}
+
+/** 封闭的记账写入(R20-17.8 / R20-17.14):文件名与载荷一一对应,只有这两个文件(窄记账例外,订正 ② ⑧) */
+export type AccountingWrite =
+  { name: 'dismissed.json'; doc: RsiDismissed } | { name: 'notice.json'; doc: RsiNotice };
+
+/**
+ * 写 `dismissed.json` / `notice.json`:持锁(锁必须属于 `ctx.io` 的 rsi 目录)、schema 校验、canonical 序列化、≤ 读取上限(保证写出的都读得回来)、
+ * 临时文件 + rename。每个写点:钩子 → `assertHeld()` → **截止时间复核** → 写;`overDeadline` 为真即抛 {@link AccountingDeadlineError},此后零写尝试
+ * (释放自己持有的锁不属于本函数,由调用方的 finally 负责)。不 recover、不 taint、不写 counts / state / 日志 / 快照清单。
+ */
+export async function writeAccountingFile(
+  ctx: RsiServiceCtx,
+  lock: RsiLockHandle,
+  w: AccountingWrite,
+  opts: { hooks?: ServiceHooks; overDeadline?: () => boolean } = {},
+): Promise<void> {
+  const doc =
+    w.name === 'dismissed.json' ? RsiDismissedSchema.parse(w.doc) : RsiNoticeSchema.parse(w.doc);
+  const body = canonicalJson(doc);
+  if (Buffer.byteLength(body, 'utf8') > RSI_ACCOUNT_FILE_MAX_BYTES) {
+    throw new RsiFailClosedError('internal');
+  }
+  const dir = await assertLockBelongs(ctx, lock);
+  const dest = path.join(dir, w.name);
+  const tmp = `${dest}.tmp`;
+  const writer = new Writer(ctx.io, lock, opts.hooks ?? {});
+  const guard = (): void => {
+    if (opts.overDeadline?.() === true) throw new AccountingDeadlineError();
+  };
+  await writer.op(`tmp-remove:${w.name}`, () => {
+    guard();
+    return remove(ctx.io, tmp);
+  });
+  await writer.op(`tmp-write:${w.name}`, () => {
+    guard();
+    return createExclusive(ctx.io, tmp, body, 0o600);
+  });
+  await writer.op(`rename:${w.name}`, () => {
+    guard();
+    return rename(ctx.io, tmp, dest);
+  });
 }
 
 export async function writeIndexFile(

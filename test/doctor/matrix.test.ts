@@ -409,6 +409,32 @@ export const FIXTURES: Fixture[] = [
     },
     expect: { status: 'warn', result: 'declined' },
   },
+  // D17(A6,R20-17.19):采集面 + 钩子面。ok = 没配 [rsi]、没有钩子状态区 → 两面都 n_a;bad = [rsi] 指向不存在的仓库 → 采集面 fail(repo_invalid)
+  {
+    id: 'D17',
+    kind: 'ok',
+    name: '没有 [rsi] 配置、没有钩子私有状态区(两面 n_a)',
+    build: async () => [await cleanWorld('d17-ok-')],
+    expect: { status: 'n_a', result: 'absent' },
+  },
+  {
+    id: 'D17',
+    kind: 'bad',
+    name: '[rsi] enabled = true 但 repo 不存在(采集面 fail)',
+    build: async () => {
+      const w = await cleanWorld('d17-bad-');
+      const cfgDir = path.join(w.home, '.config', 'agent-kit');
+      await safe.mkdirp(w.io, cfgDir, 0o755);
+      await safe.writeFile(
+        w.io,
+        path.join(cfgDir, 'config.toml'),
+        `[rsi]\nenabled = true\nrepo = ${JSON.stringify(path.join(w.dir, 'no-such-repo'))}\n`,
+        { mode: 0o600 },
+      );
+      return [w];
+    },
+    expect: { status: 'fail', result: 'repo_invalid' },
+  },
 ];
 
 describe('doctor:夹具矩阵', () => {

@@ -114,6 +114,10 @@ const READONLY_ARGVS: string[][] = [
   ['rsi', 'projects', '--rebuild-index'],
   ['rsi', 'projects', '--rebuild-index', '--json'],
   ['rsi', 'status', '--ack'],
+  // A6:`rsi dismiss` 干跑 / 用法错误不写任何东西(只有 --write 才写 dismissed.json)
+  ['rsi', 'dismiss', '--all'],
+  ['rsi', 'dismiss', 'r-1', '--json'],
+  ['rsi', 'dismiss'],
 ];
 
 describe('① 写调用审计(外部累计)+ 前后目录树', () => {

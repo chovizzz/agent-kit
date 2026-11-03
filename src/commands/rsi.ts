@@ -5,7 +5,7 @@
  *   不会让 rsi 在到达自己的逻辑前失败。分发器**只**做子命令解析,不读配置、不建上下文、不碰文件系统。
  * - 无子命令 / 未知子命令 → 退出 2,stderr 只有 `RSI_USAGE reason=unknown_subcommand`(不回显输入)。
  * - P0 子命令各一个入口文件 `src/rsi/<name>.ts`(理由:`test/rsi/import-closure.test.ts` 的真实入口候选表已按这些路径登记,文件一建出就自动纳入
- *   「入口闭包不含 llm-exec / reflect 后端 / net / 启动器」断言)。P1 预留子命令(dismiss / should-continue)不建文件,在这里退 64。
+ *   「入口闭包不含 llm-exec / reflect 后端 / net / 启动器」断言)。P1 预留子命令(should-continue)不建文件,在这里退 64。
  * - 目前全部是桩:退出 64,stderr 只有 `RSI_NOT_IMPLEMENTED subcommand=<规范名>`,stdout 为空。多余参数不影响(桩不解析参数)。
  * - R20-A2 B5-0:两个会写盘的变体要放进独立入口文件(`status.ts` / `projects.ts` 属只读闭包),分发器按 argv 里**精确 token** 路由({@link routeRsi}):
  *   `status` 带 `--ack` → `status-ack.ts`;`projects` **同时**带 `--rebuild-index` 与 `--write` → `projects-rebuild.ts`。路由是纯函数,只看 token 在不在,
@@ -16,6 +16,7 @@ import { ExitCode } from '../contracts/exit-codes.js';
 import { RSI_P1_RESERVED_SUBCOMMANDS } from '../contracts/rsi.js';
 import { subcommand as confirm } from '../rsi/confirm.js';
 import { subcommand as digest } from '../rsi/digest.js';
+import { subcommand as dismiss } from '../rsi/dismiss.js';
 import { subcommand as hooks } from '../rsi/hooks/command.js';
 import { subcommand as hint } from '../rsi/hint.js';
 import { subcommand as poke } from '../rsi/poke.js';
@@ -43,6 +44,7 @@ export const RSI_SUBCOMMAND_TABLE: readonly RsiSubcommand[] = [
   digest,
   session,
   hooks,
+  dismiss,
 ];
 
 /**
@@ -74,7 +76,7 @@ export async function runRsi(ctx: EarlyCommandContext): Promise<number> {
 export const command: CommandDef = {
   name: 'rsi',
   summary:
-    '自动 RSI 的前台入口与状态(tick / status / projects / confirm / stop / purge / digest / session / hooks)',
+    '自动 RSI 的前台入口与状态(tick / status / projects / confirm / stop / purge / digest / session / hooks / dismiss)',
   phase: 'P0',
   ownerBlock: 'R20-A2 B3',
   run: () => {
