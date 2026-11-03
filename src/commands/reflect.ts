@@ -66,6 +66,7 @@ import {
 import type { BeforeWrite } from '../reflect/types.js';
 import { SignalStoreError } from '../signals/state-store.js';
 import { parseDecimalUint } from './args.js';
+import { runReflectIngest, type IngestCommandDeps } from './reflect-ingest.js';
 import { prepareBudgetInputs } from './check-budget.js';
 import { enterWriterLock, serviceCtxOf, settleStaged } from './rsi-staged-wiring.js';
 import { combineExitCodes } from './types.js';
@@ -376,6 +377,11 @@ interface Parsed {
   write: boolean;
   /** 出现过 gc / write / json 以外的任何参数(gc 与其它模式互斥) */
   otherFlags: boolean;
+  /** `--ingest <值>`(A4,R20-16.14;值是否合法由 ingest 命令层判);undefined = 没给 */
+  ingest: string | undefined;
+  digest: string | undefined;
+  /** 出现过与 ingest 互斥的参数(`--run-llm` / `--allow-egress` / `--show-prompt` / `--gc` / `--write` / `--since` / `--max-*` / `--timeout-ms` / `--backend`) */
+  ingestConflict: boolean;
   error: string | undefined;
 }
 
@@ -395,6 +401,9 @@ function parseArgs(argv: readonly string[]): Parsed {
     gc: false,
     write: false,
     otherFlags: false,
+    ingest: undefined,
+    digest: undefined,
+    ingestConflict: false,
     error: undefined,
   };
   const fail = (m: string): void => {
@@ -415,20 +424,44 @@ function parseArgs(argv: readonly string[]): Parsed {
       if (a.startsWith(`${name}=`)) return a.slice(name.length + 1);
       return undefined;
     };
-    if (a === '--gc') out.gc = true;
-    else if (a === '--write') out.write = true;
-    else if (a === '--run-llm') {
+    if (a === '--gc') {
+      out.gc = true;
+      out.ingestConflict = true;
+    } else if (a === '--write') {
+      out.write = true;
+      out.ingestConflict = true;
+    } else if (a === '--run-llm') {
       out.runLlm = true;
       out.otherFlags = true;
+      out.ingestConflict = true;
     } else if (a === '--allow-egress') {
       out.allowEgress = true;
       out.otherFlags = true;
+      out.ingestConflict = true;
     } else if (a === '--show-prompt') {
       out.showPrompt = true;
       out.otherFlags = true;
+      out.ingestConflict = true;
     } else if (a === '--json') out.json = true;
     else {
       out.otherFlags = true;
+      const ingest = value('--ingest');
+      if (ingest !== undefined) {
+        out.ingest = ingest;
+        continue;
+      }
+      const digest = value('--digest');
+      if (digest !== undefined) {
+        out.digest = digest;
+        continue;
+      }
+      if (
+        ['--since', '--max-proposals', '--max-calls', '--timeout-ms', '--backend'].some(
+          (f) => a === f || a.startsWith(`${f}=`),
+        )
+      ) {
+        out.ingestConflict = true;
+      }
       const agent = value('--agent');
       if (agent !== undefined) {
         const p = AgentIdSchema.safeParse(agent);
@@ -481,6 +514,11 @@ function parseArgs(argv: readonly string[]): Parsed {
       fail(`未知参数:${a}`);
     }
   }
+  if (out.ingest !== undefined) {
+    // ingest 模式:其余互斥 / 必填检查由 `runReflectIngest` 用 RSI_USAGE 稳定码判(mode_conflict、missing:…)
+    return out;
+  }
+  if (out.error === undefined && out.digest !== undefined) out.error = '--digest 只用于 --ingest';
   if (out.error === undefined) {
     if (out.gc && out.otherFlags) out.error = '--gc 与其它模式互斥(只允许 --write / --json)';
     else if (out.write && !out.gc) out.error = '--write 只用于 --gc';
@@ -502,6 +540,8 @@ function parseArgs(argv: readonly string[]): Parsed {
 // ---------------------------------------------------------------------------
 
 export interface ReflectCommandDeps extends RsiLockWiring {
+  /** `--ingest` 的注入点(A4;测试用) */
+  ingestCommand?: IngestCommandDeps;
   /** 时钟;缺省真实时间 */
   clock?: () => Date;
   /** 随机源:返回 n 字节的十六进制串(run_id 后缀);缺省 node:crypto */
@@ -722,10 +762,47 @@ export function createReflectCommand(deps: ReflectCommandDeps = {}): CommandDef 
           '回收暂存区:只清已过期(30 天)且无引用、仅含 report.json 的 run;默认干跑,与其它模式互斥',
       },
       { name: '--write', description: '仅 --gc:真正删除(缺省只列出将删除的 run)' },
+      {
+        name: '--ingest -',
+        description:
+          '(会话授权下)从 stdin 读会话 agent 交回的提案(JSON,≤64KiB、≤5 条),全量校验后暂存、不 apply;须同时给 --digest <id> --agent <a> --owner <@handle>,与其它模式互斥',
+      },
+      {
+        name: '--digest <id>',
+        description: '仅 --ingest:`rsi digest` 给出的 digest id(一次性,24 小时过期)',
+      },
     ],
     async run(rawCtx: CommandContext): Promise<number> {
       const ctx = rawCtx;
       const args = parseArgs(ctx.argv);
+      if (args.ingest !== undefined) {
+        // 参数层的未知值 / 缺值错误在 ingest 下一律按用法错误处理(不回显)
+        if (args.error !== undefined) {
+          ctx.stderr('RSI_USAGE reason=unknown_arg\n');
+          return ExitCode.USAGE;
+        }
+        const loadedOv = await loadOverlay(ctx);
+        if (!loadedOv.ok) {
+          ctx.stderr('agent-kit reflect: 覆盖层读取或校验失败\n');
+          return ExitCode.USAGE;
+        }
+        return runReflectIngest(
+          ctx,
+          {
+            ingestValue: args.ingest,
+            digest: args.digest,
+            agents: args.agents,
+            owner: args.owner,
+            json: args.json,
+            conflict: args.ingestConflict,
+          },
+          {
+            clock,
+            ...(deps.ingestCommand ?? {}),
+            teamProjectKeys: new Set(loadedOv.overlay?.reflect?.team_project_keys ?? []),
+          },
+        );
+      }
       if (args.error !== undefined) {
         ctx.stderr(`agent-kit reflect: ${args.error}\n`);
         return ExitCode.USAGE;

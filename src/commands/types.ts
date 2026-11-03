@@ -15,6 +15,64 @@ export interface CommandContext {
   isTty?: boolean;
   /** 读一行确认输入(不含换行;输入结束返回 undefined)。可注入;缺省见 `resolveReadLine`。 */
   readLine?: () => Promise<string | undefined>;
+  /** 读 stdin(`reflect --ingest -` 用):最多读 `maxBytes`,超过即停并标 `tooLarge`。可注入;缺省见 `resolveReadStdin`。 */
+  readStdin?: (maxBytes: number) => Promise<StdinRead>;
+}
+
+export interface StdinRead {
+  text: string;
+  /** 输入超过了 `maxBytes`(此时 `text` 只含前 `maxBytes` 字节内的内容,调用方不得使用) */
+  tooLarge: boolean;
+}
+
+/** 读 stdin:注入优先;缺省从 process.stdin 有界读取(读满上限即停,不等 EOF,不把超大输入读进内存) */
+export function resolveReadStdin(
+  ctx: Pick<CommandContext, 'readStdin'>,
+): (maxBytes: number) => Promise<StdinRead> {
+  return ctx.readStdin ?? defaultReadStdin;
+}
+
+function defaultReadStdin(maxBytes: number): Promise<StdinRead> {
+  return readStdinFrom(process.stdin, maxBytes);
+}
+
+/**
+ * 从可读流有界读取:读满上限即停(`tooLarge`);**流错误 → reject**(不得把已读到的前缀当成完整输入,否则被截断的 JSON 可能恰好合法)。
+ * 导出供测试用 `PassThrough` 演练。
+ */
+export function readStdinFrom(stream: NodeJS.ReadableStream, maxBytes: number): Promise<StdinRead> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let total = 0;
+    const cleanup = (): void => {
+      stream.off('data', onData);
+      stream.off('end', onEnd);
+      stream.off('error', onError);
+      stream.pause();
+    };
+    const onData = (c: Buffer | string): void => {
+      const b = typeof c === 'string' ? Buffer.from(c) : c;
+      total += b.length;
+      if (total > maxBytes) {
+        cleanup();
+        resolve({ text: '', tooLarge: true });
+        return;
+      }
+      chunks.push(b);
+    };
+    const onEnd = (): void => {
+      cleanup();
+      resolve({ text: Buffer.concat(chunks, total).toString('utf8'), tooLarge: false });
+    };
+    const onError = (e: unknown): void => {
+      cleanup();
+      reject(e instanceof Error ? e : new Error('stdin error'));
+    };
+    stream.on('data', onData);
+    stream.on('end', onEnd);
+    stream.on('error', onError);
+    stream.resume();
+  });
 }
 
 /** 交互终端判定:注入优先;缺省 = stdin 与 stdout 都是 TTY(与 update/launcher 的判法一致)。 */

@@ -6,7 +6,12 @@
  *  evidence[](摘录从信号机械复制)、支持次数(会话/项目数)。
  */
 import { stringify } from 'yaml';
-import { ProposalSchema, type Proposal, type ReflectorGuidance } from '../contracts/proposal.js';
+import {
+  ProposalSchema,
+  type Proposal,
+  type ReflectorGuidance,
+  type ReflectorProvenance,
+} from '../contracts/proposal.js';
 import type { Layer } from '../contracts/atom.js';
 import type { ReflectorProposalDraft } from '../contracts/reflect.js';
 import { addDays } from '../atoms/dates.js';
@@ -22,11 +27,14 @@ export interface ReflectorInfo {
   model: string;
   run_id: string;
   backend?: 'claude' | 'codex' | 'pi' | undefined;
-  prompt_id: string;
-  prompt_sha256: string;
+  /** ingest(session_declared)不写 `prompt_id` / `prompt_sha256`(R20-16.19) */
+  prompt_id?: string | undefined;
+  prompt_sha256?: string | undefined;
   input_digest: string;
   kit_version?: string | undefined;
   stub: boolean;
+  /** R20-16.18:LLM 路径显式 `spawned`;ingest `session_declared`;缺省 = 不写 */
+  provenance?: ReflectorProvenance | undefined;
 }
 
 /** 引导窗口基线(只有计数,口径同 attest 的 `countWindow`)。 */
@@ -205,10 +213,11 @@ export function mergeProposals(input: MergeInput): MergedProposal[] {
         model: r.model,
         run_id: r.run_id,
         ...(r.backend !== undefined ? { backend: r.backend } : {}),
-        prompt_id: r.prompt_id,
-        prompt_sha256: r.prompt_sha256,
+        ...(r.prompt_id !== undefined ? { prompt_id: r.prompt_id } : {}),
+        ...(r.prompt_sha256 !== undefined ? { prompt_sha256: r.prompt_sha256 } : {}),
         input_digest: r.input_digest,
         ...(r.kit_version !== undefined ? { kit_version: r.kit_version } : {}),
+        ...(r.provenance !== undefined ? { provenance: r.provenance } : {}),
         ...(r.stub ? { stub: true as const } : {}),
         ...(input.guidance !== undefined
           ? {

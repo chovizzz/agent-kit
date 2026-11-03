@@ -25,7 +25,8 @@ export function touchAt(target: string, when: Date): void {
 }
 
 export interface ChildJob {
-  op: 'hold' | 'try' | 'writer' | 'salt';
+  op: 'hold' | 'try' | 'writer' | 'salt' | 'dhold' | 'dreserve';
+  nowMs?: number;
   tmp: string;
   state: string;
   id?: string;

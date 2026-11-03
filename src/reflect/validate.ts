@@ -21,6 +21,30 @@ import {
 import { hasInvisible, normalizeForMatch, sharesRun, squeeze, utf8Bytes } from './text.js';
 
 export const MAX_OUTPUT_BYTES = 32 * 1024;
+/** `reflect --ingest` 的输出上限(R20-16.15 第 9 步:参数化为 64KiB;LLM 路径仍是 {@link MAX_OUTPUT_BYTES}) */
+export const MAX_INGEST_OUTPUT_BYTES = 64 * 1024;
+
+/**
+ * 整批拒的全部 `code`(封闭集合)与单条丢弃的全部类别(封闭集合)。`src/contracts/rsi.ts` 的 `VALIDATOR_CODE_TO_REJECT` / `VALIDATOR_DROPPED_TO_REJECT`
+ * 必须覆盖这两张表(R20-16.17;`test/rsi/a4-codes.test.ts` 钉死):这里新增 code / 类别而没在映射表登记 → 该单测红。
+ */
+export const VALIDATOR_REJECT_CODES = [
+  'output_too_large',
+  'not_json_object',
+  'schema_invalid',
+  'placeholder_in_output',
+  'output_residual',
+  'hidden_chars_in_output',
+  'injection_suspected_local',
+] as const;
+export type ValidatorRejectCode = (typeof VALIDATOR_REJECT_CODES)[number];
+export const VALIDATOR_DROPPED_KINDS = [
+  'evidence_alias_unknown',
+  'id_conflict',
+  'pattern_unsafe',
+  'echo_detected',
+] as const;
+export type ValidatorDroppedKind = (typeof VALIDATOR_DROPPED_KINDS)[number];
 export const ECHO_RUN_CODEPOINTS = 40;
 /** signature 使用方匹配前必须把被匹配串截到这个长度(R0 契约:≤4KiB)。 */
 export const MAX_MATCH_INPUT_BYTES = 4096;
@@ -214,10 +238,12 @@ export interface ValidateContext {
   redactor: Pick<Redactor, 'pass2'>;
   atomMaxBytes?: number;
   maxProposals?: number;
+  /** 输出字节上限;缺省 {@link MAX_OUTPUT_BYTES}(LLM 路径)。ingest 传 {@link MAX_INGEST_OUTPUT_BYTES} */
+  maxOutputBytes?: number;
 }
 
 export type ValidationResult =
-  | { ok: false; code: string; detail: string }
+  | { ok: false; code: ValidatorRejectCode; detail: string }
   | {
       ok: true;
       proposals: ReflectorProposalDraft[];
@@ -234,7 +260,7 @@ function collectStrings(v: unknown, out: string[]): void {
     for (const x of Object.values(v)) collectStrings(x, out);
 }
 
-const bump = (r: Record<string, number>, k: string): void => {
+const bump = (r: Record<string, number>, k: ValidatorDroppedKind): void => {
   r[k] = (r[k] ?? 0) + 1;
 };
 
@@ -264,8 +290,9 @@ export function matchSignature(sig: { pattern: string }, text: string): boolean 
 }
 
 export function validateReflectorOutput(raw: string, ctx: ValidateContext): ValidationResult {
-  if (utf8Bytes(raw) > MAX_OUTPUT_BYTES) {
-    return { ok: false, code: 'output_too_large', detail: '输出超过 32KiB' };
+  const limit = ctx.maxOutputBytes ?? MAX_OUTPUT_BYTES;
+  if (utf8Bytes(raw) > limit) {
+    return { ok: false, code: 'output_too_large', detail: `输出超过 ${limit / 1024}KiB` };
   }
   const text = raw.trim();
   if (!text.startsWith('{') || !text.endsWith('}')) {

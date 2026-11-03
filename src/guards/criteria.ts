@@ -14,7 +14,7 @@ import type { Diagnostic } from '../contracts/diagnostics.js';
 import { LifecycleRecordSchema, lifecycleFileName } from '../contracts/lifecycle.js';
 import type { LifecycleRecord } from '../contracts/lifecycle.js';
 import { ProposalSchema, type AcceptanceProtocol, type Proposal } from '../contracts/proposal.js';
-import { deriveVendor, isCrossVendor } from '../contracts/vendor.js';
+import { UNKNOWN_VENDOR, deriveVendor, isCrossVendorOf } from '../contracts/vendor.js';
 import { canonicalJson } from '../io/canonical-json.js';
 import { acceptanceSha256, guidanceSha256, signatureSha256 } from '../judge/freeze.js';
 import { acceptanceD0, classifyTile, requiredValidTiles } from '../lifecycle/attest-count.js';
@@ -36,7 +36,7 @@ import { statusOf, viewAtom } from './view.js';
  * 诊断码(本文件产出的全部 GUARD_G3_ 前缀,稳定;`g3.ts` / `labels.ts` 自己产出的 G3 外壳码见 docs/contracts.md §12.3 的 GUARD_* 码表):
  *  通用:ATOM_UNREADABLE
  *  晋升共用:LAYER_NOT_TEAM PROPOSAL_MISSING PROPOSAL_INVALID JUDGE_PENDING JUDGE_MISSING JUDGE_NOT_ACCEPT JUDGE_INJECTION
- *    NOT_CROSS_VENDOR JUDGE_HOP_MISMATCH REFLECTOR_UNVERIFIABLE REFLECTOR_STUB RULE_HASH_UNCOMPUTABLE RULE_HASH_MISSING
+ *    NOT_CROSS_VENDOR JUDGE_HOP_MISMATCH REFLECTOR_UNVERIFIABLE REFLECTOR_SESSION_DECLARED REFLECTOR_STUB RULE_HASH_UNCOMPUTABLE RULE_HASH_MISSING
  *    RULE_HASH_MISMATCH RESCAN_DIRTY REDACTION_RESIDUAL PROPOSAL_MISMATCH FIXED_FIELDS
  *    JUDGE_PROVIDER_MISMATCH JUDGE_LAST_HOP_NOT_OK JUDGE_VENDOR_UNPROVEN VENDOR_OVERRIDES_INVALID(后四个是 C5 评审记录检查的原因码,经 judgeChecks 以本前缀输出)
  *  T2:SIGNATURE_MISSING CONFIG_UNREADABLE ADVISORY_SINCE_UNKNOWN TEXT_SINCE_UNKNOWN ATTEST_INVALID ATTEST_RUN_ID_SHAPE
@@ -735,7 +735,7 @@ function judgeChecks(a: AtomCtx, pr: Proposal): Diagnostic[] {
     if (j.verdict !== 'accept')
       out.push(e('JUDGE_NOT_ACCEPT', a.path, `judge.verdict=${j.verdict}`));
     if (j.injection_suspected) out.push(e('JUDGE_INJECTION', a.path, 'judge 标记了疑似注入'));
-    if (!isCrossVendor(pr.reflector.vendor, j.vendor)) {
+    if (!isCrossVendorOf(pr.reflector, j.vendor)) {
       out.push(e('NOT_CROSS_VENDOR', a.path, '裁判与反思器的厂商不可证明不同'));
     }
     const last = j.hops[j.hops.length - 1];
@@ -763,9 +763,26 @@ function judgeChecks(a: AtomCtx, pr: Proposal): Diagnostic[] {
   }
   const r = pr.reflector;
   if (r.stub === true) out.push(e('REFLECTOR_STUB', a.path, '假 LLM(stub)产出的提案不得晋升'));
+  // R20-16.20 ①:会话自报来源(ingest)的提案,厂商不可证明,不得凭跨厂商证明晋升
+  if (r.provenance === 'session_declared') {
+    out.push(
+      e(
+        'REFLECTOR_SESSION_DECLARED',
+        a.path,
+        '会话自报来源的提案,厂商不可证明,不得凭跨厂商证明晋升',
+      ),
+    );
+  }
+  // R20-16.20 ②:`vendor = unknown` 或复算 = unknown 一律不可验证——不再只比较两者是否相等(两边都是 unknown 时相等,曾因此放行)
+  const derived =
+    r.backend === undefined
+      ? undefined
+      : deriveVendor({ backend: r.backend, provider: r.provider, model: r.model });
   if (
-    r.backend === undefined ||
-    deriveVendor({ backend: r.backend, provider: r.provider, model: r.model }) !== r.vendor
+    derived === undefined ||
+    r.vendor === UNKNOWN_VENDOR ||
+    derived === UNKNOWN_VENDOR ||
+    derived !== r.vendor
   ) {
     out.push(
       e('REFLECTOR_UNVERIFIABLE', a.path, '反思器厂商无法由 backend/provider/model 复算一致'),

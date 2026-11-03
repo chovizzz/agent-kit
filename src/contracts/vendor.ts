@@ -160,6 +160,18 @@ export const VENDOR_ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
  * 或**不是内置厂商**(来自覆盖层追加的家族——真实厂商的模型可能被标成「新厂商」,不能当证据)→ false。
  * 不做归一化:「看起来不同」不是证明(`OpenAI` vs `openai` 不会被当作不同厂商)。
  */
+/**
+ * 提案级的跨厂商判定(R20-16.20 ③):`reflector.provenance = session_declared` 的厂商是调用方自报、kit 证明不了,**一律视为不可证明**,
+ * 与 `reflector.vendor` 写了什么无关;其余走 {@link isCrossVendor}。judge 的跨厂商判定、C5、`promote --to advisory` 都从这里取口径(CI 与本地同一份)。
+ */
+export function isCrossVendorOf(
+  reflector: { vendor: string; provenance?: string | undefined },
+  judgeVendor: string,
+): boolean {
+  if (reflector.provenance === 'session_declared') return false;
+  return isCrossVendor(reflector.vendor, judgeVendor);
+}
+
 export function isCrossVendor(a: string, b: string): boolean {
   if (!VENDOR_ID_RE.test(a) || !VENDOR_ID_RE.test(b)) return false;
   if (a === UNKNOWN_VENDOR || b === UNKNOWN_VENDOR) return false;

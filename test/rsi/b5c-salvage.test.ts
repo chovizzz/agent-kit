@@ -6,7 +6,7 @@
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { exists, readText } from '../../src/io/read-fs.js';
-import { hardlink, mkdirp, remove } from '../../src/io/safe-fs.js';
+import { hardlink, mkdirp, remove, symlink } from '../../src/io/safe-fs.js';
 import { immediateGate } from '../../src/rsi/services/immediate-gate.js';
 import { salvageInvalidJournal } from '../../src/rsi/services/purge-engine.js';
 import { readPurgeJournal } from '../../src/rsi/services/purge-journal.js';
@@ -443,7 +443,7 @@ describe('tick 与 purge journal(R20-3.8.5 ②;替换 B5a 的临时 fail-closed)
     expect(await allText(runDirOf(sc.s, 'run-ok'))).toBe(keepOk);
   });
 
-  it('confirmed + 合规 journal 但续做失败(digests 目录在场)→ tick 报 3 purge_incomplete(契约:其它写入方遇到无法完成的 journal);journal 保留', async () => {
+  it('confirmed + 合规 journal 但续做失败(digests 是符号链接:A4 的清理 fail-closed)→ tick 报 3 purge_incomplete(契约:其它写入方遇到无法完成的 journal);journal 保留', async () => {
     const sc = await makeSc('tk-resume-fail-', { state: 'confirmed' });
     const c = await purge(sc, ['--excluded', '--write'], {
       beforePhase: (st) => {
@@ -451,7 +451,8 @@ describe('tick 与 purge journal(R20-3.8.5 ②;替换 B5a 的临时 fail-closed)
       },
     });
     expect(c.code).toBe(3);
-    await mkdirp(sc.s.f.fx, path.join(sc.s.rsi, 'digests'), 0o700);
+    await mkdirp(sc.s.f.fx, path.join(sc.s.state, 'elsewhere'), 0o700);
+    await symlink(sc.s.f.fx, path.join(sc.s.state, 'elsewhere'), path.join(sc.s.rsi, 'digests'));
     const r = await tick(sc);
     expect([r.code, r.err]).toEqual([3, 'RSI_FAIL_CLOSED reason=purge_incomplete\n']);
     expect(await phaseOf(sc)).toBe('purge:planned');

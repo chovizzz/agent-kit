@@ -195,6 +195,49 @@ export async function createExclusive(
   await handle.close();
 }
 
+/**
+ * 独占创建 + 写入 + `fsync` 文件(R20-A4:digest / 名额文件的「临时文件写完 → fsync」):与 {@link createExclusive} 同样的路径守卫与 `O_EXCL|O_NOFOLLOW`,
+ * 额外在关闭前 `sync()`。写失败 / 同步失败 → 尽力删除刚创建的文件再抛错(同 createExclusive 的 dev:ino 核对)。
+ */
+export async function createExclusiveSynced(
+  ctx: IoContext,
+  target: string,
+  data: string | Uint8Array,
+  mode: number,
+): Promise<void> {
+  audit(ctx, 'createExclusive', target);
+  const abs = assertWritable(ctx, target);
+  const flags =
+    fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW;
+  const handle = await fsp.open(abs, flags, mode);
+  try {
+    await handle.chmod(mode);
+    await handle.writeFile(data);
+    await handle.sync();
+  } catch (e) {
+    const mine = await handle.stat().catch(() => undefined);
+    await handle.close().catch(() => undefined);
+    const now = await fsp.lstat(abs).catch(() => undefined);
+    if (mine !== undefined && now !== undefined && now.dev === mine.dev && now.ino === mine.ino) {
+      await fsp.rm(abs, { force: true }).catch(() => undefined);
+    }
+    throw e;
+  }
+  await handle.close();
+}
+
+/** `fsync` 一个目录(rename / unlink 之后让目录项落盘;R20-16.10 / R20-16.15)。路径守卫同其它写函数(目录须在写入根内)。 */
+export async function fsyncDir(ctx: IoContext, target: string): Promise<void> {
+  audit(ctx, 'fsyncDir', target);
+  const abs = assertWritable(ctx, target, { allowRoot: true });
+  const handle = await fsp.open(abs, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY);
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
 /** 递归建目录;目录权限缺省 0o755(.state 传 0o700)。 */
 export async function mkdirp(ctx: IoContext, target: string, mode = 0o755): Promise<void> {
   audit(ctx, 'mkdirp', target);

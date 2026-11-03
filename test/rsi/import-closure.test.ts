@@ -53,6 +53,8 @@ const REAL_ENTRY_CANDIDATES: readonly string[] = [
   'src/rsi/confirm.ts',
   'src/rsi/stop.ts',
   'src/rsi/purge.ts',
+  // A4:会话授权下的脱敏摘要入口
+  'src/rsi/digest.ts',
   'src/rsi/index.ts',
   'src/commands/rsi.ts',
 ];

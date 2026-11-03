@@ -456,16 +456,12 @@ describe('边界与拒绝', () => {
     expect(await reasonOf()).toBe('purge_incomplete');
   });
 
-  it('.state/rsi/digests/ 在场(P0 没有它的清理实现)→ internal,journal 都不写', async () => {
+  it('.state/rsi/digests/ 在场(A4:R20-3.8.3)→ 整个目录被删(幂等:不在场也不报错),purge 完成', async () => {
     const sc = await makeSc('eng-digests-');
     await mkdirp(sc.s.f.fx, path.join(sc.s.rsi, 'digests'), 0o700);
-    sc.s.audit.length = 0;
-    await expect(runFull(sc)).rejects.toMatchObject({ reason: 'internal' });
+    await runFull(sc);
+    expect(await exists(path.join(sc.s.rsi, 'digests'))).toBe(false);
     expect(await readPurgeJournal(sc.s.io)).toEqual({ state: 'absent' });
-    // 写审计里没有 journal 与月文件的写(recover / resumeTaint 无事可做)
-    expect(sc.s.audit.filter((a) => a.includes('purge-journal') || a.includes('.jsonl'))).toEqual(
-      [],
-    );
   });
 
   it('索引无效:跳过索引阶段(不改 projects.json),其余阶段照常完成', async () => {

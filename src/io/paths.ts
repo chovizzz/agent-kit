@@ -94,6 +94,11 @@ export class PathsError extends Error {
   readonly code = 'IO_PATHS_INVALID';
 }
 
+/** 调用进程的 cwd(命令层不得直接读 `process.cwd()`;测试注入优先)。rsi digest 用它判「当前项目」。 */
+export function getProcessCwd(injected?: string): string {
+  return injected ?? process.cwd();
+}
+
 /** 真实 HOME。仅供 ops 快照工具(B17)使用;KIT_REAL_HOME_OVERRIDE 让检测器自检不碰真 HOME。 */
 export function getRealHome(env?: Readonly<Record<string, string | undefined>>): string {
   const e = env ?? process.env;
