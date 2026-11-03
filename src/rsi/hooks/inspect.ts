@@ -45,9 +45,6 @@ const notInstalled = (): Record<RsiAgentId, AgentHooksState> => ({
   pi: 'not_installed',
 });
 
-const codeOf = (e: unknown): string | undefined =>
-  (e as { code?: unknown } | null)?.code as string | undefined;
-
 const isObj = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
 
@@ -93,9 +90,9 @@ export async function inspectHooks(r: HooksReader): Promise<HooksFace> {
     } else if (marker && journals.length === 0) {
       return fail('hooks_ledger_invalid'); // 标记在、账本缺,且没有可兜底的 journal
     }
-  } catch (e) {
-    const c = codeOf(e);
-    return fail(c === 'hooks_backup_invalid' ? 'hooks_backup_invalid' : 'hooks_ledger_invalid');
+  } catch {
+    // D17 的钩子面 fail 码只有 hooks_ledger_invalid(R20-17.19 / §19 D17 行);D17 不读备份区
+    return fail('hooks_ledger_invalid');
   }
 
   if (residue > 0) {
@@ -120,8 +117,9 @@ export async function inspectHooks(r: HooksReader): Promise<HooksFace> {
       agents[agent] = 'unknown';
     }
   }
-  if (drifted) return { status: 'warn', result: 'hooks_drifted', agents, residue: 0 };
+  // 目标不安全优先于漂移:不安全时连「漂没漂」都无法可信判定(A6i-8)
   if (targetUnsafe) return { status: 'warn', result: 'hooks_target_unsafe', agents, residue: 0 };
+  if (drifted) return { status: 'warn', result: 'hooks_drifted', agents, residue: 0 };
   return { status: 'ok', result: 'ok', agents, residue: 0 };
 
   function fail(result: string): HooksFace {

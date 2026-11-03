@@ -13,7 +13,7 @@ import { HooksRead } from '../../src/io/hooks-read.js';
 import { canonicalJson } from '../../src/io/canonical-json.js';
 import { createIoContext } from '../../src/io/paths.js';
 import { readText } from '../../src/io/read-fs.js';
-import { mkdirp, rename, symlink, writeFile } from '../../src/io/safe-fs.js';
+import { chmod, mkdirp, rename, symlink, writeFile } from '../../src/io/safe-fs.js';
 import { inspectHooks } from '../../src/rsi/hooks/inspect.js';
 import { REPO_ROOT } from '../helpers/tmp.js';
 import { ROOT, closureOf, fsWriteUses } from './closure-util.js';
@@ -295,6 +295,46 @@ describe('R20-17.19 钩子面(与 RSI 开关无关,R20-15.4)', () => {
       { mode: 0o644 },
     );
     expect(await inspect(f)).toMatchObject({ status: 'warn', result: 'hooks_drifted' });
+  });
+
+  it('目标不安全优先于漂移:pi 漂移 + claude settings.json 组可写 → warn hooks_target_unsafe(claude 记 unknown,只报不修)', async () => {
+    const f = await alice('a6-dr-hk-unsafe-');
+    const text = 'export default function () {}\n';
+    const wrapper = {
+      hooks: [{ type: 'command', command: 'agent-kit rsi hint --agent claude', timeout: 5 }],
+    };
+    const fp = sha(canonicalJson({ event: 'SessionStart', entry: wrapper }));
+    const base = piLedger(sha(text)) as { entries: unknown[] };
+    const ledger = {
+      ...base,
+      entries: [
+        ...base.entries,
+        {
+          agent: 'claude',
+          event: 'SessionStart',
+          fingerprint: fp,
+          shape_version: '1',
+          variant: 'plain',
+          txn_id: TXN,
+        },
+      ],
+    };
+    await hooksState(f, { ledger, pi: { text: `${text}// user edit\n` } });
+    await mkdirp(f.fx, path.join(f.home, '.claude'), 0o755);
+    const settings = path.join(f.home, '.claude', 'settings.json');
+    await writeFile(f.fx, settings, `${JSON.stringify({ hooks: { SessionStart: [wrapper] } })}\n`, {
+      mode: 0o644,
+    });
+    // 正向对照:目标安全时这里是漂移(pi),说明下面的结果来自 claude 的不安全而非别的分支
+    expect(await inspect(f)).toMatchObject({ status: 'warn', result: 'hooks_drifted' });
+    await chmod(f.fx, settings, 0o664);
+    const before = await treeOf(f.home);
+    expect(await inspect(f)).toMatchObject({
+      status: 'warn',
+      result: 'hooks_target_unsafe',
+      agents: { claude: 'unknown', pi: 'unknown' },
+    });
+    expect(await treeOf(f.home)).toEqual(before);
   });
 
   it('残留 journal / tmp → warn hooks_residue,不判漂移、不清理(目录树不变)', async () => {

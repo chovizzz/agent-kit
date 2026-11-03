@@ -150,6 +150,15 @@ describe('R20-17.2 / R20-17.3 待审与待通知', () => {
     const s = known(await scanPending(input(f, [])));
     expect(s.runDirs).toBe(2);
   });
+
+  it('dirNames(notice_full 的 S)只收 run 目录:同名普通文件 / 点开头临时项不算「目录仍存在」', async () => {
+    const f = await fx('a6-pend-dirnames-');
+    await putReport(f, 'r-1', 'llm');
+    await writeFile(f.io, path.join(f.io.stateDir, 'reflect', 'r-gone'), 'x', { mode: 0o600 });
+    await mkdirp(f.io, path.join(f.io.stateDir, 'reflect', '.tmp-x'), 0o755);
+    const s = known(await scanPending(input(f, [])));
+    expect([...s.dirNames].sort()).toEqual(['r-1']);
+  });
 });
 
 describe('R20-17.4 / R20-17.4a 读取协议与「扫描未知」', () => {

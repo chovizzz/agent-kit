@@ -185,6 +185,7 @@ async function evaluate(
     now: (deps.now ?? ((): Date => new Date()))(),
     ...(deps.probe !== undefined ? { probe: deps.probe } : {}),
   });
+  if (over()) return null;
   const doc = notice.notice ?? {
     schema_version: 1 as const,
     proposals_notified: [] as string[],
@@ -243,6 +244,7 @@ export async function runRsiNotice(
       deps.open,
     );
     if (open.kind !== 'ready') return { kind: 'skipped', why: 'config' };
+    if (over()) return { kind: 'not_recorded', why: 'over_budget' };
     const sctx: RsiServiceCtx = {
       ...open.ctx,
       ...(deps.now !== undefined ? { now: deps.now } : {}),

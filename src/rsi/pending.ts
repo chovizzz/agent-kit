@@ -161,12 +161,13 @@ export async function scanPending(input: ScanInput, deps: ScanDeps = {}): Promis
   const d = await statDirSafe(reflect);
   if (d.kind === 'unsafe') throw new RsiSnapshotError('state_dir_unsafe');
   const entries = d.kind === 'missing' ? [] : await readDir(reflect);
-  const runDirs = entries.filter(
-    (e) => e.isDirectory && !e.isSymbolicLink && !e.name.startsWith('.'),
-  ).length;
+  const isRunDir = (e: (typeof entries)[number]): boolean =>
+    e.isDirectory && !e.isSymbolicLink && !e.name.startsWith('.');
+  const runDirs = entries.filter(isRunDir).length;
   if (entries.length > maxEntries) return { known: false, reason: 'run_scan_truncated', runDirs };
   const byName = new Map(entries.map((e) => [e.name, e]));
-  const dirNames = new Set(entries.map((e) => e.name));
+  // R20-17.14a 的 S 只认「目录仍存在」的 run:同名普通文件 / 符号链接 / 点开头临时项不算(与 runDirs 同口径)
+  const dirNames = new Set(entries.filter(isRunDir).map((e) => e.name));
   const staged = stagedRuns(input.staged, input.classify);
   const pending: RunRef[] = [];
   const toNotify: RunRef[] = [];
