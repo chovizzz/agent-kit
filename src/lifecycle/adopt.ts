@@ -11,6 +11,12 @@
  * - personal 层一律拒(`PERSONAL_LAYER_P2`,P1 没有消费者)。
  */
 import { createHash } from 'node:crypto';
+import {
+  NO_VENDOR_EVIDENCE_LINE,
+  evidenceLabels,
+  vendorEvidenceReport,
+  type VendorEvidenceReport,
+} from './vendor-report.js';
 import * as path from 'node:path';
 import { parseAtom } from '../atoms/parse.js';
 import { AGENT_IDS } from '../contracts/common.js';
@@ -57,6 +63,8 @@ export interface AdoptInput {
 }
 
 export interface AdoptedItem {
+  /** N4(R20-18.20):该提案入库时的厂商证据(两侧层级、厂商、模型,自报侧);进 `report.json` 的 `adopted[]` 与 `promo_id` */
+  vendorEvidence: VendorEvidenceReport;
   proposalId: string;
   ruleId: string;
   ruleSha256: string;
@@ -461,7 +469,11 @@ export async function planAdoption(io: IoContext, input: AdoptInput): Promise<Ad
       continue;
     }
 
+    // C5 已通过 → vendorEvidence 必成立;不成立是不变量被破坏,整批 fail-closed
+    const evidence = vendorEvidenceReport(p, input.vendorOverrides ?? {});
+    if (evidence === undefined) throw new AdoptFailClosedError('VENDOR_EVIDENCE_UNAVAILABLE');
     adopted.push({
+      vendorEvidence: evidence,
       proposalId: p.id,
       ruleId: atom.fm.id,
       ruleSha256: p.judge?.rule_sha256 as string, // C6 已保证存在且等于当前哈希
@@ -500,6 +512,7 @@ export async function planAdoption(io: IoContext, input: AdoptInput): Promise<Ad
       rule_sha256: a.ruleSha256,
       proposal_sha256: a.proposalSha256,
       atom_sha256: a.atomSha256,
+      vendor_evidence: a.vendorEvidence,
     })),
     dropped: dropped.map((d) => ({ proposal_id: d.proposalId, reasons: d.reasons })),
     dropped_by_reason: sortedReasons,
@@ -572,15 +585,24 @@ interface PrCore {
   proposals_total: number;
   adopted_count: number;
   dropped_count: number;
-  adopted: { proposal_id: string; rule_id: string; rule_sha256: string }[];
+  adopted: {
+    proposal_id: string;
+    rule_id: string;
+    rule_sha256: string;
+    vendor_evidence: VendorEvidenceReport;
+  }[];
   dropped_by_reason: Record<string, number>;
   patch_sha256: string;
 }
 
 /** 只含 id / 状态 / 计数 / 哈希 / 固定模板文字;没有摘录、正文、提示。 */
 function buildPrBody(promoId: string, c: PrCore): string {
+  const labels = evidenceLabels(c.adopted.map((a) => a.vendor_evidence));
   const lines: string[] = [
     `# 采纳反思器提案(${promoId})`,
+    '',
+    // N4(R20-18.20 ②):证据声明始终出现,放在正文第一段、与摘要同一屏;文本只来自 vendor.ts 的固定标签常量
+    ...(labels.length > 0 ? labels.map((l) => `**${l}**`) : [`**${NO_VENDOR_EVIDENCE_LINE}**`]),
     '',
     '本补丁由 `agent-kit promote --run` 生成。**以本补丁(promote.patch)为准;暂存区里的旧 apply.patch 作废**',
     '(它不含 judge 评审记录,按晋升判据会被机械拒绝)。',

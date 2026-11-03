@@ -1,6 +1,10 @@
 import type { Diagnostic } from '../contracts/diagnostics.js';
 import { parseRestrictedYaml } from '../atoms/frontmatter.js';
-import { REFLECTOR_PROVENANCE } from '../contracts/proposal.js';
+import {
+  JudgeRecordSchema,
+  REFLECTOR_PROVENANCE,
+  ReflectorConfirmedSchema,
+} from '../contracts/proposal.js';
 import { err } from './diff.js';
 import { isRegularMode } from './paths.js';
 import type { Change, GuardGit } from './types.js';
@@ -124,10 +128,28 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
+/** `reflector.confirmed` / `judge.provenance` 的结构校验(原始值,不经整份 ProposalSchema;新键的任何异常都算非法) */
+function confirmStructureInvalid(doc: Record<string, unknown>): boolean {
+  const r = doc['reflector'];
+  if (isRecord(r) && 'confirmed' in r) {
+    if (r['provenance'] !== 'session_declared') return true;
+    if (!ReflectorConfirmedSchema.safeParse(r['confirmed']).success) return true;
+  }
+  const j = doc['judge'];
+  if (isRecord(j) && 'provenance' in j) {
+    if (j['provenance'] !== 'spawned' && j['provenance'] !== 'session_confirmed') return true;
+    if (j['provenance'] === 'session_confirmed' && !JudgeRecordSchema.safeParse(j).success) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /**
  * `kit:reflector` PR 新增的提案(`proposals/**.yaml`,头部侧新增的普通文件)的来源核验(contracts #24,CI 侧判据):
  * - `reflector.backend` 必填且为 `claude|codex|pi`(CI 才能用 provider/model 重算 `deriveVendor`)→ 缺 / 非法 GUARD_PROPOSAL_BACKEND_MISSING;
  * - `reflector.provenance` 存在但不在枚举内 → GUARD_PROPOSAL_PROVENANCE_INVALID(A4,R20-16.20 ④);`session_declared` 本身可以进 proposals/(只是证据);
+ * - `reflector.confirmed` 出现在非 `session_declared` 提案上、或其结构非法,以及 `judge.provenance` 取值 / 形状非法 → GUARD_PROPOSAL_CONFIRM_INVALID(N4,R20-18.16);
  * - `reflector.stub: true` 的提案一律拒收 → GUARD_PROPOSAL_STUB;
  * - `reflector.provenance` 存在但不在枚举内 → GUARD_PROPOSAL_PROVENANCE_INVALID(A4);
  * - 读不出(YAML 语法错 / 顶层非映射 / 非普通文件)→ GUARD_PROPOSAL_UNPARSEABLE(fail-closed)。
@@ -174,6 +196,17 @@ export function checkReflectorProposalOrigin(
           ),
         );
       }
+    }
+    // N4(R20-18.16):`reflector.confirmed` 与 `judge.provenance` 取值做同口径结构校验(完整的 binding / 合理性 / 跨厂商判定在晋升时的 vendorEvidence);
+    // `session_declared` 提案连同确认可随 `kit:reflector` PR 进入 proposals/,它只是证据,晋升仍走 kit:promotion
+    if (confirmStructureInvalid(y.value)) {
+      out.push(
+        err(
+          'GUARD_PROPOSAL_CONFIRM_INVALID',
+          c.path,
+          '提案的 reflector.confirmed / judge.provenance 结构非法(confirmed 只许出现在 session_declared 提案上;judge.provenance 须为 spawned | session_confirmed 且形状合法)',
+        ),
+      );
     }
     if (isRecord(r) && r['stub'] === true) {
       out.push(err('GUARD_PROPOSAL_STUB', c.path, 'reflector.stub: true 的提案不得合并(桩产物)'));

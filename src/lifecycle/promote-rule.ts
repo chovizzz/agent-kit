@@ -18,6 +18,11 @@
  * L2 判据对 `review_by` 没有要求(G3 只要求它随 status 转移一起改),所以上限以 lint 为准。
  */
 import { createHash } from 'node:crypto';
+import {
+  evidenceLabels,
+  vendorEvidenceReport,
+  type VendorEvidenceReport,
+} from './vendor-report.js';
 import { parse as parseToml } from 'smol-toml';
 import { addDays } from '../atoms/dates.js';
 import { parseRestrictedYaml } from '../atoms/frontmatter.js';
@@ -88,6 +93,8 @@ export type PromotionPlan =
       reviewBy: string | null;
       headBlobOid: string;
       ruleSha256: string;
+      /** N4(R20-18.20):厂商证据(两侧层级、厂商、模型,自报侧);进 `report.json` 与 `promo_id` */
+      vendorEvidence: VendorEvidenceReport;
       patch: string;
       patchSha256: string;
       attestHashes: string[];
@@ -397,6 +404,11 @@ export async function planPromotion(
   attestHashes.sort(sortStr);
   const headBlobOid = gitBlobOid(headText);
   const ruleSha256 = proposal.judge?.rule_sha256 as string; // C6 已保证存在且等于当前哈希
+  // N4(R20-18.20):C5 已通过 → vendorEvidence 必成立;不成立是不变量被破坏,fail-closed
+  const vendorEvidence = vendorEvidenceReport(proposal);
+  if (vendorEvidence === undefined) {
+    return fail(ExitCode.FAIL_CLOSED, 'FAIL_CLOSED', 'VENDOR_EVIDENCE_UNAVAILABLE');
+  }
   const patchSha256 = sha256(patch);
   // 哈希输入加域分隔标记(kit-promote-rule-v1)与 L3 采纳的 id 区分;再并入目标 review_by(同输入同 id,不同日期的 T2 补丁不同 id)
   const promoId = `promo-${sha256(
@@ -408,6 +420,8 @@ export async function planPromotion(
       headBlobOid,
       attestHashes.join(','),
       reviewByChange ?? '',
+      // 证据层级变了(例如先确认了反思器侧、或 --replace 了裁决)→ 新 id、新目录;同一证据重跑仍是同 id(§18.2 幂等不变)
+      canonicalJson(vendorEvidence),
     ].join('\0'),
   ).slice(0, 16)}`;
   const core = {
@@ -422,6 +436,7 @@ export async function planPromotion(
     kit_version: KIT_VERSION,
     head_blob_oid: headBlobOid,
     rule_sha256: ruleSha256,
+    vendor_evidence: vendorEvidence,
     patch_sha256: patchSha256,
     attest_files: attestHashes.length,
     attest_hashes: attestHashes,
@@ -441,6 +456,7 @@ export async function planPromotion(
     reviewBy: reviewByChange ?? null,
     headBlobOid,
     ruleSha256,
+    vendorEvidence,
     patch,
     patchSha256,
     attestHashes,
@@ -461,6 +477,7 @@ interface PrCore {
   review_by_new: string | null;
   head_blob_oid: string;
   rule_sha256: string;
+  vendor_evidence: VendorEvidenceReport;
   patch_sha256: string;
   attest_files: number;
   attest_hashes: string[];
@@ -474,6 +491,9 @@ function buildPrBody(c: PrCore): string {
   const list = (xs: readonly string[]): string => (xs.length === 0 ? '(无)' : xs.join('、'));
   const lines: string[] = [
     `# 晋升 ${c.rule_id}:${c.from} → ${c.to}(${c.promo_id})`,
+    '',
+    // N4(R20-18.20 ②):证据声明始终出现,放在正文第一段、与摘要同一屏;文本只来自 vendor.ts 的固定标签常量
+    ...evidenceLabels([c.vendor_evidence]).map((l) => `**${l}**`),
     '',
     '本补丁由 `agent-kit promote --rule` 生成,PR 标签 `kit:promotion`。只改 frontmatter 的 `status:`' +
       (c.review_by_new !== null ? ' 与 `review_by:` 两行。' : ' 一行。'),

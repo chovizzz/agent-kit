@@ -14,12 +14,17 @@ import type { Diagnostic } from '../contracts/diagnostics.js';
 import { LifecycleRecordSchema, lifecycleFileName } from '../contracts/lifecycle.js';
 import type { LifecycleRecord } from '../contracts/lifecycle.js';
 import { ProposalSchema, type AcceptanceProtocol, type Proposal } from '../contracts/proposal.js';
-import { UNKNOWN_VENDOR, deriveVendor, isCrossVendorOf } from '../contracts/vendor.js';
+import {
+  UNKNOWN_VENDOR,
+  deriveVendor,
+  isCrossVendor,
+  vendorEvidence,
+} from '../contracts/vendor.js';
 import { canonicalJson } from '../io/canonical-json.js';
 import { acceptanceSha256, guidanceSha256, signatureSha256 } from '../judge/freeze.js';
 import { acceptanceD0, classifyTile, requiredValidTiles } from '../lifecycle/attest-count.js';
 import { calibrationStrictReasons, computeCalibration } from '../lifecycle/calibration.js';
-import { checkC5, ruleSha256 } from '../lifecycle/checks.js';
+import { ruleSha256 } from '../lifecycle/checks.js';
 import { createRedactor } from '../redact/redactor.js';
 import { scanDangerousPhrases } from '../reflect/validate.js';
 import { hasInvisible } from '../reflect/text.js';
@@ -39,12 +44,16 @@ import { statusOf, viewAtom } from './view.js';
  *    NOT_CROSS_VENDOR JUDGE_HOP_MISMATCH REFLECTOR_UNVERIFIABLE REFLECTOR_SESSION_DECLARED REFLECTOR_STUB RULE_HASH_UNCOMPUTABLE RULE_HASH_MISSING
  *    RULE_HASH_MISMATCH RESCAN_DIRTY REDACTION_RESIDUAL PROPOSAL_MISMATCH FIXED_FIELDS
  *    JUDGE_PROVIDER_MISMATCH JUDGE_LAST_HOP_NOT_OK JUDGE_VENDOR_UNPROVEN VENDOR_OVERRIDES_INVALID(后四个是 C5 评审记录检查的原因码,经 judgeChecks 以本前缀输出)
+ *    N4(docs/contracts.md §20.18):REFLECTOR_CONFIRM_INVALID(反思器侧人工确认缺 / 无效,`reflector.confirmed` 经 `vendorEvidence` 判)
+ *    JUDGE_CONFIRM_INVALID(`session_confirmed` 裁决的确认无效)——两者与 NOT_CROSS_VENDOR 等一样直接取自 `vendorEvidence` 的结果,
+ *    CI 与本地 `checkC5` 同一实现;`C5_CI_CODES` 登记 C5 每个 reason 对应的本文件码(穷尽性测试钉住,新增 reason 不接 CI → 红)
  *  T2:SIGNATURE_MISSING CONFIG_UNREADABLE ADVISORY_SINCE_UNKNOWN TEXT_SINCE_UNKNOWN ATTEST_INVALID ATTEST_RUN_ID_SHAPE
  *    ATTEST_AMBIGUOUS_LATEST ATTEST_OVERLAP THRESHOLD_TILES THRESHOLD_EXPOSURE THRESHOLD_HARMFUL
  *  T2 冻结核验(K4,docs/contracts.md §18.9):ACCEPTANCE_MISSING ACCEPTANCE_HASH_MISMATCH ACCEPTANCE_CLOCK_INCONSISTENT
  *    ACCEPTANCE_CHANGED_AFTER_FREEZE PREDICTION_CHANGED_AFTER_FREEZE ACCEPTANCE_WEAKER_THAN_CORE FREEZE_COMMIT_UNKNOWN
  *  T2 校准加严(K5a,docs/contracts.md §18.10;严重度 warn = 提示,不计入失败):JUDGE_OVERCONFIDENT CALIBRATION_INSUFFICIENT
  *    CALIBRATION_UNAVAILABLE CALIBRATION_ITEM_UNREADABLE(后两者与 JUDGE_OVERCONFIDENT 一样令 THRESHOLD_TILES 多要 STRICT_EXTRA_TILES 块)
+ *    N4:CALIBRATION_SELF_REPORTED(以 `session_confirmed` 为裁判的晋升:自报记录永不计入任何校准键,按「校准不可用」处理,同样加严;warn)
  *  退役:LIFECYCLE_RECORD_MISSING LIFECYCLE_RECORD_AMBIGUOUS LIFECYCLE_RECORD_INVALID LIFECYCLE_RECORD_MISMATCH
  *    RECORD_DIGESTS REASON_NOT_EXPIRED REASON_BY_INVALID REASON_NO_EXPOSURE_UNMET REASON_NOT_HARMFUL COOLDOWN_NOT_MET
  *  warn(不计入失败):ATTEST_NOT_COUNTED ACCEPTANCE_REFROZEN
@@ -233,7 +242,7 @@ function countable(
   return { kept, diags };
 }
 
-interface AtomCtx {
+export interface AtomCtx {
   path: string;
   id: string;
   fm: Readonly<Record<string, unknown>>;
@@ -671,6 +680,21 @@ const redactor = createRedactor({ timeout_ms: 2000 });
 function rescan(a: AtomCtx, p: Proposal): Diagnostic[] {
   const v = viewAtom(a.text, a.path);
   const fields: [string, string][] = [['rationale', p.rationale]];
+  // N4(R20-18.19 ⑤):用户键入值与声明值是新的自由文本通道,CI 同样复扫(与本地 C8 清单同口径)
+  if (p.reflector.confirmed !== undefined) {
+    fields.push(
+      ['reflector.confirmed.vendor', p.reflector.confirmed.vendor],
+      ['reflector.confirmed.model', p.reflector.confirmed.model],
+      ['reflector.confirmed.kit_version', p.reflector.confirmed.kit_version],
+    );
+  }
+  if (p.judge?.provenance === 'session_confirmed') {
+    fields.push(
+      ['judge.declared.vendor', p.judge.declared.vendor],
+      ['judge.declared.model', p.judge.declared.model],
+      ['judge.confirmation.kit_version', p.judge.confirmation.kit_version],
+    );
+  }
   if (v.ok) {
     fields.push(['body', v.body]);
     if (typeof v.fm['title'] === 'string') fields.push(['title', v.fm['title']]);
@@ -715,78 +739,124 @@ function rescan(a: AtomCtx, p: Proposal): Diagnostic[] {
   return out;
 }
 
-const C5_EXTRA_REASONS: ReadonlySet<string> = new Set([
-  'JUDGE_PROVIDER_MISMATCH',
-  'JUDGE_LAST_HOP_NOT_OK',
-  'JUDGE_VENDOR_UNPROVEN',
-  'VENDOR_OVERRIDES_INVALID',
-]);
+/**
+ * C5 的每个 reason → 本文件发出的码后缀(R20-18.19 ②「CI 映射不得静默丢码」)。`judgeChecks` 对 `vendorEvidence` 的每个 issue 查此表;
+ * 表里没有的 reason 不会被丢弃,而是以 `C5_<reason>` 兜底输出(fail-closed);`test/lifecycle/n4-c5-exhaustive.test.ts` 钉住
+ * `C5_REASONS`(checks.ts)⊆ 本表的键——新增 reason 而不接 CI → 红。
+ */
+/** C5 评审记录检查原因码的 CI 前缀形(与既有 `C5_${reason}` 同一拼法;不写成整串字面量,免被 A10 熵扫描误判) */
+const c5Code = (reason: string): string => `C5_${reason}`;
 
-function judgeChecks(a: AtomCtx, pr: Proposal): Diagnostic[] {
+export const C5_CI_CODES: Readonly<Record<string, string>> = Object.freeze({
+  STUB_PROPOSAL: 'REFLECTOR_STUB',
+  REFLECTOR_SESSION_DECLARED: 'REFLECTOR_SESSION_DECLARED',
+  REFLECTOR_CONFIRM_INVALID: 'REFLECTOR_CONFIRM_INVALID',
+  REFLECTOR_BACKEND_MISSING: 'REFLECTOR_UNVERIFIABLE',
+  REFLECTOR_VENDOR_MISMATCH: 'REFLECTOR_UNVERIFIABLE',
+  VENDOR_OVERRIDES_INVALID: c5Code('VENDOR_OVERRIDES_INVALID'),
+  JUDGE_PENDING: 'JUDGE_PENDING',
+  JUDGE_MISSING: 'JUDGE_MISSING',
+  VERDICT_NOT_ACCEPT: 'JUDGE_NOT_ACCEPT',
+  VENDOR_NOT_CROSS: 'NOT_CROSS_VENDOR',
+  JUDGE_CONFIRM_INVALID: 'JUDGE_CONFIRM_INVALID',
+  JUDGE_LAST_HOP_NOT_OK: c5Code('JUDGE_LAST_HOP_NOT_OK'),
+  JUDGE_PROVIDER_MISMATCH: c5Code('JUDGE_PROVIDER_MISMATCH'),
+  JUDGE_LAST_HOP_VENDOR_MISMATCH: 'JUDGE_HOP_MISMATCH',
+  JUDGE_VENDOR_UNPROVEN: c5Code('JUDGE_VENDOR_UNPROVEN'),
+});
+
+const ISSUE_MESSAGES: Readonly<Record<string, string>> = Object.freeze({
+  REFLECTOR_SESSION_DECLARED:
+    '会话自报来源的提案且无有效人工确认,厂商不可证明,不得凭跨厂商证明晋升',
+  REFLECTOR_CONFIRM_INVALID:
+    'reflector.confirmed 无效(厂商 / 模型 / 合理性 / binding_sha256 任一不成立)',
+  JUDGE_CONFIRM_INVALID:
+    'session_confirmed 裁决的确认无效(declared / 合理性 / binding_sha256 任一不成立)',
+  VENDOR_NOT_CROSS: '裁判与反思器的厂商不可证明不同',
+  JUDGE_LAST_HOP_VENDOR_MISMATCH: 'judge.vendor 与最后一跳的厂商不一致',
+});
+
+/** @internal 导出仅供测试做 CI / 本地同口径的参数化对拍 */
+export function judgeChecks(a: AtomCtx, pr: Proposal): Diagnostic[] {
   const out: Diagnostic[] = [];
   const j = pr.judge;
+  const emitted = new Set<string>();
+  const once = (code: string, message: string): void => {
+    if (emitted.has(code)) return;
+    emitted.add(code);
+    out.push(e(code, a.path, message));
+  };
+  // 厂商证据:**与本地 checkC5 / promote 同一个函数**(R20-18.17),CI 不得比本地宽
+  const ev = vendorEvidence(pr);
+  const issue = (i: { code: string }): void => {
+    const code = C5_CI_CODES[i.code] ?? `C5_${i.code}`;
+    const msg =
+      i.code === 'JUDGE_PENDING'
+        ? '提案只有 judge_attempts(评审未成功),不得晋升'
+        : i.code === 'JUDGE_MISSING'
+          ? '提案没有 judge 记录'
+          : (ISSUE_MESSAGES[i.code] ?? `C5 评审记录检查未过:${i.code}`);
+    once(code, msg);
+  };
+  const reflectorSide = ev.issues.filter((i) => i.side === 'reflector');
+  const judgeSide = ev.issues.filter((i) => i.side === 'judge');
+  const unverifiableCodes = new Set(['REFLECTOR_BACKEND_MISSING', 'REFLECTOR_VENDOR_MISMATCH']);
   if (j === undefined) {
-    out.push(
-      pr.judge_attempts !== undefined
-        ? e('JUDGE_PENDING', a.path, '提案只有 judge_attempts(评审未成功),不得晋升')
-        : e('JUDGE_MISSING', a.path, '提案没有 judge 记录'),
-    );
+    for (const i of judgeSide) issue(i); // JUDGE_PENDING / JUDGE_MISSING
   } else {
-    if (j.verdict !== 'accept')
-      out.push(e('JUDGE_NOT_ACCEPT', a.path, `judge.verdict=${j.verdict}`));
-    if (j.injection_suspected) out.push(e('JUDGE_INJECTION', a.path, 'judge 标记了疑似注入'));
-    if (!isCrossVendorOf(pr.reflector, j.vendor)) {
-      out.push(e('NOT_CROSS_VENDOR', a.path, '裁判与反思器的厂商不可证明不同'));
+    if (j.verdict !== 'accept') once('JUDGE_NOT_ACCEPT', `judge.verdict=${j.verdict}`);
+    if (j.injection_suspected) once('JUDGE_INJECTION', 'judge 标记了疑似注入');
+    // CI 比本地多一道(只会更严):spawned 的反思器 / 裁判厂商 id 须是规范形(不归一化)——改造前的跨厂商判定口径(`vendor.ts` 的 `isCrossVendor` 对记录原值)
+    if (
+      j.provenance === 'spawned' &&
+      pr.reflector.provenance !== 'session_declared' &&
+      !isCrossVendor(pr.reflector.vendor, j.vendor)
+    ) {
+      once('NOT_CROSS_VENDOR', '裁判与反思器的厂商不可证明不同');
     }
-    const last = j.hops[j.hops.length - 1];
-    if (last === undefined || last.vendor !== j.vendor) {
-      out.push(e('JUDGE_HOP_MISMATCH', a.path, 'judge.vendor 与最后一跳的厂商不一致'));
+    for (const i of ev.issues.filter((x) => x.side === 'pair')) issue(i);
+    if (j.provenance === 'spawned') {
+      const last = j.hops[j.hops.length - 1];
+      if (last === undefined || last.vendor !== j.vendor) {
+        once('JUDGE_HOP_MISMATCH', 'judge.vendor 与最后一跳的厂商不一致');
+      }
     }
     if (j.rule_sha256 === undefined) {
-      out.push(
-        e('RULE_HASH_MISSING', a.path, 'judge 记录没有 rule_sha256,无法绑定评审时的规则文本'),
-      );
+      once('RULE_HASH_MISSING', 'judge 记录没有 rule_sha256,无法绑定评审时的规则文本');
     } else if (a.ruleSha !== undefined && j.rule_sha256 !== a.ruleSha) {
-      out.push(e('RULE_HASH_MISMATCH', a.path, '规则文本在评审之后被改过(rule_sha256 不一致)'));
+      once('RULE_HASH_MISMATCH', '规则文本在评审之后被改过(rule_sha256 不一致)');
     }
   }
   if (a.ruleSha === undefined) {
     out.push(e('RULE_HASH_UNCOMPUTABLE', a.path, '无法计算归一化后的规则哈希'));
   }
-  // 与本地 promote 同一口径:CI 不得比本地宽。上面已覆盖的 C5 原因不重复输出,只补 C5 独有的几条:
-  // judge.provider 必须等于最后一跳、最后一跳 result 必须 ok、评审厂商必须能由最后一跳模型串复算(自报 vendor 不可信)。
-  const c5 = checkC5({ proposal: pr });
-  for (const reason of c5.reasons) {
-    if (C5_EXTRA_REASONS.has(reason)) {
-      out.push(e(`C5_${reason}`, a.path, `C5 评审记录检查未过:${reason}`));
-    }
-  }
+  // 与本地 promote 同一口径:上面已覆盖的原因不重复输出,其余 C5 独有的(judge.provider = 最后一跳、最后一跳 ok、厂商可复算、确认无效、覆盖层非法)在此补上
+  if (j !== undefined) for (const i of judgeSide) issue(i);
+  for (const i of reflectorSide.filter((x) => x.code === 'VENDOR_OVERRIDES_INVALID')) issue(i);
   const r = pr.reflector;
-  if (r.stub === true) out.push(e('REFLECTOR_STUB', a.path, '假 LLM(stub)产出的提案不得晋升'));
-  // R20-16.20 ①:会话自报来源(ingest)的提案,厂商不可证明,不得凭跨厂商证明晋升
-  if (r.provenance === 'session_declared') {
-    out.push(
-      e(
-        'REFLECTOR_SESSION_DECLARED',
-        a.path,
-        '会话自报来源的提案,厂商不可证明,不得凭跨厂商证明晋升',
-      ),
-    );
+  if (r.stub === true) once('REFLECTOR_STUB', '假 LLM(stub)产出的提案不得晋升');
+  // R20-16.20 ①(N4 订正:无有效人工确认时):会话自报来源(ingest)的提案,厂商不可证明,不得凭跨厂商证明晋升;确认无效另有 REFLECTOR_CONFIRM_INVALID
+  for (const i of reflectorSide.filter(
+    (x) => x.code === 'REFLECTOR_SESSION_DECLARED' || x.code === 'REFLECTOR_CONFIRM_INVALID',
+  )) {
+    issue(i);
   }
-  // R20-16.20 ②:`vendor = unknown` 或复算 = unknown 一律不可验证——不再只比较两者是否相等(两边都是 unknown 时相等,曾因此放行)
-  const derived =
-    r.backend === undefined
-      ? undefined
-      : deriveVendor({ backend: r.backend, provider: r.provider, model: r.model });
-  if (
-    derived === undefined ||
-    r.vendor === UNKNOWN_VENDOR ||
-    derived === UNKNOWN_VENDOR ||
-    derived !== r.vendor
-  ) {
-    out.push(
-      e('REFLECTOR_UNVERIFIABLE', a.path, '反思器厂商无法由 backend/provider/model 复算一致'),
-    );
+  // 压制(R20-18.19 ①):反思器侧 self_confirmed 时,`REFLECTOR_UNVERIFIABLE`(对 A4 写的 vendor=unknown / provider=session 必然命中)一律不发
+  if (ev.reflector.tier !== 'self_confirmed') {
+    // R20-16.20 ②:`vendor = unknown` 或复算 = unknown 一律不可验证;CI 多一道严格等式(不归一化),只会更严
+    const derived =
+      r.backend === undefined
+        ? undefined
+        : deriveVendor({ backend: r.backend, provider: r.provider, model: r.model });
+    if (
+      reflectorSide.some((x) => unverifiableCodes.has(x.code)) ||
+      derived === undefined ||
+      r.vendor === UNKNOWN_VENDOR ||
+      derived === UNKNOWN_VENDOR ||
+      derived !== r.vendor
+    ) {
+      once('REFLECTOR_UNVERIFIABLE', '反思器厂商无法由 backend/provider/model 复算一致');
+    }
   }
   return out;
 }
@@ -886,6 +956,7 @@ function promotion(i: CriteriaInput): Diagnostic[] {
   }
   // K5a:judge 校准(只读基线树)。过度自信 / 校准不可用 / 同键条目损坏 → 多要 STRICT_EXTRA_TILES 块;样本不足不加严
   const judge = lp.proposal.judge;
+  const judgeSpawned = judge?.provenance === 'spawned' ? judge : undefined;
   const cal = computeCalibration({
     git: i.git,
     baseOid: i.baseOid,
@@ -895,13 +966,26 @@ function promotion(i: CriteriaInput): Diagnostic[] {
     roster: lc.roster,
     excludeProposalId: lp.proposal.id,
     target: {
-      vendor: judge?.vendor ?? '',
-      model: judge?.hops[judge.hops.length - 1]?.model ?? '',
+      vendor: judgeSpawned?.vendor ?? '',
+      model: judgeSpawned?.hops[judgeSpawned.hops.length - 1]?.model ?? '',
     },
   });
+  // N4(R20-18.19 ④):以 session_confirmed 为裁判的晋升按「校准不可用」处理(自报记录永不计入任何键,也没有可归属的 vendor / model),方向是更严
+  const selfReported = judge?.provenance === 'session_confirmed';
   const overconfident = cal.tiers.filter((t) => t.overconfident);
   const strict = calibrationStrictReasons(cal).length > 0;
+  // N4:自报裁判 → 同样加严(校准不可用同效果),但不改上面「单一实现」的加严判定
+  const strictAll = strict || selfReported;
   const pp = `proposals/${lp.proposal.id}.yaml`;
+  if (selfReported) {
+    out.push(
+      warn(
+        'GUARD_G3_CALIBRATION_SELF_REPORTED',
+        pp,
+        `裁判为人工确认的自报记录,不计入校准账,按校准不可用加严:有效验收块 +${STRICT_EXTRA_TILES}`,
+      ),
+    );
+  }
   if (cal.unavailable !== undefined) {
     out.push(
       warn(
@@ -929,7 +1013,7 @@ function promotion(i: CriteriaInput): Diagnostic[] {
       ),
     );
   }
-  if (!strict) {
+  if (!strictAll) {
     const tier = cal.tiers.find((t) => t.insufficient);
     if (tier !== undefined) {
       out.push(
@@ -944,7 +1028,7 @@ function promotion(i: CriteriaInput): Diagnostic[] {
   const required = requiredValidTiles(
     cfg.canary_window_days,
     frozen.acc.tile_days,
-    strict ? STRICT_EXTRA_TILES : 0,
+    strictAll ? STRICT_EXTRA_TILES : 0,
   );
   const exposure = kept
     .filter((k) => validTiles.has(k.k))
@@ -956,7 +1040,9 @@ function promotion(i: CriteriaInput): Diagnostic[] {
   };
   // 所需块数超过冻结协议的 max_tiles:classifyTile 拒绝序号 ≥ max_tiles 的分块,永远凑不够;不削减 extra,提示须重跑 judge 重新冻结
   const note =
-    (strict ? `;已因 judge 过度自信/校准不可用/校准条目损坏加严(+${STRICT_EXTRA_TILES} 块)` : '') +
+    (strictAll
+      ? `;已因 judge 过度自信/校准不可用/校准条目损坏加严(+${STRICT_EXTRA_TILES} 块)`
+      : '') +
     (required > frozen.acc.max_tiles
       ? `;冻结的 max_tiles=${frozen.acc.max_tiles} 装不下 ${required} 块,须重跑 judge 重新冻结(旧预测按校准账规则仍会结算)`
       : '');

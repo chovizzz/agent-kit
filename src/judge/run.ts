@@ -11,7 +11,7 @@ import { LifecycleCoreConfigSchema } from '../contracts/config.js';
 import { JUDGE_HOP_CHAIN } from '../contracts/proposal.js';
 import type { JudgeHopId, JudgeOutput, Proposal } from '../contracts/proposal.js';
 import type { Redactor } from '../contracts/redact.js';
-import { deriveVendor, isCrossVendor, isCrossVendorOf } from '../contracts/vendor.js';
+import { deriveVendor, isCrossVendor, judgeHopReflectorVendor } from '../contracts/vendor.js';
 import { loadKitConfig } from '../build/config.js';
 import { createGuardGit } from '../guards/git.js';
 import type { IoContext } from '../io/paths.js';
@@ -100,6 +100,8 @@ export interface ProposalOutcome {
   readonly hops: readonly HopRecord[];
   readonly verdict?: 'accept' | 'revise' | 'reject';
   readonly injectionSuspected?: boolean;
+  /** N4(R20-18.20 ④):该提案上 `judge` 记录的来源;没有 `judge` 时缺省 */
+  readonly judgeProvenance?: 'spawned' | 'session_confirmed';
   readonly pending?: PendingReason;
   /** 本提案是否发生过「输出校验失败」(退出码 1 的依据之一) */
   readonly invalidOutput: boolean;
@@ -137,11 +139,14 @@ function prefixOk(hops: readonly { hop: string }[]): boolean {
 function assertExistingJudge(p: Proposal): void {
   const j = p.judge;
   if (!j) return;
+  // N4:`session_confirmed` 没有 hops / provider(其有效性由 vendorEvidence 在晋升 / CI 判);`judge --run-llm` 对它一律跳过(R20-18.8)
+  if (j.provenance !== 'spawned') return;
   const last = j.hops[j.hops.length - 1];
   if (!last || !prefixOk(j.hops))
     throw new JudgeStateError('JUDGE_STATE_INVALID: 既有 judge 的链不合法');
   assertJudgeProvider(j.provider, last.hop);
-  if (!isCrossVendorOf(p.reflector, j.vendor)) {
+  const mine = judgeHopReflectorVendor(p);
+  if (!mine.usable || !isCrossVendor(mine.vendor, j.vendor)) {
     throw new JudgeStateError('JUDGE_STATE_INVALID: 既有 judge 不是可证明的跨厂商评审');
   }
 }
@@ -172,7 +177,7 @@ interface Prepared {
   readonly status: FreezeStatus;
 }
 
-interface FreezeEnv {
+export interface FreezeEnv {
   readonly tileDays: number;
   readonly maxTiles: number;
   /** 干跑不需要 HEAD(不写冻结记录) */
@@ -186,7 +191,10 @@ interface FreezeEnv {
  * kit.toml 缺失/无法解析/未过 schema → fail-closed(退出 3)。`[lifecycle]` 段缺省时用 schema 默认值
  * (与 guards/criteria.ts 的 loadLifecycle 同形)。
  */
-function loadFreezeEnv(deps: JudgeDeps, needHead: boolean): FreezeEnv {
+export function loadFreezeEnv(
+  deps: Pick<JudgeDeps, 'io' | 'resolveHead' | 'now'>,
+  needHead: boolean,
+): FreezeEnv {
   const loaded = loadKitConfig(deps.io.repoRoot);
   if (loaded.config === undefined) {
     throw new JudgeStateError('JUDGE_STATE_INVALID: 读不到可用的 kit.toml,无法确定冻结参数');
@@ -290,6 +298,13 @@ function probeOtherVendor(v: string): string {
  */
 function assertReflectorVendor(p: Proposal): void {
   const r = p.reflector;
+  if (r.provenance === 'session_declared') {
+    // N4(R20-18.21,行为翻转):已有效确认的会话提案此后可被评审;无有效确认仍是现行的 fail-closed(退出 3)
+    if (!judgeHopReflectorVendor(p).usable) {
+      throw new JudgeStateError('JUDGE_VENDOR_UNKNOWN: 反思器厂商不可证明');
+    }
+    return;
+  }
   if (!isCrossVendor(r.vendor, probeOtherVendor(r.vendor))) {
     throw new JudgeStateError('JUDGE_VENDOR_UNKNOWN: 反思器厂商不可证明');
   }
@@ -341,9 +356,13 @@ export async function runJudge(deps: JudgeDeps, opts: JudgeOptions): Promise<Jud
       emit({
         proposalId: p.id,
         status: 'already_judged',
-        hops: p.judge?.hops ?? [],
+        hops: p.judge?.provenance === 'spawned' ? p.judge.hops : [],
         ...(p.judge
-          ? { verdict: p.judge.verdict, injectionSuspected: p.judge.injection_suspected }
+          ? {
+              verdict: p.judge.verdict,
+              injectionSuspected: p.judge.injection_suspected,
+              judgeProvenance: p.judge.provenance,
+            }
           : {}),
         invalidOutput: false,
         vendorUnknown: false,
@@ -364,6 +383,7 @@ export async function runJudge(deps: JudgeDeps, opts: JudgeOptions): Promise<Jud
       continue;
     }
 
+    const reflectorForHops = judgeHopReflectorVendor(p);
     const hops: HopRecord[] = [];
     let success: { backend: LlmBackend; hop: JudgeHopId; value: JudgeOutput } | undefined;
     let invalidOutput = false;
@@ -375,11 +395,15 @@ export async function runJudge(deps: JudgeDeps, opts: JudgeOptions): Promise<Jud
         continue;
       }
       const rec = { hop, vendor: norm(backend.vendor), model: backend.model.trim() };
-      if (norm(backend.vendor) === norm(p.reflector.vendor)) {
+      if (norm(backend.vendor) === norm(reflectorForHops.vendor)) {
         hops.push({ ...rec, result: 'skipped:same-vendor' });
         continue;
       }
-      if (vendorUnproven(backend) || !isCrossVendorOf(p.reflector, backend.vendor)) {
+      if (
+        vendorUnproven(backend) ||
+        !reflectorForHops.usable ||
+        !isCrossVendor(reflectorForHops.vendor, backend.vendor)
+      ) {
         hops.push({ ...rec, result: 'error:vendor_unknown' });
         continue;
       }
@@ -449,6 +473,8 @@ export async function runJudge(deps: JudgeDeps, opts: JudgeOptions): Promise<Jud
     if (success) {
       const { backend, hop, value } = success;
       const record = {
+        // N4(R20-18.13):新写入的 spawned 记录显式带判别键
+        provenance: 'spawned' as const,
         hops: hops.map((h) => ({ hop: h.hop, vendor: h.vendor, model: h.model, result: h.result })),
         provider: backend.slot,
         vendor: norm(backend.vendor),
@@ -485,6 +511,7 @@ export async function runJudge(deps: JudgeDeps, opts: JudgeOptions): Promise<Jud
         hops,
         verdict: value.verdict,
         injectionSuspected: value.injection_suspected,
+        judgeProvenance: 'spawned',
         invalidOutput,
         vendorUnknown: hops.some((h) => h.result === 'error:vendor_unknown'),
         wrote: true,

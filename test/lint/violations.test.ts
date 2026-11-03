@@ -46,6 +46,12 @@ const EXPECTED: Readonly<Record<string, { rule: string; message: string }>> = {
   'hooks-fs-dynamic-import.ts': { rule: 'no-restricted-syntax', message: '钩子写出口' },
   // A6(R20-17.20):doctor 直接 import 钩子写出口
   'doctor-hooks-fs-import.ts': { rule: 'no-restricted-imports', message: '钩子写出口' },
+  // N4(R20-18.5 / R20-18.25):唯一控制终端出口 src/io/tty.ts 的授权闸(import / re-export / 动态 import / node:tty / /dev/tty 字面量各一个反向样本)
+  'tty-import.ts': { rule: 'no-restricted-imports', message: '控制终端出口' },
+  'tty-reexport.ts': { rule: 'no-restricted-imports', message: '控制终端出口' },
+  'tty-dynamic-import.ts': { rule: 'no-restricted-syntax', message: '控制终端出口' },
+  'node-tty-import.ts': { rule: 'no-restricted-imports', message: '控制终端出口' },
+  'dev-tty-literal.ts': { rule: 'no-restricted-syntax', message: '字面量只许控制终端出口' },
   'net-import.ts': { rule: 'no-restricted-imports', message: '网络出口' },
   'net-reexport.ts': { rule: 'no-restricted-imports', message: '网络出口' },
   'net-dynamic-import.ts': { rule: 'no-restricted-syntax', message: '网络出口' },
@@ -113,6 +119,37 @@ describe('lint 正向对照:同样的代码放到被授权的文件里不报错'
     expect((await lintAs(OS, 'src/io/safe-fs.ts')).length).toBeGreaterThan(0);
     expect((await lintAs(ENV, 'src/io/exec.ts')).length).toBeGreaterThan(0);
     expect((await lintAs(ENV, 'src/cli.ts')).length).toBeGreaterThan(0);
+  });
+
+  it('N4:控制终端出口 tty.ts 只许 judge-ingest 命令入口 / src/judge/ingest/** / 对应测试引用;node:tty 与控制终端设备字面量只许 tty.ts', async () => {
+    const USE = "import { readProof } from '../io/tty.js';\nexport const x = readProof;\n";
+    const NODE_TTY = "import * as tty from 'node:tty';\nexport const x = tty.isatty;\n";
+    // 本文件自己也受 /dev/tty 字面量闸约束,所以样本代码拼出来
+    const LIT = `export const d = '${['', 'dev', 'tty'].join('/')}';\n`;
+    for (const ok of [
+      'src/commands/judge-ingest.ts',
+      'src/judge/ingest/confirm.ts',
+      'test/io/tty.test.ts',
+      'test/judge/ingest/service.test.ts',
+    ]) {
+      expect(await lintAs(USE, ok), ok).toEqual([]);
+    }
+    for (const bad of [
+      'src/commands/judge.ts',
+      'src/rsi/worker.ts',
+      'src/rsi/hint.ts',
+      'src/rsi/poke.ts',
+      'src/sync/apply.ts',
+      'src/update/install.ts',
+      'src/judge/run.ts',
+    ]) {
+      expect((await lintAs(USE, bad)).length, bad).toBeGreaterThan(0);
+    }
+    expect(await lintAs(NODE_TTY, 'src/io/tty.ts')).toEqual([]);
+    expect(await lintAs(LIT, 'src/io/tty.ts')).toEqual([]);
+    expect((await lintAs(NODE_TTY, 'src/commands/judge-ingest.ts')).length).toBeGreaterThan(0);
+    expect((await lintAs(LIT, 'src/commands/judge-ingest.ts')).length).toBeGreaterThan(0);
+    expect((await lintAs(LIT, 'src/judge/ingest/confirm.ts')).length).toBeGreaterThan(0);
   });
 
   it('child_process 只在 exec.ts 与 llm-exec.ts 放行', async () => {

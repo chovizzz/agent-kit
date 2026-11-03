@@ -1,7 +1,6 @@
 import { parse } from 'yaml';
 import { describe, expect, it } from 'vitest';
 import { ProposalSchema } from '../../src/contracts/proposal.js';
-import type { Proposal } from '../../src/contracts/proposal.js';
 import { readText } from '../../src/io/read-fs.js';
 import { acceptanceSha256 } from '../../src/judge/freeze.js';
 import { parseJudgeOutput } from '../../src/judge/output.js';
@@ -23,11 +22,11 @@ import {
   redactor,
   snapshot,
   writeProposal,
+  readSpawnedProposal,
 } from './helpers.js';
 import type { Work } from './helpers.js';
 
-const readYaml = async (file: string): Promise<Proposal> =>
-  ProposalSchema.parse(parse(await readText(file)));
+const readYaml = readSpawnedProposal;
 const go = (w: Work, backends: JudgeBackends, over: { dry?: boolean } = {}) =>
   runJudge(
     { io: w.io, redactor, backends, now: fixedNow },

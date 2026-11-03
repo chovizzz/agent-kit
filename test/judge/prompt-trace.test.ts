@@ -4,11 +4,8 @@
  * ③旧记录无此字段仍合法;④字段不进 acceptance / rule_sha256 的哈希;⑤G3 不要求它们(有无都同样通过)。
  */
 import { createHash } from 'node:crypto';
-import { parse } from 'yaml';
 import { describe, expect, it } from 'vitest';
-import { JudgeRecordSchema, ProposalSchema } from '../../src/contracts/proposal.js';
-import type { Proposal } from '../../src/contracts/proposal.js';
-import { readText } from '../../src/io/read-fs.js';
+import { JudgeRecordSchema } from '../../src/contracts/proposal.js';
 import { acceptanceSha256 } from '../../src/judge/freeze.js';
 import { runJudge } from '../../src/judge/run.js';
 import {
@@ -38,12 +35,12 @@ import {
   outputText,
   redactor,
   writeProposal,
+  readSpawnedProposal,
 } from './helpers.js';
 
 useRepoCleanup();
 
-const readYaml = async (file: string): Promise<Proposal> =>
-  ProposalSchema.parse(parse(await readText(file)));
+const readYaml = readSpawnedProposal;
 const go = (w: Awaited<ReturnType<typeof newWork>>, b: ReturnType<typeof makeStubs>['backends']) =>
   runJudge(
     { io: w.io, redactor, backends: b, now: fixedNow },

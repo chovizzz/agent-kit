@@ -1,8 +1,8 @@
 import * as path from 'node:path';
-import { stringify } from 'yaml';
+import { parse, stringify } from 'yaml';
 import type { CommandContext } from '../../src/commands/types.js';
-import { JUDGE_HOP_CHAIN } from '../../src/contracts/proposal.js';
-import type { JudgeHopId } from '../../src/contracts/proposal.js';
+import { JUDGE_HOP_CHAIN, ProposalSchema } from '../../src/contracts/proposal.js';
+import type { JudgeHopId, Proposal, SpawnedJudgeRecord } from '../../src/contracts/proposal.js';
 import { runSync } from '../../src/io/exec.js';
 import { createIoContext } from '../../src/io/paths.js';
 import type { IoContext } from '../../src/io/paths.js';
@@ -340,4 +340,25 @@ export function cmdCtx(
     out,
     err,
   };
+}
+
+/** 读回的提案,`judge`(若有)已收窄为 `spawned` 支 */
+export type SpawnedProposal = Omit<Proposal, 'judge'> & { judge?: SpawnedJudgeRecord };
+
+/**
+ * 读回并解析提案(`ProposalSchema.parse`);`judge` 存在时断言它是 `spawned`(N4:`judge --run-llm` 新写入的记录显式带 `provenance: "spawned"`,
+ * R20-18.13)——类型层面收窄,运行期也钉住。
+ */
+export async function readSpawnedProposal(file: string): Promise<SpawnedProposal> {
+  const p = ProposalSchema.parse(parse(await readText(file)));
+  if (p.judge !== undefined && p.judge.provenance !== 'spawned') {
+    throw new Error('expected a spawned judge record');
+  }
+  return p as SpawnedProposal;
+}
+
+/** 磁盘上的原始 judge 记录是否显式带了 provenance 键(解析会补缺省,所以要读原始 yaml) */
+export async function rawJudgeProvenance(file: string): Promise<unknown> {
+  const raw = parse(await readText(file)) as { judge?: { provenance?: unknown } };
+  return raw.judge?.provenance;
 }

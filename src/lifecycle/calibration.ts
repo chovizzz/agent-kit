@@ -237,6 +237,20 @@ function parseVersion(
   }
   if (!isObj(j))
     throw new Unavailable(`${path}@${commit.slice(0, 8)} 的 judge 不是对象,无法归属校准键`);
+  // N4(R20-18.19 ④):人工确认的自报裁决**永不计入任何校准键**的历史(没有 vendor / 最后一跳 model;自报记录不得污染某个真实厂商 / 模型的校准账)。
+  // 当作「没有 judge」读:不进分组、不进 seen、也不让整本账 unavailable。以它为裁判的晋升由 criteria.ts 发 GUARD_G3_CALIBRATION_SELF_REPORTED 加严。
+  if (j['provenance'] === 'session_confirmed') {
+    return {
+      commit,
+      date,
+      targets,
+      judge: undefined,
+      acceptance: undefined,
+      prediction: undefined,
+      guidance: reflector['guidance'],
+      hasJudge: false,
+    };
+  }
   const hops = j['hops'];
   const last = Array.isArray(hops) ? hops[hops.length - 1] : undefined;
   const vendor = j['vendor'];

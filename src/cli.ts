@@ -9,6 +9,7 @@ import { command as check } from './commands/check.js';
 import { command as doctor } from './commands/doctor.js';
 import { command as inventory } from './commands/inventory.js';
 import { command as judge } from './commands/judge.js';
+import { INGEST_MODE_FLAGS, command as judgeIngest } from './commands/judge-ingest.js';
 import { command as probe } from './commands/probe.js';
 import { command as promote } from './commands/promote.js';
 import { command as redact } from './commands/redact-cmd.js';
@@ -131,7 +132,17 @@ function resolveCommand(rest: readonly string[]): { def: CommandDef; args: strin
   const sorted = [...COMMANDS].sort((a, b) => b.name.split(' ').length - a.name.split(' ').length);
   for (const def of sorted) {
     const tokens = def.name.split(' ');
-    if (tokens.every((t, i) => rest[i] === t)) return { def, args: rest.slice(tokens.length) };
+    if (tokens.every((t, i) => rest[i] === t)) {
+      const args = rest.slice(tokens.length);
+      // N4(R20-18.25):`judge --ingest` / `--confirm-reflector` 是独立入口(不并入 judge.ts)
+      if (
+        def === judge &&
+        args.some((a) => INGEST_MODE_FLAGS.some((f) => a === f || a.startsWith(`${f}=`)))
+      ) {
+        return { def: judgeIngest, args };
+      }
+      return { def, args };
+    }
   }
   return undefined;
 }

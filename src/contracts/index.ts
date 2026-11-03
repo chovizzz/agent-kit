@@ -15,6 +15,8 @@ export * from './reader.js';
 export * from './redact.js';
 export * from './proposal.js';
 export * from './vendor.js';
+export * from './judge-ingest.js';
+export * from './judge-binding.js';
 export * from './reflect.js';
 export * from './attest.js';
 export * from './lifecycle.js';

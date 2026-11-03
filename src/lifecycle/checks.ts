@@ -14,7 +14,7 @@ import type { Atom } from '../contracts/atom.js';
 import { RunIdSchema } from '../contracts/common.js';
 import type { JudgeRecord, Proposal } from '../contracts/proposal.js';
 import type { Redactor } from '../contracts/redact.js';
-import { UNKNOWN_VENDOR, deriveVendor, isCrossVendorOf } from '../contracts/vendor.js';
+import { vendorEvidence } from '../contracts/vendor.js';
 import { isUnsafePath } from '../guards/paths.js';
 import { canonicalText } from '../io/canonical-text.js';
 import { findDuplicate, type DedupeTarget, type DedupeThresholds } from '../reflect/dedupe.js';
@@ -120,19 +120,36 @@ export function redactionFields(atom: AtomLike, proposal: Proposal): TextField[]
     { path: 'reflector.model', text: proposal.reflector.model },
     { path: 'reflector.run_id', text: proposal.reflector.run_id },
   );
+  // N4(R20-18.19 ⑤):用户键入值与声明值是新的自由文本通道,不得绕过 pass2
+  const rc = proposal.reflector.confirmed;
+  if (rc !== undefined) {
+    out.push(
+      { path: 'reflector.confirmed.vendor', text: rc.vendor },
+      { path: 'reflector.confirmed.model', text: rc.model },
+      { path: 'reflector.confirmed.kit_version', text: rc.kit_version },
+    );
+  }
   const j = proposal.judge;
   if (j !== undefined) {
-    out.push(
-      { path: 'judge.provider', text: j.provider },
-      { path: 'judge.vendor', text: j.vendor },
-    );
     j.conflicts.forEach((c, i) => out.push({ path: `judge.conflicts[${i}]`, text: c }));
-    j.hops.forEach((h, i) => {
+    if (j.provenance === 'spawned') {
       out.push(
-        { path: `judge.hops[${i}].vendor`, text: h.vendor },
-        { path: `judge.hops[${i}].model`, text: h.model },
+        { path: 'judge.provider', text: j.provider },
+        { path: 'judge.vendor', text: j.vendor },
       );
-    });
+      j.hops.forEach((h, i) => {
+        out.push(
+          { path: `judge.hops[${i}].vendor`, text: h.vendor },
+          { path: `judge.hops[${i}].model`, text: h.model },
+        );
+      });
+    } else {
+      out.push(
+        { path: 'judge.declared.model', text: j.declared.model },
+        { path: 'judge.declared.vendor', text: j.declared.vendor },
+        { path: 'judge.confirmation.kit_version', text: j.confirmation.kit_version },
+      );
+    }
   }
   proposal.evidence.forEach((e, i) =>
     out.push({ path: `proposal.evidence[${i}].sig`, text: e.sig }),
@@ -394,8 +411,6 @@ export function checkC4(input: C4Input): CheckResult {
 
 // ---------------------------------------------------------------- C5
 
-const normVendor = (v: string): string => v.trim().toLowerCase();
-
 export interface C5Input {
   proposal: Proposal;
   /** 覆盖层 `vendor_overrides`(只能追加新家族);用于复算反思器厂商 */
@@ -403,74 +418,85 @@ export interface C5Input {
 }
 
 /**
- * C5 评审记录。有 `judge`(不是 `judge_attempts`)、`verdict=accept`、反思器与裁判厂商(归一化后)**可证**不同、
- * `reflector.backend` 必填且 `deriveVendor` 复算与记录一致、`stub` 不得为 true、最后一跳 `ok`
- * 且 `judge.provider` = 最后一跳的槽位 id、最后一跳厂商 = `judge.vendor`。
+ * C5 可能产生的**全部**原因码(穷尽性测试的基准:`test/lifecycle/n4-c5-exhaustive.test.ts` 要求每一个都在 `criteria.ts` 的
+ * `judgeChecks` 里有等价码或在白名单内;新增 reason 而不接 CI → 红,R20-18.19 ②)。
+ */
+export const C5_REASONS = [
+  'STUB_PROPOSAL',
+  'REFLECTOR_SESSION_DECLARED',
+  'REFLECTOR_CONFIRM_INVALID',
+  'REFLECTOR_BACKEND_MISSING',
+  'REFLECTOR_VENDOR_MISMATCH',
+  'VENDOR_OVERRIDES_INVALID',
+  'JUDGE_PENDING',
+  'JUDGE_MISSING',
+  'VERDICT_NOT_ACCEPT',
+  'VENDOR_NOT_CROSS',
+  'JUDGE_CONFIRM_INVALID',
+  'JUDGE_LAST_HOP_NOT_OK',
+  'JUDGE_PROVIDER_MISMATCH',
+  'JUDGE_LAST_HOP_VENDOR_MISMATCH',
+  'JUDGE_VENDOR_UNPROVEN',
+] as const;
+
+/**
+ * C5 评审记录。有 `judge`(不是 `judge_attempts`)、`verdict=accept`、`stub` 不得为 true;**厂商部分(两侧层级、配对、`spawned` 的
+ * 最后一跳 / provider / 厂商复算,`session_confirmed` 的确认有效性)一律经 `vendorEvidence`**(R20-18.17,唯一实现)。
+ * 压制规则在 `vendorEvidence` 内:反思器 `self_confirmed` 时不发 `REFLECTOR_BACKEND_MISSING` / `REFLECTOR_VENDOR_MISMATCH`。
+ * 原因码顺序:STUB → 反思器侧 → judge 缺省 → verdict → 配对 → 裁判侧(与改造前逐码一致)。
  */
 export function checkC5(input: C5Input): CheckResult {
   const p = input.proposal;
   const hits: Hit[] = [];
   if (p.reflector.stub === true) hits.push({ reason: 'STUB_PROPOSAL', field: 'reflector.stub' });
-  // R20-16.20 ①③:会话自报来源的提案,厂商不可证明——不得凭跨厂商证明晋升(N4 的人工确认路径属后续 judge --ingest 块)
-  const sessionDeclared = p.reflector.provenance === 'session_declared';
-  if (sessionDeclared) {
-    hits.push({ reason: 'REFLECTOR_SESSION_DECLARED', field: 'reflector.provenance' });
-  }
-  if (p.reflector.backend === undefined) {
-    hits.push({ reason: 'REFLECTOR_BACKEND_MISSING', field: 'reflector.backend' });
-  } else {
-    try {
-      const derived = deriveVendor(
-        { backend: p.reflector.backend, provider: p.reflector.provider, model: p.reflector.model },
-        input.vendorOverrides ?? {},
-      );
-      if (derived === UNKNOWN_VENDOR || derived !== normVendor(p.reflector.vendor)) {
-        hits.push({ reason: 'REFLECTOR_VENDOR_MISMATCH', field: 'reflector.vendor' });
-      }
-    } catch {
-      hits.push({ reason: 'VENDOR_OVERRIDES_INVALID', field: 'reflector.vendor' });
+  const ev = vendorEvidence(p, input.vendorOverrides ?? {});
+  const fieldOf = (code: string): string => {
+    switch (code) {
+      case 'REFLECTOR_SESSION_DECLARED':
+        return 'reflector.provenance';
+      case 'REFLECTOR_CONFIRM_INVALID':
+        return 'reflector.confirmed';
+      case 'REFLECTOR_BACKEND_MISSING':
+        return 'reflector.backend';
+      case 'REFLECTOR_VENDOR_MISMATCH':
+        return 'reflector.vendor';
+      case 'JUDGE_PENDING':
+      case 'JUDGE_MISSING':
+        return 'judge';
+      case 'VENDOR_NOT_CROSS':
+        return 'judge.vendor';
+      case 'JUDGE_CONFIRM_INVALID':
+        return 'judge.confirmation';
+      case 'JUDGE_LAST_HOP_NOT_OK':
+      case 'JUDGE_LAST_HOP_VENDOR_MISMATCH':
+      case 'JUDGE_VENDOR_UNPROVEN':
+        return 'judge.hops';
+      case 'JUDGE_PROVIDER_MISMATCH':
+        return 'judge.provider';
+      default:
+        return p.judge === undefined ? 'reflector.vendor' : 'judge.vendor';
     }
+  };
+  const issues = ev.issues;
+  const push = (i: { side: string; code: string }): void => {
+    hits.push({ reason: i.code, field: fieldOf(i.code) });
+  };
+  for (const i of issues.filter((x) => x.side === 'reflector')) push(i);
+  const judgeIssues = issues.filter((x) => x.side === 'judge');
+  for (const i of judgeIssues.filter(
+    (x) => x.code === 'JUDGE_PENDING' || x.code === 'JUDGE_MISSING',
+  )) {
+    push(i);
   }
   const j = p.judge;
-  if (j === undefined) {
-    hits.push({
-      reason: p.judge_attempts !== undefined ? 'JUDGE_PENDING' : 'JUDGE_MISSING',
-      field: 'judge',
-    });
-  } else {
-    if (j.verdict !== 'accept') hits.push({ reason: 'VERDICT_NOT_ACCEPT', field: 'judge.verdict' });
-    if (
-      !isCrossVendorOf(
-        { vendor: normVendor(p.reflector.vendor), provenance: p.reflector.provenance },
-        normVendor(j.vendor),
-      )
-    ) {
-      hits.push({ reason: 'VENDOR_NOT_CROSS', field: 'judge.vendor' });
-    }
-    const last = j.hops[j.hops.length - 1];
-    if (last === undefined || last.result !== 'ok') {
-      hits.push({ reason: 'JUDGE_LAST_HOP_NOT_OK', field: 'judge.hops' });
-    } else {
-      if (j.provider !== last.hop) {
-        hits.push({ reason: 'JUDGE_PROVIDER_MISMATCH', field: 'judge.provider' });
-      }
-      if (normVendor(last.vendor) !== normVendor(j.vendor)) {
-        hits.push({ reason: 'JUDGE_LAST_HOP_VENDOR_MISMATCH', field: 'judge.hops' });
-      }
-      // 记录里的 vendor 是自报值:同时改 judge.vendor 与最后一跳 vendor 就能内部自洽。
-      // 再用最后一跳的模型串按厂商表复算(只看模型族,没有 backend / provider 事实);推不出或不一致都拒。
-      try {
-        const derivedJudge = deriveVendor(
-          { backend: 'pi', model: last.model },
-          input.vendorOverrides ?? {},
-        );
-        if (derivedJudge === UNKNOWN_VENDOR || derivedJudge !== normVendor(j.vendor)) {
-          hits.push({ reason: 'JUDGE_VENDOR_UNPROVEN', field: 'judge.hops' });
-        }
-      } catch {
-        hits.push({ reason: 'VENDOR_OVERRIDES_INVALID', field: 'judge.vendor' });
-      }
-    }
+  if (j !== undefined && j.verdict !== 'accept') {
+    hits.push({ reason: 'VERDICT_NOT_ACCEPT', field: 'judge.verdict' });
+  }
+  for (const i of issues.filter((x) => x.side === 'pair')) push(i);
+  for (const i of judgeIssues.filter(
+    (x) => x.code !== 'JUDGE_PENDING' && x.code !== 'JUDGE_MISSING',
+  )) {
+    push(i);
   }
   return mk('C5', hits);
 }

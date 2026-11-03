@@ -4,10 +4,20 @@
  * 补丁一律用真 `git apply --check --whitespace=error` 验证,应用后在新树上跑真 `check --guards --label kit:promotion`。
  */
 import * as path from 'node:path';
+import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { createPromoteCommand } from '../../src/commands/promote.js';
 import { run as guardsRun } from '../../src/commands/guards-cmd.js';
 import { ExitCode } from '../../src/contracts/exit-codes.js';
+import { ProposalSchema } from '../../src/contracts/proposal.js';
+import {
+  SELF_REPORT_LABEL_JUDGE,
+  SELF_REPORT_LABEL_REFLECTOR,
+  VENDOR_PROVEN_LABEL,
+} from '../../src/contracts/vendor.js';
+import { normalizedRuleSha256 } from '../../src/guards/criteria.js';
+import { withSessionJudge } from '../contracts/n4-fixtures.js';
 import { canonicalJson } from '../../src/io/canonical-json.js';
 import { createIoContext } from '../../src/io/paths.js';
 import type { IoContext } from '../../src/io/paths.js';
@@ -30,6 +40,7 @@ import { buildWorld, twoTiles, type AttestSpec } from '../guards/frozen-world.js
 import { makeTestRepo } from '../helpers/make-repo.js';
 import type { TestRepo } from '../helpers/make-repo.js';
 
+const sha256Hex = (s: string): string => createHash('sha256').update(s, 'utf8').digest('hex');
 const RULE = `rules/team/${ID}.md`;
 const CLOCK = (): Date => new Date('2026-10-25T08:00:00Z');
 const CANARY_BODY = 'CANARY-BODY-TEXT-QQ';
@@ -222,6 +233,7 @@ describe('T1 proposed→advisory', () => {
       'rule_id',
       'rule_sha256',
       'to',
+      'vendor_evidence',
       'wrote',
     ]);
     expect(j).toMatchObject({
@@ -691,5 +703,89 @@ describe('内存 head 视图(overlayGit)与 review_by 算法', () => {
     expect(nextReviewBy('2026-10-08', 'stable', '2027-03-01')).toBe('2027-04-06');
     expect(nextReviewBy('2026-10-08', 'volatile', '2026-10-09')).toBe('2026-11-07'); // created+30 先到
     expect(nextReviewBy('2026-10-08', 'volatile', '2026-10-25')).toBe('2026-11-07');
+  });
+});
+
+/** N4(R20-18.20):promote --rule 的厂商证据 —— report.json / pr-body.md / stdout / --json 四处标注,promo_id 随层级变化 */
+describe('N4 vendor_evidence(promote --rule)', () => {
+  const sessionConfirmedText = (atom: string): string => {
+    const doc = parseYaml(
+      proposalYaml(atom, { rationale: `理由 ${CANARY_RATIONALE}` }).replace(
+        'provider: openai',
+        'provider: codex',
+      ),
+    ) as Record<string, unknown>;
+    const { judge: _drop, ...noJudge } = doc;
+    void _drop;
+    const base = ProposalSchema.parse(noJudge);
+    const withJ = withSessionJudge(base, {
+      vendor: 'openai',
+      ruleSha: normalizedRuleSha256(atom) as string,
+    });
+    return stringifyYaml(JSON.parse(JSON.stringify(withJ)));
+  };
+  const PROVEN = {
+    reflector: { tier: 'proven', vendor: 'anthropic', model: expect.any(String) },
+    judge: { tier: 'proven', vendor: 'openai', model: expect.any(String) },
+    self_reported: [],
+  };
+  it('两侧 proven:四处都是 VENDOR_PROVEN_LABEL(pr-body 正文第一段),report.json 带 vendor_evidence', async () => {
+    const w = await world();
+    const r = await promote(w, [...TO_ADV, '--write', '--json']);
+    expect(r.code, r.err).toBe(0);
+    const j = JSON.parse(r.out) as { vendor_evidence: unknown; promo_id: string };
+    expect(j.vendor_evidence).toMatchObject(PROVEN);
+    const dir = path.join(w.state, 'promote', j.promo_id);
+    const report = JSON.parse(await readText(path.join(dir, 'report.json'))) as Record<
+      string,
+      unknown
+    >;
+    expect(report['vendor_evidence']).toEqual(j.vendor_evidence);
+    const body = await readText(path.join(dir, 'pr-body.md'));
+    const head = body.split('\n').slice(0, 4).join('\n'); // 与标题 / 摘要同一屏
+    expect(head).toContain(VENDOR_PROVEN_LABEL);
+    expect(body).not.toContain(SELF_REPORT_LABEL_JUDGE);
+    expect(body).not.toContain(SELF_REPORT_LABEL_REFLECTOR);
+    // pr_body_sha256 覆盖标注行
+    expect(report['pr_body_sha256']).toBe(sha256Hex(body));
+    const t = await promote(w, TO_ADV);
+    expect(t.out).toContain(`vendor_evidence_label=${VENDOR_PROVEN_LABEL}`);
+  });
+  it('裁判侧自报:SELF_REPORT_LABEL_JUDGE 出现、VENDOR_PROVEN_LABEL 不出现;self_reported = [judge];promo_id 与 proven 世界不同', async () => {
+    const atom = atomText({ status: 'proposed', body: BODY });
+    const proven = await world();
+    const provenId = (
+      JSON.parse((await promote(proven, [...TO_ADV, '--json'])).out) as { promo_id: string }
+    ).promo_id;
+    const w = await world({ proposalText: sessionConfirmedText(atom) });
+    const r = await promote(w, [...TO_ADV, '--write', '--json']);
+    expect(r.code, r.err).toBe(0);
+    const j = JSON.parse(r.out) as {
+      vendor_evidence: { judge: { tier: string }; self_reported: string[] };
+      promo_id: string;
+    };
+    expect(j.vendor_evidence.judge.tier).toBe('self_confirmed');
+    expect(j.vendor_evidence.self_reported).toEqual(['judge']);
+    expect(j.promo_id).not.toBe(provenId); // 证据层级变了 → 新 id、新目录
+    const body = await readText(path.join(w.state, 'promote', j.promo_id, 'pr-body.md'));
+    expect(body.split('\n').slice(0, 4).join('\n')).toContain(SELF_REPORT_LABEL_JUDGE);
+    expect(body).not.toContain(VENDOR_PROVEN_LABEL);
+    expect(body).not.toContain(SELF_REPORT_LABEL_REFLECTOR);
+    expect((await promote(w, TO_ADV)).out).toContain(
+      `vendor_evidence_label=${SELF_REPORT_LABEL_JUDGE}`,
+    );
+    // 同一证据重跑仍是同 id 同字节(§18.2 幂等不变)
+    const again = await promote(w, [...TO_ADV, '--write', '--json']);
+    expect(JSON.parse(again.out)).toMatchObject({
+      promo_id: j.promo_id,
+      wrote: false,
+      existing: true,
+    });
+  });
+  it('正向对照:自报裁决的 CI 判据(judgeChecks)也放行 T1(两侧可证明地不同厂商),且无多余的厂商类 error', async () => {
+    const atom = atomText({ status: 'proposed', body: BODY });
+    const w = await world({ proposalText: sessionConfirmedText(atom) });
+    const r = await promote(w, [...TO_ADV, '--json']);
+    expect(r.code, r.err).toBe(0);
   });
 });

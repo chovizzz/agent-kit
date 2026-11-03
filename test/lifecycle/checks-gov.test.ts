@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { SpawnedJudgeRecord } from '../../src/contracts/proposal.js';
 import { createRedactor } from '../../src/redact/index.js';
 import {
   RuleHashError,
@@ -466,7 +467,7 @@ describe('C8 脱敏复扫', () => {
     expect(field({}, { judge: { ...base.proposal.judge!, conflicts: [k] } })).toEqual([
       'judge.conflicts[0]',
     ]);
-    const hop = { ...base.proposal.judge!.hops[0]!, model: k };
+    const hop = { ...(base.proposal.judge as SpawnedJudgeRecord).hops[0]!, model: k };
     expect(field({}, { judge: { ...base.proposal.judge!, hops: [hop] } })).toEqual([
       'judge.hops[0].model',
     ]);
