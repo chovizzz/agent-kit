@@ -26,6 +26,8 @@
  *   `StoreFs` 包装在每次落盘序列开头(`writeFile` tmp 前;chmod / rename / 清 tmp 属同一次落盘,见 `gateStoreFs`)过 `beforePersist`、打印(含异常分支的部分结果)前过 `beforeOutput`;任何一次非 allow → 之后不再外发 / 不再落盘 / 不打印,
  *   退出码取 {@link gateExitOf}(与已有结果经 `combineExitCodes` 合并)。已经写下的 judge 记录不撤销(同 B3b 失锁语义)。独立状态树(锁闸门 off)下照样 enforce。
  *   judge 锁内的 recover / resumeTaint / counts.staged 属 B5d,本块不做。
+ * - N4(docs/contracts.md §20.18):`judge --ingest` / `--confirm-reflector` 是**独立入口** `src/commands/judge-ingest.ts`(两个确认流不塞进本文件);`src/cli.ts` 在 argv 里看到这两个开关时路由过去。
+ *   本文件只多两处:`--json` 摘要的提案条目带 `judge_provenance`(`spawned` | `session_confirmed`),新写入的 `spawned` 记录显式带 `provenance`(R20-18.3 的两处追加例外)。
  * - 退出码:0 完成(含 pending=not_configured / same_vendor_only,非 --strict);1 有提案 reject / injection_suspected / 没评上且出现过评审输出校验不通过;
  *   2 用法错(含 run 不存在);3 状态损坏、提示复扫残留、厂商不可证明、写出口拒绝;
  *   4 后端不可用/全部冷却/超出 --max-calls。
@@ -212,6 +214,7 @@ function summarize(report: JudgeReport): string {
       status: o.status,
       ...(o.verdict !== undefined ? { verdict: o.verdict } : {}),
       ...(o.injectionSuspected !== undefined ? { injection_suspected: o.injectionSuspected } : {}),
+      ...(o.judgeProvenance !== undefined ? { judge_provenance: o.judgeProvenance } : {}),
       ...(o.pending !== undefined ? { judge_pending: o.pending } : {}),
       wrote: o.wrote,
       hops: o.hops.map((h) => ({ hop: h.hop, vendor: h.vendor, model: h.model, result: h.result })),

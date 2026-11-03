@@ -24,13 +24,13 @@ import {
   redactor,
   snapshot,
   writeProposal,
+  readSpawnedProposal,
   RUN_ID,
   CANARY,
 } from './helpers.js';
 import type { Script, Work } from './helpers.js';
 
-const readYaml = async (file: string): Promise<Proposal> =>
-  ProposalSchema.parse(parse(await readText(file)));
+const readYaml = readSpawnedProposal;
 
 const go = (
   w: Work,

@@ -5,6 +5,7 @@
  *
  * judge 命令自己写 `rule_sha256`(⑨A,b5736a3 起);`withRuleHash` / `stripRuleHash` 只用来造「哈希缺失 / 对不上」的反例。
  */
+import { createHash } from 'node:crypto';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse as parseYaml } from 'yaml';
@@ -16,6 +17,12 @@ import { createRetireCommand } from '../../src/commands/retire.js';
 import { command as signalsCollect } from '../../src/commands/signals-collect.js';
 import { main } from '../../src/cli.js';
 import { ExitCode } from '../../src/contracts/exit-codes.js';
+import { ProposalSchema } from '../../src/contracts/proposal.js';
+import {
+  SELF_REPORT_LABEL_JUDGE,
+  SELF_REPORT_LABEL_REFLECTOR,
+  VENDOR_PROVEN_LABEL,
+} from '../../src/contracts/vendor.js';
 import { createIoContext } from '../../src/io/paths.js';
 import { EXEC_ALLOWLIST } from '../../src/io/exec.js';
 import { exists, lstat, readDir, readText } from '../../src/io/read-fs.js';
@@ -34,6 +41,7 @@ import {
   snapshot,
   testRedactor,
 } from '../fixtures/reflect/world.js';
+import { withSessionJudge } from '../contracts/n4-fixtures.js';
 import { genClaude } from '../fixtures/sessions/gen-claude.js';
 import { StubBackend as HopStub, makeStubs, outputText } from '../judge/helpers.js';
 import { ctxFor, newR5World, overlayToml } from './r5-world.js';
@@ -205,6 +213,22 @@ describe('promote --run:端到端', () => {
     expect(patch).toContain('+  rule_sha256:');
     expect(patch).not.toBe(oldPatch);
     expect(a.id).toBe(summary['promo_id']);
+    // N4(R20-18.20):每条入库提案带厂商证据;两侧 proven → 固定的 VENDOR_PROVEN_LABEL(pr-body 第一段),四处同形
+    const evidence = {
+      reflector: { tier: 'proven', vendor: 'zhipu' },
+      judge: { tier: 'proven', vendor: 'openai' },
+      self_reported: [],
+    };
+    const reportDoc = JSON.parse(await readText(path.join(a.dir, 'report.json'))) as {
+      adopted: { vendor_evidence: unknown }[];
+    };
+    expect(reportDoc.adopted[0]?.vendor_evidence).toMatchObject(evidence);
+    expect((summary['vendor_evidence'] as unknown[])[0]).toMatchObject({
+      ...evidence,
+      proposal_id: '2026-10-12-001',
+    });
+    const body0 = await readText(path.join(a.dir, 'pr-body.md'));
+    expect(body0.split('\n').slice(0, 4).join('\n')).toContain(VENDOR_PROVEN_LABEL);
 
     // 权限:目录 0700,文件 0600
     expect((await lstat(a.dir)).mode & 0o777).toBe(0o700);
@@ -246,6 +270,47 @@ describe('promote --run:端到端', () => {
     expect(again.code).toBe(ExitCode.CHECK_FAILED);
     expect(again.out).toContain('drop C7:ID_EXISTS_IN_REPO=1');
     expect(again.out).toContain('wrote=false');
+  });
+
+  it('N4:裁判侧是人工确认的自报 → 四处标注 SELF_REPORT_LABEL_JUDGE、不出现 VENDOR_PROVEN_LABEL;promo_id 随层级变化;同一证据重跑同 id', async () => {
+    const s = await stagedRun();
+    await judgeIt(s);
+    const first = await promote(s.w, ['--run', RUN_ID, '--json']);
+    const id1 = (JSON.parse(first.out) as { promo_id: string }).promo_id;
+    // 把 spawned 裁决换成同一规则文本上的自报裁决(binding 自洽)
+    const file = path.join(s.dir, PROPOSAL);
+    const obj = parseYaml(await readText(file)) as Record<string, unknown>;
+    const { judge: _j, ...rest } = obj;
+    void _j;
+    const base = ProposalSchema.parse(rest);
+    const ruleSha = ruleSha256(await readText(path.join(s.dir, RULE)));
+    const sc = withSessionJudge(base, { vendor: 'openai', ruleSha });
+    await safe.writeFile(s.w.io, file, serializeProposal({ ...rest, judge: sc.judge }));
+    const r = await promote(s.w, ['--run', RUN_ID, '--write', '--json']);
+    expect(r.code, r.err).toBe(ExitCode.OK);
+    const sum = JSON.parse(r.out) as {
+      promo_id: string;
+      vendor_evidence: { judge: { tier: string }; self_reported: string[] }[];
+    };
+    expect(sum.promo_id).not.toBe(id1);
+    expect(sum.vendor_evidence[0]?.judge.tier).toBe('self_confirmed');
+    expect(sum.vendor_evidence[0]?.self_reported).toEqual(['judge']);
+    const a = await artifacts(s.w);
+    const body = await readText(path.join(a.dir, 'pr-body.md'));
+    expect(body.split('\n').slice(0, 4).join('\n')).toContain(SELF_REPORT_LABEL_JUDGE);
+    expect(body).not.toContain(VENDOR_PROVEN_LABEL);
+    expect(body).not.toContain(SELF_REPORT_LABEL_REFLECTOR);
+    const rep = JSON.parse(await readText(path.join(a.dir, 'report.json'))) as {
+      pr_body_sha256: string;
+      adopted: { vendor_evidence: { self_reported: string[] } }[];
+    };
+    expect(rep.adopted[0]?.vendor_evidence.self_reported).toEqual(['judge']);
+    expect(rep.pr_body_sha256).toBe(createHash('sha256').update(body, 'utf8').digest('hex'));
+    const text = await promote(s.w, ['--run', RUN_ID]);
+    expect(text.out).toContain(`vendor_evidence_label=${SELF_REPORT_LABEL_JUDGE}`);
+    // 同一证据重跑:同 id、已存在
+    const again = await promote(s.w, ['--run', RUN_ID, '--write', '--json']);
+    expect(JSON.parse(again.out)).toMatchObject({ promo_id: sum.promo_id, existing: true });
   });
 
   it('pr-body / report / stdout 不含摘录、正文、提示;写明以新 patch 为准', async () => {

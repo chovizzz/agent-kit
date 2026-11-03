@@ -35,6 +35,7 @@ import type { Overlay } from '../contracts/config.js';
 import { ExitCode } from '../contracts/exit-codes.js';
 import type { Redactor } from '../contracts/redact.js';
 import { canonicalJson } from '../io/canonical-json.js';
+import { evidenceLabels, type VendorEvidenceReport } from '../lifecycle/vendor-report.js';
 import type { IoContext } from '../io/paths.js';
 import { readText } from '../io/read-fs.js';
 import { WriteDeniedError } from '../io/safe-fs.js';
@@ -229,6 +230,13 @@ async function writeOut(
 }
 
 /** 拿锁 / 锁内 / 失锁相关失败的稳定码;不是这类错误返回 undefined,交给原有映射 */
+/** 文本模式的厂商证据声明:只含 vendor.ts 的固定标签常量(R20-18.2) */
+function evidenceTextLines(reports: readonly VendorEvidenceReport[]): string {
+  return evidenceLabels(reports)
+    .map((l) => `vendor_evidence_label=${l}\n`)
+    .join('');
+}
+
 function rsiFailureOf(e: unknown): GateExit | undefined {
   if (e instanceof RsiLockError) {
     const st = e.toStable();
@@ -311,6 +319,7 @@ export function createPromoteCommand(deps: PromoteCommandDeps = {}): CommandDef 
       promo_id: plan.promoId,
       review_by_new: plan.reviewBy,
       rule_sha256: plan.ruleSha256,
+      vendor_evidence: plan.vendorEvidence,
       patch_sha256: plan.patchSha256,
       attest_files: plan.attestHashes.length,
       out_canary_in: ch('canary').atomsIn.length,
@@ -324,8 +333,9 @@ export function createPromoteCommand(deps: PromoteCommandDeps = {}): CommandDef 
     else {
       ctx.stdout(
         `${Object.entries(summary)
+          .filter(([k]) => k !== 'vendor_evidence')
           .map(([k, v]) => `${k}=${v === null ? '-' : String(v)}`)
-          .join('\n')}\n`,
+          .join('\n')}\n${evidenceTextLines([plan.vendorEvidence])}`,
       );
     }
     return ExitCode.OK;
@@ -400,6 +410,11 @@ export function createPromoteCommand(deps: PromoteCommandDeps = {}): CommandDef 
       adopted: plan.adopted.length,
       dropped: plan.dropped.length,
       adopted_ids: plan.adopted.map((a) => a.proposalId),
+      /** N4(R20-18.20 ③):每条入库提案各一份厂商证据(与 report.json 的 adopted[] 同形) */
+      vendor_evidence: plan.adopted.map((a) => ({
+        proposal_id: a.proposalId,
+        ...a.vendorEvidence,
+      })),
       dropped_by_reason: plan.droppedByReason,
       patch_sha256: plan.patchSha256,
       wrote,
@@ -408,9 +423,14 @@ export function createPromoteCommand(deps: PromoteCommandDeps = {}): CommandDef 
     if (args.json) ctx.stdout(canonicalJson(summary));
     else {
       const lines = Object.entries(summary)
-        .filter(([k]) => k !== 'dropped_by_reason' && k !== 'adopted_ids')
+        .filter(
+          ([k]) => k !== 'dropped_by_reason' && k !== 'adopted_ids' && k !== 'vendor_evidence',
+        )
         .map(([k, v]) => `${k}=${String(v)}`);
       lines.push(`adopted_ids=${summary.adopted_ids.join(',')}`);
+      for (const l of evidenceLabels(plan.adopted.map((a) => a.vendorEvidence))) {
+        lines.push(`vendor_evidence_label=${l}`);
+      }
       for (const [r, n] of Object.entries(summary.dropped_by_reason)) lines.push(`drop ${r}=${n}`);
       ctx.stdout(`${lines.join('\n')}\n`);
     }

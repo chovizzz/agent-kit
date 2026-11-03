@@ -8,6 +8,7 @@ import {
   codePointLength,
 } from './common.js';
 import { LayerSchema } from './atom.js';
+import { CONFIRMED_MODEL_RE, VENDOR_ID_RE } from './vendor.js';
 
 /**
  * P1 的口子:`proposals/<id>.yaml`(设计 §5.5)与裁判输出(§6.5)。P0 只定义 schema,不实现任何命令。
@@ -264,9 +265,49 @@ export const ReflectorGuidanceSchema = z.strictObject({
 });
 export type ReflectorGuidance = z.infer<typeof ReflectorGuidanceSchema>;
 
-/** 提案 CI 校验用的结构化裁判记录。 */
-export const JudgeRecordSchema = z
+/**
+ * N4(R20-18.13):`JudgeRecord` 按 `provenance` 判别。`spawned` = kit 经 backends 调用评审(现有形状,缺省);
+ * `session_confirmed` = 会话 agent 交来、用户在本机 TTY 亲手键入厂商名确认的自报裁决(`judge --ingest`)。
+ */
+export const JUDGE_PROVENANCE = ['spawned', 'session_confirmed'] as const;
+export type JudgeProvenance = (typeof JUDGE_PROVENANCE)[number];
+
+const KIT_VERSION_RE = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
+
+/** 声明者(会话 agent):`agent` 是调用方声明的 CLI,`vendor` / `model` 是自报值——kit 证明不了 */
+export const JudgeDeclaredSchema = z.strictObject({
+  agent: z.enum(['claude', 'codex', 'pi']),
+  vendor: z.string().regex(VENDOR_ID_RE),
+  model: z.string().regex(CONFIRMED_MODEL_RE),
+});
+export type JudgeDeclared = z.infer<typeof JudgeDeclaredSchema>;
+
+/** 裁判侧确认留痕(R20-18.13):只由 TTY 确认模块在拿到 `TtyConfirmedProof` 之后构造 */
+export const JudgeConfirmationSchema = z.strictObject({
+  method: z.literal('tty_typed_vendor'),
+  confirmed_at: IsoTimestampSchema,
+  kit_version: z.string().regex(KIT_VERSION_RE),
+  payload_sha256: Sha256Schema,
+  binding_sha256: Sha256Schema,
+});
+export type JudgeConfirmation = z.infer<typeof JudgeConfirmationSchema>;
+
+/** 反思器侧确认(R20-18.14):`reflector.confirmed`;只允许出现在 `reflector.provenance = session_declared` 的提案上 */
+export const ReflectorConfirmedSchema = z.strictObject({
+  vendor: z.string().regex(VENDOR_ID_RE),
+  model: z.string().regex(CONFIRMED_MODEL_RE),
+  method: z.literal('tty_typed_vendor'),
+  confirmed_at: IsoTimestampSchema,
+  kit_version: z.string().regex(KIT_VERSION_RE),
+  binding_sha256: Sha256Schema,
+});
+export type ReflectorConfirmed = z.infer<typeof ReflectorConfirmedSchema>;
+
+/** 提案 CI 校验用的结构化裁判记录(`spawned` 支;现有形状 + 判别键,`superRefine` 原样)。 */
+export const SpawnedJudgeRecordSchema = z
   .strictObject({
+    /** 缺省 = `spawned`(由 {@link JudgeRecordSchema} 的 preprocess 补键);`judge --run-llm` 新写入的记录显式带它 */
+    provenance: z.literal('spawned'),
     hops: z.array(JudgeHopSchema).min(1),
     provider: z.string().min(1),
     /** 模型厂商,不是接入渠道:MaaS DeepSeek 与官方 DeepSeek 同属 deepseek */
@@ -317,6 +358,41 @@ export const JudgeRecordSchema = z
       }
     });
   });
+export type SpawnedJudgeRecord = z.infer<typeof SpawnedJudgeRecordSchema>;
+
+/**
+ * 人工确认的自报裁决(R20-18.13)。**没有** `hops` / `provider` / 顶层 `vendor` / `prompt_*`:类型层面杜绝把自报记录当「可证明」去读
+ * `j.vendor` / `j.hops`——消费方必须先按 `provenance` 收窄。`rule_sha256` / `prediction` / `acceptance` 必填(kit 在锁内确定性构造)。
+ */
+export const SessionConfirmedJudgeRecordSchema = z.strictObject({
+  provenance: z.literal('session_confirmed'),
+  verdict: z.enum(['accept', 'revise', 'reject']),
+  overfit_risk: z.enum(['low', 'medium', 'high']),
+  injection_suspected: z.boolean(),
+  conflicts: z.array(z.string()),
+  rule_sha256: Sha256Schema,
+  prediction: JudgePredictionSchema,
+  acceptance: AcceptanceProtocolSchema,
+  declared: JudgeDeclaredSchema,
+  confirmation: JudgeConfirmationSchema,
+});
+export type SessionConfirmedJudgeRecord = z.infer<typeof SessionConfirmedJudgeRecordSchema>;
+
+/**
+ * 判别联合。**解析口径**:先在缺省时补键 `provenance: 'spawned'`(仅当键**不存在**;显式的 `null` / 未知值照旧不合规,
+ * 与 `RsiPurgeJournalSchema` 同模式),再按 `provenance` 分派——`discriminatedUnion` 要求判别键必填,不能直接吃缺省。
+ * 未知 `provenance`、`session_confirmed` 里出现 `spawned` 独有键(或反之)→ schema 失败。
+ */
+export const JudgeRecordSchema = z.preprocess(
+  (v) =>
+    typeof v === 'object' &&
+    v !== null &&
+    !Array.isArray(v) &&
+    !Object.prototype.hasOwnProperty.call(v, 'provenance')
+      ? { ...(v as Record<string, unknown>), provenance: 'spawned' }
+      : v,
+  z.discriminatedUnion('provenance', [SpawnedJudgeRecordSchema, SessionConfirmedJudgeRecordSchema]),
+);
 export type JudgeRecord = z.infer<typeof JudgeRecordSchema>;
 
 /** 裁判的原始输出 schema(设计 §6.5)。generality / overfit_risk 的取值档是本契约的假设(设计只给了字段名)。 */
@@ -352,6 +428,17 @@ function normVendor(v: string): string {
  */
 export const REFLECTOR_PROVENANCE = ['spawned', 'session_declared'] as const;
 export type ReflectorProvenance = (typeof REFLECTOR_PROVENANCE)[number];
+
+/**
+ * 有效反思器厂商(R20-18.13):`reflector.confirmed` 存在时取 `confirmed.vendor`,否则取 `reflector.vendor`。
+ * 仅作形状层比较用(同厂商跳的标注);**是否可证明**一律由 `vendorEvidence` 判。
+ */
+export function effectiveReflectorVendor(r: {
+  vendor: string;
+  confirmed?: { vendor: string } | undefined;
+}): string {
+  return r.confirmed !== undefined ? r.confirmed.vendor : r.vendor;
+}
 
 export const ProposalSchema = z
   .strictObject({
@@ -405,6 +492,8 @@ export const ProposalSchema = z
       guidance: ReflectorGuidanceSchema.optional(),
       /** A4 追加(R20-16.18):提案来源;LLM 路径显式写 `spawned`,ingest 写 `session_declared` */
       provenance: z.enum(REFLECTOR_PROVENANCE).optional(),
+      /** N4 追加(R20-18.14):用户在本机 TTY 键入的反思器厂商 / 模型(只许出现在 `session_declared` 上)。`vendor` 仍写 `unknown`,旧校验器据此照旧拒绝 */
+      confirmed: ReflectorConfirmedSchema.optional(),
     }),
     /** 由运行裁判的一方写入;裁判运行前缺省 */
     judge: JudgeRecordSchema.optional(),
@@ -435,7 +524,7 @@ export const ProposalSchema = z
           message: `judge_attempts 必须记满整条兜底链(${JUDGE_HOP_CHAIN.length} 跳),实际 ${p.judge_attempts.length}`,
         });
       }
-      const mine = normVendor(p.reflector.vendor);
+      const mine = normVendor(effectiveReflectorVendor(p.reflector));
       p.judge_attempts.forEach((h, i) => {
         if (h.hop !== JUDGE_HOP_CHAIN[i]) {
           ctx.addIssue({
@@ -468,8 +557,18 @@ export const ProposalSchema = z
         }
       });
     }
+    if (p.reflector.confirmed !== undefined && p.reflector.provenance !== 'session_declared') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['reflector', 'confirmed'],
+        message: 'reflector.confirmed 只允许出现在 provenance=session_declared 的提案上',
+      });
+    }
     if (!p.judge) return;
-    if (p.judge.vendor === p.reflector.vendor) {
+    // `session_confirmed` 分支没有 hops / vendor:同厂商比较由 `vendorEvidence`(R20-18.17)负责,这里显式跳过
+    if (p.judge.provenance !== 'spawned') return;
+    const reflectorVendor = effectiveReflectorVendor(p.reflector);
+    if (p.judge.vendor === reflectorVendor) {
       ctx.addIssue({
         code: 'custom',
         path: ['judge', 'vendor'],
@@ -477,7 +576,7 @@ export const ProposalSchema = z
       });
     }
     p.judge.hops.forEach((h, i) => {
-      if (h.vendor === p.reflector.vendor && h.result !== 'skipped:same-vendor') {
+      if (h.vendor === reflectorVendor && h.result !== 'skipped:same-vendor') {
         ctx.addIssue({
           code: 'custom',
           path: ['judge', 'hops', i, 'result'],

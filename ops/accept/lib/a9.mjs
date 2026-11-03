@@ -22,6 +22,8 @@ const ALLOWED = new Set([
   'src/io/hooks-fs.ts',
   // 钩子区的只读出口(R20-17.20,A6):只含读取、没有任何写调用,doctor D17 只许经它读钩子区;HooksFs 继承它
   'src/io/hooks-read.ts',
+  // 唯一控制终端出口(N4,contracts §20.18 R20-18.5):打开 /dev/tty 并读写该句柄;不碰文件系统路径(eslint 授权闸:只许 judge-ingest 命令入口与 src/judge/ingest/** 引用)
+  'src/io/tty.ts',
 ]);
 const FS_MOD = String.raw`(?:node:)?fs(?:\/promises)?`;
 const PATTERNS = [

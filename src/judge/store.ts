@@ -79,8 +79,18 @@ async function readRegular(file: string, what: string): Promise<string> {
   return readText(file);
 }
 
-/** 读取一个 run 里的全部提案(按文件名排序)。任一文件损坏即整体中止。 */
-export async function loadRun(io: IoContext, runId: string): Promise<LoadedProposal[]> {
+/** 读取一个 run 里的提案:支持评审的(`op = add` 单目标)与不支持的提案 id(N4i-5:`judge --ingest` 要区分 `proposal_unsupported`) */
+export interface RunEntries {
+  readonly loaded: LoadedProposal[];
+  /** 通过 ProposalSchema 但不是 `op = add` 单目标的提案 id(升序;没有加载其规则文件) */
+  readonly unsupported: string[];
+}
+
+/**
+ * 读取一个 run 里的全部提案(按文件名排序)。任一文件损坏即整体中止;**不支持的提案不抛**而是记入 `unsupported`
+ * ({@link loadRun} 保持原行为:有不支持的提案即整体中止)。
+ */
+export async function loadRunEntries(io: IoContext, runId: string): Promise<RunEntries> {
   if (!RunIdSchema.safeParse(runId).success) {
     throw new JudgeRunNotFoundError('JUDGE_RUN_NOT_FOUND: run_id 不合法');
   }
@@ -92,6 +102,7 @@ export async function loadRun(io: IoContext, runId: string): Promise<LoadedPropo
   if (!(await isRealDir(propDir))) return bad('proposals/ 目录缺失');
   const names = (await readDir(propDir)).filter((e) => e.name.endsWith('.yaml'));
   const out: LoadedProposal[] = [];
+  const unsupported: string[] = [];
   for (const e of names) {
     if (!e.isFile || e.isSymbolicLink) return bad('proposals/ 下有非普通文件');
     const file = path.join(propDir, e.name);
@@ -106,7 +117,8 @@ export async function loadRun(io: IoContext, runId: string): Promise<LoadedPropo
     const proposal = parsed.data;
     if (e.name !== `${proposal.id}.yaml`) return bad('提案文件名与 id 不一致');
     if (proposal.op !== 'add' || proposal.targets.length !== 1) {
-      return bad('只支持 op=add 且单目标的提案');
+      unsupported.push(proposal.id);
+      continue;
     }
     const target = proposal.targets[0] as string;
     for (const d of [path.join(dir, 'rules'), path.join(dir, 'rules', proposal.layer)]) {
@@ -133,7 +145,14 @@ export async function loadRun(io: IoContext, runId: string): Promise<LoadedPropo
       },
     });
   }
-  return out;
+  return { loaded: out, unsupported };
+}
+
+/** 读取一个 run 里的全部提案(按文件名排序)。任一文件损坏、或有不是 `op = add` 单目标的提案,即整体中止。 */
+export async function loadRun(io: IoContext, runId: string): Promise<LoadedProposal[]> {
+  const { loaded, unsupported } = await loadRunEntries(io, runId);
+  if (unsupported.length > 0) return bad('只支持 op=add 且单目标的提案');
+  return loaded;
 }
 
 const JUDGE_KEYS = ['judge', 'judge_attempts'] as const;
@@ -165,6 +184,65 @@ export function assertOnlyJudgeKeysChanged(
     if ((JUDGE_KEYS as readonly string[]).includes(k)) continue;
     if (JSON.stringify(before[k]) !== JSON.stringify(after[k])) {
       bad('更新会改动 judge/judge_attempts 以外的字段');
+    }
+  }
+}
+
+const INGEST_ROOT_KEYS = ['judge', 'judge_attempts', 'reflector'] as const;
+
+/**
+ * N4(R20-18.31 ⑥):`judge --ingest` / `--confirm-reflector` 的写原语。与 {@link applyJudgeFields} 的区别:多允许一个键
+ * `reflector.confirmed`;**只许改 `judge`、`judge_attempts`、`reflector.confirmed` 三处**,`reflector` 的其余字段
+ * (`vendor` 须保持 `unknown`、`model` 须保持 `undeclared`、`provenance` 等)改动即抛 {@link JudgeStateError}。
+ * - `judge` 给了:写 `judge` 并删除 `judge_attempts`(与补跑成功语义一致);
+ * - `confirmed` 给了:`reflector` 里只替换 / 追加 `confirmed` 一个键,其余字段与键序原样保留。
+ */
+export function applyIngestFields(
+  raw: Readonly<Record<string, unknown>>,
+  fields: { judge?: unknown; confirmed?: unknown },
+): Record<string, unknown> {
+  const next: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (k === 'judge' && fields.judge !== undefined) continue;
+    if (k === 'judge_attempts' && fields.judge !== undefined) continue;
+    if (k === 'reflector' && fields.confirmed !== undefined) {
+      const r = v as Record<string, unknown>;
+      next[k] = { ...r, confirmed: fields.confirmed };
+      continue;
+    }
+    next[k] = v;
+  }
+  if (fields.judge !== undefined) next['judge'] = fields.judge;
+  assertOnlyIngestKeysChanged(raw, next);
+  return next;
+}
+
+/** 不变量:ingest 写原语永远不改提案的其它字段,也不改 `reflector` 里 `confirmed` 以外的任何字段。 */
+export function assertOnlyIngestKeysChanged(
+  before: Readonly<Record<string, unknown>>,
+  after: Readonly<Record<string, unknown>>,
+): void {
+  const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+  for (const k of keys) {
+    if ((INGEST_ROOT_KEYS as readonly string[]).includes(k) && k !== 'reflector') continue;
+    if (k === 'reflector') {
+      const b = before[k];
+      const a = after[k];
+      if (typeof b !== 'object' || b === null || typeof a !== 'object' || a === null) {
+        bad('更新会改动 reflector 以外的结构');
+      }
+      const strip = (o: object): Record<string, unknown> => {
+        const { confirmed: _c, ...rest } = o as Record<string, unknown>;
+        void _c;
+        return rest;
+      };
+      if (JSON.stringify(strip(b as object)) !== JSON.stringify(strip(a as object))) {
+        bad('更新会改动 reflector.confirmed 以外的 reflector 字段');
+      }
+      continue;
+    }
+    if (JSON.stringify(before[k]) !== JSON.stringify(after[k])) {
+      bad('更新会改动 judge/judge_attempts/reflector.confirmed 以外的字段');
     }
   }
 }

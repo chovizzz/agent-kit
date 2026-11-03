@@ -18,6 +18,9 @@ import tseslint from 'typescript-eslint';
  *  - A5(contracts §20.15 R20-15.6):kit 钩子写出口 `src/io/hooks-fs.ts`(第四个写出口)只许 `src/rsi/hooks/**` 及其测试引用;
  *    sync / autosync / update / `src/rsi/{poke,hint,worker,kit-schedule}.ts` / §21 的 `src/rsi/{auto,capability,contrib,exec}/**` / doctor(`src/doctor/**`、`src/commands/doctor.ts`)引用即红;
  *    A6(R20-17.20)新增只读出口 `src/io/hooks-read.ts`(doctor D17 经它读钩子区),它自己可用 fs。
+ *  - N4(contracts §20.18 R20-18.5 / R20-18.25):唯一控制终端出口 `src/io/tty.ts`(第五个出口)。`/dev/tty` 字面量与 `node:tty` 只许它自己;
+ *    引用它的只有 `src/commands/judge-ingest.ts`、`src/judge/ingest/**` 及其测试;自动入口(poke / hint / worker / 顺带调度 / sync / update / §21)引用即红
+ *    (`test/rsi/import-closure.test.ts` 另有 import 闭包断言)。
  *  - 另外禁网络模块与全局 fetch(A8 的运行期垫片是主判据,这里是便宜的第二道)、eval、动态 import、require。
  * 范围:cli.ts、src/、adapters/、test/、vitest.config.ts。ops/ 下的验收工具脚本(B17/B18)不在此列,
  * 它们本来就要读真实 HOME 做快照。
@@ -31,6 +34,7 @@ const NODE_MODULES_CP = ['child_process', 'worker_threads', 'cluster', 'vm', 'in
 const NODE_MODULES_ENV = ['os', 'process'];
 const NODE_MODULES_NET = ['net', 'tls', 'http', 'https', 'http2', 'dns', 'dns/promises', 'dgram'];
 const NODE_MODULES_LOADER = ['module'];
+const NODE_MODULES_TTY = ['tty'];
 
 /** @param {string[]} names */
 const withNodePrefix = (names) => names.flatMap((n) => [n, `node:${n}`]);
@@ -43,6 +47,9 @@ const MESSAGES = {
     'HOME 写出口 src/io/home-fs.ts 只许 src/sync/apply.ts 与 src/update/install.ts(及其测试)引用。',
   hooksFs:
     'kit 钩子写出口 src/io/hooks-fs.ts 只许 src/rsi/hooks/**(及其测试)引用(contracts §20.15 R20-15.6)。',
+  tty: '控制终端出口 src/io/tty.ts 是唯一可用 /dev/tty 字面量与 node:tty 的文件(contracts §20.18 R20-18.5)。',
+  ttyUse:
+    '控制终端出口 src/io/tty.ts 只许 src/commands/judge-ingest.ts 与 src/judge/ingest/**(及其测试)引用;自动入口禁引(contracts §20.18 R20-18.25)。',
   netOut:
     '网络出口 src/io/net.ts 只许 src/update/**(launcher.ts 除外)与 src/commands/update.ts(及其测试)引用。',
   launcher:
@@ -58,7 +65,7 @@ const MESSAGES = {
 /**
  * allowFs/allowCp/allowEnv/allowNet:该文件**自己**可以 import 对应的 node 模块(出口实现文件);
  * allowLlm/allowHomeFs/allowNetOut/allowLauncher/allowRunSelf:该文件可以 import 对应出口模块(授权使用方)。
- * @param {{ allowFs?: boolean; allowCp?: boolean; allowCpOnly?: boolean; allowEnv?: boolean; allowNet?: boolean; allowLlm?: boolean; allowHomeFs?: boolean; allowHooksFs?: boolean; allowNetOut?: boolean; allowLauncher?: boolean; allowRunSelf?: boolean; allowSigstore?: boolean }} allow
+ * @param {{ allowFs?: boolean; allowCp?: boolean; allowCpOnly?: boolean; allowEnv?: boolean; allowNet?: boolean; allowLlm?: boolean; allowTty?: boolean; allowTtyUse?: boolean; allowHomeFs?: boolean; allowHooksFs?: boolean; allowNetOut?: boolean; allowLauncher?: boolean; allowRunSelf?: boolean; allowSigstore?: boolean }} allow
  */
 function restrictions(allow = {}) {
   /** @type {{name: string; message: string}[]} */
@@ -81,10 +88,13 @@ function restrictions(allow = {}) {
   add(NODE_MODULES_ENV, MESSAGES.env, allow.allowEnv);
   add(NODE_MODULES_NET, MESSAGES.net, allow.allowNet);
   add(NODE_MODULES_LOADER, MESSAGES.loader, false);
+  add(NODE_MODULES_TTY, MESSAGES.tty, allow.allowTty);
 
   const dynamicRe = `^(node:)?(${dynamicBanned.map((n) => n.replace('/', '\\/')).join('|')})$`;
   /** llm-exec 的各种写法:`../io/llm-exec.js`、`./llm-exec`、`src/io/llm-exec.ts` */
   const LLM_EXEC_GROUP = ['**/llm-exec', '**/llm-exec.js', '**/llm-exec.ts', '**/llm-exec.*'];
+
+  const TTY_GROUP = ['**/io/tty', '**/io/tty.*', './tty', './tty.*'];
 
   /** S0 出口模块的各种写法(import / export-from / 动态 import 共用同一组文件名模式) */
   const HOME_FS_GROUP = ['**/home-fs', '**/home-fs.*'];
@@ -95,6 +105,26 @@ function restrictions(allow = {}) {
 
   /** @type {{selector: string; message: string}[]} */
   const syntax = [
+    ...(allow.allowTty
+      ? []
+      : [
+          {
+            selector: 'Literal[value=/\\/dev\\/tty/]',
+            message: `/dev/tty 字面量只许控制终端出口。${MESSAGES.tty}`,
+          },
+          {
+            selector: 'TemplateElement[value.raw=/\\/dev\\/tty/]',
+            message: `/dev/tty 字面量只许控制终端出口。${MESSAGES.tty}`,
+          },
+        ]),
+    ...(allow.allowTtyUse
+      ? []
+      : [
+          {
+            selector: 'ImportExpression[source.value=/(^|[^a-z])tty(\\.js|\\.ts)?$/]',
+            message: `动态 import 也不得绕开控制终端出口限制。${MESSAGES.ttyUse}`,
+          },
+        ]),
     ...(allow.allowHomeFs
       ? []
       : [
@@ -232,6 +262,7 @@ function restrictions(allow = {}) {
           ...(allow.allowSigstore
             ? []
             : [{ group: ['sigstore', 'sigstore/**', '@sigstore/**'], message: MESSAGES.sigstore }]),
+          ...(allow.allowTtyUse ? [] : [{ group: TTY_GROUP, message: MESSAGES.ttyUse }]),
           ...(allow.allowHomeFs ? [] : [{ group: HOME_FS_GROUP, message: MESSAGES.homeFs }]),
           ...(allow.allowHooksFs ? [] : [{ group: HOOKS_FS_GROUP, message: MESSAGES.hooksFs }]),
           ...(allow.allowNetOut ? [] : [{ group: NET_OUT_GROUP, message: MESSAGES.netOut }]),
@@ -319,6 +350,18 @@ export default tseslint.config(
       `test/reflect/backends/**/*.${EXT}`,
     ],
     rules: restrictions({ allowLlm: true }),
+  },
+  // N4(R20-18.5 / R20-18.25):控制终端出口。tty.ts 自己可用 node:fs / node:tty 与 /dev/tty 字面量;
+  // 能引用它的只有 judge-ingest 命令入口、src/judge/ingest/** 与对应测试(每块都必须由 restrictions({...}) 生成完整规则)。
+  { files: ['src/io/tty.ts'], rules: restrictions({ allowFs: true, allowTty: true }) },
+  {
+    files: [
+      'src/commands/judge-ingest.ts',
+      `src/judge/ingest/**/*.${EXT}`,
+      'test/io/tty*.test.ts',
+      `test/judge/ingest/**/*.${EXT}`,
+    ],
+    rules: restrictions({ allowTtyUse: true }),
   },
   // S0:HOME 写出口。home-fs.ts 自己可用 fs(它是第三个写出口);能引用它的只有下面这几个文件与对应测试。
   // 同样注意:每块都必须由 restrictions({...}) 生成完整规则,后面同名规则会整条替换前面的。

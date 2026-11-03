@@ -14,7 +14,7 @@ A24 不是普通脚本:它要求对 attest / promote / retire 功能的 9 处关
 | L5   | 晋升不查 attest 阈值                                          | `src/guards/criteria.ts`(`need`)         | `test/guards/criteria.test.ts`、`test/commands/promote.test.ts`            |
 | L6   | retire 不写 lifecycle 记录                                    | `src/lifecycle/retire.ts`                | `test/commands/retire.test.ts`、`test/lifecycle/retire-patch.test.ts`      |
 | L7   | 墓碑不参与 C7                                                 | `src/lifecycle/checks.ts`(`checkC7`)     | `test/lifecycle/checks-gov.test.ts`、`test/commands/promote.test.ts`       |
-| L8   | CI 判据比本地 C5 宽(去掉 `C5_EXTRA_REASONS`)                  | `src/guards/criteria.ts`(`judgeChecks`)  | `test/guards/criteria.test.ts`                                             |
+| L8   | CI 判据比本地 C5 宽(去掉 C5 独有 judge 侧原因码的补发)        | `src/guards/criteria.ts`(`judgeChecks`)  | `test/guards/criteria.test.ts`                                             |
 | L9   | `--write` 缺省也写(干跑也落盘 `.state/promote`)               | `src/commands/promote.ts`(`promoteRule`) | `test/commands/promote.test.ts`                                            |
 
 另有两处验收脚本自检(不计入标记的 9 处,`--set all` 才跑):X1 = A21 矩阵不再逐条核对原因码;X2 = A22 的 import 图检查不再拒绝 `llm-exec`

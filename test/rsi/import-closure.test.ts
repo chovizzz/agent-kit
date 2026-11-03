@@ -27,8 +27,11 @@ const FORBIDDEN_FILES: readonly string[] = [
   'src/update/install.ts',
   'src/update/registry.ts',
   'src/update/provenance.ts',
+  // N4(contracts §20.18 R20-18.25 ①):人工确认只存在于本机 TTY 里的一次键入——自动入口的闭包不得含 judge --ingest 的命令入口、服务与控制终端出口
+  'src/commands/judge-ingest.ts',
+  'src/io/tty.ts',
 ];
-const FORBIDDEN_PREFIXES: readonly string[] = ['src/reflect/backends/'];
+const FORBIDDEN_PREFIXES: readonly string[] = ['src/reflect/backends/', 'src/judge/ingest/'];
 /** 网络相关的外部说明符(含 node: 前缀与子路径) */
 const NET_EXTERNALS = ['http', 'https', 'http2', 'net', 'tls', 'dgram', 'dns', 'undici', 'ws'];
 const FORBIDDEN_EXTERNAL = (spec: string): boolean => {
@@ -241,6 +244,13 @@ describe('闭包检查器自身的对照(证明上面的"干净"不是检查器�
     expect(bad).toContain('external:sigstore');
   });
 
+  it('N4:judge --ingest 命令入口自己的闭包含 tty 与 ingest 服务(正向对照:检测器看得见);自动入口候选的闭包里一个都没有', () => {
+    const bad = violations(closureOf(['src/commands/judge-ingest.ts']));
+    expect(bad).toContain('file:src/io/tty.ts');
+    expect(bad).toContain('file:src/judge/ingest/service.ts');
+    expect(bad).toContain('file:src/commands/judge-ingest.ts');
+  });
+
   it('根 CLI 入口 src/cli.ts 的闭包含 llm-exec 与 reflect 后端(这就是 rsi 入口不能经过它的原因)', () => {
     const bad = violations(closureOf(['src/cli.ts']));
     expect(bad).toContain('file:src/io/llm-exec.ts');
@@ -271,6 +281,20 @@ describe('闭包检查器自身的对照(证明上面的"干净"不是检查器�
     'node:net 子路径写法': [[`import { x } from 'dns/promises';`], 'external:dns/promises'],
     sigstore: [[`import { verify } from 'sigstore';`], 'external:sigstore'],
     'import type 也算': [[`import type { X } from '../io/net.js';`], 'file:src/io/net.ts'],
+    // N4:自动入口不得引入 judge --ingest 的任何一层
+    直接引入控制终端出口: [[`import { readProof } from '../io/tty.js';`], 'file:src/io/tty.ts'],
+    '引入 judge --ingest 命令入口': [
+      [`import { command } from '../commands/judge-ingest.js';`],
+      'file:src/commands/judge-ingest.ts',
+    ],
+    '引入 judge --ingest 命令入口(间接带出 tty)': [
+      [`import { command } from '../commands/judge-ingest.js';`],
+      'file:src/io/tty.ts',
+    ],
+    '引入 ingest 服务': [
+      [`import { runJudgeIngest } from '../judge/ingest/service.js';`],
+      'file:src/judge/ingest/service.ts',
+    ],
   };
   for (const [name, [lines, expected]] of Object.entries(SNEAK)) {
     it(`抓得到:${name}`, () => {

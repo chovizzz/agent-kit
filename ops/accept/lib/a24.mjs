@@ -195,12 +195,13 @@ export const MUTATIONS = [
   {
     id: 'L8',
     core: true,
-    what: 'CI 判据比本地 C5 宽(去掉 C5_EXTRA:provider / 最后一跳 ok / 厂商可复算 三条不再查)',
+    what: 'CI 判据比本地 C5 宽(去掉 C5 独有的 judge 侧原因码补发:provider / 最后一跳 ok / 厂商可复算 三条不再查)',
     edits: [
       {
         file: 'src/guards/criteria.ts',
-        find: '    if (C5_EXTRA_REASONS.has(reason)) {',
-        replace: '    if (false) {',
+        // N4:judgeChecks 改经 vendorEvidence 发码后,「C5 独有的几条」(provider / 最后一跳 ok / 厂商可复算 / 确认无效)由 judgeSide 循环补发
+        find: '  if (j !== undefined) for (const i of judgeSide) issue(i);',
+        replace: '  if (false) for (const i of judgeSide) issue(i);',
       },
     ],
     tests: [T_CRITERIA],
