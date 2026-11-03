@@ -4887,6 +4887,89 @@ A5 实装(`src/contracts/rsi-hooks.ts`、`src/io/hooks-fs.ts`、`src/rsi/hooks/*
 
 2026-11-02 条文评审(第四轮,Pi GPT-6.1 Sol,限定范围):后果范围判为准确;新提 1 条(中)采纳——双持有窗口的触发条件改为「锁可被回收(pid 已死,或空 / 损坏锁超过 10 秒宽限,不要求原进程已死)+ 并发回收 + 精确交错」,措辞改为「隐私闸不依赖槽位锁的严格互斥」,验收补「活进程创建空锁后暂停」注入(R20-16.10、16.25)。
 
+### 20.17 产出到达用户:待审判定、提醒一次、`rsi dismiss`、doctor D17(A6,契约先行;A6 实装后订正)
+
+来源:设计稿 §11「产出怎么到达用户」与 §14 A6 行;§20.10 A6 行;§20.9 第 12 条(D17 归 A6,`auto` 状态 V1 再加);Q13 = A(「首次 L0 完成后提示一次」放 A6)。方案经 Pi 评审 1 轮(高 3、中 6,全部采纳,见 20.17-9)。本节只扩展,对冻结条款的改动一律写成订正(20.17-8)。
+
+#### 20.17-1 三个集合:暂存、待审、待通知(唯一实现 `src/rsi/pending.ts`)
+
+- R20-17.1 **暂存 run**:沿用 R20-3.3.3 / R20-4.5 的既有口径(证据非空、全部归属「采集中」、未 tainted;手动 `reflect --run-llm` 与 `reflect --ingest` 的 run 都算),`rsi status` 的 `counts.staged_runs / staged_proposals` 含义不变。
+- R20-17.2 **待审 run** = 暂存 run ∧ `report.json` 过 `ReflectRunReportSchema` ∧ `report.run_id` 等于目录名 ∧ 不在 `dismissed.json` 里。归属每次按**当前**排除与索引现算(R20-4.6):写下排除后、worker 尚未持锁 taint 之前,命中的 run 已不计入;项目根消失(变 U)同理。不能证明归属的一律不计入。读不了 / schema 不过 / id 不符的 run 不计入,另计 `unreadable_runs`。
+- R20-17.3 **待通知 run** = 待审 run ∧ `report.mode = ingest` ∧ 不在 `notice.json` 的已通知集合里。只有会话交回的 run 走提醒;手动 `reflect --run-llm` 的结果用户已在前台看到。
+- R20-17.4 **读取协议**:枚举 `<stateDir>/reflect/` 的直接子项至多 1000 个(超过 → 本次待审 / 待通知视为「未知」,status / D17 报 `run_scan_truncated`,提醒不发);目录项按名字升序;每个 `report.json` 经既有只读安全读取(不跟随符号链接、普通文件、`nlink = 1`、≤ 1 MiB);单次扫描总读取 ≤ 16 MiB,超出同「未知」。错误只映射稳定原因,不记录原始异常文本。三个集合由 `src/rsi/pending.ts` 一处计算,hint、status、提醒、dismiss、D17 都调用它;`pending.ts` 的 import 闭包只读(不含 `safe-fs`、hooks-fs、子进程)。待通知集合只有提醒与 status / D17 的 `notice_full` 判定需要,hint 不读 `notice.json`。
+- R20-17.4a **扫描结果类型**:`{ known: true, staged, pending, toNotify, unreadable } | { known: false, reason: run_scan_truncated | run_scan_budget }`。各入口对 `known: false` 的映射(不得当作零或空集合):status 的 `counts.pending_runs / pending_proposals / unreadable_runs` 为 `null` 并加 warning `<reason>`;D17 的同名 facts 为 `null`、采集面 `warn` `<reason>`;hint 本次空输出(零写入,不记去重标记);提醒不发、不记账;`rsi dismiss`(具名与 `--all`、干跑与 `--write`)退 4 `RSI_NOT_RUN reason=run_scan_incomplete`,零写入。
+
+#### 20.17-2 `rsi dismiss <run_id>... | --all [--write] [--json]`
+
+- R20-17.5 前台命令,默认干跑(列出将忽略的 run_id 与数量),`--write` 才写。`--all` 与具名 run_id 互斥 → `RSI_USAGE reason=mode_conflict`;都没有 → `mode_conflict`;run_id 格式不符、重复 → `unknown_arg`。
+- R20-17.6 **状态**:`off` → 退 4 `RSI_NOT_RUN reason=off`;`armed`、`confirmed`、`stopped` 均可执行(管理已有暂存产物;状态表订正见 20.17-8 ①)。不受 `KIT_AUTO_RSI` 影响(前台命令,同 R20-1.6 末句)。
+- R20-17.7 **语义**:只写 `.state/rsi/dismissed.json`,不删、不改任何 run 目录与 promote 产物。忽略**只停止提醒与待审计数,不释放暂存容量**(R20-17.15 的满区闸照旧按物理暂存计)。具名 run 不是待审 → 退 4 `RSI_NOT_RUN reason=run_not_pending`,零写入(同一批里有一个不是待审即整批拒)。`--all` 时集合 = 锁内现算的待审 run 全体;锁内集合与干跑展示不同时照锁内集合写,输出给出实际 run_id 与数量(忽略是无害方向,不用 `stale_plan`);没有待审 run → 退 0、`result=unchanged`、零写入。
+- R20-17.8 **`dismissed.json`**(0600,strict schema:`schema_version`、`runs: [{run_id, at}]`,按 `run_id` 升序、唯一,≤ 1000 条):写入时顺带移除目录已不存在的条目;移除后仍超上限 → 退 4 `RSI_NOT_RUN reason=dismiss_full`,零写入。文件损坏(不是普通文件、权限过宽、schema 不过)→ 写路径退 3 `RSI_FAIL_CLOSED reason=dismissed_invalid`,**不覆盖、不重建**;只读路径(hint、status、提醒、D17)按「无已忽略」计数(保守多算,不是授权),status / D17 报 warn `dismissed_invalid`。
+- R20-17.9 **锁与 taint**:顶层拿 `rsi/lock` 一次(R20-5.4),内部服务接受锁句柄、提交前 `assertHeld()`;拿不到 → 退 4 `RSI_NOT_RUN reason=locked`。dismiss 是**窄记账写入**:不承担 R20-4.7 的 taint 前置(它不提交任何信号、run 或 promote 内容,待审判定本身按当前规则过滤 X / U),订正见 20.17-8 ②。
+- R20-17.10 `--json` 固定键集 `{result: dry|dismissed|unchanged, runs: [run_id…], count}`;人读输出只含 run_id 与数量,不含路径、提案正文。
+
+#### 20.17-3 提醒一次
+
+- R20-17.11 **位置与时机**:根入口在命令返回、命令自身的锁全部释放之后,与 update 的提示同一流程(`src/update/launcher.ts`),但与 update 提示、RSI 顺带调度各自隔离异常(任一失败不影响另两者;不持 `rsi/lock` 调 update 流程)。实现 `src/rsi/notice.ts`。
+- R20-17.12 **触发条件(全部满足才进入)**:stdin 与 stderr 都是 TTY;不是 R20-1.6 的任一跳过情形(`KIT_AUTO_RSI=0`、`KIT_RSI_CHILD=1`、CI 变量为真);本次命令不是 `rsi poke`、`rsi hint`、钩子入口;状态为 `confirmed`(有效确认、无停止标记);配置无 collect block;不存在 `purge-journal.json`。任一不满足 → 零读 `reflect/`、零写入、不拿锁。`armed` / `stopped` 下一律不提醒(状态表的自动写入边界,R20-1.3)。
+- R20-17.13 **两行提示**(stderr,各一行,不改命令退出码):
+  - `RSI_COLLECTION_STARTED projects=P excluded=X`:`confirm.baseline_pending = false`(首次 L0 已完成)且 `notice.json` 的 `collection_started_for` 不等于当前确认记录的标识(确认时刻)。重新 `rsi confirm` 后,下一次首次 L0 完成时再提示一次;P / X 与 hint 同口径现算。
+  - `RSI_PROPOSALS_READY runs=N proposals=M`:N、M 只计待通知 run(R20-17.3);N = 0 不输出。
+    两行可同时出现,先采集、后提案。都不含路径、run_id、提案正文。
+- R20-17.14 **记账**:先写后印。非阻塞试拿 `rsi/lock` 一次:拿不到 → 本次不提示、不记账;拿到 → 锁内重算、写 `.state/rsi/notice.json`(0600,strict:`schema_version`、`proposals_notified: [run_id…]`(升序唯一,≤ 1000,写时移除目录已不存在的)、`collection_started_for: string | null`)→ 放锁 → 打印。承诺是「每个 run **至多一次**尝试展示」:写完后崩溃或 stderr 写失败会漏提示,不会重复提示。`notice.json` 损坏 → 不覆盖、不重建,本次与之后都不提醒,status / D17 报 warn `notice_invalid`,日志记稳定码。
+- R20-17.14a **`notice_full` 的唯一谓词**(提醒、status、D17 共用,`src/rsi/pending.ts`):令 S = `proposals_notified` 中目录仍存在的 run_id,T = 本次待通知集合;`notice_full` 成立当且仅当 |S ∪ T| > 1000。原文件超过 1000 条但清理后不超过、或恰好 1000 且 T 为空,都**不是** full。full 时:提案提示不发、不加入任何 run_id;采集开始提示**不受影响**(仍按 R20-17.13 判定、照常记 `collection_started_for` 并打印),写入时 `proposals_notified` 只做清理不新增。
+- R20-17.15 **预算**:尽力 ≤ 200ms(同 R20-3.2.1 的「尽力」口径,不含 Node 启动与单次系统调用);读取上限同 R20-17.4;每读完一个文件检查一次,超出即放弃且**此后零写入**(超时不留下迟到的记账)。失败一律静默(只写日志稳定码),不输出到终端。
+
+#### 20.17-4 hint 与 status
+
+- R20-17.16 **hint 的 M**:改为待审提案数(排除已忽略的 run),订正见 20.17-8 ③;其余计数与模板不变。
+- R20-17.17 **暂存区达到 run 上限**:暂存 run 目录数(含全部 mode,只数目录、不扫字节)≥ 50 时,hint 的输出换成一行 `agent-kit RSI: 暂存区已达 50 个 run 上限,新提案会被拒收;详情见 agent-kit rsi status`(≤ 200 字节,30 分钟去重窗口同 R20-3.3.2)。hint 不递归扫字节:50 MiB 闸只在 `reflect --ingest` 判定(A4 已实现 `RSI_STAGING_FULL`);hint 不输出这行**不等于**暂存区未满。提示文字不得暗示 `rsi dismiss` 能释放容量。
+- R20-17.18 **status 追加**(人读与 `--json` 同步;既有键不改):`counts.pending_runs`、`counts.pending_proposals`、`counts.dismissed_runs`、`counts.unreadable_runs`、`counts.gc_candidates`(见下)、`staging.run_limit_reached: boolean`(目录数口径)、`staging.bytes_checked: false`(status 同样不扫字节,显式说明未检测);`warnings[]` 追加 `run_scan_truncated`、`dismissed_invalid`、`notice_invalid`、`notice_full`。`gc_candidates` 由**纯只读**的 GC 计划模块给出:把 `src/reflect/gc.ts` 的计划部分拆到 `src/reflect/gc-plan.ts`(不 import `safe-fs`),执行器与 status 共同依赖它;status 的只读闭包审计(`test/rsi/readonly-zero-write.test.ts`)不放宽。计划失败 → `null` + warning `gc_plan_failed`,不改退出码。GC 只回收不含暂存提案的过期 run(§17.7 不变)。
+
+#### 20.17-5 doctor D17「rsi」
+
+- R20-17.19 `DOCTOR_CHECK_IDS` 改为 17 项(订正见 20.17-8 ④)。D17 由两个只读探测合成:
+  - **采集面**(`collection`),按 §20.2 的配置结果判,不以 `state` 为前提:用户配置文件不存在或没有 `[rsi]` → 本面 `n_a`、`result=absent`;`[rsi] enabled = false` → 本面 `n_a`、`result=disabled`;使状态为 `off` 的配置问题(R20-2.7 的 `cfg_*`、`repo_invalid` 等)→ `fail`,`result` 为该原因码;collect block(R20-2.6–2.8 的 `overlay_invalid`、`exclude_invalid`,状态仍照算为 `armed` / `confirmed`)→ `fail`,`result` 为该原因码,不论状态;`stopped`、`armed`、熔断打开 → `warn`;state / 索引 / 计数读不了或 schema 不过 → `fail`;暂存达到 run 上限、`unreadable_runs > 0`、`run_scan_truncated`、`dismissed_invalid`、`notice_invalid`、`notice_full` → `warn`;其余 `ok`。
+  - **钩子面**(`hooks`,与 RSI 开关无关,R20-15.4):私有状态区 `~/.local/state/agent-kit/hooks/` 不存在 → 本面 `n_a`;账本或标记不安全 / schema 不过(R20-15.21a)→ `fail`;存在残留 journal → `warn` `hooks_residue`(不判漂移,不恢复、不清理);pi 扩展已登记但文件 sha 与账本指纹不符 → `warn` `hooks_drifted`(`SYNC_DRIFTED` 语义:只报不修);目标被改到账本登记的节点已不在 → `warn` `hooks_drifted`;其余 `ok`。
+  - **合成**:两面都 `n_a` → D17 `n_a`;否则取严重度最高的一面(`fail > warn > ok`),`result` 取该面的原因码,并列时采集面优先。`facts`:`state`、`projects_collecting`、`projects_excluded`、`pending_runs`、`pending_proposals`、`staging_run_limit_reached`、`hooks.claude|codex|pi`(`installed | not_installed | unknown`)、`hooks_residue`(数量);全部过 doctor 的路径闸,无绝对路径、无用户名、无提案正文。
+- R20-17.20 **只读**:D17 不拿任何锁、零写入、不清理残留。钩子面经新的只读模块 `src/io/hooks-read.ts` 读取(同 R20-15.14 / 15.21a 的安全协议;只含读);`hooks-fs.ts` 的读取改为复用它。doctor 只许 import `hooks-read.ts`,不许 import `hooks-fs.ts`(eslint 闸同 R20-15.6 的做法,订正见 20.17-8 ⑤)。私有状态区目录本身不安全 → D17 `fail`,doctor 整体退出码按 §19 既有「fail 项」规则,不新增顶层 fail-closed。
+- R20-17.21 V1 再加的 `auto` 状态(§20.9 第 12 条)本节不做。
+
+#### 20.17-6 技能与稳定码
+
+- R20-17.22 `agent-kit-rsi` 技能第 5 步改为:成功后在对话里告诉用户「已暂存 N 条提案,run=<run_id>」(设计稿 §11 的主通道);并说明 `rsi dismiss` 只停止提醒、不删除。
+- R20-17.23 **新稳定码**:顶层(0) 信息行 `RSI_PROPOSALS_READY`、`RSI_COLLECTION_STARTED`(只在 R20-17.12 条件下的 stderr,不改退出码);`RSI_NOT_RUN reason=run_not_pending|dismiss_full|run_scan_incomplete`(退 4);`RSI_FAIL_CLOSED reason=dismissed_invalid`(退 3)。并入 R20-3.0 总表与枚举(同一提交);`dismiss` 从 P1 预留桩改为真子命令(`RSI_P1_RESERVED_SUBCOMMANDS` 去掉 `dismiss`)。顺带订正总表里过时的「P1 预留(不实现)」行(A4 订正 #2 已启用其中各码,表行未改)。
+
+#### 20.17-7 验收与必须覆盖的变异点(A6)
+
+- R20-17.24 **自动化端到端(javis,假 HOME)**:合成 pi 会话文件 → 钩子入口 `rsi poke` → 自动 L0 → 下一次 `rsi hint` 出计数 → 模拟 S1:`rsi digest --json` → 固定提案 JSON 经 `reflect --ingest -`(不 spawn 任何 LLM)→ `rsi status` 待审 1 → 一个 TTY kit 命令后 stderr 恰好一次 `RSI_PROPOSALS_READY runs=1 proposals=k`(且首次 L0 后恰好一次 `RSI_COLLECTION_STARTED`),再跑一次都不再出现 → `rsi dismiss --all --write` → status 待审 0、D17 `pending_runs=0`、run 目录字节不变。全程 exec 审计:kit 进程不 spawn 任何 LLM CLI。
+- R20-17.25 **负向矩阵**:
+  - 提醒:非 TTY、`KIT_AUTO_RSI=0`、CI、`KIT_RSI_CHILD=1`、`armed`、`stopped`、collect block、purge journal 在场 × 各一次 → 零读 `reflect/`、零锁、零写入(写审计桩为 0);锁被占 → 不提醒不记账;`notice.json` 损坏(`notice_invalid`)→ 不覆盖、不重建、不提醒;`notice_full` → 不发提案提示、不新增已通知 run,采集开始提示仍按 R20-17.14a 先记账后打印(允许清理既有条目);超时 → 零写入。
+  - 归属:ingest 后写下排除、不跑 worker → hint / status / 提醒 / D17 都不计入;项目根消失同理;`report.run_id` 与目录名不同 → 不计入、dismiss 拒。
+  - dismiss:`off` 拒;具名非待审整批拒;`dismissed.json` 损坏写路径退 3 且文件字节不变;上限;TAINTED 已落盘但摘录未清完时运行 dismiss → 只写 dismissed.json,不碰 run。
+  - 扫描未知:reflect/ 下 1001 个子项、总读取超 16 MiB → status / D17 为 `null` + warning,hint 空输出,dismiss(具名 / `--all`)退 4 `run_scan_incomplete` 且零写入。
+  - `notice_full`:原始满但可清理、恰好满且无新增、新增后超限三种;满时采集开始提示照常。
+  - D17 配置:`confirmed + overlay_invalid`、`confirmed + exclude_invalid` → `fail`;显式 `enabled=false` → `n_a`/`disabled`。
+  - D17:输出无绝对路径(用含用户名的假 HOME 断言);只读(写审计为 0、无锁文件);钩子残留报 `hooks_residue` 不报漂移;pi 漂移报 `hooks_drifted`。
+- R20-17.26 **必杀变异**(表 `test/rsi/a6-mutation-table.ts`,javis 执行):待审判定漏掉 dismissed;待审判定漏掉当前 X / U 过滤;`run_id` 与目录名不核对;提醒不记账(重复提示);先印后写;提醒在非 TTY / `armed` / `stopped` 下输出;超时后仍记账;`notice.json` 损坏被当空重建;dismiss 删或改 run 目录;`dismissed.json` 损坏被覆盖;hint 达上限仍用旧模板;D17 输出绝对路径;D17 写文件或拿锁;doctor import `hooks-fs.ts`;status 的只读闭包引入 `safe-fs`。
+- R20-17.27 **真实会话验收(需用户在场,另行确认)**:真实 pi 会话结束 → 下个会话开始收到提示 → 用户一句话触发 S1 → agent 在对话里告知 run。依赖 A5 的三家形状核实(生产形状现全是「假设」,`--install --write` 被闸住),不在 A6 PR 内完成;登记为待用户在场的真实环境验收。
+
+#### 20.17-8 对冻结条款的订正(随本节生效)
+
+- ① **R20-1.3 状态表**:`armed`、`stopped` 两行「允许写」追加 `rsi dismiss --write` 对 `.state/rsi/dismissed.json` 的写入;`confirmed` 行已含 `.state/rsi/**`。提醒(R20-17.14)只在 `confirmed` 写 `notice.json`。
+- ② **R20-4.7**:持 `rsi/lock` 的写入方中,`rsi dismiss --write` 与提醒记账是**窄记账例外**:它们只写各自的记账文件,不提交信号、run、promote 内容,不承担 taint 前置;其它持锁写入方的 taint 义务不变。
+- ③ **R20-3.3.3 的 M**:由「证据全部归属采集中且不是 tainted 的暂存 run 里的提案数」改为「待审 run(R20-17.2)里的提案数」,即再排除已忽略的 run。
+- ④ **§19 doctor**:「`checks` 恒 16 项」改为 17 项;§20.8.1 对照表第 12 行同步。
+- ⑤ **R20-15.6 / §20.15-11 第 3 条**:hooks 的私有状态区与目标仍只有 `hooks-fs.ts` 能写;新增的 `hooks-read.ts` 只读,doctor 与 `hooks-fs.ts` 共用,eslint 闸把 doctor 对 `hooks-fs.ts` 的 import 列为违规。
+- ⑥ **R20-3.3.1 hint 的读取集合**:在「仅限」清单后追加:`<stateDir>/reflect/` 的直接子项列举与每个 run 的 `report.json`(受 R20-17.4 上限)、`.state/rsi/dismissed.json`;hint 不读 `notice.json`、不读 run 里的其它文件。
+- ⑦ **R20-3.3.3 计数来源**:「全部由 `counts.json` + 当前配置 + 当前索引现算」对 M 改为「由 `src/rsi/pending.ts` 按 R20-17.2 现算」;N、K、P、X、n、U 的来源不变。
+- ⑧ **R20-4.5 计数投影**:「由每个持锁写入方在提交时重算并写入」对 `rsi dismiss --write` 与提醒记账不适用(窄记账例外,不写 `counts.json`)。
+- ⑨ **R20-5.1 锁矩阵**:追加资源 `.state/rsi/dismissed.json`(写方 `rsi dismiss --write`,持 `rsi/lock`;读方 hint、status、提醒、D17,不拿锁)与 `.state/rsi/notice.json`(写方提醒记账,非阻塞试锁;读方 status、D17,不拿锁);暂存区读方里 `rsi status(只读 counts.json)` 的限定删除(status 经 `pending.ts` 读 `report.json`)。
+
+#### 20.17-9 评审记录
+
+方案 v1 经 Pi (GPT-6.1 Sol) 评审,意见全部采纳:①待审判定补当前 X / U 归属与 `run_id` 一致(R20-17.2);②提醒只在 `confirmed` 且继承 R20-1.6 跳过条件(R20-17.12);③dismiss / 提醒与 taint 协议的关系写成窄记账例外并订正 R20-4.7(R20-17.9、20.17-8 ②);④暂存 / 待审 / 待通知三集合分开,既有 staged 字段不改含义(R20-17.1–17.3);⑤满区提示不暗示 dismiss 能释放容量、字段改为 `run_limit_reached` 并显式 `bytes_checked:false`(R20-17.17–17.18);⑥notice 容量满的行为与扫描上限、顺序(R20-17.4、17.14);⑦200ms 改为尽力预算 + 读取上限 + 超时后零写入(R20-17.15);⑧D17 拆采集 / 钩子两面、残留不当漂移(R20-17.19);⑨GC 计划拆成只读模块、不放宽 status 闭包审计(R20-17.18)。契约文本复评(第 2 轮):上轮 9 条中 8 条闭合;新提中 5 条全部采纳——扫描未知的各入口映射与 `run_scan_incomplete`(R20-17.4a);D17 采集面按配置结果判、collect block 一律 `fail`、`disabled` 为 `n_a`(R20-17.19);hint 读取集合与计数来源订正(20.17-8 ⑥⑦);R20-4.5 投影义务的窄记账例外与 R20-5.1 锁矩阵(⑧⑨);`notice_full` 唯一谓词(R20-17.14a)。终审(第 3 轮):5 条闭合;新提中 1 条(R20-17.25 把 `notice_full` 与损坏合写成「不覆盖、不提醒」,与 R20-17.14a 相反)已采纳拆开。
+
 ## 21. 自主 RSI 契约(R21,v3.1,契约先行;V1–V6 实装后订正)
 
 > **状态:冻结(2026-10-23,第五轮评审通过)**。共五轮只读评审(Pi GPT-6.1 Sol),第五轮结论「高严重度是否全部闭合:是」「§21 能否冻结:能」;评审范围与逐轮处置见 §21.23。冻结后的改动必须以带编号的契约修订进行(原位加修订标注、在 §21.23 记录),不得静默改写。§21.22 的 Q-A–Q-P 已定。`analysis-plan v1` 附录 `§21.7a` 是冻结时已登记的待补项,由 V1.5 的契约修订补入(R21-7.13),不影响冻结。
