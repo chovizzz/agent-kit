@@ -340,7 +340,8 @@ describe('R20-17.14 锁与损坏', () => {
     expect(
       r.audit
         .filter((a) => a.op !== 'mkdirp')
-        .map((a) => `${a.op} ${path.relative(f.io.stateDir, a.path)}`),
+        .map((a) => `${a.op} ${path.relative(f.io.stateDir, a.path)}`)
+        .filter((o) => !o.endsWith(' rsi/lock')), // 试锁本身(createExclusive 失败)不算数据写入
     ).toEqual(['appendFile rsi/log.jsonl']);
     expect(await noticeLogCodes(f)).toEqual(['locked']);
     await remove(f.io, rsiFilePath(f, 'lock'));
@@ -526,9 +527,15 @@ describe('A6 订正 #1:提醒放弃时写一行 log.jsonl(去重、只读校验�
 
   it('写入失败(notice.json 位置被目录占住)→ code=write_failed', async () => {
     const { f } = await world('a6-nt-log-wf-');
-    await mkdirp(f.io, `${noticeFile(f)}.tmp`, 0o700);
-    await mkdirp(f.io, path.join(`${noticeFile(f)}.tmp`, 'x'), 0o700);
-    const r = await notice(f);
+    const r = await notice(f, {
+      deps: {
+        hooks: {
+          point: async (n) => {
+            if (n === 'before:rename:notice.json') throw new Error('injected');
+          },
+        },
+      },
+    });
     expect(r.outcome).toEqual({ kind: 'not_recorded', why: 'write_failed' });
     expect(await noticeLogCodes(f)).toEqual(['write_failed']);
   });
@@ -573,7 +580,7 @@ describe('A6 订正 #1:提醒放弃时写一行 log.jsonl(去重、只读校验�
     await writeFile(f.fx, target, '', { mode: 0o600 });
     const log = rsiFilePath(f, 'log.jsonl');
     if (await exists(log)) await remove(f.io, log);
-    await symlink(f.io, target, log);
+    await symlink(f.fx, target, log);
     await logNoticeGiveUp(f.io, 'locked', new Date(NOW));
     expect(Buffer.from(await readBytes(target)).toString('utf8')).toBe('');
 
