@@ -13,8 +13,10 @@ import {
   auditRel,
   dismissedDoc,
   makeA6World,
+  proposalIds,
   putReport,
   putRsiFile,
+  reportDoc,
   rsiFilePath,
 } from './a6-fixture.js';
 import { NOW, makeRoFx, runDirect, setExtra, type RoFx } from './ro-fixture.js';
@@ -221,7 +223,9 @@ describe('R20-17.7 / R20-17.10 干跑与 --write 语义', () => {
   it('report.run_id 与目录名不同 → 不是待审:具名被拒', async () => {
     const f = await makeRoFx('a6-dis-mismatch-');
     await makeA6World(f, [{ runId: 'r-1', report: false }]);
-    await putReport(f, 'r-1', 'ingest', 1, `${JSON.stringify({ run_id: 'r-else' })}\n`);
+    // 完整合法的 report,只有 run_id 与目录名不同(否则会因 schema 不过而被拒,测不到 run_id 核对)
+    const doc = reportDoc('r-else', 'ingest', proposalIds(1));
+    await putReport(f, 'r-1', 'ingest', 1, `${JSON.stringify(doc, null, 2)}\n`);
     const r = await dis(f, ['r-1', '--write']);
     expect([r.code, r.err]).toEqual([4, 'RSI_NOT_RUN reason=run_not_pending\n']);
   });
