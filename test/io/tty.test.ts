@@ -36,7 +36,7 @@ describe('foldTyped:比对规则(R20-18.6 第 2 步)', () => {
 });
 
 describe('runTypedConfirmation', () => {
-  it('铸造令牌:内容(键入的值、时刻、指纹)只能经 readProof 读出;展示屏写到句柄', async () => {
+  it('铸造令牌后,内容(键入的值、时刻、指纹)只能经 readProof 读出;展示屏写到句柄', async () => {
     const tty = new FakeTty(['OpenAI']);
     const r = await runTypedConfirmation(tty, tty.handle, spec());
     expect(r.ok).toBe(true);

@@ -168,9 +168,9 @@ export interface TtyProofData {
 const proofs = new WeakMap<object, TtyProofData>();
 
 function mint(data: TtyProofData): TtyConfirmedProof {
-  const token = Object.freeze({});
-  proofs.set(token, Object.freeze({ ...data }));
-  return token as unknown as TtyConfirmedProof;
+  const minted = Object.freeze({});
+  proofs.set(minted, Object.freeze({ ...data }));
+  return minted as unknown as TtyConfirmedProof;
 }
 
 /** 读令牌内容;不是本模块铸造的对象(复制 / 展开 / 反序列化 / 手写)→ undefined */

@@ -217,8 +217,8 @@ describe('输出通道与退出码(R20-18.22)', () => {
     expect(h.tty.closed).toBe(1);
   });
   it('放弃 → 退出 1 JUDGE_CONFIRM_DECLINED;用户键入的内容不出现在 stdout / stderr', async () => {
-    const SECRET = 'zzqq-typed-secret';
-    const h = await harness([SECRET]);
+    const TYPED_SAMPLE = 'zzqq-typed-sample';
+    const h = await harness([TYPED_SAMPLE]);
     const a = await writeSessionProposal(h.w, { layer: 'personal', target: 'p-rule' });
     const before = await snapshot(h.w.runDir);
     const code = await h.run(
@@ -228,7 +228,7 @@ describe('输出通道与退出码(R20-18.22)', () => {
     expect(code).toBe(1);
     expect(h.err.join('')).toBe('JUDGE_CONFIRM_DECLINED reason=invalid\n');
     expect(JSON.parse(h.out.join(''))).toMatchObject({ result: 'declined', reason: 'invalid' });
-    expect(h.out.join('') + h.err.join('')).not.toContain(SECRET);
+    expect(h.out.join('') + h.err.join('')).not.toContain(TYPED_SAMPLE);
     expect(await snapshot(h.w.runDir)).toEqual(before);
   });
   it('校验拒绝 → 退出 1 JUDGE_INGEST_REJECTED reason=<子码>;stderr 不回显 payload / 异常文本', async () => {
