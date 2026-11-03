@@ -15,6 +15,8 @@ import tseslint from 'typescript-eslint';
  *      · 启动器 `src/update/launcher.ts`:只许 `cli.ts`、`src/cli.ts`、`src/update/**`、`src/commands/update.ts` 及其测试引用;
  *        `io/exec.ts` 将新增的 `runSelf`(S7,唯一能 spawn process.execPath 的入口)只许 launcher.ts 引用;
  *        R20-A0 起另放行零网络桥接 src/update/self-spawn.ts(自动 RSI,contracts §20.9 第 3 条),且该文件不得引用 net / 启动器 / home-fs。
+ *  - A5(contracts §20.15 R20-15.6):kit 钩子写出口 `src/io/hooks-fs.ts`(第四个写出口)只许 `src/rsi/hooks/**` 及其测试引用;
+ *    sync / autosync / update / `src/rsi/{poke,hint,worker,kit-schedule}.ts` / §21 的 `src/rsi/{auto,capability,contrib,exec}/**` 引用即红。
  *  - 另外禁网络模块与全局 fetch(A8 的运行期垫片是主判据,这里是便宜的第二道)、eval、动态 import、require。
  * 范围:cli.ts、src/、adapters/、test/、vitest.config.ts。ops/ 下的验收工具脚本(B17/B18)不在此列,
  * 它们本来就要读真实 HOME 做快照。
@@ -38,6 +40,8 @@ const MESSAGES = {
   llm: 'LLM 出口 src/io/llm-exec.ts 只许 src/reflect/backends/** 引用;其余代码经依赖注入拿后端。',
   homeFs:
     'HOME 写出口 src/io/home-fs.ts 只许 src/sync/apply.ts 与 src/update/install.ts(及其测试)引用。',
+  hooksFs:
+    'kit 钩子写出口 src/io/hooks-fs.ts 只许 src/rsi/hooks/**(及其测试)引用(contracts §20.15 R20-15.6)。',
   netOut:
     '网络出口 src/io/net.ts 只许 src/update/**(launcher.ts 除外)与 src/commands/update.ts(及其测试)引用。',
   launcher:
@@ -53,7 +57,7 @@ const MESSAGES = {
 /**
  * allowFs/allowCp/allowEnv/allowNet:该文件**自己**可以 import 对应的 node 模块(出口实现文件);
  * allowLlm/allowHomeFs/allowNetOut/allowLauncher/allowRunSelf:该文件可以 import 对应出口模块(授权使用方)。
- * @param {{ allowFs?: boolean; allowCp?: boolean; allowCpOnly?: boolean; allowEnv?: boolean; allowNet?: boolean; allowLlm?: boolean; allowHomeFs?: boolean; allowNetOut?: boolean; allowLauncher?: boolean; allowRunSelf?: boolean; allowSigstore?: boolean }} allow
+ * @param {{ allowFs?: boolean; allowCp?: boolean; allowCpOnly?: boolean; allowEnv?: boolean; allowNet?: boolean; allowLlm?: boolean; allowHomeFs?: boolean; allowHooksFs?: boolean; allowNetOut?: boolean; allowLauncher?: boolean; allowRunSelf?: boolean; allowSigstore?: boolean }} allow
  */
 function restrictions(allow = {}) {
   /** @type {{name: string; message: string}[]} */
@@ -83,6 +87,7 @@ function restrictions(allow = {}) {
 
   /** S0 出口模块的各种写法(import / export-from / 动态 import 共用同一组文件名模式) */
   const HOME_FS_GROUP = ['**/home-fs', '**/home-fs.*'];
+  const HOOKS_FS_GROUP = ['**/hooks-fs', '**/hooks-fs.*'];
   const NET_OUT_GROUP = ['**/io/net', '**/io/net.*', './net', './net.*'];
   const LAUNCHER_GROUP = ['**/launcher', '**/launcher.*'];
   const EXEC_GROUP = ['**/io/exec', '**/io/exec.*', './exec', './exec.*'];
@@ -95,6 +100,14 @@ function restrictions(allow = {}) {
           {
             selector: 'ImportExpression[source.value=/home-fs/]',
             message: `动态 import 也不得绕开 HOME 写出口限制。${MESSAGES.homeFs}`,
+          },
+        ]),
+    ...(allow.allowHooksFs
+      ? []
+      : [
+          {
+            selector: 'ImportExpression[source.value=/hooks-fs/]',
+            message: `动态 import 也不得绕开 kit 钩子写出口限制。${MESSAGES.hooksFs}`,
           },
         ]),
     ...(allow.allowNetOut
@@ -219,6 +232,7 @@ function restrictions(allow = {}) {
             ? []
             : [{ group: ['sigstore', 'sigstore/**', '@sigstore/**'], message: MESSAGES.sigstore }]),
           ...(allow.allowHomeFs ? [] : [{ group: HOME_FS_GROUP, message: MESSAGES.homeFs }]),
+          ...(allow.allowHooksFs ? [] : [{ group: HOOKS_FS_GROUP, message: MESSAGES.hooksFs }]),
           ...(allow.allowNetOut ? [] : [{ group: NET_OUT_GROUP, message: MESSAGES.netOut }]),
           ...(allow.allowLauncher ? [] : [{ group: LAUNCHER_GROUP, message: MESSAGES.launcher }]),
           // importNames:命名导入、`import *`、`export {…} from` 都会被它拦下
@@ -311,6 +325,18 @@ export default tseslint.config(
   { files: ['src/sync/apply.ts'], rules: restrictions({ allowHomeFs: true }) },
   { files: ['test/io/home-fs*.test.ts'], rules: restrictions({ allowHomeFs: true }) },
   { files: ['test/sync/apply*.test.ts'], rules: restrictions({ allowHomeFs: true }) },
+  // A5(R20-15.6):kit 钩子写出口。hooks-fs.ts 自己可用 fs;能引用它的只有 src/rsi/hooks/** 与对应测试(同样必须由 restrictions({...}) 生成完整规则)。
+  { files: ['src/io/hooks-fs.ts'], rules: restrictions({ allowFs: true }) },
+  { files: [`src/rsi/hooks/**/*.${EXT}`], rules: restrictions({ allowHooksFs: true }) },
+  {
+    files: [`test/rsi/hooks/**/*.${EXT}`, 'test/io/hooks-fs*.test.ts'],
+    rules: restrictions({ allowHooksFs: true }),
+  },
+  // 授权闸的红绿对测试要同时演练通用 home-fs 对 kit-hooks 条目的拒绝(这一个文件才多放行 home-fs)
+  {
+    files: ['test/rsi/hooks/a5-gate.test.ts'],
+    rules: restrictions({ allowHooksFs: true, allowHomeFs: true }),
+  },
   // S0:网络出口。net.ts 自己可用网络模块与全局 fetch;使用方是 update 模块(launcher 除外)。
   { files: ['src/io/net.ts'], rules: restrictions({ allowNet: true }) },
   { files: ['test/io/net*.test.ts'], rules: restrictions({ allowNetOut: true }) },

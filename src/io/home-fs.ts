@@ -4,7 +4,8 @@
  *
  * 每次调用,目标必须同时满足:
  *  1. 路径语法:HOME 相对、正斜杠、纯 ASCII 可见字符、无 `..` / 空段 / 反斜杠(Unicode 与控制字符一律拒);
- *  2. 在 `HOME_WRITE_TABLE` 内:file 条目精确匹配;dir 条目只能写其内部的子路径,目录本身不可写;
+ *  2. 在 `HOME_WRITE_TABLE` 内:file 条目精确匹配;dir 条目只能写其内部的子路径,目录本身不可写;`kit-hooks` 条目与 `hooks/` 私有状态子树
+ *     一律拒绝(`HOME_KIT_HOOKS_DENIED`,A5 / R20-15.6:只有 `hooks-fs.ts` 能写);
  *     adapter 的 dir 内部另禁点开头的路径段与 `.json` 目标(与 `isHomeWritePath` 同一判定);
  *  3. 在调用方传入的 `planScope`(本次计划的目标文件集合)内:
  *     文件操作要求精确在内;目录操作(mkdirp / removeDir)要求是某个 planScope 条目的祖先;
@@ -27,7 +28,7 @@ import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { RelPathSchema, SEMVER_RE } from '../contracts/common.js';
-import { HOME_WRITE_TABLE, isHomeWritePath } from '../contracts/sync.js';
+import { HOME_WRITE_TABLE, isHomeWritePath, isKitHooksReserved } from '../contracts/sync.js';
 import { getRealHome, type WriteAudit } from './paths.js';
 
 /** 稳定拒绝码。 */
@@ -70,6 +71,8 @@ export const HOME_DENY = {
   NOT_SYMLINK: 'HOME_NOT_SYMLINK',
   /** 版本号语法不合法(switchCurrent) */
   BAD_VERSION: 'HOME_BAD_VERSION',
+  /** kit-hooks 条目(三个 agent 钩子配置)或 `hooks/` 私有状态子树:只有专用写出口 `hooks-fs.ts` 能写(A5,R20-15.6) */
+  KIT_HOOKS: 'HOME_KIT_HOOKS_DENIED',
 } as const;
 
 export type HomeDenyCode = (typeof HOME_DENY)[keyof typeof HOME_DENY];
@@ -156,18 +159,34 @@ const TABLE = Object.freeze(
 
 function inSnapshot(rel: string): boolean {
   return TABLE.some((e) => {
-    if (e.kind === 'file') return rel === e.path;
-    if (!rel.startsWith(e.path) || rel.length <= e.path.length) return false;
-    if (e.owner !== 'adapter') return true;
-    const rest = rel.slice(e.path.length);
-    // `.json` 按大小写不敏感判(大小写不敏感的卷上 `x.JSON` 与 `x.json` 是同一个文件;契约的判定大小写敏感)
-    return !rest.split('/').some((x) => x.startsWith('.')) && !rest.toLowerCase().endsWith('.json');
+    // kit-hooks 条目(含 json-merge)通用原语一律不放行(R20-15.6);穷尽分支,新增 kind 时这里编译失败而不是静默按目录处理
+    if (e.owner === 'kit-hooks') return false;
+    switch (e.kind) {
+      case 'file':
+        return rel === e.path;
+      case 'json-merge':
+        return false;
+      case 'dir': {
+        if (!rel.startsWith(e.path) || rel.length <= e.path.length) return false;
+        if (e.owner !== 'adapter') return true;
+        const rest = rel.slice(e.path.length);
+        // `.json` 按大小写不敏感判(大小写不敏感的卷上 `x.JSON` 与 `x.json` 是同一个文件;契约的判定大小写敏感)
+        return (
+          !rest.split('/').some((x) => x.startsWith('.')) && !rest.toLowerCase().endsWith('.json')
+        );
+      }
+      default: {
+        const never: never = e.kind;
+        return never;
+      }
+    }
   });
 }
 
 /** 文件目标:语法 + 表。返回时保证快照与 `isHomeWritePath(rel)` 都放行。 */
 function assertFileInTable(rel: string): void {
   assertSyntax(rel);
+  if (isKitHooksReserved(rel)) throw new HomeWriteDeniedError(HOME_DENY.KIT_HOOKS, rel);
   if (inSnapshot(rel) && isHomeWritePath(rel)) return;
   for (const e of TABLE) {
     if (e.kind !== 'dir') continue;
@@ -187,6 +206,7 @@ function assertFileInTable(rel: string): void {
 /** 目录目标:语法 + 严格位于某个 dir 条目内部(adapter 内部另禁点开头段)。 */
 function assertDirInTable(rel: string): void {
   assertSyntax(rel);
+  if (isKitHooksReserved(rel)) throw new HomeWriteDeniedError(HOME_DENY.KIT_HOOKS, rel);
   for (const e of TABLE) {
     if (e.kind !== 'dir') continue;
     if (rel === e.path.slice(0, -1)) throw new HomeWriteDeniedError(HOME_DENY.DIR_ITSELF, rel);

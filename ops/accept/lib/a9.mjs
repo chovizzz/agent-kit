@@ -14,7 +14,13 @@ import {
   vitestStep,
 } from './common.mjs';
 
-const ALLOWED = new Set(['src/io/safe-fs.ts', 'src/io/read-fs.ts', 'src/io/home-fs.ts']);
+// 第四个写出口 src/io/hooks-fs.ts(R20-15.6,A5):kit 钩子写入的专用原语,只许 src/rsi/hooks/** 引用(eslint 授权闸)
+const ALLOWED = new Set([
+  'src/io/safe-fs.ts',
+  'src/io/read-fs.ts',
+  'src/io/home-fs.ts',
+  'src/io/hooks-fs.ts',
+]);
 const FS_MOD = String.raw`(?:node:)?fs(?:\/promises)?`;
 const PATTERNS = [
   new RegExp(String.raw`\bfrom\s*['"\`]${FS_MOD}['"\`]`),

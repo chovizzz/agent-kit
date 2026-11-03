@@ -53,7 +53,16 @@ describe('HOME_WRITE_TABLE', () => {
       '.local/share/agent-kit/',
       '.local/state/agent-kit/',
     ]);
-    expect(HOME_WRITE_TABLE.length).toBe(union.size + 2);
+    // A5(R20-15.5):kit-hooks 三条(两个 JSON 钩子配置 + pi 扩展),不属于 adapter 并集;12 → 15
+    expect(
+      HOME_WRITE_TABLE.filter((e) => e.owner === 'kit-hooks').map((e) => [e.path, e.kind]),
+    ).toEqual([
+      ['.claude/settings.json', 'json-merge'],
+      ['.codex/hooks.json', 'json-merge'],
+      ['.pi/agent/extensions/agent-kit-rsi.ts', 'file'],
+    ]);
+    expect(HOME_WRITE_TABLE.length).toBe(union.size + 2 + 3);
+    expect(HOME_WRITE_TABLE.length).toBe(15);
   });
 
   it('按 path 字节序严格升序、无重复', () => {

@@ -82,7 +82,23 @@ export const RSI_DRY = [
   { argv: ['confirm'], off: [2], armed: [2] },
   { argv: ['poke', '--agent', 'claude'], off: [0], armed: [0], hook: true },
   { argv: ['hint', '--agent', 'claude'], off: [0], armed: [0], hook: true },
+  // R20-A5(§20.15 R20-15.32):`rsi hooks --print`(三家)与 `--install`(干跑,claude)、`rsi session --print`:状态无关(R20-15.4),off / armed 都 0、零写入。
+  // 假 HOME 里预置了空的 `~/.claude/`(见 `AGENT_ROOT_SEED`):`--install` 干跑要求 agent 根已存在(R20-15.14),kit 不替 agent 建根目录。
+  { argv: ['hooks', '--print', '--agent', 'claude'], off: [0], armed: [0] },
+  { argv: ['hooks', '--print', '--agent', 'codex'], off: [0], armed: [0] },
+  { argv: ['hooks', '--print', '--agent', 'pi'], off: [0], armed: [0] },
+  { argv: ['hooks', '--install', '--agent', 'claude'], off: [0], armed: [0] },
+  { argv: ['session', '--print'], off: [0], armed: [0] },
 ];
+
+/** 假 HOME 预置的 agent 根(空目录 0755):只在预置的那一轮允许存在,并逐项核对前后不变(zero-write --home-seed) */
+const AGENT_ROOT_SEED = '.claude';
+
+function seedAgentRoot(seedDir) {
+  const d = path.join(seedDir, AGENT_ROOT_SEED);
+  fs.mkdirSync(d, { recursive: true, mode: 0o755 });
+  fs.chmodSync(d, 0o755);
+}
 
 /** 内部 worker 入口(不在 `rsi` 下):同样在两个环境里跑,KIT_AUTO_RSI=0 → 跳过,恒 0 */
 export const RSI_WORKER_ROW = { argv: ['__rsi', '--background'], off: [0], armed: [0] };
@@ -320,7 +336,9 @@ async function a5(argv) {
     const presentNow = () => rsiState.filter(pathPresent);
     const preexisting = hasRsi ? presentNow() : [];
     const names = (ps) => ps.map((p) => path.basename(p)).join(',');
-    // 第一轮环境:没有 [rsi] 配置(假 HOME 为空)→ 全部 off;rsi 命令随清单一起跑
+    // 第一轮环境:没有 [rsi] 配置(假 HOME 只有预置的空 ~/.claude/)→ 全部 off;rsi 命令随清单一起跑
+    const offSeed = path.join(tmp, 'seed-home-off');
+    seedAgentRoot(offSeed);
     await runPass(R, ctx, {
       script,
       tmp,
@@ -328,6 +346,7 @@ async function a5(argv) {
       label: hasRsi ? 'off' : 'default',
       text: hasRsi ? base + rsiDryCommands('off', ctx.cli).join('\n') + '\n' : base,
       home: flags.home,
+      ...(hasRsi ? { seed: offSeed } : {}),
     });
     if (hasRsi) {
       // off 环境之后:事先不存在的状态树不得出现(出现 = 干跑命令写了东西 = 违规 1,不能归成「前提不满足」)
@@ -351,6 +370,7 @@ async function a5(argv) {
           mode: 0o600,
         });
         fs.chmodSync(cfg, 0o600);
+        seedAgentRoot(seed);
         await runPass(R, ctx, {
           script,
           tmp,

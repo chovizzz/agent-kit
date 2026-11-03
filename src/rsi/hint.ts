@@ -17,6 +17,7 @@
  */
 import * as path from 'node:path';
 import { ExitCode } from '../contracts/exit-codes.js';
+import { formatHintOutput, isHintFormat, type HintFormat } from '../contracts/rsi-hooks.js';
 import {
   RSI_AGENT_IDS,
   RSI_DIR_MODE,
@@ -170,12 +171,21 @@ export async function hintCounts(i: {
   return { N, K, M, P, n, X, U };
 }
 
-function parseAgentArg(argv: readonly string[]): RsiAgentId | undefined {
-  if (argv.length !== 2 || argv[0] !== '--agent') return undefined;
+/**
+ * 参数:`--agent <id>`,或 `--agent <id> --format <claude-json|codex-json>`(R20-3.3.5,A5)。其余一律视为参数错误(空串)。
+ * `--format` 只改输出的包装(见 `formatHintOutput`),文本内容与 200 字节上限不变。
+ */
+function parseHintArgs(
+  argv: readonly string[],
+): { agent: RsiAgentId; format: HintFormat | undefined } | undefined {
+  if (argv.length !== 2 && argv.length !== 4) return undefined;
+  if (argv[0] !== '--agent') return undefined;
   const id = argv[1];
-  return (RSI_AGENT_IDS as readonly string[]).includes(id as string)
-    ? (id as RsiAgentId)
-    : undefined;
+  if (!(RSI_AGENT_IDS as readonly string[]).includes(id as string)) return undefined;
+  if (argv.length === 2) return { agent: id as RsiAgentId, format: undefined };
+  const f = argv[3];
+  if (argv[2] !== '--format' || f === undefined || !isHintFormat(f)) return undefined;
+  return { agent: id as RsiAgentId, format: f };
 }
 
 /** 只 lstat 判存在;无法确认 = 当作在场(→ 空串) */
@@ -194,10 +204,16 @@ async function compose(
   env: Env,
   deps: RunHintDeps,
   over: () => boolean,
-): Promise<{ text: string; agent: RsiAgentId; io: Parameters<typeof rsiDir>[0] } | null> {
+): Promise<{
+  text: string;
+  agent: RsiAgentId;
+  format: HintFormat | undefined;
+  io: Parameters<typeof rsiDir>[0];
+} | null> {
   if (autoSkip(env, 'hint') !== null) return null;
-  const agent = parseAgentArg(argv); // `--format`(P1)与其它参数一律空串(R20-3.3.5)
-  if (agent === undefined) return null;
+  const parsed = parseHintArgs(argv); // 其它参数一律空串(R20-3.3.5)
+  if (parsed === undefined) return null;
+  const { agent, format } = parsed;
   const open = await openRsiIo(
     {
       argv: [],
@@ -274,7 +290,7 @@ async function compose(
   }
   const out = finalizeHint(text);
   if (out === '' || over()) return null;
-  return { text: out, agent, io };
+  return { text: out, agent, format, io };
 }
 
 /** 返回要写到 stdout 的文本(空串 = 不输出)。从不抛错 */
@@ -300,7 +316,7 @@ export async function runHint(argv: readonly string[], deps: RunHintDeps = {}): 
     } catch {
       return '';
     }
-    return c.text;
+    return c.format === undefined ? c.text : formatHintOutput(c.format, c.text);
   } catch {
     return '';
   }
