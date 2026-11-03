@@ -109,7 +109,7 @@ B09c 之前,`cred_assign` / `cred_cli_flag` / `cred_authz` / `cred_cookie` 用�
 **引用形态**(`judgeValue`;不匹配任何一种就当口令):
 
 1. 空串;遮蔽串(`****` `xxxx`);字面量 none/null/undefined/true/false/nil(不分大小写,整词);完整的合法占位符;≤12 位的单个纯小写词(含连字符;已知缺口,见 §7)。
-2. 变量引用:`${NAME}` 任何语境;`$UPPER_ENV`(纯大写字母,或带下划线的 UPPER_SNAKE;**大写加数字而没有下划线的 `ABC123XYZ9` 更像口令,不算**)、`$lowerword`(只有字母下划线、无数字)、`$(命令` **只在 shell 语境**(运算符 `=` `:=`)——yaml / ini 里的 `$` 是字面字符;带数字的混合大小写 `$Xyz…` 任何语境都不放行;不带路径后缀。被引号截断的模板表达式(`${placeholder(`)放行。
+2. 变量引用:`${NAME}` 任何语境;`$UPPER_ENV`(纯大写字母,或带下划线的 UPPER_SNAKE;**大写加数字而没有下划线的 `ABC123XYZ9` 更像口令,不算**)、`$lowerword`(只有字母下划线、无数字)、`$(命令` **只在 shell 语境**(运算符 `=` `:=`)——yaml / ini 里的 `$` 是字面字符;带数字的混合大小写 `$Xyz…` 任何语境都不放行;不带路径后缀。**引用式候选(`'^NAME=' '$…'`)与命令替换里的裸词判 `$VAR` 时复用同一个 `varRef`(`isVarRefWord`,变量名部分同口径,可带路径后缀),不再另有一份更宽的正则**:`'$Ab3Cd4Ef5Gh'`、`$(echo $ABC123DEF456)` 都按口令脱敏,`$HOME` `${API_TOKEN}` `$DB_PASSWORD` 照旧放行(阶段 id `ref_var_strict`,禁用 ⇒ 退回旧的宽判据)。被引号截断的模板表达式(`${placeholder(`)放行。
 3. 环境访问(**区分大小写、整词**):`process.env` / `import.meta.env` / `os.environ` / `os.getenv` / `ENV` / `getenv` 等,后接可选的 `.名字`、`[`、`(` 截断残片;配置属性路径 `env.` `config.` `settings.` `secrets.` `vault.` + 名字。**名字段**只认 `UPPER_ENV`(同上)或「只含字母下划线、不带数字」——带数字的段更像口令。
 4. 类型名:首标识符在封闭集合里(string、str、number、int、bool、Record、Map、Array、Optional、List、SecretStr…),其后只允许类型括号、逗号、同集合的词,不得含数字。
 5. 调用:`X(y)` **不再自动放行**。callee 路径不含数字,并且:没有参数 / 未闭合(`createToken(`),或最后一段以取值类动词开头(get/read/load/fetch/resolve/lookup/prompt/input/decrypt/generate/random/…)且参数是单个无数字标识符 / UPPER_SNAKE / `$VAR`(`getToken(user)`)。以未闭合括号结尾的代码残片(无数字、无引号:`, R(`)放行。
@@ -132,7 +132,7 @@ B09c 之前,`cred_assign` / `cred_cli_flag` / `cred_authz` / `cred_cookie` 用�
 
 **线性**:`cred_assign` 双引号值分支里的反斜杠串用「前瞻捕获 + 反向引用」一次吃掉(原子化),64K 个反斜杠不再二次增长;`readUnit` 找收尾引号 / 行尾只在 512 字符窗口内,词内查找不越过词尾,外围收尾字符最多剥 64 个;`lastIndexOf` 回看有界。
 
-阶段 id 汇总(变异自检逐个禁用,各有专属种子):`view_orig_union`、`ref_tail_punct`(禁用 ⇒ 额外接受旧 CODE_SHAPE / CALL_CHAIN)、`ref_boundary`(额外接受旧 NON_SECRET_START)、`ref_flag_strict`(额外接受旧 FLAG_REF)、`placeholder_boundary`(旧 occupied 判定)、`ref_trailing_literal`;规则 id:`cred_assign_ext`。
+阶段 id 汇总(变异自检逐个禁用,各有专属种子):`view_orig_union`、`ref_tail_punct`(禁用 ⇒ 额外接受旧 CODE_SHAPE / CALL_CHAIN)、`ref_boundary`(额外接受旧 NON_SECRET_START)、`ref_flag_strict`(额外接受旧 FLAG_REF)、`placeholder_boundary`(旧 occupied 判定)、`ref_trailing_literal`、`ref_var_strict`;规则 id:`cred_assign_ext`。
 
 ### 3.3 真实会话样本上的两遍一致(B09e)
 
@@ -295,7 +295,7 @@ B09c 之后仍然存在、**没有种子**的行为(多数是多脱敏方向;标
 …`);`cred_authz` / `cred_cookie` 是整行贪婪规则,不参与原视图补扫,值里字面 `
 ` 之后的部分不会脱敏。
 - 漏:转义引号包裹的三引号 / 双引号拼接(`"""…"""`,`gap.triple_escaped_quotes`);Helm / HCL 的模板默认值(`gap.template_default_call`〔Helm 管道式〕、`gap.helm_default_func`〔函数式〕、`gap.hcl_variable_default`〔`variable` 块 `default`〕、`gap.hcl_ternary_default`〔三元回退〕)。(P1-A.3 已收:多行三引号值、YAML 块标量、shell heredoc,见 §3.4。)
-- ~~漏:`KW` 没有的键名:`DB_PASS` `pw` `passcode` `requirepass`、中文键名(密码 / 口令 / 密钥 / 令牌)~~(**B09d-P1 已收**:`db[_-]?pass(?:word)?`(连同已有 `pwd` 覆盖 `DB_PASS` 大小写不敏感)、`passcode`、`requirepass`、密码 / 口令 / 密钥 / 令牌 进 `KW`;中文只收四个高频词且规则要求键名后紧跟操作符);没有运算符的写法(`.netrc` 的 `password 值`、Dockerfile `ENV X 值`、SQL `IDENTIFIED BY '值'`);`{"name":"DB_PASSWORD","value":"…"}` 名值对、XML `<add key=… value=…/>`、`<password>…</password>`;`-p值` / `sshpass -p`、`curl -u user:值`、`.pgpass`;`setPassword("…")` 调用形式。
+- ~~漏:`KW` 没有的键名:`DB_PASS` `pw` `passcode` `requirepass`、中文键名(密码 / 口令 / 密钥 / 令牌)~~(**B09d-P1 已收**:`db[_-]?pass(?:word)?`(连同已有 `pwd` 覆盖 `DB_PASS` 大小写不敏感)、`passcode`、`requirepass`、密码 / 口令 / 密钥 / 令牌 进 `KW`;中文只收四个高频词且规则要求键名后紧跟操作符)。**P0 订正**:此前 `cred_assign` / `cred_assign_ext` 的整段文本预筛(`quick`)只有英文词,纯中文文本根本进不了这两条规则,「已收」名不副实;现在预筛词表与 `KW` 同步补齐这四个中文词(共用常量 `CRED_QUICK`),pass2 独立探测器 `probe_cred` 的键名分支也同步加了四词(仍要求引号包裹的 ≥20 位混合字母数字串,不变宽);种子 `p0.cjk.*`、测试 `test/redact/p0leak.test.ts` 钉死;没有运算符的写法(`.netrc` 的 `password 值`、Dockerfile `ENV X 值`、SQL `IDENTIFIED BY '值'`);`{"name":"DB_PASSWORD","value":"…"}` 名值对、XML `<add key=… value=…/>`、`<password>…</password>`;`-p值` / `sshpass -p`、`curl -u user:值`、`.pgpass`;`setPassword("…")` 调用形式。
 - 漏:`${NAME}` / `$HOME` 之后的路径后缀、`os.getenv("X", "…")` 之外的更长的默认值链。
 - 误脱敏(多脱敏方向,丢失可读性但不泄漏):源码里取值类动词以外的调用(键名等号后接 `hash(pw)` 一类)、yaml 里键名冒号后接 `$UPPER_ENV`(`$` 在非 shell 语境是字面字符)、带数字的 `config.db2.password` 路径段。
 - 漏(opus 对抗评审实测;P1-A.3 逐条复测后登记为 known_gap 种子,未修):

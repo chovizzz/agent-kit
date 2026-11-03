@@ -41,7 +41,7 @@ export { MAX_PLACEHOLDER_TYPE };
  * pass1 漏掉时命中;不 import rules.ts,不受规则禁用影响。
  */
 const PROBE_CRED_RE =
-  /(?<![A-Za-z0-9_])(?:password|passwd|pwd|secret|token|api[_-]?key|private[_-]?key|credential)["']?[ \t]?[:=][ \t]?(["'])([A-Za-z0-9]{20,})\1/gi;
+  /(?<![A-Za-z0-9_])(?:password|passwd|pwd|secret|token|api[_-]?key|private[_-]?key|credential|密码|口令|密钥|令牌)["']?[ \t]?[:=][ \t]?(["'])([A-Za-z0-9]{20,})\1/gi;
 const probeCredOk = (m: RegExpExecArray): boolean => {
   const v = m[2] as string;
   return /[a-z]/.test(v) && /[A-Z]/.test(v) && /[0-9]/.test(v) && shannon(v) >= 3.5;
