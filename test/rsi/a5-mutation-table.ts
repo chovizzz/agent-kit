@@ -53,7 +53,13 @@ export const A5_MUTATIONS: readonly A5Mutation[] = [
       },
     ],
     tests: [INSTALL],
-    expectRed: ['紧凑格式', '4 空格缩进', 'CRLF'],
+    expectRed: [
+      '紧凑格式',
+      '4 空格缩进',
+      'CRLF',
+      // 2026-11-02 javis 变异实测补登:同一变异多红的相关用例(只补登记,不改变异与用例)
+      '两个末尾换行 → config_not_canonical',
+    ],
     mustKill: ['紧凑格式'],
   },
   {
@@ -127,6 +133,9 @@ export const A5_MUTATIONS: readonly A5Mutation[] = [
     expectRed: [
       'writeFile / remove / createExclusive / chmod / rename / copyFile 两端都拒',
       'mkdirp / removeDir / renameDir 对 hooks/ 子树的目录一律拒',
+      // 2026-11-02 javis 变异实测补登:同一变异多红的相关用例(只补登记,不改变异与用例)
+      'createHomeFsContext:planScope 里放 kit-hooks 路径 → SCOPE_INVALID',
+      '三条 kit-hooks(json-merge ×2、file ×1),总数 15;无 owner 的 isHomeWritePath 不把它们算作受管路径',
     ],
     mustKill: ['writeFile / remove / createExclusive / chmod / rename / copyFile 两端都拒'],
   },
@@ -147,6 +156,9 @@ export const A5_MUTATIONS: readonly A5Mutation[] = [
       '同命令不同 matcher',
       '用户在 kit 条目上加了字段',
       '命令前缀是 agent-kit rsi 却不在形状表里',
+      // 2026-11-02 javis 变异实测补登:同一变异多红的相关用例(只补登记,不改变异与用例)
+      'kit 条目放错了事件 → foreign_kit_entry',
+      '按命令串删除是错的:用户把 kit 包装对象改了(加字段)→ config_changed_since_install,不删',
     ],
     mustKill: ['混合包装'],
   },
@@ -161,7 +173,16 @@ export const A5_MUTATIONS: readonly A5Mutation[] = [
       },
     ],
     tests: [CRASH],
-    expectRed: ['新建(文件不存在)', '合并(已有用户配置 + 备份)', '卸载:同样的矩阵'],
+    expectRed: [
+      '新建(文件不存在)',
+      '合并(已有用户配置 + 备份)',
+      '卸载:同样的矩阵',
+      // 2026-11-02 javis 变异实测补登:同一变异多红的相关用例(只补登记,不改变异与用例)
+      '只有残留 tmp、没有 journal:幂等安装 / 空 prune 不走快捷返回,锁内清理(journal tmp 与 ledger tmp)',
+      '残留的 journal tmp / 账本 tmp / 目标 tmp 都有出口:恢复时按 txn_id 与固定名字清理',
+      '目标事务已完成而顺带修剪失败 → 仍 committed、退 0,stderr 一行 RSI_HOOKS_WARN,maintenance=partial;下次修剪按无害方向补完',
+      '维护写入的 rename 之后失败(失锁)也按实际阶段记 maintenance=partial(discard)',
+    ],
     mustKill: ['新建(文件不存在)'],
   },
   {
@@ -175,7 +196,19 @@ export const A5_MUTATIONS: readonly A5Mutation[] = [
       },
     ],
     tests: [INSTALL],
-    expectRed: ['提交整个事务'],
+    expectRed: [
+      '提交整个事务',
+      // 2026-11-02 javis 变异实测补登:同一变异多红的相关用例(只补登记,不改变异与用例)
+      'pi 内容漂移:有记录但被改过 → 卸载 / 重装都拒(config_changed_since_install)',
+      'pi:独立文件(不合并),extensions/ 以 0700 建在已存在的 agent 根之下;账本记整文件指纹',
+      'plain → canary:remove + add 同一事务;再迁回',
+      '卸载 / restore 不看形状核实(只动账本登记过的节点),生产形状表下也能卸掉之前装的',
+      '按命令串删除是错的:用户把 kit 包装对象改了(加字段)→ config_changed_since_install,不删',
+      '用户内容不动,kit 节点移除;备份整份;账本归属清空',
+      '用户混入了自己的钩子到 kit 包装对象 → 不删包装对象(config_changed_since_install)',
+      '空对象 {} 也能装;卸载后留下空数组 / 空对象(精确还原归 --restore)',
+      '非 kit 节点的字节片段在新文件里与原文件逐字相同;权限沿用原文件;备份只在私有备份文件里含秘密哨兵',
+    ],
     mustKill: ['提交整个事务'],
   },
   {
@@ -207,7 +240,11 @@ export const A5_MUTATIONS: readonly A5Mutation[] = [
       },
     ],
     tests: [CRASH],
-    expectRed: ['aborted 的 bootstrap journal(标记在、账本缺)'],
+    expectRed: [
+      'aborted 的 bootstrap journal(标记在、账本缺)',
+      // 2026-11-02 javis 变异实测补登:同一变异多红的相关用例(只补登记,不改变异与用例)
+      '④ 本次目标未提交:提交前被改(config_changed_during_write)→ journal 记 aborted、备份保留、临时文件已删、对方的改动不丢',
+    ],
     mustKill: ['aborted 的 bootstrap journal(标记在、账本缺)'],
   },
   {
@@ -236,7 +273,58 @@ export const A5_MUTATIONS: readonly A5Mutation[] = [
       },
     ],
     tests: [INSTALL, CRASH],
-    expectRed: ['提交整个事务', '进行中 + 目标 = after'],
+    expectRed: [
+      '提交整个事务',
+      '进行中 + 目标 = after',
+      // 2026-11-02 javis 变异实测补登:同一变异多红的相关用例(只补登记,不改变异与用例)
+      '--discard-residue 只接管所选的那一个;非「第三种值」/ 不存在 / 别的 agent 的 journal → 退 4 txn_residue_unknown,不记 discarded',
+      '30 个 UTC 日:过期的非受保护备份被修剪,受保护备份即使过期也留着;干跑只列 id 与数量',
+      'aborted 的 bootstrap journal(标记在、账本缺)→ 提交只记 aborted 的空账本,再删 journal',
+      'discarding(--discard-residue 在 journal 改记后崩溃)→ 下一次任何 --write 补完:只提交 discarded 记录,不提交原计划归属',
+      'pi 内容漂移:有记录但被改过 → 卸载 / 重装都拒(config_changed_since_install)',
+      'pi:独立文件(不合并),extensions/ 以 0700 建在已存在的 agent 根之下;账本记整文件指纹',
+      'plain → canary:remove + add 同一事务;再迁回',
+      'restore 一个 restore 也是合法的(它是新的最新已提交事务)',
+      'restore 的备份回退点:崩溃于 target_renamed 后恢复收敛(账本逆变更只生效一次)',
+      'settings.local.json 里已有同形状 → duplicate_in_local(干跑也拒);读不了 / 不可解析 → duplicate_check_failed;只挡安装不挡卸载',
+      'txn/ 换成符号链接 → 不跟随:残留处理读不了 txn/,退 3 hooks_ledger_invalid(等级 lock_only,零后继写)',
+      '⑤ 目标已提交、事务待恢复:rename 之后失败(账本 / journal 清理未完成)→ 目标已是 after,下一次 --write 补完',
+      '之后有任何事务(卸载 / discarded)都使旧事务不可恢复;不存在的 id 同码',
+      '写前不存在 → 受保护的删除;恢复后目标消失、归属回到事务之前',
+      '卸载 / restore 不看形状核实(只动账本登记过的节点),生产形状表下也能卸掉之前装的',
+      '卸载:同样的矩阵,收敛后账本归属为空、目标里没有 kit 节点',
+      '受保护备份(每个目标最新一个已提交事务)不计入、不受 10 份上限约束;其余最多 10 份',
+      '只有残留 tmp、没有 journal:幂等安装 / 空 prune 不走快捷返回,锁内清理(journal tmp 与 ledger tmp)',
+      '只能恢复该目标上最新一个已提交事务:放回备份字节、权限;账本逆变更;源事务记 restored;自身是事务',
+      '备份区出现不认识的名字 → hooks_backup_invalid',
+      '备份损坏 / 被换成链接 / 宽权限 → 退 3 hooks_backup_invalid,零写调用',
+      '安装:合并(已有用户配置 + 备份)',
+      '安装:新建(文件不存在)',
+      '崩溃于 backup_written → 写入承诺 target_unwritten;恢复后收敛、幂等',
+      '崩溃于 journal_deleted → 写入承诺 committed;恢复后收敛、幂等',
+      '崩溃于 journal_written → 写入承诺 target_unwritten;恢复后收敛、幂等',
+      '崩溃于 ledger_committed → 写入承诺 target_written_pending;恢复后收敛、幂等',
+      '崩溃于 ledger_marker_created → 写入承诺 target_written_pending;恢复后收敛、幂等',
+      '崩溃于 target_before_write → 写入承诺 target_unwritten;恢复后收敛、幂等',
+      '崩溃于 target_renamed → 写入承诺 target_written_pending;恢复后收敛、幂等',
+      '幂等:再装一次 = unchanged,零写调用(连锁文件都不碰),账本不变',
+      '当前文件已被改(≠ 该事务的 after)→ config_changed_since_install,零写调用',
+      '手动 prune:确认之后、锁内重算的集合变了 → stale_plan,不删用户没确认过的备份',
+      '按命令串删除是错的:用户把 kit 包装对象改了(加字段)→ config_changed_since_install,不删',
+      '改记 aborted 之后、空账本提交之前再次崩溃 → 再下一次恢复照常:空账本只记 aborted(无归属、generation 不动)',
+      '标记在、账本缺、没有 bootstrap journal → 退 3 hooks_ledger_invalid(不重建、不猜);账本在而标记缺同样',
+      '残留的 journal tmp / 账本 tmp / 目标 tmp 都有出口:恢复时按 txn_id 与固定名字清理',
+      '用户内容不动,kit 节点移除;备份整份;账本归属清空',
+      '用户混入了自己的钩子到 kit 包装对象 → 不删包装对象(config_changed_since_install)',
+      '目标事务已完成而顺带修剪失败 → 仍 committed、退 0,stderr 一行 RSI_HOOKS_WARN,maintenance=partial;下次修剪按无害方向补完',
+      '空对象 {} 也能装;卸载后留下空数组 / 空对象(精确还原归 --restore)',
+      '维护写入的 rename 之后失败(失锁)也按实际阶段记 maintenance=partial(discard)',
+      '节点已被用户删掉:无可卸 = unchanged;账本不变',
+      '账本已提交、journal 未删(崩溃于 ledger_committed)→ 恢复时先 ensureLedgerDurable(fsync 账本文件与目录)再删 journal;不重写账本',
+      '进行中 + 目标 = before → 先改记 aborted,再提交只记 aborted 的空账本,然后才删 journal;之后正常安装',
+      '进行中 + 目标是第三种值 → 退 4 txn_residue_unknown,不建账本、不动目标,journal 原样保留(等级 lock_only)',
+      '追加后会超过 1 MiB → config_shape_unsupported,零写调用,文件不动;留有余量则照常安装',
+    ],
     mustKill: ['提交整个事务'],
   },
   {
@@ -296,6 +384,8 @@ export const A5_MUTATIONS: readonly A5Mutation[] = [
     expectRed: [
       '受保护备份(每个目标最新一个已提交事务)不计入',
       '30 个 UTC 日:过期的非受保护备份被修剪,受保护备份即使过期也留着',
+      // 2026-11-02 javis 变异实测补登:同一变异多红的相关用例(只补登记,不改变异与用例)
+      '目标事务已完成而顺带修剪失败 → 仍 committed、退 0,stderr 一行 RSI_HOOKS_WARN,maintenance=partial;下次修剪按无害方向补完',
     ],
     mustKill: ['受保护备份(每个目标最新一个已提交事务)不计入'],
   },
@@ -311,7 +401,12 @@ export const A5_MUTATIONS: readonly A5Mutation[] = [
       },
     ],
     tests: [INSTALL],
-    expectRed: ['提交整个事务'],
+    expectRed: [
+      '提交整个事务',
+      // 2026-11-02 javis 变异实测补登:同一变异多红的相关用例(只补登记,不改变异与用例)
+      'plain → canary:remove + add 同一事务;再迁回',
+      '空对象 {} 也能装;卸载后留下空数组 / 空对象(精确还原归 --restore)',
+    ],
     mustKill: ['提交整个事务'],
   },
   {
@@ -325,7 +420,14 @@ export const A5_MUTATIONS: readonly A5Mutation[] = [
       },
     ],
     tests: [CRASH],
-    expectRed: ['账本已提交、journal 未删(崩溃于 ledger_committed)'],
+    expectRed: [
+      '账本已提交、journal 未删(崩溃于 ledger_committed)',
+      // 2026-11-02 javis 变异实测补登:同一变异多红的相关用例(只补登记,不改变异与用例)
+      '卸载:同样的矩阵,收敛后账本归属为空、目标里没有 kit 节点',
+      '安装:合并(已有用户配置 + 备份)',
+      '安装:新建(文件不存在)',
+      '崩溃于 ledger_committed → 写入承诺 target_written_pending;恢复后收敛、幂等',
+    ],
     mustKill: ['账本已提交、journal 未删(崩溃于 ledger_committed)'],
   },
   {
@@ -370,7 +472,15 @@ export const A5_MUTATIONS: readonly A5Mutation[] = [
       },
     ],
     tests: [INSTALL, ZERO],
-    expectRed: ['生产形状表三家都是「假设」', '四种证据级别'],
+    expectRed: [
+      '生产形状表三家都是「假设」',
+      '四种证据级别',
+      // 2026-11-02 javis 变异实测补登:同一变异多红的相关用例(只补登记,不改变异与用例)
+      'hooks --install --agent claude --write → 退 4,写审计 [],树不变',
+      'hooks --install --agent codex --write → 退 4,写审计 [],树不变',
+      'hooks --install --agent pi --write → 退 4,写审计 [],树不变',
+      '适用的 agent 版本范围:区间内放行;区间外 / 版本未知 / 无法解析 → shape_unverified(fail closed)',
+    ],
     mustKill: ['生产形状表三家都是「假设」'],
   },
   {
@@ -385,7 +495,12 @@ export const A5_MUTATIONS: readonly A5Mutation[] = [
       },
     ],
     tests: [INSTALL],
-    expectRed: ['settings.local.json 里已有同形状'],
+    expectRed: [
+      'settings.local.json 里已有同形状',
+      // 2026-11-02 javis 变异实测补登:同一变异多红的相关用例(只补登记,不改变异与用例)
+      'settings.local.json 的检测要严格:重复键 / 非 UTF-8 / 目标事件不是数组 → duplicate_check_failed(不当作未发现)',
+      '不读项目 cwd、不输出冲突条目全文:拒绝信息只有稳定码',
+    ],
     mustKill: ['settings.local.json 里已有同形状'],
   },
   {
@@ -399,7 +514,13 @@ export const A5_MUTATIONS: readonly A5Mutation[] = [
       },
     ],
     tests: [CRASH],
-    expectRed: ['残留的 journal tmp / 账本 tmp / 目标 tmp 都有出口'],
+    expectRed: [
+      '残留的 journal tmp / 账本 tmp / 目标 tmp 都有出口',
+      // 2026-11-02 javis 变异实测补登:同一变异多红的相关用例(只补登记,不改变异与用例)
+      '只有残留 tmp、没有 journal:幂等安装 / 空 prune 不走快捷返回,锁内清理(journal tmp 与 ledger tmp)',
+      '安装:合并(已有用户配置 + 备份)',
+      '安装:新建(文件不存在)',
+    ],
     mustKill: ['残留的 journal tmp / 账本 tmp / 目标 tmp 都有出口'],
   },
   {
@@ -413,7 +534,13 @@ export const A5_MUTATIONS: readonly A5Mutation[] = [
       },
     ],
     tests: [CRASH],
-    expectRed: ['残留的 journal tmp / 账本 tmp / 目标 tmp 都有出口'],
+    expectRed: [
+      '残留的 journal tmp / 账本 tmp / 目标 tmp 都有出口',
+      // 2026-11-02 javis 变异实测补登:同一变异多红的相关用例(只补登记,不改变异与用例)
+      '卸载:同样的矩阵,收敛后账本归属为空、目标里没有 kit 节点',
+      '安装:合并(已有用户配置 + 备份)',
+      '安装:新建(文件不存在)',
+    ],
     mustKill: ['残留的 journal tmp / 账本 tmp / 目标 tmp 都有出口'],
   },
   {
@@ -460,6 +587,8 @@ export const A5_MUTATIONS: readonly A5Mutation[] = [
     expectRed: [
       'createHomeFsContext:planScope 里放 kit-hooks 路径',
       'writeFile / remove / createExclusive / chmod / rename / copyFile 两端都拒',
+      // 2026-11-02 javis 变异实测补登:同一变异多红的相关用例(只补登记,不改变异与用例)
+      '三条 kit-hooks(json-merge ×2、file ×1),总数 15;无 owner 的 isHomeWritePath 不把它们算作受管路径',
     ],
     mustKill: ['writeFile / remove / createExclusive / chmod / rename / copyFile 两端都拒'],
   },
@@ -469,9 +598,10 @@ export const A5_MUTATIONS: readonly A5Mutation[] = [
     edits: [
       {
         file: 'src/io/hooks-fs.ts',
+        // 2026-11-02 javis 实测:只去叶子检查时 walk 仍拒链接,变异存活;改为去掉整段祖先校验
         anchor:
-          "if (w.leaf === null) return false;\n    this.checkPlainDir(w.leaf, 'target', dirSegs.join('/'));\n    const st = await this.lstatOrNull(t.abs, 'target');",
-        replacement: "void w;\n    const st = await this.lstatOrNull(t.abs, 'target');",
+          "const w = await this.walk(dirSegs, 'target', Number.MAX_SAFE_INTEGER);\n    if (w.leaf === null) return false;\n    this.checkPlainDir(w.leaf, 'target', dirSegs.join('/'));\n    const st = await this.lstatOrNull(t.abs, 'target');",
+        replacement: "void dirSegs;\n    const st = await this.lstatOrNull(t.abs, 'target');",
       },
     ],
     tests: [CRASH],
