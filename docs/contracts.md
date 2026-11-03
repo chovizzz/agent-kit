@@ -4944,7 +4944,7 @@ A5 实装(`src/contracts/rsi-hooks.ts`、`src/io/hooks-fs.ts`、`src/rsi/hooks/*
 
 - R20-17.24 **自动化端到端(javis,假 HOME)**:合成 pi 会话文件 → 钩子入口 `rsi poke` → 自动 L0 → 下一次 `rsi hint` 出计数 → 模拟 S1:`rsi digest --json` → 固定提案 JSON 经 `reflect --ingest -`(不 spawn 任何 LLM)→ `rsi status` 待审 1 → 一个 TTY kit 命令后 stderr 恰好一次 `RSI_PROPOSALS_READY runs=1 proposals=k`(且首次 L0 后恰好一次 `RSI_COLLECTION_STARTED`),再跑一次都不再出现 → `rsi dismiss --all --write` → status 待审 0、D17 `pending_runs=0`、run 目录字节不变。全程 exec 审计:kit 进程不 spawn 任何 LLM CLI。
 - R20-17.25 **负向矩阵**:
-  - 提醒:非 TTY、`KIT_AUTO_RSI=0`、CI、`KIT_RSI_CHILD=1`、`armed`、`stopped`、collect block、purge journal 在场 × 各一次 → 零读 `reflect/`、零锁、零写入(写审计桩为 0);锁被占 → 不提醒不记账;`notice.json` 损坏 / 满 → 不覆盖、不提醒;超时 → 零写入。
+  - 提醒:非 TTY、`KIT_AUTO_RSI=0`、CI、`KIT_RSI_CHILD=1`、`armed`、`stopped`、collect block、purge journal 在场 × 各一次 → 零读 `reflect/`、零锁、零写入(写审计桩为 0);锁被占 → 不提醒不记账;`notice.json` 损坏(`notice_invalid`)→ 不覆盖、不重建、不提醒;`notice_full` → 不发提案提示、不新增已通知 run,采集开始提示仍按 R20-17.14a 先记账后打印(允许清理既有条目);超时 → 零写入。
   - 归属:ingest 后写下排除、不跑 worker → hint / status / 提醒 / D17 都不计入;项目根消失同理;`report.run_id` 与目录名不同 → 不计入、dismiss 拒。
   - dismiss:`off` 拒;具名非待审整批拒;`dismissed.json` 损坏写路径退 3 且文件字节不变;上限;TAINTED 已落盘但摘录未清完时运行 dismiss → 只写 dismissed.json,不碰 run。
   - 扫描未知:reflect/ 下 1001 个子项、总读取超 16 MiB → status / D17 为 `null` + warning,hint 空输出,dismiss(具名 / `--all`)退 4 `run_scan_incomplete` 且零写入。
@@ -4968,7 +4968,7 @@ A5 实装(`src/contracts/rsi-hooks.ts`、`src/io/hooks-fs.ts`、`src/rsi/hooks/*
 
 #### 20.17-9 评审记录
 
-方案 v1 经 Pi (GPT-6.1 Sol) 评审,意见全部采纳:①待审判定补当前 X / U 归属与 `run_id` 一致(R20-17.2);②提醒只在 `confirmed` 且继承 R20-1.6 跳过条件(R20-17.12);③dismiss / 提醒与 taint 协议的关系写成窄记账例外并订正 R20-4.7(R20-17.9、20.17-8 ②);④暂存 / 待审 / 待通知三集合分开,既有 staged 字段不改含义(R20-17.1–17.3);⑤满区提示不暗示 dismiss 能释放容量、字段改为 `run_limit_reached` 并显式 `bytes_checked:false`(R20-17.17–17.18);⑥notice 容量满的行为与扫描上限、顺序(R20-17.4、17.14);⑦200ms 改为尽力预算 + 读取上限 + 超时后零写入(R20-17.15);⑧D17 拆采集 / 钩子两面、残留不当漂移(R20-17.19);⑨GC 计划拆成只读模块、不放宽 status 闭包审计(R20-17.18)。契约文本复评(第 2 轮):上轮 9 条中 8 条闭合;新提中 5 条全部采纳——扫描未知的各入口映射与 `run_scan_incomplete`(R20-17.4a);D17 采集面按配置结果判、collect block 一律 `fail`、`disabled` 为 `n_a`(R20-17.19);hint 读取集合与计数来源订正(20.17-8 ⑥⑦);R20-4.5 投影义务的窄记账例外与 R20-5.1 锁矩阵(⑧⑨);`notice_full` 唯一谓词(R20-17.14a)。
+方案 v1 经 Pi (GPT-6.1 Sol) 评审,意见全部采纳:①待审判定补当前 X / U 归属与 `run_id` 一致(R20-17.2);②提醒只在 `confirmed` 且继承 R20-1.6 跳过条件(R20-17.12);③dismiss / 提醒与 taint 协议的关系写成窄记账例外并订正 R20-4.7(R20-17.9、20.17-8 ②);④暂存 / 待审 / 待通知三集合分开,既有 staged 字段不改含义(R20-17.1–17.3);⑤满区提示不暗示 dismiss 能释放容量、字段改为 `run_limit_reached` 并显式 `bytes_checked:false`(R20-17.17–17.18);⑥notice 容量满的行为与扫描上限、顺序(R20-17.4、17.14);⑦200ms 改为尽力预算 + 读取上限 + 超时后零写入(R20-17.15);⑧D17 拆采集 / 钩子两面、残留不当漂移(R20-17.19);⑨GC 计划拆成只读模块、不放宽 status 闭包审计(R20-17.18)。契约文本复评(第 2 轮):上轮 9 条中 8 条闭合;新提中 5 条全部采纳——扫描未知的各入口映射与 `run_scan_incomplete`(R20-17.4a);D17 采集面按配置结果判、collect block 一律 `fail`、`disabled` 为 `n_a`(R20-17.19);hint 读取集合与计数来源订正(20.17-8 ⑥⑦);R20-4.5 投影义务的窄记账例外与 R20-5.1 锁矩阵(⑧⑨);`notice_full` 唯一谓词(R20-17.14a)。终审(第 3 轮):5 条闭合;新提中 1 条(R20-17.25 把 `notice_full` 与损坏合写成「不覆盖、不提醒」,与 R20-17.14a 相反)已采纳拆开。
 
 ## 21. 自主 RSI 契约(R21,v3.1,契约先行;V1–V6 实装后订正)
 
