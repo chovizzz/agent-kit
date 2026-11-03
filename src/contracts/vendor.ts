@@ -173,6 +173,7 @@ export const VENDOR_ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
  * 与 `reflector.vendor` 写了什么无关;其余走 {@link isCrossVendor}。
  * N4(R20-18.17):**不再是口径的来源**——`vendorEvidence` 才是唯一的证据函数(它直接用 {@link isCrossVendor} 做配对,N4i-13);本函数仅为保持契约要求的签名与语义而保留导出,
  * `src/` 里没有任何调用方;签名与语义保持(`session_declared` 无确认 → false),`src/` 里除本文件外不得有任何引用(`test/contracts/n4-vendor-single-impl.test.ts` 钉住)。
+ * @deprecated 仅为契约兼容保留;新代码一律走 {@link vendorEvidence}。
  */
 export function isCrossVendorOf(
   reflector: { vendor: string; provenance?: string | undefined },

@@ -267,6 +267,8 @@ export const N4_MUTATIONS: readonly N4Mutation[] = [
     ],
     tests: [EVIDENCE],
     expectRed: [
+      '反思器确认为非内置厂商',
+      '反思器确认为 unknown',
       'session_declared 无确认 + proven 裁判',
       '反思器确认 binding 被改',
       '反思器确认不合理(claude 后端却确认为 openai 厂商 + claude 模型串)',
@@ -614,6 +616,8 @@ export const N4_MUTATIONS: readonly N4Mutation[] = [
     ],
     tests: [EVIDENCE, RUNLLM],
     expectRed: [
+      '反思器确认为非内置厂商',
+      '反思器确认为 unknown',
       'self_confirmed 反思器 + proven 裁判',
       'session_declared 无确认 + proven 裁判',
       '反思器确认 binding 被改',
@@ -642,8 +646,8 @@ export const N4_MUTATIONS: readonly N4Mutation[] = [
     ],
     tests: [EVIDENCE],
     expectRed: [
-      'self_confirmed 反思器 + proven 裁判:本地不过 ⇒ CI 有 error;本地的每个厂商类 reason 在 CI 都有映射码',
-      'self_confirmed + self_confirmed(不要求至少一侧可证明,Q-N4-2 = A):本地不过 ⇒ CI 有 error;本地的每个厂商类 reason 在 CI 都有映射码',
+      // 参数化用例(it 标题由模板拼出),取模板里的字面部分
+      '本地不过 ⇒ CI 有 error;本地的每个厂商类 reason 在 CI 都有映射码',
       '反思器 self_confirmed:CI 不发 REFLECTOR_UNVERIFIABLE',
     ],
     mustKill: ['反思器 self_confirmed:CI 不发 REFLECTOR_UNVERIFIABLE'],
