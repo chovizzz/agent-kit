@@ -124,6 +124,8 @@ export const A6_MUTATIONS: readonly A6Mutation[] = [
       '锁内重算之后、首个写点之前超时:零记账写入(没有 notice.json 也没有 .tmp),无输出',
       'assertHeld 之后、tmp 创建之前 / rename 之前超时:不创建 tmp / 不 rename,无输出,notice.json 不产生',
       '正向对照:预算内同样的世界会落盘并打印',
+      '写入失败(rename 前注入错误)→ code=write_failed',
+      '跳过分支与「没有要说的」不写日志(不建 log.jsonl):非 TTY、KIT_AUTO_RSI=0、钩子命令、armed、notice.json 损坏、已提醒过',
     ],
     mustKill: ['首次:先采集、后提案各一行', '写完后 stderr 写失败'],
   },
@@ -185,7 +187,11 @@ export const A6_MUTATIONS: readonly A6Mutation[] = [
       },
     ],
     tests: [NOTICE],
-    expectRed: ['stopped', 'armed(无确认记录)一律不提醒'],
+    expectRed: [
+      'stopped',
+      'armed(无确认记录)一律不提醒',
+      '跳过分支与「没有要说的」不写日志(不建 log.jsonl):非 TTY、KIT_AUTO_RSI=0、钩子命令、armed、notice.json 损坏、已提醒过',
+    ],
     mustKill: ['stopped', 'armed(无确认记录)一律不提醒'],
   },
   {
@@ -231,7 +237,10 @@ export const A6_MUTATIONS: readonly A6Mutation[] = [
       },
     ],
     tests: [NOTICE],
-    expectRed: ['notice.json 损坏(schema / JSON / 权限)'],
+    expectRed: [
+      'notice.json 损坏(schema / JSON / 权限)',
+      '跳过分支与「没有要说的」不写日志(不建 log.jsonl):非 TTY、KIT_AUTO_RSI=0、钩子命令、armed、notice.json 损坏、已提醒过',
+    ],
     mustKill: ['notice.json 损坏(schema / JSON / 权限)'],
   },
   {
@@ -423,13 +432,84 @@ export const A6_MUTATIONS: readonly A6Mutation[] = [
     expectRed: ['恰好 1000 个子项仍然已知'],
     mustKill: ['恰好 1000 个子项仍然已知'],
   },
+  // A6 订正 #1(20.17-11 ⑤):提醒放弃日志与 GC 计划子码
+  {
+    id: 'notice-log-no-dedup',
+    clause: '提醒放弃日志去掉 30 分钟同码去重(刷屏)',
+    edits: [
+      {
+        file: 'src/rsi/notice.ts',
+        anchor: 'if (age >= 0 && age < RSI_NOTICE_LOG_DEDUP_MS) return;',
+        replacement: 'void age;',
+      },
+    ],
+    tests: [NOTICE],
+    expectRed: ['去重:30 分钟内同码只记一行'],
+    mustKill: ['去重:30 分钟内同码只记一行'],
+  },
+  {
+    id: 'notice-log-on-skip',
+    clause: '跳过分支也写放弃日志',
+    edits: [
+      {
+        file: 'src/rsi/notice.ts',
+        anchor: "if (out.kind === 'skipped' && out.why === 'error') return 'internal';",
+        replacement: "if (out.kind === 'skipped') return 'internal';",
+      },
+    ],
+    tests: [NOTICE],
+    expectRed: [
+      '跳过分支与「没有要说的」不写日志',
+      'stopped',
+      'purge journal 在场',
+      'collect block(exclude_invalid)',
+      'armed(无确认记录)一律不提醒',
+      'notice.json 损坏(schema / JSON / 权限)→ 不覆盖、不重建、不提醒;status 报 notice_invalid',
+      '入口之后立刻超时:不读 reflect/、不拿锁、零写入、无输出',
+    ],
+    mustKill: ['跳过分支与「没有要说的」不写日志'],
+  },
+  {
+    id: 'notice-log-unsafe-still-writes',
+    clause: 'log.jsonl 不安全(权限过宽 / 符号链接)仍追加',
+    edits: [
+      {
+        file: 'src/rsi/notice.ts',
+        anchor: "if (r.kind !== 'ok' && r.kind !== 'missing') return;",
+        replacement: 'void 0;',
+      },
+    ],
+    tests: [NOTICE],
+    expectRed: ['只读校验:rsi/ 不存在不建、不写'],
+    mustKill: ['只读校验:rsi/ 不存在不建、不写'],
+  },
+  {
+    id: 'gc-plan-error-always-internal',
+    clause: 'GC 计划子码映射写死成 internal',
+    edits: [
+      {
+        file: 'src/rsi/status.ts',
+        anchor: "return GC_PLAN_ERROR_MAP[e.code] ?? 'internal';",
+        replacement: "return 'internal';",
+      },
+    ],
+    tests: [HINT],
+    expectRed: [
+      'gc_plan_error 由 ReflectGcError.code 白名单映射',
+      'gc_candidates 来自只读的 GC 计划',
+    ],
+    mustKill: [
+      'gc_plan_error 由 ReflectGcError.code 白名单映射',
+      'gc_candidates 来自只读的 GC 计划',
+    ],
+  },
 ];
 
 /** 实测结果(主代理在 javis 上执行变异后填写;A6 实装块不执行,故留空) */
 export const A6_RESULTS: readonly A6Result[] = [
-  // 2026-11-03 javis 私有检出 @ df5b18c:基线 125 例全绿、0 skipped;21 条变异全部被杀、无 skipped / 套件错误 / 表外多红,每条还原后检出干净;
-  // javis HOME 的 agent 配置与 kit 状态前后不变。首轮(@ eea4621)7 条多红了表外相关用例(已补登 expectRed);pending-no-runid-check 首轮漏杀
-  // 「run_id 与目录名不同 → 具名被拒」:该用例的 report 过不了 schema、因「读不了」被拒而测不到 run_id 核对,已改为合法 report 后被杀。
+  // 2026-11-03 javis 私有检出 @ f054fc0(A6 订正 #1 之后):基线 132 例全绿、0 skipped;25 条变异全部被杀、无 skipped / 套件错误,每条还原后检出干净;
+  // javis HOME 的 agent 配置与 kit 状态前后不变。A6 首轮(@ eea4621)7 条多红了表外相关用例(已补登 expectRed);pending-no-runid-check 首轮漏杀
+  // 「run_id 与目录名不同 → 具名被拒」(report 过不了 schema、测不到 run_id 核对),改为合法 report 后被杀。订正 #1 新增 4 条(notice-log-*、gc-plan-error-*)。
   {
     id: 'pending-ignores-dismissed',
     killedBy: [
@@ -482,8 +562,10 @@ export const A6_RESULTS: readonly A6Result[] = [
       '锁内重算之后、首个写点之前超时:零记账写入(没有 notice.json 也没有 .tmp),无输出',
       'assertHeld 之后、tmp 创建之前 / rename 之前超时:不创建 tmp / 不 rename,无输出,notice.json 不产生',
       '正向对照:预算内同样的世界会落盘并打印',
+      '写入失败(rename 前注入错误)→ code=write_failed',
+      '跳过分支与「没有要说的」不写日志(不建 log.jsonl):非 TTY、KIT_AUTO_RSI=0、钩子命令、armed、notice.json 损坏、已提醒过',
     ],
-    failed: 10,
+    failed: 12,
     skipped: 0,
     restored: true,
   },
@@ -507,15 +589,22 @@ export const A6_RESULTS: readonly A6Result[] = [
   },
   {
     id: 'notice-prints-non-tty',
-    killedBy: ['非 TTY'],
-    failed: 1,
+    killedBy: [
+      '非 TTY',
+      '跳过分支与「没有要说的」不写日志(不建 log.jsonl):非 TTY、KIT_AUTO_RSI=0、钩子命令、armed、notice.json 损坏、已提醒过',
+    ],
+    failed: 2,
     skipped: 0,
     restored: true,
   },
   {
     id: 'notice-prints-armed-stopped',
-    killedBy: ['stopped', 'armed(无确认记录)一律不提醒'],
-    failed: 2,
+    killedBy: [
+      'stopped',
+      'armed(无确认记录)一律不提醒',
+      '跳过分支与「没有要说的」不写日志(不建 log.jsonl):非 TTY、KIT_AUTO_RSI=0、钩子命令、armed、notice.json 损坏、已提醒过',
+    ],
+    failed: 3,
     skipped: 0,
     restored: true,
   },
@@ -540,8 +629,9 @@ export const A6_RESULTS: readonly A6Result[] = [
     id: 'notice-corrupt-rebuilt',
     killedBy: [
       'notice.json 损坏(schema / JSON / 权限)→ 不覆盖、不重建、不提醒;status 报 notice_invalid',
+      '跳过分支与「没有要说的」不写日志(不建 log.jsonl):非 TTY、KIT_AUTO_RSI=0、钩子命令、armed、notice.json 损坏、已提醒过',
     ],
-    failed: 1,
+    failed: 2,
     skipped: 0,
     restored: true,
   },
@@ -658,6 +748,47 @@ export const A6_RESULTS: readonly A6Result[] = [
     id: 'scan-entry-cap-off-by-one',
     killedBy: ['恰好 1000 个子项仍然已知;1001 个 → known:false run_scan_truncated(不当作零)'],
     failed: 1,
+    skipped: 0,
+    restored: true,
+  },
+  {
+    id: 'notice-log-no-dedup',
+    killedBy: ['去重:30 分钟内同码只记一行;过了窗口再记;不同码各记一行'],
+    failed: 1,
+    skipped: 0,
+    restored: true,
+  },
+  {
+    id: 'notice-log-on-skip',
+    killedBy: [
+      'stopped',
+      'purge journal 在场',
+      'collect block(exclude_invalid)',
+      'armed(无确认记录)一律不提醒',
+      'notice.json 损坏(schema / JSON / 权限)→ 不覆盖、不重建、不提醒;status 报 notice_invalid',
+      '入口之后立刻超时:不读 reflect/、不拿锁、零写入、无输出',
+      '跳过分支与「没有要说的」不写日志(不建 log.jsonl):非 TTY、KIT_AUTO_RSI=0、钩子命令、armed、notice.json 损坏、已提醒过',
+    ],
+    failed: 7,
+    skipped: 0,
+    restored: true,
+  },
+  {
+    id: 'notice-log-unsafe-still-writes',
+    killedBy: [
+      '只读校验:rsi/ 不存在不建、不写;log.jsonl 是符号链接 / 权限过宽 → 不写;正向对照:合规时写',
+    ],
+    failed: 1,
+    skipped: 0,
+    restored: true,
+  },
+  {
+    id: 'gc-plan-error-always-internal',
+    killedBy: [
+      'gc_candidates 来自只读的 GC 计划:过期且无暂存提案的 run 计入;计划失败 → null + warning gc_plan_failed(退出码不变)',
+      'A6 订正 #1:gc_plan_error 由 ReflectGcError.code 白名单映射;未知码 / 原型链上的名字 / 非 ReflectGcError → internal',
+    ],
+    failed: 2,
     skipped: 0,
     restored: true,
   },

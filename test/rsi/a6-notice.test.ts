@@ -5,10 +5,12 @@
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { exists, existsSync, readBytes } from '../../src/io/read-fs.js';
-import { mkdirp, remove, writeFile } from '../../src/io/safe-fs.js';
+import { chmod, mkdirp, remove, symlink, writeFile } from '../../src/io/safe-fs.js';
+import { RsiLogLineSchema, type RsiLogLine } from '../../src/contracts/rsi.js';
 import {
   runRsiNotice,
   isHookCommand,
+  logNoticeGiveUp,
   type NoticeDeps,
   type NoticeOutcome,
 } from '../../src/rsi/notice.js';
@@ -93,6 +95,28 @@ const readNoticeDoc = async (
   proposals_notified: string[];
   collection_started_for: string | null;
 }> => JSON.parse(Buffer.from(await readBytes(noticeFile(f))).toString('utf8'));
+/** `log.jsonl` 里 `trigger=notice` 的行(逐行过 RsiLogLineSchema;文件不存在 = 空) */
+async function noticeLogLines(f: RoFx): Promise<RsiLogLine[]> {
+  const file = rsiFilePath(f, 'log.jsonl');
+  if (!(await exists(file))) return [];
+  return Buffer.from(await readBytes(file))
+    .toString('utf8')
+    .split('\n')
+    .filter((l) => l !== '')
+    .map((l) => RsiLogLineSchema.parse(JSON.parse(l)))
+    .filter((l) => l.trigger === 'notice');
+}
+const noticeLogCodes = async (f: RoFx): Promise<string[]> =>
+  (await noticeLogLines(f)).map((l) => l.code);
+const lockedBy = async (f: RoFx): Promise<NoticeDeps['lock']> => {
+  await putRsiFile(
+    f,
+    'lock',
+    JSON.stringify({ pid: 4242, started_at: NOW, nonce: '0123456789abcdef', kit_version: '0.0.0' }),
+  );
+  return { isAlive: () => true, now: () => new Date(NOW) };
+};
+
 const dataWrites = (r: Run, f: RoFx): string[] =>
   auditRel(f, r.audit).filter((p) => p !== 'rsi/lock');
 
@@ -312,7 +336,14 @@ describe('R20-17.14 锁与损坏', () => {
     expect(r.outcome).toEqual({ kind: 'not_recorded', why: 'locked' });
     expect(r.err).toEqual([]);
     expect(await exists(noticeFile(f))).toBe(false);
-    expect(dataWrites(r, f)).toEqual([]); // 试锁失败不写任何东西(没有删除别人的锁)
+    // 试锁失败不记账、不删除别人的锁;唯一的写入是 A6 订正 #1 的一行放弃日志(无锁追加)
+    expect(
+      r.audit
+        .filter((a) => a.op !== 'mkdirp')
+        .map((a) => `${a.op} ${path.relative(f.io.stateDir, a.path)}`)
+        .filter((o) => !o.endsWith(' rsi/lock')), // 试锁本身(createExclusive 失败)不算数据写入
+    ).toEqual(['appendFile rsi/log.jsonl']);
+    expect(await noticeLogCodes(f)).toEqual(['locked']);
     await remove(f.io, rsiFilePath(f, 'lock'));
     expect((await notice(f)).err).toHaveLength(2);
   });
@@ -412,7 +443,9 @@ describe('R20-17.15 预算:一个截止时间贯穿锁前 / 锁内 / 每个写�
     const { f, r } = await timed('locked');
     expect(r.outcome).toEqual({ kind: 'not_recorded', why: 'over_budget' });
     expect(r.err).toEqual([]);
-    expect(dataWrites(r, f)).toEqual([]);
+    // 零记账写入;唯一例外是放锁之后的一行放弃日志(A6 订正 #1 ②)
+    expect(dataWrites(r, f)).toEqual(['rsi/log.jsonl']);
+    expect(await noticeLogCodes(f)).toEqual(['over_budget']);
     expect(await exists(noticeFile(f))).toBe(false);
     expect(await exists(rsiFilePath(f, 'lock'))).toBe(false); // 锁已释放
   });
@@ -460,6 +493,118 @@ describe('R20-17.15 预算:一个截止时间贯穿锁前 / 锁内 / 每个写�
     const { f, r } = await timed('never-fires');
     expect(r.outcome.kind).toBe('printed');
     expect(await exists(noticeFile(f))).toBe(true);
+  });
+});
+
+describe('A6 订正 #1:提醒放弃时写一行 log.jsonl(去重、只读校验、跳过分支不写)', () => {
+  it('行形状:{at, trigger:notice, action:skipped, code},过 RsiLogLineSchema;不含路径 / run_id / 项目名', async () => {
+    const { f } = await world('a6-nt-log-shape-');
+    await notice(f, { deps: { lock: await lockedBy(f) } });
+    const lines = await noticeLogLines(f);
+    expect(lines).toEqual([{ at: NOW, trigger: 'notice', action: 'skipped', code: 'locked' }]);
+    const raw = Buffer.from(await readBytes(rsiFilePath(f, 'log.jsonl'))).toString('utf8');
+    for (const needle of [f.dir, 'r-1', PROJECT_NAME]) expect(raw).not.toContain(needle);
+  });
+
+  it('去重:30 分钟内同码只记一行;过了窗口再记;不同码各记一行', async () => {
+    const { f } = await world('a6-nt-log-dedup-');
+    const lock = await lockedBy(f);
+    const at = (min: number) => () => new Date(Date.parse(NOW) + min * 60_000);
+    await notice(f, { deps: { lock, now: at(0) } });
+    await notice(f, { deps: { lock, now: at(10) } });
+    await notice(f, { deps: { lock, now: at(29) } });
+    expect(await noticeLogCodes(f)).toEqual(['locked']);
+    await notice(f, { deps: { lock, now: at(31) } });
+    expect(await noticeLogCodes(f)).toEqual(['locked', 'locked']);
+    // 换一个码(锁放开、拿锁后超时):与 locked 互不去重
+    await remove(f.io, rsiFilePath(f, 'lock'));
+    let t = 0;
+    await notice(f, {
+      deps: { now: at(32), clockMs: () => t, point: (n) => void (n === 'locked' && (t += 1000)) },
+    });
+    expect(await noticeLogCodes(f)).toEqual(['locked', 'locked', 'over_budget']);
+  });
+
+  it('写入失败(rename 前注入错误)→ code=write_failed', async () => {
+    const { f } = await world('a6-nt-log-wf-');
+    const r = await notice(f, {
+      deps: {
+        hooks: {
+          point: async (n) => {
+            if (n === 'before:rename:notice.json') throw new Error('injected');
+          },
+        },
+      },
+    });
+    expect(r.outcome).toEqual({ kind: 'not_recorded', why: 'write_failed' });
+    expect(await noticeLogCodes(f)).toEqual(['write_failed']);
+  });
+
+  it('跳过分支与「没有要说的」不写日志(不建 log.jsonl):非 TTY、KIT_AUTO_RSI=0、钩子命令、armed、notice.json 损坏、已提醒过', async () => {
+    const cases: [string, (f: RoFx) => Promise<Parameters<typeof notice>[1]>][] = [
+      ['非 TTY', async () => ({ isTty: false })],
+      ['KIT_AUTO_RSI=0', async () => ({ env: { KIT_AUTO_RSI: '0' } })],
+      ['钩子命令', async () => ({ argv: ['rsi', 'hint'] })],
+      ['notice.json 损坏', async (f) => (await putRsiFile(f, 'notice.json', '{'), {})],
+    ];
+    for (const [name, prep] of cases) {
+      const { f } = await world(`a6-nt-log-skip-${cases.findIndex((c) => c[0] === name)}-`);
+      const o = await prep(f);
+      const r = await notice(f, o);
+      expect(r.outcome.kind, name).toBe('skipped');
+      expect(
+        r.audit.some((a) => a.path.endsWith('log.jsonl')),
+        name,
+      ).toBe(false);
+      expect(await noticeLogCodes(f), name).toEqual([]);
+    }
+    const g = await makeRoFx('a6-nt-log-armed-');
+    await makeA6World(g, [{ runId: 'r-1' }], { confirm: false });
+    const ra = await notice(g);
+    expect(ra.audit.some((a) => a.path.endsWith('log.jsonl'))).toBe(false);
+    const { f: h } = await world('a6-nt-log-nothing-');
+    expect((await notice(h)).outcome.kind).toBe('printed');
+    const again = await notice(h);
+    expect(again.outcome.kind).toBe('nothing');
+    expect(again.audit).toEqual([]);
+    expect(await noticeLogCodes(h)).toEqual([]);
+  });
+
+  it('只读校验:rsi/ 不存在不建、不写;log.jsonl 是符号链接 / 权限过宽 → 不写;正向对照:合规时写', async () => {
+    const f0 = await makeRoFx('a6-nt-log-nodir-');
+    await logNoticeGiveUp(f0.io, 'locked', new Date(NOW));
+    expect(existsSync(path.join(f0.io.stateDir, 'rsi'))).toBe(false);
+
+    const { f } = await world('a6-nt-log-link-');
+    const target = path.join(f.dir, 'elsewhere.log');
+    await writeFile(f.fx, target, '', { mode: 0o600 });
+    const log = rsiFilePath(f, 'log.jsonl');
+    if (await exists(log)) await remove(f.io, log);
+    await symlink(f.fx, target, log);
+    await logNoticeGiveUp(f.io, 'locked', new Date(NOW));
+    expect(Buffer.from(await readBytes(target)).toString('utf8')).toBe('');
+
+    const { f: g } = await world('a6-nt-log-perm-');
+    const glog = rsiFilePath(g, 'log.jsonl');
+    await writeFile(g.io, glog, '', { mode: 0o600 });
+    await chmod(g.io, glog, 0o644);
+    await logNoticeGiveUp(g.io, 'locked', new Date(NOW));
+    expect(await noticeLogCodes(g)).toEqual([]);
+    await chmod(g.io, glog, 0o600);
+    await logNoticeGiveUp(g.io, 'locked', new Date(NOW));
+    expect(await noticeLogCodes(g)).toEqual(['locked']);
+  });
+
+  it('日志写失败(log.jsonl 只读)不改变提醒结果、不抛、不输出', async () => {
+    const { f } = await world('a6-nt-log-ro-');
+    const log = rsiFilePath(f, 'log.jsonl');
+    if (!(await exists(log))) await writeFile(f.io, log, '', { mode: 0o600 });
+    await chmod(f.io, log, 0o400);
+    const r = await notice(f, { deps: { lock: await lockedBy(f) } });
+    expect(r.outcome).toEqual({ kind: 'not_recorded', why: 'locked' });
+    expect(r.err).toEqual([]);
+    await chmod(f.io, log, 0o600);
+    expect(await noticeLogCodes(f)).toEqual([]);
   });
 });
 

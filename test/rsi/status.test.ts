@@ -39,6 +39,7 @@ const OFF_KEYS = [
   'counts',
   'cursor',
   'first_armed',
+  'gc_plan_error',
   'index',
   'last_tick',
   'lock',

@@ -18,13 +18,23 @@
  * (是否扩大窄记账例外去写日志待主代理拍板)。跳过命令清单(R20-17.12)目前分散在 `skip.ts`(环境类)与本文件的 `isHookCommand`(命令类),见 A6i。
  */
 import * as path from 'node:path';
-import { RSI_NOTICE_BUDGET_MS, type RsiNotice } from '../contracts/rsi.js';
-import type { WriteAudit } from '../io/paths.js';
-import { lstat } from '../io/read-fs.js';
+import {
+  RSI_NOTICE_BUDGET_MS,
+  RSI_NOTICE_LOG_CODES,
+  RSI_NOTICE_LOG_DEDUP_MS,
+  RSI_NOTICE_LOG_READ_MAX_BYTES,
+  RsiLogLineSchema,
+  type RsiNotice,
+  type RsiNoticeLogCode,
+} from '../contracts/rsi.js';
+import { canonicalJsonLine } from '../io/canonical-json.js';
+import type { IoContext, WriteAudit } from '../io/paths.js';
+import { lstat, readFileSafe } from '../io/read-fs.js';
+import { appendFile } from '../io/safe-fs.js';
 import type { AttributionProbe, IndexStatus } from './attribution.js';
 import { RsiCountsSchema, RsiProjectIndexSchema } from '../contracts/rsi.js';
 import { acquireRsiLock, type RsiLockDeps } from './lock.js';
-import { rsiDirReadonly } from './lock-read.js';
+import { RSI_FILE_OWNER, rsiDirReadonly } from './lock-read.js';
 import {
   noticeFull,
   readDismissed,
@@ -218,9 +228,74 @@ async function evaluate(
 
 const nothingToSay = (e: Eval): boolean => !e.collectionDue && e.toNotify.length === 0;
 
+/**
+ * 提醒一次(R20-17.11–17.15)。放弃(本应提醒却没提醒成)时另记一行 `log.jsonl`(A6 订正 #1,见 {@link logNoticeGiveUp});
+ * 跳过分支(非 TTY、环境跳过、钩子命令、配置不可用、不满足触发条件)与「没有要说的」不写。返回值不受日志成败影响。
+ */
 export async function runRsiNotice(
   input: NoticeInput,
   deps: NoticeDeps = {},
+): Promise<NoticeOutcome> {
+  const holder: { io?: IoContext } = {};
+  const out = await runNoticeCore(input, deps, holder);
+  const code = giveUpCode(out);
+  if (code !== null && holder.io !== undefined) {
+    await logNoticeGiveUp(holder.io, code, (deps.now ?? ((): Date => new Date()))()).catch(
+      () => undefined,
+    );
+  }
+  return out;
+}
+
+function giveUpCode(out: NoticeOutcome): RsiNoticeLogCode | null {
+  if (out.kind === 'not_recorded') {
+    return (RSI_NOTICE_LOG_CODES as readonly string[]).includes(out.why)
+      ? (out.why as RsiNoticeLogCode)
+      : 'internal';
+  }
+  if (out.kind === 'skipped' && out.why === 'error') return 'internal';
+  return null;
+}
+
+/**
+ * 放弃日志(A6 订正 #1):锁已释放(或从未拿到)之后,无锁 `O_APPEND` 追加一行 `{at, trigger:notice, action:skipped, code}`
+ * (R20-5.1 锁矩阵的「`log.jsonl` 单行追加」)。只在 `rsi/` 通过只读安全校验时写,不建目录、不修权限;
+ * 去重:`log.jsonl`(有界、句柄级安全读取)里 30 分钟内已有同 `code` 的提醒放弃行 → 不追加;读不了 / 不安全 → 不写(宁可少记)。
+ */
+export async function logNoticeGiveUp(
+  io: IoContext,
+  code: RsiNoticeLogCode,
+  now: Date,
+): Promise<void> {
+  const d = await rsiDirReadonly(io);
+  if (d.kind !== 'ok') return;
+  const file = path.join(d.dir, 'log.jsonl');
+  const r = await readFileSafe(file, {
+    maxBytes: RSI_NOTICE_LOG_READ_MAX_BYTES,
+    owner: RSI_FILE_OWNER,
+  });
+  if (r.kind !== 'ok' && r.kind !== 'missing') return;
+  if (r.kind === 'ok') {
+    for (const l of r.bytes.toString('utf8').split('\n')) {
+      if (l === '') continue;
+      const v = parseJson(Buffer.from(l, 'utf8')) as
+        { trigger?: unknown; code?: unknown; at?: unknown } | undefined;
+      if (v?.trigger !== 'notice' || v.code !== code || typeof v.at !== 'string') continue;
+      const age = now.getTime() - Date.parse(v.at);
+      if (age >= 0 && age < RSI_NOTICE_LOG_DEDUP_MS) return;
+    }
+  }
+  const line = canonicalJsonLine(
+    RsiLogLineSchema.parse({ at: now.toISOString(), trigger: 'notice', action: 'skipped', code }),
+  );
+  // noFollow:校验(readFileSafe)与追加之间末级被换成符号链接 → ELOOP,不写(A6 订正 #1 评审 M1)
+  await appendFile(io, file, line, { mode: 0o600, noFollow: true });
+}
+
+async function runNoticeCore(
+  input: NoticeInput,
+  deps: NoticeDeps,
+  holder: { io?: IoContext },
 ): Promise<NoticeOutcome> {
   try {
     if (!input.isTty) return { kind: 'skipped', why: 'not_tty' };
@@ -244,6 +319,7 @@ export async function runRsiNotice(
       deps.open,
     );
     if (open.kind !== 'ready') return { kind: 'skipped', why: 'config' };
+    holder.io = open.ctx.io;
     if (over()) return { kind: 'not_recorded', why: 'over_budget' };
     const sctx: RsiServiceCtx = {
       ...open.ctx,

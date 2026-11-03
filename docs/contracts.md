@@ -3948,7 +3948,7 @@ rsi 的锁(仓库 `.state/`)与 update / sync 的锁(HOME 下 `.local/state/agen
 
 ### 20.7 可观测性与隐私
 
-- R20-7.1 **日志** `.state/rsi/log.jsonl`(0600):每行 `canonicalJsonLine` 的 `{at, trigger: poke|kit|tick|confirm|purge|stop|rebuild|status, agent?, action, code, counts?, duration_ms?}`;`counts` 只含整数;不含路径、key、目录名、会话 id、摘录、异常消息。`action` / `code` 只取本节的枚举。
+- R20-7.1 **日志** `.state/rsi/log.jsonl`(0600):每行 `canonicalJsonLine` 的 `{at, trigger: poke|kit|tick|confirm|purge|stop|rebuild|status|notice, agent?, action, code, counts?, duration_ms?}`(`notice` 由 A6 订正 #1 追加,只用于日志行,`state.json` 的 `last_tick.trigger` 不含它);`counts` 只含整数;不含路径、key、目录名、会话 id、摘录、异常消息。`action` / `code` 只取本节的枚举。
   > **v3.1 修订(§21.18 第 17 条)**:追加 `.state/rsi/audit.jsonl` 与分组账 `.state/rsi/canary-ledger.jsonl` 及其保留策略(R21-12.10、R21-6.4)。
 - R20-7.2 **权限与读取前校验**: (订正见 §20.14 B4 订正 #8、#9) (订正见 §20.14 B4 订正(补) B4a-1、B4c2-5)
   - `.state/rsi/` 及其子目录 0700、文件 0600,一律经 safe-fs 写。读取 `.state/rsi/*` 前校验:不是符号链接、普通文件、`nlink == 1`、属主为当前 uid、权限不宽于 0600(目录 0700);不满足 → `state_dir_unsafe`(安全阻断),**不自动收紧**。
@@ -4919,9 +4919,9 @@ A5 实装(`src/contracts/rsi-hooks.ts`、`src/io/hooks-fs.ts`、`src/rsi/hooks/*
   - `RSI_COLLECTION_STARTED projects=P excluded=X`:`confirm.baseline_pending = false`(首次 L0 已完成)且 `notice.json` 的 `collection_started_for` 不等于当前确认记录的标识(确认时刻)。重新 `rsi confirm` 后,下一次首次 L0 完成时再提示一次;P / X 与 hint 同口径现算。
   - `RSI_PROPOSALS_READY runs=N proposals=M`:N、M 只计待通知 run(R20-17.3);N = 0 不输出。
     两行可同时出现,先采集、后提案。都不含路径、run_id、提案正文。
-- R20-17.14 **记账**:先写后印。非阻塞试拿 `rsi/lock` 一次:拿不到 → 本次不提示、不记账;拿到 → 锁内重算、写 `.state/rsi/notice.json`(0600,strict:`schema_version`、`proposals_notified: [run_id…]`(升序唯一,≤ 1000,写时移除目录已不存在的)、`collection_started_for: string | null`)→ 放锁 → 打印。承诺是「每个 run **至多一次**尝试展示」:写完后崩溃或 stderr 写失败会漏提示,不会重复提示。`notice.json` 损坏 → 不覆盖、不重建,本次与之后都不提醒,status / D17 报 warn `notice_invalid`,日志记稳定码。
+- R20-17.14 **记账**:先写后印。非阻塞试拿 `rsi/lock` 一次:拿不到 → 本次不提示、不记账;拿到 → 锁内重算、写 `.state/rsi/notice.json`(0600,strict:`schema_version`、`proposals_notified: [run_id…]`(升序唯一,≤ 1000,写时移除目录已不存在的)、`collection_started_for: string | null`)→ 放锁 → 打印。承诺是「每个 run **至多一次**尝试展示」:写完后崩溃或 stderr 写失败会漏提示,不会重复提示。`notice.json` 损坏 → 不覆盖、不重建,本次与之后都不提醒,status / D17 报 warn `notice_invalid`(损坏走「不满足触发条件」分支,不写放弃日志;见 A6 订正 #1)。
 - R20-17.14a **`notice_full` 的唯一谓词**(提醒、status、D17 共用,`src/rsi/pending.ts`):令 S = `proposals_notified` 中目录仍存在的 run_id,T = 本次待通知集合;`notice_full` 成立当且仅当 |S ∪ T| > 1000。原文件超过 1000 条但清理后不超过、或恰好 1000 且 T 为空,都**不是** full。full 时:提案提示不发、不加入任何 run_id;采集开始提示**不受影响**(仍按 R20-17.13 判定、照常记 `collection_started_for` 并打印),写入时 `proposals_notified` 只做清理不新增。
-- R20-17.15 **预算**:尽力 ≤ 200ms(同 R20-3.2.1 的「尽力」口径,不含 Node 启动与单次系统调用);读取上限同 R20-17.4;每读完一个文件检查一次,超出即放弃且**此后零写入**(超时不留下迟到的记账)。失败一律静默(只写日志稳定码),不输出到终端。
+- R20-17.15 **预算**:尽力 ≤ 200ms(同 R20-3.2.1 的「尽力」口径,不含 Node 启动与单次系统调用);读取上限同 R20-17.4;每读完一个文件检查一次,超出即放弃且**此后零记账写入**(超时不留下迟到的 `notice.json` / tmp);唯一例外是 A6 订正 #1 的一行放弃日志。失败一律静默,不输出到终端。
 
 #### 20.17-4 hint 与 status
 
@@ -4979,7 +4979,7 @@ A6 实装(`src/rsi/{pending,dismiss,notice,project-stats}.ts`、`src/reflect/gc-
 
 - A6i-1 **稳定码总表**:见 R20-3.0 总表后的「A6 订正 #1」——并入 A6 新码、删除过时的「P1 预留(不实现)」行(其所列 A4 已启用的码并入对应行),枚举与总表同一提交。
 - A6i-2 **记账文件的读写形状(取代 R20-17.8 / R20-17.14 的隐含假设)**:`dismissed.json` / `notice.json` 的读取字节上限取 1 MiB(`RSI_ACCOUNT_FILE_MAX_BYTES`,须容得下 1000 条最长合法 run_id 的 canonical 序列化,保证「写出的都读得回来」;原先隐含的小上限会把合法产物判坏)。`notice.json` 的**读取形状**条数上限放宽到 20000(`RsiNoticeReadSchema`),写出形状严格 ≤ 1000(`RsiNoticeSchema`)——否则「原文件超过 1000 条但清理后不超过不是 full」(R20-17.14a)永远到不了 `notice_full` 谓词。`dismissed.json` 读写都严格 ≤ 1000(超出 = 损坏 `dismissed_invalid`)。
-- A6i-3 **提醒失败不写 `log.jsonl`(待主代理拍板)**:R20-17.14 / R20-17.15 写「日志记稳定码 / 只写日志稳定码」,但 `log.jsonl` 属快照提交协议(`commitUnderLock` 重算清单),而提醒记账是窄记账例外(订正 ② ⑧),不承担该协议。A6 实装:提醒的全部失败(损坏、超时、写失败、锁占用)**不写日志**,可见性由 `rsi status` / D17 的 warning(`notice_invalid`、`notice_full`)承担。若要恢复写日志,需先扩大窄记账例外的范围。
+- A6i-3 **提醒放弃写一行日志(用户 2026-11-03 拍板「加一行日志」,由 A6 订正 #1 落实)**:原 A6 实装不写日志,理由「`log.jsonl` 属快照提交协议」只对持锁改写成立;无锁单行追加是 R20-5.1 锁矩阵单列的写法(poke、worker 的 `skipped_locked` 先例),不属于快照清单。现行规则见 20.17-11。
 - A6i-4 **超时后零写入的边界(R20-17.15)**:截止时间在提醒入口建立一次、贯穿锁前与锁内,不重新计时;每次读取后复核;`writeAccountingFile` 在每个写点的 `assertHeld()` 之后、实际写入之前再复核,超出即抛、此后零写尝试(已创建的 `notice.json.tmp` 属超时之前的写入,下次写入时清理)。**释放自己持有的 `rsi/lock` 不算记账写入**,超时后仍执行。不用 `Promise.race` 式超时。
 - A6i-5 **扫描因时间预算放弃**:提醒的 200ms 预算在 `scanPending` 中超出时复用 `run_scan_budget`(`known: false`),按 R20-17.4a 提醒不发、不记账。
 - A6i-6 **扫描范围**:`scanPending` 只读 `counts.staged` 里属「暂存 run」(R20-17.1)的 run 的 `report.json`(其它目录只列举、不读);暂存 run 的目录不存在或不是真实目录计入 `unreadable_runs`。`known: true` 结果另带 `runDirs`(`reflect/` 下非点开头真实目录数)与 `dirNames`(供 `notice_full` 与清理);`known: false` 结果另带 `runDirs`(`staging.run_limit_reached` 即便扫描未知也能判定)。
@@ -4989,13 +4989,21 @@ A6 实装(`src/rsi/{pending,dismiss,notice,project-stats}.ts`、`src/reflect/gc-
 - A6i-10 **status 新键**:`counts.dismissed_runs` = 有效 `dismissed.json` 的条目数;配置 `off` 时新键全 0 / `false`;`staging` 为顶层新键(`run_limit_reached`、`bytes_checked: false`)。
 - A6i-11 **提醒的接线**:`launchAndSchedule` 中提醒是独立的第三个 `try`,位于 update 提示 / 调度之后、RSI 顺带调度之前(免得与后台 worker 抢 `rsi/lock`);TTY 判据为 stdin 与 stderr(R20-17.12),与顺带调度的 stdin / stdout 判据不同。
 
-- A6i-12 **`dismiss_full` 与 `notice_full` 在默认扫描上限下不可达(待主代理定夺)**:扫描只认 `reflect/` 的至多 1000 个直接子项(R20-17.4),而 `dismissed.json` 写入时只保留「目录仍存在」的条目、`notice_full` 的 S ∪ T 也只含目录仍存在的 run,二者都是目录集合的子集,故合并后的条数不可能超过 1000;契约要求的两个判定因此只在放宽上限的测试缝(`scanLimits`)下可构造。实现仍按契约保留这两条路径(防御性,且谓词为唯一实现 `noticeFull`);若契约本意是让它们在默认配置下可达,需放宽扫描上限或改变「目录仍存在」的清理口径。
+- A6i-12 **`dismiss_full` 与 `notice_full` 在默认扫描上限下不可达(用户 2026-11-03 拍板:保留为防御码)**:扫描只认 `reflect/` 的至多 1000 个直接子项(R20-17.4),而 `dismissed.json` 写入时只保留「目录仍存在」的条目、`notice_full` 的 S ∪ T 也只含目录仍存在的 run,二者都是目录集合的子集,故合并后的条数不可能超过 1000;契约要求的两个判定因此只在放宽上限的测试缝(`scanLimits`)下可构造。实现仍按契约保留这两条路径(防御性,且谓词为唯一实现 `noticeFull`);定论:两码保留为防御码(将来放宽扫描上限时生效),谓词测试继续经测试缝 `scanLimits` 覆盖;默认配置下不出现属预期,不是缺陷。
 - A6i-13 **`rsi dismiss` 干跑遇 `dismissed.json` 损坏**:R20-17.8 只规定写路径退 3、只读路径按「无已忽略」;干跑若照「无已忽略」列出一批 run,而 `--write` 必退 3,就预告了一个不可能执行的写入。A6 实装:干跑同样退 3 `RSI_FAIL_CLOSED reason=dismissed_invalid`(零写入)。
 - A6i-14 **D17 钩子面的优先级**:`inspectHooks` 先判残留 journal(`hooks_residue`,不判漂移、各 agent 事实记 `unknown`),残留清理后才会看到 `hooks_drifted`;D17 因此不会同时报两者。
 - A6i-15 **阶段一端到端用 claude 会话夹具**:R20-17.24 写「合成 pi 会话文件」,但 pi 会话的生产形状仍是「假设」(R20-17.27 / A5 形状核实),A3 的 L0 夹具只有 claude 的完整会话形状;`test/rsi/a6-e2e.test.ts` 阶段一据此用 claude。真实 pi 会话验收仍归 R20-17.27。
 
 - A6i-16 **R20-17.12 跳过清单有两处实现(债)**:环境类跳过在 `src/rsi/skip.ts`(`autoSkip`,与 poke / hint / worker / 顺带调度共用),命令类跳过(`rsi poke` / `rsi hint` / `__rsi`)在 `src/rsi/notice.ts` 的 `isHookCommand`;`rsi confirm` / `rsi purge` 不在清单内——它们返回后 `evaluate` 会因状态变化立即返回,跳过只是省一次读,属性能优化而非正确性,故不加。注意 `confirm` / `purge --write` 之前已有待通知 run 时,命令后仍会提醒,这是契约行为(清单之外不跳过)而不是回归。
 - A6i-17 **`RSI_FILE_OWNER` 留在 `lock-read.ts`(已知债)**:该常量是 `.state/rsi/` 下固定文件的属主 / 权限口径,已被 pending / read-state / observe / notice 等共用、与锁语义无关;最小改法是新建 `src/rsi/owner.ts` 并由 `lock-read.ts` 原样 re-export。本块未动(无关重构),随下次触碰 `lock-read.ts` 时处理。
+
+#### 20.17-11 A6 订正 #1(提醒放弃日志、GC 计划子码;用户 2026-11-03 拍板)
+
+- ① **提醒放弃日志**:提醒在「本应提醒却没提醒成」时追加一行 `log.jsonl`:`{at, trigger: notice, action: skipped, code}`,`code ∈ locked | over_budget | write_failed | not_eligible | internal`(`not_eligible` = 锁内复检时触发条件已不满足;`internal` = 配置就绪之后的意外异常,含记账已完成而 stderr 写失败——此时 `notice.json` 已记、不会重复提示)。跳过分支(R20-17.12 的非 TTY、环境跳过、钩子命令、配置不可用、锁外判定不满足触发条件,含 `notice.json` 损坏)与「没有要说的」**不写**。
+- ② **写法**:锁已释放(或从未拿到)之后,无锁 `O_APPEND` 单行追加(R20-5.1 锁矩阵);只在 `rsi/` 通过只读安全校验(`rsiDirReadonly`)时写,不建目录、不修权限、0600;日志写失败吞掉,不改命令退出码与 stderr。超时(`over_budget`)同样写这一行,不受 R20-17.15 预算约束(用户选「每次放弃都记一行」)。
+- ③ **去重**:写前以句柄级安全读取(属主 / 权限 / 非链接,≤ 256 KiB)读 `log.jsonl`,30 分钟内已有同 `code` 的 `trigger=notice` 行 → 不追加;读不了 / 不安全 → 不写(宁可少记;超过 256 KiB 视同读不了,直到持锁写入方按 R20-6.7 截断);行内 `at` 无法解析或晚于当前时间 → 视为不重复。追加以 `O_NOFOLLOW` 打开(校验与追加之间末级被换成符号链接 → 不写)。由此提醒的读集合追加 `log.jsonl`(只在放弃分支读)。
+- ④ **GC 计划子码**:`rsi status` 新增顶层键 `gc_plan_error: reference_scan_failed | root_unreadable | root_not_real_dir | internal | null`,与 warning `gc_plan_failed` 同时出现;由 `ReflectGcError.code` 白名单映射(未知码、非 `ReflectGcError` → `internal`),不输出异常消息。warning 名与 `RSI_STATUS_WARNINGS` 不变;status 键集测试同提交更新。
+- ⑤ **验收**:每个放弃分支恰好 1 行且过 `RsiLogLineSchema`、无路径;30 分钟内同码重复放弃不追加,不同码各 1 行;跳过分支零写(不建 `log.jsonl`);`rsi/` 缺失 / 不安全零写;`log.jsonl` 不安全(符号链接 / 权限过宽)零写;日志失败不改结果;GC 三种失败各对应子码、未知 → `internal`、成功 → `null`、异常消息不出现在输出里。变异:去掉去重 → 红;跳过分支也写 → 红;`rsi/` 不安全仍写 → 红;子码映射写死 `internal` → 红。
 
 ## 21. 自主 RSI 契约(R21,v3.1,契约先行;V1–V6 实装后订正)
 

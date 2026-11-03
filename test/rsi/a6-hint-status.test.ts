@@ -5,7 +5,8 @@ import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { RSI_HINT_STAGING_FULL_LINE, RSI_STAGING_MAX_RUNS } from '../../src/contracts/rsi.js';
 import { runHint, type RunHintDeps } from '../../src/rsi/hint.js';
-import { runStatus, type StatusDoc } from '../../src/rsi/status.js';
+import { gcPlanErrorOf, runStatus, type StatusDoc } from '../../src/rsi/status.js';
+import { ReflectGcError } from '../../src/reflect/gc-plan.js';
 import { mkdirp, symlink } from '../../src/io/safe-fs.js';
 import type { AuditCall } from '../helpers/write-audit.js';
 import {
@@ -169,6 +170,7 @@ describe('R20-17.18 status 追加字段与 gc 计划', () => {
     const ok = await status(f);
     expect(ok.counts.gc_candidates).toBe(1);
     expect(ok.warnings).not.toContain('gc_plan_failed');
+    expect(ok.gc_plan_error).toBeNull();
     // 引用来源目录被换成符号链接 → 计划失败(fail-closed),不改 status 的退出码
     const elsewhere = path.join(f.repo, 'elsewhere');
     await mkdirp(f.fx, elsewhere, 0o755);
@@ -177,7 +179,26 @@ describe('R20-17.18 status 追加字段与 gc 计划', () => {
     const bad = JSON.parse(r.out) as StatusDoc;
     expect([r.code, bad.counts.gc_candidates]).toEqual([0, null]);
     expect(bad.warnings).toContain('gc_plan_failed');
+    // A6 订正 #1:子码与 warning 同时出现;异常消息(中文说明)不进输出
+    expect(bad.gc_plan_error).toBe('reference_scan_failed');
+    expect(r.out).not.toMatch(/引用|目录/);
     expect(r.audit).toEqual([]);
+    const text = await runDirect(f, runStatus, [], { now: () => new Date(NOW) });
+    expect(text.out).toContain('gc_plan_error=reference_scan_failed\n');
+  });
+
+  it('A6 订正 #1:gc_plan_error 由 ReflectGcError.code 白名单映射;未知码 / 原型链上的名字 / 非 ReflectGcError → internal', () => {
+    expect(gcPlanErrorOf(new ReflectGcError('GC_REFERENCE_SCAN_FAILED', 'x'))).toBe(
+      'reference_scan_failed',
+    );
+    expect(gcPlanErrorOf(new ReflectGcError('GC_ROOT_UNREADABLE', 'x'))).toBe('root_unreadable');
+    expect(gcPlanErrorOf(new ReflectGcError('GC_ROOT_NOT_REAL_DIR', 'x'))).toBe(
+      'root_not_real_dir',
+    );
+    expect(gcPlanErrorOf(new ReflectGcError('GC_SOMETHING_NEW', 'x'))).toBe('internal');
+    expect(gcPlanErrorOf(new ReflectGcError('constructor', 'x'))).toBe('internal');
+    expect(gcPlanErrorOf(new Error('boom'))).toBe('internal');
+    expect(gcPlanErrorOf(undefined)).toBe('internal');
   });
 
   it('text 模式:新键同样以 key=value 输出,null 写成 -', async () => {
