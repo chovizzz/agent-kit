@@ -375,8 +375,10 @@ export async function buildStatusDoc(
   const scanWarnings: string[] = [];
   if (dismissed.kind === 'invalid') scanWarnings.push('dismissed_invalid');
   if (notice.kind === 'invalid') scanWarnings.push('notice_invalid');
-  if (!scan.known) scanWarnings.push(scan.reason);
-  else if (
+  if (!scan.known) {
+    if (scan.reason === 'run_scan_truncated') scanWarnings.push('run_scan_truncated');
+    else scanWarnings.push('run_scan_budget');
+  } else if (
     notice.kind !== 'invalid' &&
     noticeFull(notice.notice?.proposals_notified ?? [], scan.dirNames, scan.toNotify)
   ) {

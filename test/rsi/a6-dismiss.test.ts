@@ -8,7 +8,15 @@ import { readBytes } from '../../src/io/read-fs.js';
 import { mkdirp, remove, writeFile } from '../../src/io/safe-fs.js';
 import { runDismiss, parseDismissArgs, type RsiDismissDeps } from '../../src/rsi/dismiss.js';
 import { runStatus, type StatusDoc } from '../../src/rsi/status.js';
-import { dismissedDoc, makeA6World, putReport, putRsiFile, rsiFilePath } from './a6-fixture.js';
+import {
+  PROJECT_NAME,
+  auditRel,
+  dismissedDoc,
+  makeA6World,
+  putReport,
+  putRsiFile,
+  rsiFilePath,
+} from './a6-fixture.js';
 import { NOW, makeRoFx, runDirect, setExtra, type RoFx } from './ro-fixture.js';
 import { treeOf } from './rsi-fixture.js';
 
@@ -161,7 +169,7 @@ describe('R20-17.7 / R20-17.10 干跑与 --write 语义', () => {
     const r = await dis(f, ['--all', '--write']);
     expect(r.code).toBe(0);
     expect(r.audit.length).toBeGreaterThan(0); // 正向前提:确实有写
-    const rel = r.audit.map((a) => path.relative(f.io.stateDir, a.path));
+    const rel = auditRel(f, r.audit);
     const allowed = ['rsi/lock', 'rsi/dismissed.json', 'rsi/dismissed.json.tmp'];
     expect(rel.filter((x) => !allowed.includes(x))).toEqual([]);
     expect(rel).toContain('rsi/dismissed.json');
@@ -309,7 +317,7 @@ describe('R20-17.9 锁与窄记账例外', () => {
     expect(r.code).toBe(0);
     expect(await reflectTree(f)).toEqual(before);
     expect(await readDismissedIds(f)).toEqual(['r-1']);
-    const rel = r.audit.map((a) => path.relative(f.io.stateDir, a.path));
+    const rel = auditRel(f, r.audit);
     expect(rel.some((p) => p.startsWith('reflect/'))).toBe(false);
   });
 
@@ -328,7 +336,7 @@ describe('R20-17.9 锁与窄记账例外', () => {
 describe('R20-17.2 / R20-17.4a:归属与扫描未知的入口映射', () => {
   it('ingest 之后写下排除、worker 尚未 taint:该 run 已不计入(dismiss 看不到它),status 同口径', async () => {
     const f = await world('a6-dis-excl-', ['r-1']);
-    const proj = path.join(f.dir, 'work', 'proj');
+    const proj = path.join(f.dir, 'work', PROJECT_NAME);
     await setExtra(f, `exclude_dirs = [${JSON.stringify(proj)}]\n`);
     const r = await dis(f, ['--all']);
     expect([r.code, r.out]).toEqual([0, 'dismiss unchanged count=0\n']);
@@ -339,7 +347,7 @@ describe('R20-17.2 / R20-17.4a:归属与扫描未知的入口映射', () => {
 
   it('项目根消失(变 U):同样不计入', async () => {
     const f = await world('a6-dis-gone-', ['r-1']);
-    await remove(f.fx, path.join(f.dir, 'work', 'proj'));
+    await remove(f.fx, path.join(f.dir, 'work', PROJECT_NAME));
     const r = await dis(f, ['r-1']);
     expect([r.code, r.err]).toEqual([4, 'RSI_NOT_RUN reason=run_not_pending\n']);
   });

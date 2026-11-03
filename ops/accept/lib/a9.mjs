@@ -20,6 +20,8 @@ const ALLOWED = new Set([
   'src/io/read-fs.ts',
   'src/io/home-fs.ts',
   'src/io/hooks-fs.ts',
+  // 钩子区的只读出口(R20-17.20,A6):只含读取、没有任何写调用,doctor D17 只许经它读钩子区;HooksFs 继承它
+  'src/io/hooks-read.ts',
 ]);
 const FS_MOD = String.raw`(?:node:)?fs(?:\/promises)?`;
 const PATTERNS = [

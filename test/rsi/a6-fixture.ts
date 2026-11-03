@@ -17,6 +17,9 @@ import {
   type RoFx,
 } from './ro-fixture.js';
 
+/** 夹具项目目录名:足够独特,不会出现在合法输出里(`projects=` / `projects_collecting` 等不含它) */
+export const PROJECT_NAME = 'secret-workdir-q7';
+
 export type ReportMode = ReflectRunReport['mode'];
 
 /** 合法的 `report.json`(`staged` 为提案编号列表;非空时 outcome=staged) */
@@ -111,7 +114,7 @@ export async function makeA6World(
   runs: readonly StagedSpec[],
   o: { baselinePending?: boolean; confirm?: boolean } = {},
 ): Promise<A6World> {
-  const proj = await mkProject(f, 'proj');
+  const proj = await mkProject(f, PROJECT_NAME);
   const confirm = { ...(await validConfirm(f)), baseline_pending: o.baselinePending ?? false };
   await seed(f, {
     state: baseState({
@@ -135,4 +138,21 @@ export async function makeA6World(
     if (r.report !== false) await putReport(f, r.runId, r.mode ?? 'ingest', r.proposals ?? 1);
   }
   return { f, project: proj.path, confirmedAt: confirm.confirmed_at };
+}
+
+/**
+ * 写审计里相对 `stateDir` 的路径,去掉「拿锁的目录基础设施」:`acquireRsiLock` → `rsiDir()` 对**已存在**的 `.state` 与 `.state/rsi`
+ * 各做一次幂等 `mkdirp`(`src/rsi/rsi-dir.ts`;A1 起的既有锁路径,hint / a4 / a5 同样如此)。只按 op 精确放行 `mkdirp` + 这两个路径,
+ * 其余(含 `chmod`、对别处的 `mkdirp`)一律保留。
+ */
+export function auditRel(
+  f: Pick<RoFx, 'io'>,
+  audit: readonly { op: string; path: string }[],
+): string[] {
+  return audit
+    .filter((a) => {
+      const rel = path.relative(f.io.stateDir, a.path);
+      return !(a.op === 'mkdirp' && (rel === '' || rel === 'rsi'));
+    })
+    .map((a) => path.relative(f.io.stateDir, a.path));
 }

@@ -31,8 +31,9 @@ import {
   type A4World,
 } from './a4-fixture.js';
 import { makeTickFx } from './b5a-fixture.js';
+import { claudeLine, jl, put as putSession, uuid } from './l0-fixture.js';
 import { treeOf } from './rsi-fixture.js';
-import { NOW } from './ro-fixture.js';
+import { NOW, runDirect } from './ro-fixture.js';
 
 const audit = vi.hoisted(() => ({ llm: 0, sync: [] as string[], self: 0 }));
 vi.mock('../../src/io/llm-exec.js', async (orig) => {
@@ -66,6 +67,29 @@ const LINE_STARTED = /^RSI_COLLECTION_STARTED projects=\d+ excluded=\d+\n$/;
 describe('R20-17.24 端到端', () => {
   it('阶段一:合成会话 → rsi poke → 自动 L0 → rsi hint 出计数 → 首次 L0 后 TTY 命令提示一次采集开始(再跑不再出现)', async () => {
     const f = await makeTickFx('a6-e2e-l0-', { confirmed: true });
+    // 再造两类不同的纠正,各落在两个项目的独立会话里(去重会话数 2 = cluster_min):共 3 个聚类,hint 的 K ≥ 3 门槛成立
+    const extra = [
+      'from now on always run pnpm lint before committing',
+      'from now on never force push to the main branch',
+    ];
+    for (const [j, text] of extra.entries()) {
+      for (const i of [1, 2]) {
+        const n = 16 + j * 2 + i;
+        const cwd = path.join(f.dir, 'work', `proj${i}`);
+        await putSession(
+          f,
+          'claude',
+          `p/${uuid(n)}.jsonl`,
+          jl(
+            claudeLine(cwd, {
+              timestamp: `2026-10-0${i}T01:0${j}:00.000Z`,
+              message: { role: 'user', content: text },
+            }),
+            claudeLine(cwd, { timestamp: `2026-10-0${i}T01:0${j}:01.000Z` }),
+          ),
+        );
+      }
+    }
     const T = Date.parse(NOW) + 7 * 3600_000; // 距上次(从未)L0 足够久
     const calls: { args: readonly string[] }[] = [];
     const poke = await runPoke(['--agent', 'claude'], {
@@ -92,14 +116,19 @@ describe('R20-17.24 端到端', () => {
     });
     expect(w).toMatchObject({ kind: 'ran', outcome: 'ok' });
 
+    // L0 真的采到了信号:status 现算(2 个采集中项目、信号 > 0)
+    const st = await runDirect(f, runStatus, ['--json'], { now: () => new Date(T) });
+    const counts = (JSON.parse(st.out) as StatusDoc).counts;
+    expect(counts.projects_collecting).toBe(2);
+    expect(counts.signals_total).toBeGreaterThan(0);
+    // 首次 L0 完成即确认基线(新增项目 n = 0)、没有待审提案;3 个聚类使 hint 的 K ≥ 3 门槛成立 → 下一次 hint 出计数(R20-17.24)
+    expect(counts.clusters_pending).toBeGreaterThanOrEqual(3);
     const hint = await runHint(['--agent', 'claude'], {
       env: f.env,
       now: () => new Date(T),
       clockMs: () => 0,
     });
-    expect(hint).toMatch(
-      /^agent-kit RSI: 新信号 \d+、待反思聚类 \d+、待审提案 0、项目 2\(新增 2、/,
-    );
+    expect(hint).toMatch(/^agent-kit RSI: 新信号 \d+、待反思聚类 [3-9]\d*、待审提案 0、项目 2\(/);
 
     const lines: string[] = [];
     const n1 = await runRsiNotice(
@@ -181,7 +210,9 @@ describe('R20-17.24 端到端', () => {
     expect(after.counts.staged_runs).toBe(1); // 忽略不释放暂存容量
     const d17 = await collectD17({ home: w.s.f.home, env: w.env, now });
     expect(d17.facts.pending_runs).toBe(0);
-    expect(await runHint(['--agent', 'codex'], { env: w.env, now, clockMs: () => 0 })).toBe('');
+    // 待审提案已是 0(忽略生效);hint 仍会输出,因为 A4 夹具里两个项目是「新增」(n ≥ 1 的输出门槛)——这里只钉 M
+    const afterHint = await runHint(['--agent', 'codex'], { env: w.env, now, clockMs: () => 0 });
+    expect(afterHint).toContain('待审提案 0、');
 
     // exec 审计:没有任何 LLM CLI 被 spawn;子进程出口只有 git;没有 runSelf
     expect(audit.llm).toBe(0);

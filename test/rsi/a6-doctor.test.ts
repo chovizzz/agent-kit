@@ -17,7 +17,7 @@ import { chmod, mkdirp, rename, symlink, writeFile } from '../../src/io/safe-fs.
 import { inspectHooks } from '../../src/rsi/hooks/inspect.js';
 import { REPO_ROOT } from '../helpers/tmp.js';
 import { ROOT, closureOf, fsWriteUses } from './closure-util.js';
-import { dismissedDoc, makeA6World, putReport, putRsiFile } from './a6-fixture.js';
+import { PROJECT_NAME, dismissedDoc, makeA6World, putReport, putRsiFile } from './a6-fixture.js';
 import { baseState, makeRoFx, seed, setExtra, type RoFx } from './ro-fixture.js';
 import { treeOf } from './rsi-fixture.js';
 
@@ -183,11 +183,13 @@ describe('R20-17.19 采集面:按 §20.2 的配置结果判(不以 state 为前�
       [
         'run_scan_truncated',
         async (f) => {
+          // 普通文件而不是目录:子项总数 1001 > 1000 触发扫描未知,但 run 目录数仍 < 50(契约未规定两者优先级,夹具不让它们同时触发)
           for (let i = 0; i < 1000; i++) {
-            await mkdirp(
+            await writeFile(
               f.io,
               path.join(f.io.stateDir, 'reflect', `pad-${String(i).padStart(4, '0')}`),
-              0o755,
+              '',
+              { mode: 0o644 },
             );
           }
         },
@@ -380,6 +382,8 @@ describe('R20-17.19 钩子面(与 RSI 开关无关,R20-15.4)', () => {
 
   it('经 doctor:钩子残留报 hooks_residue(不报漂移),退出码 0;facts 带 hooks_residue 数量', async () => {
     const f = await alice('a6-dr-hk-cmd-');
+    // confirmed 世界:采集面 ok,于是钩子面的 warn 才是最高严重度(armed 会让采集面 warn,并列取采集面)
+    await makeA6World(f, [{ runId: 'r-1' }]);
     await hooksState(f, { ledger: piLedger(sha('x')), journals: [TXN] });
     const r = await doctor(f);
     expect(r.d17).toMatchObject({ status: 'warn', result: 'hooks_residue' });
@@ -450,7 +454,7 @@ describe('R20-17.20 只读、无绝对路径、不拿锁', () => {
     await hooksState(f, { ledger: piLedger(sha('x')), journals: [TXN] });
     for (const extra of [[], ['--json']]) {
       const r = await doctor(f, extra);
-      for (const needle of [f.dir, f.home, f.repo, f.io.stateDir, 'alice', 'proj']) {
+      for (const needle of [f.dir, f.home, f.repo, f.io.stateDir, 'alice', PROJECT_NAME]) {
         expect(r.out.includes(needle), `${needle}`).toBe(false);
       }
     }

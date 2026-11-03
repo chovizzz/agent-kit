@@ -15,6 +15,8 @@ import {
 import { runStatus, type StatusDoc } from '../../src/rsi/status.js';
 import type { AuditCall } from '../helpers/write-audit.js';
 import {
+  PROJECT_NAME,
+  auditRel,
   makeA6World,
   noticeDoc,
   putReport,
@@ -86,10 +88,13 @@ async function notice(
 const noticeFile = (f: RoFx): string => rsiFilePath(f, 'notice.json');
 const readNoticeDoc = async (
   f: RoFx,
-): Promise<{ proposals_notified: string[]; collection_started_for: string | null }> =>
-  JSON.parse(Buffer.from(await readBytes(noticeFile(f))).toString('utf8'));
+): Promise<{
+  schema_version: number;
+  proposals_notified: string[];
+  collection_started_for: string | null;
+}> => JSON.parse(Buffer.from(await readBytes(noticeFile(f))).toString('utf8'));
 const dataWrites = (r: Run, f: RoFx): string[] =>
-  r.audit.map((a) => path.relative(f.io.stateDir, a.path)).filter((p) => p !== 'rsi/lock');
+  auditRel(f, r.audit).filter((p) => p !== 'rsi/lock');
 
 async function world(
   prefix: string,
@@ -112,8 +117,9 @@ describe('R20-17.13 两行提示、R20-17.14 先写后印与至多一次', () =>
     ]);
     for (const l of r.err) expect(l).toMatch(LINE_RE);
     for (const l of r.err)
-      for (const needle of [f.dir, 'r-1', 'proj']) expect(l).not.toContain(needle);
+      for (const needle of [f.dir, 'r-1', PROJECT_NAME]) expect(l).not.toContain(needle);
     expect(await readNoticeDoc(f)).toEqual({
+      schema_version: 1,
       proposals_notified: ['r-1'],
       collection_started_for: w.confirmedAt,
     });
@@ -202,7 +208,7 @@ async function seedStaged(
   runs: string[],
   proposals: Record<string, number> = {},
 ): Promise<void> {
-  const proj = await mkProject(f, 'proj');
+  const proj = await mkProject(f, PROJECT_NAME);
   await seed(f, {
     index: indexOf([{ key: key(1), path: proj.path, dev: proj.dev, ino: proj.ino }]),
     counts: countsOf(

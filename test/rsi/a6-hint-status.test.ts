@@ -8,7 +8,14 @@ import { runHint, type RunHintDeps } from '../../src/rsi/hint.js';
 import { runStatus, type StatusDoc } from '../../src/rsi/status.js';
 import { mkdirp, symlink } from '../../src/io/safe-fs.js';
 import type { AuditCall } from '../helpers/write-audit.js';
-import { dismissedDoc, makeA6World, putReport, putRsiFile, reportDoc } from './a6-fixture.js';
+import {
+  PROJECT_NAME,
+  dismissedDoc,
+  makeA6World,
+  putReport,
+  putRsiFile,
+  reportDoc,
+} from './a6-fixture.js';
 import { NOW, makeRoFx, runDirect, setExtra, type RoFx } from './ro-fixture.js';
 
 const NOW_MS = Date.parse(NOW);
@@ -70,7 +77,10 @@ describe('R20-17.16 hint 的 M = 待审 run 里的提案数(订正 ③ ⑦)', ()
   it('写下排除、worker 尚未 taint:该 run 立即不计入(X 过滤);项目根消失(U)同理', async () => {
     const f = await makeRoFx('a6-hs-m-x-');
     await makeA6World(f, [{ runId: 'r-1' }]);
-    await setExtra(f, `exclude_dirs = [${JSON.stringify(path.join(f.dir, 'work', 'proj'))}]\n`);
+    await setExtra(
+      f,
+      `exclude_dirs = [${JSON.stringify(path.join(f.dir, 'work', PROJECT_NAME))}]\n`,
+    );
     expect((await hint(f)).out).toBe('');
     expect((await status(f)).counts.pending_runs).toBe(0);
   });
