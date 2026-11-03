@@ -9,6 +9,7 @@ import { loadRsiConfig } from '../../src/rsi/config.js';
 import { runProjects } from '../../src/rsi/projects.js';
 import { runStatus, type RsiStatusDeps, type StatusDoc } from '../../src/rsi/status.js';
 import { treeOf } from './rsi-fixture.js';
+import { putReport } from './a6-fixture.js';
 import {
   NOW,
   SALT_FP,
@@ -45,6 +46,7 @@ const OFF_KEYS = [
   'purge',
   'reason',
   'snapshot',
+  'staging',
   'state',
   'stop',
   'tainted',
@@ -52,6 +54,10 @@ const OFF_KEYS = [
 ];
 const COUNT_KEYS = [
   'clusters_pending',
+  'dismissed_runs',
+  'gc_candidates',
+  'pending_proposals',
+  'pending_runs',
   'projects_collecting',
   'projects_excluded',
   'projects_new',
@@ -61,6 +67,7 @@ const COUNT_KEYS = [
   'staged_runs',
   'tainted_runs',
   'unknown_signals',
+  'unreadable_runs',
 ];
 
 describe('R20-3.4.1 off 与各类配置问题:退出 0、reason 报码、键集合固定、零写入', () => {
@@ -209,6 +216,8 @@ async function fullScenario(): Promise<{ f: RoFx; a: string; b: string }> {
     ),
     tainted: { 'r-mark': JSON.stringify({ reason: 'purge', at: NOW }) },
   });
+  // A6(R20-17.2):待审 run 须有可读的 report.json;r-ok 是暂存 run,给它一份(其余 run 不是暂存 run,不读)
+  await putReport(f, 'r-ok', 'ingest', 2);
   return { f, a: a.path, b: b.path };
 }
 
@@ -230,6 +239,11 @@ describe('R20-4.3 ~ 4.6 现算 P / X / U 与计数口径', () => {
       staged_runs: 1, // r-ok
       staged_proposals: 2,
       tainted_runs: 2,
+      pending_runs: 1, // A6:r-ok 有可读 report.json、未被忽略
+      pending_proposals: 2,
+      dismissed_runs: 0,
+      unreadable_runs: 0,
+      gc_candidates: 0,
     });
     expect(d.tainted).toEqual([
       { run_id: 'r-mark', reason: 'purge' }, // TAINTED 文件里的原因

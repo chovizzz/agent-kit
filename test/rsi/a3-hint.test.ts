@@ -13,6 +13,7 @@ import { chmod, mkdirp, writeFile } from '../../src/io/safe-fs.js';
 import { buildRsiPolicy, loadRsiConfig, policyFingerprint } from '../../src/rsi/config.js';
 import { runHint, type RunHintDeps } from '../../src/rsi/hint.js';
 import { runStatus } from '../../src/rsi/status.js';
+import { putReport } from './a6-fixture.js';
 import { makeTickFx, type TickFx } from './b5a-fixture.js';
 import { rsiToml, treeOf, writeCfg } from './rsi-fixture.js';
 import {
@@ -106,6 +107,8 @@ async function confirmedWorld(prefix: string): Promise<{ f: TickFx; projs: strin
     index,
     counts,
   });
+  // A6(R20-17.2 / R20-17.16):M 只计「待审 run」——暂存 run 须有可读的 report.json(run_id 与目录名一致)
+  await putReport(f, 'r-20261020-000000-aaaaaa', 'ingest', 2);
   return { f, projs: ps.map((p) => p.path) };
 }
 
@@ -117,7 +120,7 @@ describe('R20-3.3.2 / R20-3.3.3 confirmed 模板与计数(与 rsi status 对拍)
     const c = (JSON.parse(st.out) as { counts: Record<string, number> }).counts;
     const out = await runHint(['--agent', 'claude'], deps(f));
     expect(out).toBe(
-      `agent-kit RSI: 新信号 ${c['signals_new_7d']}、待反思聚类 ${c['clusters_pending']}、待审提案 ${c['staged_proposals']}、项目 ${c['projects_collecting']}(新增 ${c['projects_new']}、排除 ${c['projects_excluded']}、归属不明 ${c['unknown_signals']})。仅在用户要求时使用技能 agent-kit-rsi。\n`,
+      `agent-kit RSI: 新信号 ${c['signals_new_7d']}、待反思聚类 ${c['clusters_pending']}、待审提案 ${c['pending_proposals']}、项目 ${c['projects_collecting']}(新增 ${c['projects_new']}、排除 ${c['projects_excluded']}、归属不明 ${c['unknown_signals']})。仅在用户要求时使用技能 agent-kit-rsi。\n`,
     );
     // 期望值本身(防两边一起错):N=2+1、K=4、M=2(tainted 不计)、P=3、n=1、X=0、U=2
     expect(out).toContain('新信号 3、待反思聚类 4、待审提案 2、项目 3(新增 1、排除 0、归属不明 2)');

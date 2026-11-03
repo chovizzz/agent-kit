@@ -4,12 +4,9 @@
  *
  * R20-A2 B5e:B5-0 登记的 `binding_changed`(拍板 Q-B,tick 的 `skipped_binding_changed` 的报码)已并入 §20.3 总表,订正正文在 §20.14 B5-0-1;
  * 例外清单随之清空(本文件保留为空表,下一次「枚举先于文档」的例外照此登记、并入后同一次提交删除)。
+ * R20-A6(R20-17.23):A4 登记的 7 个码(`purge_pending` 等、`RSI_INGEST_*` 等)与 A6 新码一并并入总表,例外清单再次清空;`docs/contracts.md` 的「A6 订正 #1」。
  */
-export const PENDING_DOC: Readonly<Record<string, readonly string[]>> = {
-  // R20-A4(docs/contracts.md §20.16 R20-16.21 / R20-16.5 / R20-16.14):A4 启用的码;总表待主代理并入
-  not_run: ['purge_pending', 'digest_backlog', 'policy_changed', 'rate_limited'],
-  top1: ['RSI_INGEST_TOO_LARGE', 'RSI_STAGING_FULL', 'RSI_INGEST_REJECTED'],
-};
+export const PENDING_DOC: Readonly<Record<string, readonly string[]>> = {};
 
 /**
  * 其中 §20.14 的订正条款**也还没写**的码(`rsi-codes-table` 对它们豁免「必须出现在 §20.14」这一条,并**反向断言它们确实还不在**)。

@@ -11,6 +11,7 @@ import * as path from 'node:path';
 import { ExitCode } from '../contracts/exit-codes.js';
 import {
   RSI_INDEX_MAX_ENTRIES,
+  RSI_STAGING_MAX_RUNS,
   RSI_STATUS_NEXT_REBUILD,
   RsiTaintMarkSchema,
   type RsiAgentId,
@@ -26,6 +27,8 @@ import { failExit } from './exit.js';
 import { currentCursorFingerprint } from './l0/fingerprint.js';
 import { evaluateAgentRoot } from './l0/roots.js';
 import { peekRsiLock, type RsiLockDeps } from './lock-read.js';
+import { noticeFull, readDismissed, readNotice, scanPending } from './pending.js';
+import { planReflectGc } from '../reflect/gc-plan.js';
 import { emitLines, forbiddenPaths, jsonLines } from './output.js';
 import { readRsiState, type RsiReadData } from './read-state.js';
 import type { OutLine } from './sanitize.js';
@@ -66,7 +69,16 @@ export interface StatusDoc {
     staged_runs: number;
     staged_proposals: number;
     tainted_runs: number;
+    /** A6(R20-17.18):扫描结果未知(`run_scan_truncated` / `run_scan_budget`)时为 `null` 并加同名 warning */
+    pending_runs: number | null;
+    pending_proposals: number | null;
+    dismissed_runs: number;
+    unreadable_runs: number | null;
+    /** 纯只读 GC 计划的候选数;计划失败 = `null` + warning `gc_plan_failed` */
+    gc_candidates: number | null;
   };
+  /** A6(R20-17.18):目录数口径;status 同样不扫字节,显式说明未检测 */
+  staging: { run_limit_reached: boolean; bytes_checked: false };
   last_tick: {
     at: string;
     trigger: string;
@@ -119,7 +131,13 @@ function offDoc(reason: string): StatusDoc {
       staged_runs: 0,
       staged_proposals: 0,
       tainted_runs: 0,
+      pending_runs: 0,
+      pending_proposals: 0,
+      dismissed_runs: 0,
+      unreadable_runs: 0,
+      gc_candidates: 0,
     },
+    staging: { run_limit_reached: false, bytes_checked: false },
     last_tick: null,
     breaker: { state: 'closed', kind: null, consecutive_failures: 0, until: null },
     index: { status: 'absent', entries: 0 },
@@ -249,10 +267,11 @@ async function indexRebuildRequired(
   return data.index.value !== null && data.index.value.salt_fp !== saltFp;
 }
 
-async function buildDoc(
+/** `rsi status` 与 doctor D17 共用的只读文档构造(A6 导出;`ctx` 只用到 `env`) */
+export async function buildStatusDoc(
   config: RsiConfigOn,
   data: RsiReadData,
-  ctx: RsiEarlyContext,
+  ctx: Pick<RsiEarlyContext, 'env'>,
   io: Parameters<typeof peekRsiLock>[0],
   deps: RsiStatusDeps,
 ): Promise<StatusDoc> {
@@ -341,6 +360,36 @@ async function buildDoc(
   }
   tainted.sort((a, b) => (a.run_id < b.run_id ? -1 : a.run_id > b.run_id ? 1 : 0));
 
+  // ---- A6:待审 / 已忽略 / 待通知(R20-17.18;唯一实现 pending.ts) ----
+  const rsiPath = data.rsiDir;
+  const stateDirOf = rsiPath === null ? io.stateDir : path.dirname(rsiPath);
+  const dismissed = await readDismissed(rsiPath);
+  const notice = await readNotice(rsiPath);
+  const scan = await scanPending({
+    stateDir: stateDirOf,
+    staged: c?.staged ?? [],
+    classify: att.classify,
+    dismissed: dismissed.ids,
+    notified: notice.kind === 'ok' ? new Set(notice.notice.proposals_notified) : new Set<string>(),
+  });
+  const scanWarnings: string[] = [];
+  if (dismissed.kind === 'invalid') scanWarnings.push('dismissed_invalid');
+  if (notice.kind === 'invalid') scanWarnings.push('notice_invalid');
+  if (!scan.known) scanWarnings.push(scan.reason);
+  else if (
+    notice.kind !== 'invalid' &&
+    noticeFull(notice.notice?.proposals_notified ?? [], scan.dirNames, scan.toNotify)
+  ) {
+    scanWarnings.push('notice_full');
+  }
+  let gcCandidates: number | null = null;
+  try {
+    gcCandidates = (await planReflectGc(io, now)).candidates.length;
+  } catch {
+    gcCandidates = null;
+    scanWarnings.push('gc_plan_failed');
+  }
+
   const confirmDoc = data.stateDoc.kind === 'ok' ? data.stateDoc.state.confirm : null;
   const confirm: StatusDoc['confirm'] =
     data.stateDoc.kind === 'confirm_schema_invalid'
@@ -393,7 +442,13 @@ async function buildDoc(
       staged_runs: stagedRuns,
       staged_proposals: stagedProposals,
       tainted_runs: tainted.length,
+      pending_runs: scan.known ? scan.pending.length : null,
+      pending_proposals: scan.known ? scan.pending.reduce((n, r) => n + r.proposals, 0) : null,
+      dismissed_runs: dismissed.runs.length,
+      unreadable_runs: scan.known ? scan.unreadable : null,
+      gc_candidates: gcCandidates,
     },
+    staging: { run_limit_reached: scan.runDirs >= RSI_STAGING_MAX_RUNS, bytes_checked: false },
     last_tick:
       lastTick === null
         ? null
@@ -423,7 +478,7 @@ async function buildDoc(
     purge: { journal: data.journalPresent ? 'present' : 'absent' },
     lock: await peekRsiLock(io, deps.lock),
     tainted,
-    warnings,
+    warnings: [...warnings, ...scanWarnings],
   };
 }
 
@@ -465,7 +520,7 @@ export async function runStatus(ctx: RsiEarlyContext, deps: RsiStatusDeps = {}):
     } else {
       const { io, config } = open.ctx;
       const data = await readRsiState(io);
-      doc = await buildDoc(config, data, ctx, io, deps);
+      doc = await buildStatusDoc(config, data, ctx, io, deps);
       forbidden = await forbiddenPaths(ctx.env, [io.stateDir, io.repoRoot, config.repo]);
     }
     const lines: OutLine[] = json

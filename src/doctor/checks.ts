@@ -1,5 +1,5 @@
 /**
- * S5:doctor 的 16 个检查(D01–D16,docs/contracts.md §19.3),每个是纯函数:输入是调用方探测好的只读快照 / 状态,
+ * S5:doctor 的 17 个检查(D01–D17;D17 为 A6,docs/contracts.md §19.3),每个是纯函数:输入是调用方探测好的只读快照 / 状态,
  * 输出是 CheckResult。本文件不读盘、不写盘、不联网、不读环境;所有字符串输出都经 types.ts 的过滤器。
  *
  * D05 / D06 / D07 / D08 复用 S3 的分类(`src/sync/classify.ts` 的 preflightEntry / currentOf 与 `planSync` 的计划),
@@ -14,7 +14,7 @@ import type { DiskEntry, SyncPlan } from '../sync/types.js';
 import { compareSemver, parseSemver } from '../update/policy.js';
 import type { Gate } from '../update/policy.js';
 import { en, iso, result, sha12, showPath, ver } from './types.js';
-import type { CheckResult } from './types.js';
+import type { CheckResult, DoctorStatus } from './types.js';
 
 const managed = (p: string): boolean => isHomeWritePath(p);
 
@@ -603,4 +603,60 @@ export function checkD16(last: LastAutoSync | undefined): CheckResult {
     facts,
     items,
   });
+}
+
+// ---------------------------------------------------------------------------
+// D17 rsi(契约 R20-17.19–R20-17.21;A6):采集面 + 钩子面合成
+// ---------------------------------------------------------------------------
+export interface D17Face {
+  status: DoctorStatus;
+  /** 该面的原因码(`ok` / `absent` / `disabled` / 配置原因码 / `stopped` / `hooks_residue` ……) */
+  result: string;
+}
+
+export interface D17Input {
+  collection: D17Face & { items: readonly string[] };
+  hooks: D17Face & {
+    agents: Readonly<Record<'claude' | 'codex' | 'pi', 'installed' | 'not_installed' | 'unknown'>>;
+    residue: number;
+  };
+  /** 采集面的计数(采集面 `n_a` / 读不了时为 null) */
+  facts: {
+    state: string | null;
+    projects_collecting: number | null;
+    projects_excluded: number | null;
+    pending_runs: number | null;
+    pending_proposals: number | null;
+    staging_run_limit_reached: boolean | null;
+  };
+}
+
+const SEVERITY: Readonly<Record<DoctorStatus, number>> = { n_a: 0, ok: 1, warn: 2, fail: 3 };
+
+/**
+ * result:两面都 `n_a` → `n_a`(result 取采集面);否则取严重度最高的一面(`fail > warn > ok`),`result` 取该面的原因码,并列时采集面优先。
+ * 全部 facts 只含枚举 / 计数 / 布尔:无绝对路径、无用户名、无提案正文。
+ */
+export function checkD17(i: D17Input): CheckResult {
+  const facts = {
+    state: en(i.facts.state ?? undefined),
+    projects_collecting: i.facts.projects_collecting,
+    projects_excluded: i.facts.projects_excluded,
+    pending_runs: i.facts.pending_runs,
+    pending_proposals: i.facts.pending_proposals,
+    staging_run_limit_reached: i.facts.staging_run_limit_reached,
+    'hooks.claude': i.hooks.agents.claude,
+    'hooks.codex': i.hooks.agents.codex,
+    'hooks.pi': i.hooks.agents.pi,
+    hooks_residue: i.hooks.residue,
+  };
+  const items = [
+    ...i.collection.items.map((c) => `collection:${c}`),
+    ...(i.hooks.status === 'warn' || i.hooks.status === 'fail' ? [`hooks:${i.hooks.result}`] : []),
+  ];
+  const pick = SEVERITY[i.hooks.status] > SEVERITY[i.collection.status] ? i.hooks : i.collection;
+  if (i.collection.status === 'n_a' && i.hooks.status === 'n_a') {
+    return result('D17', 'n_a', i.collection.result, { facts, items });
+  }
+  return result('D17', pick.status, pick.result, { facts, items });
 }

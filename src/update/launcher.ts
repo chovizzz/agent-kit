@@ -273,6 +273,19 @@ export async function launchAndSchedule(
     // 后台调度失败不影响本次命令
   }
   try {
+    // 提醒一次(R20-17.11):命令自身的锁已全部释放;与 update 提示、RSI 顺带调度各自隔离异常。先于顺带调度,免得与后台 worker 抢 rsi/lock
+    const { runRsiNotice } = await import('../rsi/notice.js');
+    const { hookEnv } = await import('../rsi/hook-entry.js');
+    await runRsiNotice({
+      argv,
+      env: hookEnv(),
+      isTty: process.stdin.isTTY === true && process.stderr.isTTY === true,
+      stderr,
+    });
+  } catch {
+    // 提醒失败不影响本次命令
+  }
+  try {
     // 自动 RSI 的顺带调度(R20-1.7):与 update 的调度并列、互不影响;模块本身零网络,失败一律吞掉
     const { scheduleRsiAfterCommand } = await import('../rsi/kit-schedule.js');
     const { hookEnv } = await import('../rsi/hook-entry.js');

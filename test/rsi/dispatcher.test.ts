@@ -59,6 +59,8 @@ const IMPLEMENTED = [
   // A5:`session --print`、`hooks`(行为测试在 test/rsi/hooks/)
   'session',
   'hooks',
+  // A6:`rsi dismiss`(行为测试在 a6-dismiss.test.ts)
+  'dismiss',
 ];
 /** A3 实装的钩子:经分发器(进程内 main)同样恒退 0、无输出;行为测试在 a3-poke / a3-hint / a3-entry / a3-dist */
 const HOOKS = ['poke', 'hint'];
@@ -123,6 +125,7 @@ describe('rsi 分发器', () => {
       const r = await run(['rsi', sub], bad);
       // tick 在配置 off 时按契约退 4 `RSI_NOT_RUN reason=off`(不是桩的 64,也不是通用路径的 3);confirm 无 TTY 先退 2 `not_tty`(先于任何读);purge 不带模式参数 → 2 mode_conflict(参数先于配置判定)
       // digest(A4):不带 --agent / --json → RSI_USAGE 退 2(R20-16.5,参数先于配置判定);同样不是通用路径的 3
+      // dismiss(A6):不带 run_id 也不带 --all → 2 mode_conflict(R20-17.5,参数先于配置判定)
       expect(r.code, sub).toBe(
         sub === 'tick'
           ? 4
@@ -130,7 +133,8 @@ describe('rsi 分发器', () => {
               sub === 'purge' ||
               sub === 'digest' ||
               sub === 'session' ||
-              sub === 'hooks'
+              sub === 'hooks' ||
+              sub === 'dismiss'
             ? 2
             : 0,
       );

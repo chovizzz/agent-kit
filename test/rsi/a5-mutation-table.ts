@@ -361,7 +361,8 @@ export const A5_MUTATIONS: readonly A5Mutation[] = [
     clause: '读取:目标 nlink == 1(R20-15.14)',
     edits: [
       {
-        file: 'src/io/hooks-fs.ts',
+        // A6(R20-17.20):读取实现拆到只读模块 hooks-read.ts(HooksFs 继承),锚点不变、只改文件
+        file: 'src/io/hooks-read.ts',
         anchor: '!st.isFile() ||\n        st.nlink !== 1 ||',
         replacement: '!st.isFile() ||\n        false ||',
       },

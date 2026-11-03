@@ -39,7 +39,7 @@ export type RsiEarlyContext = EarlyCommandContext;
 /** 一个 rsi 子命令。`name` 即命令行里的第二个词;`owner` 写后续负责实装的块(桩说明与交接用)。 */
 export interface RsiSubcommand {
   readonly name: string;
-  readonly owner: 'B3a' | 'B3b' | 'B3c' | 'B4' | 'B5' | 'A3' | 'A4' | 'A5';
+  readonly owner: 'B3a' | 'B3b' | 'B3c' | 'B4' | 'B5' | 'A3' | 'A4' | 'A5' | 'A6';
   run(ctx: RsiEarlyContext): Promise<number>;
 }
 

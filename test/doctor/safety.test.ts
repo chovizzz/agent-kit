@@ -256,7 +256,7 @@ describe('doctor:真实 HOME', () => {
     // 命令确实执行并给出汇总(不是因为用法错误提前退出)
     expect(r.code).not.toBe(2);
     expect(r.out).toMatch(/^doctor ok=\d+ warn=\d+ fail=\d+ n_a=\d+$/m);
-    expect((JSON.parse(j.out) as JsonReport).checks).toHaveLength(16);
+    expect((JSON.parse(j.out) as JsonReport).checks).toHaveLength(17);
     expect(r.out + j.out).not.toContain(real);
     expect(await realHomeDigest(real)).toBe(before);
   });
@@ -297,7 +297,7 @@ describe('doctor:用法与输出形状', () => {
     expect((JSON.parse(r.out) as JsonReport).checks.map((c) => c.id)).toEqual(['D01', 'D05']);
   });
 
-  it('--json:canonical JSON,键集合固定;16 项齐全且按 id 排序', async () => {
+  it('--json:canonical JSON,键集合固定;17 项齐全且按 id 排序', async () => {
     const w = await richWorld();
     const r = await runDoctor(w, ['--json']);
     const rep = JSON.parse(r.out) as JsonReport;

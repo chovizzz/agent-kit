@@ -8,6 +8,7 @@
  *  - 快照清单 + `.state/rsi/{state.json,projects.json,counts.json}`(`readVerified` 只核对这三个);
  *  - 索引根路径的 `lstat` / `realpath`(`attribute` 的探测,≤ 索引条目数);
  *  - `.state/rsi/STOP` 与 `.state/rsi/purge-journal.json` **只 `lstat` 判存在**(STOP → stopped → 空;journal 在 → 空,R20-3.8.5 ③)。
+ * A6(订正 ⑥):读集合追加 `<stateDir>/reflect/` 的直接子项列举、暂存 run 的 `report.json`(受 R20-17.4 上限)与 `.state/rsi/dismissed.json`;**不读** `notice.json`、不读 run 里的其它文件。
  * **不读**盐、信号库、会话计数、会话根、`cursor.json`、STOP 内容;不拿锁。计数由 `counts.json` + 当前配置 + 当前索引现算(R20-4.6),
  * 盐指纹只用 `projects.json` 与 `counts.json` 各自的 `salt_fp` 互相核对(`attribution.ts`)。
  *
@@ -27,6 +28,8 @@ import {
   RSI_HINT_DEDUP_MS,
   RSI_HINT_MAX_BYTES,
   RSI_HINT_MIN_CLUSTERS,
+  RSI_HINT_STAGING_FULL_LINE,
+  RSI_STAGING_MAX_RUNS,
   RsiCountsSchema,
   RsiProjectIndexSchema,
   type RsiAgentId,
@@ -37,12 +40,14 @@ import {
 import type { WriteAudit } from '../io/paths.js';
 import { lstat } from '../io/read-fs.js';
 import { createExclusive, mkdirp } from '../io/safe-fs.js';
-import { attribute, type AttributionProbe, type IndexStatus } from './attribution.js';
+import type { AttributionProbe, IndexStatus } from './attribution.js';
 import { buildRsiPolicy, policyFingerprint } from './config.js';
 import { armedListingForHint } from './l0/armed-listing.js';
 import { rsiDirReadonly } from './lock-read.js';
 import { rsiDir } from './rsi-dir.js';
 import { windowIndex } from './services/breaker.js';
+import { readDismissed, scanPending } from './pending.js';
+import { projectStats } from './project-stats.js';
 import { openRsiIo, type OpenRsiIoDeps } from './services/open.js';
 import { autoSkip } from './skip.js';
 import { readVerified } from './snapshot-read.js';
@@ -81,7 +86,7 @@ export interface HintCounts {
   N: number;
   /** 剔除 X 与 U 的证据后仍达门槛的聚类数 */
   K: number;
-  /** 证据全部归属「采集中」且不是 tainted 的暂存 run 里的提案数 */
+  /** 待审 run(R20-17.2)里的提案数 */
   M: number;
   P: number;
   n: number;
@@ -97,78 +102,12 @@ export function armedTemplate(p: number): string {
   return `agent-kit RSI: 待确认,将采集 ${showCount(p)} 个项目。仅在用户要求时运行 agent-kit rsi confirm。`;
 }
 
-function last7Days(now: Date): Set<string> {
-  const out = new Set<string>();
-  for (let i = 0; i < 7; i++) {
-    out.add(new Date(now.getTime() - i * 86_400_000).toISOString().slice(0, 10));
-  }
-  return out;
-}
-
 function parseJson(b: Buffer): unknown {
   try {
     return JSON.parse(b.toString('utf8'));
   } catch {
     return undefined;
   }
-}
-
-/** 计数现算(与 `rsi status` 同口径;`test/rsi/a3-hint.test.ts` 对拍) */
-export async function hintCounts(i: {
-  config: Parameters<typeof attribute>[0]['config'];
-  indexStatus: IndexStatus;
-  index: RsiProjectIndex | null;
-  counts: RsiCounts | null;
-  ackGen: number;
-  now: Date;
-  probe?: AttributionProbe;
-}): Promise<HintCounts> {
-  const att = await attribute({
-    config: i.config,
-    indexStatus: i.indexStatus,
-    index: i.index,
-    counts: i.counts,
-    ...(i.probe !== undefined ? { probe: i.probe } : {}),
-  });
-  const entries = i.index?.entries ?? [];
-  let P = 0;
-  let X = 0;
-  let n = 0;
-  for (const e of entries) {
-    const a = att.byKey.get(e.key);
-    if (a === 'P') {
-      P++;
-      if (e.first_indexed_generation > i.ackGen) n++;
-    } else if (a === 'X') X++;
-  }
-  const c = i.counts;
-  let U = c?.unknown_keys_signals ?? 0;
-  let N = 0;
-  let K = 0;
-  let M = 0;
-  if (c !== null) {
-    const days = last7Days(i.now);
-    for (const [k, v] of Object.entries(c.per_key)) {
-      const cls = att.classify(k);
-      if (cls === 'U') U += v.signals_total;
-      if (cls === 'P')
-        for (const [d, x] of Object.entries(v.signals_by_day)) if (days.has(d)) N += x;
-    }
-    for (const cl of c.clusters) {
-      let m = 0;
-      for (const [k, v] of Object.entries(cl.evidence_by_key)) if (att.classify(k) === 'P') m += v;
-      if (m >= c.cluster_min) K++;
-    }
-    for (const s of c.staged) {
-      if (s.tainted) continue;
-      if (s.evidence_keys.length > 0 && s.evidence_keys.every((k) => att.classify(k) === 'P')) {
-        M += s.proposals;
-      }
-    }
-  } else {
-    for (const e of entries) if (att.classify(e.key) === 'U') U += e.signals;
-  }
-  return { N, K, M, P, n, X, U };
 }
 
 /**
@@ -274,7 +213,7 @@ async function compose(
       if (!p.success) return null;
       counts = p.data;
     }
-    const c = await hintCounts({
+    const stats = await projectStats({
       config,
       indexStatus,
       index,
@@ -283,8 +222,38 @@ async function compose(
       now: (deps.now ?? ((): Date => new Date()))(),
       ...(deps.probe !== undefined ? { probe: deps.probe } : {}),
     });
-    if (!(c.K >= RSI_HINT_MIN_CLUSTERS || c.M >= 1 || c.n >= 1)) return null;
-    text = confirmedTemplate(c);
+    // R20-17.16 / R20-17.4:M = 待审 run 里的提案数(排除已忽略);读取集合追加 `reflect/` 子项列举、各 run 的 report.json、dismissed.json(订正 ⑥)。
+    // hint 不读 notice.json。扫描结果未知(子项过多 / 总读取超限)→ 本次空输出,零写入。
+    const dismissed = await readDismissed(d.kind === 'ok' ? d.dir : null);
+    const scan = await scanPending(
+      {
+        stateDir: d.kind === 'ok' ? path.dirname(d.dir) : io.stateDir,
+        staged: counts?.staged ?? [],
+        classify: stats.classify,
+        dismissed: dismissed.ids,
+        notified: null,
+      },
+      { over },
+    );
+    if (!scan.known) return null;
+    if (over()) return null;
+    // R20-17.17:暂存 run 目录数达到上限 → 换成一行满区提示(只数目录,不扫字节;不暗示 dismiss 能释放容量)
+    if (scan.runDirs >= RSI_STAGING_MAX_RUNS) {
+      text = RSI_HINT_STAGING_FULL_LINE;
+    } else {
+      const M = scan.pending.reduce((sum, r) => sum + r.proposals, 0);
+      const c: HintCounts = {
+        N: stats.N,
+        K: stats.K,
+        M,
+        P: stats.P,
+        n: stats.n,
+        X: stats.X,
+        U: stats.U,
+      };
+      if (!(c.K >= RSI_HINT_MIN_CLUSTERS || c.M >= 1 || c.n >= 1)) return null;
+      text = confirmedTemplate(c);
+    }
   } else {
     return null;
   }

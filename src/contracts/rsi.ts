@@ -60,6 +60,10 @@ export const RSI_NOT_RUN_REASONS = Object.freeze([
   'digest_backlog',
   'policy_changed',
   'rate_limited',
+  // R20-A6(R20-17.23):`rsi dismiss`
+  'run_not_pending',
+  'dismiss_full',
+  'run_scan_incomplete',
 ] as const);
 export const RSI_FAIL_CLOSED_REASONS = Object.freeze([
   'cfg_symlink',
@@ -95,6 +99,13 @@ export const RSI_FAIL_CLOSED_REASONS = Object.freeze([
   'hooks_target_unsafe',
   'hooks_backup_invalid',
   'hooks_ledger_invalid',
+  // R20-A6(R20-17.8 / R20-17.23):`dismissed.json` 损坏时写路径不覆盖
+  'dismissed_invalid',
+] as const);
+/** 顶层(0)信息行(R20-17.23):只在提醒条件下写 stderr,不改退出码 */
+export const RSI_INFO_LINE_CODES = Object.freeze([
+  'RSI_PROPOSALS_READY',
+  'RSI_COLLECTION_STARTED',
 ] as const);
 /** 顶层码,退出 1(R20-3.0 总表「顶层(1)」行):只登记,供「契约表 ↔ 枚举」一致性测试逐行比对 */
 export const RSI_EXIT1_CODES = Object.freeze([
@@ -656,6 +667,13 @@ export const RSI_STATUS_WARNINGS = Object.freeze([
   'index_full',
   'breaker_open',
   'index_rebuild_required',
+  // R20-A6(R20-17.4a / R20-17.18)
+  'run_scan_truncated',
+  'run_scan_budget',
+  'dismissed_invalid',
+  'notice_invalid',
+  'notice_full',
+  'gc_plan_failed',
 ] as const);
 export type RsiStatusWarning = (typeof RSI_STATUS_WARNINGS)[number];
 /** `rsi status` 文本模式「下一步」行的固定枚举词(`next=<词>`;不含路径) */
@@ -692,9 +710,11 @@ export const RSI_SUBCOMMANDS = Object.freeze([
   /** R20-A5:`rsi session --print`(可粘贴的 `[rsi.session]` 配置)与 `rsi hooks`(kit 钩子写入,§20.15) */
   'session',
   'hooks',
+  /** R20-A6:`rsi dismiss`(R20-17.5) */
+  'dismiss',
 ] as const);
-/** P1 预留子命令(§20.3 末段):P0 注册为命令桩,退出 64;不建入口文件 */
-export const RSI_P1_RESERVED_SUBCOMMANDS = Object.freeze(['dismiss', 'should-continue'] as const);
+/** P1 预留子命令(§20.3 末段):注册为命令桩,退出 64;不建入口文件。A6 起 `dismiss` 已是真子命令 */
+export const RSI_P1_RESERVED_SUBCOMMANDS = Object.freeze(['should-continue'] as const);
 
 // ---------------------------------------------------------------------------
 // A4(会话授权、`rsi digest`、`reflect --ingest`;docs/contracts.md §20.16)
@@ -867,3 +887,56 @@ export const VALIDATOR_DROPPED_TO_REJECT: Readonly<Record<string, RsiIngestRejec
 /** 暂存区容量(R20-6.7 / R20-16.15 第 2、11 步):50 个 run / 50MiB(按现有 `.state/reflect/` 计) */
 export const RSI_STAGING_MAX_RUNS = 50;
 export const RSI_STAGING_MAX_BYTES = 50 * 1024 * 1024;
+
+// ---------------------------------------------------------------------------
+// A6(待审判定、提醒一次、`rsi dismiss`;docs/contracts.md §20.17)
+// ---------------------------------------------------------------------------
+/** R20-17.4:`reflect/` 直接子项上限与单次扫描总读取上限、单个 `report.json` 上限 */
+export const RSI_SCAN_MAX_ENTRIES = 1000;
+export const RSI_SCAN_MAX_TOTAL_BYTES = 16 * 1024 * 1024;
+export const RSI_SCAN_MAX_REPORT_BYTES = 1024 * 1024;
+/** R20-17.8 / R20-17.14:`dismissed.json` 与 `notice.json` 的条数上限、读取字节上限 */
+export const RSI_DISMISSED_MAX = 1000;
+export const RSI_NOTICE_MAX = 1000;
+/** 读取字节上限须容得下写出的最大合法形状(1000 条 × 最长 64 字符 run_id + 时间戳 + canonical 缩进 < 400 KiB) */
+export const RSI_ACCOUNT_FILE_MAX_BYTES = 1024 * 1024;
+/** `notice.json` 读取形状可超过写出上限(R20-17.14a:原文件 > 1000 条但清理后不超限不是 full),读取侧条数上限 */
+export const RSI_NOTICE_READ_MAX = 20000;
+/** R20-17.15:提醒的尽力预算 */
+export const RSI_NOTICE_BUDGET_MS = 200;
+/** R20-17.17:暂存区达到 run 上限时 hint 的单行输出(不暗示 dismiss 能释放容量) */
+export const RSI_HINT_STAGING_FULL_LINE = `agent-kit RSI: 暂存区已达 ${RSI_STAGING_MAX_RUNS} 个 run 上限,新提案会被拒收;详情见 agent-kit rsi status`;
+/** R20-17.10 `rsi dismiss --json` 的 `result` */
+export const RSI_DISMISS_RESULTS = Object.freeze(['dry', 'dismissed', 'unchanged'] as const);
+
+const sortedUniqueIds = (a: readonly string[]): boolean =>
+  a.every((x, i) => i === 0 || (a[i - 1] as string) < x);
+
+/** `.state/rsi/dismissed.json`(R20-17.8):按 run_id 升序、唯一、≤ 1000 */
+export const RsiDismissedSchema = z
+  .strictObject({
+    schema_version: z.literal(1),
+    runs: z
+      .array(z.strictObject({ run_id: RunIdSchema, at: IsoTimestampSchema }))
+      .max(RSI_DISMISSED_MAX),
+  })
+  .refine((d) => sortedUniqueIds(d.runs.map((r) => r.run_id)), 'runs 须按 run_id 升序且唯一');
+export type RsiDismissed = z.infer<typeof RsiDismissedSchema>;
+
+/** `.state/rsi/notice.json`(R20-17.14) */
+export const RsiNoticeSchema = z
+  .strictObject({
+    schema_version: z.literal(1),
+    proposals_notified: z.array(RunIdSchema).max(RSI_NOTICE_MAX),
+    collection_started_for: z.string().min(1).max(64).nullable(),
+  })
+  .refine((d) => sortedUniqueIds(d.proposals_notified), 'proposals_notified 须升序且唯一');
+export type RsiNotice = z.infer<typeof RsiNoticeSchema>;
+/** 读取形状:条数上限放宽到 {@link RSI_NOTICE_READ_MAX}(其余同写出形状);提交前由写入方清理为 ≤ 1000 */
+export const RsiNoticeReadSchema = z
+  .strictObject({
+    schema_version: z.literal(1),
+    proposals_notified: z.array(RunIdSchema).max(RSI_NOTICE_READ_MAX),
+    collection_started_for: z.string().min(1).max(64).nullable(),
+  })
+  .refine((d) => sortedUniqueIds(d.proposals_notified), 'proposals_notified 须升序且唯一');

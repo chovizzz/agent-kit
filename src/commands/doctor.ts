@@ -30,8 +30,10 @@ import {
   checkD14,
   checkD15,
   checkD16,
+  checkD17,
 } from '../doctor/checks.js';
 import { Collector } from '../doctor/collect.js';
+import { collectD17 } from '../doctor/rsi-face.js';
 import type { CollectDeps } from '../doctor/collect.js';
 import { result } from '../doctor/types.js';
 import type { CheckResult } from '../doctor/types.js';
@@ -104,6 +106,14 @@ const FAIL_CLOSED_BY_RESULT: Readonly<Record<string, 'state_dir_unsafe' | 'state
   ledger_unreadable: 'state_unreadable',
 };
 
+/**
+ * result 字符串 → 顶层 fail-closed 原因。D17 不参与(契约 R20-17.20:D17 的 fail 走 §19 既有「fail 项」规则、退出 1,不新增顶层 fail-closed;
+ * 绑定检查项而不是靠 result 的拼写约定)。
+ */
+function failClosedOf(r: CheckResult): 'state_dir_unsafe' | 'state_unreadable' | undefined {
+  return r.id === 'D17' ? undefined : FAIL_CLOSED_BY_RESULT[r.result];
+}
+
 const STATE_DEPENDENT: readonly DoctorCheckId[] = ['D04', 'D05', 'D06', 'D07', 'D08', 'D12', 'D16'];
 
 function renderText(results: readonly CheckResult[], summary: Record<string, number>): string {
@@ -134,7 +144,7 @@ export function createDoctorCommand(deps: DoctorCommandDeps = {}): CommandDef {
     ownerBlock: 'S5',
     flags: [
       { name: '--json', description: 'stdout 输出 canonical JSON(键集合固定)' },
-      { name: '--only <id>', description: '只跑指定检查(D01–D16),可重复' },
+      { name: '--only <id>', description: '只跑指定检查(D01–D17),可重复' },
       {
         name: '--online',
         description: '多读一次 registry(本版未实现联网:D12 标 n_a,退出 4)',
@@ -220,6 +230,14 @@ export function createDoctorCommand(deps: DoctorCommandDeps = {}): CommandDef {
             if (s.s === 'unreadable') return result('D16', 'fail', 'state_unreadable');
             return checkD16(s.s === 'ok' ? s.state.last_auto_sync : undefined);
           }
+          case 'D17':
+            return checkD17(
+              await collectD17({
+                home,
+                env,
+                ...(deps.now !== undefined ? { now: deps.now } : {}),
+              }),
+            );
         }
       };
 
@@ -270,7 +288,7 @@ export function createDoctorCommand(deps: DoctorCommandDeps = {}): CommandDef {
       const codes: number[] = [];
       for (const r of results) {
         if (r.status === 'fail') {
-          const fc = FAIL_CLOSED_BY_RESULT[r.result];
+          const fc = failClosedOf(r);
           if (fc === undefined) {
             ctx.stderr(`DOCTOR_CHECK_FAILED check=${r.id} result=${r.result}\n`);
             codes.push(ExitCode.CHECK_FAILED);
@@ -279,7 +297,7 @@ export function createDoctorCommand(deps: DoctorCommandDeps = {}): CommandDef {
       }
       const fcReasons = new Set<string>();
       for (const r of results) {
-        const fc = FAIL_CLOSED_BY_RESULT[r.result];
+        const fc = failClosedOf(r);
         if (fc !== undefined) fcReasons.add(fc);
       }
       for (const fc of [...fcReasons].sort()) {
