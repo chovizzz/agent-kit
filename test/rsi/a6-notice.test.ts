@@ -525,7 +525,7 @@ describe('A6 订正 #1:提醒放弃时写一行 log.jsonl(去重、只读校验�
     expect(await noticeLogCodes(f)).toEqual(['locked', 'locked', 'over_budget']);
   });
 
-  it('写入失败(notice.json 位置被目录占住)→ code=write_failed', async () => {
+  it('写入失败(rename 前注入错误)→ code=write_failed', async () => {
     const { f } = await world('a6-nt-log-wf-');
     const r = await notice(f, {
       deps: {
