@@ -89,6 +89,7 @@ export const RSI_FAIL_CLOSED_REASONS = Object.freeze([
   'write_denied',
   'purge_incomplete',
   'output_leak',
+  'stdin_unreadable',
   'internal',
 ] as const);
 /** 顶层码,退出 1(R20-3.0 总表「顶层(1)」行):只登记,供「契约表 ↔ 枚举」一致性测试逐行比对 */

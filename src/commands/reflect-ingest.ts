@@ -18,6 +18,7 @@ import { ownerOk, runIngest, type IngestDeps, type IngestOutcome } from '../rsi/
 import { RsiLockError, withRsiLock } from '../rsi/lock.js';
 import { utcToday } from '../rsi/session.js';
 import { observeSessionFacts, stateGate } from '../rsi/session-facts.js';
+import { RsiFailClosedError } from '../rsi/types.js';
 import { invalidateForFacts } from '../rsi/session-invalidate.js';
 import { openRsiIo } from '../rsi/services/open.js';
 import type { OpenRsiIoDeps } from '../rsi/services/open.js';
@@ -106,8 +107,9 @@ export async function runReflectIngest(
   try {
     stdin = await resolveReadStdin(ctx)(RSI_INGEST_MAX_STDIN_BYTES);
   } catch (e) {
-    // stdin 读取失败(流错误):契约没有专门的码,按既有的 `RSI_FAIL_CLOSED reason=internal`(退出 3)报,待主代理定夺;此时尚未拿锁 / 动 digest / 占名额
-    return failExit(ctx.stderr, e);
+    // stdin 读取失败(流错误):退出 3 `RSI_FAIL_CLOSED reason=stdin_unreadable`(A4 实装订正 A4i-1);此时尚未拿锁 / 动 digest / 占名额
+    void e;
+    return failExit(ctx.stderr, new RsiFailClosedError('stdin_unreadable'));
   }
   if (stdin.tooLarge) {
     ctx.stderr('RSI_INGEST_TOO_LARGE\n');
