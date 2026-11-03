@@ -585,16 +585,16 @@ export async function planDiscard(
   txnId: string,
 ): Promise<DiscardComputed> {
   const j = await loadJournal(env, txnId);
-  if (j === null || j.agent !== agent) throw notRun('txn_residue_unknown');
+  if (j === null || j.agent !== agent) throw notRun('residue_not_discardable');
   const cur = await targetState(env, agent);
   if (j.state === 'discarding') return { journal: j, current: cur };
-  // 契约只授权「第三种值」从这里退出;其它状态不强行记 discarded(评审采纳,缺口列为待定夺)
+  // 契约只授权「第三种值」从这里退出;其它状态不强行记 discarded,退 residue_not_discardable(A5 订正 #2)
   if (
     j.state !== 'in_progress' ||
     is(cur, j.after_exists, j.after_sha256) ||
     is(cur, j.before_exists, j.before_sha256)
   ) {
-    throw notRun('txn_residue_unknown');
+    throw notRun('residue_not_discardable');
   }
   return { journal: j, current: cur };
 }

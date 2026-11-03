@@ -11,8 +11,8 @@
  *
  * 契约未规定码的两处缺口(列为「待主代理定夺」,这里取最保守的既有码):
  *  - `PI_CODING_AGENT_DIR` 已设时 pi 的写对象仍是固定的 `~/.pi/agent/...`(R20-15.2 不可配置),但 pi 实际会读覆盖目录,扩展不会被加载——
- *    install / uninstall / restore(pi)一律退 4 `agent_not_installed`(暂借;应补专用原因码);
- *  - `--discard-residue` 所选 journal 不存在、不属于该 agent、或目标不是「第三种值」(契约只授权第三种值从这里退出)→ 退 4 `txn_residue_unknown`(暂借),不强行记 discarded。
+ *    install / uninstall / restore(pi)一律退 4 `agent_dir_overridden`(A5 订正 #2);
+ *  - `--discard-residue` 所选 journal 不存在、不属于该 agent、或目标不是「第三种值」(契约只授权第三种值从这里退出)→ 退 4 `residue_not_discardable`(A5 订正 #2),不强行记 discarded。
  */
 import { ExitCode } from '../../contracts/exit-codes.js';
 import {
@@ -338,7 +338,7 @@ export async function runHooksCommand(ctx: RsiEarlyContext, deps: HooksDeps = {}
     ): Promise<Computed> => {
       const shape = shapes[agent];
       const variant = variantOf(agent);
-      if (agent === 'pi' && piDirIsSet(ctx.env)) throw notRun('agent_not_installed');
+      if (agent === 'pi' && piDirIsSet(ctx.env)) throw notRun('agent_dir_overridden');
       if (!(await (fs as HooksFs).agentRootExists(agent))) throw notRun('agent_not_installed');
       const ledger = await ledgerForPlan(env);
       const target = await (fs as HooksFs).readTarget(agent);
@@ -425,7 +425,7 @@ export async function runHooksCommand(ctx: RsiEarlyContext, deps: HooksDeps = {}
       const agent = p.agent as RsiAgentId;
       const txn = p.txn as string;
       snap.verified = isShapeWritable(shapes[agent], await deps.agentVersion?.(agent));
-      if (agent === 'pi' && piDirIsSet(ctx.env)) throw notRun('agent_not_installed');
+      if (agent === 'pi' && piDirIsSet(ctx.env)) throw notRun('agent_dir_overridden');
       if (!(await fs.agentRootExists(agent))) throw notRun('agent_not_installed');
       const first = await planRestore(env, agent, txn, pathDisplay(agent));
       snap.plan = { kind: 'restore', before_exists: first.current.exists, ops: [] };

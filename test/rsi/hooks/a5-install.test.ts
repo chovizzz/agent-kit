@@ -774,15 +774,20 @@ describe('codex 与 pi', () => {
     }
   });
 
-  it('PI_CODING_AGENT_DIR 已设:pi 的 install / uninstall 不碰固定位置(暂借 agent_not_installed,缺口待定夺)', async () => {
+  it('PI_CODING_AGENT_DIR 已设:pi 的 install / uninstall / restore 不碰固定位置 → agent_dir_overridden(A5 订正 #2)', async () => {
     const hx = await makeHx('a5-pi-dir-');
     await hx.agentRoot('pi');
-    const r = await hx.write(['--install', '--agent', 'pi'], {
-      envExtra: { PI_CODING_AGENT_DIR: '/somewhere/else' },
-    });
-    expect(r.code).toBe(4);
-    expect(r.err).toBe('RSI_HOOKS_NOT_RUN reason=agent_not_installed\n');
-    expect(r.audit).toEqual([]);
+    // 评审采纳:install / uninstall / restore 三条路径各自断言(restore 的覆盖目录检查是独立分支,先于 planRestore)
+    for (const args of [
+      ['--install', '--agent', 'pi'],
+      ['--uninstall', '--agent', 'pi'],
+      ['--restore', '20260101T000000Z-0000000000000001', '--agent', 'pi'],
+    ]) {
+      const r = await hx.write(args, { envExtra: { PI_CODING_AGENT_DIR: '/somewhere/else' } });
+      expect(r.code, args.join(' ')).toBe(4);
+      expect(r.err, args.join(' ')).toBe('RSI_HOOKS_NOT_RUN reason=agent_dir_overridden\n');
+      expect(r.audit, args.join(' ')).toEqual([]);
+    }
   });
 
   it('agent 根不存在 → 4 agent_not_installed;kit 不替 agent 建根目录', async () => {
