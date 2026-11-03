@@ -118,8 +118,11 @@ describe('Codex reader 只读(fs 层 flags 记录)', () => {
     const onSource = rec.calls.filter(under(w.sessions));
     // 3 次 = discover 的首行判定 + 基类预扫(找第一个有效时间戳)+ 主读;实现形状变了就改这里
     // 正向前提:真读了会话文件、也探了侧链文件首行(否则「没有写调用」是空话)
-    expect(onSource.filter((c) => c.path === main && c.api === 'createReadStream').length).toBe(3); // discover 首行 + 预扫 + 主读
-    expect(onSource.filter((c) => c.path === side && c.api === 'createReadStream').length).toBe(1);
+    // 会话文件现经 read-fs.readLinesSafe(fsp.open,O_RDONLY|O_NOFOLLOW|O_NONBLOCK)打开,不再是裸 createReadStream;正向前提计 open
+    const opens = (p: string) =>
+      onSource.filter((c) => c.path === p && (c.api === 'createReadStream' || c.api === 'open'));
+    expect(opens(main).length).toBe(3); // discover 首行 + 预扫 + 主读
+    expect(opens(side).length).toBe(1);
     for (const c of onSource) {
       expect(
         READ_OPENERS.includes(c.api) || c.api === 'createReadStream',

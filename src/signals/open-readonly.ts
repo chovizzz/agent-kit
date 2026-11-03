@@ -7,7 +7,7 @@
  *  2. 观察者垫片:测试可挂 `setOpenObserver` 记录每次打开(路径 + 声明的 flags);
  *  3. 测试另用 vi.mock('node:fs') 在 fs 层记录真实 flags(test/signals/readonly.test.ts)。
  */
-import { readLines, readText, stat } from '../io/read-fs.js';
+import { readLinesSafe, readText, stat } from '../io/read-fs.js';
 import type { Stats } from '../io/read-fs.js';
 
 export interface OpenEvent {
@@ -29,12 +29,14 @@ export function setOpenObserver(fn: Observer | undefined): Observer | undefined 
 
 /**
  * 逐行流式读取(去 `\n` / `\r\n`,保留空行)。大文件不会被整体读入内存。
- * 行分隔符只认 `\n`(口径 C2):底层是 read-fs.readLines 的按字节读取,**不用 node:readline**,
+ * 打开走 read-fs.readLinesSafe(`O_NOFOLLOW | O_NONBLOCK` + fstat):最终路径是符号链接 / FIFO / 设备 / 目录时抛
+ * UnsafeSessionFileError(不阻塞、不跟随),由管线按该会话的 read_error 计(errorClass = UnsafeSessionFileError),不会当空文件。
+ * 行分隔符只认 `\n`(口径 C2):底层是 read-fs.readLinesSafe 的按字节读取,**不用 node:readline**,
  * 所以行内裸 `\r`、U+2028/U+2029 都不会把一行切开;单行超过 MAX_LINE_BYTES(64MiB)时产出 TOO_LONG_LINE 占位。
  */
 export function openReadonlyLines(path: string): AsyncGenerator<string, void, undefined> {
   observer?.({ path, flags: 'O_RDONLY', purpose: 'lines' });
-  return readLines(path);
+  return readLinesSafe(path);
 }
 
 export async function statReadonly(path: string): Promise<Stats> {

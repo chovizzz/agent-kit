@@ -1,6 +1,7 @@
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { readText } from '../../src/io/read-fs.js';
+import { REPO_ROOT } from '../helpers/tmp.js';
 import { makeFixture, runMain } from './helpers.js';
 
 interface Snap {
@@ -37,19 +38,16 @@ const VOLATILE = `~/.claude/projects/**
 **/.DS_Store
 `;
 
-async function snap(fx: Awaited<ReturnType<typeof makeFixture>>, name: string): Promise<Snap> {
+async function snap(
+  fx: Awaited<ReturnType<typeof makeFixture>>,
+  name: string,
+  env: Record<string, string> = {},
+): Promise<Snap> {
   const o = path.join(fx.out, name);
-  const r = runMain([
-    'snap',
-    '--repo',
-    fx.repo,
-    '--home',
-    fx.home,
-    '--base-ref',
-    '',
-    '--out-root',
-    o,
-  ]);
+  const r = runMain(
+    ['snap', '--repo', fx.repo, '--home', fx.home, '--base-ref', '', '--out-root', o],
+    env,
+  );
   expect(r.status, r.stderr).toBe(0);
   return JSON.parse(await readText(path.join(o, 'snapshot.json'))) as Snap;
 }
@@ -179,6 +177,156 @@ describe('快照语法:字面 / glob / 目录 / 注释空行', () => {
     expect(j.outside_links).toEqual(['~/.claude/CLAUDE.md']);
     expect(j.paths['~/.claude/CLAUDE.md']?.target?.outside).toBe(true);
     expect(j.paths['~/.claude/CLAUDE.md']?.target?.sha).toBeUndefined();
+  });
+});
+
+describe('B17 盲区 ②:嵌套目录符号链接的目标同样被监视', () => {
+  /** skills/s1/lnk -> ~/shared(二层、指向 HOME 内目录) */
+  async function setup(volatile = '') {
+    const fx = await makeFixture('~/.claude/skills/\n', volatile);
+    await fx.put('.claude/skills/s1/SKILL.md', '# s1\n');
+    await fx.put('shared/f.md', 'v1\n');
+    await fx.put('shared/cache/c.bin', 'c1\n');
+    await fx.link('.claude/skills/s1/lnk', '../../../shared');
+    return fx;
+  }
+
+  it('写进链接目标的文件 => 快照有差异;目标没变 => 无差异(正向对照)', async () => {
+    const fx = await setup();
+    await snap(fx, 'n1');
+    await snap(fx, 'n2');
+    expect(diff(fx, 'n1', 'n2').d.count).toBe(0);
+    await fx.put('shared/f.md', 'v2-changed\n');
+    await snap(fx, 'n3');
+    expect(diff(fx, 'n1', 'n3').d.changed.map((c) => c.path)).toEqual(['~/.claude/skills/s1']);
+    // 目标里新增文件同样可见
+    await fx.put('shared/new.md', 'x\n');
+    await snap(fx, 'n4');
+    expect(diff(fx, 'n3', 'n4').d.changed.map((c) => c.path)).toEqual(['~/.claude/skills/s1']);
+  });
+
+  it('volatile 按「链接路径」判:链接目标下被 volatile 命中的子树改动不报,其余照报', async () => {
+    const fx = await setup('~/.claude/skills/s1/lnk/cache/**\n');
+    await snap(fx, 'v1');
+    await fx.put('shared/cache/c.bin', 'c2\n');
+    await snap(fx, 'v2');
+    expect(diff(fx, 'v1', 'v2').d.count).toBe(0);
+    await fx.put('shared/f.md', 'v2\n');
+    await snap(fx, 'v3');
+    expect(diff(fx, 'v2', 'v3').d.count).toBe(1);
+  });
+
+  it('多层嵌套链接:volatile 按最外层「链接路径」逐层翻译(内层目标下的 volatile 行生效),其余照报', async () => {
+    const fx = await makeFixture('~/.claude/skills/\n', '~/.claude/skills/s1/lnk/inner/cache/**\n');
+    await fx.put('.claude/skills/s1/SKILL.md', '# s1\n');
+    await fx.put('shared/f.md', 'v1\n');
+    await fx.put('shared2/cache/x', 'x1\n');
+    await fx.put('shared2/keep.md', 'k1\n');
+    await fx.link('.claude/skills/s1/lnk', '../../../shared'); // s1/lnk -> ~/shared
+    await fx.link('shared/inner', '../shared2'); // ~/shared/inner -> ~/shared2(链上的链)
+    await snap(fx, 'm1');
+    await fx.put('shared2/cache/x', 'x2\n');
+    await snap(fx, 'm2');
+    expect(diff(fx, 'm1', 'm2').d.count).toBe(0); // volatile 命中
+    await fx.put('shared2/keep.md', 'k2\n');
+    await snap(fx, 'm3');
+    expect(diff(fx, 'm2', 'm3').d.changed.map((c) => c.path)).toEqual(['~/.claude/skills/s1']);
+  });
+
+  it('指向遍历根祖先的链接记为环、不展开:祖先里无关兄弟的改动不算到本树头上', async () => {
+    const fx = await makeFixture('~/.claude/skills/\n', '');
+    await fx.put('.claude/skills/s1/SKILL.md', '# s1\n');
+    await fx.put('.claude/skills/s3/SKILL.md', '# s3\n');
+    await fx.link('.claude/skills/s1/up', '..'); // -> skills/(s1 的祖先)
+    await snap(fx, 'y1');
+    await fx.put('.claude/skills/s3/SKILL.md', '# s3 changed\n');
+    await snap(fx, 'y2');
+    // s3 自己是受管顶层条目,单独报;s1 的摘要不因 up 展开而跟着变
+    expect(diff(fx, 'y1', 'y2').d.changed.map((c) => c.path)).toEqual(['~/.claude/skills/s3']);
+  });
+
+  it('环与重复:链到自己 / 祖先 / 树内兄弟都不挂不爆,且目标仍被监视', async () => {
+    const fx = await makeFixture('~/.claude/skills/\n', '');
+    await fx.put('.claude/skills/s1/SKILL.md', '# s1\n');
+    await fx.put('.claude/skills/s2/SKILL.md', '# s2\n');
+    await fx.link('.claude/skills/s1/self', '.'); // 自己
+    await fx.link('.claude/skills/s1/up', '..'); // 祖先(skills/)
+    await fx.link('.claude/skills/s1/sib', '../s2'); // 另一棵受管树
+    const a = await snap(fx, 'c1');
+    const rec = (a.paths['~/.claude/skills/s1'] ?? {}) as { tree?: string };
+    expect(typeof rec.tree).toBe('string');
+    await fx.put('.claude/skills/s2/SKILL.md', '# s2 changed\n');
+    await snap(fx, 'c2');
+    const changed = diff(fx, 'c1', 'c2').d.changed.map((c) => c.path);
+    // s2 自己变了;s1 通过 sib 看得到同一改动
+    expect(changed).toEqual(['~/.claude/skills/s1', '~/.claude/skills/s2']);
+  });
+
+  it('目标在凭据位置:不读内容(不泄漏),只登记为盲区链接', async () => {
+    const fx = await makeFixture('~/.claude/skills/\n', '');
+    await fx.put('.claude/skills/s1/SKILL.md', '# s1\n');
+    await fx.put('.ssh/id', 'PRIVATE-CONTENT');
+    await fx.link('.claude/skills/s1/k', '../../../.ssh');
+    const o = path.join(fx.out, 'sens');
+    runMain(['snap', '--repo', fx.repo, '--home', fx.home, '--base-ref', '', '--out-root', o]);
+    const text = await readText(path.join(o, 'snapshot.json'));
+    expect(text).not.toContain('PRIVATE-CONTENT');
+    expect(text).toContain('~/.claude/skills/s1/k');
+  });
+});
+
+describe('B17 盲区 ③:macOS ~/Library 监视面', () => {
+  const lib = async (fx: Awaited<ReturnType<typeof makeFixture>>) => {
+    await fx.put('Library/Application Support/SomeApp/data', 'x');
+    await fx.put('Library/Preferences/org.example.app.plist', 'p');
+  };
+  const DARWIN = { KIT_OPS_PLATFORM: 'darwin' };
+  const LINUX = { KIT_OPS_PLATFORM: 'linux' };
+
+  it('darwin 上监视两个目录的名字表;非 darwin 不监视(正向 / 负向对照)', async () => {
+    const fx = await makeFixture('~/.claude/CLAUDE.md\n', '');
+    await lib(fx);
+    const d = await snap(fx, 'd', DARWIN);
+    expect(d.paths['watch:~/Library/Application Support']?.names).toEqual(['SomeApp']);
+    expect(d.paths['watch:~/Library/Preferences']?.names).toEqual(['org.example.app.plist']);
+    const l = await snap(fx, 'l', LINUX);
+    expect(l.paths['watch:~/Library/Application Support']).toBeUndefined();
+    expect(l.paths['watch:~/Library/Preferences']).toBeUndefined();
+  });
+
+  it('命令绕过假 HOME 在 ~/Library 下新建条目 => darwin 下有差异;linux 下看不见', async () => {
+    const fx = await makeFixture('~/.claude/CLAUDE.md\n', '');
+    await lib(fx);
+    await snap(fx, 'b', DARWIN);
+    await snap(fx, 'bl', LINUX);
+    await fx.put('Library/Application Support/agent-kit/x', 'leak');
+    await fx.put('Library/Preferences/dev.agent-kit.plist', 'leak');
+    await snap(fx, 'a', DARWIN);
+    await snap(fx, 'al', LINUX);
+    expect(diff(fx, 'b', 'a').d.changed.map((c) => c.path)).toEqual([
+      'watch:~/Library/Application Support',
+      'watch:~/Library/Preferences',
+    ]);
+    expect(diff(fx, 'bl', 'al').d.count).toBe(0);
+  });
+
+  it('真实 volatile-paths.txt 的 macOS 段:系统常态条目不报,第三方新条目照报', async () => {
+    const vol = await readText(path.join(REPO_ROOT, 'ops', 'volatile-paths.txt'));
+    const fx = await makeFixture('~/.claude/CLAUDE.md\n', vol);
+    await lib(fx);
+    await snap(fx, 'b', DARWIN);
+    await fx.put('Library/Preferences/com.apple.finder.plist', 'sys');
+    await fx.put('Library/Preferences/ByHost/com.apple.x.plist', 'sys');
+    await fx.put('Library/Preferences/.GlobalPreferences.plist', 'sys');
+    await fx.put('Library/Application Support/CrashReporter/r.plist', 'sys');
+    await fx.put('Library/Application Support/com.apple.sharedfilelist/x', 'sys');
+    await snap(fx, 'a1', DARWIN);
+    expect(diff(fx, 'b', 'a1').d.count).toBe(0);
+    await fx.put('Library/Application Support/BrandNewApp/x', 'new');
+    await snap(fx, 'a2', DARWIN);
+    expect(diff(fx, 'a1', 'a2').d.changed.map((c) => c.path)).toEqual([
+      'watch:~/Library/Application Support',
+    ]);
   });
 });
 

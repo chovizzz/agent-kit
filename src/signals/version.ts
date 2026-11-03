@@ -33,3 +33,25 @@ export function resolveAgentVersion(
   }
   return { version: fallback, source: 'collector_fallback' };
 }
+
+/** 逐段数值比较的 X.Y.Z 元组;形状不对返回 null(不接受预发布后缀以外的东西)。 */
+function parseTriple(v: string | undefined): [number, number, number] | null {
+  const m = /^([0-9]+)\.([0-9]+)\.([0-9]+)/.exec(v ?? '');
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+}
+
+/**
+ * codex 会话版本是否「不能证明 tool_failures 可见」:版本未知或 < 0.149.0 → true。
+ * 逐段数值比较:JS 的数组 `<` 会把数组转成字符串按字典序比(0.80.0 会被当成 >= 0.149.0),不能用。
+ */
+export function isCodexPre0149(version: string | undefined): boolean {
+  const t = parseTriple(version);
+  if (t === null) return true;
+  const min = [0, 149, 0] as const;
+  for (let i = 0; i < 3; i++) {
+    const a = t[i] as number;
+    const b = min[i] as number;
+    if (a !== b) return a < b;
+  }
+  return false;
+}

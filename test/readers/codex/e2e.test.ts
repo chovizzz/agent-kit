@@ -135,6 +135,19 @@ describe('collect 端到端(codex)', () => {
     for (const x of rows) expect(x.agent_version_source).toBe('unknown');
   });
 
+  it('D1:0.80.x–0.99.x 是旧版(逐段数值比较,不是字典序)→ codex_pre_0149_limited', async () => {
+    for (const ver of ['0.80.0', '0.99.9']) {
+      const w = await newWork(`cx-d1-${ver}-`);
+      const b = new LineBuilder().meta({ cli_version: ver });
+      b.userItem('x');
+      await writeRollout(w.io, w.sessions, b, { id: 'd1lex' });
+      const r = await run(w, ['--allow-project', 'proj-a']);
+      expect(r.code, r.err).toBe(0);
+      const o = JSON.parse(r.out) as { report: { tool_failures_scope?: string } };
+      expect(o.report.tool_failures_scope, ver).toBe('codex_pre_0149_limited');
+    }
+  });
+
   it('D1:tool_failures_scope——全 >=0.149 → full;含旧版/无版本会话 → codex_pre_0149_limited', async () => {
     // 用例 1:单一 0.161.0 会话 → full
     {

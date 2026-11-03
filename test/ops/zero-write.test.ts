@@ -388,6 +388,77 @@ describe('adapter 元数据取并集(合成 managed-targets.json,L-4)', () => {
     ).toBe(0);
   });
 
+  it('adapter 清单存在但解析失败 / 形状不对 => 清单错误(退出 3,ADAPTER_MANIFEST_INVALID),不再悄悄跳过', async () => {
+    const bad: [string, string, string][] = [
+      ['坏 JSON', '{ not json', 'invalid_json'],
+      [
+        'managed_targets 缺失',
+        JSON.stringify({ agent: 'claude' }),
+        'managed_targets_not_string_array',
+      ],
+      [
+        'managed_targets 不是数组',
+        JSON.stringify({ managed_targets: '~/.claude/' }),
+        'managed_targets_not_string_array',
+      ],
+      [
+        '含非字符串元素',
+        JSON.stringify({ managed_targets: ['~/.claude/CLAUDE.md', 7] }),
+        'managed_targets_not_string_array',
+      ],
+      ['顶层是 null', 'null', 'managed_targets_not_string_array'],
+    ];
+    for (const [name, body, reason] of bad) {
+      const fx = await makeFixture(MANAGED, VOLATILE);
+      await fx.repoPut('adapters/claude/managed-targets.json', body);
+      const r = runMain(['lists-check', '--repo', fx.repo, '--home', fx.home, '--base-ref', '']);
+      expect(r.status, name).toBe(3);
+      expect(r.stdout, name).toContain('ADAPTER_MANIFEST_INVALID');
+      expect(r.stdout, name).toContain(reason);
+      // 完整的零写入流程同样拒绝(不是只有 lists-check)
+      const z = runMain([
+        '--repo',
+        fx.repo,
+        '--home',
+        fx.home,
+        '--base-ref',
+        '',
+        '--commands-file',
+        await fx.repoPut('cmds.txt', NODE0 + '\n'),
+        '--out-root',
+        path.join(fx.out, 'zw'),
+        '--tmp',
+        fx.dir,
+      ]);
+      expect(z.status, name).toBe(3);
+    }
+  });
+
+  it('snap 是诊断命令不退出 3,但清单坏了要在 stderr 留一行 WARN(不能零痕迹)', async () => {
+    const fx = await makeFixture(MANAGED, VOLATILE);
+    await fx.repoPut('adapters/claude/managed-targets.json', '{ nope');
+    const r = runMain(['snap', '--repo', fx.repo, '--home', fx.home, '--base-ref', '']);
+    expect(r.status).toBe(0);
+    expect(r.stderr).toContain('ADAPTER_MANIFEST_INVALID');
+  });
+
+  it('每份零写入报告固定带「只保证窗口结束时受管路径无残留写入」的 NOTE(B17 盲区 ①)', async () => {
+    const fx = await makeFixture(MANAGED, VOLATILE);
+    await seed(fx);
+    const r = await zw(fx, NODE0);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('NOTE 零写入检查只保证窗口结束时受管路径无残留写入');
+  });
+
+  it('正向对照:adapter 清单文件不存在(目录里没有 managed-targets.json)=> 仍跳过,退出 0', async () => {
+    const fx = await makeFixture(MANAGED, VOLATILE);
+    await fx.repoPut('adapters/claude/index.ts', '// no manifest\n');
+    await fx.repoPut('adapters/codex/managed-targets.json', targets(['~/.claude/CLAUDE.md']));
+    const r = runMain(['lists-check', '--repo', fx.repo, '--home', fx.home, '--base-ref', '']);
+    expect(r.status).toBe(0);
+    expect(r.stdout).not.toContain('ADAPTER_MANIFEST_INVALID');
+  });
+
   it('adapter 落点参与快照(取并集),标注来源', async () => {
     const fx = await makeFixture(MANAGED + '~/.claude/rules/\n', VOLATILE);
     await fx.repoPut('adapters/codex/managed-targets.json', targets(['~/.codex/agents/']));

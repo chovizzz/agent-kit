@@ -13,6 +13,7 @@ import { processSession } from './pipeline.js';
 import type { PipelineDeps, SessionResult } from './pipeline.js';
 import { applySessionStats, buildSessionStat, planSessionStats } from './session-stats.js';
 import type { StatWriteResult } from './session-stats.js';
+import { isCodexPre0149 } from './version.js';
 import { writeSignals } from './state-store.js';
 import type { WriteGate, WriteResult } from './state-store.js';
 
@@ -91,17 +92,10 @@ export async function collect(input: CollectInput): Promise<CollectOutput> {
   }
 
   // D1(方案 A):codex 报告带 tool_failures 适用性标记。任一会话版本 < 0.149 或版本未知
-  // (不能证明可见性)→ limited;全部 >= 0.149 → full。比较用数值元组,不引 semver 依赖。
+  // (不能证明可见性)→ limited;全部 >= 0.149 → full。比较逐段数值(isCodexPre0149),不引 semver 依赖。
   const toolFailuresScope = (() => {
     if (input.reader.agent !== 'codex') return undefined;
-    const parse = (v: string | undefined): [number, number, number] | null => {
-      const m = /^([0-9]+)\.([0-9]+)\.([0-9]+)/.exec(v ?? '');
-      return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
-    };
-    const limited = processed.some((r) => {
-      const t = parse(r.version?.version);
-      return t === null || t < [0, 149, 0];
-    });
+    const limited = processed.some((r) => isCodexPre0149(r.version?.version));
     return limited ? ('codex_pre_0149_limited' as const) : ('full' as const);
   })();
 

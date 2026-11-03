@@ -54,6 +54,9 @@ function main(argv) {
     if (sub === 'snap') {
       const home = resolveHome(o.home);
       const lists = loadLists(o, home);
+      // snap 是诊断命令,不退出 3;但 adapter 清单坏了时快照缺那个 adapter 的落点,不能零痕迹
+      for (const e of lists.adapterErrors)
+        err(`WARN ADAPTER_MANIFEST_INVALID ${JSON.stringify(e)}:快照不含该 adapter 的落点`);
       const snap = takeSnapshot({
         home,
         managedText: lists.managedText,

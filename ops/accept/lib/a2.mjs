@@ -100,10 +100,30 @@ async function a2(argv) {
   const kit = path.join(ctx.root, 'kit.toml');
   if (!fs.existsSync(kit)) R.fail('缺 kit.toml');
   else {
-    const m = /^\s*enforce\s*=\s*"([^"]*)"/m.exec(fs.readFileSync(kit, 'utf8'));
-    if (!m) R.fail('kit.toml 没有 [budget].enforce');
-    else if (m[1] !== 'block') R.fail(`kit.toml enforce="${m[1]}",必须是 "block"(决策 ② D2)`);
-    else R.pass('kit.toml enforce="block"');
+    // 只取 [budget] 表内的 enforce(用仓库已有的 TOML 解析器 smol-toml):以前的正则取「全文第一个 enforce」,
+    // [signals] 等别的表先出现 enforce = "block" 就会让 [budget] 写 warn 的 kit.toml 误过。单引号字面量由解析器天然支持。
+    // smol-toml 是 devDependency:装不上 = 环境没就绪(未执行),不是 kit.toml 的问题,所以动态加载并区分开
+    let parseToml;
+    try {
+      parseToml = (await import('smol-toml')).parse;
+    } catch {
+      R.notRun('缺 smol-toml(先 pnpm install):无法解析 kit.toml');
+    }
+    if (parseToml) {
+      let enforce;
+      let parseError;
+      try {
+        const budget = parseToml(fs.readFileSync(kit, 'utf8')).budget;
+        enforce = budget !== null && typeof budget === 'object' ? budget.enforce : undefined;
+      } catch (e) {
+        parseError = e;
+      }
+      if (parseError) R.fail(`kit.toml 不是合法 TOML:${String(parseError.message).split('\n')[0]}`);
+      else if (typeof enforce !== 'string') R.fail('kit.toml 没有 [budget].enforce');
+      else if (enforce !== 'block')
+        R.fail(`kit.toml enforce="${enforce}",必须是 "block"(决策 ② D2)`);
+      else R.pass('kit.toml enforce="block"');
+    }
   }
 
   // 3) 真实仓库 check:block 下仍退出 0(没有原子超限) 并打印各目标字节/行数

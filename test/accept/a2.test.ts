@@ -110,6 +110,34 @@ describe('A2 预算', () => {
     expect(r.stdout).toContain('必须是 "block"');
   });
 
+  it('enforce 只认 [budget] 表:[signals] 先出现 enforce="block" 而 [budget] 写 warn => 1', async () => {
+    const { fx, cli } = await setup({
+      kit: '[signals]\nenforce = "block"\n\n[budget]\nenforce = "warn"\n',
+    });
+    const r = run(fx, cli);
+    expect(r.status, r.stdout).toBe(1);
+    expect(r.stdout).toContain('enforce="warn"');
+  });
+
+  it('[budget] 没有 enforce、别的表有 => 1(不借用别的表)', async () => {
+    const { fx, cli } = await setup({ kit: '[signals]\nenforce = "block"\n\n[budget]\nx = 1\n' });
+    const r = run(fx, cli);
+    expect(r.status, r.stdout).toBe(1);
+    expect(r.stdout).toContain('没有 [budget].enforce');
+  });
+
+  it("正向对照:单引号字面量 enforce = 'block'、[signals] 在前 => 0;kit.toml 不是合法 TOML => 1", async () => {
+    const ok = await setup({
+      kit: "[signals]\nenforce = 'warn'\n\n[budget]\nenforce = 'block'\n",
+    });
+    const r = run(ok.fx, ok.cli);
+    expect(r.status, r.stdout).toBe(0);
+    const bad = await setup({ kit: '[budget\nenforce = "block"\n' });
+    const r2 = run(bad.fx, bad.cli);
+    expect(r2.status, r2.stdout).toBe(1);
+    expect(r2.stdout).toContain('不是合法 TOML');
+  });
+
   it('check 没打印 5 个目标 / 退出非 0 => 1;命令桩 64 => 4', async () => {
     const few = await setup({
       checkBody: "process.stdout.write('budget claude: 0 字节 / 0 行\\n');",

@@ -33,7 +33,21 @@ export const HOME_WATCH = [
   '~/.local/share',
   '~/.local/state',
 ];
+/**
+ * macOS 额外监视面(B17 盲区 ③):`~/Library` 不在上面的列表里,命令绕过假 HOME 写 ~/Library/Application Support
+ * 或 ~/Library/Preferences(plist)就看不见。只加这两个目录的直接子项名字表(同上面的机制),不整个监视 ~/Library(太大);
+ * 系统与其它应用常态变化的条目在 ops/volatile-paths.txt 的 macOS 段里剔除。
+ */
+export const HOME_WATCH_DARWIN = ['~/Library/Application Support', '~/Library/Preferences'];
+
+/** 测试缝:KIT_OPS_PLATFORM 可覆盖平台(用来在 linux 上演练 darwin 监视面);缺省取 process.platform。 */
+export function homeWatchFor(platform) {
+  return platform === 'darwin' ? [...HOME_WATCH, ...HOME_WATCH_DARWIN] : [...HOME_WATCH];
+}
+
 const MAX_HASH_BYTES = 64 * 1024 * 1024;
+/** 嵌套目录符号链接的最大跟随深度(链上的链);超出记 depth_limit 并按截断处理(fail-closed)。 */
+const MAX_LINK_DEPTH = 6;
 
 export function resolveHome(explicit) {
   if (explicit) return path.resolve(explicit);
@@ -129,10 +143,13 @@ function inFollowScope(real, realHome) {
 
 /** volatile 判定:被跟随的链接目标按「链接路径」判(而不是 realpath),否则可以对目标真实路径写 volatile 行挖空监视。 */
 function isVol(ctx, p) {
-  for (const a of ctx.aliases) {
-    if (isUnder(p, a.real)) return ctx.vol.isVolatile(a.link + p.slice(a.real.length));
+  // 嵌套目录链接会让 alias 叠起来(内层链接路径本身又在外层目标的 real 路径下):由内向外逐层翻译回「链接路径」
+  let q = p;
+  for (let i = ctx.aliases.length - 1; i >= 0; i--) {
+    const a = ctx.aliases[i];
+    if (isUnder(q, a.real)) q = a.link + q.slice(a.real.length);
   }
-  return ctx.vol.isVolatile(p);
+  return ctx.vol.isVolatile(q);
 }
 
 /** HOME 之外的目录:不读内容,只记「路径 + 类型 + 大小 + ctime」(原地改写文件会改文件 ctime)。 */
@@ -181,7 +198,9 @@ function realpathOrNull(p) {
  * 符号链接目标摘要(只在 HOME 内跟随)。返回 { rec, ctime } :
  *   rec  - 并入快照记录的 target 字段(文件:size+sha;目录:树摘要;HOME 之外:仅元数据);
  *   ctime - 目标(及目标树)的最大 ctime,并入 meta 供归因/「被碰过」判断。
- * nested=true(树内部的链接)时不再递归目录,只记目录的存在。
+ * nested=true(树内部的链接):指向 follow scope 内目录的,与顶层链接一样递归目标树并登记 alias(B17 盲区 ②:
+ * 以前只记 {t:'dir'},写进链接目标的改动不可见);防环与重复:目标落在正在遍历的树内 => 已由那棵树的摘要覆盖(`covered`),
+ * 目标是正在遍历的某棵树的祖先 => 环(`cycle`),跟随深度超过 MAX_LINK_DEPTH => `depth_limit` 且按截断处理。
  */
 function linkTarget(abs, ctx, nested) {
   const real = realpathOrNull(abs);
@@ -214,10 +233,24 @@ function linkTarget(abs, ctx, nested) {
     };
   }
   if (tst.isDirectory()) {
-    if (nested) return { rec: { t: 'dir' }, ctime: Math.trunc(tst.ctimeMs), contentCtime: 0 };
+    if (nested) {
+      const ct = Math.trunc(tst.ctimeMs);
+      if (ctx.walkStack.some((r) => isUnder(real, r)))
+        return { rec: { t: 'dir', covered: true }, ctime: ct, contentCtime: 0 };
+      if (ctx.walkStack.some((r) => isUnder(r, real)))
+        return { rec: { t: 'dir', cycle: true }, ctime: ct, contentCtime: 0 };
+      if (ctx.walkStack.length >= MAX_LINK_DEPTH) {
+        ctx.truncated = true;
+        return { rec: { t: 'dir', depth_limit: true }, ctime: ct, contentCtime: 0 };
+      }
+    }
     ctx.aliases.push({ real, link: abs });
-    const tree = treeDigest(real, ctx.vol, ctx);
-    ctx.aliases.pop();
+    let tree;
+    try {
+      tree = treeDigest(real, ctx.vol, ctx);
+    } finally {
+      ctx.aliases.pop();
+    }
     if (tree.truncated) ctx.truncated = true;
     return {
       rec: { t: 'dir', tree: tree.digest },
@@ -245,6 +278,15 @@ function linkTarget(abs, ctx, nested) {
  * 树内部的符号链接只记 readlink 与文件目标的哈希(目录目标不再递归),HOME 之外的目标不读内容。
  */
 function treeDigest(root, vol, ctx) {
+  ctx.walkStack.push(realpathOrNull(root) ?? root);
+  try {
+    return treeDigestInner(root, vol, ctx);
+  } finally {
+    ctx.walkStack.pop();
+  }
+}
+
+function treeDigestInner(root, vol, ctx) {
   const lines = [];
   let maxCtime = 0;
   let contentCtime = 0; // 只算文件/链接,不算目录:目录 ctime 会被 volatile 子项的增删抬高
@@ -479,6 +521,7 @@ export function takeSnapshot(o) {
     outsideLinks: new Set(),
     hashedBytes: 0,
     aliases: [],
+    walkStack: [],
   };
   const entries = [];
   const all = [
@@ -508,7 +551,8 @@ export function takeSnapshot(o) {
   }
   if (o.homeWatch !== false) {
     // 防"命令绕过 HOME 环境变量、按 passwd 写真实 HOME":只看几个常见落点的直接子项名字表
-    for (const w of HOME_WATCH) {
+    const platform = o.platform ?? process.env.KIT_OPS_PLATFORM ?? process.platform;
+    for (const w of homeWatchFor(platform)) {
       const abs = toAbsolute(w, home);
       const ents = readdirNames(abs);
       const key = `watch:${w}`;
@@ -590,32 +634,51 @@ export function findUncoveredAdapterTargets(managedText, adapterTargets, home) {
   return out;
 }
 
-/** 读 adapters/<x>/managed-targets.json 的 managed_targets(只取字符串数组)。 */
+/**
+ * 读 adapters/<x>/managed-targets.json 的 managed_targets(只取字符串数组)。
+ * 返回 { targets, skipped, errors }:文件不存在 = 该 adapter 没有清单,跳过(照旧);
+ * 文件存在但读不了 / JSON 解析失败 / managed_targets 不是字符串数组(缺失、非数组、含非字符串元素)= 清单错误,
+ * 记进 errors(调用方 fail-closed:零写入检查退出 3)。以前这里一律 continue,等于清单坏了就悄悄少监视一个 adapter。
+ */
 export function readAdapterTargets(repo) {
   const dir = path.join(repo, 'adapters');
   const targets = [];
   const skipped = [];
+  const errors = [];
   let names = [];
   try {
     names = fs.readdirSync(dir).sort();
   } catch {
-    return { targets, skipped };
+    return { targets, skipped, errors };
   }
   for (const n of names) {
     const f = path.join(dir, n, 'managed-targets.json');
-    let j;
+    let text;
     try {
-      j = JSON.parse(fs.readFileSync(f, 'utf8'));
-    } catch {
+      text = fs.readFileSync(f, 'utf8');
+    } catch (e) {
+      if (e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')) continue; // 没有清单文件:照旧跳过
+      errors.push({ adapter: n, reason: `unreadable:${e?.code ?? 'ERR'}` });
       continue;
     }
-    for (const t of Array.isArray(j.managed_targets) ? j.managed_targets : []) {
-      if (typeof t !== 'string') continue;
+    let j;
+    try {
+      j = JSON.parse(text);
+    } catch {
+      errors.push({ adapter: n, reason: 'invalid_json' });
+      continue;
+    }
+    const list = j !== null && typeof j === 'object' ? j.managed_targets : undefined;
+    if (!Array.isArray(list) || list.some((t) => typeof t !== 'string')) {
+      errors.push({ adapter: n, reason: 'managed_targets_not_string_array' });
+      continue;
+    }
+    for (const t of list) {
       if (t.startsWith('~') || t.startsWith('/')) targets.push(t);
       else skipped.push(`${n}:${t}`); // 项目级相对路径,不在 HOME 快照范围
     }
   }
-  return { targets: [...new Set(targets)].sort(), skipped };
+  return { targets: [...new Set(targets)].sort(), skipped, errors };
 }
 
 export { findListConflicts };
