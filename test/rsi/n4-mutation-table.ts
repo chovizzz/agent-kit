@@ -133,7 +133,12 @@ export const N4_MUTATIONS: readonly N4Mutation[] = [
       },
     ],
     tests: [SERVICE, COMMAND],
-    expectRed: ['run 状态类:proposal_unknown', '校验拒绝 → 退出 1'],
+    expectRed: [
+      '校验不过同样走 rejected(使 agent 能看到原因)',
+      '严格批次:合法 + 非法混合 → 整批拒,零写入(合法那条也没写)',
+      'run 状态类:proposal_unknown',
+      '校验拒绝 → 退出 1',
+    ],
     mustKill: ['run 状态类:proposal_unknown'],
   },
   {
@@ -161,8 +166,9 @@ export const N4_MUTATIONS: readonly N4Mutation[] = [
       },
     ],
     tests: [SERVICE],
+    // 规则文件被改先被锁内重读的 rule_hash 核对拦下(同样落 STALE),不经指纹;指纹的必杀是提案文件被改
     expectRed: ['规则文件在展示后被改 → STALE', '提案文件在展示后被改', '指纹不含 payload 项'],
-    mustKill: ['规则文件在展示后被改 → STALE'],
+    mustKill: ['提案文件在展示后被改'],
   },
   {
     id: 'overwrite-existing-judge',
@@ -175,7 +181,11 @@ export const N4_MUTATIONS: readonly N4Mutation[] = [
       },
     ],
     tests: [SERVICE],
-    expectRed: ['已有 spawned 裁决 → already_judged', '重放同一 payload → already_judged'],
+    expectRed: [
+      '--replace 替换既有 session_confirmed:完整确认后替换,旧 binding 消失;确认屏列出旧记录摘要;不带 --replace 则拒',
+      '已有 spawned 裁决 → already_judged',
+      '重放同一 payload → already_judged',
+    ],
     mustKill: ['已有 spawned 裁决 → already_judged'],
   },
   {
@@ -203,7 +213,12 @@ export const N4_MUTATIONS: readonly N4Mutation[] = [
       },
     ],
     tests: [EVIDENCE],
-    expectRed: ['session_declared 无确认 + proven 裁判'],
+    expectRed: [
+      '单侧入口:反思器压制规则——self_confirmed 时不发 BACKEND_MISSING / VENDOR_MISMATCH(A4 写的 provider=session / model=undeclared 必然命中)',
+      '反思器 self_confirmed:CI 不发 REFLECTOR_UNVERIFIABLE(压制),但 session_declared 无确认时发(R20-16.20 ② 保持)',
+      '穷尽性:C5 观察到的每个 reason 都在 C5_REASONS 里,C5_REASONS 的每一项都在 C5_CI_CODES 里(往 C5 加 reason 不接 CI → 红)',
+      'session_declared 无确认 + proven 裁判',
+    ],
     mustKill: ['session_declared 无确认 + proven 裁判'],
   },
   {
@@ -218,7 +233,10 @@ export const N4_MUTATIONS: readonly N4Mutation[] = [
       },
     ],
     tests: [EVIDENCE],
-    expectRed: ['裁判确认 binding 被改'],
+    expectRed: [
+      'spawned 专属码不对 session_confirmed 发出;session_confirmed 无效时只发 JUDGE_CONFIRM_INVALID',
+      '裁判确认 binding 被改',
+    ],
     mustKill: ['裁判确认 binding 被改'],
   },
   {
@@ -248,7 +266,16 @@ export const N4_MUTATIONS: readonly N4Mutation[] = [
       },
     ],
     tests: [EVIDENCE],
-    expectRed: ['同厂商:self_confirmed 反思器 openai + 自报裁判 openai'],
+    expectRed: [
+      'session_declared 无确认 + proven 裁判',
+      '反思器确认 binding 被改',
+      '反思器确认不合理(claude 后端却确认为 openai 厂商 + claude 模型串)',
+      '裁判确认 binding 被改(verdict 被改成 accept 之外的值而 binding 不动)',
+      '裁判自报 vendor=unknown',
+      '裁判自报非内置厂商',
+      '反思器 self_confirmed:CI 不发 REFLECTOR_UNVERIFIABLE(压制),但 session_declared 无确认时发(R20-16.20 ② 保持)',
+      '同厂商:self_confirmed 反思器 openai + 自报裁判 openai',
+    ],
     mustKill: ['同厂商:self_confirmed 反思器 openai + 自报裁判 openai'],
   },
   {
@@ -276,8 +303,12 @@ export const N4_MUTATIONS: readonly N4Mutation[] = [
       },
     ],
     tests: [SERVICE, EVIDENCE],
-    expectRed: ['反思器侧:非内置厂商 / 模型串非法'],
-    mustKill: [],
+    expectRed: [
+      '反思器侧:非内置厂商 / 模型串非法',
+      '反思器确认为非内置厂商',
+      '反思器确认为 unknown',
+    ],
+    mustKill: ['反思器确认为非内置厂商', '反思器确认为 unknown'],
   },
   {
     id: 'declared-conflict-removed',
@@ -346,7 +377,10 @@ export const N4_MUTATIONS: readonly N4Mutation[] = [
       },
     ],
     tests: [EVIDENCE],
-    expectRed: ['本地不过 ⇒ CI 有 error'],
+    expectRed: [
+      '反思器 self_confirmed:CI 不发 REFLECTOR_UNVERIFIABLE(压制),但 session_declared 无确认时发(R20-16.20 ② 保持)',
+      '本地不过 ⇒ CI 有 error',
+    ],
     mustKill: ['本地不过 ⇒ CI 有 error'],
   },
   {
@@ -360,7 +394,10 @@ export const N4_MUTATIONS: readonly N4Mutation[] = [
       },
     ],
     tests: [SCHEMA],
-    expectRed: ['旧记录(无 provenance)继续合法且按 spawned 解析'],
+    expectRed: [
+      'spawned 的 superRefine 原样保留:hops 链、最后一跳 ok',
+      '旧记录(无 provenance)继续合法且按 spawned 解析',
+    ],
     mustKill: ['旧记录(无 provenance)继续合法且按 spawned 解析'],
   },
   {
@@ -374,7 +411,10 @@ export const N4_MUTATIONS: readonly N4Mutation[] = [
       },
     ],
     tests: [SCHEMA],
-    expectRed: ['旧记录(无 provenance)继续合法且按 spawned 解析'],
+    expectRed: [
+      'spawned 的 superRefine 原样保留:hops 链、最后一跳 ok',
+      '旧记录(无 provenance)继续合法且按 spawned 解析',
+    ],
     mustKill: ['旧记录(无 provenance)继续合法且按 spawned 解析'],
   },
   {
@@ -432,7 +472,10 @@ export const N4_MUTATIONS: readonly N4Mutation[] = [
       },
     ],
     tests: [SERVICE],
-    expectRed: ['output 类:映射到各自的子码'],
+    expectRed: [
+      'predicted 时 prediction 必填且形状合法(prediction_invalid);非 predicted 时 agent 给的 prediction 被丢弃',
+      'output 类:映射到各自的子码',
+    ],
     mustKill: ['output 类:映射到各自的子码'],
   },
   {
@@ -446,7 +489,11 @@ export const N4_MUTATIONS: readonly N4Mutation[] = [
       },
     ],
     tests: [SERVICE],
-    expectRed: ['严格批次:合法 + 非法混合'],
+    expectRed: [
+      '校验不过同样走 rejected(使 agent 能看到原因)',
+      'run 状态类:proposal_unknown / proposal_unsupported / rule_hash_mismatch / already_judged',
+      '严格批次:合法 + 非法混合',
+    ],
     mustKill: ['严格批次:合法 + 非法混合'],
   },
   {
@@ -461,6 +508,10 @@ export const N4_MUTATIONS: readonly N4Mutation[] = [
     ],
     tests: [STORE, SERVICE],
     expectRed: [
+      '同 run 前提防回归:两个不同 input_digest 的 session_declared 提案 → 拒一次覆盖(schema_invalid),零写入',
+      '写入只改 reflector.confirmed(judge 原样);不限层;不允许空行跳过',
+      '--proposal 限定子集;不在候选里 → proposal_unknown;键入厂商与已有 judge 同厂商 → same_vendor',
+      '已有 confirmed(无效的旧值)被替换',
       'confirmed:reflector 里只追加 confirmed 一个键',
       'team 提案:裁判侧 + 反思器侧都由用户键入',
     ],
@@ -506,7 +557,13 @@ export const N4_MUTATIONS: readonly N4Mutation[] = [
       },
     ],
     tests: [COMMAND],
-    expectRed: ['--write --json:stdout 只有固定键集合的 JSON'],
+    expectRed: [
+      '--write 且打不开控制终端 → 退出 2 JUDGE_USAGE reason=not_tty;stdin 未读、暂存区字节不变;干跑在无 TTY 下可跑',
+      '放弃 → 退出 1 JUDGE_CONFIRM_DECLINED;用户键入的内容不出现在 stdout / stderr',
+      '--confirm-reflector 无候选 → 退出 0 nothing_to_confirm,零写入',
+      '干跑文本输出:每条提案一行(枚举 + freeze=deferred),不含 payload 自由文本',
+      '--write --json:stdout 只有固定键集合的 JSON',
+    ],
     mustKill: ['--write --json:stdout 只有固定键集合的 JSON'],
   },
   {
@@ -556,7 +613,21 @@ export const N4_MUTATIONS: readonly N4Mutation[] = [
       },
     ],
     tests: [EVIDENCE, RUNLLM],
-    expectRed: ['self_confirmed + self_confirmed(不要求至少一侧可证明', '行为翻转:反思器侧确认'],
+    expectRed: [
+      'self_confirmed 反思器 + proven 裁判',
+      'session_declared 无确认 + proven 裁判',
+      '反思器确认 binding 被改',
+      '反思器确认不合理(claude 后端却确认为 openai 厂商 + claude 模型串)',
+      '同厂商:self_confirmed 反思器 openai + 自报裁判 openai',
+      'model:proven 取反思器记录的 model / 裁判最后一跳的 model;self_confirmed 取键入 / 声明值',
+      '单侧入口:反思器压制规则——self_confirmed 时不发 BACKEND_MISSING / VENDOR_MISMATCH(A4 写的 provider=session / model=undeclared 必然命中)',
+      '反思器 self_confirmed:CI 不发 REFLECTOR_UNVERIFIABLE(压制),但 session_declared 无确认时发(R20-16.20 ② 保持)',
+      '确认的厂商参与同厂商判定:反思器确认为 openai → codex 跳 skipped:same-vendor,改由下一家评审',
+      '全链无成功时写的 judge_attempts 以有效反思器厂商记 same-vendor 跳,自己的 schema 接受(否则确认后 judge --run-llm 的产出会被自己拒绝)',
+      '既有 session_confirmed 裁决:judge --run-llm 跳过(not_measurable 口径),不调用,outcome 标注来源',
+      'self_confirmed + self_confirmed(不要求至少一侧可证明',
+      '行为翻转:反思器侧确认',
+    ],
     mustKill: ['self_confirmed + self_confirmed(不要求至少一侧可证明'],
   },
   {
@@ -570,7 +641,11 @@ export const N4_MUTATIONS: readonly N4Mutation[] = [
       },
     ],
     tests: [EVIDENCE],
-    expectRed: ['反思器 self_confirmed:CI 不发 REFLECTOR_UNVERIFIABLE'],
+    expectRed: [
+      'self_confirmed 反思器 + proven 裁判:本地不过 ⇒ CI 有 error;本地的每个厂商类 reason 在 CI 都有映射码',
+      'self_confirmed + self_confirmed(不要求至少一侧可证明,Q-N4-2 = A):本地不过 ⇒ CI 有 error;本地的每个厂商类 reason 在 CI 都有映射码',
+      '反思器 self_confirmed:CI 不发 REFLECTOR_UNVERIFIABLE',
+    ],
     mustKill: ['反思器 self_confirmed:CI 不发 REFLECTOR_UNVERIFIABLE'],
   },
   {

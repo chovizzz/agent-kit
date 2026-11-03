@@ -119,19 +119,40 @@ const ROWS: Row[] = [
     issues: ['judge:JUDGE_CONFIRM_INVALID', 'pair:VENDOR_NOT_CROSS'],
     tiers: ['proven', 'none'],
   },
+  // agent=pi + 无法归族的模型串:合理性检查推不出厂商(derived=unknown),只剩「内置规范厂商」这一道挡
   {
     name: '裁判自报 vendor=unknown',
-    p: withSessionJudge(baseProposal(), { vendor: 'unknown' }),
+    p: withSessionJudge(baseProposal(), { agent: 'pi', vendor: 'unknown', model: 'mystery-1' }),
     ok: false,
     issues: ['judge:JUDGE_CONFIRM_INVALID', 'pair:VENDOR_NOT_CROSS'],
     tiers: ['proven', 'none'],
   },
   {
     name: '裁判自报非内置厂商',
-    p: withSessionJudge(baseProposal(), { vendor: 'acme' }),
+    p: withSessionJudge(baseProposal(), { agent: 'pi', vendor: 'acme', model: 'mystery-1' }),
     ok: false,
     issues: ['judge:JUDGE_CONFIRM_INVALID', 'pair:VENDOR_NOT_CROSS'],
     tiers: ['proven', 'none'],
+  },
+  {
+    name: '反思器确认为非内置厂商(pi 后端 + 无法归族的模型串)',
+    p: withSpawnedJudge(
+      withReflectorConfirmed(sessionDeclared('pi'), { vendor: 'acme', model: 'mystery-1' }),
+      { vendor: 'deepseek', model: 'deepseek-x' },
+    ),
+    ok: false,
+    issues: ['reflector:REFLECTOR_CONFIRM_INVALID', 'pair:VENDOR_NOT_CROSS'],
+    tiers: ['none', 'proven'],
+  },
+  {
+    name: '反思器确认为 unknown(pi 后端 + 无法归族的模型串)',
+    p: withSpawnedJudge(
+      withReflectorConfirmed(sessionDeclared('pi'), { vendor: 'unknown', model: 'mystery-1' }),
+      { vendor: 'deepseek', model: 'deepseek-x' },
+    ),
+    ok: false,
+    issues: ['reflector:REFLECTOR_CONFIRM_INVALID', 'pair:VENDOR_NOT_CROSS'],
+    tiers: ['none', 'proven'],
   },
   {
     name: '同厂商:self_confirmed 反思器 openai + 自报裁判 openai',
