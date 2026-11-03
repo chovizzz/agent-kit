@@ -55,6 +55,9 @@ const REAL_ENTRY_CANDIDATES: readonly string[] = [
   'src/rsi/purge.ts',
   // A4:会话授权下的脱敏摘要入口
   'src/rsi/digest.ts',
+  // A5:`rsi session --print`(纯输出)与 `rsi hooks`(前台写 kit 钩子;闭包同样不得含 net / llm-exec / 启动器)
+  'src/rsi/session-print.ts',
+  'src/rsi/hooks/command.ts',
   'src/rsi/index.ts',
   'src/commands/rsi.ts',
 ];

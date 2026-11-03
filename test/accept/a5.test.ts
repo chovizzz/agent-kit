@@ -200,6 +200,12 @@ const RSI_TABLE = {
   confirm: { off: 2, armed: 2 },
   'poke --agent claude': { off: 0, armed: 0 },
   'hint --agent claude': { off: 0, armed: 0 },
+  // R20-A5(R20-15.32)
+  'hooks --print --agent claude': { off: 0, armed: 0 },
+  'hooks --print --agent codex': { off: 0, armed: 0 },
+  'hooks --print --agent pi': { off: 0, armed: 0 },
+  'hooks --install --agent claude': { off: 0, armed: 0 },
+  'session --print': { off: 0, armed: 0 },
 };
 
 function rsiStub(extra = ''): string {

@@ -21,9 +21,14 @@ import {
 export interface HomeWriteEntry {
   /** HOME 相对;`dir` 以 `/` 结尾(目录本身不可写,只能写计划里点名的、其内部的文件) */
   readonly path: string;
-  readonly kind: 'file' | 'dir';
-  /** adapter = 渲染产物落点(= `adapters/*\/managed-targets.json` 的并集);kit = 本套件自己的状态/安装目录 */
-  readonly owner: 'adapter' | 'kit';
+  /** `json-merge`(A5,R20-15.5):合并写入的 JSON 配置文件;与 `file` 一样按路径精确匹配,但归属 `kit-hooks` */
+  readonly kind: 'file' | 'dir' | 'json-merge';
+  /**
+   * adapter = 渲染产物落点(= `adapters/*\/managed-targets.json` 的并集);kit = 本套件自己的状态/安装目录;
+   * kit-hooks(A5,R20-15.5)= 可执行类的 agent 钩子配置,**只有** `src/io/hooks-fs.ts`(专用原语,只许 `src/rsi/hooks/**` 引用)能写,
+   * 通用 home-fs 一律拒绝,`isHomeWritePath(rel)` 不带 owner 时也不把它们算作「受管路径」。
+   */
+  readonly owner: 'adapter' | 'kit' | 'kit-hooks';
   /** 声明该落点的 adapter(owner=kit 为空) */
   readonly agents: readonly (typeof RENDER_AGENT_IDS)[number][];
 }
@@ -31,23 +36,44 @@ export interface HomeWriteEntry {
 /**
  * 与 `adapters/*\/managed-targets.json` 的并集一一对应(test/contracts/sync-update.test.ts 逐项核对,
  * 并集多一条或少一条都红),外加两个本套件目录。按 `path` 字节序升序。
- * 不在表内的一律不可写:`~/.claude/CLAUDE.md`、`settings*.json`、hooks、`~/.codex/config.toml`、
- * `~/.config/agent-kit/`(用户配置,只读)等。
+ * 不在表内的一律不可写:`~/.claude/CLAUDE.md`、`~/.codex/config.toml`、`~/.config/agent-kit/`(用户配置,只读)等。
+ * A5(R20-15.5)起表里有三条 `kit-hooks`(两个 JSON 钩子配置 + pi 扩展),通用 home-fs 一律拒绝,见 {@link isKitHooksReserved}。
  */
 export const HOME_WRITE_TABLE: readonly HomeWriteEntry[] = [
   { path: '.agents/skills/', kind: 'dir', owner: 'adapter', agents: ['codex', 'kimi', 'pi'] },
   { path: '.claude/agents/', kind: 'dir', owner: 'adapter', agents: ['claude'] },
   { path: '.claude/rules/agent-kit/', kind: 'dir', owner: 'adapter', agents: ['claude'] },
+  { path: '.claude/settings.json', kind: 'json-merge', owner: 'kit-hooks', agents: [] },
   { path: '.claude/skills/', kind: 'dir', owner: 'adapter', agents: ['claude'] },
   { path: '.codex/AGENTS.md', kind: 'file', owner: 'adapter', agents: ['codex'] },
   { path: '.codex/agents/', kind: 'dir', owner: 'adapter', agents: ['codex'] },
+  { path: '.codex/hooks.json', kind: 'json-merge', owner: 'kit-hooks', agents: [] },
   { path: '.config/opencode/AGENTS.md', kind: 'file', owner: 'adapter', agents: ['opencode'] },
   { path: '.kimi-code/AGENTS.md', kind: 'file', owner: 'adapter', agents: ['kimi'] },
   { path: '.kimi-code/agents/', kind: 'dir', owner: 'adapter', agents: ['kimi'] },
   { path: '.local/share/agent-kit/', kind: 'dir', owner: 'kit', agents: [] },
   { path: '.local/state/agent-kit/', kind: 'dir', owner: 'kit', agents: [] },
   { path: '.pi/agent/AGENTS.md', kind: 'file', owner: 'adapter', agents: ['pi'] },
+  { path: '.pi/agent/extensions/agent-kit-rsi.ts', kind: 'file', owner: 'kit-hooks', agents: [] },
 ];
+
+/**
+ * `hooks/` 私有事务状态子树(账本、标记、journal、备份;R20-15.21):HOME 相对、不带末尾斜杠。它落在 `.local/state/agent-kit/`(kit 条目)之内,
+ * 但通用 home-fs 对它一律拒绝——只有专用写出口 `src/io/hooks-fs.ts` 能写,否则通用上下文可以删恢复依据、伪造归属或破坏 bootstrap 标记。
+ */
+export const HOOKS_PRIVATE_STATE_REL = '.local/state/agent-kit/hooks';
+
+/** `rel` 是否归专用写出口独占:kit-hooks 的三个目标文件,或 `hooks/` 私有状态子树(含 `hooks` 本身与其内任意路径) */
+export function isKitHooksReserved(rel: string): boolean {
+  // ASCII 大小写折叠(评审采纳):大小写不敏感的卷上 `.local/state/agent-kit/HOOKS/ledger.json` 与 `hooks/ledger.json` 是同一个文件,
+  // 区分大小写的比较会让通用出口借 kit 目录条目的授权绕过独占;保守起见任何大小写写法都算保留(调用方已过 ASCII 语法闸)
+  const lower = rel.toLowerCase();
+  if (HOME_WRITE_TABLE.some((e) => e.owner === 'kit-hooks' && e.path.toLowerCase() === lower)) {
+    return true;
+  }
+  const prefix = HOOKS_PRIVATE_STATE_REL.toLowerCase();
+  return lower === prefix || lower.startsWith(`${prefix}/`);
+}
 
 /**
  * `rel`(HOME 相对)是否落在表内:`file` 条目要求完全相等;`dir` 条目要求严格位于其内部(目录本身不算);
@@ -59,7 +85,9 @@ export function isHomeWritePath(rel: string, owner?: HomeWriteEntry['owner']): b
   if (!RelPathSchema.safeParse(rel).success) return false;
   return HOME_WRITE_TABLE.some((e) => {
     if (owner !== undefined && e.owner !== owner) return false;
-    if (e.kind === 'file') return rel === e.path;
+    // 不带 owner 时 kit-hooks 条目不算「受管路径」(doctor 的 managed() 等老调用行为不变);要问它们须显式 owner='kit-hooks'
+    if (owner === undefined && e.owner === 'kit-hooks') return false;
+    if (e.kind === 'file' || e.kind === 'json-merge') return rel === e.path;
     if (!rel.startsWith(e.path) || rel.length <= e.path.length) return false;
     // adapter 目录内部:不碰点开头的条目(别的管理器的清单如 `.social-hub-skills.json`)与 `.json` 文件(没有注释语法,不能放托管块)。
     // 只检查目录以下的路径段,所以 `.claude/…` 这种 HOME 根下的点目录不受影响;kit 自己的状态目录(含 ledger.json)不适用。

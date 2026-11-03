@@ -106,7 +106,10 @@ afterAll(async () => {
 describe('home-fs:表内路径可写(正向对照)', () => {
   it('每个表条目:file 条目精确路径、dir 条目内部子路径都能原子写入并读回', async () => {
     const f = await setup('homefs-ok-');
-    const targets = HOME_WRITE_TABLE.map((e) => (e.kind === 'file' ? e.path : `${e.path}sub/f.md`));
+    // kit-hooks 条目(A5)不归通用 home-fs 写,另见下方「kit-hooks 目标」拒绝用例
+    const targets = HOME_WRITE_TABLE.filter((e) => e.owner !== 'kit-hooks').map((e) =>
+      e.kind === 'file' ? e.path : `${e.path}sub/f.md`,
+    );
     const ctx = f.mk(targets);
     // 干净 HOME 上直接写:缺失的父目录(含 .codex 这类文件型条目的父目录)由 home-fs 隐式创建
     for (const rel of targets) {
@@ -160,7 +163,17 @@ describe('home-fs:路径 / 表 / planScope 拒绝规则(表驱动,每条先有�
     { name: '零宽字符', rel: '.claude/skills/de​mo/SKILL.md', code: HOME_DENY.PATH_INVALID },
     { name: '空串', rel: '', code: HOME_DENY.PATH_INVALID },
     { name: '表外:CLAUDE.md', rel: '.claude/CLAUDE.md', code: HOME_DENY.NOT_IN_TABLE },
-    { name: '表外:settings.json', rel: '.claude/settings.json', code: HOME_DENY.NOT_IN_TABLE },
+    {
+      name: '表外:settings.local.json',
+      rel: '.claude/settings.local.json',
+      code: HOME_DENY.NOT_IN_TABLE,
+    },
+    // A5 起 settings.json 是 kit-hooks 目标:通用 home-fs 一律拒绝
+    {
+      name: 'kit-hooks 目标:settings.json',
+      rel: '.claude/settings.json',
+      code: HOME_DENY.KIT_HOOKS,
+    },
     { name: '表外:codex config', rel: '.codex/config.toml', code: HOME_DENY.NOT_IN_TABLE },
     {
       name: '表外:用户配置目录',

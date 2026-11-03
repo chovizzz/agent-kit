@@ -17,6 +17,10 @@ import {
   RSI_USAGE_REASONS,
 } from '../../src/contracts/rsi.js';
 import { readText } from '../../src/io/read-fs.js';
+import {
+  RSI_HOOKS_NOT_RUN_REASONS,
+  RSI_HOOKS_WARN_REASONS,
+} from '../../src/contracts/rsi-hooks.js';
 import { PENDING_DOC, PENDING_NOTE_UNWRITTEN } from './rsi-pending-doc.js';
 
 const FULL = await readText(new URL('../../docs/contracts.md', import.meta.url).pathname);
@@ -73,6 +77,13 @@ const CATS: Cat[] = [
     enumCodes: RSI_FAIL_CLOSED_REASONS,
   },
   { name: 'counter', head: '计数码', enumCodes: RSI_COUNTER_CODES },
+  // R20-A5(R20-15.28):`rsi hooks` 的两个独立码族,已并入总表
+  {
+    name: 'hooks_not_run',
+    head: '`RSI_HOOKS_NOT_RUN reason=`',
+    enumCodes: RSI_HOOKS_NOT_RUN_REASONS,
+  },
+  { name: 'hooks_warn', head: '`RSI_HOOKS_WARN reason=`', enumCodes: RSI_HOOKS_WARN_REASONS },
 ];
 
 describe('R20-3.0 稳定码总表 ↔ 枚举(逐行、双向)', () => {

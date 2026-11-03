@@ -91,6 +91,10 @@ export const RSI_FAIL_CLOSED_REASONS = Object.freeze([
   'output_leak',
   'stdin_unreadable',
   'internal',
+  // R20-A5(R20-15.28):`rsi hooks` 的私有状态区 / 目标安全拒绝(`lock_lost` / `internal` 与上面共用同名项)
+  'hooks_target_unsafe',
+  'hooks_backup_invalid',
+  'hooks_ledger_invalid',
 ] as const);
 /** 顶层码,退出 1(R20-3.0 总表「顶层(1)」行):只登记,供「契约表 ↔ 枚举」一致性测试逐行比对 */
 export const RSI_EXIT1_CODES = Object.freeze([
@@ -103,6 +107,8 @@ export const RSI_EXIT1_CODES = Object.freeze([
   'RSI_INGEST_TOO_LARGE',
   'RSI_STAGING_FULL',
   'RSI_INGEST_REJECTED',
+  // R20-A5(R20-15.28):`rsi hooks` 确认输入不是 yes / EOF
+  'RSI_HOOKS_DECLINED',
 ] as const);
 /** 计数码(R20-3.0 总表「计数码」行;不改退出码,只进 `--json` 与日志;顺序照总表) */
 export const RSI_COUNTER_CODES = Object.freeze([
@@ -683,14 +689,12 @@ export const RSI_SUBCOMMANDS = Object.freeze([
   'hint',
   /** R20-A4:`rsi digest`(会话授权下的脱敏摘要) */
   'digest',
-] as const);
-/** P1 预留子命令(§20.3 末段):P0 注册为命令桩,退出 64;不建入口文件 */
-export const RSI_P1_RESERVED_SUBCOMMANDS = Object.freeze([
+  /** R20-A5:`rsi session --print`(可粘贴的 `[rsi.session]` 配置)与 `rsi hooks`(kit 钩子写入,§20.15) */
   'session',
   'hooks',
-  'dismiss',
-  'should-continue',
 ] as const);
+/** P1 预留子命令(§20.3 末段):P0 注册为命令桩,退出 64;不建入口文件 */
+export const RSI_P1_RESERVED_SUBCOMMANDS = Object.freeze(['dismiss', 'should-continue'] as const);
 
 // ---------------------------------------------------------------------------
 // A4(会话授权、`rsi digest`、`reflect --ingest`;docs/contracts.md §20.16)

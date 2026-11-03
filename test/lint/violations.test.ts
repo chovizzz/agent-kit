@@ -40,6 +40,10 @@ const EXPECTED: Readonly<Record<string, { rule: string; message: string }>> = {
   'home-fs-import.ts': { rule: 'no-restricted-imports', message: 'HOME 写出口' },
   'home-fs-reexport.ts': { rule: 'no-restricted-imports', message: 'HOME 写出口' },
   'home-fs-dynamic-import.ts': { rule: 'no-restricted-syntax', message: 'HOME 写出口' },
+  // A5(R20-15.6):kit 钩子写出口的授权闸(三种写法各一个反向样本)
+  'hooks-fs-import.ts': { rule: 'no-restricted-imports', message: '钩子写出口' },
+  'hooks-fs-reexport.ts': { rule: 'no-restricted-imports', message: '钩子写出口' },
+  'hooks-fs-dynamic-import.ts': { rule: 'no-restricted-syntax', message: '钩子写出口' },
   'net-import.ts': { rule: 'no-restricted-imports', message: '网络出口' },
   'net-reexport.ts': { rule: 'no-restricted-imports', message: '网络出口' },
   'net-dynamic-import.ts': { rule: 'no-restricted-syntax', message: '网络出口' },
@@ -255,6 +259,48 @@ describe('lint 正向对照:同样的代码放到被授权的文件里不报错'
       // 被授权的使用方仍然不得直接碰 fs
       expect((await lintAs(FS, 'src/sync/apply.ts')).length).toBeGreaterThan(0);
       expect((await lintAs(FS, 'src/update/install.ts')).length).toBeGreaterThan(0);
+    });
+
+    it('hooks-fs(R20-15.6):只有 src/rsi/hooks/** 与对应测试能引用;sync / update / 自动入口 / §21 目录一律红(import / re-export / 动态 import)', async () => {
+      const HK_IMP = "import { HooksFs } from '../io/hooks-fs.js';\nexport const w = HooksFs;\n";
+      const HK_REX = "export { HooksFs } from '../io/hooks-fs.js';\n";
+      const HK_DYN = "export const l = () => import('../io/hooks-fs.js');\n";
+      for (const code of [HK_IMP, HK_REX, HK_DYN]) {
+        for (const ok of [
+          'src/rsi/hooks/txn.ts',
+          'src/rsi/hooks/apply.ts',
+          'test/rsi/hooks/a5-txn.test.ts',
+          'test/io/hooks-fs.test.ts',
+        ]) {
+          expect(await lintAs(code, ok), `${ok}: ${code.trim()}`).toEqual([]);
+        }
+        for (const bad of [
+          ...ELSEWHERE,
+          'src/sync/apply.ts',
+          'src/update/install.ts',
+          'src/update/autosync.ts',
+          'src/rsi/poke.ts',
+          'src/rsi/hint.ts',
+          'src/rsi/worker.ts',
+          'src/rsi/kit-schedule.ts',
+          'src/rsi/auto/x.ts',
+          'src/rsi/capability/x.ts',
+          'src/rsi/contrib/x.ts',
+          'src/rsi/exec/x.ts',
+          'src/commands/rsi.ts',
+          'test/rsi/a4-digest.test.ts',
+        ]) {
+          expect((await lintAs(code, bad)).length, `${bad}: ${code.trim()}`).toBeGreaterThan(0);
+        }
+      }
+      // hooks-fs.ts 自己可用 fs(第四个写出口),但不得碰子进程 / 网络 / 环境;被授权的使用方仍不得直接碰 fs
+      const FS = "import * as fs from 'node:fs';\nexport const x = fs.existsSync;\n";
+      expect(await lintAs(FS, 'src/io/hooks-fs.ts')).toEqual([]);
+      expect((await lintAs(HTTPS, 'src/io/hooks-fs.ts')).length).toBeGreaterThan(0);
+      expect((await lintAs(FETCH, 'src/io/hooks-fs.ts')).length).toBeGreaterThan(0);
+      expect((await lintAs(FS, 'src/rsi/hooks/txn.ts')).length).toBeGreaterThan(0);
+      // 反向:src/rsi/hooks/** 不得借此引用 home-fs
+      expect((await lintAs(HF_IMP, 'src/rsi/hooks/txn.ts')).length).toBeGreaterThan(0);
     });
 
     it('net:只有 update 模块(launcher 除外)、commands/update.ts 与对应测试能引用;只有 net.ts 能用网络模块 / fetch', async () => {
