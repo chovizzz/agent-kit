@@ -40,6 +40,8 @@ const INSTALL = 'rsi/hooks/a5-install.test.ts';
 const CRASH = 'rsi/hooks/a5-crash.test.ts';
 const GATE = 'rsi/hooks/a5-gate.test.ts';
 const ZERO = 'rsi/hooks/a5-zero-write.test.ts';
+const PIVER = 'rsi/hooks/a5-pi-version.test.ts';
+const PRINT = 'rsi/hooks/a5-print.test.ts';
 
 export const A5_MUTATIONS: readonly A5Mutation[] = [
   {
@@ -472,17 +474,20 @@ export const A5_MUTATIONS: readonly A5Mutation[] = [
         replacement: 'void 0;',
       },
     ],
-    tests: [INSTALL, ZERO],
+    tests: [INSTALL, ZERO, PIVER],
     expectRed: [
-      '生产形状表三家都是「假设」',
+      '生产形状表:claude / codex 是「假设」、pi 是「实测运行」但版本未知',
       '四种证据级别',
       // 2026-11-02 javis 变异实测补登:同一变异多红的相关用例(只补登记,不改变异与用例)
       'hooks --install --agent claude',
       'hooks --install --agent c',
       'hooks --install --agent ',
       '适用的 agent 版本范围:区间内放行;区间外 / 版本未知 / 无法解析 → shape_unverified(fail closed)',
+      // 2026-11-04 N1 订正 #3:新增杀手 a5-pi-version.test.ts(写闸端到端、生产接线)
+      '写闸端到端',
+      '生产接线 subcommand.run',
     ],
-    mustKill: ['生产形状表三家都是「假设」'],
+    mustKill: ['生产形状表:claude / codex 是「假设」、pi 是「实测运行」但版本未知'],
   },
   {
     id: 'local-duplicate-check-removed',
@@ -637,6 +642,120 @@ export const A5_MUTATIONS: readonly A5Mutation[] = [
     tests: ['io/safe-fs-kit-hooks.test.ts'],
     expectRed: ['私有子树时', '大小写别名', '递归删除', 'kit-hooks 目标文件'],
     mustKill: ['私有子树时', '递归删除'],
+  },
+  // ---- N1 订正 #3(2026-11-04):pi 形状核实 + agent 版本探测 ----
+  {
+    id: 'probe-failure-treated-as-known',
+    clause:
+      '版本探测失败(退出非 0 / 超时 / 找不到命令 / 被信号杀死)必须是「版本未知」,写闸照旧拒(N1 订正 #3,fail-closed)',
+    edits: [
+      {
+        file: 'src/rsi/hooks/agent-version.ts',
+        anchor:
+          'if (r.timedOut || r.spawnError !== undefined || r.signal !== null || r.status !== 0) {',
+        replacement: 'if (false) {',
+      },
+    ],
+    tests: [PIVER],
+    expectRed: [
+      '负向:退出非 0 / 超时 / 找不到命令',
+      '退出非 0 / 输出垃圾 / 找不到命令 / 超时',
+      '--install --write 退 4 shape_unverified,零写入',
+    ],
+    mustKill: ['负向:退出非 0 / 超时 / 找不到命令', '退出非 0 / 输出垃圾 / 找不到命令 / 超时'],
+  },
+  {
+    id: 'probe-unparsable-treated-as-known',
+    clause: '版本输出解析不了(垃圾 / 前后缀 / 预发布)必须是「版本未知」(N1 订正 #3,fail-closed)',
+    edits: [
+      {
+        file: 'src/rsi/hooks/agent-version.ts',
+        anchor: 'return m === null ? undefined : `${m[1]}.${m[2]}.${m[3]}`;',
+        replacement: "return m === null ? '1.5.0' : `${m[1]}.${m[2]}.${m[3]}`;",
+      },
+    ],
+    tests: [PIVER],
+    expectRed: [
+      '负向:空 / 垃圾 / 带前缀后缀',
+      '负向:退出非 0 / 超时 / 找不到命令',
+      '退出非 0 / 输出垃圾 / 找不到命令 / 超时',
+      'stdout 为空时看 stderr',
+      '--install --write 退 4 shape_unverified,零写入',
+    ],
+    mustKill: ['负向:空 / 垃圾 / 带前缀后缀'],
+  },
+  {
+    id: 'version-min-compare-removed',
+    clause:
+      '适用版本下界:pi 本机版本 < min(1.5.0)→ shape_unverified(R20-15.9 的「版本不在适用范围 → 同码」)',
+    edits: [
+      {
+        file: 'src/contracts/rsi-hooks.ts',
+        anchor: 'if (lo === null || cmpVer(v, lo) < 0) return false;',
+        replacement: 'if (lo === null) return false;',
+      },
+    ],
+    tests: [PIVER, INSTALL, PRINT],
+    expectRed: [
+      '→ 退 4 shape_unverified,零写调用,树不变;干跑 verified=false',
+      '生产表冻结;claude / codex 是「假设」',
+      '适用的 agent 版本范围',
+      'isShapeWritable:四个证据级别 × 版本范围',
+      '--install --write 退 4 shape_unverified,零写入',
+      '生产接线 subcommand.run',
+    ],
+    mustKill: ['→ 退 4 shape_unverified,零写调用,树不变;干跑 verified=false'],
+  },
+  {
+    id: 'pi-evidence-reverted-to-assumed',
+    clause: 'pi 形状证据级别 = 实测运行(2026-11-04 核实);改回假设则 pi 的写闸永远拒(N1 订正 #3)',
+    edits: [
+      {
+        file: 'src/contracts/rsi-hooks.ts',
+        anchor: "evidence: '实测运行',\n    agent_versions: { min: '1.5.0' },",
+        replacement: "evidence: '假设',\n    agent_versions: { min: '1.5.0' },",
+      },
+    ],
+    tests: [PIVER, INSTALL, PRINT],
+    expectRed: [
+      'pi = 实测运行 + min 1.5.0',
+      '→ 退 0、真实写入,写出的扩展与 --print 内容逐字一致',
+      '生产形状表:claude / codex 是「假设」',
+      '生产表冻结;claude / codex 是「假设」',
+      '卸载不看版本闸',
+      '生产接线 subcommand.run',
+    ],
+    mustKill: ['pi = 实测运行 + min 1.5.0', '→ 退 0、真实写入,写出的扩展与 --print 内容逐字一致'],
+  },
+  {
+    id: 'production-wiring-drops-probe',
+    clause:
+      '生产接线必须把版本探测传给 runHooksCommand(此前 agentVersion 从没传 → 版本恒未知 → pi 的写闸永远拒)',
+    edits: [
+      {
+        file: 'src/rsi/hooks/command.ts',
+        anchor:
+          'run: (ctx) => runHooksCommand(ctx, { agentVersion: makeAgentVersionProbe(getExecPath(ctx.env)) }),',
+        replacement: 'run: (ctx) => runHooksCommand(ctx),',
+      },
+    ],
+    tests: [PIVER],
+    expectRed: ['PATH 里有 pi 1.5.0 → 干跑 verified=true'],
+    mustKill: ['PATH 里有 pi 1.5.0 → 干跑 verified=true'],
+  },
+  {
+    id: 'probe-spawns-for-unverified-agents',
+    clause: 'claude / codex 的版本命令未核实:探测不得对它们 spawn(N1 订正 #3)',
+    edits: [
+      {
+        file: 'src/rsi/hooks/agent-version.ts',
+        anchor: 'if (!Object.hasOwn(AGENT_VERSION_BINARIES, agent)) return undefined;',
+        replacement: 'void 0;',
+      },
+    ],
+    tests: [PIVER],
+    expectRed: ['claude / codex:版本命令未核实 → undefined 且出口一次都不调用'],
+    mustKill: ['claude / codex:版本命令未核实 → undefined 且出口一次都不调用'],
   },
 ];
 
@@ -996,6 +1115,89 @@ export const A5_RESULTS: readonly A5Result[] = [
       '递归删除 / rename 保留子树的祖先被拒,子树仍在',
     ],
     failed: 4,
+    skipped: 0,
+    restored: true,
+  },
+  // ---- 2026-11-04 N1 订正 #3(pi 形状核实 + 版本探测)。javis 私有检出 ~/kit-test-psh @ e163a01 + 本次改动:基线(a5-pi-version / a5-install / a5-print / a5-zero-write 四个文件)118 例全绿、0 skipped;
+  // 下面 7 条(6 条新增 + 重跑既有 shape-gate-removed,杀手文件加入 a5-pi-version)全部被杀、无 skipped / 套件错误,每条还原后逐文件内容一致且整棵树的 diff / status 哈希前后一致。
+  // shape-gate-removed 这条是对 2026-11-03 记录的重跑:杀手测试名因 pi 改为实测运行而更名(旧名「生产形状表三家都是『假设』…」已不存在,上方旧记录保持原样不改),失败数 9 → 20。
+  {
+    id: 'probe-failure-treated-as-known',
+    killedBy: [
+      '负向:退出非 0 / 超时 / 找不到命令 / 被信号杀死 / 输出垃圾 / 出口抛错 → undefined(每项输出都是合法版本号,排除「只因输出垃圾才失败」)',
+      '退出非 0 / 输出垃圾 / 找不到命令 / 超时 → undefined;超时按设定的时限杀掉',
+      'pi 退出 2 → --install --write 退 4 shape_unverified,零写入',
+    ],
+    failed: 3,
+    skipped: 0,
+    restored: true,
+  },
+  {
+    id: 'probe-unparsable-treated-as-known',
+    killedBy: [
+      '负向:空 / 垃圾 / 带前缀后缀 / 预发布 / 缺段 / 多行 / 超长段',
+      '负向:退出非 0 / 超时 / 找不到命令 / 被信号杀死 / 输出垃圾 / 出口抛错 → undefined(每项输出都是合法版本号,排除「只因输出垃圾才失败」)',
+      'stdout 为空时看 stderr;stdout 有内容(哪怕是垃圾)时不回退 stderr',
+      '退出非 0 / 输出垃圾 / 找不到命令 / 超时 → undefined;超时按设定的时限杀掉',
+      'pi 输出垃圾 → --install --write 退 4 shape_unverified,零写入',
+    ],
+    failed: 5,
+    skipped: 0,
+    restored: true,
+  },
+  {
+    id: 'version-min-compare-removed',
+    killedBy: [
+      '适用的 agent 版本范围:区间内放行;区间外 / 版本未知 / 无法解析 → shape_unverified(fail closed)',
+      '1.4.9 → 退 4 shape_unverified,零写调用,树不变;干跑 verified=false',
+      '0.9.0 → 退 4 shape_unverified,零写调用,树不变;干跑 verified=false',
+      'pi 1.4.9 → --install --write 退 4 shape_unverified,零写入',
+      '结构、固定写对象与 HOME_WRITE_TABLE 的 kit-hooks 三条逐项相等',
+      'isShapeWritable:四个证据级别 × 版本范围(区间边界、未知版本、无法解析 → fail closed)',
+    ],
+    failed: 6,
+    skipped: 0,
+    restored: true,
+  },
+  {
+    id: 'pi-evidence-reverted-to-assumed',
+    killedBy: [
+      '生产形状表:claude / codex 是「假设」、pi 是「实测运行」但版本未知 → --install --write 退 4 shape_unverified,零写调用;干跑照常、verified=false',
+      'pi = 实测运行 + min 1.5.0;claude / codex = 假设 + 无版本范围',
+      '版本 1.5.0 / 1.5.1 / 1.10.0 / 2.0.0 → 退 0、真实写入,写出的扩展与 --print 内容逐字一致,verified=true(四个参数化用例)',
+      '卸载不看版本闸:版本未知也能卸掉之前装的',
+      'PATH 里有 pi 1.5.0 → 干跑 verified=true,--write 经确认后真实写入且与 --print 一致',
+      '结构、固定写对象与 HOME_WRITE_TABLE 的 kit-hooks 三条逐项相等',
+    ],
+    failed: 9,
+    skipped: 0,
+    restored: true,
+  },
+  {
+    id: 'production-wiring-drops-probe',
+    killedBy: ['PATH 里有 pi 1.5.0 → 干跑 verified=true,--write 经确认后真实写入且与 --print 一致'],
+    failed: 1,
+    skipped: 0,
+    restored: true,
+  },
+  {
+    id: 'probe-spawns-for-unverified-agents',
+    killedBy: ['claude / codex:版本命令未核实 → undefined 且出口一次都不调用'],
+    failed: 1,
+    skipped: 0,
+    restored: true,
+  },
+  {
+    id: 'shape-gate-removed',
+    killedBy: [
+      '生产形状表:claude / codex 是「假设」、pi 是「实测运行」但版本未知 → --install --write 退 4 shape_unverified,零写调用;干跑照常、verified=false',
+      '四种证据级别:只有「公开文档」「实测运行」开放 --write',
+      '适用的 agent 版本范围:区间内放行;区间外 / 版本未知 / 无法解析 → shape_unverified(fail closed)',
+      'a5-pi-version 写闸端到端 8 例(1.4.9 / 0.9.0 / 版本未知 / 无法解析 / 缺段 / 未注入探测 / claude 与 codex 仍被闸)',
+      'a5-pi-version 生产接线 4 例(pi 1.4.9 / 输出垃圾 / 退出 2 / PATH 里没有 pi)',
+      'a5-zero-write 的 hooks --install --agent claude|codex|pi --write × off / armed 共 6 例',
+    ],
+    failed: 20,
     skipped: 0,
     restored: true,
   },

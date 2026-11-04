@@ -5,7 +5,7 @@ import tseslint from 'typescript-eslint';
  * A9 / A5 的静态护栏:
  *  - 文件系统:`node:fs` 系列只许出现在 src/io/safe-fs.ts(写)与 src/io/read-fs.ts(读)。
  *  - HOME / 环境变量 / cwd:`node:os`、`process.env`、`process.cwd` 只许出现在 src/io/paths.ts。
- *  - 子进程:`child_process` 只许出现在 src/io/exec.ts(git 白名单)与 src/io/llm-exec.ts(受控 LLM 出口,R0)。
+ *  - 子进程:`child_process` 只许出现在 src/io/exec.ts(git 白名单)、src/io/llm-exec.ts(受控 LLM 出口,R0)与 src/io/agent-probe.ts(agent 版本探测,N1 订正 #3)。
  *  - LLM 出口:除 src/reflect/backends/** 外,任何文件不得 import / re-export / 动态 import `llm-exec`
  *    (命令层、reflect 干跑路径、judge 都经依赖注入拿后端);测试里只有 llm-exec / backends 的测试可以。
  *  - S0(sync / doctor / update,contracts §19)预写的三道授权闸,对应文件 S1/S6/S7 才建,规则先就位:
@@ -18,6 +18,8 @@ import tseslint from 'typescript-eslint';
  *  - A5(contracts §20.15 R20-15.6):kit 钩子写出口 `src/io/hooks-fs.ts`(第四个写出口)只许 `src/rsi/hooks/**` 及其测试引用;
  *    sync / autosync / update / `src/rsi/{poke,hint,worker,kit-schedule}.ts` / §21 的 `src/rsi/{auto,capability,contrib,exec}/**` / doctor(`src/doctor/**`、`src/commands/doctor.ts`)引用即红;
  *    A6(R20-17.20)新增只读出口 `src/io/hooks-read.ts`(doctor D17 经它读钩子区),它自己可用 fs。
+ *  - N1 订正 #3(contracts §20.15-12):agent 版本探测出口 `src/io/agent-probe.ts`(第三个可 import child_process 的文件,只跑 `pi --version`,环境只有 PATH)
+ *    只许 `src/rsi/hooks/**` 及其测试 import(静态 / re-export / 动态 import 都拦);它不 import `exec.ts`、不经 `launcher.ts` / `net.ts`,`EXEC_ALLOWLIST` 仍恒为 git。
  *  - N4(contracts §20.18 R20-18.5 / R20-18.25):唯一控制终端出口 `src/io/tty.ts`(第五个出口)。`/dev/tty` 字面量与 `node:tty` 只许它自己;
  *    引用它的只有 `src/commands/judge-ingest.ts`、`src/judge/ingest/**` 及其测试;自动入口(poke / hint / worker / 顺带调度 / sync / update / §21)引用即红
  *    (`test/rsi/import-closure.test.ts` 另有 import 闭包断言)。
@@ -41,7 +43,7 @@ const withNodePrefix = (names) => names.flatMap((n) => [n, `node:${n}`]);
 
 const MESSAGES = {
   fs: '文件系统只经 src/io/safe-fs.ts(写)与 src/io/read-fs.ts(读)。',
-  cp: '子进程只经 src/io/exec.ts(runSync,git)与 src/io/llm-exec.ts(runLlm,受控 LLM 出口)。',
+  cp: '子进程只经 src/io/exec.ts(runSync,git)、src/io/llm-exec.ts(runLlm,受控 LLM 出口)与 src/io/agent-probe.ts(版本探测)。',
   llm: 'LLM 出口 src/io/llm-exec.ts 只许 src/reflect/backends/** 引用;其余代码经依赖注入拿后端。',
   homeFs:
     'HOME 写出口 src/io/home-fs.ts 只许 src/sync/apply.ts 与 src/update/install.ts(及其测试)引用。',
@@ -54,6 +56,8 @@ const MESSAGES = {
     '网络出口 src/io/net.ts 只许 src/update/**(launcher.ts 除外)与 src/commands/update.ts(及其测试)引用。',
   launcher:
     '启动器 src/update/launcher.ts 只许 cli.ts / src/cli.ts / src/update/** / src/commands/update.ts(及其测试)引用。',
+  agentProbe:
+    'agent 版本探测出口 src/io/agent-probe.ts(只跑 `pi --version`)只许 src/rsi/hooks/**(及其测试)引用(contracts §20.15-12 N1 订正 #3)。',
   runSelf:
     'runSelf(spawn process.execPath)只许 src/update/launcher.ts 与零网络桥接 src/update/self-spawn.ts 引用。',
   sigstore: '`sigstore` 包(来源证明验签)只许 src/update/provenance.ts 引用。',
@@ -65,7 +69,7 @@ const MESSAGES = {
 /**
  * allowFs/allowCp/allowEnv/allowNet:该文件**自己**可以 import 对应的 node 模块(出口实现文件);
  * allowLlm/allowHomeFs/allowNetOut/allowLauncher/allowRunSelf:该文件可以 import 对应出口模块(授权使用方)。
- * @param {{ allowFs?: boolean; allowCp?: boolean; allowCpOnly?: boolean; allowEnv?: boolean; allowNet?: boolean; allowLlm?: boolean; allowTty?: boolean; allowTtyUse?: boolean; allowHomeFs?: boolean; allowHooksFs?: boolean; allowNetOut?: boolean; allowLauncher?: boolean; allowRunSelf?: boolean; allowSigstore?: boolean }} allow
+ * @param {{ allowFs?: boolean; allowCp?: boolean; allowCpOnly?: boolean; allowEnv?: boolean; allowNet?: boolean; allowLlm?: boolean; allowTty?: boolean; allowTtyUse?: boolean; allowHomeFs?: boolean; allowHooksFs?: boolean; allowNetOut?: boolean; allowLauncher?: boolean; allowRunSelf?: boolean; allowAgentProbe?: boolean; allowSigstore?: boolean }} allow
  */
 function restrictions(allow = {}) {
   /** @type {{name: string; message: string}[]} */
@@ -102,6 +106,7 @@ function restrictions(allow = {}) {
   const NET_OUT_GROUP = ['**/io/net', '**/io/net.*', './net', './net.*'];
   const LAUNCHER_GROUP = ['**/launcher', '**/launcher.*'];
   const EXEC_GROUP = ['**/io/exec', '**/io/exec.*', './exec', './exec.*'];
+  const AGENT_PROBE_GROUP = ['**/agent-probe', '**/agent-probe.*'];
 
   /** @type {{selector: string; message: string}[]} */
   const syntax = [
@@ -174,6 +179,14 @@ function restrictions(allow = {}) {
           {
             selector: 'ImportExpression[source.value=/launcher/]',
             message: `动态 import 也不得绕开启动器限制。${MESSAGES.launcher}`,
+          },
+        ]),
+    ...(allow.allowAgentProbe
+      ? []
+      : [
+          {
+            selector: 'ImportExpression[source.value=/agent-probe/]',
+            message: `动态 import 也不得绕开版本探测出口限制。${MESSAGES.agentProbe}`,
           },
         ]),
     ...(allow.allowLlm
@@ -271,6 +284,9 @@ function restrictions(allow = {}) {
           ...(allow.allowRunSelf
             ? []
             : [{ group: EXEC_GROUP, importNames: ['runSelf'], message: MESSAGES.runSelf }]),
+          ...(allow.allowAgentProbe
+            ? []
+            : [{ group: AGENT_PROBE_GROUP, message: MESSAGES.agentProbe }]),
         ],
       },
     ],
@@ -338,6 +354,8 @@ export default tseslint.config(
   { files: ['src/io/safe-fs.ts', 'src/io/read-fs.ts'], rules: restrictions({ allowFs: true }) },
   { files: ['src/io/paths.ts'], rules: restrictions({ allowEnv: true }) },
   { files: ['src/io/exec.ts'], rules: restrictions({ allowCp: true }) },
+  // N1 订正 #3(contracts §20.15-12):agent 版本探测出口。自己可用 child_process;能 import 它的只有 src/rsi/hooks/** 与其测试(见下)。
+  { files: ['src/io/agent-probe.ts'], rules: restrictions({ allowCp: true }) },
   // R0:受控 LLM 出口。llm-exec.ts 自己可用 child_process;能引用它的只有 reflect 后端目录与它们的测试。
   // 注意:flat config 里后面的同名规则会**整条替换**前面的,所以放行必须走 restrictions({...}) 生成,不能另写一块只含局部规则的 override。
   { files: ['src/io/llm-exec.ts'], rules: restrictions({ allowCp: true }) },
@@ -373,15 +391,18 @@ export default tseslint.config(
   { files: ['src/io/hooks-fs.ts'], rules: restrictions({ allowFs: true }) },
   // A6(R20-17.20):钩子区的只读出口 hooks-read.ts(只含读取;doctor 只许 import 它)自己可用 fs,但不得引用 hooks-fs / 子进程 / 网络 / 环境。
   { files: ['src/io/hooks-read.ts'], rules: restrictions({ allowFs: true }) },
-  { files: [`src/rsi/hooks/**/*.${EXT}`], rules: restrictions({ allowHooksFs: true }) },
+  {
+    files: [`src/rsi/hooks/**/*.${EXT}`],
+    rules: restrictions({ allowHooksFs: true, allowAgentProbe: true }),
+  },
   {
     files: [`test/rsi/hooks/**/*.${EXT}`, 'test/io/hooks-fs*.test.ts'],
-    rules: restrictions({ allowHooksFs: true }),
+    rules: restrictions({ allowHooksFs: true, allowAgentProbe: true }),
   },
   // 授权闸的红绿对测试要同时演练通用 home-fs 对 kit-hooks 条目的拒绝(这一个文件才多放行 home-fs)
   {
     files: ['test/rsi/hooks/a5-gate.test.ts'],
-    rules: restrictions({ allowHooksFs: true, allowHomeFs: true }),
+    rules: restrictions({ allowHooksFs: true, allowHomeFs: true, allowAgentProbe: true }),
   },
   // S0:网络出口。net.ts 自己可用网络模块与全局 fetch;使用方是 update 模块(launcher 除外)。
   { files: ['src/io/net.ts'], rules: restrictions({ allowNet: true }) },

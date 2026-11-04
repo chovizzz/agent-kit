@@ -36,7 +36,7 @@ import { RSI_AGENT_IDS, type RsiAgentId } from '../../contracts/rsi.js';
 import { resolveIsTty, resolveReadLine } from '../../commands/types.js';
 import { canonicalJson } from '../../io/canonical-json.js';
 import { HooksFs } from '../../io/hooks-fs.js';
-import { getRealHome } from '../../io/paths.js';
+import { getExecPath, getRealHome } from '../../io/paths.js';
 import {
   ApplyError,
   acquireLock,
@@ -47,6 +47,7 @@ import {
 import { piDirIsSet } from '../services/open.js';
 import type { RsiEarlyContext, RsiSubcommand } from '../types.js';
 import { randomBytes } from 'node:crypto';
+import { makeAgentVersionProbe } from './agent-version.js';
 import { allJsonSpecs, entryFingerprint } from './entries.js';
 import { parseStrictJson } from './json-strict.js';
 import {
@@ -88,7 +89,7 @@ export interface HooksDeps {
   randomHex?: (bytes: number) => string;
   inject?: (point: string) => void | Promise<void>;
   trace?: (event: string) => void;
-  /** 本机 agent 版本探测(形状表 `agent_versions` 非 null 时用;缺省 undefined = 未知) */
+  /** 本机 agent 版本探测(形状表 `agent_versions` 非 null 时才会被调用;缺省 undefined = 未知)。生产接线见 {@link subcommand}(`agent-version.ts`) */
   agentVersion?: (agent: RsiAgentId) => Promise<string | undefined> | string | undefined;
   /** 安装的变体(缺省 plain;canary 由 `[rsi.auto]` 状态在安装时决定,§21 之前恒 plain) */
   variantOf?: (agent: RsiAgentId) => HookVariant;
@@ -224,6 +225,9 @@ export async function runHooksCommand(ctx: RsiEarlyContext, deps: HooksDeps = {}
 
   const shapes = deps.shapes ?? PRODUCTION_SHAPES;
   const variantOf = deps.variantOf ?? ((): HookVariant => 'plain');
+  /** 只在形状表有版本范围时才探测(范围 null = 不看版本,不 spawn):claude / codex 现在不会触发任何子进程 */
+  const versionOf = async (agent: RsiAgentId): Promise<string | undefined> =>
+    shapes[agent].agent_versions === null ? undefined : await deps.agentVersion?.(agent);
   const progress: Progress = newProgress();
   const snap: Snapshot = {
     mode: p.mode,
@@ -268,7 +272,7 @@ export async function runHooksCommand(ctx: RsiEarlyContext, deps: HooksDeps = {}
       const agent = p.agent as RsiAgentId;
       const shape = shapes[agent];
       const variant = variantOf(agent);
-      const verified = isShapeWritable(shape, await deps.agentVersion?.(agent));
+      const verified = isShapeWritable(shape, await versionOf(agent));
       snap.verified = verified;
       snap.plan = { kind: 'print', before_exists: null, ops: [] };
       say(renderPrint(shape, variant, verified));
@@ -363,7 +367,7 @@ export async function runHooksCommand(ctx: RsiEarlyContext, deps: HooksDeps = {}
       const agent = p.agent as RsiAgentId;
       const shape = shapes[agent];
       const kind = p.mode;
-      snap.verified = isShapeWritable(shape, await deps.agentVersion?.(agent));
+      snap.verified = isShapeWritable(shape, await versionOf(agent));
       // 形状核实是写能力的闸(R20-15.9):干跑不受限,`--install --write` 在确认与拿锁之前就拒
       if (kind === 'install' && p.write && snap.verified !== true) throw notRun('shape_unverified');
 
@@ -424,7 +428,7 @@ export async function runHooksCommand(ctx: RsiEarlyContext, deps: HooksDeps = {}
     if (p.mode === 'restore') {
       const agent = p.agent as RsiAgentId;
       const txn = p.txn as string;
-      snap.verified = isShapeWritable(shapes[agent], await deps.agentVersion?.(agent));
+      snap.verified = isShapeWritable(shapes[agent], await versionOf(agent));
       if (agent === 'pi' && piDirIsSet(ctx.env)) throw notRun('agent_dir_overridden');
       if (!(await fs.agentRootExists(agent))) throw notRun('agent_not_installed');
       const first = await planRestore(env, agent, txn, pathDisplay(agent));
@@ -579,5 +583,6 @@ async function incidentalPrune(env: HooksEnv, ctx: Pick<RsiEarlyContext, 'stderr
 export const subcommand: RsiSubcommand = {
   name: 'hooks',
   owner: 'A5',
-  run: (ctx) => runHooksCommand(ctx),
+  // 生产接线:版本探测经 io/exec.ts 的专用出口(只跑 `pi --version`,3 秒超时,失败即未知);形状表 / 故障注入仍不从 CLI 暴露
+  run: (ctx) => runHooksCommand(ctx, { agentVersion: makeAgentVersionProbe(getExecPath(ctx.env)) }),
 };

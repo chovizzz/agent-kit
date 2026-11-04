@@ -105,6 +105,12 @@ export function getRealHome(env?: Readonly<Record<string, string | undefined>>):
   return e['KIT_REAL_HOME_OVERRIDE'] ?? os.homedir();
 }
 
+/** 子进程用的 PATH:优先注入的 env,否则真实进程环境,都没有则 `/usr/bin:/bin`(与 `createIoContext` 的 `execPath` 同口径) */
+export function getExecPath(env?: Readonly<Record<string, string | undefined>>): string {
+  const e = env ?? process.env;
+  return e['PATH'] ?? '/usr/bin:/bin';
+}
+
 /**
  * 从真实 process.env 里只取键名匹配 `keyRe` 的那部分(拷贝,不含其它键)。
  * 给启动器 / runSelf 用:它们不能直接碰 process.env(eslint 闸),又必须看到「是否 CI」「代理变量」这类具体键。
