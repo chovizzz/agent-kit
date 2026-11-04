@@ -171,7 +171,7 @@ export const AU_MUTATIONS: readonly AuMutation[] = [
       },
     ],
     tests: [SPAWN, DIST],
-    expectRed: ['H2-B', '受控 tmp 不存在'],
+    expectRed: ['H2-B', '受控 tmp 不存在', '受控 tmp 权限过宽'],
     mustKill: ['H2-B', '受控 tmp 不存在'],
   },
   {
@@ -200,7 +200,7 @@ export const AU_MUTATIONS: readonly AuMutation[] = [
       },
     ],
     tests: [ENTRY, DIST],
-    expectRed: ['永不调度'],
+    expectRed: ['永不调度', 'b current 损坏', 'c 不转发', 'd KIT_LAUNCHED'],
     mustKill: ['永不调度'],
   },
   {
@@ -243,7 +243,7 @@ export const AU_MUTATIONS: readonly AuMutation[] = [
       },
     ],
     tests: [ENTRY, DIST],
-    expectRed: ['NO 集合内', 'rsi off'],
+    expectRed: ['NO 集合内', 'rsi off', 'b current 损坏', 'c 不转发'],
     mustKill: ['NO 集合内', 'rsi off'],
   },
   {
@@ -257,7 +257,7 @@ export const AU_MUTATIONS: readonly AuMutation[] = [
       },
     ],
     tests: [ENTRY],
-    expectRed: ['其余 noop why', 'L0 未到期'],
+    expectRed: ['NO 集合内', '其余 noop why', 'L0 未到期'],
     mustKill: ['其余 noop why', 'L0 未到期'],
   },
   {
