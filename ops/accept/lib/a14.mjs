@@ -46,6 +46,25 @@ export const IMPLEMENTED_LATER_PHASE = new Set([
   'update',
 ]);
 
+/**
+ * P0 命令在**空仓库**(`--root` 指向空目录:没有 kit.toml、没有任何输入)下的契约预期退出码(contracts §2 退出码表):
+ *   build / check:读不到 kit.toml => 诊断 CFG_KIT_TOML_MISSING => 检查失败 1(不是 3:没有发生 fail-closed 事件;不是 2:参数没错);
+ *   redact:没给 --selftest / --stdin => 用法错误 2;
+ *   signals collect:没给 --source => 用法错误 2。
+ * 以前只要不是 64 / 4 就算「不是桩」PASS,抛未捕获异常(1 以外的怪码)、静默退 0 都会过;现在只认这张表。
+ */
+/** build / check 的退出 1 必须带诊断码:未捕获异常的 node 进程退出码同样是 1,只看退出码分不开。 */
+export const P0_EMPTY_REPO_DIAG = new Map([
+  ['build', 'CFG_KIT_TOML_MISSING'],
+  ['check', 'CFG_KIT_TOML_MISSING'],
+]);
+export const P0_EMPTY_REPO_EXIT = new Map([
+  ['build', [1]],
+  ['check', [1]],
+  ['redact', [2]],
+  ['signals collect', [2]],
+]);
+
 export const DELIVERABLES = [
   'kit.toml',
   'ops/zero-write-check.sh',
@@ -135,7 +154,23 @@ async function a14(argv) {
         if (r.spawnFailed || r.status === null) R.notRun(`${name}: 未能正常结束`);
         else if (r.status === EXIT_STUB) R.notRun(`${name}: [P0] 命令仍是桩(退出 64),交付物不齐`);
         else if (r.status === 4) R.notRun(`${name}: [P0] 命令自报未执行(退出 4)`);
-        else R.pass(`${name}: [P0] 不是命令桩(空仓库下退出 ${r.status})`);
+        else {
+          const want = P0_EMPTY_REPO_EXIT.get(name);
+          if (want === undefined)
+            R.fail(`${name}: [P0] 命令没有登记空仓库下的预期退出码(P0_EMPTY_REPO_EXIT)`);
+          else if (!want.includes(r.status))
+            R.fail(
+              `${name}: [P0] 空仓库下退出 ${r.status},契约预期 ${want.join('|')}(不是桩,但也不是契约里的行为)`,
+            );
+          else if (
+            P0_EMPTY_REPO_DIAG.has(name) &&
+            !`${r.stdout}${r.stderr}`.includes(P0_EMPTY_REPO_DIAG.get(name))
+          )
+            R.fail(
+              `${name}: [P0] 空仓库下退出 ${r.status} 但没有诊断码 ${P0_EMPTY_REPO_DIAG.get(name)}(疑似未捕获异常)`,
+            );
+          else R.pass(`${name}: [P0] 不是命令桩(空仓库下退出 ${r.status},符合契约预期)`);
+        }
       } else if (IMPLEMENTED_LATER_PHASE.has(name)) {
         // 已实装的不再是桩:空仓库下必须正常结束且不得自报未执行(与 P0 同一判据)。
         if (r.spawnFailed || r.status === null) R.notRun(`${name}: 未能正常结束`);

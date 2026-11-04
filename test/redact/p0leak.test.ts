@@ -127,3 +127,62 @@ describe('P0-2:`$VAR` 引用形口令', () => {
       expect(isReferenceWord(w), w).toBe(false);
   });
 });
+
+describe('P0 低优先:弯引号键名 / CJK 后缀 / 中文说明文字', () => {
+  const LDQ = '“';
+  const RDQ = '”';
+  const LSQ = '‘';
+  const RSQ = '’';
+  const SFX_ZH = J('生', '产');
+  const PROSE = J('每次', '请求', '都需', '要携', '带的', '凭证');
+
+  it('键名被左右双弯引号包住再接等号与值:脱敏,键名保留', () => {
+    const out = expectRedacted(`${LDQ}${KMIMA}${RDQ}=${kx}`, [kx]);
+    expect(out.startsWith(`${LDQ}${KMIMA}${RDQ}=`)).toBe(true);
+  });
+
+  it('键名被单弯引号包住再接冒号与值:脱敏', () => {
+    expectRedacted(`${LSQ}${KLINGPAI}${RSQ}: ${kx}`, [kx]);
+  });
+
+  it('英文键名也认弯引号(共用同一键名右侧引号类)', () => {
+    expectRedacted(`${LDQ}${PWK}${RDQ}=${kx}`, [kx]);
+  });
+
+  it('正向对照:弯引号键名后是变量引用不动', () => {
+    const t = `${LDQ}${KMIMA}${RDQ}=${D}HOME`;
+    const a = r.apply(t);
+    expect(a.ok && a.text === t).toBe(true);
+  });
+
+  it('中文键名带 CJK 后缀再接等号与值:脱敏(对照:ASCII 后缀本来就脱敏)', () => {
+    const out = expectRedacted(`${KMIMA}_${SFX_ZH}=${kx}`, [kx]);
+    expect(out.startsWith(`${KMIMA}_${SFX_ZH}=`)).toBe(true);
+    expectRedacted(`${KMIMA}_prod=${kx}`, [kx]);
+    expectRedacted(`${PWK}_${SFX_ZH}=${kx}`, [kx]);
+  });
+
+  it.each([KMIMA, KKOULING, KMIYAO, KLINGPAI])('%s 后接冒号与中文说明文字:不当秘密', (k) => {
+    for (const t of [`${k}: ${PROSE}\n`, `${k}:"${PROSE}"\n`, `${k}：${PROSE}\n`]) {
+      const a = r.apply(t);
+      expect(a.ok && a.text === t, t).toBe(true);
+    }
+  });
+
+  it('正向对照:冒号后混了 ASCII 字母数字的值照旧脱敏;等号赋值的纯中文值照旧脱敏', () => {
+    expectRedacted(`${KMIMA}: ${J('前缀', '说明')}${kx}`, [kx]);
+    expectRedacted(`${KMIMA}: "${PROSE}${kx}"`, [kx]);
+    const eq = r.apply(`${KMIMA}=${PROSE}`);
+    expect(eq.ok).toBe(true);
+    if (eq.ok) {
+      expect(eq.text).not.toContain(PROSE);
+      expect(eq.text).toContain(PH);
+    }
+  });
+
+  it('回归:冒号后「中文 + 全角字母数字」先被 view_normalize 折叠成 ASCII,照旧脱敏(不被 ref_cjk_prose 放行)', () => {
+    const fw = J('ＸＹＺ', '１２３');
+    const out = expectRedacted(`${KMIMA}: ${J('我的', '口令')}${fw}`, [fw]);
+    expect(out).not.toContain(J('我的', '口令'));
+  });
+});

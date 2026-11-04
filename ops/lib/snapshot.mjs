@@ -41,6 +41,15 @@ export const HOME_WATCH = [
 export const HOME_WATCH_DARWIN = ['~/Library/Application Support', '~/Library/Preferences'];
 
 /** 测试缝:KIT_OPS_PLATFORM 可覆盖平台(用来在 linux 上演练 darwin 监视面);缺省取 process.platform。 */
+/** 当前生效的快照上限(给报告文案用,不要在文案里硬编码数字):单树条目数、哈希总字节、嵌套链接全局条目预算。 */
+export function snapshotLimits() {
+  return {
+    treeMaxFiles: TREE_MAX_FILES,
+    hashTotalBytes: TREE_MAX_HASH_TOTAL,
+    linkFanoutMax: linkFanoutMax(),
+  };
+}
+
 export function homeWatchFor(platform) {
   return platform === 'darwin' ? [...HOME_WATCH, ...HOME_WATCH_DARWIN] : [...HOME_WATCH];
 }
@@ -48,6 +57,17 @@ export function homeWatchFor(platform) {
 const MAX_HASH_BYTES = 64 * 1024 * 1024;
 /** 活动树深度上限(含根树:根 + 最多 5 层链上链);用尽记 depth_limit 并按截断处理(fail-closed)。 */
 const MAX_LINK_DEPTH = 6;
+/**
+ * 嵌套链接扇出的全局预算(ctx 级,整个快照共用):经「树内部的链接」进入的目标树(活动树深度 >= 2)里,
+ * 一共最多处理这么多条目。以前每棵目标树各自按 TREE_MAX_FILES 计数,树内放 N 个链接就能把总量放大 N 倍
+ * (多层则按指数);现在超出即按截断处理(fail-closed,stats.truncated = true)。
+ * 测试缝:KIT_OPS_LINK_FANOUT_MAX 可覆盖(正整数),用来不造 5 万个文件就能演练。
+ */
+const LINK_FANOUT_MAX_DEFAULT = 50000;
+function linkFanoutMax() {
+  const n = Number(process.env.KIT_OPS_LINK_FANOUT_MAX);
+  return Number.isInteger(n) && n > 0 ? n : LINK_FANOUT_MAX_DEFAULT;
+}
 
 export function resolveHome(explicit) {
   if (explicit) return path.resolve(explicit);
@@ -243,6 +263,10 @@ function linkTarget(abs, ctx, nested) {
         return { rec: { t: 'dir', depth_limit: true }, ctime: ct, contentCtime: 0 };
       }
     }
+    // 注意:嵌套(nested)时 `abs` 是**目标树内部的 real 路径**(外层链接已被跟随展开),不是用户看到的链接路径;
+    // 顶层链接(snapDir / describe)里它才是链接路径本身。`link` 只用于 isVol 把 real 路径逐层翻译回「链接路径」做 volatile 判定
+    // (外层 alias 的翻译结果恰好把内层 real 路径折回外层链接路径,所以判定正确)。
+    // 不要把它直接用于报告 / 归因:嵌套项里它可能是 realpath,写进 `~/` 键会泄漏绝对 HOME 路径或与顶层口径不一致。
     ctx.aliases.push({ real, link: abs });
     let tree;
     try {
@@ -306,6 +330,11 @@ function treeDigestInner(root, vol, ctx) {
     for (const e of ents.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
       const p = path.join(dir, e.name);
       if (isVol(ctx, p)) continue;
+      // 嵌套链接目标树(活动树深度 >= 2)共用一个 ctx 级条目预算,超出按截断处理(fail-closed)
+      if (ctx.walkStack.length >= 2 && ++ctx.nestedEntries > ctx.linkFanoutMax) {
+        truncated = true;
+        return;
+      }
       const r = rel ? `${rel}/${e.name}` : e.name;
       const lst = lstatOrNull(p);
       if (lst) maxCtime = Math.max(maxCtime, Math.trunc(lst.ctimeMs));
@@ -500,10 +529,11 @@ function describeChild(readFrom, keyPath, ctx) {
 }
 
 /**
- * @param {{home:string, managedText:string, volatileText:string, adapterTargets?:string[]}} o
+ * @param {{home:string, managedText:string, volatileText:string, adapterTargets?:string[], adapterErrors?:{adapter:string,reason:string}[]}} o
  */
 export function takeSnapshot(o) {
   const home = o.home;
+  const adapterErrors = o.adapterErrors ?? [];
   const managed = parseList(o.managedText);
   const volatile = parseList(o.volatileText);
   const vol = compileVolatile(volatile, home);
@@ -521,6 +551,8 @@ export function takeSnapshot(o) {
     hashedBytes: 0,
     aliases: [],
     walkStack: [],
+    nestedEntries: 0,
+    linkFanoutMax: linkFanoutMax(),
   };
   const entries = [];
   const all = [
@@ -590,7 +622,19 @@ export function takeSnapshot(o) {
       recorded_paths: Object.keys(sortedPaths).length,
       volatile_excluded: ctx.volatileExcluded.size,
       ...(ctx.truncated ? { truncated: true } : {}),
+      // 基线自描述其不完整:adapter 清单坏了时,快照里没有该 adapter 的落点(snap 是诊断命令不退出 3,
+      // 但拿它当基线的人必须能从 JSON 里看出来)
+      ...(adapterErrors.length > 0
+        ? { adapter_manifest_invalid: adapterErrors.length, adapter_manifest_errors: adapterErrors }
+        : {}),
     },
+    ...(adapterErrors.length > 0
+      ? {
+          notes: [
+            `ADAPTER_MANIFEST_INVALID:${adapterErrors.length} 个 adapter 清单无效,本快照不含这些 adapter 的落点(不能当完整基线)`,
+          ],
+        }
+      : {}),
   };
 }
 
@@ -635,7 +679,7 @@ export function findUncoveredAdapterTargets(managedText, adapterTargets, home) {
 
 /**
  * 读 adapters/<x>/managed-targets.json 的 managed_targets(只取字符串数组)。
- * 返回 { targets, skipped, errors }:文件不存在 = 该 adapter 没有清单,跳过(照旧);
+ * 返回 { targets, skipped, errors }:文件不存在 = 该 adapter 没有清单,跳过(照旧);adapters/ 下的非点文件条目不是目录(ENOTDIR)= 布局异常,记 adapter_entry_not_directory;
  * 文件存在但读不了 / JSON 解析失败 / managed_targets 不是字符串数组(缺失、非数组、含非字符串元素)= 清单错误,
  * 记进 errors(调用方 fail-closed:零写入检查退出 3)。以前这里一律 continue,等于清单坏了就悄悄少监视一个 adapter。
  */
@@ -651,12 +695,18 @@ export function readAdapterTargets(repo) {
     return { targets, skipped, errors };
   }
   for (const n of names) {
+    if (n.startsWith('.')) continue; // .DS_Store 之类的点文件不是 adapter
     const f = path.join(dir, n, 'managed-targets.json');
     let text;
     try {
       text = fs.readFileSync(f, 'utf8');
     } catch (e) {
-      if (e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')) continue; // 没有清单文件:照旧跳过
+      if (e && e.code === 'ENOENT') continue; // 没有清单文件:照旧跳过
+      // ENOTDIR:adapters/ 下出现了普通文件(应该是 adapter 目录)——仓库布局腐烂,不是「没写清单」,记为清单错误
+      if (e && e.code === 'ENOTDIR') {
+        errors.push({ adapter: n, reason: 'adapter_entry_not_directory' });
+        continue;
+      }
       errors.push({ adapter: n, reason: `unreadable:${e?.code ?? 'ERR'}` });
       continue;
     }

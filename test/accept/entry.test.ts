@@ -1,7 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import * as path from 'node:path';
-import { exists } from '../../src/io/read-fs.js';
-import { callLib, commitAll, guardRealHome, makeFx, REPO_ROOT, runEntry } from './helpers.js';
+import { exists, readText } from '../../src/io/read-fs.js';
+import {
+  callLib,
+  commitAll,
+  guardRealHome,
+  LIB,
+  makeFx,
+  REPO_ROOT,
+  runEntry,
+  runNodeFile,
+} from './helpers.js';
 import type { Fx } from './helpers.js';
 
 guardRealHome();
@@ -133,6 +142,19 @@ describe('ops/accept-p0.sh 汇总', () => {
       fx.env(),
     );
     expect(r2.status, r2.stdout).toBe(3);
+  });
+  it('脚本目录路径含空格 / 百分号 / 非 ASCII 时仍能找到并运行各项脚本(fileURLToPath,不是 URL.pathname)', async () => {
+    const fx = await makeFx('entry-');
+    const sub = 'sp ace%20x/中文';
+    for (const f of ['accept-p0.mjs', 'common.mjs'])
+      await fx.put(`${sub}/ops/accept/lib/${f}`, await readText(path.join(LIB, f)));
+    // A4 的桩脚本:打印一行并退出 0(只证明被找到并执行)
+    await fx.put(`${sub}/ops/accept/a4-merge-guards.sh`, 'echo STUB-A4-RAN\nexit 0\n');
+    const copy = path.join(fx.root, sub, 'ops', 'accept', 'lib', 'accept-p0.mjs');
+    const r = runNodeFile(copy, ['--only', 'A4', '--root', fx.root], fx.env());
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(r.stdout).toContain('STUB-A4-RAN');
+    expect(r.stdout).toMatch(/A4\s+PASS\s+exit=0/);
   });
   it('mergeExit 优先级由 common 测试覆盖;--help 退出 0', async () => {
     const fx = await makeFx('entry-');

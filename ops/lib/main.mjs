@@ -62,6 +62,7 @@ function main(argv) {
         managedText: lists.managedText,
         volatileText: lists.volatileText,
         adapterTargets: lists.adapterTargets,
+        adapterErrors: lists.adapterErrors,
         homeWatch: lists.homeWatch,
       });
       const dest = o.outRoot ? path.join(o.outRoot, 'snapshot.json') : undefined;

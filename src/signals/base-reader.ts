@@ -250,13 +250,20 @@ export abstract class JsonlTraceReader<S = undefined> implements TraceReader {
     const refs: SessionRef[] = [];
     for (const file of files) {
       const abs = path.resolve(file);
-      const st = await statReadonly(abs);
+      // stat 失败(枚举后被删、权限):不炸掉整个 discover。仍产出引用(bytes 记 0),
+      // 逐会话读取阶段会再读一次并失败,计入 read_error,而不是静默少一个会话
+      let bytes = 0;
+      try {
+        bytes = (await statReadonly(abs)).size;
+      } catch {
+        bytes = 0;
+      }
       refs.push({
         agent: this.agent,
         path: abs,
         // discover 拿不到盐:这里只放无盐临时值,collector 与 read() 都会用本机盐重算
         session_ref: provisionalSessionRef(abs),
-        bytes: st.size,
+        bytes,
       });
     }
     return refs;

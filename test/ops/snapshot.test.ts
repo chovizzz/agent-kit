@@ -17,7 +17,7 @@ interface Snap {
       files?: Record<string, string>;
     }
   >;
-  stats: { volatile_excluded: number; recorded_paths: number };
+  stats: { volatile_excluded: number; recorded_paths: number; truncated?: boolean };
 }
 interface Diff {
   added: { path: string }[];
@@ -269,6 +269,23 @@ describe('B17 盲区 ②:嵌套目录符号链接的目标同样被监视', () =
     runMain(['snap', '--repo', fx.repo, '--home', fx.home, '--base-ref', '', '--out-root', o]);
     expect(await readText(path.join(o, 'snapshot.json'))).not.toContain('OUTSIDE-');
     expect(diff(fx, 'o1b', 'o2').d.changed.map((c) => c.path)).toEqual(['~/.claude/skills/s1']);
+  });
+
+  it('嵌套链接扇出预算是 ctx 级全局的:多条嵌套链接合计超限 => 截断(fail-closed);未超限 / 默认预算下不截断', async () => {
+    const fx = await makeFixture('~/.claude/skills/\n', '');
+    await fx.put('.claude/skills/s1/SKILL.md', '# s1\n');
+    for (const n of ['a', 'b', 'c']) {
+      for (const f of ['1', '2', '3']) await fx.put(`shared-${n}/f${f}.md`, `${n}${f}\n`);
+      await fx.link(`.claude/skills/s1/l-${n}`, `../../../shared-${n}`);
+    }
+    // 每棵目标树只有 3 个条目(远低于单树上限),三棵合计 9 个嵌套条目
+    const dflt = await snap(fx, 'fan0');
+    expect(dflt.stats.truncated).toBeUndefined();
+    const tight = await snap(fx, 'fan1', { KIT_OPS_LINK_FANOUT_MAX: '5' });
+    expect(tight.stats.truncated).toBe(true);
+    // 预算足够时不截断(正向对照:截断来自预算而不是链接本身)
+    const exact = await snap(fx, 'fan2', { KIT_OPS_LINK_FANOUT_MAX: '1000' });
+    expect(exact.stats.truncated).toBeUndefined();
   });
 
   it('环与重复:链到自己 / 祖先 / 树内兄弟都不挂不爆,且目标仍被监视', async () => {

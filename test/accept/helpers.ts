@@ -41,6 +41,18 @@ export function runScript(
   return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 
+/** 直接用 node 跑任意脚本(给「脚本被复制到特殊路径」的用例用)。env 是完整白名单。 */
+export function runNodeFile(file: string, args: string[], env: Record<string, string>): Run {
+  const r = spawnSync(process.execPath, [file, ...args], {
+    cwd: REPO_ROOT,
+    encoding: 'utf8',
+    timeout: 120_000,
+    maxBuffer: 64 * 1024 * 1024,
+    env: { PATH: SAFE_PATH, ...env },
+  });
+  return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+}
+
 export function runEntry(args: string[], env: Record<string, string>): Run {
   const r = spawnSync('bash', [ENTRY, ...args], {
     cwd: REPO_ROOT,

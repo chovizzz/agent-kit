@@ -93,6 +93,23 @@ describe('redact --stdin', () => {
     expect(r.code).toBe(ExitCode.CHECK_FAILED);
     expect(r.err).toContain(`offset=${pad.length}`);
   });
+
+  it('--check 分块重叠区内的命中只报一次(按全局偏移去重)', async () => {
+    const line = 'lorem ipsum dolor sit amet\n';
+    // 密钥行落在第一块尾部的 2KiB 重叠区里:两块都会扫到它
+    const head = line.repeat(2400);
+    const k = fakeSk();
+    const text = `${head}${k}\n${line.repeat(1000)}`;
+    const chunks = chunkForCheck(text, 65536, 2048);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(
+      chunks.filter((c) => c.start <= head.length && head.length < c.start + c.text.length),
+    ).toHaveLength(2);
+    const r = await run(['--stdin', '--check', '--timeout-ms', '10000'], text);
+    expect(r.code).toBe(ExitCode.CHECK_FAILED);
+    // 正向对照:命中确实上报了,且偏移是绝对偏移;只有一行
+    expect(r.err).toBe(`REDACT_HIT rule=prefix_sk type=api_key offset=${head.length}\n`);
+  });
 });
 
 describe('redact 用法与覆盖层', () => {

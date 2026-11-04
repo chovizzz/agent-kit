@@ -26,6 +26,7 @@ import {
   diffSnapshots,
   findUncoveredAdapterTargets,
   readAdapterTargets,
+  snapshotLimits,
   resolveHome,
   takeSnapshot,
 } from './snapshot.mjs';
@@ -917,12 +918,12 @@ export function runZeroWrite(o, log = () => {}) {
     );
     report.outside_links = outsideLinks;
   }
-  if (r1.after.stats.truncated || finalSnap.stats.truncated) {
+  if (r1.after.stats.truncated || r2?.after.stats.truncated || finalSnap.stats.truncated) {
     needAttrib = true;
+    const lim = snapshotLimits();
     report.findings.push({
       code: 'SNAPSHOT_TRUNCATED',
-      detail:
-        '快照里有目录树超过上限(50000 项 / 1GiB 哈希预算)或读不了的子目录:深层变更可能漏检,不能判通过',
+      detail: `快照里有目录树超过上限(单树 ${lim.treeMaxFiles} 项 / 嵌套链接全局 ${lim.linkFanoutMax} 项 / ${Math.round(lim.hashTotalBytes / 2 ** 30)}GiB 哈希预算)或读不了的子目录:深层变更可能漏检,不能判通过`,
     });
   }
 

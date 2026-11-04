@@ -36,26 +36,30 @@ async function zw(
   fx: Fixture,
   commands: string,
   extra: string[] = [],
+  env: Record<string, string> = {},
 ): Promise<{ status: number | null; report: Report; stdout: string }> {
   const cmds = await fx.repoPut('cmds.txt', commands + '\n');
   const outRoot = path.join(fx.out, 'zw');
-  const r = runMain([
-    '--repo',
-    fx.repo,
-    '--home',
-    fx.home,
-    '--base-ref',
-    '',
-    '--commands-file',
-    cmds,
-    '--out-root',
-    outRoot,
-    '--tmp',
-    fx.dir,
-    '--require-success',
-    ...(extra.includes('--settle-ms') ? [] : ['--settle-ms', '120']),
-    ...extra,
-  ]);
+  const r = runMain(
+    [
+      '--repo',
+      fx.repo,
+      '--home',
+      fx.home,
+      '--base-ref',
+      '',
+      '--commands-file',
+      cmds,
+      '--out-root',
+      outRoot,
+      '--tmp',
+      fx.dir,
+      '--require-success',
+      ...(extra.includes('--settle-ms') ? [] : ['--settle-ms', '120']),
+      ...extra,
+    ],
+    env,
+  );
   // report.json 在 out-root/<ts>/ 下;只有一个子目录
   const m = /报告:(.+)/.exec(r.stdout);
   const report = m
@@ -234,6 +238,37 @@ describe('A5 副判据:受管路径快照', () => {
     // 默认接受 64(未实现桩),--require-success 时不接受
     const stub = await zw(fx, `/bin/sh -c "exit 64"`, []);
     expect(stub.status).toBe(1); // zw() 已带 --require-success
+  });
+
+  it('未预期异常(--tmp 指向普通文件,建临时目录失败)=> 退出 4(未执行),不落成 node 默认的 1(违规)', async () => {
+    const fx = await makeFixture(MANAGED, VOLATILE);
+    await seed(fx);
+    const notDir = await fx.repoPut('not-a-dir', 'x\n');
+    const bad = await zw(fx, NODE0, ['--tmp', notDir]);
+    expect(bad.status).toBe(4);
+    expect(bad.stdout).toBe('');
+    // 正向对照:同样的输入换成真目录就是正常通过(0),说明上面的 4 来自那个异常而不是别的
+    expect((await zw(fx, NODE0)).status).toBe(0);
+  });
+
+  it('快照截断 => SNAPSHOT_TRUNCATED(退出 5),文案里是实际生效的上限而不是硬编码数字;正向对照:默认预算下通过', async () => {
+    const fx = await makeFixture(MANAGED, VOLATILE);
+    await seed(fx);
+    for (const n of ['a', 'b', 'c']) {
+      for (const f of ['1', '2', '3']) await fx.put(`shared-${n}/f${f}.md`, `${n}${f}\n`);
+      await fx.link(`.claude/skills/s1/l-${n}`, `../../../shared-${n}`);
+    }
+    expect((await zw(fx, NODE0)).status).toBe(0);
+    const t = await zw(fx, NODE0, [], { KIT_OPS_LINK_FANOUT_MAX: '5' });
+    expect(t.status, t.stdout).toBe(5);
+    expect(codes(t)).toContain('SNAPSHOT_TRUNCATED');
+    const detail = (
+      t.report.findings.find((f) => f.code === 'SNAPSHOT_TRUNCATED') as unknown as {
+        detail: string;
+      }
+    ).detail;
+    expect(detail).toContain('嵌套链接全局 5 项');
+    expect(detail).not.toContain('50000 项 / 1GiB');
   });
 
   it('缺 dist/cli.js 且用默认命令 => 退出 4(未执行),不当作通过', async () => {
@@ -442,6 +477,25 @@ describe('adapter 元数据取并集(合成 managed-targets.json,L-4)', () => {
     expect(r.stderr).toContain('ADAPTER_MANIFEST_INVALID');
   });
 
+  it('snap 遇坏清单:快照 JSON 自描述不完整(stats.adapter_manifest_* + notes);好清单的快照没有这些字段', async () => {
+    const fx = await makeFixture(MANAGED, VOLATILE);
+    await fx.repoPut('adapters/claude/managed-targets.json', targets(['~/.claude/CLAUDE.md']));
+    const good = runMain(['snap', '--repo', fx.repo, '--home', fx.home, '--base-ref', '']);
+    expect(good.status).toBe(0);
+    const g = JSON.parse(good.stdout) as { stats: Record<string, unknown>; notes?: string[] };
+    expect(g.stats['adapter_manifest_invalid']).toBeUndefined();
+    expect(g.notes).toBeUndefined();
+    await fx.repoPut('adapters/codex/managed-targets.json', '{ nope');
+    const bad = runMain(['snap', '--repo', fx.repo, '--home', fx.home, '--base-ref', '']);
+    expect(bad.status).toBe(0);
+    const b = JSON.parse(bad.stdout) as { stats: Record<string, unknown>; notes?: string[] };
+    expect(b.stats['adapter_manifest_invalid']).toBe(1);
+    expect(b.stats['adapter_manifest_errors']).toEqual([
+      { adapter: 'codex', reason: 'invalid_json' },
+    ]);
+    expect(b.notes?.[0]).toContain('ADAPTER_MANIFEST_INVALID');
+  });
+
   it('每份零写入报告固定带「只保证窗口结束时受管路径无残留写入」的 NOTE(B17 盲区 ①)', async () => {
     const fx = await makeFixture(MANAGED, VOLATILE);
     await seed(fx);
@@ -480,6 +534,19 @@ describe('adapter 元数据取并集(合成 managed-targets.json,L-4)', () => {
       expect(src, f).toContain('adapterTargetsChecked(');
       expect(src, f).not.toMatch(/readAdapterTargets\([^)]*\)\.targets/);
     }
+  });
+
+  it('adapters/ 下出现普通文件(ENOTDIR)=> 清单错误,退出 3;点文件(.DS_Store)不算;正向对照:adapter 目录正常', async () => {
+    const fx = await makeFixture(MANAGED, VOLATILE);
+    await fx.repoPut('adapters/claude/managed-targets.json', targets(['~/.claude/CLAUDE.md']));
+    await fx.repoPut('adapters/.DS_Store', 'junk');
+    const ok = runMain(['lists-check', '--repo', fx.repo, '--home', fx.home, '--base-ref', '']);
+    expect(ok.status, ok.stdout).toBe(0);
+    await fx.repoPut('adapters/stray-file', 'not a directory');
+    const bad = runMain(['lists-check', '--repo', fx.repo, '--home', fx.home, '--base-ref', '']);
+    expect(bad.status).toBe(3);
+    expect(bad.stdout).toContain('ADAPTER_MANIFEST_INVALID');
+    expect(bad.stdout).toContain('adapter_entry_not_directory');
   });
 
   it('正向对照:adapter 清单文件不存在(目录里没有 managed-targets.json)=> 仍跳过,退出 0', async () => {

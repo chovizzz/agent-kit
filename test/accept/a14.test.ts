@@ -38,7 +38,10 @@ const rest = argv.filter((a, i) => a !== '--root' && argv[i - 1] !== '--root');
 const name = rest.join(' ');
 const ent = table.find(([n]) => n === name);
 if (!ent) process.exit(2);
-if (ent[1] === 'P0') process.exit(mode === 'p0-stub' && name === 'build' ? 64 : mode === 'p0-notrun' && name === 'check' ? 4 : 2);
+// P0 命令空仓库下的契约预期退出码:build / check 读不到 kit.toml => 1;redact / signals collect 缺必填参数 => 2
+const P0_EXIT = { build: 1, check: 1, redact: 2, 'signals collect': 2 };
+if (ent[1] === 'P0' && mode !== 'p0-crash' && P0_EXIT[name] === 1) process.stderr.write('error CFG_KIT_TOML_MISSING kit.toml\\n');
+if (ent[1] === 'P0') process.exit(mode === 'p0-stub' && name === 'build' ? 64 : mode === 'p0-notrun' && name === 'check' ? 4 : mode === 'p0-wild-exit' && name === 'build' ? 7 : mode === 'p0-zero-exit' && name === 'redact' ? 0 : P0_EXIT[name]);
 // probe / reflect / judge / attest / promote / retire 已实装(a14 的 IMPLEMENTED_LATER_PHASE):正常模式下必须非桩、非 4。
 if (mode === 'silent-stub' && name === 'inventory') process.exit(64);
 if (['probe', 'reflect', 'judge', 'attest', 'promote', 'retire', 'calibrate', 'sync', 'doctor'].includes(name)) process.exit(mode === 'p1-stub-regression' ? 64 : 0);
@@ -152,6 +155,22 @@ describe('A14 交付物齐全', () => {
     const r = a14(await setup('p0-notrun'));
     expect(r.status, r.stdout).toBe(4);
     expect(r.stdout).toContain('自报未执行');
+  });
+  it('P0 命令在空仓库下只认契约预期退出码:怪码(7)/ 静默退 0 => 1,不再是 PASS', async () => {
+    const ok = a14(await setup('ok'));
+    expect(ok.stdout).toContain('build: [P0] 不是命令桩(空仓库下退出 1,符合契约预期)');
+    expect(ok.stdout).toContain('redact: [P0] 不是命令桩(空仓库下退出 2,符合契约预期)');
+    const wild = a14(await setup('p0-wild-exit'));
+    expect(wild.status, wild.stdout).toBe(1);
+    expect(wild.stdout).toContain('build: [P0] 空仓库下退出 7,契约预期 1');
+    const zero = a14(await setup('p0-zero-exit'));
+    expect(zero.status, zero.stdout).toBe(1);
+    expect(zero.stdout).toContain('redact: [P0] 空仓库下退出 0,契约预期 2');
+  });
+  it('build 退出 1 但没有诊断码(未捕获异常)=> 1', async () => {
+    const r = a14(await setup('p0-crash'));
+    expect(r.status, r.stdout).toBe(1);
+    expect(r.stdout).toContain('没有诊断码 CFG_KIT_TOML_MISSING');
   });
   it('CLI 不存在 => 4', async () => {
     const s = await setup('ok');
