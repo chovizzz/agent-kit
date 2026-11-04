@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as path from 'node:path';
-import { readText } from '../../src/io/read-fs.js';
+import { existsSync, readText } from '../../src/io/read-fs.js';
 import { guardRealHome, makeFx, putOutside, REPO_ROOT, runScript } from './helpers.js';
 import type { Fx } from './helpers.js';
 
@@ -18,6 +18,10 @@ const root = argv[argv.indexOf('--root') + 1];
 const mode = fs.readFileSync(path.join(root, 'stub-mode.txt'), 'utf8').trim();
 const cmd = argv.slice(argv.indexOf('--root') + 2).join(' ');
 if (mode === 'build64' && cmd === 'build') process.exit(64);
+if (mode === 'write-out' && cmd === 'build') {
+  fs.mkdirSync(path.join(root, 'out'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'out', 'a8-marker.txt'), 'built\n');
+}
 if (mode === 'check1' && cmd === 'check') process.exit(1);
 if (mode === 'swallow-fetch' && cmd === 'check') {
   try { await fetch(${JSON.stringify(URL_)}); } catch { /* 调用方吞掉异常 */ }
@@ -49,6 +53,17 @@ describe('A8 运行期无网络', () => {
     expect(r.status, r.stdout).toBe(0);
     expect((r.stdout.match(/垫片自检:.* 被拦/g) ?? []).length).toBe(5);
     expect(r.stdout).toContain('signals collect: 在垫片下成功');
+  });
+
+  it('build 在仓库副本里跑:不改写被测仓库已提交的 out/(否则后面的 A15 拿不到「已提交产物」)', async () => {
+    const { fx, cli } = await setup('write-out');
+    await fx.put('out/committed.txt', 'stale\n');
+    const r = a8(fx, cli);
+    // 正向前提:build 真的跑了并成功(stub 在它拿到的 --root 下写了标记)
+    expect(r.status, r.stdout).toBe(0);
+    expect(r.stdout).toContain('build: 在垫片下成功');
+    expect(existsSync(path.join(fx.root, 'out', 'a8-marker.txt'))).toBe(false);
+    expect(await readText(path.join(fx.root, 'out', 'committed.txt'))).toBe('stale\n');
   });
 
   it('命令尝试联网但吞掉了异常 => 1(留痕的拦截记录照样算数)', async () => {
