@@ -306,7 +306,8 @@ export const AU_MUTATIONS: readonly AuMutation[] = [
     edits: [
       {
         file: 'src/rsi/poke.ts',
-        anchor: "  // 隐私闸(`collect_blocked`):用户的强拒绝信号,不顺带调度\n  'collect_blocked',\n",
+        anchor:
+          "  // 隐私闸(`collect_blocked`):用户的强拒绝信号,不顺带调度\n  'collect_blocked',\n",
         replacement: '',
       },
     ],
@@ -325,7 +326,11 @@ export const AU_MUTATIONS: readonly AuMutation[] = [
       },
     ],
     tests: ['doctor/d01-hook-tmp.test.ts'],
-    expectRed: ['正:[rsi] 已配置、自动更新未关、tmp 缺失', '负:tmp 权限过宽也算 missing', '纯函数:缺省'],
+    expectRed: [
+      '正:[rsi] 已配置、自动更新未关、tmp 缺失',
+      '负:tmp 权限过宽也算 missing',
+      '纯函数:缺省',
+    ],
     mustKill: ['正:[rsi] 已配置、自动更新未关、tmp 缺失'],
   },
   {

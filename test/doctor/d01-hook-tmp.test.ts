@@ -62,7 +62,7 @@ describe('D01 hook_update_tmp', () => {
   });
 
   it('负:自动更新被关(KIT_AUTO_UPDATE=0 / CI / auto_install=false)→ 不报', async () => {
-    for (const env of [{ KIT_AUTO_UPDATE: '0' }, { CI: 'true' }]) {
+    for (const env of [{ KIT_AUTO_UPDATE: '0' }, { CI: 'true' }] as Record<string, string>[]) {
       const w = await newWorld('d01-hook-off-');
       await cfg(w, RSI_CFG);
       expect(await d01(w, env), JSON.stringify(env)).toMatchObject({ status: 'ok' });
