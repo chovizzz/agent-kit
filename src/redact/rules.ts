@@ -690,6 +690,15 @@ export const STAGE_PLACEHOLDER = 'placeholder_boundary';
 export const STAGE_REF_TEMPLATE = 'ref_template_strict';
 export const STAGE_REF_ZOD = 'ref_zod_strict';
 export const STAGE_REF_VAR = 'ref_var_strict';
+export const STAGE_REF_CJK = 'ref_cjk_prose';
+
+/**
+ * CJK 说明文字:含至少一个汉字 / 假名 / 谚文,且不含任何 ASCII 字母数字。冒号语境(yaml / json / 文档,`!shell`)里
+ * 中文键名后的整句中文说明(`令牌: 每次请求都需要携带的凭证`)不是口令。混了 ASCII 字母数字的值(`中文Kx8q2Lm9`)不适用。
+ */
+const CJK_LETTER = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]/;
+const ASCII_ALNUM = /[A-Za-z0-9]/;
+export const isCjkProse = (v: string): boolean => CJK_LETTER.test(v) && !ASCII_ALNUM.test(v);
 
 /**
  * 判一个无引号值。尾部标点先剥掉再判:候选 c1=去 `;,:`、c2=再去 `)]}`、c3=再去 `({[`,
@@ -715,6 +724,9 @@ export function judgeValue(
     if (disabled.has(STAGE_REF_ZOD) ? LEGACY_ZOD.test(c) : ZOD_CHAIN.test(c))
       return { secret: false, coreLen: e3 };
   }
+  // 只在非 shell 语境(`:` `=>`)放行;`=` 赋值的中文值照旧按口令处理(中文口令是真实存在的)
+  if (!shell && !disabled.has(STAGE_REF_CJK) && isCjkProse(v))
+    return { secret: false, coreLen: e3 };
   if (disabled.has(STAGE_REF_TAIL) && (LEGACY_CODE_SHAPE.test(v) || LEGACY_CALL_CHAIN.test(v)))
     return { secret: false, coreLen: e3 };
   if (disabled.has(STAGE_REF_BOUNDARY) && LEGACY_NON_SECRET_START.test(v))
@@ -751,7 +763,10 @@ const CRED_QUICK: readonly string[] = [
   '令牌',
 ];
 /** 键名后缀(`_prod` `-v2` 或 key/id/value…)与引号 / 空白的上限:对齐排版的 `db_password      = …` 也要认。 */
-const SFX = '(?:[_-][A-Za-z0-9_-]{1,40}|(?:key|id|value|secret|token|hash))?';
+// 后缀的字符集含 CJK 统一表意文字(`密码_生产=…`);只放宽后缀,键名本身仍是 KW 的封闭集合
+const SFX = '(?:[_-][A-Za-z0-9_\\u3400-\\u9fff-]{1,40}|(?:key|id|value|secret|token|hash))?';
+/** 键名右侧的引号:ASCII 单双引号,加文字处理器常见的弯引号(U+2018/2019/201C/201D;NFKC 不折叠它们)。值侧不变。 */
+const KEY_QUOTE = `["'\\u2018\\u2019\\u201c\\u201d]`;
 const SP = '[ \\t]{0,32}';
 
 /**
@@ -760,7 +775,7 @@ const SP = '[ \\t]{0,32}';
  * 值之前的空白允许 `key = value`;被拒绝的匹配不再吞掉后文(见 scan 里的 lastIndex 回退)。
  */
 const CRED_ASSIGN_RE = new RegExp(
-  `${KW}${SFX}(?:\\\\*["'])?${SP}(:=|=>|:|=)${SP}(?:\\\\*"((?:[^"\\\\\\r\\n]|(?=(\\\\+))\\3(?!"))*)(?:\\\\*")?|'([^'\\r\\n]{8,})'?|(?!\\\\+')([^\\s"'\`]+)|\\\\+'((?:[^'\\\\\\r\\n]|(?=(\\\\+))\\7(?!'))*)(?:\\\\+')?)`,
+  `${KW}${SFX}(?:\\\\*${KEY_QUOTE})?${SP}(:=|=>|:|=)${SP}(?:\\\\*"((?:[^"\\\\\\r\\n]|(?=(\\\\+))\\3(?!"))*)(?:\\\\*")?|'([^'\\r\\n]{8,})'?|(?!\\\\+')([^\\s"'\`]+)|\\\\+'((?:[^'\\\\\\r\\n]|(?=(\\\\+))\\7(?!'))*)(?:\\\\+')?)`,
   'gid',
 );
 
@@ -1345,7 +1360,7 @@ const credAssign: Rule = {
  * 分组:1=`:=` `=>` `=`,2=`:`(无标注),3=标注之后的 `=`。标注 `: str =` 的类型部分有长度上限、不含引号。
  */
 const EXT_HEAD_RE = new RegExp(
-  `${KW}${SFX}(?:\\\\*["'])?${SP}(?:(:=|=>|=)|(:)(?:${SP}[A-Za-z_][\\w.\\[\\], |?]{0,40}?${SP}(=)(?!=))?)${SP}`,
+  `${KW}${SFX}(?:\\\\*${KEY_QUOTE})?${SP}(?:(:=|=>|=)|(:)(?:${SP}[A-Za-z_][\\w.\\[\\], |?]{0,40}?${SP}(=)(?!=))?)${SP}`,
   'gid',
 );
 const WORD_STOP = /[\s|&;<>(),\]}`]/;
@@ -2202,6 +2217,7 @@ export const STAGE_IDS = [
   STAGE_REF_TEMPLATE,
   STAGE_REF_ZOD,
   STAGE_REF_VAR,
+  STAGE_REF_CJK,
   STAGE_BLOCK,
   STAGE_DEFAULT_CHAIN,
 ] as const;

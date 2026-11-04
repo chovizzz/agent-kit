@@ -30,6 +30,9 @@ const PROBES: Record<string, string> = {
   'dns/promises.resolve4': `require('node:dns/promises').resolve4('example.invalid').catch((e) => console.log(e.code));`,
   'global fetch': `fetch('${LOOP_HTTP}/').catch((e) => console.log(e.code));`,
   'require(undici)': `try { require('undici'); } catch (e) { console.log(e.code); }`,
+  // ESM 动态 import 不经过 Module._load:靠 module.register 的 resolve 钩子拦(钩子线程里抛的错 code 不一定保留,按 message 里的 ENO_NET 认)
+  "import('undici')": `import('undici').then(() => console.log('LOADED'), (e) => console.log(e && (e.code === 'ENO_NET' || /ENO_NET/.test(String(e.message))) ? 'ENO_NET' : 'OTHER:' + (e && e.code)));`,
+  "import('undici/lib/fetch')": `import('undici/lib/fetch').then(() => console.log('LOADED'), (e) => console.log(e && (e.code === 'ENO_NET' || /ENO_NET/.test(String(e.message))) ? 'ENO_NET' : 'OTHER:' + (e && e.code)));`,
   'child_process.spawnSync curl': `try { require('node:child_process').spawnSync('curl', ['--version']); } catch (e) { console.log(e.code); }`,
   'child_process.execFileSync wget': `try { require('node:child_process').execFileSync('/usr/bin/wget', ['--version']); } catch (e) { console.log(e.code); }`,
   'child_process.execSync shell curl': `try { require('node:child_process').execSync('curl --version'); } catch (e) { console.log(e.code); }`,
@@ -57,6 +60,34 @@ describe('A8 零网络垫片:每个网络面都被拦', () => {
        }`,
     ]);
     expect(r.stdout.trim().split('\n')).toEqual(['ENO_NET', 'ENO_NET', 'ENO_NET']);
+  });
+
+  it("静态 `import 'undici'`(ESM 入口)也被拦", () => {
+    const r = runNode([
+      '--require',
+      NO_NET,
+      '--input-type=module',
+      '-e',
+      `try { await import('undici'); console.log('LOADED'); } catch (e) { console.log(/ENO_NET/.test(String(e.message)) ? 'ENO_NET' : 'OTHER'); }`,
+    ]);
+    expect(r.stdout.trim()).toBe('ENO_NET');
+    expect(r.stderr).toContain('[no-net] blocked import(undici)');
+  });
+
+  it("正向对照:ESM 动态 import 普通内置模块不受影响;没有垫片时 import('undici') 不是 ENO_NET", () => {
+    const ok = runNode([
+      '--require',
+      NO_NET,
+      '-e',
+      `Promise.all([import('node:os'), import('node:path')]).then(() => console.log('ok'));`,
+    ]);
+    expect(ok.stdout.trim()).toBe('ok');
+    expect(ok.stderr).not.toContain('[no-net]');
+    const bare = runNode([
+      '-e',
+      `import('undici').then(() => console.log('LOADED'), (e) => console.log(/ENO_NET/.test(String(e.message)) ? 'ENO_NET' : 'OTHER'));`,
+    ]);
+    expect(bare.stdout.trim()).not.toBe('ENO_NET');
   });
 
   it('KIT_NO_NET_LOG 留痕:异常被调用方吞掉也能在日志里看到', () => {

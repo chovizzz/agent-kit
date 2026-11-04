@@ -2065,6 +2065,63 @@ export function buildSeeds(seed: number = SEED): Seed[] {
         [`${PWK}=$(echo `, R(dollar + upperMixed, cred), ')'],
         ['cred_assign', 'ref_var_strict', 'ref_trailing_literal'],
       ),
+      // P0 低优先修复:弯引号包住的键名、CJK 后缀的键名、中文说明文字(冒号语境)
+      make(
+        'p0.cjk.curly_double_quotes',
+        'plain',
+        'recognized',
+        [`\u201c${KMIMA}\u201d=`, R(pw(), cred)],
+        ['cred_assign'],
+      ),
+      make(
+        'p0.cjk.curly_single_quotes',
+        'plain',
+        'recognized',
+        [`\u2018${KLINGPAI}\u2019: `, R(pw(), cred)],
+        ['cred_assign'],
+      ),
+      make(
+        'p0.cjk.suffix_cjk',
+        'plain',
+        'recognized',
+        [`${KMIMA}_${['生', '产'].join('')}=`, R(pw(), cred)],
+        ['cred_assign'],
+      ),
+      make(
+        'p0.cjk.prose_prefix_with_ascii_value',
+        'plain',
+        'recognized',
+        [`${KKOULING}: `, R(`${['中', '文', '前', '缀'].join('')}${pw()}`, cred)],
+        ['cred_assign'],
+      ),
+      // 冒号后的中文说明文字不当秘密(benign 档不参与变异对账,所以另有一颗 recognized 混合种子钉住 ref_cjk_prose:
+      // 说明行原样保留 + 同一输入里的真值被替换;阶段被禁用时说明行也被替换 => 红)
+      ...[KMIMA, KKOULING, KMIYAO, KLINGPAI].map((k, i) =>
+        unchanged(
+          `p0.benign.cjk_prose_colon_${i}`,
+          'benign',
+          'benign',
+          `${k}: ${['每', '次', '请', '求', '都', '需', '要', '携', '带', '的', '说', '明'].join('')}\n`,
+        ),
+      ),
+      unchanged(
+        'p0.benign.cjk_prose_colon_quoted',
+        'benign',
+        'benign',
+        `${KMIMA}:"${['用', '于', '登', '录', '的', '说', '明', '文', '字'].join('')}"\n`,
+      ),
+      make(
+        'p0.cjk.prose_kept_secret_redacted',
+        'concat_multiline',
+        'recognized',
+        [
+          `${KLINGPAI}: ${['每', '次', '请', '求', '都', '需', '要', '携', '带', '的', '说', '明'].join('')}\n`,
+          `${KMIMA}=`,
+          R(pw(), cred),
+          '\n',
+        ],
+        ['cred_assign', 'ref_cjk_prose'],
+      ),
       // 真正的变量引用照旧不动(正向对照)
       unchanged('p0.benign.cjk_dollar_home', 'benign', 'benign', `${KMIMA}=${dollar}HOME`),
       unchanged(

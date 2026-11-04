@@ -24,6 +24,14 @@ if (mode === 'lang') body += 'lang=' + process.env.LANG + '\\n';
 if (mode === 'cwd') body += 'cwd=' + path.basename(process.cwd()) + '\\n';
 if (mode === 'abs') body += 'root=' + root + '\\n';
 if (mode === 'ts') body += 'built=' + new Date().toISOString() + '\\n';
+if (mode === 'ts-slash') body += 'built: 2024/01/02\\n';
+if (mode === 'ts-rfc') body += 'Date: Mon, 01 Jan 2024 10:00:00 GMT\\n';
+if (mode === 'ts-epoch-json') fs.writeFileSync(path.join(out, 'claude', 'meta.json'), '{"generated_at": 1700000000}\\n');
+if (mode === 'ts-epoch-comment') body = '# built 1700000000\\n' + body;
+if (mode === 'benign-numbers') {
+  fs.writeFileSync(path.join(out, 'claude', 'meta.json'), '{"max_tokens": 1700000000, "size": 1234567890, "generated_at": 123456, "id": "a1700000000b", "candidate_id": 1700000000}\\n');
+  body += 'validate: 1700000000 tokens\\nrange 5000000000\\n';
+}
 if (mode === 'user') body += 'by=' + os.userInfo().username + '\\n';
 if (mode === 'home') body += 'p=/Users/x/y\\n';
 fs.writeFileSync(path.join(out, 'claude', 'CLAUDE.md'), body);
@@ -62,6 +70,23 @@ describe('A1 确定性', () => {
     const r = a1(fx, cli);
     expect(r.status, r.stdout).toBe(1);
     expect(r.stdout).toContain(msg);
+  });
+  it.each([
+    ['ts-slash', 'YYYY/MM/DD'],
+    ['ts-rfc', 'RFC2822'],
+    ['ts-epoch-json', 'epoch(键值)'],
+    ['ts-epoch-comment', 'epoch(注释头)'],
+  ])('恒定的非 ISO 时间戳(哈希全等也要抓到):%s => 退出 1', async (mode, kind) => {
+    const { fx, cli } = await setup(mode);
+    const r = a1(fx, cli);
+    expect(r.status, r.stdout).toBe(1);
+    expect(r.stdout).toContain(`疑似时间戳(${kind})`);
+  });
+  it('正向对照:普通的 10 位数 / 非时间键的大数 / 区间外的数不算时间戳 => 退出 0', async () => {
+    const { fx, cli } = await setup('benign-numbers');
+    const r = a1(fx, cli);
+    expect(r.status, r.stdout).toBe(0);
+    expect(r.stdout).toContain('树哈希全等');
   });
   it('空 out/ 不能证明确定性 => 退出 1', async () => {
     const { fx, cli } = await setup('empty');

@@ -11,6 +11,7 @@ import {
   runMain,
 } from './common.mjs';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 export const ITEMS = [
   {
@@ -150,7 +151,8 @@ async function acceptMain(argv) {
     return EXIT.OK;
   }
   const only = flags.only ? parseOnly(flags.only) : ITEMS.map((i) => i.id);
-  const here = path.dirname(new URL(import.meta.url).pathname);
+  // fileURLToPath 而不是 URL.pathname:路径含空格 / 百分号 / 非 ASCII 时 pathname 保留 %XX 转义,拼出的脚本路径不存在
+  const here = path.dirname(fileURLToPath(import.meta.url));
   const results = [];
   for (const it of ITEMS.filter((i) => only.includes(i.id))) {
     if (it.manual) {

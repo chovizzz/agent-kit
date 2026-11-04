@@ -75,7 +75,8 @@ export async function isMainSessionFile(file: string): Promise<boolean> {
   // 首行 JSON null:jq 的 `null.payload.source` 为 null,退出码 0,即主会话;其余非对象标量/数组 jq 报错
   if (parsed === null) return true;
   if (!isJsonObject(parsed)) return false;
-  // payload 存在却不是对象(字符串、数组等):jq 的 `.payload.source` 会报错、退出码非 0,所以也不是会话
+  // payload 存在却不是对象(字符串、数组、数字等):jq 1.7.1 实测 `.payload.source` 报错、退出码 5(`// false` 压不住这类错误),
+  // 所以不是会话(首行本身是数组 / 标量同理)。测试 test/readers/codex/main-session.test.ts 钉住了这组实测值
   const payload = parsed['payload'];
   if (payload !== undefined && payload !== null && !isJsonObject(payload)) return false;
   const source = objectOf(payload)['source'];
@@ -175,7 +176,16 @@ export class CodexReader extends JsonlTraceReader {
     });
     const out: string[] = [];
     // 显式传入的单个文件(walkFiles 不按文件名过滤它,与基类约定一致)也要过首行判定:侧链文件不是会话(C1)
-    for (const f of candidates) if (await isMainSessionFile(f)) out.push(f);
+    for (const f of candidates) {
+      try {
+        if (await isMainSessionFile(f)) out.push(f);
+      } catch {
+        // 单个文件首行读失败(权限、枚举后被删、被换成链接 / FIFO):不能炸掉整个 discover。
+        // 保留在列表里,让逐会话的读取阶段再读一次并失败,计入 read_error(`SESSION_READ_FAILED` 的类名计数)——
+        // 既不影响其它文件,也不会把「读不了」静默当成「不是会话」(fail-closed 且可见)
+        out.push(f);
+      }
+    }
     return out;
   }
 

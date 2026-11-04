@@ -1,7 +1,7 @@
 'use strict';
 /* eslint-disable @typescript-eslint/no-require-imports -- 经 NODE_OPTIONS=--require 预加载的 CJS 垫片,只能用 require */
 // A8 运行期零网络垫片:`NODE_OPTIONS=--require ops/guards/no-net.cjs`。
-// 覆盖:net / tls / http / https / http2 / dns(含 dns/promises)/ dgram / 全局 fetch / undici(若可解析)
+// 覆盖:net / tls / http / https / http2 / dns(含 dns/promises)/ dgram / 全局 fetch / undici(CJS require 与 ESM import,后者靠 module.register 的 resolve 钩子)
 //       / child_process 启动 curl|wget|nc|ncat|ssh|scp|telnet|ftp。
 // 被拦时抛 Error(code='ENO_NET'),并向 stderr 写一行 `[no-net] blocked <api>`(即使调用方吞掉异常也留痕);
 // 若设了 KIT_NO_NET_LOG,同时追加写入该文件。
@@ -180,6 +180,37 @@ Module._load = function (request, parent, isMain) {
   if (/(^|[\\/])undici($|[\\/])/.test(String(request))) throw blocked(`require(${request})`);
   return origLoad.call(this, request, parent, isMain);
 };
+
+// ESM 的 `import 'undici'` / `import('undici')` 不经过 Module._load:另用 module.register 注册一个 resolve 钩子(Node >= 20.6;
+// 项目要求 >= 22)。钩子跑在独立线程,用 fs.writeSync / appendFileSync 留痕;抛出的错误带 `ENO_NET` 字样,
+// 但 code 属性在跨线程序列化时不一定保留,所以调用方应按 message 里的 `ENO_NET` 识别 ESM 路径。
+// 副作用(已知):module.register 的钩子会随 worker_threads / child_process 传播到子 node 进程(即使子进程丢掉了 NODE_OPTIONS),
+// 所以那里 `import('undici')` 仍被拦而 CJS 补丁不在——覆盖是「宁多拦」的不一致,不要据此认为子进程已被整体隔离;
+// 全进程每次 ESM resolve 多过一次钩子线程(只做一次正则判断)。
+// 注册失败(老 Node、无 register)时静默降级:此时头部声明里的 undici 只覆盖 CJS require。
+const ESM_HOOK_SRC = `
+import { appendFileSync, writeSync } from 'node:fs';
+export async function resolve(specifier, context, nextResolve) {
+  if (/(^|[\\\\/])undici($|[\\\\/])/.test(String(specifier))) {
+    const msg = '[no-net] blocked import(' + specifier + ')';
+    try {
+      writeSync(2, msg + '\\n');
+      if (process.env.KIT_NO_NET_LOG) appendFileSync(process.env.KIT_NO_NET_LOG, msg + '\\n');
+    } catch {}
+    const e = new Error('ENO_NET 网络访问被 no-net 垫片拒绝:import(' + specifier + ')');
+    e.code = 'ENO_NET';
+    throw e;
+  }
+  return nextResolve(specifier, context);
+}
+`;
+try {
+  if (typeof Module.register === 'function') {
+    Module.register('data:text/javascript,' + encodeURIComponent(ESM_HOOK_SRC));
+  }
+} catch {
+  /* 注册失败:降级为仅 CJS require 的 undici 拦截 */
+}
 
 // ---- child_process:启动联网二进制 ----
 const cp = require('node:child_process');

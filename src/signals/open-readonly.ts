@@ -8,7 +8,7 @@
  *  3. 测试另用 vi.mock('node:fs') 在 fs 层记录真实 flags(test/signals/readonly.test.ts)。
  */
 import { getRealHome } from '../io/paths.js';
-import { readLinesSafe, readText, stat } from '../io/read-fs.js';
+import { openStreamSafe, readLinesSafe, stat } from '../io/read-fs.js';
 import type { Stats } from '../io/read-fs.js';
 
 export interface OpenEvent {
@@ -50,15 +50,33 @@ export async function statReadonly(path: string): Promise<Stats> {
   return stat(path);
 }
 
-/** 伴随小文件(如 Kimi 同级的 state.json)的只读文本读取;超过 maxBytes 或不存在返回 undefined。 */
+/**
+ * 伴随小文件(如 Kimi 同级的 state.json)的只读文本读取;超过 maxBytes、不存在、或不是可安全读的普通文件
+ * (符号链接、FIFO、设备、目录)一律返回 undefined(调用方按「取不到」处理,不阻塞、不抛错)。
+ * 打开走 read-fs.openStreamSafe(`O_NOFOLLOW | O_NONBLOCK` + 同句柄 fstat),校验与读取共用一个句柄,
+ * 所以 lstat 之后路径被换成链接 / FIFO 也读不到别的东西。硬链接放行(与会话文件同口径:只读、内容本来就不被信任)。
+ * 读取按字节累计,超过 maxBytes 立即停止(不先整体读入内存再判大小)。
+ */
 export async function readCompanionText(
   path: string,
   maxBytes = 1024 * 1024,
 ): Promise<string | undefined> {
   observer?.({ path, flags: 'O_RDONLY', purpose: 'text' });
   try {
-    if ((await stat(path)).size > maxBytes) return undefined;
-    return await readText(path);
+    const s = await openStreamSafe(path, { allowHardlink: true });
+    if (s.kind !== 'ok') return undefined;
+    try {
+      const parts: Buffer[] = [];
+      let total = 0;
+      for await (const c of s.chunks()) {
+        total += c.length;
+        if (total > maxBytes) return undefined;
+        parts.push(c);
+      }
+      return Buffer.concat(parts, total).toString('utf8');
+    } finally {
+      await s.close();
+    }
   } catch {
     return undefined;
   }
