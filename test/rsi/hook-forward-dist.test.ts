@@ -13,7 +13,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import * as path from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { KIT_VERSION } from '../../src/contracts/meta.js';
-import { exists, readDir, readText, realpathSync } from '../../src/io/read-fs.js';
+import { exists, lstat, readDir, readText, realpathSync } from '../../src/io/read-fs.js';
 import * as safe from '../../src/io/safe-fs.js';
 import { REPO_ROOT } from '../helpers/tmp.js';
 import { makeSandbox, type Sandbox } from '../build/helpers.js';
@@ -384,6 +384,40 @@ describe('d KIT_LAUNCHED', () => {
     const b = await run(w, HINT, { KIT_LAUNCHED: '0' });
     expect(b.out).toBe(`FROM_CURRENT ${HINT.join(' ')}\n`);
     expect(await markers(w)).toHaveLength(1);
+  }, 60_000);
+});
+
+describe('f 前台命令备好受控 tmp(H2-B):只用 pi 的用户装钩子那一次之后,poke 才调度得起来', () => {
+  it('全新假 HOME 没有 tmp:poke 不调度;先跑一条非 TTY 前台命令(--version)→ tmp 被建出(0700);同一世界再 poke → 恰好一次 __update --background', async () => {
+    const w = await world({ installed: KIT_VERSION, rsi: 'stop', tmpDir: 'none' });
+    const tmpAbs = path.join(w.home, STATE_DIR, 'tmp');
+    expect((await run(w, POKE)).status).toBe(0);
+    expect(await spawns(w)).toEqual([]);
+    expect(await exists(tmpAbs)).toBe(false);
+
+    await reset(w);
+    const fg = await run(w, ['--version']);
+    expect(fg.status).toBe(0);
+    expect(fg.out).toContain(KIT_VERSION);
+    expect(await exists(tmpAbs)).toBe(true);
+    expect(((await lstat(tmpAbs)).mode & 0o777).toString(8)).toBe('700');
+
+    await reset(w);
+    expect(await run(w, POKE)).toEqual({ status: 0, out: '', err: '' });
+    const s = await spawns(w);
+    expect(s).toHaveLength(1);
+    expect(s[0]?.args.slice(-2)).toEqual(['__update', '--background']);
+    expect(await read(w.logs.write)).toBe('');
+    expect(await waitMarkers(w, 1)).toHaveLength(1);
+  }, 90_000);
+
+  it('KIT_AUTO_UPDATE=0 的前台命令不建 tmp(之后 poke 也不调度)', async () => {
+    const w = await world({ installed: KIT_VERSION, rsi: 'stop', tmpDir: 'none' });
+    const tmpAbs = path.join(w.home, STATE_DIR, 'tmp');
+    expect((await run(w, ['--version'], { KIT_AUTO_UPDATE: '0' })).status).toBe(0);
+    expect(await exists(tmpAbs)).toBe(false);
+    expect(await run(w, POKE)).toEqual({ status: 0, out: '', err: '' });
+    expect(await spawns(w)).toEqual([]);
   }, 60_000);
 });
 

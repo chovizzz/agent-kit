@@ -280,6 +280,20 @@ export const AU_MUTATIONS: readonly AuMutation[] = [
     mustKill: ['的闭包(含 import type)不含网络出口', 'H1:policy.ts'],
   },
   {
+    id: 'ensure-hook-tmp-removed',
+    clause: '前台命令不再备好受控 tmp(只用 pi 的用户永远调度不起来)',
+    edits: [
+      {
+        file: 'src/update/launcher.ts',
+        anchor: '    await ensureHookTmp({ home, env });',
+        replacement: '    void ensureHookTmp;',
+      },
+    ],
+    tests: [DIST],
+    expectRed: ['f 前台命令备好受控 tmp'],
+    mustKill: ['全新假 HOME 没有 tmp'],
+  },
+  {
     id: 'auto-install-fail-open',
     clause: 'readAutoInstall 读不出配置时放行(应 fail-closed)',
     edits: [
