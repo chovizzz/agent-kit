@@ -288,7 +288,8 @@ export async function decideCurrent(
     anchor: installed.anchor,
     version: cur,
   });
-  if (!tree.ok) return { launch: false, broken: tree.reason === 'anchor_mismatch' ? 'anchor' : 'tree' };
+  if (!tree.ok)
+    return { launch: false, broken: tree.reason === 'anchor_mismatch' ? 'anchor' : 'tree' };
   return { launch: true, version: cur };
 }
 

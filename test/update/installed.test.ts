@@ -321,9 +321,9 @@ describe('pickWorkerTarget:update worker 由谁来跑', () => {
   it('current 与安装记录对齐且树校验过(不要求更高)→ current;否则 self', async () => {
     const ok = await newWorld();
     await installFake(ok, '0.2.0');
-    expect(await installed.pickWorkerTarget(ok.home, await installed.readUpdateState(ok.home))).toEqual(
-      { kind: 'current', version: '0.2.0' },
-    );
+    expect(
+      await installed.pickWorkerTarget(ok.home, await installed.readUpdateState(ok.home)),
+    ).toEqual({ kind: 'current', version: '0.2.0' });
 
     const anchor = await newWorld();
     await installFake(anchor, '0.2.0');

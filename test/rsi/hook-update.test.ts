@@ -115,7 +115,13 @@ describe('runPoke × scheduleUpdate', () => {
       expect(s.updates).toBe(0);
     });
   }
-  for (const argv of [[], ['--agent'], ['--agent', 'kimi'], ['--agent=claude'], ['--agent', 'claude', '--x']]) {
+  for (const argv of [
+    [],
+    ['--agent'],
+    ['--agent', 'kimi'],
+    ['--agent=claude'],
+    ['--agent', 'claude', '--x'],
+  ]) {
     it(`参数不合法 ${JSON.stringify(argv)}:不调度`, async () => {
       const f = await makeTickFx('au-arg-');
       const s = spy(f);

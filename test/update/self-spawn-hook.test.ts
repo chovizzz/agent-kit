@@ -201,7 +201,10 @@ describe('spawnUpdateWorker:谓词矩阵 / 零写入 / 目标选择', () => {
     return w;
   }
   const anchorOf = (w: World): string => (w as World & { anchor: string }).anchor;
-  const input = (w: World, env: Record<string, string> = {}): { home: string; env: Record<string, string> } => ({
+  const input = (
+    w: World,
+    env: Record<string, string> = {},
+  ): { home: string; env: Record<string, string> } => ({
     home: w.home,
     env: { ...HOME_ENV, ...env },
   });
@@ -227,9 +230,9 @@ describe('spawnUpdateWorker:谓词矩阵 / 零写入 / 目标选择', () => {
   it('KIT_LAUNCHED=1(poke 跑在被转发的 current 里)不挡调度', async () => {
     const w = await dueWorld();
     const r = rec();
-    expect(await spawnUpdateWorker(input(w, { KIT_LAUNCHED: '1' }), { runSelf: r.run, now })).toEqual(
-      { scheduled: true },
-    );
+    expect(
+      await spawnUpdateWorker(input(w, { KIT_LAUNCHED: '1' }), { runSelf: r.run, now }),
+    ).toEqual({ scheduled: true });
   });
 
   it('H3 开关:KIT_AUTO_UPDATE 关(0/false/off/no)、CI、auto_install=false → 不调度', async () => {
@@ -237,15 +240,19 @@ describe('spawnUpdateWorker:谓词矩阵 / 零写入 / 目标选择', () => {
     for (const v of off) {
       const w = await dueWorld();
       const r = rec();
-      expect(await spawnUpdateWorker(input(w, { KIT_AUTO_UPDATE: v }), { runSelf: r.run, now }), v)
-        .toEqual({ scheduled: false, why: 'gate' });
+      expect(
+        await spawnUpdateWorker(input(w, { KIT_AUTO_UPDATE: v }), { runSelf: r.run, now }),
+        v,
+      ).toEqual({ scheduled: false, why: 'gate' });
       expect(r.calls).toHaveLength(0);
     }
     for (const ci of ['CI', 'GITHUB_ACTIONS', 'GITLAB_CI', 'BUILDKITE']) {
       const w = await dueWorld();
       const r = rec();
-      expect(await spawnUpdateWorker(input(w, { [ci]: 'true' }), { runSelf: r.run, now }), ci)
-        .toEqual({ scheduled: false, why: 'gate' });
+      expect(
+        await spawnUpdateWorker(input(w, { [ci]: 'true' }), { runSelf: r.run, now }),
+        ci,
+      ).toEqual({ scheduled: false, why: 'gate' });
       expect(r.calls).toHaveLength(0);
     }
     const w = await dueWorld();
@@ -322,22 +329,32 @@ describe('spawnUpdateWorker:谓词矩阵 / 零写入 / 目标选择', () => {
 
   it('目标:current 校验不过(锚点不符)→ self;没有任何状态(首次安装)→ self 且仍调度', async () => {
     const bad = await dueWorld();
-    await putState(bad, '0.2.0', 'e'.repeat(64), (s) => ({ ...s, last_check_at: iso(NOW - 48 * 3_600_000) }));
+    await putState(bad, '0.2.0', 'e'.repeat(64), (s) => ({
+      ...s,
+      last_check_at: iso(NOW - 48 * 3_600_000),
+    }));
     const r = rec();
-    expect(await spawnUpdateWorker(input(bad), { runSelf: r.run, now })).toEqual({ scheduled: true });
+    expect(await spawnUpdateWorker(input(bad), { runSelf: r.run, now })).toEqual({
+      scheduled: true,
+    });
     expect(r.calls[0]?.target).toEqual({ kind: 'self' });
 
     const fresh = await newWorld();
     await mkTmp(fresh);
     const r2 = rec();
-    expect(await spawnUpdateWorker(input(fresh), { runSelf: r2.run, now })).toEqual({ scheduled: true });
+    expect(await spawnUpdateWorker(input(fresh), { runSelf: r2.run, now })).toEqual({
+      scheduled: true,
+    });
     expect(r2.calls[0]?.target).toEqual({ kind: 'self' });
   });
 
   it('runSelf 拒绝 / 抛错 → scheduled:false(why 为拒绝原因 / denied / threw),从不抛', async () => {
     const w = await dueWorld();
     expect(
-      await spawnUpdateWorker(input(w), { runSelf: rec({ spawned: false, reason: 'spawn_failed' }).run, now }),
+      await spawnUpdateWorker(input(w), {
+        runSelf: rec({ spawned: false, reason: 'spawn_failed' }).run,
+        now,
+      }),
     ).toEqual({ scheduled: false, why: 'spawn_failed' });
     expect(
       await spawnUpdateWorker(input(w), {
