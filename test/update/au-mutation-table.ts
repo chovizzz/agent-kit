@@ -290,7 +290,7 @@ export const AU_MUTATIONS: readonly AuMutation[] = [
       },
     ],
     tests: [DIST],
-    expectRed: ['f 前台命令备好受控 tmp'],
+    expectRed: ['全新假 HOME 没有 tmp'],
     mustKill: ['全新假 HOME 没有 tmp'],
   },
   {

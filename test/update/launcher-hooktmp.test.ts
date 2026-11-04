@@ -51,9 +51,10 @@ describe('ensureHookTmp', () => {
       { KIT_LAUNCHED: '1' },
     ]) {
       const w = await newWorld();
-      expect(await ensureHookTmp({ home: w.home, env: envOf(w, extra) }), JSON.stringify(extra)).toBe(
-        false,
-      );
+      expect(
+        await ensureHookTmp({ home: w.home, env: envOf(w, extra) }),
+        JSON.stringify(extra),
+      ).toBe(false);
       expect(await treeOf(w.home), JSON.stringify(extra)).toEqual([]);
     }
     const w = await newWorld();
