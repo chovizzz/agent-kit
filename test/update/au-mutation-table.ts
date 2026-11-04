@@ -301,6 +301,34 @@ export const AU_MUTATIONS: readonly AuMutation[] = [
     mustKill: ['全新假 HOME 没有 tmp'],
   },
   {
+    id: 'collect-blocked-also-schedules',
+    clause: '谓词:隐私闸 collect_blocked 也调度(应视为用户的强拒绝信号)',
+    edits: [
+      {
+        file: 'src/rsi/poke.ts',
+        anchor: "  // 隐私闸(`collect_blocked`):用户的强拒绝信号,不顺带调度\n  'collect_blocked',\n",
+        replacement: '',
+      },
+    ],
+    tests: [ENTRY],
+    expectRed: ['NO 集合内', 'M1 / L3:源码里出现过的每个 noop why'],
+    mustKill: ['NO 集合内'],
+  },
+  {
+    id: 'doctor-missing-not-warned',
+    clause: 'doctor D01:tmp 缺失不报 warn(迁移缺口失明)',
+    edits: [
+      {
+        file: 'src/doctor/checks.ts',
+        anchor: "  if (i.hookUpdateTmp === 'missing') {",
+        replacement: "  if (i.hookUpdateTmp === 'never') {",
+      },
+    ],
+    tests: ['doctor/d01-hook-tmp.test.ts'],
+    expectRed: ['正:[rsi] 已配置、自动更新未关、tmp 缺失', '负:tmp 权限过宽也算 missing', '纯函数:缺省'],
+    mustKill: ['正:[rsi] 已配置、自动更新未关、tmp 缺失'],
+  },
+  {
     id: 'auto-install-fail-open',
     clause: 'readAutoInstall 读不出配置时放行(应 fail-closed)',
     edits: [
