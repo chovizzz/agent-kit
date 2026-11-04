@@ -422,7 +422,7 @@ describe('f 前台命令备好受控 tmp(H2-B):只用 pi 的用户装钩子那�
 });
 
 describe('e poke 顺带调度 update worker', () => {
-  it('due + 受控 tmp 合格(STOP 世界,rsi 侧无动作):恰好一次 __update --background,目标 current、TMPDIR = 受控目录;钩子零写入、无输出', async () => {
+  it('due + 受控 tmp 合格(STOP 世界,rsi 侧无动作):恰好一次 __update --background,目标 current、TMPDIR = 受控目录;钩子进程自身零写入、无输出', async () => {
     const w = await world({ installed: KIT_VERSION, rsi: 'stop' });
     const r = await run(w, POKE);
     expect(r).toEqual({ status: 0, out: '', err: '' });
@@ -430,6 +430,8 @@ describe('e poke 顺带调度 update worker', () => {
     expect(s).toHaveLength(1);
     expect(s[0]?.fn).toBe('spawn');
     expect(s[0]?.args.slice(-2)).toEqual(['__update', '--background']);
+    // 只断言钩子进程自身(preload 只挂在它上面)零写入;被拉起的 worker 的后续写入不在断言范围——这里 worker 是 current 里的桩(只写标记、退 0),
+    // 且本世界的 registry 是空的 file:// 目录,即使跑真 worker 也会早退。
     expect(await read(w.logs.write)).toBe('');
     const m = await waitMarkers(w, 1);
     expect(m).toHaveLength(1);

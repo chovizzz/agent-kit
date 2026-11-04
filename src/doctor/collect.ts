@@ -37,7 +37,8 @@ import {
   type SnapshotResult,
 } from '../sync/snapshot.js';
 import type { DiskEntry, SyncPlan } from '../sync/types.js';
-import { autoUpdateGate } from '../update/policy.js';
+import { checkControlledTmp } from '../update/installed.js';
+import { autoUpdateGate, hookUpdateGate } from '../update/policy.js';
 import { parseUpdateState } from '../update/state.js';
 import type {
   D01Input,
@@ -294,12 +295,33 @@ export class Collector {
     );
     const launched = this.a.env['KIT_LAUNCHED'];
     return {
+      hookUpdateTmp: await this.hookUpdateTmp(),
       nodeVersion: this.a.deps.nodeVersion ?? process.versions.node,
       bootstrapVersion: await this.ownVersion(),
       currentLink: link === null ? 'absent' : link.isSymbolicLink() ? 'symlink' : 'other',
       installedVersion: st?.installed?.version,
       launched: launched !== undefined && launched !== '' && launched !== '0',
     };
+  }
+
+  /**
+   * 钩子触发自动更新的前置:配置了 `[rsi]`(没有它 poke 不会调度,M1)、自动更新未关(`hookUpdateGate`:`KIT_AUTO_UPDATE` / CI / `auto_install`)时,
+   * 受控 tmp 必须已存在且合格(只读 `checkControlledTmp`)。读不出配置一律 `not_applicable`(doctor 不替配置错误再报一次)。
+   */
+  private async hookUpdateTmp(): Promise<NonNullable<D01Input['hookUpdateTmp']>> {
+    return safely(async () => {
+      const probe = await probePath(this.a.home, '.config/agent-kit/config.toml');
+      if (probe.entry.kind !== 'file' || probe.text === undefined) return 'not_applicable' as const;
+      if (!/^\s*\[rsi\]/m.test(probe.text)) return 'not_applicable' as const;
+      const cfg = await this.config();
+      if (cfg.status === 'invalid') return 'not_applicable' as const;
+      if (!hookUpdateGate({ env: this.a.env, autoInstall: cfg.autoInstall }).enabled) {
+        return 'not_applicable' as const;
+      }
+      return (await checkControlledTmp(this.a.home)) === undefined
+        ? ('missing' as const)
+        : ('ok' as const);
+    }, 'not_applicable' as const);
   }
 
   async d02(): Promise<D02Input> {

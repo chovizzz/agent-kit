@@ -51,6 +51,8 @@ export const NO_UPDATE_SCHEDULE_WHY: ReadonlySet<string> = new Set([
   'bad_args',
   'off',
   'usage',
+  // 隐私闸(`collect_blocked`):用户的强拒绝信号,不顺带调度
+  'collect_blocked',
   'error',
 ]);
 export function shouldScheduleUpdateFromPoke(r: SpawnGateResult): boolean {

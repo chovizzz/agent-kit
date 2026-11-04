@@ -76,7 +76,6 @@ async function stop(f: TickFx): Promise<void> {
 
 /** 调度的 noop why(rsi 开着但这次没起 worker);与 NO_UPDATE_SCHEDULE_WHY 合起来必须覆盖源码里出现过的全部 why */
 const YES_WHYS = [
-  'collect_blocked',
   'agent_not_enabled',
   'budget',
   'busy',
@@ -91,8 +90,8 @@ const YES_WHYS = [
 
 describe('M1 调度谓词:noop why 全矩阵', () => {
   const noop = (why: string): SpawnGateResult => ({ kind: 'noop', why });
-  // 不调度:跳过条件、参数不合法、rsi 关闭 / 配置不可用、内部错误
-  const NO = ['auto_off', 'child', 'ci', 'bad_args', 'off', 'usage', 'error'];
+  // 不调度:跳过条件、参数不合法、rsi 关闭 / 配置不可用、隐私闸(collect_blocked)、内部错误
+  const NO = ['auto_off', 'child', 'ci', 'bad_args', 'off', 'usage', 'collect_blocked', 'error'];
   // 调度:rsi 开着但这次没起 worker 的各种原因 + 起了 / 起失败
   const YES = YES_WHYS;
   it('NO 集合内的 why 不调度', () => {
