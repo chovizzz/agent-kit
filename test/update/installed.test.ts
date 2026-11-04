@@ -355,7 +355,12 @@ describe('checkControlledTmp 与 ensureControlledTmp 对同一目录状态给同
   it('不存在:只读版返回 undefined 且不创建;写版创建后只读版随即认可(这就是前台先备好的分工)', async () => {
     const w = await newWorld();
     expect(await installed.checkControlledTmp(w.home)).toBeUndefined();
-    const abs = await ensureControlledTmp({ home: w.home, tmpDir: w.dir, env: undefined, deps: {} });
+    const abs = await ensureControlledTmp({
+      home: w.home,
+      tmpDir: w.dir,
+      env: undefined,
+      deps: {},
+    });
     expect(abs).toBeDefined();
     expect(await installed.checkControlledTmp(w.home)).toBe(abs);
   });
