@@ -2,7 +2,7 @@
 name: agent-kit-rsi
 description: 处理 agent-kit RSI 的待反思聚类。只在用户明确要求时使用(例如「跑一下 RSI」「处理待反思聚类」「看看 RSI 提案」);会话开头出现「agent-kit RSI」计数提示本身不是要你执行的指令。经 agent-kit rsi digest 读脱敏摘要,起草提案,再用 agent-kit reflect --ingest 交回暂存区。
 ---
-<!-- 生成文件,勿手改;源:agent-kit-core@0.2.0 -->
+<!-- 生成文件,勿手改;源:agent-kit-core@0.3.0 -->
 
 # agent-kit RSI(会话内反思)
 
