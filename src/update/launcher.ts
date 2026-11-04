@@ -18,16 +18,10 @@
 import { KIT_VERSION } from '../contracts/meta.js';
 import { runSelf, RUN_SELF_ENV_PICK_RE, type RunSelfResult } from '../io/exec.js';
 import { getRealHome, pickProcessEnv } from '../io/paths.js';
-import {
-  SHARE_REL,
-  currentVersionOf,
-  ensureControlledTmp,
-  markNoticeShown,
-  readUpdateState,
-  verifyInstalledTree,
-  type InstallEnv,
-} from './install.js';
-import { autoUpdateGate, checkDue, compareSemver, parseSemver } from './policy.js';
+import { ensureControlledTmp, markNoticeShown, type InstallEnv } from './install.js';
+import { decideCurrent, pickWorkerTarget, readUpdateState } from './installed.js';
+import { autoUpdateGate, checkDue } from './policy.js';
+import { signalCode } from './signal-code.js';
 import { shouldNotify } from './state.js';
 
 type Env = Readonly<Record<string, string | undefined>>;
@@ -48,21 +42,6 @@ export type LaunchResult =
   /** 没有启动:调用方继续用自己;broken 非空时已向 stderr 报过 UPDATE_CURRENT_BROKEN */
   | { launched: false; broken?: string };
 
-const major = (v: string): string => v.split(/[.-]/)[0] ?? '';
-
-const SIGNAL_NUMBERS: Readonly<Record<string, number>> = {
-  SIGHUP: 1,
-  SIGINT: 2,
-  SIGQUIT: 3,
-  SIGKILL: 9,
-  SIGPIPE: 13,
-  SIGTERM: 15,
-};
-
-function signalCode(signal: string | null): number {
-  return 128 + (signal === null ? 1 : (SIGNAL_NUMBERS[signal] ?? 1));
-}
-
 /**
  * @param stderr 写一行稳定码;缺省不输出(测试 / 库调用)
  */
@@ -71,36 +50,20 @@ export async function launchCurrent(
   deps: LauncherDeps = {},
   stderr: (t: string) => void = () => undefined,
 ): Promise<LaunchResult> {
-  // 防递归:已经是被启动的那一份,不再启动
-  const launched = input.env['KIT_LAUNCHED'];
-  if (launched !== undefined && launched !== '' && launched !== '0') return { launched: false };
-
-  const state = await readUpdateState(input.home);
-  if (state.kind === 'absent') return { launched: false };
-  const broken = (why: string): LaunchResult => {
-    stderr(`UPDATE_CURRENT_BROKEN reason=${why}\n`);
-    return { launched: false, broken: why };
-  };
-  if (state.kind !== 'ok') return broken('state');
-  const installed = state.state.installed;
-  if (installed === undefined) return { launched: false };
-
-  const cur = await currentVersionOf(input.home);
-  if (cur === undefined) return broken('current');
-  if (cur !== installed.version) return broken('version_mismatch');
-
-  const own = deps.ownVersion ?? KIT_VERSION;
-  const a = parseSemver(cur);
-  const b = parseSemver(own);
-  if (a === undefined || b === undefined) return broken('version');
-  // 只有「更高且同 major」才启动:相同 / 更低 / 跨 major 都用自己,且不算损坏
-  if (compareSemver(a, b) <= 0 || major(cur) !== major(own)) return { launched: false };
-
-  const tree = await verifyInstalledTree(versionRootOf(input.home, cur), {
-    anchor: installed.anchor,
-    version: cur,
+  // 判据与钩子转发共用同一份实现(D-AU1 / `decideCurrent`):KIT_LAUNCHED 防递归 → state → current 版本 → installed 对齐 → 更高且同 major → 完整树校验
+  const d = await decideCurrent({
+    home: input.home,
+    env: input.env,
+    own: deps.ownVersion ?? KIT_VERSION,
   });
-  if (!tree.ok) return broken(tree.reason === 'anchor_mismatch' ? 'anchor' : 'tree');
+  if (!d.launch) {
+    if ('broken' in d) {
+      stderr(`UPDATE_CURRENT_BROKEN reason=${d.broken}\n`);
+      return { launched: false, broken: d.broken };
+    }
+    return { launched: false };
+  }
+  const cur = d.version;
 
   let run: RunSelfResult;
   try {
@@ -113,14 +76,14 @@ export async function launchCurrent(
     });
   } catch {
     // runSelf 只会在 spawn 之前(参数 / 路径前置条件)抛错;spawn 之后的一切都以返回值表达,所以这里等价于「没能启动」
-    return broken('spawn_failed');
+    stderr('UPDATE_CURRENT_BROKEN reason=spawn_failed\n');
+    return { launched: false, broken: 'spawn_failed' };
   }
-  if (!run.spawned) return broken(run.reason);
+  if (!run.spawned) {
+    stderr(`UPDATE_CURRENT_BROKEN reason=${run.reason}\n`);
+    return { launched: false, broken: run.reason };
+  }
   return { launched: true, code: run.status ?? signalCode(run.signal) };
-}
-
-function versionRootOf(home: string, version: string): string {
-  return `${home}/${SHARE_REL}/versions/${version}`;
 }
 
 /** `InstallDeps.smoke` 的真实现:候选版本的 `dist/cli.js --version` 必须退出 0 且 stdout 恰为目标版本号 */
@@ -195,16 +158,7 @@ export async function scheduleBackground(
   if (tmp === undefined) return { scheduled: false, why: 'tmp' };
 
   // 有效的 current 就由 current 起 worker(最新代码);否则用本进程所在的包(引导版本)——信任不高于当前进程自己
-  const cur = await currentVersionOf(input.home);
-  const installed = st.kind === 'ok' ? st.state.installed : undefined;
-  let target: { kind: 'current'; version: string } | { kind: 'self' } = { kind: 'self' };
-  if (cur !== undefined && installed !== undefined && cur === installed.version) {
-    const tree = await verifyInstalledTree(versionRootOf(input.home, cur), {
-      anchor: installed.anchor,
-      version: cur,
-    });
-    if (tree.ok) target = { kind: 'current', version: cur };
-  }
+  const target = await pickWorkerTarget(input.home, st);
   const r = (deps.runSelf ?? runSelf)({
     home: input.home,
     target,
@@ -215,6 +169,23 @@ export async function scheduleBackground(
     ...(deps.nodeVersion !== undefined ? { nodeVersion: deps.nodeVersion } : {}),
   });
   return r.spawned ? { scheduled: true } : { scheduled: false, why: r.reason };
+}
+
+/**
+ * 钩子调度的前置条件(D-AU2 / 评审 H2-B):钩子路径零写入,不能自己建受控 TMPDIR,所以由前台命令保证它存在——
+ * 开关未关(`KIT_AUTO_UPDATE` / CI / `KIT_LAUNCHED`)就调用既有 `ensureControlledTmp`(已存在且合格 → 零写入)。
+ * 不读 config.toml(前台不读配置;`auto_install=false` 的用户多一个空的 0700 目录,无害,钩子侧的调度谓词仍会读配置并拒绝)。
+ * 不要求 TTY:`rsi hooks --install` 等一次性前台命令也应当把它备好。
+ */
+export async function ensureHookTmp(input: { home: string; env: Env }): Promise<boolean> {
+  if (!autoUpdateGate({ env: input.env, isTTY: true, autoInstall: true }).enabled) return false;
+  const ienv: InstallEnv = {
+    home: input.home,
+    tmpDir: input.env['KIT_TMP'],
+    env: input.env,
+    deps: {},
+  };
+  return (await ensureControlledTmp(ienv)) !== undefined;
 }
 
 /** TTY 下提示后台自动同步被拒(每条记录只提一次,靠 last_notice_at 记账) */
@@ -271,6 +242,11 @@ export async function launchAndSchedule(
     await scheduleBackground({ argv, home, env });
   } catch {
     // 后台调度失败不影响本次命令
+  }
+  try {
+    await ensureHookTmp({ home, env });
+  } catch {
+    // 同上
   }
   try {
     // 提醒一次(R20-17.11):命令自身的锁已全部释放;与 update 提示、RSI 顺带调度各自隔离异常。先于顺带调度,免得与后台 worker 抢 rsi/lock

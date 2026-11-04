@@ -9,6 +9,7 @@
  *   `detectProxy` 只负责如实报告「配了代理但没生效」,由调用方(S7 的 worker 启动方式)保证生效。
  */
 import { createHash } from 'node:crypto';
+import { NET_ERROR_CODES, type NetErrorCode } from '../contracts/net-error.js';
 
 export const NPMJS_HOST = 'registry.npmjs.org';
 export const DEFAULT_TIMEOUT_MS = 5000;
@@ -17,18 +18,9 @@ export const DEFAULT_TARBALL_TIMEOUT_MS = 60_000;
 export const DEFAULT_TARBALL_MAX_BYTES = 50 * 1024 * 1024;
 export const MAX_REDIRECTS = 3;
 
-/** 网络层稳定码(`http_<码>` 另算);与 UPDATE_RESULT_CODES 中的网络类一一对应,host_denied 是本层多出的策略拒绝。 */
-export const NET_ERROR_CODES = [
-  'timeout',
-  'dns',
-  'connect',
-  'tls',
-  'proxy',
-  'too_large',
-  'parse',
-  'host_denied',
-] as const;
-export type NetErrorCode = (typeof NET_ERROR_CODES)[number] | `http_${number}`;
+/** 网络层稳定码表与类型已搬到 `contracts/net-error.ts`(零网络模块引用它而不进 net.ts 的闭包);此处 re-export,调用点不变。 */
+export { NET_ERROR_CODES };
+export type { NetErrorCode };
 
 export interface NetErrorInit {
   status?: number;

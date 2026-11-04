@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import * as path from 'node:path';
 import { RelPathSchema } from '../contracts/common.js';
 import {
@@ -9,9 +8,12 @@ import {
   type SyncLedger,
 } from '../contracts/sync.js';
 import { getRealHome } from '../io/paths.js';
-import { lstat, readBytes, readDir, realpath } from '../io/read-fs.js';
-import { inspectManagedBlock } from '../render/managed-block.js';
-import type { BlockSnapshot, DiskEntry, DiskKind, DiskSnapshot } from './types.js';
+import { readDir, realpath } from '../io/read-fs.js';
+import { MAX_READ_BYTES, lstatOrNull, sha256Of } from '../io/probe.js';
+import type { DiskEntry, DiskSnapshot } from './types.js';
+
+// 单路径探测已下沉到 io/probe.ts(D-AU1 / M3),此处 re-export,调用点不变
+export { MAX_READ_BYTES, blockSnapshotOf, probePath, sha256Of, type Probe } from '../io/probe.js';
 
 /**
  * S4:磁盘快照构建器(只读)。对计划涉及的 HOME 相对路径,用 read-fs 的只读 API 构造 S3 计划器要的 `DiskSnapshot`:
@@ -19,17 +21,11 @@ import type { BlockSnapshot, DiskEntry, DiskKind, DiskSnapshot } from './types.j
  * 本文件不 import 任何写出口;干跑与 doctor 都可直接用,绝不建目录、不改 mtime。
  */
 
-/** 单文件读入上限:超过的当作非常规文件(不读、不改)。 */
-export const MAX_READ_BYTES = 32 * 1024 * 1024;
-
 export const STATE_SYNC_DIR = '.local/state/agent-kit/sync';
 export const LEDGER_REL = `${STATE_SYNC_DIR}/ledger.json`;
 export const TXN_DIR_REL = `${STATE_SYNC_DIR}/txn`;
 export const BACKUPS_DIR_REL = `${STATE_SYNC_DIR}/backups`;
 export const LOCK_REL = `${STATE_SYNC_DIR}/lock`;
-
-export const sha256Of = (b: Uint8Array | string): string =>
-  createHash('sha256').update(b).digest('hex');
 
 // ---------------------------------------------------------------------------
 // HOME 校验
@@ -77,24 +73,6 @@ export async function resolveAllowedHome(
 // 单路径探测
 // ---------------------------------------------------------------------------
 
-async function lstatOrNull(p: string): Promise<Awaited<ReturnType<typeof lstat>> | null> {
-  try {
-    return await lstat(p);
-  } catch (e) {
-    const code = (e as NodeJS.ErrnoException).code;
-    if (code === 'ENOENT' || code === 'ENOTDIR') return null;
-    throw e;
-  }
-}
-
-export interface Probe {
-  entry: DiskEntry;
-  /** kind=file 时的权限位(& 0o777) */
-  mode?: number;
-  /** kind=file 且未超上限时的 UTF-8 文本 */
-  text?: string;
-}
-
 /** 目标所在的「条目目录」(如 `.agents/skills/<name>`),仅 adapter 目录条目内部、且不是独占目录时有。 */
 export function entryDirOf(rel: string, ownedDirs: readonly string[]): string | undefined {
   for (const t of HOME_WRITE_TABLE) {
@@ -106,66 +84,6 @@ export function entryDirOf(rel: string, ownedDirs: readonly string[]): string | 
     return `${t.path}${rest.slice(0, slash)}`;
   }
   return undefined;
-}
-
-/**
- * 探测一个 HOME 相对路径。`home` 是 realpath。
- * 中间段是符号链接 → `linkedSegment: true`(不再往下走);中间段不是目录 → `kind: 'other'`。
- */
-export async function probePath(
-  home: string,
-  rel: string,
-  opts: { blockIds?: readonly string[]; readText?: boolean } = {},
-): Promise<Probe> {
-  const segments = rel.split('/');
-  let cur = home;
-  for (let i = 0; i < segments.length; i++) {
-    const next = path.join(cur, segments[i] as string);
-    const st = await lstatOrNull(next);
-    if (st === null) return { entry: { kind: 'missing' } };
-    const last = i === segments.length - 1;
-    if (!last) {
-      if (st.isSymbolicLink()) return { entry: { kind: 'missing', linkedSegment: true } };
-      if (!st.isDirectory()) return { entry: { kind: 'other' } };
-      cur = next;
-      continue;
-    }
-    let kind: DiskKind;
-    if (st.isSymbolicLink()) kind = 'symlink';
-    else if (st.isDirectory()) kind = 'dir';
-    else if (st.isFile()) kind = st.nlink > 1 ? 'hardlink' : 'file';
-    else kind = 'other';
-    if (kind !== 'file') return { entry: { kind } };
-    if (st.size > MAX_READ_BYTES) return { entry: { kind: 'other' } };
-    const bytes = await readBytes(next);
-    const text = Buffer.from(bytes).toString('utf8');
-    const entry: DiskEntry = { kind: 'file', sha256: sha256Of(bytes) };
-    if (opts.blockIds !== undefined && opts.blockIds.length > 0) {
-      const blocks: Record<string, BlockSnapshot> = {};
-      for (const id of opts.blockIds) blocks[id] = blockSnapshotOf(text, id);
-      entry.blocks = blocks;
-    }
-    return { entry, mode: st.mode & 0o777, ...(opts.readText === false ? {} : { text }) };
-  }
-  return { entry: { kind: 'missing' } };
-}
-
-/** 一个托管块在文本里的状态;restBlank = 去掉该块之后其余内容只剩空白(含 BOM)。 */
-export function blockSnapshotOf(text: string, id: string): BlockSnapshot {
-  const r = inspectManagedBlock(text, id);
-  switch (r.state) {
-    case 'corrupt':
-      return { state: 'corrupt' };
-    case 'block-missing':
-    case 'file-missing':
-      return { state: 'block-missing' };
-    default:
-      return {
-        state: r.state,
-        bodySha: r.block.actualSha,
-        restBlank: `${r.before}${r.after}`.trim() === '',
-      };
-  }
 }
 
 // ---------------------------------------------------------------------------
