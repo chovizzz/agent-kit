@@ -807,6 +807,17 @@ export type RsiDigestReason = (typeof RSI_DIGEST_REASONS)[number];
  */
 export const RSI_EXCERPT_MARK_OPEN = '<untrusted-excerpt>';
 export const RSI_EXCERPT_MARK_CLOSE = '</untrusted-excerpt>';
+/**
+ * digest 组装时的路径中和占位(A4 订正 #8,R20-16.11-a):摘录里的 HOME 绝对路径前缀 → `~`,仓库根 → `<repo>`,状态目录 → `<state>`,`KIT_TMP` → `<kit_tmp>`。
+ * 占位文本里不含任何绝对路径,不会再触发路径泄漏闸。
+ */
+export const RSI_DIGEST_PATH_PLACEHOLDERS = Object.freeze({
+  home: '~',
+  repo: '<repo>',
+  state: '<state>',
+  kit_tmp: '<kit_tmp>',
+} as const);
+export type RsiDigestPathLabel = keyof typeof RSI_DIGEST_PATH_PLACEHOLDERS;
 
 export const RsiDigestIdSchema = z.string().regex(/^d_[0-9a-f]{16}$/);
 export const RsiDigestAliasSchema = z.string().regex(/^e[1-9][0-9]{0,2}$/);

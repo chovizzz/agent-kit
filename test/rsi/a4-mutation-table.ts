@@ -98,9 +98,9 @@ export const A4_MUTATIONS: readonly A4Mutation[] = [
     edits: [
       {
         file: 'src/rsi/digest.ts',
-        anchor: 'selected = selectClusters(kept, p0.key);',
-        replacement:
-          "selected = selectClusters(loaded, p0.key).map((c) => ({ ...c, current: c.current.filter((s) => classOf.get(s.project_key) === 'P') })).filter((c) => c.current.length > 0);",
+        // A4 订正 #8 后组装入口改为 selectClustersScreened;变异语义不变:聚类吃未剔除 X / U 的 `loaded`
+        anchor: 'const sel = selectClustersScreened(kept, p0.key, (s) => {',
+        replacement: 'const sel = selectClustersScreened(loaded, p0.key, (s) => {',
       },
     ],
     tests: [DIGEST],
