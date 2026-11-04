@@ -1,6 +1,7 @@
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { readText } from '../../src/io/read-fs.js';
+import * as safe from '../../src/io/safe-fs.js';
 import { REPO_ROOT } from '../helpers/tmp.js';
 import { makeFixture, runMain } from './helpers.js';
 
@@ -233,16 +234,41 @@ describe('B17 盲区 ②:嵌套目录符号链接的目标同样被监视', () =
     expect(diff(fx, 'm2', 'm3').d.changed.map((c) => c.path)).toEqual(['~/.claude/skills/s1']);
   });
 
-  it('指向遍历根祖先的链接记为环、不展开:祖先里无关兄弟的改动不算到本树头上', async () => {
+  it('指向遍历根真实祖先的链接照常递归:经它写受管树之外的祖先子项必须可见(不是整棵不看)', async () => {
     const fx = await makeFixture('~/.claude/skills/\n', '');
     await fx.put('.claude/skills/s1/SKILL.md', '# s1\n');
     await fx.put('.claude/skills/s3/SKILL.md', '# s3\n');
-    await fx.link('.claude/skills/s1/up', '..'); // -> skills/(s1 的祖先)
+    await fx.put('.claude/other/f.md', 'o1\n'); // 不在任何受管条目里,只有经 up 才看得到
+    await fx.link('.claude/skills/s1/up', '../..'); // -> ~/.claude(s1 的真实祖先)
     await snap(fx, 'y1');
-    await fx.put('.claude/skills/s3/SKILL.md', '# s3 changed\n');
+    await snap(fx, 'y1b');
+    expect(diff(fx, 'y1', 'y1b').d.count).toBe(0); // 正向对照:不写 => 无差异,且递归会终止
+    await fx.put('.claude/other/f.md', 'o2\n');
     await snap(fx, 'y2');
-    // s3 自己是受管顶层条目,单独报;s1 的摘要不因 up 展开而跟着变
-    expect(diff(fx, 'y1', 'y2').d.changed.map((c) => c.path)).toEqual(['~/.claude/skills/s3']);
+    expect(diff(fx, 'y1b', 'y2').d.changed.map((c) => c.path)).toEqual(['~/.claude/skills/s1']);
+    await fx.put('.claude/skills/s3/SKILL.md', '# s3 changed\n');
+    await snap(fx, 'y3');
+    expect(diff(fx, 'y2', 'y3').d.changed.map((c) => c.path)).toEqual([
+      '~/.claude/skills/s1',
+      '~/.claude/skills/s3',
+    ]);
+  });
+
+  it('HOME 之外的嵌套目录链接记元数据树:原地改写其中已存在的文件仍可见;不读内容', async () => {
+    const fx = await makeFixture('~/.claude/skills/\n', '');
+    await fx.put('.claude/skills/s1/SKILL.md', '# s1\n');
+    const outside = path.join(fx.dir, 'outside');
+    await safe.mkdirp(fx.ctx, outside);
+    await safe.writeFile(fx.ctx, path.join(outside, 'f.md'), 'OUTSIDE-AAAA\n');
+    await fx.link('.claude/skills/s1/o', outside);
+    await snap(fx, 'o1');
+    await snap(fx, 'o1b');
+    expect(diff(fx, 'o1', 'o1b').d.count).toBe(0);
+    await safe.writeFile(fx.ctx, path.join(outside, 'f.md'), 'OUTSIDE-BBBB\n'); // 同长度改写
+    const o = path.join(fx.out, 'o2');
+    runMain(['snap', '--repo', fx.repo, '--home', fx.home, '--base-ref', '', '--out-root', o]);
+    expect(await readText(path.join(o, 'snapshot.json'))).not.toContain('OUTSIDE-');
+    expect(diff(fx, 'o1b', 'o2').d.changed.map((c) => c.path)).toEqual(['~/.claude/skills/s1']);
   });
 
   it('环与重复:链到自己 / 祖先 / 树内兄弟都不挂不爆,且目标仍被监视', async () => {

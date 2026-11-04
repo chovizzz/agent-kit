@@ -12,7 +12,10 @@ describe('isCodexPre0149:逐段数值比较', () => {
     ['0.150.0', false],
     ['0.161.0', false],
     ['1.0.0', false],
-    ['0.149.1-beta.2', false],
+    ['0.149.1-beta.2', true], // 预发布 / 非数字后缀一律按旧版(保守)
+    ['0.149.0-rc1', true],
+    ['0.149.0abc', true],
+    ['0.161.0+build5', true],
     [undefined, true],
     ['unknown', true],
     ['', true],

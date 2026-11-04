@@ -469,17 +469,46 @@ export class UnsafeSessionFileError extends Error {
   }
 }
 
+export interface SafeLinesOptions {
+  /**
+   * 给了(调用方的 HOME)才允许「最终路径是符号链接」:链接(含多跳)解析后的真实路径在 HOME 的真实路径之内(路径段前缀,
+   * 不含 HOME 本身)时,对**解析后的真实路径**再做一次 openStreamSafe(O_NOFOLLOW + 同句柄 fstat)读取;
+   * 目标在 HOME 之外、解析失败、或目标之后被换成链接 / FIFO / 目录,一律照旧拒绝。缺省 = 任何符号链接都拒。
+   */
+  linkHome?: string;
+}
+
+/** `p` 是否在 `root` 之内(路径段前缀:名字以 root 的名字为前缀的同级目录不算在内;不含 root 本身) */
+function strictlyUnder(p: string, root: string): boolean {
+  const r = root.endsWith('/') ? root : `${root}/`;
+  return p.startsWith(r) && p.length > r.length;
+}
+
 /**
  * 与 {@link readLines} 同一套切行口径,但打开走 {@link openStreamSafe}(`O_NOFOLLOW | O_NONBLOCK` + 句柄 fstat):
- * 最终路径是符号链接 → 抛 UnsafeSessionFileError(why=link);FIFO / 设备 / 目录 → 抛(why=not_regular),不会阻塞在打开 / 读上。
+ * 最终路径是符号链接 → 缺省抛 UnsafeSessionFileError(why=link),给了 `linkHome` 且解析后在 HOME 内则放行(见 SafeLinesOptions);
+ * FIFO / 设备 / 目录 → 抛(why=not_regular),不会阻塞在打开 / 读上。
  * 不存在 → 抛带 `code: 'ENOENT'` 的 Error(只有 `code` 与裸 createReadStream 一致,message 不含路径)。硬链接放行(只读,内容本来就不被信任)。
  * 校验与读取共用同一个句柄,检查后路径被换掉也读不到别的东西。
  */
 export async function* readLinesSafe(
   path: string,
   maxLineBytes: number = MAX_LINE_BYTES,
+  opts: SafeLinesOptions = {},
 ): AsyncGenerator<string, void, undefined> {
-  const s = await openStreamSafe(path, { allowHardlink: true });
+  let s = await openStreamSafe(path, { allowHardlink: true });
+  if (s.kind === 'unsafe' && s.why === 'link' && opts.linkHome !== undefined) {
+    let real: string;
+    let home: string;
+    try {
+      real = await fsp.realpath(path);
+      home = await fsp.realpath(opts.linkHome);
+    } catch {
+      throw new UnsafeSessionFileError('link');
+    }
+    if (!strictlyUnder(real, home)) throw new UnsafeSessionFileError('link');
+    s = await openStreamSafe(real, { allowHardlink: true });
+  }
   if (s.kind === 'missing') {
     throw Object.assign(new Error('ENOENT: no such file'), { code: 'ENOENT' });
   }

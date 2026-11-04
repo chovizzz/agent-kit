@@ -135,6 +135,20 @@ describe('collect 端到端(codex)', () => {
     for (const x of rows) expect(x.agent_version_source).toBe('unknown');
   });
 
+  it('D1:零会话成功读取(全被排除)不得声称 full', async () => {
+    const w = await newWork('cx-d1-empty-');
+    const b = new LineBuilder().meta({ cli_version: '0.161.0' });
+    b.userItem('x');
+    await writeRollout(w.io, w.sessions, b, { id: 'd1empty' });
+    const r = await run(w, ['--allow-project', 'no-such-project']);
+    expect(r.code, r.err).toBe(0);
+    const o = JSON.parse(r.out) as {
+      report: { sessions_read: number; tool_failures_scope?: string };
+    };
+    expect(o.report.sessions_read).toBe(0);
+    expect(o.report.tool_failures_scope).toBe('codex_pre_0149_limited');
+  });
+
   it('D1:0.80.x–0.99.x 是旧版(逐段数值比较,不是字典序)→ codex_pre_0149_limited', async () => {
     for (const ver of ['0.80.0', '0.99.9']) {
       const w = await newWork(`cx-d1-${ver}-`);

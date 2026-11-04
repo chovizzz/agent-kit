@@ -36,7 +36,8 @@ export function resolveAgentVersion(
 
 /** 逐段数值比较的 X.Y.Z 元组;形状不对返回 null(不接受预发布后缀以外的东西)。 */
 function parseTriple(v: string | undefined): [number, number, number] | null {
-  const m = /^([0-9]+)\.([0-9]+)\.([0-9]+)/.exec(v ?? '');
+  // 严格 X.Y.Z:带预发布 / 构建 / 非数字后缀的一律当取不到(调用方按旧版处理,保守)
+  const m = /^([0-9]+)\.([0-9]+)\.([0-9]+)$/.exec(v ?? '');
   return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
 }
 

@@ -46,7 +46,7 @@ export function homeWatchFor(platform) {
 }
 
 const MAX_HASH_BYTES = 64 * 1024 * 1024;
-/** 嵌套目录符号链接的最大跟随深度(链上的链);超出记 depth_limit 并按截断处理(fail-closed)。 */
+/** 活动树深度上限(含根树:根 + 最多 5 层链上链);用尽记 depth_limit 并按截断处理(fail-closed)。 */
 const MAX_LINK_DEPTH = 6;
 
 export function resolveHome(explicit) {
@@ -199,8 +199,9 @@ function realpathOrNull(p) {
  *   rec  - 并入快照记录的 target 字段(文件:size+sha;目录:树摘要;HOME 之外:仅元数据);
  *   ctime - 目标(及目标树)的最大 ctime,并入 meta 供归因/「被碰过」判断。
  * nested=true(树内部的链接):指向 follow scope 内目录的,与顶层链接一样递归目标树并登记 alias(B17 盲区 ②:
- * 以前只记 {t:'dir'},写进链接目标的改动不可见);防环与重复:目标落在正在遍历的树内 => 已由那棵树的摘要覆盖(`covered`),
- * 目标是正在遍历的某棵树的祖先 => 环(`cycle`),跟随深度超过 MAX_LINK_DEPTH => `depth_limit` 且按截断处理。
+ * 以前只记 {t:'dir'},写进链接目标的改动不可见);防环与重复:目标落在正在遍历的树内 => 已由那棵树的摘要覆盖(`covered`,同时挡住真环:
+ * 目标是活动树根的真实祖先时照常递归,走回活动树内的那一层会被 covered 挡住),活动树深度(含根树)达到 MAX_LINK_DEPTH => `depth_limit` 且按截断处理。
+ * HOME 之外 / 凭据位置的嵌套目录链接与顶层一致:记元数据树(不读内容)。
  */
 function linkTarget(abs, ctx, nested) {
   const real = realpathOrNull(abs);
@@ -215,7 +216,7 @@ function linkTarget(abs, ctx, nested) {
     // 不读 HOME 之外(或凭据位置)的内容;只记元数据(写入会改 ctime/size => 快照有差异),并登记为盲区链接
     ctx.outsideLinks.add(ctx.tilde(abs));
     let meta = {};
-    if (tst.isDirectory() && !nested) {
+    if (tst.isDirectory()) {
       const md = metaDigest(real);
       if (md.truncated) ctx.truncated = true;
       meta = { tree: md.digest };
@@ -237,8 +238,6 @@ function linkTarget(abs, ctx, nested) {
       const ct = Math.trunc(tst.ctimeMs);
       if (ctx.walkStack.some((r) => isUnder(real, r)))
         return { rec: { t: 'dir', covered: true }, ctime: ct, contentCtime: 0 };
-      if (ctx.walkStack.some((r) => isUnder(r, real)))
-        return { rec: { t: 'dir', cycle: true }, ctime: ct, contentCtime: 0 };
       if (ctx.walkStack.length >= MAX_LINK_DEPTH) {
         ctx.truncated = true;
         return { rec: { t: 'dir', depth_limit: true }, ctime: ct, contentCtime: 0 };

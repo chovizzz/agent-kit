@@ -95,7 +95,9 @@ export async function collect(input: CollectInput): Promise<CollectOutput> {
   // (不能证明可见性)→ limited;全部 >= 0.149 → full。比较逐段数值(isCodexPre0149),不引 semver 依赖。
   const toolFailuresScope = (() => {
     if (input.reader.agent !== 'codex') return undefined;
-    const limited = processed.some((r) => isCodexPre0149(r.version?.version));
+    // 零会话成功读取时没有任何可见性证据,不能报 full
+    const limited =
+      processed.length === 0 || processed.some((r) => isCodexPre0149(r.version?.version));
     return limited ? ('codex_pre_0149_limited' as const) : ('full' as const);
   })();
 

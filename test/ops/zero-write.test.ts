@@ -5,7 +5,7 @@ import { readText } from '../../src/io/read-fs.js';
 import * as safe from '../../src/io/safe-fs.js';
 import { GIT_NO_AUTO_ARGS, GIT_NO_AUTO_CONFIG } from '../helpers/git-quiet.js';
 import { REPO_ROOT } from '../helpers/tmp.js';
-import { makeFixture, runMain } from './helpers.js';
+import { makeFixture, runMain, runNode } from './helpers.js';
 import type { Fixture } from './helpers.js';
 
 const MANAGED = `~/.claude/CLAUDE.md
@@ -448,6 +448,38 @@ describe('adapter 元数据取并集(合成 managed-targets.json,L-4)', () => {
     const r = await zw(fx, NODE0);
     expect(r.status).toBe(0);
     expect(r.stdout).toContain('NOTE 零写入检查只保证窗口结束时受管路径无残留写入');
+  });
+
+  it('ops/accept 的调用方(real-home-guard / a19 / a22)经 adapterTargetsChecked:坏清单 => FAIL 或抛错,好清单 => 照常取 targets', async () => {
+    const fx = await makeFixture(MANAGED, VOLATILE);
+    const script = `
+      const g = await import(${JSON.stringify(path.join(REPO_ROOT, 'ops/accept/lib/real-home-guard.mjs'))});
+      const snap = await import(${JSON.stringify(path.join(REPO_ROOT, 'ops/lib/snapshot.mjs'))});
+      const fails = [];
+      const R = { fail: (m) => fails.push(m) };
+      const targets = g.adapterTargetsChecked(snap, ${JSON.stringify(fx.repo)}, R);
+      let thrown = null;
+      try { g.adapterTargetsChecked(snap, ${JSON.stringify(fx.repo)}); } catch (e) { thrown = String(e.message); }
+      process.stdout.write(JSON.stringify({ targets, fails, thrown }));
+    `;
+    const run = (): { targets: string[]; fails: string[]; thrown: string | null } => {
+      const r = runNode(['--input-type=module', '-e', script]);
+      expect(r.status, r.stderr).toBe(0);
+      return JSON.parse(r.stdout) as { targets: string[]; fails: string[]; thrown: string | null };
+    };
+    await fx.repoPut('adapters/claude/managed-targets.json', targets(['~/.claude/CLAUDE.md']));
+    expect(run()).toEqual({ targets: ['~/.claude/CLAUDE.md'], fails: [], thrown: null });
+    await fx.repoPut('adapters/codex/managed-targets.json', '{ nope');
+    const bad = run();
+    expect(bad.fails).toHaveLength(1);
+    expect(bad.fails[0]).toContain('ADAPTER_MANIFEST_INVALID');
+    expect(bad.thrown).toContain('ADAPTER_MANIFEST_INVALID');
+    // 三个调用方都必须经它(不再直接取 .targets)
+    for (const f of ['real-home-guard.mjs', 'a19.mjs', 'a22.mjs']) {
+      const src = await readText(path.join(REPO_ROOT, 'ops/accept/lib', f));
+      expect(src, f).toContain('adapterTargetsChecked(');
+      expect(src, f).not.toMatch(/readAdapterTargets\([^)]*\)\.targets/);
+    }
   });
 
   it('正向对照:adapter 清单文件不存在(目录里没有 managed-targets.json)=> 仍跳过,退出 0', async () => {
