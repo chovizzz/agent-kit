@@ -191,7 +191,16 @@ Module._load = function (request, parent, isMain) {
 const ESM_HOOK_SRC = `
 import { appendFileSync, writeSync } from 'node:fs';
 export async function resolve(specifier, context, nextResolve) {
-  if (/(^|[\\\\/])undici($|[\\\\/])/.test(String(specifier))) {
+  // 只拦裸包名 undici / node:undici 及其子路径;相对路径(./undici/x.mjs)、带 scope 的同名包(@acme/undici)、
+  // 绝对路径里恰好有 undici 目录段的普通文件都不是 undici,不拦。解析后真的落在 node_modules/undici/ 下的(别的包间接 import)再拦一次。
+  const bare = /^(?:node:)?undici(?:\\/|$)/.test(String(specifier));
+  let hit = bare;
+  let resolved;
+  if (!bare) {
+    resolved = await nextResolve(specifier, context);
+    hit = /\\/node_modules\\/undici\\//.test(String(resolved.url));
+  }
+  if (hit) {
     const msg = '[no-net] blocked import(' + specifier + ')';
     try {
       writeSync(2, msg + '\\n');
@@ -201,7 +210,7 @@ export async function resolve(specifier, context, nextResolve) {
     e.code = 'ENO_NET';
     throw e;
   }
-  return nextResolve(specifier, context);
+  return resolved ?? nextResolve(specifier, context);
 }
 `;
 try {

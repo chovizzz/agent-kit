@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import * as path from 'node:path';
+import * as safe from '../../src/io/safe-fs.js';
+import { makeTempDir, wideCtx } from '../helpers/tmp.js';
 import { NO_NET, runNode } from './helpers.js';
 
 // 每个探针:尝试联网(目标只是回环地址的 1 号端口,绝不出机器),把异常的 code 打印到 stdout。
@@ -88,6 +91,50 @@ describe('A8 零网络垫片:每个网络面都被拦', () => {
       `import('undici').then(() => console.log('LOADED'), (e) => console.log(/ENO_NET/.test(String(e.message)) ? 'ENO_NET' : 'OTHER'));`,
     ]);
     expect(bare.stdout.trim()).not.toBe('ENO_NET');
+  });
+
+  it('不误拦名字里带 undici 的非 undici 说明符:相对路径 / scope 同名包 / 目录段里有 undici 的普通文件(真文件,能被加载);裸 node:undici 与 undici 子路径照拦', async () => {
+    const { dir } = await makeTempDir('no-net-esm-');
+    const ctx = wideCtx(dir);
+    const put = async (rel: string, text: string): Promise<void> => {
+      const f = path.join(dir, rel);
+      await safe.mkdirp(ctx, path.dirname(f));
+      await safe.writeFile(ctx, f, text);
+    };
+    await put('undici/x.mjs', 'export default 1;\n');
+    await put(
+      'node_modules/@acme/undici/package.json',
+      '{"name":"@acme/undici","type":"module","main":"i.js"}',
+    );
+    await put('node_modules/@acme/undici/i.js', 'export default 2;\n');
+    await put(
+      'node_modules/@types/undici/package.json',
+      '{"name":"@types/undici","type":"module","main":"i.js"}',
+    );
+    await put('node_modules/@types/undici/i.js', 'export default 3;\n');
+    const probe = (spec: string) =>
+      runNode(
+        [
+          '--require',
+          NO_NET,
+          '--input-type=module',
+          '-e',
+          `try { const m = await import(${JSON.stringify(spec)}); console.log('LOADED', m.default); } catch (e) { console.log(/ENO_NET/.test(String(e.message)) ? 'ENO_NET' : String(e.code)); }`,
+        ],
+        {},
+        dir,
+      );
+    for (const [spec, v] of [
+      ['./undici/x.mjs', '1'],
+      ['@acme/undici', '2'],
+      ['@types/undici', '3'],
+    ] as const) {
+      const r = probe(spec);
+      expect(r.stdout.trim(), `${spec} ${r.stderr}`).toBe(`LOADED ${v}`);
+      expect(r.stderr, spec).not.toContain('[no-net]');
+    }
+    expect(probe('node:undici').stdout.trim()).toBe('ENO_NET');
+    expect(probe('undici/lib/x').stdout.trim()).toBe('ENO_NET');
   });
 
   it('KIT_NO_NET_LOG 留痕:异常被调用方吞掉也能在日志里看到', () => {

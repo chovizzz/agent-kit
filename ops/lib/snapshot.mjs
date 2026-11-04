@@ -41,6 +41,15 @@ export const HOME_WATCH = [
 export const HOME_WATCH_DARWIN = ['~/Library/Application Support', '~/Library/Preferences'];
 
 /** 测试缝:KIT_OPS_PLATFORM 可覆盖平台(用来在 linux 上演练 darwin 监视面);缺省取 process.platform。 */
+/** 当前生效的快照上限(给报告文案用,不要在文案里硬编码数字):单树条目数、哈希总字节、嵌套链接全局条目预算。 */
+export function snapshotLimits() {
+  return {
+    treeMaxFiles: TREE_MAX_FILES,
+    hashTotalBytes: TREE_MAX_HASH_TOTAL,
+    linkFanoutMax: linkFanoutMax(),
+  };
+}
+
 export function homeWatchFor(platform) {
   return platform === 'darwin' ? [...HOME_WATCH, ...HOME_WATCH_DARWIN] : [...HOME_WATCH];
 }

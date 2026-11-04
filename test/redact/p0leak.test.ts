@@ -179,4 +179,10 @@ describe('P0 低优先:弯引号键名 / CJK 后缀 / 中文说明文字', () =>
       expect(eq.text).toContain(PH);
     }
   });
+
+  it('回归:冒号后「中文 + 全角字母数字」先被 view_normalize 折叠成 ASCII,照旧脱敏(不被 ref_cjk_prose 放行)', () => {
+    const fw = J('ＸＹＺ', '１２３');
+    const out = expectRedacted(`${KMIMA}: ${J('我的', '口令')}${fw}`, [fw]);
+    expect(out).not.toContain(J('我的', '口令'));
+  });
 });

@@ -36,26 +36,30 @@ async function zw(
   fx: Fixture,
   commands: string,
   extra: string[] = [],
+  env: Record<string, string> = {},
 ): Promise<{ status: number | null; report: Report; stdout: string }> {
   const cmds = await fx.repoPut('cmds.txt', commands + '\n');
   const outRoot = path.join(fx.out, 'zw');
-  const r = runMain([
-    '--repo',
-    fx.repo,
-    '--home',
-    fx.home,
-    '--base-ref',
-    '',
-    '--commands-file',
-    cmds,
-    '--out-root',
-    outRoot,
-    '--tmp',
-    fx.dir,
-    '--require-success',
-    ...(extra.includes('--settle-ms') ? [] : ['--settle-ms', '120']),
-    ...extra,
-  ]);
+  const r = runMain(
+    [
+      '--repo',
+      fx.repo,
+      '--home',
+      fx.home,
+      '--base-ref',
+      '',
+      '--commands-file',
+      cmds,
+      '--out-root',
+      outRoot,
+      '--tmp',
+      fx.dir,
+      '--require-success',
+      ...(extra.includes('--settle-ms') ? [] : ['--settle-ms', '120']),
+      ...extra,
+    ],
+    env,
+  );
   // report.json 在 out-root/<ts>/ 下;只有一个子目录
   const m = /报告:(.+)/.exec(r.stdout);
   const report = m
@@ -245,6 +249,26 @@ describe('A5 副判据:受管路径快照', () => {
     expect(bad.stdout).toBe('');
     // 正向对照:同样的输入换成真目录就是正常通过(0),说明上面的 4 来自那个异常而不是别的
     expect((await zw(fx, NODE0)).status).toBe(0);
+  });
+
+  it('快照截断 => SNAPSHOT_TRUNCATED(退出 5),文案里是实际生效的上限而不是硬编码数字;正向对照:默认预算下通过', async () => {
+    const fx = await makeFixture(MANAGED, VOLATILE);
+    await seed(fx);
+    for (const n of ['a', 'b', 'c']) {
+      for (const f of ['1', '2', '3']) await fx.put(`shared-${n}/f${f}.md`, `${n}${f}\n`);
+      await fx.link(`.claude/skills/s1/l-${n}`, `../../../shared-${n}`);
+    }
+    expect((await zw(fx, NODE0)).status).toBe(0);
+    const t = await zw(fx, NODE0, [], { KIT_OPS_LINK_FANOUT_MAX: '5' });
+    expect(t.status, t.stdout).toBe(5);
+    expect(codes(t)).toContain('SNAPSHOT_TRUNCATED');
+    const detail = (
+      t.report.findings.find((f) => f.code === 'SNAPSHOT_TRUNCATED') as unknown as {
+        detail: string;
+      }
+    ).detail;
+    expect(detail).toContain('嵌套链接全局 5 项');
+    expect(detail).not.toContain('50000 项 / 1GiB');
   });
 
   it('缺 dist/cli.js 且用默认命令 => 退出 4(未执行),不当作通过', async () => {

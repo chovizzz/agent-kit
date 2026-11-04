@@ -30,7 +30,7 @@ if (mode === 'ts-epoch-json') fs.writeFileSync(path.join(out, 'claude', 'meta.js
 if (mode === 'ts-epoch-comment') body = '# built 1700000000\\n' + body;
 if (mode === 'benign-numbers') {
   fs.writeFileSync(path.join(out, 'claude', 'meta.json'), '{"max_tokens": 1700000000, "size": 1234567890, "generated_at": 123456, "id": "a1700000000b", "candidate_id": 1700000000}\\n');
-  body += 'validate: 1700000000 tokens\\nrange 5000000000\\n';
+  body += 'validate: 1700000000 tokens\\nrange 5000000000\\ntimeout=1700000000\\nbuiltins=1700000000\\nupdate_check: 1700000000\\ntimestamped=1700000000\\n';
 }
 if (mode === 'user') body += 'by=' + os.userInfo().username + '\\n';
 if (mode === 'home') body += 'p=/Users/x/y\\n';

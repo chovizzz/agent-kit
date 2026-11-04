@@ -157,7 +157,7 @@ export function createRedactCommand(deps: RedactCommandDeps): CommandDef {
       if (args.check) {
         let code: number = ExitCode.OK;
         const chunks = chunkForCheck(text, 65536, 2048);
-        // 相邻块有 2KiB 重叠:落在重叠区的命中会在两块各出现一次。按(规则, 类型, 全局偏移)去重,只报一行
+        // 相邻块有 2KiB 重叠:落在重叠区的命中会在两块各出现一次。按(规则, 类型, 全局偏移, 命中长度)去重,只报一行
         const reported = new Set<string>();
         for (const [n, c] of chunks.entries()) {
           const d = redactor.pass2Detail(c.text);
@@ -168,7 +168,7 @@ export function createRedactCommand(deps: RedactCommandDeps): CommandDef {
           for (const h of d.hits) {
             code = ExitCode.CHECK_FAILED;
             const offset = c.start + h.start;
-            const key = `${h.rule}\u0000${h.type}\u0000${offset}`;
+            const key = `${h.rule}\u0000${h.type}\u0000${offset}\u0000${h.end - h.start}`;
             if (reported.has(key)) continue;
             reported.add(key);
             ctx.stderr(`REDACT_HIT rule=${h.rule} type=${h.type} offset=${offset}\n`);

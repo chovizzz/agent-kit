@@ -32,11 +32,34 @@ const RFC2822 = new RegExp(
 // epoch:只在两种上下文里认,不在任意数字上认(普通计数 / 大小 / id 也常是 10 位数,全文扫会大量误伤):
 //  ① 键名像时间的键值对(JSON / YAML / TOML / env:`"generated_at": 1700000000`、`built=1700000000`);
 //  ② 文件头部 20 行内的注释行里的独立数字。
-// 关键词前必须不是字母(`candidate` `validate` 含 date 子串,不算);路径里的日期分目录(out/2026/11/03/…)同样会被 SLASH_DATE 抓到:out/ 里不许有任何日期写法,是有意为之。
+// 键名按段匹配封闭词表(`candidate` `validate` `timeout` `builtins` `update_check` `timestamped` 都不算);路径里的日期分目录(out/2026/11/03/…)同样会被 SLASH_DATE 抓到:out/ 里不许有任何日期写法,是有意为之。
 // 数值区间:秒 2001-01-01..2100-01-01(10 位),毫秒同区间(13 位);区间外的当普通数字。
 const EPOCH_S = [978307200, 4102444800];
-const TIME_KEY_VALUE =
-  /(?:^|[^A-Za-z])(?:mtime|ctime|atime|time|date|stamp|created|updated|generated|built|epoch)[A-Za-z_-]*["']?\s*[:=]\s*["']?([0-9]{10}|[0-9]{13})(?![0-9.])/gim;
+// 键名必须是「封闭的时间键形态」:按 _ - . 与驼峰切段后,有一段恰好是下面这些词之一(timeout / builtins / update_check / timestamped 都不是)
+const TIME_WORDS = new Set([
+  'time',
+  'timestamp',
+  'ts',
+  'date',
+  'datetime',
+  'mtime',
+  'ctime',
+  'atime',
+  'created',
+  'updated',
+  'generated',
+  'built',
+  'epoch',
+]);
+const KEY_VALUE =
+  /["']?([A-Za-z][A-Za-z0-9_.-]*)["']?[ \t]*[:=][ \t]*["']?([0-9]{10}|[0-9]{13})(?![0-9.])/g;
+function isTimeKey(key) {
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .toLowerCase()
+    .split(/[_.-]/)
+    .some((w) => TIME_WORDS.has(w));
+}
 const COMMENT_LINE = /^\s*(?:#|\/\/|--|;|\/\*|\*|<!--)/;
 const BARE_EPOCH = /(?<![0-9A-Za-z_.-])([0-9]{10}|[0-9]{13})(?![0-9A-Za-z_.])/g;
 function epochInRange(digits) {
@@ -50,7 +73,8 @@ export function timestampKind(text) {
   if (ISO_TS.test(text)) return 'ISO';
   if (SLASH_DATE.test(text)) return 'YYYY/MM/DD';
   if (RFC2822.test(text)) return 'RFC2822';
-  for (const m of text.matchAll(TIME_KEY_VALUE)) if (epochInRange(m[1])) return 'epoch(键值)';
+  for (const m of text.matchAll(KEY_VALUE))
+    if (isTimeKey(m[1]) && epochInRange(m[2])) return 'epoch(键值)';
   const head = text.split('\n', 20);
   for (const line of head) {
     if (!COMMENT_LINE.test(line)) continue;
