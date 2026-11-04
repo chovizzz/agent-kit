@@ -52,7 +52,6 @@ import {
   markBad,
   markInstalled,
   markNotified,
-  parseUpdateState,
   recordCheck,
   serializeUpdateState,
 } from './state.js';

@@ -9,7 +9,7 @@ import {
 } from '../contracts/sync.js';
 import { getRealHome } from '../io/paths.js';
 import { readDir, realpath } from '../io/read-fs.js';
-import { MAX_READ_BYTES, lstatOrNull, sha256Of } from '../io/probe.js';
+import { lstatOrNull, probePath } from '../io/probe.js';
 import type { DiskEntry, DiskSnapshot } from './types.js';
 
 // 单路径探测已下沉到 io/probe.ts(D-AU1 / M3),此处 re-export,调用点不变
