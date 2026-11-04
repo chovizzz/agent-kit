@@ -6,6 +6,8 @@ import {
   EXIT_STUB,
   Reporter,
   cleanEnv,
+  copyFiles,
+  listRepoFiles,
   mkTmp,
   makeCtx,
   parseCommon,
@@ -86,11 +88,19 @@ async function a8(argv) {
       R.notRun(`找不到 CLI:${ctx.cli}`);
       return R.exit();
     }
+    // 在仓库副本里跑(同 A1 / A15):`build` 会写 `<root>/out/`,直接在仓库根跑会改写已提交的 out/,
+    // 让后面的 A15「仓库 out/ 与重新构建一致」拿到的不再是已提交产物(假绿)。副本内容与仓库一致,不影响「零网络」结论。
+    const repoCopy = path.join(tmp, 'repo');
+    copyFiles(
+      ctx.root,
+      listRepoFiles(ctx.root, { exclude: ['out', 'dist', 'node_modules', '.state', '.git'] }),
+      repoCopy,
+    );
     for (const [name, args] of cmds) {
       fs.rmSync(log, { force: true });
-      const r = run(ctx.node, [ctx.cli, '--root', ctx.root, ...args], {
+      const r = run(ctx.node, [ctx.cli, '--root', repoCopy, ...args], {
         env: cleanEnv(baseEnv),
-        cwd: ctx.root,
+        cwd: repoCopy,
       });
       const blocked =
         readLog().includes('[no-net] blocked') || r.stderr.includes('[no-net] blocked');
