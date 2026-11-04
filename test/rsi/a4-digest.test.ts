@@ -24,9 +24,7 @@ import {
   lesson,
   makeA4World,
   parseDigest,
-  recommit,
   retry,
-  writeSignalFile,
   rewriteCfg,
   SESSION_OK,
   type A4World,
@@ -174,7 +172,7 @@ describe('输出(R20-16.6 ~ R20-16.9)', () => {
     expect(d.agent).toBe('claude');
     expect(d.digest_id).toMatch(/^d_[0-9a-f]{16}$/);
     expect(d.expires_at).toBe('2026-10-27T12:00:00.000Z');
-    expect(d.truncated).toEqual({ clusters_dropped: 0 });
+    expect(d.truncated).toEqual({ clusters_dropped: 0, evidence_dropped: 0 }); // A4 订正 #8:键集合追加 evidence_dropped
     expect(d.clusters.map((c) => [c.alias, c.kind, c.evidence.length, c.other_evidence])).toEqual([
       ['c1', 'explicit_lesson', 3, 2], // cur 3 条摘录;other 的 2 条只是计数
       ['c2', 'explicit_lesson', 2, 0],
@@ -381,16 +379,17 @@ describe('R20-16.11 / 16.24 输出复扫', () => {
     expect((await digestCmd(ok, DIGEST_ARGS())).code).toBe(0);
   });
 
-  it('植入 HOME 路径 → output_leak(退出 3,无文件、无输出)', async () => {
+  it('植入 HOME 路径(非摘录字段 digest_id;摘录里的路径见 a4-digest-neutralize.test.ts)→ output_leak(退出 3,无文件、无输出)', async () => {
+    // A4 订正 #8(R20-16.11-a):摘录里的 HOME 路径先中和 / 丢该条,不再整份拒;整份闸作兜底,植入非摘录字段仍整份拒
     const w = await makeA4World('a4-dg-leak-');
-    // 复扫器放行,只测路径泄漏闸:往信号里植入假 HOME 路径
-    await writeSignalFile(w, [
-      lesson(w.keys.cur, 'h1', 0, `from now on look under ${w.s.f.home}/notes first`),
-    ]);
-    await recommit(w);
-    const r = await digestCmd(w, DIGEST_ARGS(), { redactor: cleanRedactor });
+    const r = await digestCmd(w, DIGEST_ARGS(), {
+      redactor: cleanRedactor,
+      randomHex: () => `${w.s.f.home}/notes`,
+    });
     expect([r.code, r.err, r.out]).toEqual([3, 'RSI_DIGEST_REJECTED reason=output_leak\n', '']);
     expect(await slotFiles(w)).toEqual([]);
+    // 正向对照:同一世界、正常 id → 成功
+    expect((await digestCmd(w, DIGEST_ARGS(), { redactor: cleanRedactor })).code).toBe(0);
   });
 });
 

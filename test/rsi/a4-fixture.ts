@@ -201,7 +201,7 @@ export const parseDigest = (
     evidence: { alias: string; excerpt: string }[];
     other_evidence: number;
   }[];
-  truncated: { clusters_dropped: number };
+  truncated: { clusters_dropped: number; evidence_dropped: number };
 } => JSON.parse(t) as never;
 
 /** 夹具目录之外没有任何写(真实 HOME 不被写):写审计里的每个路径都在夹具目录内 */

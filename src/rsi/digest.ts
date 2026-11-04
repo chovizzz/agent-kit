@@ -9,7 +9,9 @@
  *  3. 预留槽位(持 `digests/lock`,毫秒级;满 → `digest_backlog`)。之后**任何**出口都放弃本进程的预留(只删自己 token 的文件)。
  *  4. **不拿 `rsi/lock`**,按快照协议读(状态 / 索引 / counts / 信号月文件,按清单核对;不一致重读一次,仍不一致 `RSI_SNAPSHOT_BUSY`)。
  *  5. 当前项目 = cwd 经 `canonical()` → 本机盐 → key;排除 / 归属不明 → 空 clusters + reason。**先剔除 X / U 的信号,再** classify / cluster / 门槛 / 排序 / 计数(R20-16.7)。
- *  6. 取舍(R20-16.8)→ 输出 canonical JSON(≤48KiB,超出从末尾整簇丢弃)→ 整份 pass2 复扫 + 路径泄漏闸(命中 `RSI_DIGEST_REJECTED`,不写不输出)。
+ *  6. 取舍(R20-16.8)。组装时每条摘录先做路径中和(HOME → `~`、仓库根 / 状态目录 / KIT_TMP → 占位),中和后仍过不了泄漏闸的单条证据丢弃
+ *     (`truncated.evidence_dropped`;簇因此无证据 → 整簇丢,计入 `clusters_dropped`,R20-16.11-a)→ 输出 canonical JSON(≤48KiB,超出从末尾整簇丢弃)
+ *     → 整份 pass2 复扫 + 路径泄漏闸作最后兜底(命中 `RSI_DIGEST_REJECTED`,不写不输出)。
  *  7. 最终复核:重读事实并**重新执行归属判定**(根路径 `(dev, ino)` 与归属结果),与开始时任一不同 → `policy_changed`(可重试)。
  *  8. 发布槽位(持锁,token 仍是自己的才 tmp → fsync → rename → fsync 目录),**写成功后才输出**;写失败 → `RSI_FAIL_CLOSED reason=internal`。
  */
@@ -66,7 +68,8 @@ import { createExcludeMatcher } from './exclude-match.js';
 import { RsiSnapshotBusyError, failExit } from './exit.js';
 import { RsiLockError } from './lock-error.js';
 import { rsiDirReadonly } from './lock-read.js';
-import { emitLines, forbiddenPaths, jsonLines } from './output.js';
+import { evidencePassesLeakGate, neutralizePaths, resolveLabeledRoots } from './digest-paths.js';
+import { emitLines, jsonLines } from './output.js';
 import { rsiRedactor } from './redactor.js';
 import { factsKey, observeSessionFacts, stateGate } from './session-facts.js';
 import { invalidateForFacts } from './session-invalidate.js';
@@ -260,6 +263,17 @@ export async function judgeProject(
 // ---------------------------------------------------------------------------
 // 取舍与输出(R20-16.7 ~ R20-16.9)
 // ---------------------------------------------------------------------------
+/** 单条证据的组装期处理(路径中和 + 单条闸):返回改写后的信号,或 `null` = 丢弃这一条(R20-16.11-a) */
+export type EvidenceScreen = (s: LoadedSignal) => LoadedSignal | null;
+
+export interface Selection {
+  selected: SelectedCluster[];
+  /** 被单条闸丢弃的当前项目证据条数(`truncated.evidence_dropped`) */
+  evidenceDropped: number;
+  /** 因此没有证据了的簇数(并入 `truncated.clusters_dropped`) */
+  clustersEmptied: number;
+}
+
 export interface SelectedCluster {
   kind: string;
   /** 当前项目的证据(给摘录) */
@@ -280,15 +294,35 @@ export function selectClusters(
   kept: readonly LoadedSignal[],
   currentKey: string,
 ): SelectedCluster[] {
+  return selectClustersScreened(kept, currentKey, (s) => s).selected;
+}
+
+/**
+ * {@link selectClusters} + 单条证据处理(R20-16.11-a):`screen` 作用在当前项目的每条可用证据上(**排序与截到 8 条之前**,
+ * 被丢的不占名额);丢光了证据的簇不入选并计入 `clustersEmptied`。`other` 只是计数,不受影响。
+ */
+export function selectClustersScreened(
+  kept: readonly LoadedSignal[],
+  currentKey: string,
+  screen: EvidenceScreen,
+): Selection {
   const clusters = buildClusters(classifySignals(kept));
+  let evidenceDropped = 0;
+  let clustersEmptied = 0;
   const rows = clusters.map((c) => {
     const eligible = c.members.filter((s) => isEvidenceEligible(s) && !hasMark(s.excerpt_redacted));
-    const current = eligible
+    const mine = eligible
       .filter((s) => s.project_key === currentKey)
       .sort((a, b) => (a.sig_id < b.sig_id ? -1 : a.sig_id > b.sig_id ? 1 : 0));
-    return { id: c.id, kind: c.kind as string, current, other: eligible.length - current.length };
+    const current = mine.flatMap((s) => {
+      const r = screen(s);
+      if (r === null) evidenceDropped++;
+      return r === null ? [] : [r];
+    });
+    if (mine.length >= 1 && current.length === 0) clustersEmptied++;
+    return { id: c.id, kind: c.kind as string, current, other: eligible.length - mine.length };
   });
-  return rows
+  const selected = rows
     .filter((r) => r.current.length >= 1)
     .sort((a, b) => b.current.length - a.current.length || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
     .slice(0, RSI_DIGEST_MAX_CLUSTERS)
@@ -297,6 +331,7 @@ export function selectClusters(
       current: r.current.slice(0, RSI_DIGEST_MAX_EVIDENCE_PER_CLUSTER),
       other: r.other,
     }));
+  return { selected, evidenceDropped, clustersEmptied };
 }
 
 export interface DigestBody {
@@ -304,6 +339,7 @@ export interface DigestBody {
   aliases: Record<string, string>;
   reason: RsiDigestReason;
   clustersDropped: number;
+  evidenceDropped: number;
 }
 
 /** 渲染 canonical JSON;> 48KiB 时从末尾整簇丢弃(`clusters_dropped`)。别名 `e1…`/`c1…` 按输出顺序编号,整份内唯一 */
@@ -313,9 +349,13 @@ export function renderDigest(i: {
   agent: RsiAgentId;
   reason: Exclude<RsiDigestReason, 'no_clusters'>;
   selected: readonly SelectedCluster[];
+  /** 组装期(路径中和后)被单条闸丢弃的证据条数 / 因此丢光证据的簇数(R20-16.11-a);缺省 0 */
+  evidenceDropped?: number;
+  clustersEmptied?: number;
 }): DigestBody {
   const kept = [...i.selected];
-  let dropped = 0;
+  const evidenceDropped = i.evidenceDropped ?? 0;
+  let dropped = i.clustersEmptied ?? 0;
   for (;;) {
     let n = 0;
     const aliases: Record<string, string> = {};
@@ -340,10 +380,10 @@ export function renderDigest(i: {
       agent: i.agent,
       reason,
       clusters,
-      truncated: { clusters_dropped: dropped },
+      truncated: { clusters_dropped: dropped, evidence_dropped: evidenceDropped },
     });
     if (Buffer.byteLength(text, 'utf8') <= RSI_DIGEST_MAX_BYTES || kept.length === 0) {
-      return { text, aliases, reason, clustersDropped: dropped };
+      return { text, aliases, reason, clustersDropped: dropped, evidenceDropped };
     }
     kept.pop();
     dropped++;
@@ -481,6 +521,15 @@ async function digest(
 
     // 先剔除 X / U,再聚类(R20-16.7)
     let selected: SelectedCluster[] = [];
+    let evidenceDropped = 0;
+    let clustersEmptied = 0;
+    // 路径中和的根与禁止值(整份输出的闸也用同一份 forbidden)
+    const pathRoots = await resolveLabeledRoots(env, {
+      stateDir: io.stateDir,
+      repoRoots: [io.repoRoot, config0.repo],
+    });
+    // 禁止值 = 中和用的根集合(同一来源,不会漂移):HOME、KIT_TMP、状态目录、仓库根及其 realpath(同 R20-16.11 ① 的 `forbiddenPaths`)
+    const forbidden = [...new Set(pathRoots.map((r) => r.path))];
     /** 参与分类 / 聚类的各项目的归属基线(最终复核要重判:其它项目的归属变化也会改变入选与 other_evidence) */
     let classBaseline: [string, Attribution][] = [];
     if (p0.reason === 'ok' && p0.key !== null) {
@@ -499,7 +548,16 @@ async function digest(
       }
       classBaseline = [...classOf.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1));
       const kept = loaded.filter((s) => classOf.get(s.project_key) === 'P');
-      selected = selectClusters(kept, p0.key);
+      const sel = selectClustersScreened(kept, p0.key, (s) => {
+        // R20-16.11-a:先中和路径,中和后仍过不了泄漏闸的这一条丢弃(pass2 命中不在此处理,留给整份复扫)
+        const excerpt = neutralizePaths(s.excerpt_redacted, pathRoots);
+        return evidencePassesLeakGate(excerpt, forbidden)
+          ? { ...s, excerpt_redacted: excerpt }
+          : null;
+      });
+      selected = sel.selected;
+      evidenceDropped = sel.evidenceDropped;
+      clustersEmptied = sel.clustersEmptied;
     }
     const digestId = `d_${(deps.randomHex ?? ((n: number): string => randomBytes(n).toString('hex')))(8)}`;
     const expiresAt = new Date(now.getTime() + RSI_DIGEST_TTL_MS).toISOString();
@@ -509,6 +567,8 @@ async function digest(
       agent,
       reason: p0.reason,
       selected: p0.reason === 'ok' ? selected : [],
+      evidenceDropped,
+      clustersEmptied,
     });
 
     // 输出复扫:整份文本 pass2 + 路径泄漏闸(R20-16.11 ①)
@@ -522,7 +582,6 @@ async function digest(
       ctx.stderr('RSI_DIGEST_REJECTED reason=rescan_hit\n');
       return ExitCode.FAIL_CLOSED;
     }
-    const forbidden = await forbiddenPaths(env, [io.stateDir, io.repoRoot, config0.repo]);
     const lines = jsonLines(body.text);
     const leak: string[] = [];
     const leakSink = { stdout: () => undefined, stderr: (t: string) => void leak.push(t) };
