@@ -120,7 +120,14 @@ export const AU_MUTATIONS: readonly AuMutation[] = [
       },
     ],
     tests: [SPAWN, DIST],
-    expectRed: ['不转发的情形', '判据只来自 decideCurrent', 'b current 损坏', 'c 不转发', 'd KIT_LAUNCHED', 'e poke'],
+    expectRed: [
+      '不转发的情形',
+      '判据只来自 decideCurrent',
+      'b current 损坏',
+      'c 不转发',
+      'd KIT_LAUNCHED',
+      'e poke',
+    ],
     mustKill: ['不转发的情形', 'b current 损坏'],
   },
   {
@@ -144,7 +151,8 @@ export const AU_MUTATIONS: readonly AuMutation[] = [
     edits: [
       {
         file: 'src/update/self-spawn.ts',
-        anchor: "    if (!checkDue(st.kind === 'ok' ? st.state.last_check_at : undefined, nowMs).due) {",
+        anchor:
+          "    if (!checkDue(st.kind === 'ok' ? st.state.last_check_at : undefined, nowMs).due) {",
         replacement: '    if (nowMs < 0) {',
       },
     ],
