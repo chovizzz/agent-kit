@@ -4,9 +4,10 @@
  * 本文件是**纯契约**:不 import 任何写出口,`rsi hint` 会 import 它(`formatHintOutput`),所以保持轻量。
  * 形状表(R20-15.8)是唯一的「钩子长什么样」的来源;证据级别(R20-15.9)决定是否开放 `--write`。
  *
- * ⚠️ 生产形状表里三家的证据级别**全部是 `假设`**:形状核实要用户在场观察真实会话(设计稿 §14 A5 行),是主代理之后的真实环境动作。
- * 在那之前,生产环境的 `--install --write` 一律 `RSI_HOOKS_NOT_RUN reason=shape_unverified`。核实通过后,只改下面表里的 `evidence`
- * 与 `agent_versions`,不要改判定函数 {@link isShapeWritable}(它是「是否已核实」的唯一实现,`--json` 的 `verified` 与写闸共用它)。
+ * 生产形状表的证据级别(契约 §20.15-12 N1 订正 #3):**pi = `实测运行`**(2026-11-04,pi 1.5.0,用户在真实会话里观察:`session_start` 调 hint、`session_shutdown` 调 poke、
+ * 会话 jsonl 里有 `customType:"agent-kit-rsi"` 的隐藏消息),适用版本 `min: '1.5.0'`,写闸需要本机 pi 版本(`src/rsi/hooks/agent-version.ts` 探测,探测不到即拒);
+ * **claude / codex 仍是 `假设`**:形状核实要用户在场观察真实会话(设计稿 §14 A5 行),在那之前它们的 `--install --write` 一律 `RSI_HOOKS_NOT_RUN reason=shape_unverified`。
+ * 核实通过后只改下面表里的 `evidence` 与 `agent_versions`,不要改判定函数 {@link isShapeWritable}(它是「是否已核实」的唯一实现,`--json` 的 `verified` 与写闸共用它)。
  */
 import { z } from 'zod';
 import { IsoTimestampSchema, Sha256Schema } from './common.js';
@@ -277,7 +278,7 @@ export default function (pi) {
 `;
 
 /**
- * 生产形状表(冻结)。⚠️ 三家 `evidence` 全部是 `假设`,见文件头。
+ * 生产形状表(冻结)。claude / codex 的 `evidence` 是 `假设`,pi 是 `实测运行`(`>=1.5.0`),见文件头。
  * codex 的 `hooks.json` 结构与信任步骤同样未核实;这里的 JSON 形状沿用 claude 的包装对象写法,仅供 `--print`。
  */
 export const PRODUCTION_SHAPES: ShapeTable = deepFreeze({
@@ -321,8 +322,8 @@ export const PRODUCTION_SHAPES: ShapeTable = deepFreeze({
     agent: 'pi',
     kind: 'file',
     shape_version: 'pi-1',
-    evidence: '假设',
-    agent_versions: null,
+    evidence: '实测运行',
+    agent_versions: { min: '1.5.0' },
     agent_root_rel: '.pi/agent',
     target_rel: '.pi/agent/extensions/agent-kit-rsi.ts',
     hint_format: null,

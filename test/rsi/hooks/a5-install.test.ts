@@ -1,6 +1,6 @@
 /**
  * A5(contracts §20.15):`rsi hooks --install / --uninstall` 的安装语义矩阵。
- * 全部在假 HOME(KIT_TMP 下)里跑;写路径用「测试形状表」(证据抬到公开文档),生产形状表的拒绝见 a5-zero-write.test.ts。
+ * 全部在假 HOME(KIT_TMP 下)里跑;写路径用「测试形状表」(证据抬到公开文档),生产形状表的拒绝见 a5-zero-write.test.ts,pi 的版本闸见 a5-pi-version.test.ts。
  */
 import { describe, expect, it } from 'vitest';
 import {
@@ -517,9 +517,10 @@ describe('形状核实是写能力的闸(R20-15.8–15.10)', () => {
     pi: { ...PRODUCTION_SHAPES.pi, evidence: e },
   });
 
-  it('生产形状表三家都是「假设」→ --install --write 退 4 shape_unverified,零写调用;干跑照常、verified=false', async () => {
+  it('生产形状表:claude / codex 是「假设」、pi 是「实测运行」但版本未知 → --install --write 退 4 shape_unverified,零写调用;干跑照常、verified=false', async () => {
     for (const agent of AGENTS) {
-      expect(PRODUCTION_SHAPES[agent].evidence).toBe('假设');
+      // N1 订正 #3:pi 核实过(>=1.5.0);这里不注入版本探测 = 版本未知,pi 仍被闸(版本已知的放行见 a5-pi-version.test.ts)
+      expect(PRODUCTION_SHAPES[agent].evidence).toBe(agent === 'pi' ? '实测运行' : '假设');
       const hx = await makeHx('a5-shape-prod-');
       await hx.agentRoot(agent);
       const before = await hx.tree();

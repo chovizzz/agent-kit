@@ -1,7 +1,7 @@
 /**
  * A5(`rsi hooks`)测试夹具:假 HOME(KIT_TMP 下,经 `KIT_REAL_HOME_OVERRIDE` 注入)、可注入时钟 / 随机源 / 故障点 / 形状表。
  * **所有写都落在假 HOME 内**:每个命令的写审计钩子都被收集,`assertAuditInside` 断言审计里的每个绝对路径都在假 HOME 之内。
- * 测试用形状表 {@link TEST_SHAPES} 把三家的证据级别抬到 `公开文档`(只在测试里,生产表全是 `假设`)走写路径。
+ * 测试用形状表 {@link TEST_SHAPES} 把三家的证据级别抬到 `公开文档`(只在测试里;生产表 claude / codex 是 `假设`、pi 是 `实测运行` 且要求版本 >=1.5.0)走写路径。
  * 文件写入只经 safe-fs(`wideCtx(dir)`),不 import node:fs。
  */
 import * as path from 'node:path';
@@ -21,8 +21,12 @@ import { makeTempDir, wideCtx } from '../../helpers/tmp.js';
 import { withWriteAudit } from '../../helpers/write-audit.js';
 import { treeOf } from '../rsi-fixture.js';
 
-const verified = (s: HookShape): HookShape => ({ ...s, evidence: '公开文档' });
-/** 测试专用:三家都「已核实」。生产形状表 {@link PRODUCTION_SHAPES} 全是 `假设`,走不到写路径 */
+const verified = (s: HookShape): HookShape => ({
+  ...s,
+  evidence: '公开文档',
+  agent_versions: null,
+});
+/** 测试专用:三家都「已核实」(且无版本范围)。生产形状表 {@link PRODUCTION_SHAPES} 里 claude / codex 是 `假设`,pi 要版本 >=1.5.0 */
 export const TEST_SHAPES: ShapeTable = {
   claude: verified(PRODUCTION_SHAPES.claude),
   codex: verified(PRODUCTION_SHAPES.codex),

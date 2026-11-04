@@ -28,19 +28,26 @@ import { makeTickFx, type TickFx } from '../b5a-fixture.js';
 import { NOW, baseState, seed } from '../ro-fixture.js';
 import { AGENTS, jsonOf, makeHx } from './a5-fixture.js';
 
-describe('形状表(R20-15.8):生产表冻结,三家证据都是「假设」', () => {
+describe('形状表(R20-15.8):生产表冻结;claude / codex 是「假设」,pi 是「实测运行」(N1 订正 #3)', () => {
   it('结构、固定写对象与 HOME_WRITE_TABLE 的 kit-hooks 三条逐项相等', () => {
     const tableHooks = HOME_WRITE_TABLE.filter((e) => e.owner === 'kit-hooks').map((e) => e.path);
     expect(tableHooks.sort()).toEqual(Object.values(HOOKS_TARGET_RELS).sort());
     for (const a of AGENTS) {
       const s = PRODUCTION_SHAPES[a];
       expect(s.agent).toBe(a);
-      expect(s.evidence, a).toBe('假设'); // 形状核实是主代理之后的真实环境动作,这里不得标成已核实
+      // 形状核实是用户在场的真实环境动作:只有 pi 核实过(2026-11-04,pi 1.5.0);claude / codex 不得标成已核实
+      expect(s.evidence, a).toBe(a === 'pi' ? '实测运行' : '假设');
+      expect(s.agent_versions, a).toEqual(a === 'pi' ? { min: '1.5.0' } : null);
       expect(s.target_rel).toBe(HOOKS_TARGET_RELS[a]);
       expect(s.agent_root_rel).toBe(HOOKS_AGENT_ROOT_RELS[a]);
       expect(s.shape_version).toMatch(/^[a-z]+-\d+$/);
       expect(s.failure_handling.length).toBeGreaterThan(0);
+      // 旧版本 / 版本未知都不可写;claude / codex 无论版本都不可写;pi 在 >=1.5.0 才可写(正向对照)
       expect(isShapeWritable(s, '1.0.0'), a).toBe(false);
+      expect(isShapeWritable(s, undefined), a).toBe(false);
+      expect(isShapeWritable(s, '99.0.0'), a).toBe(a === 'pi');
+      expect(isShapeWritable(s, '1.5.0'), a).toBe(a === 'pi');
+      expect(isShapeWritable(s, '1.4.9'), a).toBe(false);
       expect(Object.isFrozen(s), a).toBe(true);
     }
     expect(() => {

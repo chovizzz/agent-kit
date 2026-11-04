@@ -62,6 +62,11 @@ const EXPECTED: Readonly<Record<string, { rule: string; message: string }>> = {
   'run-self-namespace.ts': { rule: 'no-restricted-imports', message: 'runSelf' },
   'run-self-reexport.ts': { rule: 'no-restricted-imports', message: 'runSelf' },
   'run-self-dynamic-import.ts': { rule: 'no-restricted-syntax', message: 'runSelf' },
+  // N1 订正 #3(contracts §20.15-12):agent 版本探测出口只许 src/rsi/hooks/**
+  'agent-probe-import.ts': { rule: 'no-restricted-imports', message: '版本探测出口' },
+  'agent-probe-namespace.ts': { rule: 'no-restricted-imports', message: '版本探测出口' },
+  'agent-probe-reexport.ts': { rule: 'no-restricted-imports', message: '版本探测出口' },
+  'agent-probe-dynamic-import.ts': { rule: 'no-restricted-syntax', message: '版本探测出口' },
   'sigstore-import.ts': { rule: 'no-restricted-imports', message: 'sigstore' },
   'sigstore-scoped-import.ts': { rule: 'no-restricted-imports', message: 'sigstore' },
   'sigstore-dynamic-import.ts': { rule: 'no-restricted-syntax', message: 'sigstore' },
@@ -472,6 +477,51 @@ describe('lint 正向对照:同样的代码放到被授权的文件里不报错'
       for (const where of ['src/foo.ts', 'src/update/install.ts', 'src/commands/build.ts']) {
         expect(await lintAs(RUN_SYNC, where), where).toEqual([]);
       }
+    });
+
+    it('N1 订正 #3:agent 版本探测出口 src/io/agent-probe.ts 只许 src/rsi/hooks/** 与其测试 import(命名导入 / import * / re-export / 动态 import);它自己可用 child_process 但不得碰 fs / 网络 / 环境', async () => {
+      const AP_IMP =
+        "import { runAgentVersionCommand } from '../io/agent-probe.js';\nexport const r = runAgentVersionCommand;\n";
+      const AP_NS = "import * as probe from '../io/agent-probe.js';\nexport const r = probe;\n";
+      const AP_REX = "export { runAgentVersionCommand } from '../io/agent-probe.js';\n";
+      const AP_DYN = "export const l = () => import('../io/agent-probe.js');\n";
+      for (const code of [AP_IMP, AP_NS, AP_REX, AP_DYN]) {
+        // 动态 import 在 src/rsi/hooks/** 里还会被「动态 import 一律禁」的既有闸拦(allowRunSelf 未放行),这里只断言静态三种写法对授权目录放行
+        if (code !== AP_DYN) {
+          for (const ok of [
+            'src/rsi/hooks/agent-version.ts',
+            'src/rsi/hooks/command.ts',
+            'test/rsi/hooks/a5-pi-version.test.ts',
+          ]) {
+            expect(await lintAs(code, ok), `${ok}: ${code.trim()}`).toEqual([]);
+          }
+        }
+        for (const bad of [
+          ...ELSEWHERE,
+          'src/rsi/poke.ts',
+          'src/rsi/hint.ts',
+          'src/rsi/worker.ts',
+          'src/rsi/kit-schedule.ts',
+          'src/commands/rsi.ts',
+          'src/doctor/checks.ts',
+          'src/update/launcher.ts',
+          'src/update/self-spawn.ts',
+          // 放行的是目录,不是同名前缀:`hooks-x` 不在其内
+          'src/rsi/hooks-extra.ts',
+          'test/rsi/a4-digest.test.ts',
+        ]) {
+          expect((await lintAs(code, bad)).length, `${bad}: ${code.trim()}`).toBeGreaterThan(0);
+        }
+      }
+      // 正向对照:授权目录里 import runSync / 别的出口不受这条闸影响;hooks 目录仍不得直接碰 runSelf / 子进程模块
+      expect(await lintAs(RUN_SYNC, 'src/rsi/hooks/agent-version.ts')).toEqual([]);
+      expect((await lintAs(RS_IMP, 'src/rsi/hooks/agent-version.ts')).length).toBeGreaterThan(0);
+      expect((await lintAs(CP, 'src/rsi/hooks/agent-version.ts')).length).toBeGreaterThan(0);
+      // agent-probe.ts 自己可用 child_process(第三个出口),但不得碰 fs / 网络;
+      expect(await lintAs(CP, 'src/io/agent-probe.ts')).toEqual([]);
+      expect((await lintAs(FS, 'src/io/agent-probe.ts')).length).toBeGreaterThan(0);
+      expect((await lintAs(HTTPS, 'src/io/agent-probe.ts')).length).toBeGreaterThan(0);
+      expect((await lintAs(FETCH, 'src/io/agent-probe.ts')).length).toBeGreaterThan(0);
     });
 
     it('R20-A0:self-spawn.ts 只比默认多放行 runSelf —— 不得引用 net / home-fs / 启动器 / sigstore / llm-exec / fs / 子进程模块(R20-1.1 零网络)', async () => {
