@@ -105,7 +105,10 @@ describe('Kimi reader 只读(fs 层 flags)', () => {
     expect(meta.cwd_hint).toBe('/work/proj-a'); // 正向前提:state.json 确实被读到
     const onSource = h.calls.filter(under(w.sessions));
     const statePath = path.join(path.dirname(path.dirname(path.dirname(g.file))), 'state.json');
-    expect(onSource.some((c) => c.path === g.file && c.api === 'createReadStream')).toBe(true);
+    // 会话文件现经 read-fs.readLinesSafe(fsp.open,O_RDONLY|O_NOFOLLOW|O_NONBLOCK)打开,不再是裸 createReadStream;正向前提计 open
+    expect(
+      onSource.some((c) => c.path === g.file && (c.api === 'createReadStream' || c.api === 'open')),
+    ).toBe(true);
     expect(onSource.some((c) => c.path === statePath)).toBe(true);
     for (const c of onSource) {
       expect(h.READ_OPENERS.includes(c.api), `${c.api} ${c.path}`).toBe(true);

@@ -26,6 +26,7 @@ import {
   treeHash,
 } from './common.mjs';
 import { freshDist } from './accept-p1.mjs';
+import { adapterTargetsChecked } from './real-home-guard.mjs';
 import { OK_TEXT, RUN_ID as JUDGE_RUN, writeRunDir } from './a18.mjs';
 import { commitStaged, initRepo } from './lc-world.mjs';
 
@@ -279,7 +280,7 @@ async function a19(argv) {
     const home = path.resolve(flags.home ?? snapLib.resolveHome());
     const managedText = fs.readFileSync(path.join(ctx.root, 'ops', 'managed-paths.txt'), 'utf8');
     const volatileText = fs.readFileSync(path.join(ctx.root, 'ops', 'volatile-paths.txt'), 'utf8');
-    const adapterTargets = snapLib.readAdapterTargets(ctx.root).targets;
+    const adapterTargets = adapterTargetsChecked(snapLib, ctx.root, R);
     const takeHome = () =>
       snapLib.takeSnapshot({ home, managedText, volatileText, adapterTargets, homeWatch: true });
     const targets = {

@@ -28,6 +28,7 @@ import {
   sha256,
 } from './common.mjs';
 import { freshDist, importDist } from './accept-p1.mjs';
+import { adapterTargetsChecked } from './real-home-guard.mjs';
 import { checkClosure, closure, specifiersOf } from './import-graph.mjs';
 import { compareSnapshots, snapshotTargets } from './a19.mjs';
 import { LESSON, buildDryWorld, loadWorldMods, writeSessions } from './lc-world.mjs';
@@ -277,7 +278,7 @@ async function a22(argv) {
     // 测量窗口
     const managedText = fs.readFileSync(path.join(ctx.root, 'ops', 'managed-paths.txt'), 'utf8');
     const volatileText = fs.readFileSync(path.join(ctx.root, 'ops', 'volatile-paths.txt'), 'utf8');
-    const adapterTargets = snapLib.readAdapterTargets(ctx.root).targets;
+    const adapterTargets = adapterTargetsChecked(snapLib, ctx.root, R);
     const takeHome = () =>
       snapLib.takeSnapshot({ home, managedText, volatileText, adapterTargets, homeWatch: true });
     const targets = { tmp: tmp };

@@ -14,3 +14,28 @@
 ~/.local/share/opencode/**
 ~/.openclaw/agents/**
 **/.DS_Store
+
+# --- macOS 监视面(~/Library/Application Support 与 ~/Library/Preferences 的直接子项名字表,仅 darwin 监视)---
+# 只放「系统与常见应用常态自己增删」的条目;第三方应用首次运行新建的目录 / plist 仍会被报出(真阳性,由人工归因)。
+# 名字表只记直接子项名,所以这些行按名字(或其祖先)剔除,不涉及内容。
+~/Library/Preferences/com.apple.*
+~/Library/Preferences/ByHost/**
+~/Library/Preferences/.GlobalPreferences*
+~/Library/Preferences/*.plist.*
+~/Library/Preferences/*.lockfile
+~/Library/Application Support/com.apple.*
+~/Library/Application Support/CrashReporter/**
+~/Library/Application Support/AddressBook/**
+~/Library/Application Support/Knowledge/**
+~/Library/Application Support/CloudDocs/**
+~/Library/Application Support/FileProvider/**
+~/Library/Application Support/Caches/**
+~/Library/Application Support/Dock/**
+~/Library/Application Support/SyncServices/**
+~/Library/Application Support/MobileSync/**
+~/Library/Application Support/App Store/**
+~/Library/Application Support/CallHistoryDB/**
+~/Library/Application Support/CallHistoryTransactions/**
+~/Library/Application Support/DifferentialPrivacy/**
+~/Library/Application Support/networkserviceproxy/**
+~/Library/Application Support/iCloud/**

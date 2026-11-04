@@ -5,6 +5,20 @@ import { pathToFileURL } from 'node:url';
 import { byteCmp, sha256 } from './common.mjs';
 
 /**
+ * 读 adapter 落点并 fail-closed:有任何 adapter 清单无效(ADAPTER_MANIFEST_INVALID)时,
+ * 给了 R 就记 FAIL(脚本照常收尾并退出 1),没给 R 就抛错;不再悄悄少监视一个 adapter。返回 targets。
+ */
+export function adapterTargetsChecked(snapLib, root, R) {
+  const { targets, errors } = snapLib.readAdapterTargets(root);
+  if (errors.length) {
+    const msg = `adapter 清单无效(ADAPTER_MANIFEST_INVALID):${JSON.stringify(errors)}`;
+    if (R) R.fail(msg);
+    else throw new Error(msg);
+  }
+  return targets;
+}
+
+/**
  * 真实 HOME 守卫:受管路径快照(ops/lib/snapshot.mjs)+ 套件自己的 share/config 目录树哈希。
  * 返回 { take(), diff(before, after) -> 差异条目数 }。
  */
@@ -15,7 +29,7 @@ export async function realHomeGuard(ctx, home) {
   const realHome = path.resolve(home ?? snapLib.resolveHome());
   const managedText = fs.readFileSync(path.join(ctx.root, 'ops', 'managed-paths.txt'), 'utf8');
   const volatileText = fs.readFileSync(path.join(ctx.root, 'ops', 'volatile-paths.txt'), 'utf8');
-  const adapterTargets = snapLib.readAdapterTargets(ctx.root).targets;
+  const adapterTargets = adapterTargetsChecked(snapLib, ctx.root);
   const extra = [
     path.join(realHome, '.local', 'share', 'agent-kit'),
     path.join(realHome, '.local', 'state', 'agent-kit'),

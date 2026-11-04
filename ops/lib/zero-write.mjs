@@ -42,6 +42,13 @@ export const DEFAULT_COMMANDS = [
   '{NODE} {REPO}/dist/cli.js --root {REPO} signals collect --source {SOURCE} --dry',
 ].join('\n');
 
+/**
+ * B17 盲区 ①(只披露,不修):受管路径只在命令窗口的开头与结尾各快照一次,窗口内「新建后又删除」的文件在前后快照里都不存在,
+ * 看不见。所以零写入检查只保证「窗口结束时受管路径无残留写入」,不保证命令运行期间从未写过。每份报告固定带这一行。
+ */
+export const WINDOW_BLIND_SPOT_NOTE =
+  '零写入检查只保证窗口结束时受管路径无残留写入;命令窗口内新建后又删除的文件在前后快照里不可见(B17 盲区 ①)';
+
 const SETTLE_AFTER_MS = 800;
 const ALLOWED_EXIT = new Set([0, 64]); // 64 = P0 里尚未实现的命令桩
 
@@ -255,7 +262,7 @@ export const HELP = `用法:ops/zero-write-check.sh [选项]
   --allow-kit-paths-present  允许 ~/.config/<kit>/ 与 ~/.local/state/<kit>/ 事先存在
   --home <目录>              受管路径快照所用的"真实 HOME"(缺省 KIT_REAL_HOME_OVERRIDE,再缺省 os.homedir())
   --repo --managed --volatile --allow-file --out-root --tmp --node --kit-name  路径/名称覆盖
-退出码:0 通过 | 1 违规 | 2 用法 | 3 清单变更被拒 | 4 未执行 | 5 待人工归因`;
+退出码:0 通过 | 1 违规 | 2 用法 | 3 清单变更被拒(含 adapter managed-targets.json 解析失败 / 形状不对:ADAPTER_MANIFEST_INVALID) | 4 未执行 | 5 待人工归因`;
 
 // ---------- 清单加载与卫生 ----------
 export function loadLists(o, home) {
@@ -263,7 +270,7 @@ export function loadLists(o, home) {
   const volatileFile = o.volatile ?? path.join(o.repo, 'ops', 'volatile-paths.txt');
   const managedText = readText(managedFile);
   const volatileText = readText(volatileFile);
-  const { targets, skipped } = readAdapterTargets(o.repo);
+  const { targets, skipped, errors } = readAdapterTargets(o.repo);
   return {
     managedFile,
     volatileFile,
@@ -271,6 +278,7 @@ export function loadLists(o, home) {
     volatileText,
     adapterTargets: targets,
     adapterSkipped: skipped,
+    adapterErrors: errors,
     homeWatch: !o.noHomeWatch,
     home,
   };
@@ -283,6 +291,10 @@ export function checkLists(o, lists) {
   const volatile = parseList(lists.volatileText);
   const adapterEntries = lists.adapterTargets.flatMap((t) => parseList(t));
   problems.push(...findListConflicts([...managed, ...adapterEntries], volatile, lists.home));
+  // adapter 清单存在但读不了 / 解析失败 / 形状不对:fail-closed(以前被悄悄跳过 = 少监视一个 adapter)
+  for (const e of lists.adapterErrors ?? []) {
+    problems.push({ code: 'ADAPTER_MANIFEST_INVALID', adapter: e.adapter, reason: e.reason });
+  }
   // 基线比较:仅当两份清单在默认位置(仓库内)时才有意义
   const rel = path.relative(o.repo, lists.managedFile);
   if (o.baseRef && !rel.startsWith('..') && !path.isAbsolute(rel)) {
@@ -655,7 +667,7 @@ export function runZeroWrite(o, log = () => {}) {
   const report = {
     exit: 0,
     findings: [],
-    notes: [],
+    notes: [WINDOW_BLIND_SPOT_NOTE],
     lists: {
       adapter_targets: lists.adapterTargets.length,
       adapter_targets_skipped: lists.adapterSkipped,

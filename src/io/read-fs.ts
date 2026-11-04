@@ -68,9 +68,10 @@ function checkMeta(
   st: fs.Stats,
   kind: 'file' | 'dir',
   owner: OwnerPolicy | undefined,
+  allowHardlink = false,
 ): SafeUnsafeWhy | undefined {
   if (kind === 'file' ? !st.isFile() : !st.isDirectory()) return 'not_regular';
-  if (kind === 'file' && st.nlink > 1) return 'hardlink';
+  if (kind === 'file' && st.nlink > 1 && !allowHardlink) return 'hardlink';
   if (owner !== undefined) {
     const want = owner.uid ?? currentUid();
     if (want !== undefined && st.uid !== want) return 'owner';
@@ -159,6 +160,8 @@ export async function readFileSafe(path: string, opts: SafeReadOptions): Promise
 export interface StreamOpenOptions {
   /** 提供时校验属主与权限;缺省只做 O_NOFOLLOW + 普通文件 + `nlink == 1` */
   owner?: OwnerPolicy;
+  /** 允许 `nlink > 1`(缺省 false)。只给「会话文件」这类只读、不信任内容但硬链接合法的读取用;链接 / FIFO 仍然拒绝 */
+  allowHardlink?: boolean;
   /** 测试缝:调用后紧接着 open */
   beforeOpen?: () => Promise<void> | void;
   /** 单次读取的块大小(字节);缺省 64KiB。测试用小块演练跨块边界 */
@@ -214,7 +217,7 @@ export async function openStreamSafe(
     await close();
     return { kind: 'missing' };
   }
-  const why = checkMeta(st, 'file', opts.owner);
+  const why = checkMeta(st, 'file', opts.owner, opts.allowHardlink === true);
   if (why !== undefined) {
     await close();
     return { kind: 'unsafe', why };
@@ -450,6 +453,78 @@ export async function* readLines(
   maxLineBytes: number = MAX_LINE_BYTES,
 ): AsyncGenerator<string, void, undefined> {
   const stream = fs.createReadStream(path);
+  try {
+    yield* splitLines(stream, maxLineBytes);
+  } finally {
+    stream.destroy();
+  }
+}
+
+/** 会话文件打不开 / 不是可安全读的普通文件(符号链接、FIFO、设备、目录等)。调用方按「读失败」处理,不得当空文件。 */
+export class UnsafeSessionFileError extends Error {
+  readonly why: SafeUnsafeWhy;
+  constructor(why: SafeUnsafeWhy) {
+    super(`unsafe session file: ${why}`);
+    this.why = why;
+  }
+}
+
+export interface SafeLinesOptions {
+  /**
+   * 给了(调用方的 HOME)才允许「最终路径是符号链接」:链接(含多跳)解析后的真实路径在 HOME 的真实路径之内(路径段前缀,
+   * 不含 HOME 本身)时,对**解析后的真实路径**再做一次 openStreamSafe(O_NOFOLLOW + 同句柄 fstat)读取;
+   * 目标在 HOME 之外、解析失败、或目标之后被换成链接 / FIFO / 目录,一律照旧拒绝。缺省 = 任何符号链接都拒。
+   */
+  linkHome?: string;
+}
+
+/** `p` 是否在 `root` 之内(路径段前缀:名字以 root 的名字为前缀的同级目录不算在内;不含 root 本身) */
+function strictlyUnder(p: string, root: string): boolean {
+  const r = root.endsWith('/') ? root : `${root}/`;
+  return p.startsWith(r) && p.length > r.length;
+}
+
+/**
+ * 与 {@link readLines} 同一套切行口径,但打开走 {@link openStreamSafe}(`O_NOFOLLOW | O_NONBLOCK` + 句柄 fstat):
+ * 最终路径是符号链接 → 缺省抛 UnsafeSessionFileError(why=link),给了 `linkHome` 且解析后在 HOME 内则放行(见 SafeLinesOptions);
+ * FIFO / 设备 / 目录 → 抛(why=not_regular),不会阻塞在打开 / 读上。
+ * 不存在 → 抛带 `code: 'ENOENT'` 的 Error(只有 `code` 与裸 createReadStream 一致,message 不含路径)。硬链接放行(只读,内容本来就不被信任)。
+ * 校验与读取共用同一个句柄,检查后路径被换掉也读不到别的东西。
+ */
+export async function* readLinesSafe(
+  path: string,
+  maxLineBytes: number = MAX_LINE_BYTES,
+  opts: SafeLinesOptions = {},
+): AsyncGenerator<string, void, undefined> {
+  let s = await openStreamSafe(path, { allowHardlink: true });
+  if (s.kind === 'unsafe' && s.why === 'link' && opts.linkHome !== undefined) {
+    let real: string;
+    let home: string;
+    try {
+      real = await fsp.realpath(path);
+      home = await fsp.realpath(opts.linkHome);
+    } catch {
+      throw new UnsafeSessionFileError('link');
+    }
+    if (!strictlyUnder(real, home)) throw new UnsafeSessionFileError('link');
+    s = await openStreamSafe(real, { allowHardlink: true });
+  }
+  if (s.kind === 'missing') {
+    throw Object.assign(new Error('ENOENT: no such file'), { code: 'ENOENT' });
+  }
+  if (s.kind === 'unsafe') throw new UnsafeSessionFileError(s.why);
+  try {
+    yield* splitLines(s.chunks(), maxLineBytes);
+  } finally {
+    await s.close();
+  }
+}
+
+/** 切行核心:从字节块序列里按 `\n` 切行(见 readLines 的说明)。不负责关闭来源。 */
+async function* splitLines(
+  chunks: AsyncIterable<Buffer>,
+  maxLineBytes: number,
+): AsyncGenerator<string, void, undefined> {
   let parts: Buffer[] = [];
   let curLen = 0;
   let tooLong = false;
@@ -471,27 +546,22 @@ export async function* readLines(
     parts.push(seg);
     curLen += seg.length;
   };
-  try {
-    for await (const chunk of stream) {
-      const buf = chunk as Buffer;
-      let pos = 0;
-      for (;;) {
-        const idx = buf.indexOf(0x0a, pos);
-        if (idx < 0) {
-          append(buf.subarray(pos));
-          break;
-        }
-        append(buf.subarray(pos, idx));
-        yield tooLong ? TOO_LONG_LINE : decode();
-        parts = [];
-        curLen = 0;
-        tooLong = false;
-        any = false;
-        pos = idx + 1;
+  for await (const buf of chunks) {
+    let pos = 0;
+    for (;;) {
+      const idx = buf.indexOf(0x0a, pos);
+      if (idx < 0) {
+        append(buf.subarray(pos));
+        break;
       }
+      append(buf.subarray(pos, idx));
+      yield tooLong ? TOO_LONG_LINE : decode();
+      parts = [];
+      curLen = 0;
+      tooLong = false;
+      any = false;
+      pos = idx + 1;
     }
-    if (any) yield tooLong ? TOO_LONG_LINE : decode();
-  } finally {
-    stream.destroy();
   }
+  if (any) yield tooLong ? TOO_LONG_LINE : decode();
 }

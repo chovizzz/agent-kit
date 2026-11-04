@@ -121,7 +121,10 @@ describe('reader 只读(fs 层 flags 记录)', () => {
     }
     const onSource = rec.calls.filter(under(w.sessions));
     // 正向前提:确实读了会话文件(否则「没有写调用」是空话)
-    const reads = onSource.filter((c) => c.path === g.file && c.api === 'createReadStream');
+    // 会话文件现在经 read-fs.readLinesSafe(fsp.open,O_RDONLY|O_NOFOLLOW|O_NONBLOCK)打开,不再是裸 createReadStream
+    const reads = onSource.filter(
+      (c) => c.path === g.file && (c.api === 'createReadStream' || c.api === 'open'),
+    );
     expect(reads.length).toBeGreaterThanOrEqual(2); // 预扫 + 主读
     for (const c of onSource) {
       expect(
