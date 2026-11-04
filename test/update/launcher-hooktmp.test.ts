@@ -49,7 +49,7 @@ describe('ensureHookTmp', () => {
       { CI: 'true' },
       { GITHUB_ACTIONS: 'true' },
       { KIT_LAUNCHED: '1' },
-    ]) {
+    ] as Record<string, string>[]) {
       const w = await newWorld();
       expect(
         await ensureHookTmp({ home: w.home, env: envOf(w, extra) }),
