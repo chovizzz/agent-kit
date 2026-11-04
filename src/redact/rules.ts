@@ -689,6 +689,7 @@ export const STAGE_REF_FLAG = 'ref_flag_strict';
 export const STAGE_PLACEHOLDER = 'placeholder_boundary';
 export const STAGE_REF_TEMPLATE = 'ref_template_strict';
 export const STAGE_REF_ZOD = 'ref_zod_strict';
+export const STAGE_REF_VAR = 'ref_var_strict';
 
 /**
  * 判一个无引号值。尾部标点先剥掉再判:候选 c1=去 `;,:`、c2=再去 `)]}`、c3=再去 `({[`,
@@ -733,6 +734,22 @@ const KW =
   // B09d-P1(§7 缺口收敛):补 db_pass/pw 已有、passcode/requirepass 与四个高频中文键名。
   // 中文只收四个高频词(密码/口令/密钥/令牌),且规则要求键名后紧跟操作符,误杀面有限。
   '(?:password|passwd|passphrase|pwd|secret|token|api[_-]?key|apikey|access[_-]?key|auth[_-]?key|private[_-]?key|credentials?|db[_-]?pass(?:word)?|passcode|requirepass|密码|口令|密钥|令牌)';
+/**
+ * `cred_assign` / `cred_assign_ext` 的整段文本预筛词(小写子串)。必须覆盖 KW 里的**每一类**键名:
+ * 只写英文词时,纯中文键名文本(`密码=…`)根本进不了规则(P0 漏报)。
+ */
+const CRED_QUICK: readonly string[] = [
+  'pass',
+  'pwd',
+  'secret',
+  'token',
+  'key',
+  'credential',
+  '密码',
+  '口令',
+  '密钥',
+  '令牌',
+];
 /** 键名后缀(`_prod` `-v2` 或 key/id/value…)与引号 / 空白的上限:对齐排版的 `db_password      = …` 也要认。 */
 const SFX = '(?:[_-][A-Za-z0-9_-]{1,40}|(?:key|id|value|secret|token|hash))?';
 const SP = '[ \\t]{0,32}';
@@ -764,7 +781,18 @@ const hasPlaceholder = (raw: string): boolean => {
 };
 
 /** `$VAR` / `${VAR}`(可带路径后缀)。**不是**任意以 `$` 开头的串:`$Up3r…` 这类可能是口令本身。 */
-const VAR_REF = /^\$(?:\{[A-Za-z_]\w*\}|[A-Za-z_]\w*)(?:[\\/][\w.@+~\\/-]*)?$/;
+const VAR_REF_PARTS = /^(\$(?:\{[A-Za-z_]\w*\}|[A-Za-z_]\w*))(?:[\\/][\w.@+~\\/-]*)?$/;
+/** 旧判据(P0 修复前),只为变异自检保留:允许 `$Ab3Cd4…` `$ABC123…`。 */
+const LEGACY_VAR_REF = /^\$(?:\{[A-Za-z_]\w*\}|[A-Za-z_]\w*)(?:[\\/][\w.@+~\\/-]*)?$/;
+/**
+ * 引用式 / 命令替换语境里的 `$VAR`(可带路径后缀):变量名部分与赋值语境同口径,直接复用 `varRef`(shell 语境):
+ * 大写加数字无下划线、带数字的混合大小写都不是引用。
+ */
+function isVarRefWord(w: string, disabled: ReadonlySet<string>): boolean {
+  if (disabled.has(STAGE_REF_VAR) && LEGACY_VAR_REF.test(w)) return true;
+  const m = VAR_REF_PARTS.exec(w);
+  return m !== null && varRef(m[1] as string, true);
+}
 /** 路径:有根标记(`/` `~/` `./` `../` `C:\` `\\`)且至少两段,每段只含 `[\w.@+~-]`。 */
 const PATH_REF =
   /^(?:[A-Za-z]:[\\/]+|\\\\|~[\\/]+|\.{1,2}[\\/]+|[\\/]+)(?:[\w.@+~-]+[\\/]+)+[\w.@+~-]+[\\/]*$/;
@@ -799,7 +827,7 @@ function isFlagRef(w: string, disabled: ReadonlySet<string>): boolean {
  */
 export function isReferenceWord(w: string, disabled: ReadonlySet<string> = NO_DISABLED): boolean {
   if (w === '') return true;
-  if (VAR_REF.test(w)) return true;
+  if (isVarRefWord(w, disabled)) return true;
   if (PATH_REF.test(w) || FILE_REF.test(w) || isFlagRef(w, disabled)) return true;
   return !/^[$%<{]/.test(w) && !judgeValue(w, true, disabled).secret;
 }
@@ -1183,7 +1211,7 @@ const credAssign: Rule = {
   prio: 70,
   compact: false,
   valueClass: true,
-  quick: ['pass', 'pwd', 'secret', 'token', 'key', 'credential'],
+  quick: CRED_QUICK,
   scan(text, _lower, push, env) {
     // 引用式候选:`'^NAME='` 这类,收尾引号之后的词单独判。先只登记,等所有普通赋值处理完,再按「值内部的引号不计」判奇偶
     const cand = new Map<number, number>();
@@ -1412,7 +1440,7 @@ const credAssignExt: Rule = {
   prio: 70,
   compact: false,
   valueClass: true,
-  quick: ['pass', 'pwd', 'secret', 'token', 'key', 'credential'],
+  quick: CRED_QUICK,
   scan(text, _lower, push, env) {
     const re = EXT_HEAD_RE;
     re.lastIndex = 0;
@@ -2173,6 +2201,7 @@ export const STAGE_IDS = [
   STAGE_TRAILING,
   STAGE_REF_TEMPLATE,
   STAGE_REF_ZOD,
+  STAGE_REF_VAR,
   STAGE_BLOCK,
   STAGE_DEFAULT_CHAIN,
 ] as const;

@@ -2011,6 +2011,83 @@ export function buildSeeds(seed: number = SEED): Seed[] {
     );
   }
 
+  // ---- P0:中文键名(quick 预筛漏掉中文词)与引用式 / 命令替换语境里的 `$VAR` 口令 ----
+  // 键名运行时拼装(A10);口令由独立 PRNG 产生。每条都是 recognized,`$VAR` 两形钉在 ref_var_strict 上
+  {
+    const gz = makeGen(mulberry32((seed ^ 0x90c) >>> 0));
+    const pw = (): string => 'K' + gz.entropic(ALNUM, 10, 3.0);
+    const cred = 'credential';
+    const KMIMA = ['密', '码'].join('');
+    const KKOULING = ['口', '令'].join('');
+    const KLINGPAI = ['令', '牌'].join('');
+    const KMIYAO = ['密', '钥'].join('');
+    const KDB = ['数据库', '配置'].join('');
+    const PWK = ['pass', 'word'].join('');
+    const FULLCOLON = '：';
+    const dollar = '$';
+    const upperMixed = ['ABC', '123', 'DEF', '456'].join('');
+    add(
+      make('p0.cjk.mima', 'plain', 'recognized', [`${KMIMA}=`, R(pw(), cred)], ['cred_assign']),
+      make(
+        'p0.cjk.kouling_fullwidth_colon',
+        'plain',
+        'recognized',
+        [`${KKOULING}${FULLCOLON}`, R(pw(), cred)],
+        ['cred_assign', 'view_normalize'],
+      ),
+      make(
+        'p0.cjk.lingpai',
+        'plain',
+        'recognized',
+        [`${KLINGPAI}=`, R(pw(), cred)],
+        ['cred_assign'],
+      ),
+      make('p0.cjk.miyao', 'plain', 'recognized', [`${KMIYAO}: `, R(pw(), cred)], ['cred_assign']),
+      make(
+        'p0.cjk.multiline_block',
+        'concat_multiline',
+        'recognized',
+        [`${KDB}:\n  ${KMIMA}: `, R(pw(), cred), `\n  ${KMIYAO}: `, R(pw(), cred), '\n'],
+        ['cred_assign'],
+      ),
+      // `$VAR` 形的真值(口令):带数字的混合大小写、大写加数字无下划线,在引用式 / 命令替换语境里也不是变量引用
+      make(
+        'p0.dollar.quoted_ref_mixed',
+        'plain',
+        'recognized',
+        [`cfg = '^${PWK}=' '`, R(dollar + pw(), cred), "'"],
+        ['cred_assign', 'ref_var_strict'],
+      ),
+      make(
+        'p0.dollar.cmd_subst_upper_digits',
+        'plain',
+        'recognized',
+        [`${PWK}=$(echo `, R(dollar + upperMixed, cred), ')'],
+        ['cred_assign', 'ref_var_strict', 'ref_trailing_literal'],
+      ),
+      // 真正的变量引用照旧不动(正向对照)
+      unchanged('p0.benign.cjk_dollar_home', 'benign', 'benign', `${KMIMA}=${dollar}HOME`),
+      unchanged(
+        'p0.benign.quoted_ref_home',
+        'benign',
+        'benign',
+        `cfg = '^${PWK}=' '${dollar}HOME'`,
+      ),
+      unchanged(
+        'p0.benign.quoted_ref_db_password',
+        'benign',
+        'benign',
+        `cfg = '^${PWK}=' '${dollar}DB_${PWK.toUpperCase()}'`,
+      ),
+      unchanged(
+        'p0.benign.cmd_subst_api_token',
+        'benign',
+        'benign',
+        `${PWK}=$(echo ${dollar}{API_${['TO', 'KEN'].join('')}})`,
+      ),
+    );
+  }
+
   // ---- 做不到的形态(只报告,不计入召回) ----
   const gapPw = 'K' + g.entropic(ALNUM, 10, 3.0);
   const PW = ['pass', 'word'].join('');
