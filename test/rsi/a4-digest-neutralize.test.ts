@@ -175,7 +175,12 @@ describe('R20-16.11-a / R20-16.28 digest 命令级', () => {
 
   it('④ 兜底:HOME 出现在非摘录字段(digest_id)→ 仍整份 output_leak:3、无文件、stdout 空;正向对照:同一世界正常 id 成功', async () => {
     const w = await makeA4World('a4-nz-fallback-');
-    const r = await digestCmd(w, DIGEST_ARGS(), { randomHex: () => w.s.f.home });
+    // 复扫器放行,只测路径泄漏闸:假 HOME 的随机目录后缀在某些环境(如 CI 的 mkdtemp 路径)会被 pass2 当成秘密,先于路径闸命中,
+    // 不放行的话这条用例在不同机器上测的就不是同一道闸
+    const r = await digestCmd(w, DIGEST_ARGS(), {
+      redactor: { pass2: () => ({ clean: true }) } as never,
+      randomHex: () => w.s.f.home,
+    });
     expect([r.code, r.err, r.out]).toEqual([3, 'RSI_DIGEST_REJECTED reason=output_leak\n', '']);
     expect((await digestCmd(w, DIGEST_ARGS())).code).toBe(0);
   });
