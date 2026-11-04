@@ -32,7 +32,7 @@ export const VERSIONS_REL = `${SHARE_REL}/versions`;
 export const CURRENT_LINK_REL_RO = `${SHARE_REL}/current`;
 /** 后台 worker 的受控 TMPDIR(同 `install.ts` 的 `UPDATE_TMP_REL`,`test/update/installed.test.ts` 钉相等) */
 export const UPDATE_TMP_REL_RO = `${UPDATE_STATE_DIR_REL}/tmp`;
-export const MAX_STATE_BYTES = 1024 * 1024;
+const MAX_STATE_BYTES = 1024 * 1024;
 const MAX_WALK_ENTRIES = 20_000;
 const MAX_WALK_DEPTH = 16;
 

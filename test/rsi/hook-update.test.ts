@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RSI_L0_MIN_INTERVAL_MS } from '../../src/contracts/rsi.js';
 import type { RunSelfOptions, RunSelfResult } from '../../src/io/exec.js';
 import { getRealHome } from '../../src/io/paths.js';
+import { readTextSync } from '../../src/io/read-fs.js';
 import { writeFile } from '../../src/io/safe-fs.js';
 import { runHookEntry, type HookBridge } from '../../src/rsi/hook-entry.js';
 import {
@@ -19,6 +20,7 @@ import {
   type RunPokeDeps,
 } from '../../src/rsi/poke.js';
 import type { SpawnGateResult } from '../../src/rsi/services/spawn-gate.js';
+import { ROOT } from './closure-util.js';
 import { makeTickFx, type TickFx } from './b5a-fixture.js';
 import { treeOf, writeCfg } from './rsi-fixture.js';
 
@@ -72,24 +74,27 @@ async function stop(f: TickFx): Promise<void> {
   );
 }
 
+/** 调度的 noop why(rsi 开着但这次没起 worker);与 NO_UPDATE_SCHEDULE_WHY 合起来必须覆盖源码里出现过的全部 why */
+const YES_WHYS = [
+  'collect_blocked',
+  'agent_not_enabled',
+  'budget',
+  'busy',
+  'invalid',
+  'unsafe',
+  'state_invalid',
+  'stopped',
+  'breaker_open',
+  'not_due',
+  'reserved',
+];
+
 describe('M1 调度谓词:noop why 全矩阵', () => {
   const noop = (why: string): SpawnGateResult => ({ kind: 'noop', why });
   // 不调度:跳过条件、参数不合法、rsi 关闭 / 配置不可用、内部错误
   const NO = ['auto_off', 'child', 'ci', 'bad_args', 'off', 'usage', 'error'];
   // 调度:rsi 开着但这次没起 worker 的各种原因 + 起了 / 起失败
-  const YES = [
-    'collect_blocked',
-    'agent_not_enabled',
-    'budget',
-    'busy',
-    'invalid',
-    'unsafe',
-    'state_invalid',
-    'stopped',
-    'breaker_open',
-    'not_due',
-    'reserved',
-  ];
+  const YES = YES_WHYS;
   it('NO 集合内的 why 不调度', () => {
     for (const why of NO) expect(shouldScheduleUpdateFromPoke(noop(why)), why).toBe(false);
     expect([...NO_UPDATE_SCHEDULE_WHY].sort()).toEqual([...NO].sort());
@@ -98,6 +103,27 @@ describe('M1 调度谓词:noop why 全矩阵', () => {
     for (const why of YES) expect(shouldScheduleUpdateFromPoke(noop(why)), why).toBe(true);
     expect(shouldScheduleUpdateFromPoke({ kind: 'spawned' })).toBe(true);
     expect(shouldScheduleUpdateFromPoke({ kind: 'spawn_failed', why: 'x' })).toBe(true);
+  });
+});
+
+describe('M1 / L3:源码里出现过的每个 noop why 都被显式归类(新增 why 必须有意识地选调度与否)', () => {
+  it('spawn-gate.ts 的 noop(...) 字面量、open.kind、状态机 off / stopped、skip.ts 的原因、poke.ts 自己的 bad_args / error 全部落在 NO 或 YES 集合内', () => {
+    const read = (f: string): string => readTextSync(path.join(ROOT, f));
+    const gate = read('src/rsi/services/spawn-gate.ts');
+    const literals = [...gate.matchAll(/noop\('([a-z_]+)'\)/g)].map((m) => m[1] as string);
+    const skip = read('src/rsi/skip.ts');
+    const skipReasons = [...skip.matchAll(/return '([a-z_]+)';/g)].map((m) => m[1] as string);
+    const pokeSrc = read('src/rsi/poke.ts');
+    const pokeWhys = [...pokeSrc.matchAll(/why: '([a-z_]+)'/g)].map((m) => m[1] as string);
+    // 动态 why:open.kind('off' | 'usage')、readVerified 的 busy / invalid / unsafe、rsiStateOf 的 off / stopped(见 spawn-gate.ts)
+    const dynamic = ['off', 'usage', 'busy', 'invalid', 'unsafe', 'stopped'];
+    const known = new Set([...NO_UPDATE_SCHEDULE_WHY, ...YES_WHYS]);
+    // `launched` 只用于 kind='kit' 的顺带调度(poke 不会产生)
+    const seen = [...new Set([...literals, ...skipReasons, ...pokeWhys, ...dynamic])].filter(
+      (w) => w !== 'launched',
+    );
+    expect(seen.length).toBeGreaterThan(8);
+    for (const why of seen) expect(known.has(why), `未归类的 why:${why}`).toBe(true);
   });
 });
 

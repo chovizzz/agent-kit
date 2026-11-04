@@ -13,6 +13,7 @@ import { lstat, readDir } from '../../src/io/read-fs.js';
 import * as safe from '../../src/io/safe-fs.js';
 import { readAutoInstall } from '../../src/update/auto-install.js';
 import * as install from '../../src/update/install.js';
+import { ensureControlledTmp } from '../../src/update/install.js';
 import * as installed from '../../src/update/installed.js';
 import { launchCurrent } from '../../src/update/launcher.js';
 import { signalCode } from '../../src/update/signal-code.js';
@@ -314,6 +315,49 @@ describe('checkControlledTmp(H2-B:只读,从不创建)', () => {
     await safe.mkdirp(chain.fx, path.join(chain.home, '.local', 'state', 'agent-kit'));
     await safe.symlink(chain.fx, elsewhere, path.join(chain.home, STATE_DIR));
     expect(await installed.checkControlledTmp(chain.home)).toBeUndefined();
+  });
+});
+
+describe('checkControlledTmp 与 ensureControlledTmp 对同一目录状态给同判(评审 M3:避免前台认为备好了、钩子永远不调度的分叉)', () => {
+  const tmpRel = installed.UPDATE_TMP_REL_RO;
+  const both = async (w: World): Promise<[string | undefined, string | undefined]> => {
+    const ro = await installed.checkControlledTmp(w.home);
+    const rw = await ensureControlledTmp({ home: w.home, tmpDir: w.dir, env: undefined, deps: {} });
+    return [ro, rw];
+  };
+  it('已存在且合格 / 权限过宽 / 是文件 / 是符号链接:两者结论一致(合格时路径相同)', async () => {
+    const ok = await newWorld();
+    const abs = path.join(ok.home, ...tmpRel.split('/'));
+    await safe.mkdirp(ok.fx, abs, 0o700);
+    await safe.chmod(ok.fx, abs, 0o700);
+    expect(await both(ok)).toEqual([abs, abs]);
+
+    const loose = await newWorld();
+    const a1 = path.join(loose.home, ...tmpRel.split('/'));
+    await safe.mkdirp(loose.fx, a1, 0o755);
+    await safe.chmod(loose.fx, a1, 0o755);
+    expect(await both(loose)).toEqual([undefined, undefined]);
+
+    const file = await newWorld();
+    const a2 = path.join(file.home, ...tmpRel.split('/'));
+    await safe.mkdirp(file.fx, path.dirname(a2));
+    await safe.writeFile(file.fx, a2, 'x', { mode: 0o600 });
+    expect(await both(file)).toEqual([undefined, undefined]);
+
+    const sym = await newWorld();
+    const a3 = path.join(sym.home, ...tmpRel.split('/'));
+    const real = path.join(sym.dir, 'real-tmp');
+    await safe.mkdirp(sym.fx, real, 0o700);
+    await safe.mkdirp(sym.fx, path.dirname(a3));
+    await safe.symlink(sym.fx, real, a3);
+    expect(await both(sym)).toEqual([undefined, undefined]);
+  });
+  it('不存在:只读版返回 undefined 且不创建;写版创建后只读版随即认可(这就是前台先备好的分工)', async () => {
+    const w = await newWorld();
+    expect(await installed.checkControlledTmp(w.home)).toBeUndefined();
+    const abs = await ensureControlledTmp({ home: w.home, tmpDir: w.dir, env: undefined, deps: {} });
+    expect(abs).toBeDefined();
+    expect(await installed.checkControlledTmp(w.home)).toBe(abs);
   });
 });
 
