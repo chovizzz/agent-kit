@@ -1,17 +1,22 @@
 # hooks 与 AGENTS.md 盘点(B15)
 
-- 时点:2026-10-13T06:01:20Z(UTC)。
+- 时点:2026-11-04T07:51:55Z(UTC)。
 - 范围:`~/.claude/settings.json` 中的 `hooks` 字段,只记事件名、matcher、脚本路径与脚本字节数;脚本内容与该文件其它字段**均未读取或记录**。另记 `~/AGENTS.md` 与 `~/workspace/AGENTS.md` 的大小与 sha256。
 
 ## hooks 清单
 
-事件名:`PreToolUse` [#B15-045]。hook 条目共 3 条 [#B15-046]、hook 命令共 7 条 [#B15-047]。
+事件名:`PreModelSwitch,UserPromptSubmit,PostToolUse,PreToolUse` [#B15-045]。hook 条目共 8 条 [#B15-046]、hook 命令共 8 条 [#B15-047]。
 
-| 事件       | matcher | 脚本路径                               | 脚本字节数 | 编号                        |
-| ---------- | ------- | -------------------------------------- | ---------- | --------------------------- |
-| PreToolUse | Bash    | `~/.claude/hooks/guard-bash.sh`        | 4994       | [#B15-049]、映射 [#B15-059] |
-| PreToolUse | Write   | `~/.claude/hooks/guard-write.sh`       | 2794       | [#B15-049]、映射 [#B15-059] |
-| PreToolUse | Agent   | `~/.claude/hooks/guard-agent-model.sh` | 5226       | [#B15-049]、映射 [#B15-059] |
+| 事件             | matcher         | 脚本路径                                   | 脚本字节数 | 编号                        |
+| ---------------- | --------------- | ------------------------------------------ | ---------- | --------------------------- |
+| PreModelSwitch   | `.*fable.*`     | `~/.claude/hooks/guard-model-switch.sh`    | 1105       | [#B15-049]、映射 [#B15-059] |
+| UserPromptSubmit | -               | `~/.claude/hooks/usage-handoff-hint.sh`    | 1246       | [#B15-049]、映射 [#B15-059] |
+| PostToolUse      | AskUserQuestion | `~/.claude/feishu-relay/ask-done-hook.mjs` | 699        | [#B15-049]、映射 [#B15-059] |
+| PostToolUse      | -               | `~/.claude/hooks/usage-handoff-hint.sh`    | 1246       | [#B15-049]、映射 [#B15-059] |
+| PreToolUse       | Bash            | `~/.claude/hooks/guard-bash.sh`            | 4994       | [#B15-049]、映射 [#B15-059] |
+| PreToolUse       | Write           | `~/.claude/hooks/guard-write.sh`           | 2794       | [#B15-049]、映射 [#B15-059] |
+| PreToolUse       | Agent           | `~/.claude/hooks/guard-agent-model.sh`     | 6361       | [#B15-049]、映射 [#B15-059] |
+| PreToolUse       | AskUserQuestion | `~/.claude/feishu-relay/ask-hook.mjs`      | 1896       | [#B15-049]、映射 [#B15-059] |
 
 - 脚本路径 [#B15-048] 在 `settings.json` 中写作 `$HOME/.claude/hooks/...`,此处统一写为 `~/`。
 - 字节数顺序与路径顺序一致 [#B15-049];路径与 matcher 的一一对应由 [#B15-059] 独立给出。
