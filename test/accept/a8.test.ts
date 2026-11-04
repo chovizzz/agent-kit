@@ -20,7 +20,7 @@ const cmd = argv.slice(argv.indexOf('--root') + 2).join(' ');
 if (mode === 'build64' && cmd === 'build') process.exit(64);
 if (mode === 'write-out' && cmd === 'build') {
   fs.mkdirSync(path.join(root, 'out'), { recursive: true });
-  fs.writeFileSync(path.join(root, 'out', 'a8-marker.txt'), 'built\n');
+  fs.writeFileSync(path.join(root, 'out', 'a8-marker.txt'), 'built');
 }
 if (mode === 'check1' && cmd === 'check') process.exit(1);
 if (mode === 'swallow-fetch' && cmd === 'check') {
