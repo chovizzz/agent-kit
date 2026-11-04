@@ -127,6 +127,7 @@ export const AU_MUTATIONS: readonly AuMutation[] = [
       'c 不转发',
       'd KIT_LAUNCHED',
       'e poke',
+      'f 前台命令备好受控 tmp',
     ],
     mustKill: ['不转发的情形', 'b current 损坏'],
   },
@@ -229,7 +230,7 @@ export const AU_MUTATIONS: readonly AuMutation[] = [
       },
     ],
     tests: [DIST],
-    expectRed: ['b current 损坏', 'c 不转发', 'd KIT_LAUNCHED', 'e poke'],
+    expectRed: ['b current 损坏', 'c 不转发', 'd KIT_LAUNCHED', 'e poke', 'f 前台命令备好受控 tmp'],
     mustKill: ['b current 损坏'],
   },
   {
@@ -243,7 +244,13 @@ export const AU_MUTATIONS: readonly AuMutation[] = [
       },
     ],
     tests: [ENTRY, DIST],
-    expectRed: ['NO 集合内', 'rsi off', 'b current 损坏', 'c 不转发'],
+    expectRed: [
+      'NO 集合内',
+      'rsi off',
+      'b current 损坏',
+      'c 不转发',
+      'M1 / L3:源码里出现过的每个 noop why',
+    ],
     mustKill: ['NO 集合内', 'rsi off'],
   },
   {
