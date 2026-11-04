@@ -329,193 +329,193 @@ export interface AuMutationResult {
 // 2026-11-04T15:56:55.552Z javis 私有检出 @ dee6813:基线全绿(0 failed);每条变异还原后逐文件 sha256 一致、git 干净;javis HOME 下 .local/state/agent-kit 前后不变
 export const AU_RESULTS: readonly AuMutationResult[] = [
   {
-    "id": "tree-verify-removed",
-    "killedBy": [
-      "decideCurrent 矩阵 > 锚点不符 → anchor;文件被改 / 多出文件 → tree(完整树校验在「更高同 major」时一定跑)",
-      "b current 损坏:静默用自己(stdout / stderr 空、不起 current、零写入) > anchor",
-      "forwardHookToCurrent > 不转发的情形 runSelf 一次都不调:相同 / 更低 / 跨 major / 损坏 / 无状态 / KIT_LAUNCHED",
-      "forwardHookToCurrent > 判据只来自 decideCurrent:注入的校验器说不过就不转发(不自行比较版本)",
-      "b current 损坏:静默用自己(stdout / stderr 空、不起 current、零写入) > tamper"
+    id: 'tree-verify-removed',
+    killedBy: [
+      'decideCurrent 矩阵 > 锚点不符 → anchor;文件被改 / 多出文件 → tree(完整树校验在「更高同 major」时一定跑)',
+      'b current 损坏:静默用自己(stdout / stderr 空、不起 current、零写入) > anchor',
+      'forwardHookToCurrent > 不转发的情形 runSelf 一次都不调:相同 / 更低 / 跨 major / 损坏 / 无状态 / KIT_LAUNCHED',
+      'forwardHookToCurrent > 判据只来自 decideCurrent:注入的校验器说不过就不转发(不自行比较版本)',
+      'b current 损坏:静默用自己(stdout / stderr 空、不起 current、零写入) > tamper',
     ],
-    "failed": 5,
-    "skipped": 0,
-    "restored": true
+    failed: 5,
+    skipped: 0,
+    restored: true,
   },
   {
-    "id": "launched-guard-removed",
-    "killedBy": [
-      "decideCurrent 矩阵 > L5:KIT_LAUNCHED 按 truthyEnv 口径——1 不转发;0 / 空串 / false 与未设相同(转发)",
-      "d KIT_LAUNCHED > =1 不转发(防递归);=0 视为未设,照常转发",
-      "decideCurrent 矩阵 > M4 短路顺序:每一步失败都不再做后面更贵的读取(记录读取器调用)",
-      "forwardHookToCurrent > 不转发的情形 runSelf 一次都不调:相同 / 更低 / 跨 major / 损坏 / 无状态 / KIT_LAUNCHED"
+    id: 'launched-guard-removed',
+    killedBy: [
+      'decideCurrent 矩阵 > L5:KIT_LAUNCHED 按 truthyEnv 口径——1 不转发;0 / 空串 / false 与未设相同(转发)',
+      'd KIT_LAUNCHED > =1 不转发(防递归);=0 视为未设,照常转发',
+      'decideCurrent 矩阵 > M4 短路顺序:每一步失败都不再做后面更贵的读取(记录读取器调用)',
+      'forwardHookToCurrent > 不转发的情形 runSelf 一次都不调:相同 / 更低 / 跨 major / 损坏 / 无状态 / KIT_LAUNCHED',
     ],
-    "failed": 4,
-    "skipped": 0,
-    "restored": true
+    failed: 4,
+    skipped: 0,
+    restored: true,
   },
   {
-    "id": "version-compare-inverted",
-    "killedBy": [
-      "c 不转发:相同 / 更低 / 跨 major / 没有安装状态 > 更低",
-      "a 有效 current:钩子转发 > hint:stdout 来自 current、退出码恒 0(子进程的 7 被丢弃)、argv 原样、环境(HOME / KIT_TMP / KIT_REAL_HOME_OVERRIDE / KIT_STATE_DIR)正确、KIT_LAUNCHED=1",
-      "a 有效 current:钩子转发 > poke:转发(恒 0),父进程不再调度 update worker",
-      "a 有效 current:钩子转发 > `__rsi --background`:转发且透传子进程退出码(7)",
-      "d KIT_LAUNCHED > =1 不转发(防递归);=0 视为未设,照常转发"
+    id: 'version-compare-inverted',
+    killedBy: [
+      'c 不转发:相同 / 更低 / 跨 major / 没有安装状态 > 更低',
+      'a 有效 current:钩子转发 > hint:stdout 来自 current、退出码恒 0(子进程的 7 被丢弃)、argv 原样、环境(HOME / KIT_TMP / KIT_REAL_HOME_OVERRIDE / KIT_STATE_DIR)正确、KIT_LAUNCHED=1',
+      'a 有效 current:钩子转发 > poke:转发(恒 0),父进程不再调度 update worker',
+      'a 有效 current:钩子转发 > `__rsi --background`:转发且透传子进程退出码(7)',
+      'd KIT_LAUNCHED > =1 不转发(防递归);=0 视为未设,照常转发',
     ],
-    "failed": 14,
-    "skipped": 0,
-    "restored": true
+    failed: 14,
+    skipped: 0,
+    restored: true,
   },
   {
-    "id": "absent-as-broken",
-    "killedBy": [
-      "decideCurrent 矩阵 > M6 state 三态:absent / 没有 installed → 静默用自己(无 broken);unreadable / unsafe → broken=state"
+    id: 'absent-as-broken',
+    killedBy: [
+      'decideCurrent 矩阵 > M6 state 三态:absent / 没有 installed → 静默用自己(无 broken);unreadable / unsafe → broken=state',
     ],
-    "failed": 1,
-    "skipped": 0,
-    "restored": true
+    failed: 1,
+    skipped: 0,
+    restored: true,
   },
   {
-    "id": "forward-ignores-decision",
-    "killedBy": [
-      "forwardHookToCurrent > 不转发的情形 runSelf 一次都不调:相同 / 更低 / 跨 major / 损坏 / 无状态 / KIT_LAUNCHED",
-      "b current 损坏:静默用自己(stdout / stderr 空、不起 current、零写入) > anchor",
-      "b current 损坏:静默用自己(stdout / stderr 空、不起 current、零写入) > tamper",
-      "b current 损坏:静默用自己(stdout / stderr 空、不起 current、零写入) > version",
-      "c 不转发:相同 / 更低 / 跨 major / 没有安装状态 > 相同"
+    id: 'forward-ignores-decision',
+    killedBy: [
+      'forwardHookToCurrent > 不转发的情形 runSelf 一次都不调:相同 / 更低 / 跨 major / 损坏 / 无状态 / KIT_LAUNCHED',
+      'b current 损坏:静默用自己(stdout / stderr 空、不起 current、零写入) > anchor',
+      'b current 损坏:静默用自己(stdout / stderr 空、不起 current、零写入) > tamper',
+      'b current 损坏:静默用自己(stdout / stderr 空、不起 current、零写入) > version',
+      'c 不转发:相同 / 更低 / 跨 major / 没有安装状态 > 相同',
     ],
-    "failed": 20,
-    "skipped": 0,
-    "restored": true
+    failed: 20,
+    skipped: 0,
+    restored: true,
   },
   {
-    "id": "signal-not-forwarded",
-    "killedBy": [
-      "forwardHookToCurrent > H4:超时 / 被信号终止(status:null)也算已转发,折成 128+signo,不回退本地"
+    id: 'signal-not-forwarded',
+    killedBy: [
+      'forwardHookToCurrent > H4:超时 / 被信号终止(status:null)也算已转发,折成 128+signo,不回退本地',
     ],
-    "failed": 1,
-    "skipped": 0,
-    "restored": true
+    failed: 1,
+    skipped: 0,
+    restored: true,
   },
   {
-    "id": "schedule-without-due",
-    "killedBy": [
-      "spawnUpdateWorker:谓词矩阵 / 零写入 / 目标选择 > 24h 节流:23h59m 不调度;恰 24h、从未检查、时钟回拨 → 调度",
-      "e poke 顺带调度 update worker > 不调度:未到期(上次检查刚刚)",
-      "spawnUpdateWorker:谓词矩阵 / 零写入 / 目标选择 > M5:worker 一旦写下 last_check_at,紧接着的第二次 poke 不再调度(并发窗口内多起的 worker 由 worker 锁 / 锁内复查节流消化)"
+    id: 'schedule-without-due',
+    killedBy: [
+      'spawnUpdateWorker:谓词矩阵 / 零写入 / 目标选择 > 24h 节流:23h59m 不调度;恰 24h、从未检查、时钟回拨 → 调度',
+      'e poke 顺带调度 update worker > 不调度:未到期(上次检查刚刚)',
+      'spawnUpdateWorker:谓词矩阵 / 零写入 / 目标选择 > M5:worker 一旦写下 last_check_at,紧接着的第二次 poke 不再调度(并发窗口内多起的 worker 由 worker 锁 / 锁内复查节流消化)',
     ],
-    "failed": 3,
-    "skipped": 0,
-    "restored": true
+    failed: 3,
+    skipped: 0,
+    restored: true,
   },
   {
-    "id": "tmp-check-removed",
-    "killedBy": [
-      "spawnUpdateWorker:谓词矩阵 / 零写入 / 目标选择 > H2-B:受控 tmp 不存在 / 权限过宽 → 不调度且不创建它(why=tmp)",
-      "f 前台命令备好受控 tmp(H2-B):只用 pi 的用户装钩子那一次之后,poke 才调度得起来 > 全新假 HOME 没有 tmp:poke 不调度;先跑一条非 TTY 前台命令(--version)→ tmp 被建出(0700);同一世界再 poke → 恰好一次 __update --background",
-      "f 前台命令备好受控 tmp(H2-B):只用 pi 的用户装钩子那一次之后,poke 才调度得起来 > KIT_AUTO_UPDATE=0 的前台命令不建 tmp(之后 poke 也不调度)",
-      "e poke 顺带调度 update worker > 不调度:受控 tmp 不存在",
-      "e poke 顺带调度 update worker > 不调度:受控 tmp 权限过宽"
+    id: 'tmp-check-removed',
+    killedBy: [
+      'spawnUpdateWorker:谓词矩阵 / 零写入 / 目标选择 > H2-B:受控 tmp 不存在 / 权限过宽 → 不调度且不创建它(why=tmp)',
+      'f 前台命令备好受控 tmp(H2-B):只用 pi 的用户装钩子那一次之后,poke 才调度得起来 > 全新假 HOME 没有 tmp:poke 不调度;先跑一条非 TTY 前台命令(--version)→ tmp 被建出(0700);同一世界再 poke → 恰好一次 __update --background',
+      'f 前台命令备好受控 tmp(H2-B):只用 pi 的用户装钩子那一次之后,poke 才调度得起来 > KIT_AUTO_UPDATE=0 的前台命令不建 tmp(之后 poke 也不调度)',
+      'e poke 顺带调度 update worker > 不调度:受控 tmp 不存在',
+      'e poke 顺带调度 update worker > 不调度:受控 tmp 权限过宽',
     ],
-    "failed": 5,
-    "skipped": 0,
-    "restored": true
+    failed: 5,
+    skipped: 0,
+    restored: true,
   },
   {
-    "id": "launched-blocks-schedule",
-    "killedBy": [
-      "spawnUpdateWorker:谓词矩阵 / 零写入 / 目标选择 > KIT_LAUNCHED=1(poke 跑在被转发的 current 里)不挡调度"
+    id: 'launched-blocks-schedule',
+    killedBy: [
+      'spawnUpdateWorker:谓词矩阵 / 零写入 / 目标选择 > KIT_LAUNCHED=1(poke 跑在被转发的 current 里)不挡调度',
     ],
-    "failed": 1,
-    "skipped": 0,
-    "restored": true
+    failed: 1,
+    skipped: 0,
+    restored: true,
   },
   {
-    "id": "hint-also-schedules",
-    "killedBy": [
-      "e poke 顺带调度 update worker > 不调度:hint 永不调度",
-      "b current 损坏:静默用自己(stdout / stderr 空、不起 current、零写入) > anchor",
-      "b current 损坏:静默用自己(stdout / stderr 空、不起 current、零写入) > tamper",
-      "b current 损坏:静默用自己(stdout / stderr 空、不起 current、零写入) > version"
+    id: 'hint-also-schedules',
+    killedBy: [
+      'e poke 顺带调度 update worker > 不调度:hint 永不调度',
+      'b current 损坏:静默用自己(stdout / stderr 空、不起 current、零写入) > anchor',
+      'b current 损坏:静默用自己(stdout / stderr 空、不起 current、零写入) > tamper',
+      'b current 损坏:静默用自己(stdout / stderr 空、不起 current、零写入) > version',
     ],
-    "failed": 10,
-    "skipped": 0,
-    "restored": true
+    failed: 10,
+    skipped: 0,
+    restored: true,
   },
   {
-    "id": "autoskip-after-forward",
-    "killedBy": [
-      "runHookEntry:转发 / 调度 > M2:autoSkip 先于转发——KIT_AUTO_RSI=0 / KIT_RSI_CHILD / CI 下三种钩子都不调桥接"
+    id: 'autoskip-after-forward',
+    killedBy: [
+      'runHookEntry:转发 / 调度 > M2:autoSkip 先于转发——KIT_AUTO_RSI=0 / KIT_RSI_CHILD / CI 下三种钩子都不调桥接',
     ],
-    "failed": 1,
-    "skipped": 0,
-    "restored": true
+    failed: 1,
+    skipped: 0,
+    restored: true,
   },
   {
-    "id": "broken-printed",
-    "killedBy": [
-      "b current 损坏:静默用自己(stdout / stderr 空、不起 current、零写入) > anchor",
-      "b current 损坏:静默用自己(stdout / stderr 空、不起 current、零写入) > tamper",
-      "b current 损坏:静默用自己(stdout / stderr 空、不起 current、零写入) > version",
-      "b current 损坏:静默用自己(stdout / stderr 空、不起 current、零写入) > escape"
+    id: 'broken-printed',
+    killedBy: [
+      'b current 损坏:静默用自己(stdout / stderr 空、不起 current、零写入) > anchor',
+      'b current 损坏:静默用自己(stdout / stderr 空、不起 current、零写入) > tamper',
+      'b current 损坏:静默用自己(stdout / stderr 空、不起 current、零写入) > version',
+      'b current 损坏:静默用自己(stdout / stderr 空、不起 current、零写入) > escape',
     ],
-    "failed": 19,
-    "skipped": 0,
-    "restored": true
+    failed: 19,
+    skipped: 0,
+    restored: true,
   },
   {
-    "id": "off-also-schedules",
-    "killedBy": [
-      "M1 调度谓词:noop why 全矩阵 > NO 集合内的 why 不调度",
-      "e poke 顺带调度 update worker > 不调度:rsi off",
-      "b current 损坏:静默用自己(stdout / stderr 空、不起 current、零写入) > anchor",
-      "b current 损坏:静默用自己(stdout / stderr 空、不起 current、零写入) > tamper",
-      "b current 损坏:静默用自己(stdout / stderr 空、不起 current、零写入) > version"
+    id: 'off-also-schedules',
+    killedBy: [
+      'M1 调度谓词:noop why 全矩阵 > NO 集合内的 why 不调度',
+      'e poke 顺带调度 update worker > 不调度:rsi off',
+      'b current 损坏:静默用自己(stdout / stderr 空、不起 current、零写入) > anchor',
+      'b current 损坏:静默用自己(stdout / stderr 空、不起 current、零写入) > tamper',
+      'b current 损坏:静默用自己(stdout / stderr 空、不起 current、零写入) > version',
     ],
-    "failed": 11,
-    "skipped": 0,
-    "restored": true
+    failed: 11,
+    skipped: 0,
+    restored: true,
   },
   {
-    "id": "throttled-not-scheduled",
-    "killedBy": [
-      "M1 调度谓词:noop why 全矩阵 > 其余 noop why(L0 throttled / breaker_open / stopped / state_invalid 等)、spawned、spawn_failed 都调度",
-      "runPoke × scheduleUpdate > L0 未到期(throttled)→ 仍调度,且 rsi 侧零写入",
-      "M1 调度谓词:noop why 全矩阵 > NO 集合内的 why 不调度"
+    id: 'throttled-not-scheduled',
+    killedBy: [
+      'M1 调度谓词:noop why 全矩阵 > 其余 noop why(L0 throttled / breaker_open / stopped / state_invalid 等)、spawned、spawn_failed 都调度',
+      'runPoke × scheduleUpdate > L0 未到期(throttled)→ 仍调度,且 rsi 侧零写入',
+      'M1 调度谓词:noop why 全矩阵 > NO 集合内的 why 不调度',
     ],
-    "failed": 3,
-    "skipped": 0,
-    "restored": true
+    failed: 3,
+    skipped: 0,
+    restored: true,
   },
   {
-    "id": "policy-imports-net",
-    "killedBy": [
-      "D-AU:零网络闭包 > src/update/installed.ts 的闭包(含 import type)不含网络出口 / 安装器 / 启动器 / 写出口",
-      "D-AU:零网络闭包 > H1:policy.ts 引的是 contracts/net-error.ts,不是 io/net.ts;io/net.ts 反向 re-export 码表",
-      "D-AU:零网络闭包 > src/update/policy.ts 的闭包(含 import type)不含网络出口 / 安装器 / 启动器 / 写出口",
-      "D-AU:零网络闭包 > src/update/state.ts 的闭包(含 import type)不含网络出口 / 安装器 / 启动器 / 写出口",
-      "D-AU:零网络闭包 > src/update/self-spawn.ts 的闭包(含 import type)不含网络出口 / 安装器 / 启动器 / 写出口"
+    id: 'policy-imports-net',
+    killedBy: [
+      'D-AU:零网络闭包 > src/update/installed.ts 的闭包(含 import type)不含网络出口 / 安装器 / 启动器 / 写出口',
+      'D-AU:零网络闭包 > H1:policy.ts 引的是 contracts/net-error.ts,不是 io/net.ts;io/net.ts 反向 re-export 码表',
+      'D-AU:零网络闭包 > src/update/policy.ts 的闭包(含 import type)不含网络出口 / 安装器 / 启动器 / 写出口',
+      'D-AU:零网络闭包 > src/update/state.ts 的闭包(含 import type)不含网络出口 / 安装器 / 启动器 / 写出口',
+      'D-AU:零网络闭包 > src/update/self-spawn.ts 的闭包(含 import type)不含网络出口 / 安装器 / 启动器 / 写出口',
     ],
-    "failed": 9,
-    "skipped": 0,
-    "restored": true
+    failed: 9,
+    skipped: 0,
+    restored: true,
   },
   {
-    "id": "ensure-hook-tmp-removed",
-    "killedBy": [
-      "f 前台命令备好受控 tmp(H2-B):只用 pi 的用户装钩子那一次之后,poke 才调度得起来 > 全新假 HOME 没有 tmp:poke 不调度;先跑一条非 TTY 前台命令(--version)→ tmp 被建出(0700);同一世界再 poke → 恰好一次 __update --background"
+    id: 'ensure-hook-tmp-removed',
+    killedBy: [
+      'f 前台命令备好受控 tmp(H2-B):只用 pi 的用户装钩子那一次之后,poke 才调度得起来 > 全新假 HOME 没有 tmp:poke 不调度;先跑一条非 TTY 前台命令(--version)→ tmp 被建出(0700);同一世界再 poke → 恰好一次 __update --background',
     ],
-    "failed": 1,
-    "skipped": 0,
-    "restored": true
+    failed: 1,
+    skipped: 0,
+    restored: true,
   },
   {
-    "id": "auto-install-fail-open",
-    "killedBy": [
-      "readAutoInstall(H3:worker 与钩子调度共用) > fail-closed:TOML 解析失败 / schema 不合 / 配置路径是目录 → ok:false"
+    id: 'auto-install-fail-open',
+    killedBy: [
+      'readAutoInstall(H3:worker 与钩子调度共用) > fail-closed:TOML 解析失败 / schema 不合 / 配置路径是目录 → ok:false',
     ],
-    "failed": 1,
-    "skipped": 0,
-    "restored": true
-  }
+    failed: 1,
+    skipped: 0,
+    restored: true,
+  },
 ];
