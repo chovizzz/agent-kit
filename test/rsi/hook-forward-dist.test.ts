@@ -90,7 +90,11 @@ beforeAll(async () => {
   sb = await makeSandbox('au-dist-');
   pkg = path.join(sb.dir, 'pkg');
   await safe.mkdirp(sb.wctx, pkg);
-  await safe.copyFile(sb.wctx, path.join(REPO_ROOT, 'package.json'), path.join(pkg, 'package.json'));
+  await safe.copyFile(
+    sb.wctx,
+    path.join(REPO_ROOT, 'package.json'),
+    path.join(pkg, 'package.json'),
+  );
   const v = spawnSync(
     process.execPath,
     [VITE_BIN, 'build', '--outDir', path.join(pkg, 'dist'), '--emptyOutDir'],
@@ -140,10 +144,7 @@ async function world(o: Opts = {}): Promise<W> {
   const installed = o.installed === undefined ? HIGHER : o.installed;
   if (installed !== null) {
     const inst = await installFake(w, installed, STUB_CLI);
-    const last =
-      o.lastCheck === 'recent'
-        ? new Date().toISOString()
-        : '2026-10-14T12:00:00.000Z';
+    const last = o.lastCheck === 'recent' ? new Date().toISOString() : '2026-10-14T12:00:00.000Z';
     await putState(w, installed, inst.pkg.anchor, (s) => ({ ...s, last_check_at: last }));
     if (o.breakIt === 'anchor') await putState(w, installed, 'a'.repeat(64));
     if (o.breakIt === 'tamper') {
@@ -182,9 +183,14 @@ async function world(o: Opts = {}): Promise<W> {
     const d = path.join(repo, '.state', 'rsi');
     await safe.mkdirp(w.fx, d, 0o700);
     await safe.chmod(w.fx, d, 0o700);
-    await safe.writeFile(w.fx, path.join(d, 'STOP'), '{"at":"2026-10-24T00:00:00.000Z","by":"user"}', {
-      mode: 0o600,
-    });
+    await safe.writeFile(
+      w.fx,
+      path.join(d, 'STOP'),
+      '{"at":"2026-10-24T00:00:00.000Z","by":"user"}',
+      {
+        mode: 0o600,
+      },
+    );
   }
   // 受控 tmp(update worker 的 TMPDIR):钩子只读检查它,从不创建
   const tmpMode = o.tmpDir === 'loose' ? 0o755 : 0o700;
@@ -197,7 +203,10 @@ async function world(o: Opts = {}): Promise<W> {
   const tmp = path.join(w.dir, 'tmp');
   await safe.mkdirp(w.fx, tmp, 0o700);
   await safe.chmod(w.fx, tmp, 0o700);
-  const logs: Logs = { write: path.join(w.dir, 'writes.log'), spawn: path.join(w.dir, 'spawns.log') };
+  const logs: Logs = {
+    write: path.join(w.dir, 'writes.log'),
+    spawn: path.join(w.dir, 'spawns.log'),
+  };
   const env = {
     PATH: SAFE_PATH,
     HOME: w.home,
@@ -223,11 +232,15 @@ interface Ran {
 }
 
 function run(w: W, args: string[], env: Record<string, string> = {}): Promise<Ran> {
-  const child = spawn(process.execPath, ['--import', preload, path.join(pkg, 'dist', 'cli.js'), ...args], {
-    cwd: w.repo,
-    env: { ...w.env, ...env },
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
+  const child = spawn(
+    process.execPath,
+    ['--import', preload, path.join(pkg, 'dist', 'cli.js'), ...args],
+    {
+      cwd: w.repo,
+      env: { ...w.env, ...env },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    },
+  );
   let out = '';
   let err = '';
   child.stdout.on('data', (d: Buffer) => (out += d.toString('utf8')));
@@ -243,7 +256,9 @@ function run(w: W, args: string[], env: Record<string, string> = {}): Promise<Ra
 
 async function markerFiles(w: W): Promise<string[]> {
   try {
-    return (await readDir(w.tmp)).filter((e) => e.name.startsWith('marker-')).map((e) => path.join(w.tmp, e.name));
+    return (await readDir(w.tmp))
+      .filter((e) => e.name.startsWith('marker-'))
+      .map((e) => path.join(w.tmp, e.name));
   } catch {
     return [];
   }
@@ -343,16 +358,20 @@ describe('c 不转发:相同 / 更低 / 跨 major / 没有安装状态', () => {
     ['跨 major(更高)', NEXT_MAJOR],
     ['没有任何安装状态', null],
   ] as const) {
-    it(name, async () => {
-      const w = await world({ installed: inst });
-      for (const args of [POKE, HINT, WORKER]) {
-        await reset(w);
-        const r = await run(w, args);
-        expect(r, `${name} ${args.join(' ')}`).toEqual({ status: 0, out: '', err: '' });
-        expect(await markers(w), `${name} ${args.join(' ')}`).toEqual([]);
-        expect(await read(w.logs.write), `${name} ${args.join(' ')}`).toBe('');
-      }
-    }, 90_000);
+    it(
+      name,
+      async () => {
+        const w = await world({ installed: inst });
+        for (const args of [POKE, HINT, WORKER]) {
+          await reset(w);
+          const r = await run(w, args);
+          expect(r, `${name} ${args.join(' ')}`).toEqual({ status: 0, out: '', err: '' });
+          expect(await markers(w), `${name} ${args.join(' ')}`).toEqual([]);
+          expect(await read(w.logs.write), `${name} ${args.join(' ')}`).toBe('');
+        }
+      },
+      90_000,
+    );
   }
 });
 
