@@ -1,6 +1,6 @@
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { readBytes } from '../../src/io/read-fs.js';
+import { lstat, readBytes } from '../../src/io/read-fs.js';
 import * as safe from '../../src/io/safe-fs.js';
 import {
   binEntryOf,
@@ -128,10 +128,18 @@ describe('verifyInstalledTree', () => {
       verifyInstalledTree(root, { anchor: p.anchor, binExecutable: 'dist/cli.js' });
     await safe.chmod(w.fx, bin, 0o755);
     expect(await check()).toEqual({ ok: true, anchor: p.anchor }); // 正向对照
+    // 平台可能静默丢弃非属组用户设的 setgid / sticky(chmod 成功但没生效):以磁盘上实际读到的权限为准判定期望,
+    // 并要求至少 setuid(04755)确实留住,使本用例在掩码退回 0o777 时必红
+    const kept: number[] = [];
     for (const mode of [0o4755, 0o2755, 0o1755, 0o775, 0o700, 0o644]) {
       await safe.chmod(w.fx, bin, mode);
-      expect(await check(), mode.toString(8)).toEqual({ ok: false, reason: 'bin_mode' });
+      const actual = (await lstat(bin)).mode & 0o7777;
+      if (actual === mode) kept.push(mode);
+      expect(await check(), `${mode.toString(8)}(实际 ${actual.toString(8)})`).toEqual(
+        actual === 0o755 ? { ok: true, anchor: p.anchor } : { ok: false, reason: 'bin_mode' },
+      );
     }
+    expect(kept).toContain(0o4755);
   });
 
   it('改文件 / 多文件 / 少文件 / 符号链接 / integrity.json 缺失', async () => {

@@ -43,14 +43,18 @@ function gate(tgzPath: string, tag: string): Gate {
 }
 
 let n = 0;
-async function gateEdited(edit: (f: EditableFile[]) => void, tag = `v${real.version}`): Promise<Gate> {
+async function gateEdited(
+  edit: (f: EditableFile[]) => void,
+  tag = `v${real.version}`,
+): Promise<Gate> {
   const pkg = repackReal(real, edit);
   const p = path.join(real.sb.dir, `edited-${++n}.tgz`);
   await safe.writeFile(real.sb.wctx, p, pkg.tgz);
   return gate(p, tag);
 }
 
-const codes = (g: Gate): string[] => [...g.err.matchAll(/^(REL_[A-Z_]+):/gm)].map((m) => m[1] as string);
+const codes = (g: Gate): string[] =>
+  [...g.err.matchAll(/^(REL_[A-Z_]+):/gm)].map((m) => m[1] as string);
 const setBin = (f: EditableFile[], fn: (b: EditableFile) => void): void => {
   const b = f.find((x) => x.path === 'dist/cli.js');
   expect(b).toBeDefined();

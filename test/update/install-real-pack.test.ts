@@ -25,7 +25,14 @@ import {
   type EditableFile,
   type RealPack,
 } from '../build/real-pack-helper.js';
-import { newWorld, runUpdate, stateOf, writeRegistry, type BuiltPkg, type World } from './install-world.js';
+import {
+  newWorld,
+  runUpdate,
+  stateOf,
+  writeRegistry,
+  type BuiltPkg,
+  type World,
+} from './install-world.js';
 
 let real: RealPack;
 let sb: RealPack['sb'];

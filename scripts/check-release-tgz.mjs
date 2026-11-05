@@ -94,7 +94,9 @@ if (!existsSync(path.join(outDir, 'install.js'))) {
   console.error('check-release-tgz: 缺 tsc 构建产物(先 pnpm run build)');
   process.exit(4);
 }
-const { checkPackage, staticSmoke } = await import(pathToFileURL(path.join(outDir, 'install.js')).href);
+const { checkPackage, staticSmoke } = await import(
+  pathToFileURL(path.join(outDir, 'install.js')).href
+);
 const { readTgz } = await import(pathToFileURL(path.join(outDir, 'tar.js')).href);
 let listing;
 try {
@@ -121,7 +123,13 @@ if (listing !== undefined) {
       encoding: 'utf8',
       timeout: 30_000,
       cwd: dir,
-      env: { PATH: path.dirname(process.execPath), HOME: path.join(dir, 'home'), KIT_TMP: dir, KIT_LAUNCHED: '1', KIT_AUTO_UPDATE: '0' },
+      env: {
+        PATH: path.dirname(process.execPath),
+        HOME: path.join(dir, 'home'),
+        KIT_TMP: dir,
+        KIT_LAUNCHED: '1',
+        KIT_AUTO_UPDATE: '0',
+      },
     });
     if (r.status !== 0 || (r.stdout ?? '').trim() !== version) {
       violations.push(
@@ -137,4 +145,6 @@ if (violations.length > 0) {
   for (const v of violations) console.error(v);
   process.exit(1);
 }
-console.log(`check-release-tgz: ${path.basename(tgzPath)} 通过(bin 0755 / checkPackage / staticSmoke / --version = ${version})`);
+console.log(
+  `check-release-tgz: ${path.basename(tgzPath)} 通过(bin 0755 / checkPackage / staticSmoke / --version = ${version})`,
+);
