@@ -224,7 +224,13 @@ export const A4_MUTATIONS: readonly A4Mutation[] = [
       },
     ],
     tests: [INGEST],
-    expectRed: ['pattern 不安全', '回显', 'id 冲突 / 重复'],
+    expectRed: [
+      'pattern 不安全',
+      '回显',
+      'id 冲突 / 重复',
+      // 订正 #9:新增的「内容类仍在消费之后」对照用例同样断言「单条丢弃 → 整批拒」
+      '格式预检:内容类仍在消费之后',
+    ],
     mustKill: ['回显', 'pattern 不安全'],
   },
   {
@@ -391,6 +397,12 @@ export const A4_MUTATIONS: readonly A4Mutation[] = [
           "if (!shape.ok) return rej(VALIDATOR_CODE_TO_REJECT[shape.code] ?? 'schema_invalid');",
         replacement: "if (false) return rej('schema_invalid');",
       },
+      {
+        // 零提案检查同属形状,一并退回第 9 步(否则 shape.out 在形状失败时为 undefined,会被无关的 TypeError 杀掉)
+        file: 'src/rsi/ingest.ts',
+        anchor: "if (shape.out.proposals.length === 0) return rej('schema_invalid');",
+        replacement: "if (false) return rej('schema_invalid');",
+      },
     ],
     tests: [INGEST],
     expectRed: ['格式预检:'],
@@ -421,7 +433,8 @@ export const A4_MUTATIONS: readonly A4Mutation[] = [
       },
     ],
     tests: [INGEST, 'rsi/a4-skill-doc.test.ts'],
-    expectRed: ['名额常量', 'agent 第 6 次', '全局第 11 次', 'skill 写的名额数字'],
+    // 格式预检的 seeded 变体把当日名额预置为 claude:2,常量改回 2 时其对照组(第 3 次)也会撞限
+    expectRed: ['名额常量', 'agent 第 6 次', '全局第 11 次', 'skill 写的名额数字', '格式预检:'],
     mustKill: ['名额常量', 'agent 第 6 次'],
   },
   {
