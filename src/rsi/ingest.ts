@@ -249,10 +249,18 @@ export async function runIngest(input: IngestInput, deps: IngestDeps): Promise<I
   ) {
     return rej('too_many_proposals');
   }
-  const norm = normalizeEvidence(doc);
+  let norm: ReturnType<typeof normalizeEvidence>;
+  try {
+    norm = normalizeEvidence(doc);
+  } catch {
+    // 深嵌套等使 JSON.stringify 递归爆栈的输入:本来就不是合法形状,按 schema_invalid 拒(仍在名额之前)
+    return rej('schema_invalid');
+  }
   const text = norm.text ?? input.raw;
   const shape = checkReflectorShape(text, INGEST_SHAPE_CTX);
   if (!shape.ok) return rej(VALIDATOR_CODE_TO_REJECT[shape.code] ?? 'schema_invalid');
+  // schema 本身允许空 proposals(LLM 路径可以没有提案);ingest 交回零提案没有意义,同属形状问题,不占名额
+  if (shape.out.proposals.length === 0) return rej('schema_invalid');
 
   // ---- 第 4 步:先预留名额(先于消费 digest 持久化) ----
   await point('ingest:before_quota');

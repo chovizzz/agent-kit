@@ -10,6 +10,7 @@ import {
   RSI_INGEST_MAX_PROPOSALS,
   RSI_INGEST_QUOTA_GLOBAL,
   RSI_INGEST_QUOTA_PER_AGENT,
+  RSI_INGEST_REJECT_REASONS,
 } from '../../src/contracts/rsi.js';
 import { DEFAULT_ATOM_MAX_BYTES } from '../../src/contracts/common.js';
 import { readText } from '../../src/io/read-fs.js';
@@ -87,9 +88,42 @@ describe('skill 提交格式与校验同源(R20-16.29 ④)', () => {
       'schema_invalid',
       'too_many_proposals',
       'output_too_large',
+      'digest_invalid',
+      'digest_expired',
+      'digest_agent_mismatch',
+      'digest_policy_changed',
     ]) {
       expect(SKILL).toContain(code);
+      expect(RSI_INGEST_REJECT_REASONS as readonly string[]).toContain(code);
     }
+    expect(SKILL).toContain('RSI_INGEST_TOO_LARGE');
     expect(SKILL).toContain('不占当天名额');
+    expect(SKILL).toContain('已被删除');
+  });
+  it('示例从真实 SKILL.md 提取,恰好保留 1 条提案', () => {
+    const doc = JSON.parse(exampleJson()) as { proposals: unknown[] };
+    expect(doc.proposals).toHaveLength(1);
+    const ok = validateReflectorOutput(exampleJson(), {
+      ...CTX,
+      allowedAliases: new Set(['e1']),
+      excerpts: [],
+      existingIds: new Set<string>(),
+      redactor: { pass2: () => ({ clean: true }) } as never,
+    });
+    expect(ok.ok && ok.proposals).toHaveLength(1);
+  });
+  it('边界:缺字段 / 多字段被形状检查拒;skill 写明空数组与 observations 的处理', () => {
+    const base = JSON.parse(exampleJson()) as { proposals: Record<string, unknown>[] };
+    const noVerify = structuredClone(base);
+    delete noVerify.proposals[0]?.['verify'];
+    const extra = structuredClone(base);
+    (extra.proposals[0] as Record<string, unknown>)['status'] = 'active';
+    for (const bad of [noVerify, extra]) {
+      const r = checkReflectorShape(JSON.stringify(bad), CTX);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.code).toBe('schema_invalid');
+    }
+    expect(SKILL).toContain('空数组会被拒');
+    expect(SKILL).toContain('本版不要提交 `observations`');
   });
 });

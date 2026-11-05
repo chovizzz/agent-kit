@@ -439,6 +439,34 @@ export const A4_MUTATIONS: readonly A4Mutation[] = [
     mustKill: ['名额常量', '全局第 11 次'],
   },
   {
+    id: 'zero-proposals-precheck-removed',
+    clause: '零提案的预检拿掉(空数组又扣名额、消费 digest)',
+    edits: [
+      {
+        file: 'src/rsi/ingest.ts',
+        anchor: "if (shape.out.proposals.length === 0) return rej('schema_invalid');",
+        replacement: "if (false) return rej('schema_invalid');",
+      },
+    ],
+    tests: [INGEST],
+    expectRed: ['格式预检:'],
+    mustKill: ['格式预检:零提案(空数组)'],
+  },
+  {
+    id: 'normalize-throw-unguarded',
+    clause: '证据归一化的递归爆栈不兜住(深嵌套输入使 ingest 抛出)',
+    edits: [
+      {
+        file: 'src/rsi/ingest.ts',
+        anchor: '    norm = normalizeEvidence(doc);\n  } catch {',
+        replacement: '    norm = normalizeEvidence(doc);\n  } catch (e) {\n    throw e;',
+      },
+    ],
+    tests: [INGEST],
+    expectRed: ['格式预检:'],
+    mustKill: ['格式预检:深嵌套'],
+  },
+  {
     id: 'skill-example-broken',
     clause: 'skill 示例 JSON 改坏一个字段(verify → verfy)',
     edits: [
@@ -449,7 +477,11 @@ export const A4_MUTATIONS: readonly A4Mutation[] = [
       },
     ],
     tests: ['rsi/a4-skill-doc.test.ts'],
-    expectRed: ['skill 示例 JSON 通过形状与完整校验', '每个提案字段都在 skill 里点名'],
+    expectRed: [
+      'skill 示例 JSON 通过形状与完整校验',
+      '每个提案字段都在 skill 里点名',
+      '示例从真实 SKILL.md 提取',
+    ],
     mustKill: ['skill 示例 JSON 通过形状与完整校验'],
   },
 ];

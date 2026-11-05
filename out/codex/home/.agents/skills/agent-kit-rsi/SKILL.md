@@ -20,7 +20,7 @@ description: 处理 agent-kit RSI 的待反思聚类。只在用户明确要求�
 
 ## 提交格式
 
-标准输入只能是**一个 JSON 对象**:顶层只有 `proposals`(必填,数组,1 到 5 条)和可选的 `observations`(不需要就省略)。不要送裸数组 `[...]`,不要加 Markdown 围栏或前后说明文字,不要多出任何未列出的键(多余的键、缺键都会被拒)。最小合法例子,可直接复制后换成你自己的提案(`evidence` 里的别名必须来自这次 digest):
+标准输入只能是**一个 JSON 对象**:顶层只有 `proposals`(必填,数组,至少 1 条、最多 5 条,空数组会被拒)。本版不要提交 `observations`,也不要加别的顶层键。不要送裸数组 `[...]`,不要加 Markdown 围栏或前后说明文字,不要多出任何未列出的键(多余的键、缺键都会被拒)。最小合法例子,可直接复制后换成你自己的提案(`evidence` 里的别名必须来自这次 digest):
 
 ```json
 {
@@ -59,8 +59,11 @@ description: 处理 agent-kit RSI 的待反思聚类。只在用户明确要求�
 
 ## 被拒绝时
 
-- 格式类拒绝:`RSI_INGEST_REJECTED reason=not_json_object`(不是单个 JSON 对象,例如裸数组)、`schema_invalid`(缺键、多键或取值不合约束)、`too_many_proposals`(超过 5 条)、`output_too_large`(整份超过 64KiB)。这类拒绝发生在占用名额之前:**不占当天名额,digest 也没有用掉**。对照「提交格式」改好,用同一个 `digest_id` 再交一次即可。
-- 其它 `RSI_INGEST_REJECTED reason=…`:整批被拒,这份 digest 已经用掉,名额也已计。不要原样重试同一批;告诉用户原因,需要时重新运行第 1 步取新的 digest。
+`RSI_INGEST_REJECTED reason=…` 分三种情况:
+
+- 格式类:`not_json_object`(不是单个 JSON 对象,例如裸数组)、`schema_invalid`(缺键、多键、空数组或取值不合约束)、`too_many_proposals`(超过 5 条)、`output_too_large`(归一化后超过 64KiB)。这类拒绝发生在占用名额之前:**不占当天名额,digest 也没有用掉**。对照「提交格式」改好,用同一个 `digest_id` 再交一次即可。另外,标准输入原始字节超过 64KiB 时返回的是 `RSI_INGEST_TOO_LARGE`(不是 `output_too_large`),同样不占名额、不动 digest。
+- digest 前置失败:`digest_invalid`、`digest_expired` 不占名额。`digest_agent_mismatch`、`digest_policy_changed` 也不占名额,但这份 digest 已被删除。这几种都要重新运行第 1 步取新的 digest。
+- 消费之后的内容类(别名越界、`evidence_stale`、话术、回显、`id_conflict`、`duplicate` 等其余子码):整批被拒,这份 digest 已经用掉,名额也已计。不要原样重试同一批;告诉用户原因,需要时重新运行第 1 步取新的 digest。
 - `RSI_NOT_RUN reason=rate_limited`:当天名额用完(每个 agent 每天 5 次,全局 10 次)。告诉用户明天再来。
 - `RSI_NOT_RUN reason=locked` 或 `policy_changed`:稍后重试一次即可;仍然失败就如实告诉用户。
 
