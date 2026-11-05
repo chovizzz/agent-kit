@@ -464,6 +464,12 @@ export default tseslint.config(
     files: SUBPROCESS_TESTS,
     rules: restrictions({ allowCpOnly: true }),
   },
+  // D-AU3:真实 npm pack 产物的安装端到端测试。要 spawn vite / npm / node(child_process),并用启动器的 smokeCandidate 做真冒烟;
+  // 排在上面的 `test/update/install*.test.ts` 与 SUBPROCESS_TESTS 之后,只给这一个文件 child_process + 启动器两项(不放 runSelf / net / home-fs)。
+  {
+    files: ['test/update/install-real-pack.test.ts'],
+    rules: restrictions({ allowCpOnly: true, allowLauncher: true }),
+  },
   {
     // 本机口径:vitest 配置文件里允许 console 以外的一切照旧;eqeqeq 全局
     rules: { eqeqeq: ['error', 'always'] },

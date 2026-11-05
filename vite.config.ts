@@ -37,7 +37,7 @@ const absentOptional: Plugin = {
 /**
  * bin 入口(`dist/cli.js`)设为 0755(D-AU3,docs/contracts.md §19.9.1)。rolldown 按 umask 写出 0644;`npm pack` 保留磁盘上的可执行位,
  * 所以在这里设好,发布包里的 bin 才是 0755。安装器的静态冒烟不依赖它(kit 用 process.execPath 执行),这是对「npm i -g / npx 之外直接执行」的兜底
- * 与对发布产物的回归钉子(test/update/real-pack-install.test.ts 断言真实 npm pack 产物里它是 0755)。
+ * 与对发布产物的回归钉子(test/update/install-real-pack.test.ts 断言真实 npm pack 产物里它是 0755)。
  */
 const binExecutable: Plugin = {
   name: 'agent-kit:bin-executable',

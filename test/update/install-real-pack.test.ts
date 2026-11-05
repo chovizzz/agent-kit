@@ -15,7 +15,6 @@ import { spawnSync } from 'node:child_process';
 import * as path from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { buildIntegrity } from '../../src/build/payload.js';
-import { runSelf, type RunSelfResult } from '../../src/io/exec.js';
 import { exists, lstat, readBytes, readText, realpath } from '../../src/io/read-fs.js';
 import * as safe from '../../src/io/safe-fs.js';
 import { smokeCandidate } from '../../src/update/launcher.js';
@@ -166,30 +165,26 @@ function asBuilt(): BuiltPkg {
 }
 
 interface SmokeCall {
-  args: readonly string[];
-  result: RunSelfResult;
+  stagingAbs: string;
+  ok: boolean;
 }
 
-/** 真实的冒烟(真 spawn),只是把 runSelf 的调用与返回记下来,供断言「确实执行了 dist/cli.js --version」 */
+/**
+ * 真实的冒烟(`smokeCandidate` 真 spawn `node <staging>/dist/cli.js --version`,退出 0 且 stdout 恰为版本号才返回 true),
+ * 只是把每次调用的 staging 路径与结果记下来,供断言「冒烟确实跑了、跑的是 staging 里的候选、结果为真」。
+ */
 function recordingSmoke(): {
   smoke: (c: { home: string; stagingAbs: string; version: string }) => boolean;
   calls: SmokeCall[];
-  targets: string[];
 } {
   const calls: SmokeCall[] = [];
-  const targets: string[] = [];
   return {
     calls,
-    targets,
-    smoke: (c) =>
-      smokeCandidate(c, {
-        runSelf: (o) => {
-          const result = runSelf(o);
-          calls.push({ args: o.args, result });
-          if (o.target.kind === 'candidate') targets.push(o.target.stagingAbs);
-          return result;
-        },
-      }),
+    smoke: (c) => {
+      const ok = smokeCandidate(c);
+      calls.push({ stagingAbs: c.stagingAbs, ok });
+      return ok;
+    },
   };
 }
 
@@ -222,10 +217,8 @@ async function expectInstalled(
   expect(await realpath(cur)).toBe(await realpath(vdir));
   // 冒烟真的执行了 dist/cli.js --version:一次真 spawn,退出 0,stdout 恰为版本号;跑的是 staging 里的候选
   expect(rec.calls).toHaveLength(1);
-  expect(rec.calls[0]?.args).toEqual([]);
-  expect(rec.calls[0]?.result).toMatchObject({ spawned: true, status: 0 });
-  expect(rec.calls[0]?.result.spawned && rec.calls[0].result.stdout.trim()).toBe(version);
-  expect(rec.targets[0]).toMatch(/\/staging\/st-[0-9a-f]+$/);
+  expect(rec.calls[0]?.ok).toBe(true);
+  expect(rec.calls[0]?.stagingAbs).toMatch(/\/staging\/st-[0-9a-f]+$/);
   // 没拉黑;状态记了版本与锚点
   const st = await stateOf(w);
   expect(st['bad_versions']).toEqual([]);

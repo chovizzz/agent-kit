@@ -26,7 +26,7 @@ const SPAWN = 'update/self-spawn-hook.test.ts';
 const CLOSURE = 'update/installed-closure.test.ts';
 const ENTRY = 'rsi/hook-update.test.ts';
 const DIST = 'rsi/hook-forward-dist.test.ts';
-const REALPACK = 'update/real-pack-install.test.ts';
+const REALPACK = 'update/install-real-pack.test.ts';
 
 export const AU_MUTATIONS: readonly AuMutation[] = [
   {

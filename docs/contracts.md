@@ -2988,7 +2988,7 @@ S7c-A 给 home-fs 追加三个原语(都走同一套「表内 + planScope + 逐�
 2. **staging 统一 0755**:安装器写 staging 时把 bin 入口(`binEntryOf`,与静态冒烟同一份判定)设为 0755,其余文件沿用 tar 读取器归一的 0644 / 0755;读回复核时 `verifyInstalledTree(…, { binExecutable })` 核对该文件权限恰为 0755,否则 `staging_mismatch`(`fail-closed`)。该选项只在安装读回 staging 时给;回滚 / 启动器 / 自动同步校验已安装树时不给,不对权限提额外要求(`tar.ts` 把任一可执行位归一为 0755,本身无其它权限假设;`checkPackage` 不看权限)。
 3. **构建也设 0755**:`vite.config.ts` 的 `agent-kit:bin-executable` 插件在 `writeBundle` 把 `dist/cli.js` 设为 0755;因 `npm pack` 保留权限位,发布包里的 bin 从 0.3.4 起是 0755。这只是兜底与回归钉子:**安装器的正确性不依赖它**(0.3.0–0.3.3 的存量 tarball 是 0644,第 1 条保证它们仍可装)。
 4. **`bad_versions` 的影响(只记录,不写迁移)**:被本缺陷误判拉黑的旧版本(用户机器上的 0.3.3)只对**该版本号**有效;新版本(0.3.4 及以后)不在 `bad_versions` 里,不受影响,无需也不提供清理用户状态的代码。
-5. **验收必须用真实发布产物**:`test/update/real-pack-install.test.ts`(进 `pnpm test`,CI 的必过集合)在 KIT_TMP 里用仓库的 vite 配置真实构建 dist、按发布脚本生成 `integrity.json`、真实 `npm pack` 出 tgz,再走完整安装流程(假 HOME + file:// registry 夹具,验签器按既有测试方式注入,tarball 与冒烟都是真的:真 spawn `node staging/dist/cli.js --version`)。断言:安装成功、`versions/<v>` 与 `current` 正确、冒烟真的执行并输出版本号、`bad_versions` 为空、装好的 bin 为 0755;另有「真实内容但 bin 为 0644」的回归用例(重打包,复现 0.3.0–0.3.3 的形态)与「bin 首两字节不是 `#!`」的负向用例(重算 integrity,使只有静态冒烟能拦)。**今后凡改 update / 安装 / 构建产物相关代码,验收不得只用测试自造的 tarball。**
+5. **验收必须用真实发布产物**:`test/update/install-real-pack.test.ts`(进 `pnpm test`,CI 的必过集合)在 KIT_TMP 里用仓库的 vite 配置真实构建 dist、按发布脚本生成 `integrity.json`、真实 `npm pack` 出 tgz,再走完整安装流程(假 HOME + file:// registry 夹具,验签器按既有测试方式注入,tarball 与冒烟都是真的:真 spawn `node staging/dist/cli.js --version`)。断言:安装成功、`versions/<v>` 与 `current` 正确、冒烟真的执行并输出版本号、`bad_versions` 为空、装好的 bin 为 0755;另有「真实内容但 bin 为 0644」的回归用例(重打包,复现 0.3.0–0.3.3 的形态)与「bin 首两字节不是 `#!`」的负向用例(重算 integrity,使只有静态冒烟能拦)。**今后凡改 update / 安装 / 构建产物相关代码,验收不得只用测试自造的 tarball。**
 
 ### 19.10 示例
 
