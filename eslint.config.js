@@ -331,6 +331,9 @@ const SUBPROCESS_TESTS = [
   // R20 A2 B5b:confirm 拒绝路径零写入的真子进程支撑(vite 打包 confirm-entry 后用 node 跑 main())
   'test/rsi/proc/confirm-helper.ts',
   'test/build/bundle-artifact.test.ts',
+  // D-AU3:真实构建 + 真实 npm pack 的支撑与发布前门禁脚本的子进程测试
+  'test/build/real-pack-helper.ts',
+  'test/build/release-tgz-gate.test.ts',
   // R20 A2 B5-0:发布冻结脚本在沙箱 cwd 里的真子进程测试
   'test/build/publish-freeze.test.ts',
   // R20 A3:真实发布产物(vite 构建的 dist/cli.js)上的钩子入口四组合、stdin 不关闭、端到端起 worker
@@ -463,6 +466,12 @@ export default tseslint.config(
   {
     files: SUBPROCESS_TESTS,
     rules: restrictions({ allowCpOnly: true }),
+  },
+  // D-AU3:真实 npm pack 产物的安装端到端测试。要 spawn vite / npm / node(child_process),并用启动器的 smokeCandidate 做真冒烟;
+  // 排在上面的 `test/update/install*.test.ts` 与 SUBPROCESS_TESTS 之后,只给这一个文件 child_process + 启动器两项(不放 runSelf / net / home-fs)。
+  {
+    files: ['test/update/install-real-pack.test.ts'],
+    rules: restrictions({ allowCpOnly: true, allowLauncher: true }),
   },
   {
     // 本机口径:vitest 配置文件里允许 console 以外的一切照旧;eqeqeq 全局

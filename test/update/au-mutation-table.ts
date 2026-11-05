@@ -26,6 +26,7 @@ const SPAWN = 'update/self-spawn-hook.test.ts';
 const CLOSURE = 'update/installed-closure.test.ts';
 const ENTRY = 'rsi/hook-update.test.ts';
 const DIST = 'rsi/hook-forward-dist.test.ts';
+const REALPACK = 'update/install-real-pack.test.ts';
 
 export const AU_MUTATIONS: readonly AuMutation[] = [
   {
@@ -347,6 +348,160 @@ export const AU_MUTATIONS: readonly AuMutation[] = [
     expectRed: ['fail-closed'],
     mustKill: ['fail-closed'],
   },
+  // ---- D-AU3(contracts §19.9.1):真实发布产物 + 静态冒烟不看权限位 ----
+  {
+    id: 'smoke-requires-0755',
+    clause: 'D-AU3:静态冒烟恢复「bin 必须 0755」(真实 npm pack 的 0644 产物被误拉黑)',
+    edits: [
+      {
+        file: 'src/update/install.ts',
+        anchor: "  if (f.bytes.subarray(0, 2).toString('latin1') !== '#!')\n",
+        replacement:
+          "  if (f.mode !== 0o755) return { ok: false, detail: 'bin_not_executable' };\n  if (f.bytes.subarray(0, 2).toString('latin1') !== '#!')\n",
+      },
+    ],
+    tests: [REALPACK, 'update/install-package.test.ts', 'update/install-flow.test.ts'],
+    expectRed: [
+      '回归 D-AU3',
+      'D-AU3:tarball 里 bin 是 0644',
+      'bin 缺失 / 不可执行 / 指向 dist 之外',
+      'D-AU3:bin 指向 dist/alt.js',
+      '静态冒烟用的就是这个入口',
+    ],
+    mustKill: ['回归 D-AU3', 'D-AU3:tarball 里 bin 是 0644'],
+  },
+  {
+    id: 'staging-bin-not-0755',
+    clause: 'D-AU3:写 staging 时不把 bin 设为 0755(沿用 tarball 里的权限)',
+    edits: [
+      {
+        file: 'src/update/install.ts',
+        anchor: '        mode: f.path === binEntry ? 0o755 : f.mode,\n',
+        replacement: '        mode: f.mode,\n',
+      },
+    ],
+    tests: [REALPACK, 'update/install-flow.test.ts'],
+    expectRed: ['回归 D-AU3', 'D-AU3:tarball 里 bin 是 0644', 'D-AU3:bin 指向 dist/alt.js'],
+    mustKill: ['回归 D-AU3', 'D-AU3:tarball 里 bin 是 0644', 'D-AU3:bin 指向 dist/alt.js'],
+  },
+  {
+    id: 'readback-skips-bin-mode',
+    clause: 'D-AU3:读回复核不核对 bin 权限(verifyInstalledTree 的 binExecutable 形同虚设)',
+    edits: [
+      {
+        file: 'src/update/installed.ts',
+        anchor:
+          "      if (!st.isFile() || (st.mode & 0o7777) !== 0o755) return { ok: false, reason: 'bin_mode' };\n",
+        replacement: "      if (!st.isFile()) return { ok: false, reason: 'bin_mode' };\n",
+      },
+    ],
+    tests: ['update/install-package.test.ts'],
+    expectRed: ['binExecutable(D-AU3)', 'binExecutable:掩码是 0o7777'],
+    mustKill: ['binExecutable(D-AU3)'],
+  },
+  {
+    id: 'bin-mask-0o777',
+    clause: 'D-AU3:读回复核的权限掩码改回 0o777(特殊位 04755 / 02755 被放过)',
+    edits: [
+      {
+        file: 'src/update/installed.ts',
+        anchor: "(st.mode & 0o7777) !== 0o755) return { ok: false, reason: 'bin_mode' };",
+        replacement: "(st.mode & 0o777) !== 0o755) return { ok: false, reason: 'bin_mode' };",
+      },
+    ],
+    tests: ['update/install-package.test.ts'],
+    expectRed: ['binExecutable:掩码是 0o7777'],
+    mustKill: ['binExecutable:掩码是 0o7777'],
+  },
+  {
+    id: 'release-gate-mode-check-removed',
+    clause: 'D-AU3:发布前门禁脚本去掉 tar header 原始 mode 检查',
+    edits: [
+      {
+        file: 'scripts/check-release-tgz.mjs',
+        anchor: 'else if ((rawMode & 0o7777) !== 0o755) {',
+        replacement: 'else if (false) {',
+      },
+    ],
+    tests: ['build/release-tgz-gate.test.ts'],
+    expectRed: ['坏包:tar header 里 bin 是 0644', '坏包:bin 带特殊位'],
+    mustKill: ['坏包:tar header 里 bin 是 0644', '坏包:bin 带特殊位'],
+  },
+  {
+    id: 'release-gate-mask-0o777',
+    clause: 'D-AU3:发布前门禁的 mode 掩码改回 0o777(特殊位放过)',
+    edits: [
+      {
+        file: 'scripts/check-release-tgz.mjs',
+        anchor: 'else if ((rawMode & 0o7777) !== 0o755) {',
+        replacement: 'else if ((rawMode & 0o777) !== 0o755) {',
+      },
+    ],
+    tests: ['build/release-tgz-gate.test.ts'],
+    expectRed: ['坏包:bin 带特殊位'],
+    mustKill: ['坏包:bin 带特殊位'],
+  },
+  {
+    id: 'release-gate-version-run-removed',
+    clause: 'D-AU3:发布前门禁不再真执行 --version(版本不符放过)',
+    edits: [
+      {
+        file: 'scripts/check-release-tgz.mjs',
+        anchor: "if (r.status !== 0 || (r.stdout ?? '').trim() !== version) {",
+        replacement: 'if (false) {',
+      },
+    ],
+    tests: ['build/release-tgz-gate.test.ts'],
+    expectRed: ['坏包:解包后 --version 输出不等于 tag 版本'],
+    mustKill: ['坏包:解包后 --version 输出不等于 tag 版本'],
+  },
+  {
+    id: 'readback-bin-mode-not-wired',
+    clause: 'D-AU3:安装器读回 staging 时不传 binExecutable(权限复核没接进提交前的链路)',
+    edits: [
+      {
+        file: 'src/update/install.ts',
+        anchor: '      ...(binEntry !== undefined ? { binExecutable: binEntry } : {}),\n',
+        replacement: '',
+      },
+    ],
+    tests: ['update/install-flow.test.ts'],
+    expectRed: ['D-AU3:staging 里 bin 权限被改回 0644'],
+    mustKill: ['D-AU3:staging 里 bin 权限被改回 0644'],
+  },
+  {
+    id: 'smoke-shebang-check-removed',
+    clause: 'D-AU3:静态冒烟去掉 `#!` 检查',
+    edits: [
+      {
+        file: 'src/update/install.ts',
+        anchor:
+          "  if (f.bytes.subarray(0, 2).toString('latin1') !== '#!')\n    return { ok: false, detail: 'bin_shebang' };\n",
+        replacement: '',
+      },
+    ],
+    tests: [REALPACK, 'update/install-package.test.ts', 'update/install-flow.test.ts'],
+    expectRed: [
+      '负向:bin 首两字节不是 #!',
+      'bin 缺失 / 不可执行 / 指向 dist 之外',
+      '冒烟:bin 入口没有 shebang',
+    ],
+    mustKill: ['负向:bin 首两字节不是 #!'],
+  },
+  {
+    id: 'build-bin-not-executable',
+    clause: 'D-AU3:构建不再把 dist/cli.js 设为 0755(vite 插件去掉)',
+    edits: [
+      {
+        file: 'vite.config.ts',
+        anchor: 'plugins: [nodePrefixBuiltins, absentOptional, binExecutable],',
+        replacement: 'plugins: [nodePrefixBuiltins, absentOptional],',
+      },
+    ],
+    tests: [REALPACK],
+    expectRed: ['产物前提'],
+    mustKill: ['产物前提'],
+  },
 ];
 
 export interface AuMutationResult {
@@ -568,6 +723,103 @@ export const AU_RESULTS: readonly AuMutationResult[] = [
     killedBy: [
       'readAutoInstall(H3:worker 与钩子调度共用) > fail-closed:TOML 解析失败 / schema 不合 / 配置路径是目录 → ok:false',
     ],
+    failed: 1,
+    skipped: 0,
+    restored: true,
+  },
+  // 2026-11-05T09:01:34Z javis 私有检出 @ 132bed1(基线 8743886 + D-AU3):基线全绿(0 failed);下列五条还原后逐文件 sha256 一致、git 干净;javis HOME 下 .local/state/agent-kit 前后不变
+  {
+    id: 'smoke-requires-0755',
+    killedBy: [
+      'D-AU3:tarball 里 bin 是 0644(npm pack 的真实形态)也装得上,装好后 bin 统一 0755',
+      'bin 缺失 / 不可执行 / 指向 dist 之外',
+      '回归 D-AU3:真实内容但 tarball 里 bin 是 0644(0.3.0–0.3.3 的真实形态)同样装得上,装好后是 0755',
+      'D-AU3:bin 指向 dist/alt.js(对象形态)→ 提到 0755 的恰是静态冒烟判的那个入口,别的文件不动',
+      '静态冒烟用的就是这个入口:入口文件缺失 → bin_missing;形态非法 → bin_entry;合法且有 shebang → 通过',
+    ],
+    failed: 5,
+    skipped: 0,
+    restored: true,
+  },
+  {
+    id: 'staging-bin-not-0755',
+    killedBy: [
+      'D-AU3:tarball 里 bin 是 0644(npm pack 的真实形态)也装得上,装好后 bin 统一 0755',
+      '回归 D-AU3:真实内容但 tarball 里 bin 是 0644(0.3.0–0.3.3 的真实形态)同样装得上,装好后是 0755',
+      'D-AU3:bin 指向 dist/alt.js(对象形态)→ 提到 0755 的恰是静态冒烟判的那个入口,别的文件不动',
+    ],
+    failed: 3,
+    skipped: 0,
+    restored: true,
+  },
+  {
+    id: 'readback-skips-bin-mode',
+    killedBy: [
+      'binExecutable(D-AU3):bin 不是 0755 → bin_mode;不给该选项时不看权限',
+      'binExecutable:掩码是 0o7777,精确等于 0755;04755 / 02755 / 01755 / 0775 / 0700 都不合格',
+    ],
+    failed: 2,
+    skipped: 0,
+    restored: true,
+  },
+  {
+    id: 'bin-mask-0o777',
+    killedBy: [
+      'binExecutable:掩码是 0o7777,精确等于 0755;04755 / 02755 / 01755 / 0775 / 0700 都不合格',
+    ],
+    failed: 1,
+    skipped: 0,
+    restored: true,
+  },
+  {
+    id: 'release-gate-mode-check-removed',
+    killedBy: [
+      '坏包:tar header 里 bin 是 0644(0.3.0–0.3.3 的形态)→ REL_BIN_MODE,只此一项',
+      '坏包:bin 带特殊位(04755 / 02755)也不合格 → REL_BIN_MODE',
+    ],
+    failed: 2,
+    skipped: 0,
+    restored: true,
+  },
+  {
+    id: 'release-gate-mask-0o777',
+    killedBy: ['坏包:bin 带特殊位(04755 / 02755)也不合格 → REL_BIN_MODE'],
+    failed: 1,
+    skipped: 0,
+    restored: true,
+  },
+  {
+    id: 'release-gate-version-run-removed',
+    killedBy: [
+      '坏包:解包后 --version 输出不等于 tag 版本(integrity 已重算)→ REL_VERSION_RUN,只此一项',
+    ],
+    failed: 1,
+    skipped: 0,
+    restored: true,
+  },
+  {
+    id: 'readback-bin-mode-not-wired',
+    killedBy: [
+      'D-AU3:staging 里 bin 权限被改回 0644 → 读回复核 staging_mismatch,fail-closed(不冒烟、不提交、不动 current)',
+    ],
+    failed: 1,
+    skipped: 0,
+    restored: true,
+  },
+  {
+    id: 'smoke-shebang-check-removed',
+    killedBy: [
+      '冒烟:bin 入口没有 shebang → smoke,拉黑',
+      'bin 缺失 / 不可执行 / 指向 dist 之外',
+      '负向:bin 首两字节不是 #!(integrity 已重算,只有静态冒烟能拦)→ smoke,拉黑,current 不动',
+    ],
+    failed: 3,
+    skipped: 0,
+    restored: true,
+  },
+  {
+    id: 'build-bin-not-executable',
+    killedBy: ['产物前提:真实 tarball 里 dist/cli.js 以 #! 开头;npm pack 保留构建设好的 0755'],
     failed: 1,
     skipped: 0,
     restored: true,
