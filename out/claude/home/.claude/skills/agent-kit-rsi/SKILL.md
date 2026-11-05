@@ -59,7 +59,7 @@ description: 处理 agent-kit RSI 的待反思聚类。只在用户明确要求�
 
 ## 被拒绝时
 
-- 格式类拒绝:`RSI_INGEST_REJECTED reason=not_json_object`(不是单个 JSON 对象,例如裸数组)、`schema_invalid`(缺键、多键或取值不合约束)、`too_many_proposals`(超过 5 条)。这类拒绝发生在占用名额之前:**不占当天名额,digest 也没有用掉**。对照「提交格式」改好,用同一个 `digest_id` 再交一次即可。
+- 格式类拒绝:`RSI_INGEST_REJECTED reason=not_json_object`(不是单个 JSON 对象,例如裸数组)、`schema_invalid`(缺键、多键或取值不合约束)、`too_many_proposals`(超过 5 条)、`output_too_large`(整份超过 64KiB)。这类拒绝发生在占用名额之前:**不占当天名额,digest 也没有用掉**。对照「提交格式」改好,用同一个 `digest_id` 再交一次即可。
 - 其它 `RSI_INGEST_REJECTED reason=…`:整批被拒,这份 digest 已经用掉,名额也已计。不要原样重试同一批;告诉用户原因,需要时重新运行第 1 步取新的 digest。
 - `RSI_NOT_RUN reason=rate_limited`:当天名额用完(每个 agent 每天 5 次,全局 10 次)。告诉用户明天再来。
 - `RSI_NOT_RUN reason=locked` 或 `policy_changed`:稍后重试一次即可;仍然失败就如实告诉用户。

@@ -82,7 +82,12 @@ describe('skill 提交格式与校验同源(R20-16.29 ④)', () => {
     );
   });
   it('skill 写明格式类拒绝不占名额、不消费 digest', () => {
-    for (const code of ['not_json_object', 'schema_invalid', 'too_many_proposals']) {
+    for (const code of [
+      'not_json_object',
+      'schema_invalid',
+      'too_many_proposals',
+      'output_too_large',
+    ]) {
       expect(SKILL).toContain(code);
     }
     expect(SKILL).toContain('不占当天名额');
