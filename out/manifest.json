@@ -7,7 +7,7 @@
       "confidence": "documented",
       "mode": "owned",
       "path": "claude/home/.claude/skills/agent-kit-rsi/SKILL.md",
-      "sha256": "1a14b6c4d23a21fadcb93ac7d1ec16399e455dcbc2865c368307b183ecce5dcd",
+      "sha256": "4458a32b45ed1d0d0c6845e267251097f6e36594add53af97871f086a32307bd",
       "sourceRefs": [
         "skill:agent-kit-rsi"
       ],
@@ -31,7 +31,7 @@
       "confidence": "documented",
       "mode": "owned",
       "path": "codex/home/.agents/skills/agent-kit-rsi/SKILL.md",
-      "sha256": "1a14b6c4d23a21fadcb93ac7d1ec16399e455dcbc2865c368307b183ecce5dcd",
+      "sha256": "4458a32b45ed1d0d0c6845e267251097f6e36594add53af97871f086a32307bd",
       "sourceRefs": [
         "skill:agent-kit-rsi"
       ],
@@ -55,7 +55,7 @@
       "confidence": "documented",
       "mode": "owned",
       "path": "kimi/home/.agents/skills/agent-kit-rsi/SKILL.md",
-      "sha256": "1a14b6c4d23a21fadcb93ac7d1ec16399e455dcbc2865c368307b183ecce5dcd",
+      "sha256": "4458a32b45ed1d0d0c6845e267251097f6e36594add53af97871f086a32307bd",
       "sourceRefs": [
         "skill:agent-kit-rsi"
       ],
@@ -79,7 +79,7 @@
       "confidence": "documented",
       "mode": "owned",
       "path": "pi/home/.agents/skills/agent-kit-rsi/SKILL.md",
-      "sha256": "1a14b6c4d23a21fadcb93ac7d1ec16399e455dcbc2865c368307b183ecce5dcd",
+      "sha256": "4458a32b45ed1d0d0c6845e267251097f6e36594add53af97871f086a32307bd",
       "sourceRefs": [
         "skill:agent-kit-rsi"
       ],

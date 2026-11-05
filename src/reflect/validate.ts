@@ -289,7 +289,21 @@ export function matchSignature(sig: { pattern: string }, text: string): boolean 
   return new RegExp(sig.pattern, SIGNATURE_REGEX_FLAGS).test(clipped);
 }
 
-export function validateReflectorOutput(raw: string, ctx: ValidateContext): ValidationResult {
+export type ShapeResult =
+  { ok: true; out: ReflectorOutput } | { ok: false; code: ValidatorRejectCode; detail: string };
+
+/** 形状检查所需的上下文子集(与 digest / 会话 / 暂存区状态无关) */
+export type ShapeContext = Pick<
+  ValidateContext,
+  'atomMaxBytes' | 'maxProposals' | 'maxOutputBytes'
+>;
+
+/**
+ * 校验的第一段:大小、「单个 JSON 对象」、`makeReflectorOutputSchema` 的 schema。**纯函数,不依赖 digest、会话或任何磁盘状态**。
+ * `validateReflectorOutput` 以它开头;`reflect --ingest` 在预留名额之前单独调用它(R20-16.15 订正 #9:格式不对不占名额),
+ * 两处走同一份实现,不会漂移。
+ */
+export function checkReflectorShape(raw: string, ctx: ShapeContext): ShapeResult {
   const limit = ctx.maxOutputBytes ?? MAX_OUTPUT_BYTES;
   if (utf8Bytes(raw) > limit) {
     return { ok: false, code: 'output_too_large', detail: `输出超过 ${limit / 1024}KiB` };
@@ -319,7 +333,13 @@ export function validateReflectorOutput(raw: string, ctx: ValidateContext): Vali
       detail: `${parsed.error.issues.length} 处不符合 schema`,
     };
   }
-  const out = parsed.data;
+  return { ok: true, out: parsed.data };
+}
+
+export function validateReflectorOutput(raw: string, ctx: ValidateContext): ValidationResult {
+  const shape = checkReflectorShape(raw, ctx);
+  if (!shape.ok) return shape;
+  const out = shape.out;
 
   const strings: string[] = [];
   collectStrings(out, strings);
