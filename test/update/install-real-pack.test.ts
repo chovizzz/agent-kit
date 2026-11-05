@@ -1,168 +1,47 @@
 /**
- * D-AU3 验收(docs/contracts.md §19.9.1):**真实发布产物**走完整自动更新安装流程。
+ * D-AU3 验收(docs/contracts.md §19.9.1):**真实构建 + 真实 npm pack 的最小发布形态**走完整自动更新安装流程。
+ * (完整的发布等价性由 release.yml 里对实际待发布 tgz 的发布前门禁 scripts/check-release-tgz.mjs 保证,见 test/build/release-tgz-gate.test.ts。)
  *
  * 为什么要有这条:此前 update 测试的 tarball 全是 test/update/install-world.ts 自己造的(bin 权限写死 0755),
  * 而真实 `npm pack` 出来的 `dist/cli.js` 是 0644,于是静态冒烟(曾要求 0755)在真实环境里每个版本都失败,测试却一直绿。
  *
- * 做法(全部在 KIT_TMP 里,不碰仓库的 dist/、不碰真实 HOME):
+ * 做法(全部在 KIT_TMP 里,不碰仓库的 dist/、不碰真实 HOME;构建与 pack 见 test/build/real-pack-helper.ts):
  *  1. 用仓库的 vite 配置真实构建 dist,放进一个只含 package.json / README / LICENSE 的包根;
  *  2. 按发布脚本的做法生成 integrity.json(覆盖包内除自身外的每个文件);
  *  3. 真实 `npm pack` 出 tgz;
  *  4. 假 HOME + file:// registry 夹具提供 packument / tarball / attestations(验签器按仓库既有测试的方式注入,tarball 是真的),
  *     冒烟用真实的 `smokeCandidate`(真 spawn `node <staging>/dist/cli.js --version`)。
  */
-import { spawnSync } from 'node:child_process';
 import * as path from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { buildIntegrity } from '../../src/build/payload.js';
-import { exists, lstat, readBytes, readText, realpath } from '../../src/io/read-fs.js';
-import * as safe from '../../src/io/safe-fs.js';
+import { exists, lstat, realpath } from '../../src/io/read-fs.js';
 import { smokeCandidate } from '../../src/update/launcher.js';
-import { readTgz, type TarListing } from '../../src/update/tar.js';
-import { REPO_ROOT } from '../helpers/tmp.js';
-import { makeSandbox, type Sandbox } from '../build/helpers.js';
+import { readTgz } from '../../src/update/tar.js';
 import {
-  newWorld,
-  runUpdate,
-  sha256,
-  sha512,
-  stateOf,
-  tgzOf,
-  writeRegistry,
-  type BuiltPkg,
-  type Ent,
-  type World,
-} from './install-world.js';
+  asBuiltReal,
+  buildRealPack,
+  repackReal,
+  spawnTool,
+  type EditableFile,
+  type RealPack,
+} from '../build/real-pack-helper.js';
+import { newWorld, runUpdate, stateOf, writeRegistry, type BuiltPkg, type World } from './install-world.js';
 
-const SAFE_PATH = `${path.dirname(process.execPath)}:/usr/bin:/bin:/usr/sbin:/sbin`;
-const VITE_BIN = path.join(REPO_ROOT, 'node_modules', 'vite', 'bin', 'vite.js');
-
-interface Ran {
-  status: number | null;
-  stdout: string;
-  stderr: string;
-}
-
-function spawn(cmd: string, args: string[], cwd: string, env: Record<string, string>): Ran {
-  const r = spawnSync(cmd, args, {
-    cwd,
-    encoding: 'utf8',
-    timeout: 180_000,
-    maxBuffer: 64 * 1024 * 1024,
-    env: { PATH: SAFE_PATH, ...env },
-  });
-  return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
-}
-
-let sb: Sandbox;
+let real: RealPack;
+let sb: RealPack['sb'];
 let version: string;
-let realTgz: Buffer;
-let realListing: TarListing;
+let realListing: RealPack['listing'];
 
 beforeAll(async () => {
-  sb = await makeSandbox('realpack-');
-  const env = { HOME: sb.home, KIT_TMP: sb.dir, KIT_AUTO_UPDATE: '0' };
-  const pkgRoot = path.join(sb.dir, 'pkgroot');
-  const dist = path.join(pkgRoot, 'dist');
-  await safe.mkdirp(sb.wctx, pkgRoot);
-
-  // 1. 真实构建(与 build 脚本同一份 vite 配置、同一个许可证清单脚本)
-  const v = spawn(
-    process.execPath,
-    [VITE_BIN, 'build', '--outDir', dist, '--emptyOutDir'],
-    REPO_ROOT,
-    env,
-  );
-  expect(v.stderr).not.toMatch(/error/i);
-  expect(v.status).toBe(0);
-  const g = spawn(
-    process.execPath,
-    [path.join(REPO_ROOT, 'scripts', 'gen-third-party-licenses.mjs'), '--dist', dist],
-    REPO_ROOT,
-    env,
-  );
-  expect(g.stderr).toBe('');
-  expect(g.status).toBe(0);
-
-  // 2. 包根:真实的 package.json(含 bin / files 字段)、README、LICENSE
-  for (const f of ['package.json', 'README.md', 'LICENSE']) {
-    await safe.writeFile(
-      sb.wctx,
-      path.join(pkgRoot, f),
-      Buffer.from(await readBytes(path.join(REPO_ROOT, f))),
-    );
-  }
-  version = (JSON.parse(await readText(path.join(pkgRoot, 'package.json'))) as { version: string })
-    .version;
-
-  const npmEnv = {
-    ...env,
-    npm_config_cache: path.join(sb.dir, 'npm-cache'),
-    npm_config_update_notifier: 'false',
-    npm_config_loglevel: 'error',
-  };
-  // 3. integrity.json:覆盖 npm 会打进包的每个文件(不含自身),与 scripts/build-payload.mjs 同口径
-  const dry = spawn('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], pkgRoot, npmEnv);
-  expect(dry.status, dry.stderr).toBe(0);
-  const listed = (JSON.parse(dry.stdout) as { files: { path: string }[] }[])[0]?.files ?? [];
-  const entries = [];
-  for (const f of listed) {
-    entries.push({
-      path: f.path,
-      content: Buffer.from(await readBytes(path.join(pkgRoot, ...f.path.split('/')))),
-    });
-  }
-  await safe.writeFile(
-    sb.wctx,
-    path.join(pkgRoot, 'integrity.json'),
-    buildIntegrity(version, entries).text,
-  );
-
-  // 4. 真实 npm pack
-  const packDir = path.join(sb.dir, 'packed');
-  await safe.mkdirp(sb.wctx, packDir);
-  const pack = spawn(
-    'npm',
-    ['pack', '--json', '--ignore-scripts', '--pack-destination', packDir],
-    pkgRoot,
-    npmEnv,
-  );
-  expect(pack.status, pack.stderr).toBe(0);
-  const name = (JSON.parse(pack.stdout) as { filename: string }[])[0]?.filename;
-  expect(name).toMatch(/\.tgz$/);
-  realTgz = Buffer.from(await readBytes(path.join(packDir, name as string)));
-  realListing = readTgz(realTgz);
+  real = await buildRealPack('realpack-');
+  sb = real.sb;
+  version = real.version;
+  realListing = real.listing;
 }, 300_000);
 
-/** 把(可能改过的)文件清单重新打成 tgz,并按需重算 integrity.json,包装成 registry 夹具用的 BuiltPkg */
-function repack(edit: (f: { path: string; bytes: Buffer; mode: number }[]) => void): BuiltPkg {
-  const files = realListing.files.map((f) => ({ path: f.path, bytes: f.bytes, mode: f.mode }));
-  edit(files);
-  const body = files.filter((f) => f.path !== 'integrity.json');
-  const integrity = buildIntegrity(
-    version,
-    body.map((f) => ({ path: f.path, content: f.bytes })),
-  ).text;
-  const ib = Buffer.from(integrity);
-  const ents: Ent[] = [{ name: 'package/', type: '5', mode: 0o755 }];
-  for (const d of realListing.dirs) ents.push({ name: `package/${d}/`, type: '5', mode: 0o755 });
-  for (const f of body) ents.push({ name: `package/${f.path}`, data: f.bytes, mode: f.mode });
-  ents.push({ name: 'package/integrity.json', data: ib });
-  const tgz = tgzOf(ents);
-  return { version, tgz, sha512: sha512(tgz), files: [], integrityBytes: ib, anchor: sha256(ib) };
-}
-
-function asBuilt(): BuiltPkg {
-  const ib = Buffer.from(realListing.files.find((f) => f.path === 'integrity.json')?.bytes ?? '');
-  return {
-    version,
-    tgz: realTgz,
-    sha512: sha512(realTgz),
-    files: [],
-    integrityBytes: ib,
-    anchor: sha256(ib),
-  };
-}
+const repack = (edit: (f: EditableFile[]) => void): BuiltPkg => repackReal(real, edit);
+const asBuilt = (): BuiltPkg => asBuiltReal(real);
+const spawn = spawnTool;
 
 interface SmokeCall {
   stagingAbs: string;

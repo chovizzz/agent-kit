@@ -389,13 +389,69 @@ export const AU_MUTATIONS: readonly AuMutation[] = [
       {
         file: 'src/update/installed.ts',
         anchor:
-          "      if (!st.isFile() || (st.mode & 0o777) !== 0o755) return { ok: false, reason: 'bin_mode' };\n",
+          "      if (!st.isFile() || (st.mode & 0o7777) !== 0o755) return { ok: false, reason: 'bin_mode' };\n",
         replacement: "      if (!st.isFile()) return { ok: false, reason: 'bin_mode' };\n",
       },
     ],
     tests: ['update/install-package.test.ts'],
     expectRed: ['binExecutable(D-AU3)'],
     mustKill: ['binExecutable(D-AU3)'],
+  },
+  {
+    id: 'bin-mask-0o777',
+    clause: 'D-AU3:读回复核的权限掩码改回 0o777(特殊位 04755 / 02755 被放过)',
+    edits: [
+      {
+        file: 'src/update/installed.ts',
+        anchor: "(st.mode & 0o7777) !== 0o755) return { ok: false, reason: 'bin_mode' };",
+        replacement: "(st.mode & 0o777) !== 0o755) return { ok: false, reason: 'bin_mode' };",
+      },
+    ],
+    tests: ['update/install-package.test.ts'],
+    expectRed: ['binExecutable:掩码是 0o7777'],
+    mustKill: ['binExecutable:掩码是 0o7777'],
+  },
+  {
+    id: 'release-gate-mode-check-removed',
+    clause: 'D-AU3:发布前门禁脚本去掉 tar header 原始 mode 检查',
+    edits: [
+      {
+        file: 'scripts/check-release-tgz.mjs',
+        anchor: 'else if ((rawMode & 0o7777) !== 0o755) {',
+        replacement: 'else if (false) {',
+      },
+    ],
+    tests: ['build/release-tgz-gate.test.ts'],
+    expectRed: ['坏包:tar header 里 bin 是 0644', '坏包:bin 带特殊位'],
+    mustKill: ['坏包:tar header 里 bin 是 0644', '坏包:bin 带特殊位'],
+  },
+  {
+    id: 'release-gate-mask-0o777',
+    clause: 'D-AU3:发布前门禁的 mode 掩码改回 0o777(特殊位放过)',
+    edits: [
+      {
+        file: 'scripts/check-release-tgz.mjs',
+        anchor: 'else if ((rawMode & 0o7777) !== 0o755) {',
+        replacement: 'else if ((rawMode & 0o777) !== 0o755) {',
+      },
+    ],
+    tests: ['build/release-tgz-gate.test.ts'],
+    expectRed: ['坏包:bin 带特殊位'],
+    mustKill: ['坏包:bin 带特殊位'],
+  },
+  {
+    id: 'release-gate-version-run-removed',
+    clause: 'D-AU3:发布前门禁不再真执行 --version(版本不符放过)',
+    edits: [
+      {
+        file: 'scripts/check-release-tgz.mjs',
+        anchor: "if (r.status !== 0 || (r.stdout ?? '').trim() !== version) {",
+        replacement: 'if (false) {',
+      },
+    ],
+    tests: ['build/release-tgz-gate.test.ts'],
+    expectRed: ['坏包:解包后 --version 输出不等于 tag 版本'],
+    mustKill: ['坏包:解包后 --version 输出不等于 tag 版本'],
   },
   {
     id: 'readback-bin-mode-not-wired',

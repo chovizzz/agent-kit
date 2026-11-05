@@ -3,12 +3,13 @@ import { describe, expect, it } from 'vitest';
 import { readBytes } from '../../src/io/read-fs.js';
 import * as safe from '../../src/io/safe-fs.js';
 import {
+  binEntryOf,
   checkPackage,
   sriMatches,
   staticSmoke,
   verifyInstalledTree,
 } from '../../src/update/install.js';
-import { readTgz } from '../../src/update/tar.js';
+import { readTgz, type TarListing } from '../../src/update/tar.js';
 import { buildPkg, newWorld, sha512 } from './install-world.js';
 
 describe('sriMatches', () => {
@@ -120,6 +121,19 @@ describe('verifyInstalledTree', () => {
     ).toEqual({ ok: false, reason: 'bin_mode' });
   });
 
+  it('binExecutable:掩码是 0o7777,精确等于 0755;04755 / 02755 / 01755 / 0775 / 0700 都不合格', async () => {
+    const { w, p, root } = await laidOut();
+    const bin = path.join(root, 'dist/cli.js');
+    const check = (): ReturnType<typeof verifyInstalledTree> =>
+      verifyInstalledTree(root, { anchor: p.anchor, binExecutable: 'dist/cli.js' });
+    await safe.chmod(w.fx, bin, 0o755);
+    expect(await check()).toEqual({ ok: true, anchor: p.anchor }); // 正向对照
+    for (const mode of [0o4755, 0o2755, 0o1755, 0o775, 0o700, 0o644]) {
+      await safe.chmod(w.fx, bin, mode);
+      expect(await check(), mode.toString(8)).toEqual({ ok: false, reason: 'bin_mode' });
+    }
+  });
+
   it('改文件 / 多文件 / 少文件 / 符号链接 / integrity.json 缺失', async () => {
     const a = await laidOut();
     await safe.writeFile(a.w.fx, path.join(a.root, 'dist/main.js'), 'tampered');
@@ -137,5 +151,62 @@ describe('verifyInstalledTree', () => {
     await safe.remove(e.w.fx, path.join(e.root, 'integrity.json'));
     expect(await verifyInstalledTree(e.root)).toMatchObject({ reason: 'integrity_missing' });
     expect((await readBytes(path.join(a.root, 'package.json'))).byteLength).toBeGreaterThan(0);
+  });
+});
+
+describe('binEntryOf(D-AU3:静态冒烟与 staging 提权共用的 bin 入口判定)', () => {
+  const listingOf = (pkgJson: string | undefined): TarListing => ({
+    files:
+      pkgJson === undefined
+        ? []
+        : [{ path: 'package.json', mode: 0o644, bytes: Buffer.from(pkgJson) }],
+    dirs: [],
+  });
+  const withBin = (bin: unknown): string =>
+    JSON.stringify({ name: '@chovizzz/agent-kit', version: '1.2.3', bin });
+
+  const CASES: [string, string | undefined, string | undefined][] = [
+    ['字符串形态', withBin('dist/cli.js'), 'dist/cli.js'],
+    ['对象形态(agent-kit 键)', withBin({ 'agent-kit': 'dist/cli.js' }), 'dist/cli.js'],
+    ['对象形态,子目录', withBin({ 'agent-kit': 'dist/bin/run.js' }), 'dist/bin/run.js'],
+    ['对象缺 agent-kit 键', withBin({ other: 'dist/cli.js' }), undefined],
+    ['没有 bin 字段', JSON.stringify({ name: 'x' }), undefined],
+    ['bin 为 null', withBin(null), undefined],
+    ['bin 为数组', withBin(['dist/cli.js']), undefined],
+    ['bin 为数字', withBin(1), undefined],
+    ['值不是字符串', withBin({ 'agent-kit': 5 }), undefined],
+    ['越界路径 ../x', withBin({ 'agent-kit': '../x' }), undefined],
+    ['含 .. 段', withBin({ 'agent-kit': 'dist/../x.js' }), undefined],
+    ['不在 dist/ 下', withBin('src/cli.js'), undefined],
+    ['绝对路径', withBin('/etc/passwd'), undefined],
+    ['含空格(非可见 ASCII)', withBin('dist/a b.js'), undefined],
+    ['package.json 不是合法 JSON', '{', undefined],
+    ['package.json 是 null', 'null', undefined],
+    ['没有 package.json', undefined, undefined],
+  ];
+
+  it.each(CASES)('%s', (_name, pkgJson, want) => {
+    expect(binEntryOf(listingOf(pkgJson))).toBe(want);
+  });
+
+  it('静态冒烟用的就是这个入口:入口文件缺失 → bin_missing;形态非法 → bin_entry;合法且有 shebang → 通过', () => {
+    const files = (pkgJson: string, extra: { path: string; data: string }[]): TarListing => ({
+      files: [
+        { path: 'package.json', mode: 0o644, bytes: Buffer.from(pkgJson) },
+        ...extra.map((e) => ({ path: e.path, mode: 0o644 as const, bytes: Buffer.from(e.data) })),
+      ],
+      dirs: [],
+    });
+    const ok = files(withBin({ 'agent-kit': 'dist/alt.js' }), [
+      { path: 'dist/alt.js', data: '#!/usr/bin/env node\n' },
+      { path: 'dist/cli.js', data: 'no shebang' },
+    ]);
+    expect(binEntryOf(ok)).toBe('dist/alt.js');
+    expect(staticSmoke(ok)).toEqual({ ok: true }); // 判的是 alt.js(cli.js 没有 shebang 也不影响)
+    expect(staticSmoke(files(withBin('dist/alt.js'), []))).toEqual({
+      ok: false,
+      detail: 'bin_missing',
+    });
+    expect(staticSmoke(files(withBin('../x'), []))).toEqual({ ok: false, detail: 'bin_entry' });
   });
 });

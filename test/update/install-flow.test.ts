@@ -94,6 +94,36 @@ describe('update 正常安装', () => {
     );
   });
 
+  it('D-AU3:bin 指向 dist/alt.js(对象形态)→ 提到 0755 的恰是静态冒烟判的那个入口,别的文件不动', async () => {
+    const w = await newWorld();
+    const pkg = buildPkg('0.1.1', {
+      edit: (f) => [
+        ...f.map((x) =>
+          x.path === 'package.json'
+            ? {
+                ...x,
+                data: JSON.stringify({
+                  name: '@chovizzz/agent-kit',
+                  version: '0.1.1',
+                  bin: { 'agent-kit': 'dist/alt.js' },
+                }),
+              }
+            : x.path === 'dist/cli.js'
+              ? { ...x, mode: 0o644 }
+              : x,
+        ),
+        { path: 'dist/alt.js', data: '#!/usr/bin/env node\n', mode: 0o644 },
+      ],
+    });
+    await writeRegistry(w, { versions: [{ pkg }], distTags: { latest: '0.1.1' } });
+    const r = await runUpdate(w, ['--write']);
+    expect(r.err).toBe('');
+    expect(r.code).toBe(0);
+    const dist = path.join(share(w), 'versions/0.1.1/dist');
+    expect((await lstat(path.join(dist, 'alt.js'))).mode & 0o7777).toBe(0o755);
+    expect((await lstat(path.join(dist, 'cli.js'))).mode & 0o7777).toBe(0o644);
+  });
+
   it('D-AU3:staging 里 bin 权限被改回 0644 → 读回复核 staging_mismatch,fail-closed(不冒烟、不提交、不动 current)', async () => {
     const w = await newWorld();
     await writeRegistry(w, {

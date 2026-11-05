@@ -214,7 +214,7 @@ export async function verifyInstalledTree(
   if (want.binExecutable !== undefined) {
     try {
       const st = await lstat(path.join(rootAbs, ...want.binExecutable.split('/')));
-      if (!st.isFile() || (st.mode & 0o777) !== 0o755) return { ok: false, reason: 'bin_mode' };
+      if (!st.isFile() || (st.mode & 0o7777) !== 0o755) return { ok: false, reason: 'bin_mode' };
     } catch {
       return { ok: false, reason: 'bin_mode' };
     }

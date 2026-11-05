@@ -112,11 +112,23 @@ jobs:
             exit 1
           fi
 
+      # D-AU3(contracts §19.9.1):对**实际待发布的 tgz**做发布前门禁——tar header 里 dist/cli.js 的原始 mode 恰为 0755、
+      # 安装器的 checkPackage / staticSmoke 通过、解包后 `node dist/cli.js --version` 等于 tag 版本。任一不过即失败,不发布。
+      # 下一步 `npm publish` 发布的就是这里检查过的同一个文件(不再让 publish 自己重新 pack)。
+      - name: Pack and gate the release tarball
+        run: |
+          PACK_DIR="$(mktemp -d "${RUNNER_TEMP}/pack.XXXXXX")"
+          npm pack --ignore-scripts --pack-destination "$PACK_DIR"
+          TGZ="$(ls "$PACK_DIR"/*.tgz)"
+          test "$(ls "$PACK_DIR"/*.tgz | wc -l)" -eq 1
+          node scripts/check-release-tgz.mjs "$TGZ" --tag "${GITHUB_REF_NAME}"
+          echo "RELEASE_TGZ=$TGZ" >> "$GITHUB_ENV"
+
       - name: Publish to npm
-        # 预发布版本(带 -rc/-next 等后缀)只进 rc 标签,绝不进 latest
+        # 预发布版本(带 -rc/-next 等后缀)只进 rc 标签,绝不进 latest;发布的是上一步检查过的那个 tgz
         run: |
           VER="$(node -p "require('./package.json').version")"
           case "$VER" in *-*) DIST_TAG=rc ;; *) DIST_TAG=latest ;; esac
-          npm publish --provenance --access public --ignore-scripts --tag "$DIST_TAG"
+          npm publish "$RELEASE_TGZ" --provenance --access public --ignore-scripts --tag "$DIST_TAG"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

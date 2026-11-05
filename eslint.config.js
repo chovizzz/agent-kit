@@ -331,6 +331,9 @@ const SUBPROCESS_TESTS = [
   // R20 A2 B5b:confirm 拒绝路径零写入的真子进程支撑(vite 打包 confirm-entry 后用 node 跑 main())
   'test/rsi/proc/confirm-helper.ts',
   'test/build/bundle-artifact.test.ts',
+  // D-AU3:真实构建 + 真实 npm pack 的支撑与发布前门禁脚本的子进程测试
+  'test/build/real-pack-helper.ts',
+  'test/build/release-tgz-gate.test.ts',
   // R20 A2 B5-0:发布冻结脚本在沙箱 cwd 里的真子进程测试
   'test/build/publish-freeze.test.ts',
   // R20 A3:真实发布产物(vite 构建的 dist/cli.js)上的钩子入口四组合、stdin 不关闭、端到端起 worker
