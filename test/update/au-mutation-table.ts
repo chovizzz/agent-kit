@@ -699,6 +699,15 @@ export const AU_RESULTS: readonly AuMutationResult[] = [
     restored: true,
   },
   {
+    id: 'readback-bin-mode-not-wired',
+    killedBy: [
+      'D-AU3:staging 里 bin 权限被改回 0644 → 读回复核 staging_mismatch,fail-closed(不冒烟、不提交、不动 current)',
+    ],
+    failed: 1,
+    skipped: 0,
+    restored: true,
+  },
+  {
     id: 'smoke-shebang-check-removed',
     killedBy: [
       '冒烟:bin 入口没有 shebang → smoke,拉黑',
