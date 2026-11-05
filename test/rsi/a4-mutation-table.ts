@@ -407,7 +407,7 @@ export const A4_MUTATIONS: readonly A4Mutation[] = [
       },
     ],
     tests: [INGEST],
-    expectRed: ['格式预检:> 5 条', '> 5 条提案 → too_many_proposals'],
+    expectRed: ['格式预检:', '> 5 条提案 → too_many_proposals'],
     mustKill: ['格式预检:> 5 条'],
   },
   {
