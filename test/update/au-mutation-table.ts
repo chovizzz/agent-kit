@@ -655,4 +655,51 @@ export const AU_RESULTS: readonly AuMutationResult[] = [
     skipped: 0,
     restored: true,
   },
+  // 2026-11-05T09:01:34Z javis 私有检出 @ 132bed1(基线 8743886 + D-AU3):基线全绿(0 failed);下列五条还原后逐文件 sha256 一致、git 干净;javis HOME 下 .local/state/agent-kit 前后不变
+  {
+    id: 'smoke-requires-0755',
+    killedBy: [
+      'D-AU3:tarball 里 bin 是 0644(npm pack 的真实形态)也装得上,装好后 bin 统一 0755',
+      'bin 缺失 / 不可执行 / 指向 dist 之外',
+      '回归 D-AU3:真实内容但 tarball 里 bin 是 0644(0.3.0–0.3.3 的真实形态)同样装得上,装好后是 0755',
+    ],
+    failed: 3,
+    skipped: 0,
+    restored: true,
+  },
+  {
+    id: 'staging-bin-not-0755',
+    killedBy: [
+      'D-AU3:tarball 里 bin 是 0644(npm pack 的真实形态)也装得上,装好后 bin 统一 0755',
+      '回归 D-AU3:真实内容但 tarball 里 bin 是 0644(0.3.0–0.3.3 的真实形态)同样装得上,装好后是 0755',
+    ],
+    failed: 2,
+    skipped: 0,
+    restored: true,
+  },
+  {
+    id: 'readback-skips-bin-mode',
+    killedBy: ['binExecutable(D-AU3):bin 不是 0755 → bin_mode;不给该选项时不看权限'],
+    failed: 1,
+    skipped: 0,
+    restored: true,
+  },
+  {
+    id: 'smoke-shebang-check-removed',
+    killedBy: [
+      '冒烟:bin 入口没有 shebang → smoke,拉黑',
+      'bin 缺失 / 不可执行 / 指向 dist 之外',
+      '负向:bin 首两字节不是 #!(integrity 已重算,只有静态冒烟能拦)→ smoke,拉黑,current 不动',
+    ],
+    failed: 3,
+    skipped: 0,
+    restored: true,
+  },
+  {
+    id: 'build-bin-not-executable',
+    killedBy: ['产物前提:真实 tarball 里 dist/cli.js 以 #! 开头;npm pack 保留构建设好的 0755'],
+    failed: 1,
+    skipped: 0,
+    restored: true,
+  },
 ];
