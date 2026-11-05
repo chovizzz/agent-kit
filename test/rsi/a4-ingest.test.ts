@@ -557,11 +557,7 @@ describe('格式预检(订正 #9;R20-16.15 第 3a 步、R20-16.29):格式不对�
     ['schema 不合法(多余字段)', () => body(uniq(0, { status: 'active' })), 'schema_invalid'],
     ['schema 不合法(缺 verify)', () => body(uniq(0, { verify: undefined })), 'schema_invalid'],
     ['schema 不合法(op 不是 add)', () => body(uniq(0, { op: 'edit' })), 'schema_invalid'],
-    [
-      '> 5 条',
-      () => body(...[0, 1, 2, 3, 4, 5].map((i) => uniq(i))),
-      'too_many_proposals',
-    ],
+    ['> 5 条', () => body(...[0, 1, 2, 3, 4, 5].map((i) => uniq(i))), 'too_many_proposals'],
   ];
   for (const [name, mk, reason] of cases) {
     it(`格式预检:${name} → ${reason};名额文件不变、digest 仍可用;同一 digest 改正后通过并扣名额`, async () => {

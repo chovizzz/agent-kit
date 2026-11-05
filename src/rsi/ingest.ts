@@ -113,7 +113,7 @@ const INGEST_SHAPE_CTX = {
   maxProposals: RSI_INGEST_MAX_PROPOSALS,
   maxOutputBytes: MAX_INGEST_OUTPUT_BYTES,
 } as const;
-const OWNER_RE =/^@[A-Za-z0-9][A-Za-z0-9._/-]{0,63}$/;
+const OWNER_RE = /^@[A-Za-z0-9][A-Za-z0-9._/-]{0,63}$/;
 const rej = (reason: RsiIngestRejectReason): IngestOutcome => ({ kind: 'rejected', reason });
 const notRun = (reason: string): IngestOutcome => ({
   kind: 'not_run',

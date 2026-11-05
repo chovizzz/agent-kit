@@ -290,11 +290,13 @@ export function matchSignature(sig: { pattern: string }, text: string): boolean 
 }
 
 export type ShapeResult =
-  | { ok: true; out: ReflectorOutput }
-  | { ok: false; code: ValidatorRejectCode; detail: string };
+  { ok: true; out: ReflectorOutput } | { ok: false; code: ValidatorRejectCode; detail: string };
 
 /** 形状检查所需的上下文子集(与 digest / 会话 / 暂存区状态无关) */
-export type ShapeContext = Pick<ValidateContext, 'atomMaxBytes' | 'maxProposals' | 'maxOutputBytes'>;
+export type ShapeContext = Pick<
+  ValidateContext,
+  'atomMaxBytes' | 'maxProposals' | 'maxOutputBytes'
+>;
 
 /**
  * 校验的第一段:大小、「单个 JSON 对象」、`makeReflectorOutputSchema` 的 schema。**纯函数,不依赖 digest、会话或任何磁盘状态**。
