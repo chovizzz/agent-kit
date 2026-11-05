@@ -26,6 +26,7 @@ const SPAWN = 'update/self-spawn-hook.test.ts';
 const CLOSURE = 'update/installed-closure.test.ts';
 const ENTRY = 'rsi/hook-update.test.ts';
 const DIST = 'rsi/hook-forward-dist.test.ts';
+const REALPACK = 'update/real-pack-install.test.ts';
 
 export const AU_MUTATIONS: readonly AuMutation[] = [
   {
@@ -346,6 +347,88 @@ export const AU_MUTATIONS: readonly AuMutation[] = [
     tests: [INSTALLED],
     expectRed: ['fail-closed'],
     mustKill: ['fail-closed'],
+  },
+  // ---- D-AU3(contracts §19.9.1):真实发布产物 + 静态冒烟不看权限位 ----
+  {
+    id: 'smoke-requires-0755',
+    clause: 'D-AU3:静态冒烟恢复「bin 必须 0755」(真实 npm pack 的 0644 产物被误拉黑)',
+    edits: [
+      {
+        file: 'src/update/install.ts',
+        anchor: "  if (f.bytes.subarray(0, 2).toString('latin1') !== '#!')\n",
+        replacement:
+          "  if (f.mode !== 0o755) return { ok: false, detail: 'bin_not_executable' };\n  if (f.bytes.subarray(0, 2).toString('latin1') !== '#!')\n",
+      },
+    ],
+    tests: [REALPACK, 'update/install-package.test.ts', 'update/install-flow.test.ts'],
+    expectRed: [
+      '回归 D-AU3',
+      'D-AU3:tarball 里 bin 是 0644',
+      'bin 缺失 / 不可执行 / 指向 dist 之外',
+    ],
+    mustKill: ['回归 D-AU3', 'D-AU3:tarball 里 bin 是 0644'],
+  },
+  {
+    id: 'staging-bin-not-0755',
+    clause: 'D-AU3:写 staging 时不把 bin 设为 0755(沿用 tarball 里的权限)',
+    edits: [
+      {
+        file: 'src/update/install.ts',
+        anchor: '        mode: f.path === binEntry ? 0o755 : f.mode,\n',
+        replacement: '        mode: f.mode,\n',
+      },
+    ],
+    tests: [REALPACK, 'update/install-flow.test.ts'],
+    expectRed: ['回归 D-AU3', 'D-AU3:tarball 里 bin 是 0644'],
+    mustKill: ['回归 D-AU3', 'D-AU3:tarball 里 bin 是 0644'],
+  },
+  {
+    id: 'readback-skips-bin-mode',
+    clause: 'D-AU3:读回复核不核对 bin 权限(verifyInstalledTree 的 binExecutable 形同虚设)',
+    edits: [
+      {
+        file: 'src/update/installed.ts',
+        anchor:
+          "      if (!st.isFile() || (st.mode & 0o777) !== 0o755) return { ok: false, reason: 'bin_mode' };\n",
+        replacement: "      if (!st.isFile()) return { ok: false, reason: 'bin_mode' };\n",
+      },
+    ],
+    tests: ['update/install-package.test.ts'],
+    expectRed: ['binExecutable(D-AU3)'],
+    mustKill: ['binExecutable(D-AU3)'],
+  },
+  {
+    id: 'smoke-shebang-check-removed',
+    clause: 'D-AU3:静态冒烟去掉 `#!` 检查',
+    edits: [
+      {
+        file: 'src/update/install.ts',
+        anchor:
+          "  if (f.bytes.subarray(0, 2).toString('latin1') !== '#!')\n    return { ok: false, detail: 'bin_shebang' };\n",
+        replacement: '',
+      },
+    ],
+    tests: [REALPACK, 'update/install-package.test.ts', 'update/install-flow.test.ts'],
+    expectRed: [
+      '负向:bin 首两字节不是 #!',
+      'bin 缺失 / 不可执行 / 指向 dist 之外',
+      '冒烟:bin 入口没有 shebang',
+    ],
+    mustKill: ['负向:bin 首两字节不是 #!'],
+  },
+  {
+    id: 'build-bin-not-executable',
+    clause: 'D-AU3:构建不再把 dist/cli.js 设为 0755(vite 插件去掉)',
+    edits: [
+      {
+        file: 'vite.config.ts',
+        anchor: 'plugins: [nodePrefixBuiltins, absentOptional, binExecutable],',
+        replacement: 'plugins: [nodePrefixBuiltins, absentOptional],',
+      },
+    ],
+    tests: [REALPACK],
+    expectRed: ['产物前提'],
+    mustKill: ['产物前提'],
   },
 ];
 

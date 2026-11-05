@@ -148,17 +148,20 @@ export type TreeCheck =
         | 'version_mismatch'
         | 'irregular'
         | 'file_set'
-        | 'file_mismatch';
+        | 'file_mismatch'
+        | 'bin_mode';
     };
 
 /**
  * 磁盘上一棵已安装版本树的完整校验(回滚前、staging 写完后复核用):
  * integrity.json 是普通文件(非链接、nlink=1)→ 其 sha256 等于 `anchor`(给了的话)→ 过 schema、`kit_version` 等于 `version`(给了的话)
  * → 树里没有符号链接 / 特殊文件,文件集合与 integrity.files ∪ {integrity.json} 严格相等 → 逐文件 sha256 + 字节数。
+ * `want.binExecutable`(包根相对路径,只有安装器读回 staging 时给):该文件的权限必须恰为 0755(D-AU3:bin 在 staging 里统一设为 0755);
+ * 回滚 / 启动器 / 自动同步校验已安装版本时不给,不对权限提额外要求。
  */
 export async function verifyInstalledTree(
   rootAbs: string,
-  want: { anchor?: string; version?: string } = {},
+  want: { anchor?: string; version?: string; binExecutable?: string } = {},
 ): Promise<TreeCheck> {
   const ipath = path.join(rootAbs, 'integrity.json');
   let ibytes: Uint8Array;
@@ -206,6 +209,14 @@ export async function verifyInstalledTree(
         return { ok: false, reason: 'file_mismatch' };
     } catch {
       return { ok: false, reason: 'file_mismatch' };
+    }
+  }
+  if (want.binExecutable !== undefined) {
+    try {
+      const st = await lstat(path.join(rootAbs, ...want.binExecutable.split('/')));
+      if (!st.isFile() || (st.mode & 0o777) !== 0o755) return { ok: false, reason: 'bin_mode' };
+    } catch {
+      return { ok: false, reason: 'bin_mode' };
     }
   }
   return { ok: true, anchor };

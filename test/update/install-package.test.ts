@@ -58,10 +58,16 @@ describe('checkPackage / staticSmoke', () => {
         ),
     });
     expect(staticSmoke(readTgz(noBin.tgz))).toEqual({ ok: false, detail: 'bin_entry' });
+    // D-AU3:权限位不是判据——npm pack 出来的 bin 是 0644,真实发布版必须能通过(此前要求 0755 → 每个真实版本被误拉黑)
     const notExec = buildPkg('1.2.3', {
       edit: (f) => f.map((x) => (x.path === 'dist/cli.js' ? { ...x, mode: 0o644 } : x)),
     });
-    expect(staticSmoke(readTgz(notExec.tgz))).toEqual({ ok: false, detail: 'bin_not_executable' });
+    expect(staticSmoke(readTgz(notExec.tgz))).toEqual({ ok: true });
+    const noShebang = buildPkg('1.2.3', {
+      edit: (f) =>
+        f.map((x) => (x.path === 'dist/cli.js' ? { ...x, data: "console.log('x');\n" } : x)),
+    });
+    expect(staticSmoke(readTgz(noShebang.tgz))).toEqual({ ok: false, detail: 'bin_shebang' });
     const outside = buildPkg('1.2.3', {
       edit: (f) =>
         f.map((x) =>
@@ -101,6 +107,17 @@ describe('verifyInstalledTree', () => {
     expect(await verifyInstalledTree(root, { version: '9.9.9' })).toMatchObject({
       reason: 'version_mismatch',
     });
+  });
+
+  it('binExecutable(D-AU3):bin 不是 0755 → bin_mode;不给该选项时不看权限', async () => {
+    const { p, root } = await laidOut(); // laidOut 以默认 0644 写文件
+    expect(await verifyInstalledTree(root, { anchor: p.anchor })).toMatchObject({ ok: true });
+    expect(
+      await verifyInstalledTree(root, { anchor: p.anchor, binExecutable: 'dist/cli.js' }),
+    ).toEqual({ ok: false, reason: 'bin_mode' });
+    expect(
+      await verifyInstalledTree(root, { anchor: p.anchor, binExecutable: 'dist/missing.js' }),
+    ).toEqual({ ok: false, reason: 'bin_mode' });
   });
 
   it('改文件 / 多文件 / 少文件 / 符号链接 / integrity.json 缺失', async () => {

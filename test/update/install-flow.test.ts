@@ -76,6 +76,23 @@ describe('update 正常安装', () => {
     expect(t).not.toContain('staging/st-');
   });
 
+  it('D-AU3:tarball 里 bin 是 0644(npm pack 的真实形态)也装得上,装好后 bin 统一 0755', async () => {
+    const w = await newWorld();
+    const pkg = buildPkg('0.1.1', {
+      edit: (f) => f.map((x) => (x.path === 'dist/cli.js' ? { ...x, mode: 0o644 } : x)),
+    });
+    await writeRegistry(w, { versions: [{ pkg }], distTags: { latest: '0.1.1' } });
+    const r = await runUpdate(w, ['--write']);
+    expect(r.err).toBe('');
+    expect(r.code).toBe(0);
+    expect((await stateOf(w))['bad_versions']).toEqual([]);
+    const bin = path.join(share(w), 'versions/0.1.1/dist/cli.js');
+    expect((await lstat(bin)).mode & 0o777).toBe(0o755);
+    expect((await lstat(path.join(share(w), 'versions/0.1.1/dist/main.js'))).mode & 0o777).toBe(
+      0o644,
+    );
+  });
+
   it('第二次运行:已最新,不再验签', async () => {
     const { w } = await setup();
     await runUpdate(w, ['--write']);

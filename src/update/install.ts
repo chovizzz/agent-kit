@@ -394,15 +394,18 @@ export function checkPackage(listing: TarListing, version: string): PackageCheck
   return { ok: true, anchor: sha256Hex(ib), integrityFiles: integrity.files.length };
 }
 
-/** 静态冒烟:bin 入口存在、是 dist/ 下的普通文件、带可执行位与 shebang。不执行任何代码。 */
-export function staticSmoke(listing: TarListing): { ok: true } | { ok: false; detail: string } {
+/**
+ * 从包内 `package.json` 取 bin 入口(`bin['agent-kit']` 或字符串形态的 `bin`):必须是 `dist/` 下、可见 ASCII、不含 `..` 的相对路径。
+ * 取不到 / 形状不对 → undefined(调用方按 `bin_entry` 处理)。静态冒烟与「staging 里把 bin 统一设为 0755」共用这一份判定。
+ */
+export function binEntryOf(listing: TarListing): string | undefined {
   const pj = listing.files.find((f) => f.path === 'package.json');
-  if (pj === undefined) return { ok: false, detail: 'package_json_missing' };
+  if (pj === undefined) return undefined;
   let bin: unknown;
   try {
     bin = (JSON.parse(pj.bytes.toString('utf8')) as Record<string, unknown>)['bin'];
   } catch {
-    return { ok: false, detail: 'package_json_invalid' };
+    return undefined;
   }
   const entry =
     typeof bin === 'string'
@@ -411,11 +414,30 @@ export function staticSmoke(listing: TarListing): { ok: true } | { ok: false; de
         ? (bin as Record<string, unknown>)['agent-kit']
         : undefined;
   if (typeof entry !== 'string' || !/^dist\/[\x21-\x7e]+$/.test(entry) || entry.includes('..')) {
-    return { ok: false, detail: 'bin_entry' };
+    return undefined;
   }
+  return entry;
+}
+
+/**
+ * 静态冒烟:bin 入口存在、是 dist/ 下的普通文件(tar 读取器只产出普通文件)、以 shebang(`#!`)开头。不执行任何代码。
+ *
+ * **不看权限位**(D-AU3 订正,docs/contracts.md §19.9.1):`npm pack` 对 vite 产出的 `dist/cli.js` 打进 tarball 的是 0644(实测 0.3.0–0.3.3),
+ * 而 kit 用 `process.execPath` 执行候选版本,不依赖可执行位;此前要求 0755 会让每个真实发布版都被误判为 `smoke` 并拉黑。
+ * 可执行位由安装器在写 staging 时统一设为 0755 并读回核对(见 `installVersion` 与 `verifyInstalledTree` 的 `binExecutable`)。
+ */
+export function staticSmoke(listing: TarListing): { ok: true } | { ok: false; detail: string } {
+  const pj = listing.files.find((f) => f.path === 'package.json');
+  if (pj === undefined) return { ok: false, detail: 'package_json_missing' };
+  try {
+    JSON.parse(pj.bytes.toString('utf8'));
+  } catch {
+    return { ok: false, detail: 'package_json_invalid' };
+  }
+  const entry = binEntryOf(listing);
+  if (entry === undefined) return { ok: false, detail: 'bin_entry' };
   const f = listing.files.find((x) => x.path === entry);
   if (f === undefined) return { ok: false, detail: 'bin_missing' };
-  if (f.mode !== 0o755) return { ok: false, detail: 'bin_not_executable' };
   if (f.bytes.subarray(0, 2).toString('latin1') !== '#!')
     return { ok: false, detail: 'bin_shebang' };
   return { ok: true };
@@ -627,15 +649,21 @@ export async function installVersion(env: InstallEnv, input: InstallInput): Prom
     const ctx = mkCtx(env, scope);
     stagingCreated = true;
     await mkdirp(ctx, staging, STATE_DIR_MODE);
+    // bin 入口统一 0755(npm pack 出来的是 0644,见 staticSmoke 注释);其余文件沿用 tar 读取器归一后的权限
+    const binEntry = binEntryOf(listing);
     for (const f of listing.files) {
       await writeFile(ctx, `${staging}/${f.path}`, f.bytes, {
-        mode: f.mode,
+        mode: f.path === binEntry ? 0o755 : f.mode,
         dirMode: STATE_DIR_MODE,
       });
     }
     await inject(env, 'after-staging-write');
     const stagingAbs = path.join(env.home, ...staging.split('/'));
-    const back = await verifyInstalledTree(stagingAbs, { anchor: pkg.anchor, version });
+    const back = await verifyInstalledTree(stagingAbs, {
+      anchor: pkg.anchor,
+      version,
+      ...(binEntry !== undefined ? { binExecutable: binEntry } : {}),
+    });
     if (!back.ok)
       return { ok: false, failure: { kind: 'fail_closed', reason: 'staging_mismatch' } };
     if (env.deps.smoke !== undefined) {
