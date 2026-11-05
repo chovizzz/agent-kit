@@ -7,7 +7,7 @@
       "confidence": "documented",
       "mode": "owned",
       "path": "claude/home/.claude/skills/agent-kit-rsi/SKILL.md",
-      "sha256": "4458a32b45ed1d0d0c6845e267251097f6e36594add53af97871f086a32307bd",
+      "sha256": "b98a38a3132998b427e116fe2570fa152fdf74904cbb94336a486e73b076882b",
       "sourceRefs": [
         "skill:agent-kit-rsi"
       ],
@@ -19,7 +19,7 @@
       "confidence": "documented",
       "mode": "owned",
       "path": "claude/home/.claude/skills/commit-checklist/SKILL.md",
-      "sha256": "140632c75adc80614b26beaf9ac5f5ca7a72a5a351ed55c69e2002b007d2e922",
+      "sha256": "33ec5064a1e578c8b87be7f5d906949e8ac5d6bb960b2eaa5bbc2195523e316d",
       "sourceRefs": [
         "skill:commit-checklist"
       ],
@@ -31,7 +31,7 @@
       "confidence": "documented",
       "mode": "owned",
       "path": "codex/home/.agents/skills/agent-kit-rsi/SKILL.md",
-      "sha256": "4458a32b45ed1d0d0c6845e267251097f6e36594add53af97871f086a32307bd",
+      "sha256": "b98a38a3132998b427e116fe2570fa152fdf74904cbb94336a486e73b076882b",
       "sourceRefs": [
         "skill:agent-kit-rsi"
       ],
@@ -43,7 +43,7 @@
       "confidence": "documented",
       "mode": "owned",
       "path": "codex/home/.agents/skills/commit-checklist/SKILL.md",
-      "sha256": "140632c75adc80614b26beaf9ac5f5ca7a72a5a351ed55c69e2002b007d2e922",
+      "sha256": "33ec5064a1e578c8b87be7f5d906949e8ac5d6bb960b2eaa5bbc2195523e316d",
       "sourceRefs": [
         "skill:commit-checklist"
       ],
@@ -55,7 +55,7 @@
       "confidence": "documented",
       "mode": "owned",
       "path": "kimi/home/.agents/skills/agent-kit-rsi/SKILL.md",
-      "sha256": "4458a32b45ed1d0d0c6845e267251097f6e36594add53af97871f086a32307bd",
+      "sha256": "b98a38a3132998b427e116fe2570fa152fdf74904cbb94336a486e73b076882b",
       "sourceRefs": [
         "skill:agent-kit-rsi"
       ],
@@ -67,7 +67,7 @@
       "confidence": "documented",
       "mode": "owned",
       "path": "kimi/home/.agents/skills/commit-checklist/SKILL.md",
-      "sha256": "140632c75adc80614b26beaf9ac5f5ca7a72a5a351ed55c69e2002b007d2e922",
+      "sha256": "33ec5064a1e578c8b87be7f5d906949e8ac5d6bb960b2eaa5bbc2195523e316d",
       "sourceRefs": [
         "skill:commit-checklist"
       ],
@@ -79,7 +79,7 @@
       "confidence": "documented",
       "mode": "owned",
       "path": "pi/home/.agents/skills/agent-kit-rsi/SKILL.md",
-      "sha256": "4458a32b45ed1d0d0c6845e267251097f6e36594add53af97871f086a32307bd",
+      "sha256": "b98a38a3132998b427e116fe2570fa152fdf74904cbb94336a486e73b076882b",
       "sourceRefs": [
         "skill:agent-kit-rsi"
       ],
@@ -91,14 +91,14 @@
       "confidence": "documented",
       "mode": "owned",
       "path": "pi/home/.agents/skills/commit-checklist/SKILL.md",
-      "sha256": "140632c75adc80614b26beaf9ac5f5ca7a72a5a351ed55c69e2002b007d2e922",
+      "sha256": "33ec5064a1e578c8b87be7f5d906949e8ac5d6bb960b2eaa5bbc2195523e316d",
       "sourceRefs": [
         "skill:commit-checklist"
       ],
       "target": "home"
     }
   ],
-  "kit_version": "0.3.2",
+  "kit_version": "0.3.3",
   "schema_version": 1,
   "skippedLayers": [
     {
