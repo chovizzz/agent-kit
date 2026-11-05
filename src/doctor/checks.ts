@@ -35,9 +35,18 @@ export interface D01Input {
   installedVersion: string | undefined;
   /** KIT_LAUNCHED 已设 = 本次由启动器拉起,即正在用 current */
   launched: boolean;
+  /**
+   * D-AU2(§20.19)钩子触发的自动更新所需的受控 tmp:`missing` = 钩子会因它静默不调度;`not_applicable` = 用不上
+   * (没有 `[rsi]` 配置、或自动更新被关:`KIT_AUTO_UPDATE` / CI / `auto_install=false`)。缺省按 `not_applicable`。
+   */
+  hookUpdateTmp?: 'ok' | 'missing' | 'not_applicable';
 }
 
-/** result:ok | node_too_old | launcher_broken | current_unrecorded。启动器未安装(S7c 之前)不算问题。 */
+/**
+ * result:ok | node_too_old | launcher_broken | current_unrecorded | hook_update_tmp_missing(warn)。启动器未安装(S7c 之前)不算问题。
+ * `hook_update_tmp_missing`:存量纯 pi 用户 `npm i -g` 升级后从没跑过前台命令,没有 update/tmp,poke 永远静默不调度;`items` 给一行提示。
+ * 注意:doctor 本身经启动器,跑完后 `ensureHookTmp` 会把 tmp 建好,所以同一次运行里 D01 先报 missing、再跑一次就 ok——这是预期的。
+ */
 export function checkD01(i: D01Input): CheckResult {
   const major = Number.parseInt(i.nodeVersion.split('.')[0] ?? '', 10);
   const launcher =
@@ -54,12 +63,19 @@ export function checkD01(i: D01Input): CheckResult {
     current_version: ver(i.installedVersion),
     launcher,
     using_current: i.launched,
+    hook_update_tmp: i.hookUpdateTmp ?? 'not_applicable',
   };
   if (!Number.isInteger(major) || major < MIN_NODE_MAJOR) {
     return result('D01', 'fail', 'node_too_old', { facts });
   }
   if (launcher === 'broken') return result('D01', 'warn', 'launcher_broken', { facts });
   if (launcher === 'unrecorded') return result('D01', 'warn', 'current_unrecorded', { facts });
+  if (i.hookUpdateTmp === 'missing') {
+    return result('D01', 'warn', 'hook_update_tmp_missing', {
+      facts,
+      items: ['在终端跑一次任意 agent-kit 命令(如 agent-kit --version)以启用钩子触发的自动更新'],
+    });
+  }
   return result('D01', 'ok', 'ok', { facts });
 }
 

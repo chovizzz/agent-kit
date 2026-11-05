@@ -16,7 +16,7 @@
  * 已知残余:home-fs 的校验与使用之间有竞态窗口(Node 无 openat);tuf-js 联网刷新会在 os.tmpdir() 建临时目录(见 provenance.ts),
  * 本文件不改 TMPDIR(process.env 只许 paths.ts 触碰),S7c-B 的后台 worker 以子进程方式启动时由启动器传受控 TMPDIR。
  */
-import { createHash, randomBytes } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import * as path from 'node:path';
 import { z } from 'zod';
 import { SEMVER_RE } from '../contracts/common.js';
@@ -46,16 +46,27 @@ import {
   type HomeFsContext,
   type HomeFsStage,
 } from '../io/home-fs.js';
-import { lstat, readBytes, readDir, realpath } from '../io/read-fs.js';
-import { probePath } from '../sync/snapshot.js';
+import { lstat, readDir } from '../io/read-fs.js';
+import { probePath } from '../io/probe.js';
 import {
   markBad,
   markInstalled,
   markNotified,
-  parseUpdateState,
   recordCheck,
   serializeUpdateState,
 } from './state.js';
+import {
+  SHARE_REL,
+  UPDATE_STATE_DIR_REL,
+  UPDATE_STATE_FILE_REL,
+  VERSIONS_REL,
+  chainUnsafe,
+  currentVersionOf,
+  readUpdateState,
+  sha256Hex,
+  verifyInstalledTree,
+  walkTree,
+} from './installed.js';
 import { verifyTarballBinding } from './policy.js';
 import { verifyProvenance, type ProvenanceVerifier } from './provenance.js';
 import { toPolicyAttestations, type RegistrySource } from './registry.js';
@@ -65,11 +76,19 @@ import { TarError, readTgz, type TarListing } from './tar.js';
 // 路径与常量
 // ---------------------------------------------------------------------------
 
-export const SHARE_REL = '.local/share/agent-kit';
-export const UPDATE_STATE_DIR_REL = '.local/state/agent-kit/update';
-export const UPDATE_STATE_FILE_REL = `${UPDATE_STATE_DIR_REL}/state.json`;
+// 只读部分(SHARE_REL / UPDATE_STATE_* / 状态读取 / current 解析 / 完整树校验)已拆到零网络的 `installed.ts`(D-AU1),此处 re-export,外部调用点不变。
+export {
+  SHARE_REL,
+  UPDATE_STATE_DIR_REL,
+  UPDATE_STATE_FILE_REL,
+  chainUnsafe,
+  currentVersionOf,
+  readUpdateState,
+  verifyInstalledTree,
+  type StateRead,
+  type TreeCheck,
+} from './installed.js';
 export const UPDATE_LOCK_REL = `${UPDATE_STATE_DIR_REL}/lock`;
-const VERSIONS_REL = `${SHARE_REL}/versions`;
 const STAGING_REL = `${SHARE_REL}/staging`;
 const TUF_REL = `${SHARE_REL}/tuf`;
 /** 后台 worker 的受控 TMPDIR(tuf-js 联网刷新在 os.tmpdir() 下建临时目录) */
@@ -84,12 +103,8 @@ export const LOCK_PARTIAL_GRACE_MS = 10_000;
 export const PROVENANCE_GRACE_HOURS = 24;
 const STATE_FILE_MODE = 0o600;
 const STATE_DIR_MODE = 0o700;
-const MAX_STATE_BYTES = 1024 * 1024;
-const MAX_WALK_ENTRIES = 20_000;
-const MAX_WALK_DEPTH = 16;
 
 const defaultRandomHex = (bytes: number): string => randomBytes(bytes).toString('hex');
-const sha256Hex = (b: Uint8Array | string): string => createHash('sha256').update(b).digest('hex');
 
 export interface InstallDeps {
   now?: () => Date;
@@ -138,174 +153,6 @@ const inject = async (env: InstallEnv, point: string): Promise<void> => {
 // ---------------------------------------------------------------------------
 // 只读探测
 // ---------------------------------------------------------------------------
-
-/** rel 路径上任一已存在段是符号链接 / 不是目录 → true(状态目录不安全) */
-export async function chainUnsafe(home: string, rel: string): Promise<boolean> {
-  let cur = home;
-  for (const seg of rel.split('/')) {
-    cur = path.join(cur, seg);
-    let st;
-    try {
-      st = await lstat(cur);
-    } catch (e) {
-      const code = (e as NodeJS.ErrnoException).code;
-      if (code === 'ENOENT' || code === 'ENOTDIR') return false;
-      return true;
-    }
-    if (st.isSymbolicLink() || !st.isDirectory()) return true;
-  }
-  return false;
-}
-
-export type StateRead =
-  | { kind: 'absent' }
-  | { kind: 'unsafe' }
-  | { kind: 'unreadable' }
-  | { kind: 'ok'; state: UpdateState };
-
-export async function readUpdateState(home: string): Promise<StateRead> {
-  if ((await chainUnsafe(home, UPDATE_STATE_DIR_REL)) || (await chainUnsafe(home, SHARE_REL))) {
-    return { kind: 'unsafe' };
-  }
-  const p = await probePath(home, UPDATE_STATE_FILE_REL);
-  if (p.entry.kind === 'missing')
-    return p.entry.linkedSegment === true ? { kind: 'unsafe' } : { kind: 'absent' };
-  if (
-    p.entry.kind !== 'file' ||
-    p.text === undefined ||
-    Buffer.byteLength(p.text) > MAX_STATE_BYTES
-  ) {
-    return { kind: 'unreadable' };
-  }
-  const r = parseUpdateState(p.text);
-  return r.ok ? { kind: 'ok', state: r.state } : { kind: 'unreadable' };
-}
-
-/** `current` 指向的版本(仅当它是符号链接且真实路径严格位于 versions/ 内);否则 undefined */
-export async function currentVersionOf(home: string): Promise<string | undefined> {
-  try {
-    const link = path.join(home, ...CURRENT_LINK_REL.split('/'));
-    if (!(await lstat(link)).isSymbolicLink()) return undefined;
-    const versions = await realpath(path.join(home, ...VERSIONS_REL.split('/')));
-    const real = await realpath(link);
-    const rel = path.relative(versions, real);
-    if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel) || rel.includes(path.sep)) {
-      return undefined;
-    }
-    return SEMVER_RE.test(rel) ? rel : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-interface Walked {
-  files: string[];
-  dirs: string[];
-  /** 链接 / 特殊文件 / 超出上限:不能当普通树处理 */
-  irregular: boolean;
-}
-
-/** 列出 root 下的普通文件与目录(相对路径,POSIX);遇到符号链接 / 特殊文件 / 超限置 irregular */
-async function walkTree(root: string): Promise<Walked> {
-  const out: Walked = { files: [], dirs: [], irregular: false };
-  let budget = MAX_WALK_ENTRIES;
-  const visit = async (rel: string, depth: number): Promise<void> => {
-    if (depth > MAX_WALK_DEPTH) {
-      out.irregular = true;
-      return;
-    }
-    const entries = await readDir(rel === '' ? root : path.join(root, ...rel.split('/')));
-    for (const e of entries) {
-      if (--budget < 0) {
-        out.irregular = true;
-        return;
-      }
-      const r = rel === '' ? e.name : `${rel}/${e.name}`;
-      if (e.isSymbolicLink) out.irregular = true;
-      else if (e.isDirectory) {
-        out.dirs.push(r);
-        await visit(r, depth + 1);
-      } else if (e.isFile) out.files.push(r);
-      else out.irregular = true;
-    }
-  };
-  await visit('', 0);
-  return out;
-}
-
-export type TreeCheck =
-  | { ok: true; anchor: string }
-  | {
-      ok: false;
-      reason:
-        | 'integrity_missing'
-        | 'integrity_invalid'
-        | 'anchor_mismatch'
-        | 'version_mismatch'
-        | 'irregular'
-        | 'file_set'
-        | 'file_mismatch';
-    };
-
-/**
- * 磁盘上一棵已安装版本树的完整校验(回滚前、staging 写完后复核用):
- * integrity.json 是普通文件(非链接、nlink=1)→ 其 sha256 等于 `anchor`(给了的话)→ 过 schema、`kit_version` 等于 `version`(给了的话)
- * → 树里没有符号链接 / 特殊文件,文件集合与 integrity.files ∪ {integrity.json} 严格相等 → 逐文件 sha256 + 字节数。
- */
-export async function verifyInstalledTree(
-  rootAbs: string,
-  want: { anchor?: string; version?: string } = {},
-): Promise<TreeCheck> {
-  const ipath = path.join(rootAbs, 'integrity.json');
-  let ibytes: Uint8Array;
-  try {
-    const st = await lstat(ipath);
-    if (!st.isFile() || st.isSymbolicLink() || st.nlink > 1 || st.size > MAX_STATE_BYTES) {
-      return { ok: false, reason: 'integrity_missing' };
-    }
-    ibytes = await readBytes(ipath);
-  } catch {
-    return { ok: false, reason: 'integrity_missing' };
-  }
-  const anchor = sha256Hex(ibytes);
-  if (want.anchor !== undefined && want.anchor !== anchor)
-    return { ok: false, reason: 'anchor_mismatch' };
-  let files: { path: string; sha256: string; bytes: number }[];
-  try {
-    const parsed = PayloadIntegritySchema.parse(JSON.parse(Buffer.from(ibytes).toString('utf8')));
-    if (want.version !== undefined && parsed.kit_version !== want.version) {
-      return { ok: false, reason: 'version_mismatch' };
-    }
-    files = parsed.files;
-  } catch {
-    return { ok: false, reason: 'integrity_invalid' };
-  }
-  let walked: Walked;
-  try {
-    walked = await walkTree(rootAbs);
-  } catch {
-    return { ok: false, reason: 'irregular' };
-  }
-  if (walked.irregular) return { ok: false, reason: 'irregular' };
-  const listed = new Set([...files.map((f) => f.path), 'integrity.json']);
-  if (walked.files.length !== listed.size || !walked.files.every((f) => listed.has(f))) {
-    return { ok: false, reason: 'file_set' };
-  }
-  for (const f of files) {
-    const abs = path.join(rootAbs, ...f.path.split('/'));
-    try {
-      const st = await lstat(abs);
-      if (!st.isFile() || st.isSymbolicLink() || st.nlink > 1)
-        return { ok: false, reason: 'file_mismatch' };
-      const b = await readBytes(abs);
-      if (b.byteLength !== f.bytes || sha256Hex(b) !== f.sha256)
-        return { ok: false, reason: 'file_mismatch' };
-    } catch {
-      return { ok: false, reason: 'file_mismatch' };
-    }
-  }
-  return { ok: true, anchor };
-}
 
 // ---------------------------------------------------------------------------
 // 状态写入

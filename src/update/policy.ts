@@ -12,7 +12,7 @@ import {
   UPDATE_COOLDOWN_HOURS_DEFAULT,
   UPDATE_PIN_RE,
 } from '../contracts/update.js';
-import type { NetErrorCode } from '../io/net.js';
+import type { NetErrorCode } from '../contracts/net-error.js';
 
 // ---------------------------------------------------------------------------
 // SemVer
@@ -146,6 +146,22 @@ export function autoUpdateGate(input: {
     return off('command_excluded');
   }
   return { enabled: true };
+}
+
+/**
+ * 钩子(poke)顺带调度 update worker 的开关(D-AU2 / 评审 H3;零网络纯函数):只看 `KIT_AUTO_UPDATE` 关 / CI / `auto_install`。
+ * **不看** TTY(钩子天然非 TTY)、`KIT_LAUNCHED`(poke 可能就跑在被转发的 current 里,带着 `KIT_LAUNCHED=1`)、命令名。
+ * 与 worker 内的二次判定同一口径(worker 同样摘掉 `KIT_LAUNCHED` 并把 TTY 当真),所以钩子放行的 worker 不会被自己的闸挡回。
+ */
+export function hookUpdateGate(input: {
+  env: Readonly<Record<string, string | undefined>>;
+  autoInstall: boolean;
+}): Gate {
+  return autoUpdateGate({
+    env: { ...input.env, KIT_LAUNCHED: undefined },
+    isTTY: true,
+    autoInstall: input.autoInstall,
+  });
 }
 
 export type ThrottleReason = 'never' | 'unparseable' | 'clock_back' | 'elapsed' | 'throttled';

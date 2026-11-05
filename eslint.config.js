@@ -15,6 +15,7 @@ import tseslint from 'typescript-eslint';
  *      · 启动器 `src/update/launcher.ts`:只许 `cli.ts`、`src/cli.ts`、`src/update/**`、`src/commands/update.ts` 及其测试引用;
  *        `io/exec.ts` 将新增的 `runSelf`(S7,唯一能 spawn process.execPath 的入口)只许 launcher.ts 引用;
  *        R20-A0 起另放行零网络桥接 src/update/self-spawn.ts(自动 RSI,contracts §20.9 第 3 条),且该文件不得引用 net / 启动器 / home-fs。
+ *        D-AU1/D-AU2 起 installed.ts / auto-install.ts / signal-code.ts 同样不得引用 net / 启动器 / home-fs(钩子闭包零网络)。
  *  - A5(contracts §20.15 R20-15.6):kit 钩子写出口 `src/io/hooks-fs.ts`(第四个写出口)只许 `src/rsi/hooks/**` 及其测试引用;
  *    sync / autosync / update / `src/rsi/{poke,hint,worker,kit-schedule}.ts` / §21 的 `src/rsi/{auto,capability,contrib,exec}/**` / doctor(`src/doctor/**`、`src/commands/doctor.ts`)引用即红;
  *    A6(R20-17.20)新增只读出口 `src/io/hooks-read.ts`(doctor D17 经它读钩子区),它自己可用 fs。
@@ -334,6 +335,8 @@ const SUBPROCESS_TESTS = [
   'test/build/publish-freeze.test.ts',
   // R20 A3:真实发布产物(vite 构建的 dist/cli.js)上的钩子入口四组合、stdin 不关闭、端到端起 worker
   'test/rsi/a3-dist.test.ts',
+  // D-AU1 / D-AU2:真实发布产物上的钩子转发到 current、poke 顺带调度 update(同 a3-dist 的办法)
+  'test/rsi/hook-forward-dist.test.ts',
   // 回放用例 check.sh 的正负对照(bash 子进程,写入只落在 makeTempDir 的临时目录)
   'test/cases/replay-checks.test.ts',
 ];
@@ -427,6 +430,14 @@ export default tseslint.config(
   // net.ts,所以不能经 launcher.ts(→ install.ts → net.ts)。这一块**只**多放行 runSelf;它排在上面的 `src/update/**` 之后,
   // 把该目录给的 allowNetOut / allowLauncher 整条收回——桥接文件不得引用 net / 启动器 / home-fs / sigstore,其余限制与默认一致。
   { files: ['src/update/self-spawn.ts'], rules: restrictions({ allowRunSelf: true }) },
+  // D-AU1 / D-AU2(contracts §20.19):钩子入口经 self-spawn.ts 引用的 update 只读构件——current 判据 / 状态读取 / 完整树校验(installed.ts)、
+  // auto_install 读取(auto-install.ts)、退出码折算(signal-code.ts)。它们的 import 闭包必须零网络(R20-1.1),
+  // 所以同样把 `src/update/**` 给的 allowNetOut / allowLauncher 整条收回:不得引用 net.ts / 启动器 / home-fs / sigstore / runSelf。
+  // policy.ts / state.ts 的零网络由 import 闭包测试钉(它们既有的 lint 放行不动;网络码表已搬到 contracts/net-error.ts)。
+  {
+    files: ['src/update/installed.ts', 'src/update/auto-install.ts', 'src/update/signal-code.ts'],
+    rules: restrictions({}),
+  },
   // S7a:来源证明验签。provenance.ts 是唯一可 import `sigstore` 的文件(其余权限同 src/update/**)。
   {
     files: ['src/update/provenance.ts'],

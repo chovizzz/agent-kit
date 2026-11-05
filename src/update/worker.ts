@@ -8,15 +8,14 @@
  * 在**同一把 update 锁内**通过 `afterInstall` 调自动同步评估。节流在拿到锁后还会再查一次(`proceedInLock`),
  * 排队的两个 worker 不会重复检查。拿不到锁:静默结束,日志记 `skipped_locked`(不无锁写 state.json)。
  */
-import { parse as parseToml } from 'smol-toml';
 import { ExitCode } from '../contracts/exit-codes.js';
-import { UserConfigSchema } from '../contracts/update.js';
 import { createUpdateCommand, type UpdateCommandDeps } from '../commands/update.js';
 import type { CommandContext, CommandDef } from '../commands/types.js';
 import { RUN_SELF_ENV_PICK_RE } from '../io/exec.js';
 import { getRealHome, pickProcessEnv } from '../io/paths.js';
-import { probePath, resolveAllowedHome } from '../sync/snapshot.js';
+import { resolveAllowedHome } from '../sync/snapshot.js';
 import type { ApplyDeps, ApplyEnv } from '../sync/apply.js';
+import { readAutoInstall } from './auto-install.js';
 import { autoSyncEnabled, runAutoSync, type AutoSyncDeps } from './autosync.js';
 import { SHARE_REL, readUpdateState, writeWorkerLog, type InstallEnv } from './install.js';
 import { smokeCandidate } from './launcher.js';
@@ -68,17 +67,10 @@ async function runWorker(ctx: CommandContext, deps: WorkerDeps): Promise<WorkerO
 
   // 开关:worker 带 KIT_LAUNCHED=1(runSelf 强制),判开关时摘掉;TTY 由前台判过
   const gateEnv: Record<string, string | undefined> = { ...env, KIT_LAUNCHED: undefined };
-  let autoInstall = true;
-  const cfgProbe = await probePath(homeReal, '.config/agent-kit/config.toml');
-  if (cfgProbe.entry.kind !== 'missing') {
-    try {
-      if (cfgProbe.text === undefined) return await finish('failed');
-      autoInstall = UserConfigSchema.parse(parseToml(cfgProbe.text)).update.auto_install;
-    } catch {
-      return await finish('failed');
-    }
-  }
-  if (!autoUpdateGate({ env: gateEnv, isTTY: true, autoInstall }).enabled) {
+  // 配置读取与钩子的调度判定共用 readAutoInstall(D-AU2 / H3):读不出 / 解析失败 → failed
+  const cfg = await readAutoInstall(homeReal);
+  if (!cfg.ok) return await finish('failed');
+  if (!autoUpdateGate({ env: gateEnv, isTTY: true, autoInstall: cfg.autoInstall }).enabled) {
     return await finish('skipped_gate');
   }
 
