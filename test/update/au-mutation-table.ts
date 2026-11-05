@@ -398,6 +398,20 @@ export const AU_MUTATIONS: readonly AuMutation[] = [
     mustKill: ['binExecutable(D-AU3)'],
   },
   {
+    id: 'readback-bin-mode-not-wired',
+    clause: 'D-AU3:安装器读回 staging 时不传 binExecutable(权限复核没接进提交前的链路)',
+    edits: [
+      {
+        file: 'src/update/install.ts',
+        anchor: '      ...(binEntry !== undefined ? { binExecutable: binEntry } : {}),\n',
+        replacement: '',
+      },
+    ],
+    tests: ['update/install-flow.test.ts'],
+    expectRed: ['D-AU3:staging 里 bin 权限被改回 0644'],
+    mustKill: ['D-AU3:staging 里 bin 权限被改回 0644'],
+  },
+  {
     id: 'smoke-shebang-check-removed',
     clause: 'D-AU3:静态冒烟去掉 `#!` 检查',
     edits: [

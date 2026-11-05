@@ -1,6 +1,7 @@
 import * as path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { lstat, readText, realpath } from '../../src/io/read-fs.js';
+import { lstat, readDir, readText, realpath } from '../../src/io/read-fs.js';
+import * as safe from '../../src/io/safe-fs.js';
 import {
   NOW_HTTP,
   OLD_ISO,
@@ -91,6 +92,36 @@ describe('update 正常安装', () => {
     expect((await lstat(path.join(share(w), 'versions/0.1.1/dist/main.js'))).mode & 0o777).toBe(
       0o644,
     );
+  });
+
+  it('D-AU3:staging 里 bin 权限被改回 0644 → 读回复核 staging_mismatch,fail-closed(不冒烟、不提交、不动 current)', async () => {
+    const w = await newWorld();
+    await writeRegistry(w, {
+      versions: [{ pkg: buildPkg('0.1.1') }],
+      distTags: { latest: '0.1.1' },
+    });
+    let smoked = 0;
+    const r = await runUpdate(w, ['--write'], {
+      deps: {
+        smoke: () => {
+          smoked += 1;
+          return true;
+        },
+        inject: async (p) => {
+          if (p !== 'after-staging-write') return;
+          const stagingRoot = path.join(share(w), 'staging');
+          for (const e of await readDir(stagingRoot)) {
+            await safe.chmod(w.fx, path.join(stagingRoot, e.name, 'dist/cli.js'), 0o644);
+          }
+        },
+      },
+    });
+    expect(r.code).toBe(3);
+    expect(r.err).toContain('staging_mismatch');
+    expect(smoked).toBe(0);
+    const t =(await treeOf(share(w))).join('\n');
+    expect(t).not.toMatch(/versions|current/);
+    expect(t).not.toContain('staging/st-');
   });
 
   it('第二次运行:已最新,不再验签', async () => {
