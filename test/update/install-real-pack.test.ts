@@ -190,7 +190,11 @@ function recordingSmoke(): {
 
 async function install(
   pkg: BuiltPkg,
-): Promise<{ w: World; r: Awaited<ReturnType<typeof runUpdate>>; rec: ReturnType<typeof recordingSmoke> }> {
+): Promise<{
+  w: World;
+  r: Awaited<ReturnType<typeof runUpdate>>;
+  rec: ReturnType<typeof recordingSmoke>;
+}> {
   const w = await newWorld();
   await writeRegistry(w, { versions: [{ pkg }], distTags: { latest: version } });
   const rec = recordingSmoke();
@@ -267,7 +271,8 @@ describe('真实 npm pack 产物 → 完整安装流程', () => {
   it('负向:bin 首两字节不是 #!(integrity 已重算,只有静态冒烟能拦)→ smoke,拉黑,current 不动', async () => {
     const pkg = repack((files) => {
       for (const f of files)
-        if (f.path === 'dist/cli.js') f.bytes = Buffer.concat([Buffer.from('//'), f.bytes.subarray(2)]);
+        if (f.path === 'dist/cli.js')
+          f.bytes = Buffer.concat([Buffer.from('//'), f.bytes.subarray(2)]);
     });
     // 对照:这份被改过的 bin 其实还能跑(只是没有 shebang),所以拦它的只会是静态冒烟,而不是真执行
     const cli = readTgz(pkg.tgz).files.find((f) => f.path === 'dist/cli.js');
