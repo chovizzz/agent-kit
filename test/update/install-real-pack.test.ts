@@ -188,9 +188,7 @@ function recordingSmoke(): {
   };
 }
 
-async function install(
-  pkg: BuiltPkg,
-): Promise<{
+async function install(pkg: BuiltPkg): Promise<{
   w: World;
   r: Awaited<ReturnType<typeof runUpdate>>;
   rec: ReturnType<typeof recordingSmoke>;

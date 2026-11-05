@@ -119,7 +119,7 @@ describe('update 正常安装', () => {
     expect(r.code).toBe(3);
     expect(r.err).toContain('staging_mismatch');
     expect(smoked).toBe(0);
-    const t =(await treeOf(share(w))).join('\n');
+    const t = (await treeOf(share(w))).join('\n');
     expect(t).not.toMatch(/versions|current/);
     expect(t).not.toContain('staging/st-');
   });
