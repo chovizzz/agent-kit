@@ -14,7 +14,11 @@ import {
 import type { CommandContext } from '../../src/commands/types.js';
 import { ProposalSchema } from '../../src/contracts/proposal.js';
 import { ReflectRunReportSchema } from '../../src/contracts/reflect.js';
-import { RSI_INGEST_REJECT_REASONS } from '../../src/contracts/rsi.js';
+import {
+  RSI_INGEST_QUOTA_GLOBAL,
+  RSI_INGEST_QUOTA_PER_AGENT,
+  RSI_INGEST_REJECT_REASONS,
+} from '../../src/contracts/rsi.js';
 import { exists, readDir, readText } from '../../src/io/read-fs.js';
 import { chmod, mkdirp, remove, rename, symlink, writeFile } from '../../src/io/safe-fs.js';
 import { readSlot, withDigestsLock, revokeAllSlots } from '../../src/rsi/digest-slots.js';
@@ -73,6 +77,22 @@ const WORDS = [
   ['verify', 'backups', 'daily', 'restored'],
   ['refresh', 'caches', 'hourly', 'selectively'],
 ];
+/**
+ * 名额边界用例要连交 10 份以上提案:uniq 的模板词互相重叠(Jaccard 在 0.58 附近,同词会越过 0.6 被判 duplicate),
+ * 这里每份提案的 do / why 词汇两两不相交,保证只有名额在起作用。
+ */
+function distinct(n: number): Record<string, unknown> {
+  const w = (k: string): string => `bq${n}${k}`;
+  return draft({
+    id: `rule-boundary-${n}`,
+    title: `boundary rule ${n}`,
+    do: `${w('a')} ${w('b')} ${w('c')} ${w('d')} ${w('e')} ${w('f')}.`,
+    why: `${w('g')} ${w('h')} ${w('i')} ${w('j')} ${w('k')} ${w('l')}.`,
+    verify: `${w('m')} ${w('n')} is visible in the checklist.`,
+    signature: { type: 'phrase', pattern: `zzbound${n}x` },
+    rationale: `${w('o')} ${w('p')} came up in several sessions.`,
+  });
+}
 function uniq(n: number, over: Record<string, unknown> = {}): Record<string, unknown> {
   const [a, b, c, d] = WORDS[n % WORDS.length] as string[];
   return draft({
@@ -409,29 +429,47 @@ describe('digest 校验(R20-16.15 第 3 步):均不占名额', () => {
   });
 });
 
-describe('名额(R20-16.15 第 4 步):每个声明的 agent ≤ 2、全局 ≤ 4,按 UTC 日分文件', () => {
+describe('名额(R20-16.15 第 4 步):每个声明的 agent ≤ 5、全局 ≤ 10,按 UTC 日分文件', () => {
   const all3 =
     '[rsi.session]\nenabled = true\nagents = ["claude", "codex", "pi"]\nexpires = "2026-12-31"\n';
-  it('agent 第 3 次 → 4 rate_limited,且不消费 digest;全局第 5 次同样', async () => {
-    const w = await makeA4World('a4-ig-quota-', { session: all3 });
+  it('名额常量:每 agent 5、全局 10(订正 #9:原 2 / 4)', () => {
+    expect([RSI_INGEST_QUOTA_PER_AGENT, RSI_INGEST_QUOTA_GLOBAL]).toEqual([5, 10]);
+  });
+  it('agent 第 6 次 → 4 rate_limited,且不消费 digest;第 5 次仍通过', async () => {
+    const w = await makeA4World('a4-ig-quota-agent-', { session: all3 });
     let n = 0;
-    for (const a of ['claude', 'claude', 'codex', 'codex']) {
-      const r = await ingest(w, await issue(w, a), body(uniq(n++)), { agent: a });
-      expect(r.code, `${a}:${r.err}`).toBe(0);
+    for (let i = 0; i < 5; i++) {
+      const r = await ingest(w, await issue(w, 'claude'), body(distinct(n++)));
+      expect(r.code, `claude 第 ${i + 1} 次:${r.err}`).toBe(0);
+    }
+    expect(await quota(w)).toEqual({ schema_version: 1, total: 5, agents: { claude: 5 } });
+    const sixth = await issue(w, 'claude');
+    const r6 = await ingest(w, sixth, body(distinct(n++)));
+    expect([r6.code, r6.err]).toEqual([4, 'RSI_NOT_RUN reason=rate_limited\n']);
+    expect(await digestStillThere(w, sixth)).toBe(true);
+    expect(await quota(w)).toEqual({ schema_version: 1, total: 5, agents: { claude: 5 } });
+    // 正向对照:另一个 agent 自己还有名额
+    const other = await ingest(w, await issue(w, 'codex'), body(distinct(n++)), { agent: 'codex' });
+    expect(other.code, other.err).toBe(0);
+  });
+  it('全局第 11 次 → 4 rate_limited,且不消费 digest;第 10 次仍通过', async () => {
+    const w = await makeA4World('a4-ig-quota-global-', { session: all3 });
+    let n = 0;
+    for (const a of ['claude', 'codex']) {
+      for (let i = 0; i < 5; i++) {
+        const r = await ingest(w, await issue(w, a), body(distinct(n++)), { agent: a });
+        expect(r.code, `${a} 第 ${i + 1} 次:${r.err}`).toBe(0);
+      }
     }
     expect(await quota(w)).toEqual({
       schema_version: 1,
-      total: 4,
-      agents: { claude: 2, codex: 2 },
+      total: 10,
+      agents: { claude: 5, codex: 5 },
     });
-    const third = await issue(w, 'claude');
-    const r3 = await ingest(w, third, body(uniq(n++)));
-    expect([r3.code, r3.err]).toEqual([4, 'RSI_NOT_RUN reason=rate_limited\n']);
-    expect(await digestStillThere(w, third)).toBe(true);
-    const fifth = await issue(w, 'pi'); // pi 自己是第 1 次,但全局已满 4
-    const r5 = await ingest(w, fifth, body(uniq(n++)), { agent: 'pi' });
-    expect([r5.code, r5.err]).toEqual([4, 'RSI_NOT_RUN reason=rate_limited\n']);
-    expect(await digestStillThere(w, fifth)).toBe(true);
+    const eleventh = await issue(w, 'pi'); // pi 自己是第 1 次,但全局已满 10
+    const r11 = await ingest(w, eleventh, body(distinct(n++)), { agent: 'pi' });
+    expect([r11.code, r11.err]).toEqual([4, 'RSI_NOT_RUN reason=rate_limited\n']);
+    expect(await digestStillThere(w, eleventh)).toBe(true);
   });
   it('当日名额文件损坏只封当日(不改写它);次日使用新文件、恢复', async () => {
     const w = await makeA4World('a4-ig-quota-bad-');
@@ -510,16 +548,71 @@ describe('名额(R20-16.15 第 4 步):每个声明的 agent ≤ 2、全局 ≤ 4
   });
 });
 
+describe('格式预检(订正 #9;R20-16.15 第 3a 步、R20-16.29):格式不对不占名额、不消费 digest', () => {
+  const cases: [string, () => string, string][] = [
+    ['裸 JSON 数组', () => JSON.stringify([uniq(0)]), 'not_json_object'],
+    ['非 JSON 文本', () => 'hello', 'not_json_object'],
+    ['缺 proposals 的空对象', () => '{}', 'schema_invalid'],
+    ['顶层键写错(proposal)', () => JSON.stringify({ proposal: [uniq(0)] }), 'schema_invalid'],
+    ['schema 不合法(多余字段)', () => body(uniq(0, { status: 'active' })), 'schema_invalid'],
+    ['schema 不合法(缺 verify)', () => body(uniq(0, { verify: undefined })), 'schema_invalid'],
+    ['schema 不合法(op 不是 add)', () => body(uniq(0, { op: 'edit' })), 'schema_invalid'],
+    [
+      '> 5 条',
+      () => body(...[0, 1, 2, 3, 4, 5].map((i) => uniq(i))),
+      'too_many_proposals',
+    ],
+  ];
+  for (const [name, mk, reason] of cases) {
+    it(`格式预检:${name} → ${reason};名额文件不变、digest 仍可用;同一 digest 改正后通过并扣名额`, async () => {
+      const w = await makeA4World('a4-ig-fmt-');
+      const id = await issue(w);
+      rejected(await ingest(w, id, mk()), reason);
+      expect(await quota(w)).toBeNull();
+      expect(await digestStillThere(w, id)).toBe(true);
+      expect(await runDirs(w)).toEqual([]);
+      // 对照组:同一 digest 交合法提交 → 通过、暂存、名额 +1、digest 用掉
+      const ok = await ingest(w, id, body(uniq(0)));
+      expect(ok.code, ok.err).toBe(0);
+      expect(await quota(w)).toEqual({ schema_version: 1, total: 1, agents: { claude: 1 } });
+      expect(await runDirs(w)).toHaveLength(1);
+      expect(await digestStillThere(w, id)).toBe(false);
+    });
+  }
+  it('格式预检:名额已用尽时格式错仍报格式子码(预检先于名额);同样的合法提交才是 rate_limited', async () => {
+    const w = await makeA4World('a4-ig-fmt-full-');
+    const id = await issue(w);
+    const full = JSON.stringify({ schema_version: 1, total: 10, agents: { claude: 5 } });
+    await put(w.s, quotaFile(w), full, 0o600);
+    rejected(await ingest(w, id, JSON.stringify([uniq(0)])), 'not_json_object');
+    expect(await readText(quotaFile(w))).toBe(full);
+    expect(await digestStillThere(w, id)).toBe(true);
+    const ok = await ingest(w, id, body(uniq(0)));
+    expect([ok.code, ok.err]).toEqual([4, 'RSI_NOT_RUN reason=rate_limited\n']);
+  });
+  it('格式预检:digest 本身无效时仍先报 digest 子码(第 3 步先于 3a)', async () => {
+    const w = await makeA4World('a4-ig-fmt-digest-');
+    rejected(await ingest(w, 'd_0000000000000000', 'hello'), 'digest_invalid');
+  });
+  it('格式预检:依赖 digest 的校验仍在消费之后——别名越界照旧消费 digest、占名额', async () => {
+    const w = await makeA4World('a4-ig-fmt-alias-');
+    const id = await issue(w);
+    rejected(await ingest(w, id, body(uniq(0, { evidence: ['e9'] }))), 'alias_unknown');
+    expect(await digestStillThere(w, id)).toBe(false);
+    expect(await quota(w)).toEqual({ schema_version: 1, total: 1, agents: { claude: 1 } });
+  });
+});
+
 describe('严格批次与映射(R20-16.15 第 6 ~ 11 步;R20-16.17)', () => {
-  it('> 5 条提案 → too_many_proposals(digest 已消费,名额已计)', async () => {
+  it('> 5 条提案 → too_many_proposals(订正 #9:形状预检,digest 仍可用,名额不变;原为已消费 / 已计)', async () => {
     const w = await makeA4World('a4-ig-many-');
     const id = await issue(w);
     rejected(
       await ingest(w, id, body(...[0, 1, 2, 3, 4, 5].map((i) => uniq(i)))),
       'too_many_proposals',
     );
-    expect(await digestStillThere(w, id)).toBe(false);
-    expect(await quota(w)).toEqual({ schema_version: 1, total: 1, agents: { claude: 1 } });
+    expect(await digestStillThere(w, id)).toBe(true);
+    expect(await quota(w)).toBeNull();
   });
   const cases: [string, (w: A4World) => string, string][] = [
     ['别名越界', () => body(uniq(0, { evidence: ['e9'] })), 'alias_unknown'],
@@ -577,7 +670,7 @@ describe('严格批次与映射(R20-16.15 第 6 ~ 11 步;R20-16.17)', () => {
     const w = await makeA4World('a4-ig-conflict-');
     expect((await ingest(w, await issue(w), body(uniq(0)))).code).toBe(0);
     rejected(await ingest(w, await issue(w), body(uniq(0))), 'id_conflict');
-    // 同 agent 每日名额 ≤ 2:第三次换 codex(session 授权了 claude + codex)
+    // 第三次换 codex(session 授权了 claude + codex);名额已是每 agent 5,这里换 agent 只是沿用原用例的写法
     rejected(
       await ingest(w, await issue(w, 'codex'), body(uniq(0, { id: 'rule-other-name-xyz' })), {
         agent: 'codex',

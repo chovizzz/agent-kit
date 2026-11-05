@@ -33,6 +33,7 @@ import { buildApplyPatch, filesOf, simulateGuards, writeStage } from '../reflect
 import type { EvidenceItem, LoadedSignal } from '../reflect/types.js';
 import {
   MAX_INGEST_OUTPUT_BYTES,
+  checkReflectorShape,
   evidenceExcerptSuspicious,
   validateReflectorOutput,
 } from '../reflect/validate.js';
@@ -106,7 +107,13 @@ export type IngestOutcome =
       exit: 1 | 4;
     };
 
-const OWNER_RE = /^@[A-Za-z0-9][A-Za-z0-9._/-]{0,63}$/;
+/** 第 3a 步预检与第 9 步全量校验共用的形状参数(同一份,防漂移) */
+const INGEST_SHAPE_CTX = {
+  atomMaxBytes: DEFAULT_ATOM_MAX_BYTES,
+  maxProposals: RSI_INGEST_MAX_PROPOSALS,
+  maxOutputBytes: MAX_INGEST_OUTPUT_BYTES,
+} as const;
+const OWNER_RE =/^@[A-Za-z0-9][A-Za-z0-9._/-]{0,63}$/;
 const rej = (reason: RsiIngestRejectReason): IngestOutcome => ({ kind: 'rejected', reason });
 const notRun = (reason: string): IngestOutcome => ({
   kind: 'not_run',
@@ -227,6 +234,26 @@ export async function runIngest(input: IngestInput, deps: IngestDeps): Promise<I
   if ('bad' in step3) return rej(step3.bad);
   const found = step3.found;
 
+  // ---- 第 3a 步(订正 #9):格式预检,**在预留名额之前**。JSON 对象 / 条数 / schema 与 digest、会话无关:格式不对不占名额、不消费 digest ----
+  // 证据归一化(第 7 步的 agent 摘录丢弃)也在此做一次,第 6、7 步直接复用这里的 doc / norm,不重读
+  let doc: unknown;
+  try {
+    doc = JSON.parse(input.raw.trim());
+  } catch {
+    doc = undefined;
+  }
+  if (
+    isRecord(doc) &&
+    Array.isArray(doc['proposals']) &&
+    doc['proposals'].length > RSI_INGEST_MAX_PROPOSALS
+  ) {
+    return rej('too_many_proposals');
+  }
+  const norm = normalizeEvidence(doc);
+  const text = norm.text ?? input.raw;
+  const shape = checkReflectorShape(text, INGEST_SHAPE_CTX);
+  if (!shape.ok) return rej(VALIDATOR_CODE_TO_REJECT[shape.code] ?? 'schema_invalid');
+
   // ---- 第 4 步:先预留名额(先于消费 digest 持久化) ----
   await point('ingest:before_quota');
   const q = await reserveIngestQuota(io, lock, agent, today, deps.quota ?? {});
@@ -243,25 +270,10 @@ export async function runIngest(input: IngestInput, deps: IngestDeps): Promise<I
   if (consumed === 'gone') return rej('digest_invalid'); // 名额照计,不碰该槽位
   const record = found.record;
 
-  // ---- 第 6 步:解析 stdin;> 5 条 → too_many_proposals ----
-  let doc: unknown;
-  try {
-    doc = JSON.parse(input.raw.trim());
-  } catch {
-    doc = undefined;
-  }
-  if (
-    isRecord(doc) &&
-    Array.isArray(doc['proposals']) &&
-    doc['proposals'].length > RSI_INGEST_MAX_PROPOSALS
-  ) {
-    return rej('too_many_proposals');
-  }
+  // ---- 第 6 步:解析 stdin 与条数上限已在第 3a 步(名额之前)完成,doc / norm / text 直接使用 ----
 
   // ---- 第 7 步:证据只能是该 digest 的别名;agent 的摘录 / 证据文本一律丢弃 ----
-  const norm = normalizeEvidence(doc);
   // norm.agentExcerpts 只记着「有多少条被丢弃」,下游不读它的内容
-  const text = norm.text ?? input.raw;
   const used = referencedAliases(norm.text === null ? doc : JSON.parse(norm.text));
   if (used.some((a) => !Object.hasOwn(record.aliases, a))) return rej('alias_unknown');
 
@@ -307,9 +319,7 @@ export async function runIngest(input: IngestInput, deps: IngestDeps): Promise<I
       .filter((x): x is string => typeof x === 'string' && x !== ''),
     existingIds,
     redactor,
-    atomMaxBytes: DEFAULT_ATOM_MAX_BYTES,
-    maxProposals: RSI_INGEST_MAX_PROPOSALS,
-    maxOutputBytes: MAX_INGEST_OUTPUT_BYTES,
+    ...INGEST_SHAPE_CTX,
   });
   if (!v.ok) return rej(VALIDATOR_CODE_TO_REJECT[v.code] ?? 'schema_invalid');
   // 严格批次:任一 dropped 计数非零 → 整批拒,子码取首个非零类别(按类别名字典序)。LLM 路径的单条丢弃行为不变

@@ -851,9 +851,9 @@ export const slotName = (n: number): string => `s${String(n).padStart(2, '0')}.j
 // --- ingest(R20-16.14 ~ R20-16.17) ---
 export const RSI_INGEST_MAX_STDIN_BYTES = 64 * 1024;
 export const RSI_INGEST_MAX_PROPOSALS = 5;
-/** 每个声明的 agent 每 UTC 日 ≤ 2 次、全局 ≤ 4 次(R20-16.15 第 4 步) */
-export const RSI_INGEST_QUOTA_PER_AGENT = 2;
-export const RSI_INGEST_QUOTA_GLOBAL = 4;
+/** 每个声明的 agent 每 UTC 日 ≤ 5 次、全局 ≤ 10 次(R20-16.15 第 4 步;订正 #9 由 2 / 4 提到 5 / 10) */
+export const RSI_INGEST_QUOTA_PER_AGENT = 5;
+export const RSI_INGEST_QUOTA_GLOBAL = 10;
 /** 名额日文件(R20-16.15 第 4 步):`.state/rsi/ingest-quota/<YYYY-MM-DD>.json` */
 export const RsiIngestQuotaSchema = z.strictObject({
   schema_version: z.literal(1),

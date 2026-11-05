@@ -175,8 +175,10 @@ export const A4_MUTATIONS: readonly A4Mutation[] = [
       '第 3 步之后槽位被 --revoke',
       // 2026-11-02 javis 变异实测补登:这三条也断言「digest 已被消费」,变异后同样变红
       '正向对照:49 个 run 时可以写',
-      '> 5 条提案 → too_many_proposals',
       '首次创建 ingest-quota/',
+      // 订正 #9:「> 5 条」不再消费 digest(前移到格式预检),改由这两组「digest 用掉」的断言接手
+      '格式预检:',
+      '依赖 digest 的校验仍在消费之后',
     ],
     mustKill: ['digest 已删、暂存未写就崩溃'],
   },
@@ -199,7 +201,9 @@ export const A4_MUTATIONS: readonly A4Mutation[] = [
     tests: [INGEST],
     expectRed: [
       '名额先于消费 digest 持久化',
-      'agent 第 3 次',
+      'agent 第 6 次',
+      '全局第 11 次',
+      '格式预检:名额已用尽时格式错仍报格式子码',
       // 2026-11-02 javis 变异实测补登:这几条断言「名额写在 digest 消费之前 / 拒绝时 digest 未被消费」
       '当日名额文件损坏只封当日',
       '首次创建 ingest-quota/',
@@ -207,7 +211,7 @@ export const A4_MUTATIONS: readonly A4Mutation[] = [
       '已有目录属主不是当前用户',
       '名额目录准备前就失锁',
     ],
-    mustKill: ['名额先于消费 digest 持久化', 'agent 第 3 次'],
+    mustKill: ['名额先于消费 digest 持久化', 'agent 第 6 次'],
   },
   {
     id: 'strict-batch-to-drop',
@@ -375,6 +379,78 @@ export const A4_MUTATIONS: readonly A4Mutation[] = [
       '进入目录访问之前失锁(锁文件被夺走)',
       '进入目录访问之前失锁(purge 删掉了整个 digests/)',
     ],
+  },
+  // ---- A4 订正 #9(R20-16.29 ⑤):格式预检前移 / 名额提高 / skill 示例与 schema 同源 ----
+  {
+    id: 'format-precheck-after-quota',
+    clause: '形状预检挪回预留名额之后(格式错的提交又占名额、消费 digest)',
+    edits: [
+      {
+        file: 'src/rsi/ingest.ts',
+        anchor:
+          "if (!shape.ok) return rej(VALIDATOR_CODE_TO_REJECT[shape.code] ?? 'schema_invalid');",
+        replacement: "if (false) return rej('schema_invalid');",
+      },
+    ],
+    tests: [INGEST],
+    expectRed: ['格式预检:'],
+    mustKill: ['格式预检:裸 JSON 数组', '格式预检:名额已用尽时格式错仍报格式子码'],
+  },
+  {
+    id: 'toomany-precheck-removed',
+    clause: '条数上限预检挪走(> 5 条的提交不再在名额之前以 too_many_proposals 拒绝)',
+    edits: [
+      {
+        file: 'src/rsi/ingest.ts',
+        anchor: "doc['proposals'].length > RSI_INGEST_MAX_PROPOSALS",
+        replacement: "doc['proposals'].length > 1000",
+      },
+    ],
+    tests: [INGEST],
+    expectRed: ['格式预检:> 5 条', '> 5 条提案 → too_many_proposals'],
+    mustKill: ['格式预检:> 5 条'],
+  },
+  {
+    id: 'quota-per-agent-back-to-2',
+    clause: '每 agent 每日名额改回 2',
+    edits: [
+      {
+        file: 'src/contracts/rsi.ts',
+        anchor: 'export const RSI_INGEST_QUOTA_PER_AGENT = 5;',
+        replacement: 'export const RSI_INGEST_QUOTA_PER_AGENT = 2;',
+      },
+    ],
+    tests: [INGEST, 'rsi/a4-skill-doc.test.ts'],
+    expectRed: ['名额常量', 'agent 第 6 次', '全局第 11 次', 'skill 写的名额数字'],
+    mustKill: ['名额常量', 'agent 第 6 次'],
+  },
+  {
+    id: 'quota-global-back-to-4',
+    clause: '全局每日名额改回 4',
+    edits: [
+      {
+        file: 'src/contracts/rsi.ts',
+        anchor: 'export const RSI_INGEST_QUOTA_GLOBAL = 10;',
+        replacement: 'export const RSI_INGEST_QUOTA_GLOBAL = 4;',
+      },
+    ],
+    tests: [INGEST, 'rsi/a4-skill-doc.test.ts'],
+    expectRed: ['名额常量', 'agent 第 6 次', '全局第 11 次', 'skill 写的名额数字'],
+    mustKill: ['名额常量', '全局第 11 次'],
+  },
+  {
+    id: 'skill-example-broken',
+    clause: 'skill 示例 JSON 改坏一个字段(verify → verfy)',
+    edits: [
+      {
+        file: 'skills/agent-kit-rsi/SKILL.md',
+        anchor: '"verify": "',
+        replacement: '"verfy": "',
+      },
+    ],
+    tests: ['rsi/a4-skill-doc.test.ts'],
+    expectRed: ['skill 示例 JSON 通过形状与完整校验', '每个提案字段都在 skill 里点名'],
+    mustKill: ['skill 示例 JSON 通过形状与完整校验'],
   },
 ];
 

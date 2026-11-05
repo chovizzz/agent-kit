@@ -1,7 +1,7 @@
 /**
  * ingest 的每日名额(docs/contracts.md R20-16.15 第 4 步;R20-A4;设计稿 §8a.4:尽力护栏,不是安全保证)。
  *
- * 按 UTC 日分文件 `.state/rsi/ingest-quota/<YYYY-MM-DD>.json`(日期取本次调用的 UTC 今天;不存在 = 当日零次):每个声明的 agent ≤ 2、全局 ≤ 4。
+ * 按 UTC 日分文件 `.state/rsi/ingest-quota/<YYYY-MM-DD>.json`(日期取本次调用的 UTC 今天;不存在 = 当日零次):每个声明的 agent ≤ 5、全局 ≤ 10(订正 #9:原 2 / 4)。
  * 读经 `readFileSafe`;写经同目录临时文件 → fsync → rename → fsync 目录,每个写出口之前 `assertHeld()`(调用方持 `rsi/lock`)。
  * 超额 → `limited`(调用方退出 4 `RSI_NOT_RUN reason=rate_limited`,不消费 digest)。**当日文件读不过或过不了 schema → 只封禁当日**(同样 `limited`),**不改写它**;次日自然使用新文件。
  * 每次成功预留后删除早于今天的名额文件(尽力,失败不影响结果)。名额**先于**消费 digest 持久化:两步之间崩溃只会多耗一次名额,不会少计。
