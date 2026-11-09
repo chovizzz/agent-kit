@@ -3,7 +3,7 @@
  *
  * 规则:对「首期 ≤ `RSI_AUTO_PHASE`」的每个 R21 条款(加上全部 `[V0]` 条款),要求 `test/**` 里至少有一个**在 AST 中真实注册**的
  * `it('R21-x.y …')` / `test('R21-x.y …')`:调用名是裸标识符 `it` / `test`(不是 `.skip` / `.todo`、不在字符串或注释里)、回调体含至少一次调用
- * (非空、非纯 `return`)、不在 `if (false)` 分支里;或在 {@link EXEMPT} 里带理由。W0 时相位为 0:只覆盖 R21-0.1 / R21-0.2。
+ * (非空、非纯 `return`)、不在 `if (false)` 分支里、外层函数只能是会执行的 describe 回调;或在 {@link EXEMPT} 里带理由。W0 时相位为 0:只覆盖 R21-0.1 / R21-0.2。
  * 这是**追踪登记**:无法机械证明「语义上非占位」,它不证明某个条款被充分测试,每条不变量仍需自己的负向用例与变异锚点;
  * W-final 提升相位前,豁免表只能含非本期条款。
  */
@@ -55,6 +55,30 @@ const inDeadBranch = (n: ts.Node): boolean => {
   return false;
 };
 
+const LIVE_SUITE_MODIFIERS = new Set(['concurrent', 'sequential', 'shuffle', 'each', 'for']);
+
+/** `describe(...)` / `describe.each(t)(...)` 这类会执行回调的 suite;`.skip` / `.todo` / `.skipIf` 等一律不算 */
+const isLiveSuiteCall = (call: ts.CallExpression): boolean => {
+  let e: ts.Expression = call.expression;
+  if (ts.isCallExpression(e)) e = e.expression;
+  while (ts.isPropertyAccessExpression(e)) {
+    if (!LIVE_SUITE_MODIFIERS.has(e.name.text)) return false;
+    e = e.expression;
+  }
+  return ts.isIdentifier(e) && e.text === 'describe';
+};
+
+/** 真实注册:外层每一个函数都必须是会执行的 describe 回调(未调用的函数、跳过的 suite、其它回调里的 it 都不算) */
+const inRegisteredContext = (n: ts.Node): boolean => {
+  for (let p: ts.Node | undefined = n.parent; p; p = p.parent) {
+    if (!ts.isFunctionLike(p)) continue;
+    const call = p.parent;
+    if (!ts.isCallExpression(call) || !call.arguments.some((a) => a === p)) return false;
+    if (!isLiveSuiteCall(call)) return false;
+  }
+  return true;
+};
+
 /**
  * AST 提取「真实」的 R21 条款引用。条款号后面不得紧跟数字或字母(`R21-4.4` 不匹配 `R21-4.4a`)。
  */
@@ -74,7 +98,8 @@ export function realClauseRefs(src: string): Set<string> {
         cb !== undefined &&
         (ts.isArrowFunction(cb) || ts.isFunctionExpression(cb)) &&
         containsCall(cb.body) &&
-        !inDeadBranch(n)
+        !inDeadBranch(n) &&
+        inRegisteredContext(n)
       ) {
         for (const c of title.text.matchAll(CLAUSE_RE)) out.add(c[0]);
       }
@@ -159,6 +184,29 @@ describe('W0-11 条款追踪', async () => {
       expect(why.trim().length, id).toBeGreaterThan(0);
     }
     expect(Object.keys(EXEMPT)).toEqual([]);
+  });
+
+  it('R21-0.1 提取器的注册上下文:跳过的 suite、未调用的函数里的 it 不算覆盖,会执行的 describe 算', () => {
+    const id = ['R21', '-9.7'].join('');
+    for (const bad of [
+      `describe.skip('s', () => { it('${id} a', () => { x(); }); });`,
+      `describe.todo('s', () => { it('${id} a', () => { x(); }); });`,
+      `describe.skipIf(c)('s', () => { it('${id} a', () => { x(); }); });`,
+      `describe('o', () => { describe.skip('s', () => { it('${id} a', () => { x(); }); }); });`,
+      `function neverCalled() { it('${id} a', () => { x(); }); }`,
+      `const f = () => { it('${id} a', () => { x(); }); };`,
+      `it('outer', () => { it('${id} a', () => { x(); }); });`,
+    ]) {
+      expect(realClauseRefs(bad).has(id), bad).toBe(false);
+    }
+    for (const good of [
+      `describe('s', () => { it('${id} a', () => { x(); }); });`,
+      `describe('o', async () => { describe.concurrent('s', () => { test('${id} a', () => { x(); }); }); });`,
+      `describe.each([1])('s %s', () => { it('${id} a', () => { x(); }); });`,
+      `for (const a of b) { it('${id} a', () => { x(); }); }`,
+    ]) {
+      expect(realClauseRefs(good).has(id), good).toBe(true);
+    }
   });
 
   it('R21-0.1 提取器的反向对照:skip / todo / 空体 / 纯 return / 字符串里 / 注释里 / if(false) / 非调用回调都不算覆盖', () => {

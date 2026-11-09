@@ -8,6 +8,7 @@ import { z } from 'zod';
 import {
   IsoDateSchema,
   IsoTimestampSchema,
+  RelPathSchema,
   RunIdSchema,
   SessionRefIdSchema,
   Sha256Schema,
@@ -35,6 +36,7 @@ import {
   RSI_WATCH_RESULTS,
   RSI_ADMISSION_FAIL_REASONS,
   RSI_ADMISSION_STATES,
+  RSI_PROBE_SESSIONS,
   RsiAgentSchema,
   RsiCandidateIdSchema,
   RsiMarkerSchema,
@@ -166,7 +168,7 @@ export const PersonalLifecycleRecordSchema = z
         target_terminal: TargetTerminalSchema,
       })
       .nullable(),
-    target_paths: z.array(z.string().min(1).max(256)).min(1).max(4),
+    target_paths: z.array(RelPathSchema.max(256)).min(1).max(4),
     content_sha256: Sha256Schema,
     fp_hmac: Hex(16),
     cluster_id: z.string().min(1).max(128),
@@ -387,7 +389,7 @@ const AdmissionEntrySchema = z
     generation: NonNegInt,
     armed_at: IsoTimestampSchema,
     probe_expires_at: IsoTimestampSchema,
-    tickets: NonNegInt,
+    tickets: z.literal(RSI_PROBE_SESSIONS),
     decided_at: IsoTimestampSchema.nullable(),
     reason: z.enum(RSI_ADMISSION_FAIL_REASONS).nullable(),
   })

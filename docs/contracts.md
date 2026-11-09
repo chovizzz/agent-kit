@@ -6461,7 +6461,7 @@ worker 持锁扫 `.state/reflect/<run>/proposals/` 暂存提案,**仅** `layer=p
 #### W0-11 lint 与测试骨架(契约追加;依 `docs/block-boundaries.md`「改 eslint 规则 = 契约变更」)
 
 - `src/io/home-fs.ts` 授权 `src/rsi/personal/**`(只写 `.local/state/agent-kit/rsi-personal/**`);**后置覆盖**收回 `src/rsi/personal/read/**` 与 `src/rsi/personal/judge-signal.ts`(同 `self-spawn.ts` 写法)。
-- `runSync`(`src/io/exec.ts`)在 `src/rsi/**` 内只许 `src/rsi/personal/{commit,commit-journal,repo-check}.ts`(私有仓库唯一 git 出口的机械保证);`src/rsi/hooks/**` 不在自动入口闭包内、保持既有放行。
+- `runSync`(`src/io/exec.ts`)在 `src/rsi/**` 内只许 `src/rsi/personal/{commit,commit-journal,repo-check}.ts`(直接导入由 lint 拦截,静态转出由 `test/lint/run-sync-relay.test.ts` 拦截:`src/io/exec.ts` 以外的模块不得转出 `runSync`;调用 `runSync` 的函数包装不在机械保证内,靠闭包与评审把关);`src/rsi/hooks/**` 不在自动入口闭包内、保持既有放行。
 - 自动入口(hint / poke / worker)import 闭包另禁 `src/rsi/contrib/publish/**`、`src/rsi/exec/host/**`、`src/rsi/exec/isolated/**`(R21-1.4)。
 - **条款追踪测试**:解析本节两张表;对「首期 ≤ `RSI_AUTO_PHASE`」的每个 R21 条款要求至少一个**在测试源码 AST 中真实注册、非跳过、回调体含至少一次调用(非空 / 非纯 `return`)、不在 `if (false)` 分支里**的 `it('R21-x.y …')`(字符串 / 注释里的假调用不算),或带理由的豁免;语义上是否「非占位」无法机械证明的部分,由评审与每条不变量自己的负向用例 / 变异锚点负责;W0 时相位为 0,只覆盖 R21-0.1 / 0.2。这是**追踪登记**,不替代每条不变量自己的负向用例与变异锚点。
 

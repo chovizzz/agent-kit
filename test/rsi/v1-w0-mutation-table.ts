@@ -149,7 +149,12 @@ export const V1_W0_MUTATIONS: readonly V1W0Mutation[] = [
       },
     ],
     tests: [AUTO, W0],
-    expectRed: ['[rsi.auto] 写错一个键', 'auto / capability / contrib 是表'],
+    expectRed: [
+      '[rsi.auto] 写错一个键',
+      'auto / capability / contrib 是表',
+      '[rsi.auto] 合法 → ok',
+      '在 L-auto 失败',
+    ],
     mustKill: ['[rsi.auto] 写错一个键'],
   },
   {
@@ -207,7 +212,7 @@ export const V1_W0_MUTATIONS: readonly V1W0Mutation[] = [
       },
     ],
     tests: [STATE],
-    expectRed: ['旧文件(没有 auto_pause)照常通过'],
+    expectRed: ['旧文件(没有 auto_pause)照常通过', '⑥记录过不了 schema'],
     mustKill: ['旧文件(没有 auto_pause)照常通过'],
   },
   {
@@ -350,6 +355,63 @@ export const V1_W0_MUTATIONS: readonly V1W0Mutation[] = [
     tests: [LINT],
     expectRed: ['src/rsi/personal/** 是 home-fs 的授权使用方'],
     mustKill: ['src/rsi/personal/** 是 home-fs 的授权使用方'],
+  },
+  {
+    id: 'target-paths-any-string',
+    clause: 'R21-3.7:target_paths 退回任意字符串,接受绝对路径与目录穿越',
+    edits: [
+      {
+        file: PERSONAL,
+        anchor: 'z.array(RelPathSchema.max(256)).min(1).max(4)',
+        replacement: 'z.array(z.string().min(1).max(256)).min(1).max(4)',
+      },
+    ],
+    tests: [W0],
+    expectRed: ['target_paths 拒绝绝对路径'],
+    mustKill: ['target_paths 拒绝绝对路径'],
+  },
+  {
+    id: 'admission-tickets-unbounded',
+    clause: 'W0-3:准入文件 tickets 不再受 RSI_PROBE_SESSIONS 约束',
+    edits: [
+      {
+        file: PERSONAL,
+        anchor: 'tickets: z.literal(RSI_PROBE_SESSIONS),',
+        replacement: 'tickets: NonNegInt,',
+      },
+    ],
+    tests: [W0],
+    expectRed: ['探针票数只能等于 RSI_PROBE_SESSIONS'],
+    mustKill: ['探针票数只能等于 RSI_PROBE_SESSIONS'],
+  },
+  {
+    id: 'tracker-ignores-registration',
+    clause: 'W0-11:条款追踪把跳过的 suite、未注册函数里的 it 算作覆盖',
+    edits: [
+      {
+        file: 'test/contracts/r21-clause-coverage.test.ts',
+        anchor: '        inRegisteredContext(n)\n',
+        replacement: '        true\n',
+      },
+    ],
+    tests: ['contracts/r21-clause-coverage.test.ts'],
+    expectRed: ['提取器的注册上下文'],
+    mustKill: ['提取器的注册上下文'],
+  },
+  {
+    id: 'runsync-relayed',
+    clause: 'W0-11:exec.ts 以外的模块转出 runSync,绕开 src/rsi/** 的直接导入限域',
+    edits: [
+      {
+        file: 'src/rsi/auto-config.ts',
+        anchor: 'export function resolveAutoConfig(cfg: RsiConfig): RsiAutoConfig {',
+        replacement:
+          "export { runSync } from '../io/exec.js';\nexport function resolveAutoConfig(cfg: RsiConfig): RsiAutoConfig {",
+      },
+    ],
+    tests: ['lint/run-sync-relay.test.ts'],
+    expectRed: ['exec.ts 以外的模块都不转出 runSync'],
+    mustKill: ['exec.ts 以外的模块都不转出 runSync'],
   },
 ];
 

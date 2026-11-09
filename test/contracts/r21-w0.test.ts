@@ -28,6 +28,7 @@ import {
   RSI_TERMINAL_REASONS,
   RSI_LIFECYCLE_STATES,
   type RsiAutoPhaseName,
+  RSI_PROBE_SESSIONS,
 } from '../../src/contracts/rsi.js';
 import {
   CanaryAdmissionSchema,
@@ -594,6 +595,35 @@ describe('W0-3 准入文件', () => {
     expect(
       CanaryAdmissionSchema.safeParse({ schema_version: 1, agents: { codex: entry({}) } }).success,
     ).toBe(false);
+  });
+  it('W0-3 探针票数只能等于 RSI_PROBE_SESSIONS,超额或为零的准入文件不合法', () => {
+    const ok = (tickets: unknown) =>
+      CanaryAdmissionSchema.safeParse({
+        schema_version: 1,
+        agents: { claude: entry({ tickets }) },
+      }).success;
+    expect(ok(RSI_PROBE_SESSIONS)).toBe(true);
+    for (const bad of [0, 2, 4, 1000000]) expect(ok(bad), String(bad)).toBe(false);
+  });
+});
+
+describe('R21-3.7 target_paths 只收私有仓库相对路径', () => {
+  it('R21-3.7 target_paths 拒绝绝对路径、目录穿越、NUL 与反斜杠,普通相对路径通过', () => {
+    const ok = (p: string) =>
+      PersonalLifecycleRecordSchema.safeParse(rec({ target_paths: [p] })).success;
+    expect(ok('rules/ra_0123456789ab.md')).toBe(true);
+    for (const bad of [
+      '/tmp/outside.md',
+      '../outside.md',
+      'rules/../../outside.md',
+      'rules\\x.md',
+      'rules/\0x.md',
+      'rules//x.md',
+      '~/x.md',
+      `rules/${'x'.repeat(260)}.md`,
+    ]) {
+      expect(ok(bad), bad).toBe(false);
+    }
   });
 });
 
