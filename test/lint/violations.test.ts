@@ -608,7 +608,10 @@ describe('lint 正向对照:同样的代码放到被授权的文件里不报错'
         'src/rsi/personal/commit-extra.ts',
       ]) {
         expect((await lintAs(RUN_SYNC, bad)).length, `${bad}: runSync`).toBeGreaterThan(0);
-        expect((await lintAs(RUN_SYNC_REX, bad)).length, `${bad}: runSync reexport`).toBeGreaterThan(0);
+        expect(
+          (await lintAs(RUN_SYNC_REX, bad)).length,
+          `${bad}: runSync reexport`,
+        ).toBeGreaterThan(0);
       }
       // `import * as exec` 同样被 importNames 拦下(与 runSelf 同口径)
       expect((await lintAs(RS_NS, 'src/rsi/hint.ts')).length).toBeGreaterThan(0);

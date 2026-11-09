@@ -336,7 +336,11 @@ describe('§21 W0-7 `auto_pause`:可选键(旧 state.json 照常通过),出现�
     });
     const withPause = {
       ...stateWith(null),
-      auto_pause: { reasons: ['user_paused', 'rollback_storm'], diverged: false, owner_changed: true },
+      auto_pause: {
+        reasons: ['user_paused', 'rollback_storm'],
+        diverged: false,
+        owner_changed: true,
+      },
     };
     expect(RsiStateSchema.safeParse(withPause).success).toBe(true);
     expect(parseRsiStateDoc(Buffer.from(JSON.stringify(withPause)))).toMatchObject({ kind: 'ok' });

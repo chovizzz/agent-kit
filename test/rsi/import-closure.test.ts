@@ -116,11 +116,7 @@ function specifiersOf(file: string, source: string): string[] {
   return out;
 }
 
-function resolveRelative(
-  fromAbs: string,
-  spec: string,
-  virtual: Virtual = {},
-): string | undefined {
+function resolveRelative(fromAbs: string, spec: string, virtual: Virtual = {}): string | undefined {
   const base = path.resolve(path.dirname(fromAbs), spec);
   const cands = [base.replace(/\.js$/, '.ts'), `${base}.ts`, path.join(base, 'index.ts')];
   // 虚拟文件(不落盘)也参与解析:禁止前缀目录 V4–V6 才建,负向用例靠它在今天就能演练

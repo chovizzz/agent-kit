@@ -38,7 +38,8 @@ export function realClauseRefs(src: string): Set<string> {
     .split('\n')
     .filter((l) => !/^\s*(\/\/|\/\*|\*)/.test(l))
     .join('\n');
-  const re = /(?:^|[^\w.])(?:it|test)\(\s*(['"`])((?:(?!\1)[^\\]|\\.)*)\1\s*,\s*(async\s*)?\(\s*\)\s*=>\s*(\{\s*\}|\{|[^{])/gm;
+  const re =
+    /(?:^|[^\w.])(?:it|test)\(\s*(['"`])((?:(?!\1)[^\\]|\\.)*)\1\s*,\s*(async\s*)?\(\s*\)\s*=>\s*(\{\s*\}|\{|[^{])/gm;
   for (const m of src.matchAll(re)) {
     const body = m[4] ?? '';
     if (/^\{\s*\}$/.test(body)) continue; // 空函数体
@@ -60,7 +61,8 @@ export function uncoveredClauses(
     else if (tag === 'V1') {
       const first = map.get(id);
       if (first === undefined) throw new Error(`${id} 没有首期`);
-      if (RSI_AUTO_PHASE_ORDER.indexOf(first as (typeof RSI_AUTO_PHASE_ORDER)[number]) <= phase) need.push(id);
+      if (RSI_AUTO_PHASE_ORDER.indexOf(first as (typeof RSI_AUTO_PHASE_ORDER)[number]) <= phase)
+        need.push(id);
     }
   }
   return need.filter((id) => !covered.has(id) && exempt[id] === undefined).sort();
@@ -115,7 +117,9 @@ describe('W0-11 条款追踪', async () => {
     expect(refs.has(id)).toBe(false);
     expect(refs.has(idA)).toBe(true); // 带后缀的条款只匹配自己
     expect(refs.has(['R21', '-9.8'].join(''))).toBe(false);
-    const ok = realClauseRefs(`it('${id} real', () => { expect(1).toBe(1); });\ntest('${id} t', async () => { x(); });`);
+    const ok = realClauseRefs(
+      `it('${id} real', () => { expect(1).toBe(1); });\ntest('${id} t', async () => { x(); });`,
+    );
     expect(ok.has(id)).toBe(true);
   });
 

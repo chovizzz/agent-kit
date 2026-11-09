@@ -86,7 +86,8 @@ describe('W0-1 能力表:默认拒绝;文档表 ↔ RSI_CAPABILITY_PHASE 双向�
 
   it('R21-0.1 能力默认拒绝:不在表里 = 不可用;相位 0 时全部不可用;到期后只放行本期及更早', () => {
     expect(capabilityAvailable('no_such_capability', 9)).toBe(false); // 变异:缺省放行 → 红
-    for (const k of Object.keys(RSI_CAPABILITY_PHASE)) expect(capabilityAvailable(k), k).toBe(false);
+    for (const k of Object.keys(RSI_CAPABILITY_PHASE))
+      expect(capabilityAvailable(k), k).toBe(false);
     expect(capabilityAvailable('candidate_create', 1)).toBe(true);
     expect(capabilityAvailable('transition_shadow_to_canary', 1)).toBe(false);
     expect(capabilityAvailable('transition_shadow_to_canary', 2)).toBe(true);
@@ -123,7 +124,8 @@ describe('W0-1 条款分配表:`[V1]` 条款一个不漏、不重复、不多', 
     for (const id of ['R21-6.1', 'R21-6.11', 'R21-9.1', 'R21-4.2', 'R21-12.7']) {
       expect(map.get(id), id).toBe('V1b');
     }
-    for (const id of ['R21-3.5', 'R21-4.3', 'R21-9.5', 'R21-12.4']) expect(map.get(id), id).toBe('V1a');
+    for (const id of ['R21-3.5', 'R21-4.3', 'R21-9.5', 'R21-12.4'])
+      expect(map.get(id), id).toBe('V1a');
   });
 });
 
@@ -138,7 +140,9 @@ describe('R21-10.2 熔断码表 ↔ 枚举;最早期', () => {
       .filter((l) => l.startsWith('| `'))
       .map((l) => ticks(l.split('|')[1] as string)[0]);
     expect(codes).toEqual([...RSI_AUTO_PAUSE_REASONS]);
-    expect(Object.keys(RSI_AUTO_PAUSE_REASON_PHASE).sort()).toEqual([...RSI_AUTO_PAUSE_REASONS].sort());
+    expect(Object.keys(RSI_AUTO_PAUSE_REASON_PHASE).sort()).toEqual(
+      [...RSI_AUTO_PAUSE_REASONS].sort(),
+    );
     expect(RSI_AUTO_PAUSE_REASON_PHASE.rollback_storm).toBe('V1b'); // W0-12:需要回滚才会触发
     expect(RSI_AUTO_PAUSE_REASON_PHASE.user_paused).toBe('V1a');
     for (const p of Object.values(RSI_AUTO_PAUSE_REASON_PHASE) as RsiAutoPhaseName[]) {
@@ -149,18 +153,36 @@ describe('R21-10.2 熔断码表 ↔ 枚举;最早期', () => {
 
 describe('R21-12.9 稳定码并入(W0-12)', () => {
   it('R21-12.9 USAGE / NOT_RUN / 顶层 / FAIL_CLOSED 追加项都在既有枚举里,且枚举无重复', () => {
-    for (const c of ['bad_date', 'unknown_id', 'bad_marker']) expect(RSI_USAGE_REASONS).toContain(c);
-    for (const c of ['not_diverged', 'phase_not_available', 'ticket_expired', 'no_runtime', 'rate_limited']) {
+    for (const c of ['bad_date', 'unknown_id', 'bad_marker'])
+      expect(RSI_USAGE_REASONS).toContain(c);
+    for (const c of [
+      'not_diverged',
+      'phase_not_available',
+      'ticket_expired',
+      'no_runtime',
+      'rate_limited',
+    ]) {
       expect(RSI_NOT_RUN_REASONS).toContain(c);
     }
     for (const c of ['RSI_AUTO_RESUME_BLOCKED', 'RSI_CONTRIB_DEGRADED', 'RSI_EXEC_DECLINED']) {
       expect(RSI_EXIT1_CODES).toContain(c);
     }
     expect(RSI_EXEC_NOT_RUN).toBe('RSI_EXEC_NOT_RUN');
-    for (const c of ['personal_repo_invalid', 'candidate_invalid', 'ledger_line_invalid', 'txn_invalid', 'probe_error']) {
+    for (const c of [
+      'personal_repo_invalid',
+      'candidate_invalid',
+      'ledger_line_invalid',
+      'txn_invalid',
+      'probe_error',
+    ]) {
       expect(RSI_FAIL_CLOSED_REASONS).toContain(c);
     }
-    for (const arr of [RSI_USAGE_REASONS, RSI_NOT_RUN_REASONS, RSI_EXIT1_CODES, RSI_FAIL_CLOSED_REASONS]) {
+    for (const arr of [
+      RSI_USAGE_REASONS,
+      RSI_NOT_RUN_REASONS,
+      RSI_EXIT1_CODES,
+      RSI_FAIL_CLOSED_REASONS,
+    ]) {
       expect(new Set(arr).size).toBe(arr.length);
     }
   });
@@ -168,8 +190,12 @@ describe('R21-12.9 稳定码并入(W0-12)', () => {
   it('R21-12.9 G0 原因码 = g0_ + ingest 拒绝子码(A4-1);终态理由优先级 vetoed 最高(R21-4.4a)', () => {
     expect(rsiG0Reasons()).toEqual(RSI_INGEST_REJECT_REASONS.map((r) => `g0_${r}`));
     expect(RSI_TERMINAL_REASONS[0]).toBe('vetoed');
-    expect(RSI_TERMINAL_REASONS.indexOf('judge_rejected')).toBeGreaterThan(RSI_TERMINAL_REASONS.indexOf('cleared'));
-    expect(RSI_TERMINAL_REASONS.indexOf('judge_rejected')).toBeLessThan(RSI_TERMINAL_REASONS.indexOf('auto_rollback'));
+    expect(RSI_TERMINAL_REASONS.indexOf('judge_rejected')).toBeGreaterThan(
+      RSI_TERMINAL_REASONS.indexOf('cleared'),
+    );
+    expect(RSI_TERMINAL_REASONS.indexOf('judge_rejected')).toBeLessThan(
+      RSI_TERMINAL_REASONS.indexOf('auto_rollback'),
+    );
   });
 });
 
@@ -189,7 +215,9 @@ describe('W0-2 签名:教训类 Jaccard 阈值与 cluster.ts 一致', () => {
 describe('R21-2.1 RsiBaseSchema 放行三个子表(只验表或缺省)', () => {
   it('R21-2.1 auto / capability / contrib 是表 → 通过;不是表 → 拒;未知键仍拒', () => {
     const base = { enabled: true };
-    expect(RsiBaseSchema.safeParse({ ...base, auto: { enabled: true, whatever: 1 } }).success).toBe(true);
+    expect(RsiBaseSchema.safeParse({ ...base, auto: { enabled: true, whatever: 1 } }).success).toBe(
+      true,
+    );
     expect(RsiBaseSchema.safeParse({ ...base, capability: {}, contrib: {} }).success).toBe(true);
     for (const k of ['auto', 'capability', 'contrib']) {
       expect(RsiBaseSchema.safeParse({ ...base, [k]: 5 }).success, k).toBe(false);
@@ -240,8 +268,22 @@ describe('R21-4.3 合法组合矩阵(非法一律拒绝 = candidate_invalid)', (
       ['canary', { claude: 'injected', pi: 'injected', codex: 'none' }, {}],
       ['adopted', { claude: 'injected', pi: 'none', codex: 'none' }, {}],
       ['stable', { claude: 'static', pi: 'withdraw_pending', codex: 'static_pending' }, {}],
-      ['rolling_back', { claude: 'removal_pending', pi: 'none', codex: 'none' }, { rollback: { phase: 'rollback_requested', reason: 'vetoed', target_terminal: 'rolled_back' } }],
-      ['retiring', { claude: 'removal_pending', pi: 'none', codex: 'none' }, { rollback: { phase: 'rollback_requested', reason: 'no_hit', target_terminal: 'retired' } }],
+      [
+        'rolling_back',
+        { claude: 'removal_pending', pi: 'none', codex: 'none' },
+        {
+          rollback: {
+            phase: 'rollback_requested',
+            reason: 'vetoed',
+            target_terminal: 'rolled_back',
+          },
+        },
+      ],
+      [
+        'retiring',
+        { claude: 'removal_pending', pi: 'none', codex: 'none' },
+        { rollback: { phase: 'rollback_requested', reason: 'no_hit', target_terminal: 'retired' } },
+      ],
       ['rejected', none, { terminal_reason: 'vetoed' }],
       ['expired', none, { terminal_reason: 'auto_expired' }],
       ['rolled_back', none, { terminal_reason: 'auto_rollback' }],
@@ -250,7 +292,9 @@ describe('R21-4.3 合法组合矩阵(非法一律拒绝 = candidate_invalid)', (
     expect(ok.length).toBe(RSI_LIFECYCLE_STATES.length);
     for (const [lifecycle, deploy, extra] of ok) {
       const r = PersonalLifecycleRecordSchema.safeParse(rec({ lifecycle, deploy, ...extra }));
-      expect(r.success, `${lifecycle}: ${r.success ? '' : JSON.stringify(r.error.issues)}`).toBe(true);
+      expect(r.success, `${lifecycle}: ${r.success ? '' : JSON.stringify(r.error.issues)}`).toBe(
+        true,
+      );
     }
   });
 
@@ -262,31 +306,80 @@ describe('R21-4.3 合法组合矩阵(非法一律拒绝 = candidate_invalid)', (
       ['canary', { claude: 'injected', pi: 'none', codex: 'injected' }, {}],
       ['canary', { claude: 'static', pi: 'none', codex: 'none' }, {}],
       ['adopted', { claude: 'none', pi: 'removal_pending', codex: 'none' }, {}],
-      ['rolling_back', { claude: 'injected', pi: 'none', codex: 'none' }, { rollback: { phase: 'rollback_requested', reason: 'vetoed', target_terminal: 'rolled_back' } }],
+      [
+        'rolling_back',
+        { claude: 'injected', pi: 'none', codex: 'none' },
+        {
+          rollback: {
+            phase: 'rollback_requested',
+            reason: 'vetoed',
+            target_terminal: 'rolled_back',
+          },
+        },
+      ],
     ];
     for (const [lifecycle, deploy, extra] of bad) {
-      expect(PersonalLifecycleRecordSchema.safeParse(rec({ lifecycle, deploy, ...extra })).success, `${lifecycle} ${JSON.stringify(deploy)}`).toBe(false);
+      expect(
+        PersonalLifecycleRecordSchema.safeParse(rec({ lifecycle, deploy, ...extra })).success,
+        `${lifecycle} ${JSON.stringify(deploy)}`,
+      ).toBe(false);
     }
-    expect(deployMatrixViolation('canary', { claude: 'none', pi: 'none', codex: 'injected' })).not.toBeNull();
-    expect(deployMatrixViolation('canary', { claude: 'injected', pi: 'injected', codex: 'none' })).toBeNull();
+    expect(
+      deployMatrixViolation('canary', { claude: 'none', pi: 'none', codex: 'injected' }),
+    ).not.toBeNull();
+    expect(
+      deployMatrixViolation('canary', { claude: 'injected', pi: 'injected', codex: 'none' }),
+    ).toBeNull();
   });
 
   it('R21-3.7 终态必须带终态理由、非终态不得带;rolling_back 必须带 rollback;blocked_from 仅 blocked;未知键拒(strict)', () => {
-    expect(PersonalLifecycleRecordSchema.safeParse(rec({ lifecycle: 'rejected' })).success).toBe(false);
-    expect(PersonalLifecycleRecordSchema.safeParse(rec({ terminal_reason: 'vetoed' })).success).toBe(false);
-    expect(PersonalLifecycleRecordSchema.safeParse(rec({ lifecycle: 'rolling_back', deploy: { claude: 'none', pi: 'none', codex: 'none' } })).success).toBe(false);
-    expect(PersonalLifecycleRecordSchema.safeParse(rec({ blocked_from: 'shadow' })).success).toBe(false);
-    expect(PersonalLifecycleRecordSchema.safeParse(rec({ lifecycle: 'blocked' })).success).toBe(false);
+    expect(PersonalLifecycleRecordSchema.safeParse(rec({ lifecycle: 'rejected' })).success).toBe(
+      false,
+    );
+    expect(
+      PersonalLifecycleRecordSchema.safeParse(rec({ terminal_reason: 'vetoed' })).success,
+    ).toBe(false);
+    expect(
+      PersonalLifecycleRecordSchema.safeParse(
+        rec({ lifecycle: 'rolling_back', deploy: { claude: 'none', pi: 'none', codex: 'none' } }),
+      ).success,
+    ).toBe(false);
+    expect(PersonalLifecycleRecordSchema.safeParse(rec({ blocked_from: 'shadow' })).success).toBe(
+      false,
+    );
+    expect(PersonalLifecycleRecordSchema.safeParse(rec({ lifecycle: 'blocked' })).success).toBe(
+      false,
+    );
     expect(PersonalLifecycleRecordSchema.safeParse(rec({ surprise: 1 })).success).toBe(false); // 旧版读到未知键 → 拒
   });
 
   it('R21-3.7 转移原因码是封闭枚举;source_proposal 与 cluster_signature 可缺省(旧记录合法)', () => {
-    const t = (reason: string) => ({ dim: 'lifecycle', from: 'proposed', to: 'shadow', at: T, reason, idem_key: '0123456789abcdef' });
-    expect(PersonalLifecycleRecordSchema.safeParse(rec({ transitions: [t('gates_passed')] })).success).toBe(true);
-    expect(PersonalLifecycleRecordSchema.safeParse(rec({ transitions: [t('g0_schema_invalid')] })).success).toBe(true);
-    expect(PersonalLifecycleRecordSchema.safeParse(rec({ transitions: [t('because')] })).success).toBe(false);
-    expect(PersonalLifecycleRecordSchema.safeParse(rec({ source_proposal: null })).success).toBe(true);
-    expect(PersonalLifecycleRecordSchema.safeParse(rec({ transitions: Array.from({ length: 257 }, () => t('gates_passed')) })).success).toBe(false);
+    const t = (reason: string) => ({
+      dim: 'lifecycle',
+      from: 'proposed',
+      to: 'shadow',
+      at: T,
+      reason,
+      idem_key: '0123456789abcdef',
+    });
+    expect(
+      PersonalLifecycleRecordSchema.safeParse(rec({ transitions: [t('gates_passed')] })).success,
+    ).toBe(true);
+    expect(
+      PersonalLifecycleRecordSchema.safeParse(rec({ transitions: [t('g0_schema_invalid')] }))
+        .success,
+    ).toBe(true);
+    expect(
+      PersonalLifecycleRecordSchema.safeParse(rec({ transitions: [t('because')] })).success,
+    ).toBe(false);
+    expect(PersonalLifecycleRecordSchema.safeParse(rec({ source_proposal: null })).success).toBe(
+      true,
+    );
+    expect(
+      PersonalLifecycleRecordSchema.safeParse(
+        rec({ transitions: Array.from({ length: 257 }, () => t('gates_passed')) }),
+      ).success,
+    ).toBe(false);
   });
 });
 
@@ -305,71 +398,180 @@ describe('R21-3.6a 提交 journal:bootstrap 是单列状态机', () => {
     ...over,
   });
   it('R21-3.6a 正向:五 phase 各一;bootstrap 四 phase 且 old_head=null', () => {
-    for (const phase of ['planned', 'objects_written', 'ref_updated', 'worktree_synced', 'recorded']) {
+    for (const phase of [
+      'planned',
+      'objects_written',
+      'ref_updated',
+      'worktree_synced',
+      'recorded',
+    ]) {
       expect(PersonalCommitJournalSchema.safeParse(j({ phase })).success, phase).toBe(true);
     }
     for (const phase of ['planned', 'initialized', 'committed', 'recorded']) {
-      expect(PersonalCommitJournalSchema.safeParse(j({ kind: 'bootstrap', old_head: null, candidate_ids: [], phase })).success, phase).toBe(true);
+      expect(
+        PersonalCommitJournalSchema.safeParse(
+          j({ kind: 'bootstrap', old_head: null, candidate_ids: [], phase }),
+        ).success,
+        phase,
+      ).toBe(true);
     }
   });
   it('R21-3.6a 负向:bootstrap 带 old_head / 用了五 phase 的 phase;非 bootstrap 缺 old_head / 用了 bootstrap 的 phase;ref 不是 rsi 分支', () => {
-    expect(PersonalCommitJournalSchema.safeParse(j({ kind: 'bootstrap', phase: 'planned' })).success).toBe(false);
-    expect(PersonalCommitJournalSchema.safeParse(j({ kind: 'bootstrap', old_head: null, phase: 'ref_updated' })).success).toBe(false);
+    expect(
+      PersonalCommitJournalSchema.safeParse(j({ kind: 'bootstrap', phase: 'planned' })).success,
+    ).toBe(false);
+    expect(
+      PersonalCommitJournalSchema.safeParse(
+        j({ kind: 'bootstrap', old_head: null, phase: 'ref_updated' }),
+      ).success,
+    ).toBe(false);
     expect(PersonalCommitJournalSchema.safeParse(j({ old_head: null })).success).toBe(false);
     expect(PersonalCommitJournalSchema.safeParse(j({ phase: 'initialized' })).success).toBe(false);
-    expect(PersonalCommitJournalSchema.safeParse(j({ ref: 'refs/heads/main' })).success).toBe(false);
+    expect(PersonalCommitJournalSchema.safeParse(j({ ref: 'refs/heads/main' })).success).toBe(
+      false,
+    );
   });
 });
 
 describe('R21-6.4 分组账行:探针行是唯一 marker 非空且 candidate_id 为 null 的 excluded 行', () => {
-  const base = { at: T, agent: 'claude', background_fp: '0'.repeat(16), background_fp_ex: '0'.repeat(16), policy_fp: A, case_set_sha256: null, overlaps_preset: false, hint_version: 1 };
-  const assign = (over: Record<string, unknown>) => ({ ...base, kind: 'assign', marker: 'rsm_0123456789abcdef', candidate_id: ID, arm: 'treat', reason: null, p: 0.5, ...over });
+  const base = {
+    at: T,
+    agent: 'claude',
+    background_fp: '0'.repeat(16),
+    background_fp_ex: '0'.repeat(16),
+    policy_fp: A,
+    case_set_sha256: null,
+    overlaps_preset: false,
+    hint_version: 1,
+  };
+  const assign = (over: Record<string, unknown>) => ({
+    ...base,
+    kind: 'assign',
+    marker: 'rsm_0123456789abcdef',
+    candidate_id: ID,
+    arm: 'treat',
+    reason: null,
+    p: 0.5,
+    ...over,
+  });
   it('R21-6.4 正向:treat / control / 各 excluded 原因 / 探针行', () => {
     expect(RsiCanaryLedgerLineSchema.safeParse(assign({})).success).toBe(true);
     expect(RsiCanaryLedgerLineSchema.safeParse(assign({ arm: 'control' })).success).toBe(true);
-    for (const reason of ['paused', 'not_admitted', 'policy_mismatch', 'agent_not_injected', 'revoked', 'rng_error', 'permit_unreadable']) {
-      expect(RsiCanaryLedgerLineSchema.safeParse(assign({ arm: 'excluded', reason, p: 0, marker: null })).success, reason).toBe(true);
+    for (const reason of [
+      'paused',
+      'not_admitted',
+      'policy_mismatch',
+      'agent_not_injected',
+      'revoked',
+      'rng_error',
+      'permit_unreadable',
+    ]) {
+      expect(
+        RsiCanaryLedgerLineSchema.safeParse(assign({ arm: 'excluded', reason, p: 0, marker: null }))
+          .success,
+        reason,
+      ).toBe(true);
     }
-    expect(RsiCanaryLedgerLineSchema.safeParse(assign({ arm: 'excluded', reason: 'admission_probe', p: 0, candidate_id: null })).success).toBe(true);
+    expect(
+      RsiCanaryLedgerLineSchema.safeParse(
+        assign({ arm: 'excluded', reason: 'admission_probe', p: 0, candidate_id: null }),
+      ).success,
+    ).toBe(true);
   });
   it('R21-6.4 负向:探针行带 candidate_id / 无 marker;非探针 excluded 带 marker;treat 缺 marker、p=0;excluded p≠0;codex 不参与分组', () => {
-    expect(RsiCanaryLedgerLineSchema.safeParse(assign({ arm: 'excluded', reason: 'admission_probe', p: 0 })).success).toBe(false);
-    expect(RsiCanaryLedgerLineSchema.safeParse(assign({ arm: 'excluded', reason: 'admission_probe', p: 0, candidate_id: null, marker: null })).success).toBe(false);
-    expect(RsiCanaryLedgerLineSchema.safeParse(assign({ arm: 'excluded', reason: 'paused', p: 0 })).success).toBe(false);
+    expect(
+      RsiCanaryLedgerLineSchema.safeParse(
+        assign({ arm: 'excluded', reason: 'admission_probe', p: 0 }),
+      ).success,
+    ).toBe(false);
+    expect(
+      RsiCanaryLedgerLineSchema.safeParse(
+        assign({
+          arm: 'excluded',
+          reason: 'admission_probe',
+          p: 0,
+          candidate_id: null,
+          marker: null,
+        }),
+      ).success,
+    ).toBe(false);
+    expect(
+      RsiCanaryLedgerLineSchema.safeParse(assign({ arm: 'excluded', reason: 'paused', p: 0 }))
+        .success,
+    ).toBe(false);
     expect(RsiCanaryLedgerLineSchema.safeParse(assign({ marker: null })).success).toBe(false);
     expect(RsiCanaryLedgerLineSchema.safeParse(assign({ p: 0 })).success).toBe(false);
-    expect(RsiCanaryLedgerLineSchema.safeParse(assign({ arm: 'excluded', reason: 'paused', p: 0.5, marker: null })).success).toBe(false);
+    expect(
+      RsiCanaryLedgerLineSchema.safeParse(
+        assign({ arm: 'excluded', reason: 'paused', p: 0.5, marker: null }),
+      ).success,
+    ).toBe(false);
     expect(RsiCanaryLedgerLineSchema.safeParse(assign({ agent: 'codex' })).success).toBe(false);
-    expect(RsiCanaryLedgerLineSchema.safeParse(assign({ arm: 'treat', reason: 'paused' })).success).toBe(false);
+    expect(
+      RsiCanaryLedgerLineSchema.safeParse(assign({ arm: 'treat', reason: 'paused' })).success,
+    ).toBe(false);
   });
   it('R21-6.4 stop 行:revocation_reconciled ⇔ revocation_ref 必填;普通 stop 行 ref 为 null', () => {
-    const stop = (reason: string, revocation_ref: string | null) => ({ kind: 'stop', at: T, candidate_id: ID, reason, revocation_ref });
-    expect(RsiCanaryLedgerLineSchema.safeParse(stop('revocation_reconciled', '0123456789abcdef')).success).toBe(true);
-    expect(RsiCanaryLedgerLineSchema.safeParse(stop('auto_rollback' as string, null)).success).toBe(false); // auto_rollback 是终态理由不是转移原因码
+    const stop = (reason: string, revocation_ref: string | null) => ({
+      kind: 'stop',
+      at: T,
+      candidate_id: ID,
+      reason,
+      revocation_ref,
+    });
+    expect(
+      RsiCanaryLedgerLineSchema.safeParse(stop('revocation_reconciled', '0123456789abcdef'))
+        .success,
+    ).toBe(true);
+    expect(RsiCanaryLedgerLineSchema.safeParse(stop('auto_rollback' as string, null)).success).toBe(
+      false,
+    ); // auto_rollback 是终态理由不是转移原因码
     expect(RsiCanaryLedgerLineSchema.safeParse(stop('harm_c1', null)).success).toBe(true);
-    expect(RsiCanaryLedgerLineSchema.safeParse(stop('revocation_reconciled', null)).success).toBe(false);
-    expect(RsiCanaryLedgerLineSchema.safeParse(stop('harm_c1', '0123456789abcdef')).success).toBe(false);
+    expect(RsiCanaryLedgerLineSchema.safeParse(stop('revocation_reconciled', null)).success).toBe(
+      false,
+    );
+    expect(RsiCanaryLedgerLineSchema.safeParse(stop('harm_c1', '0123456789abcdef')).success).toBe(
+      false,
+    );
   });
 });
 
 describe('W0-3 准入文件', () => {
-  const entry = (over: Record<string, unknown>) => ({ state: 'probing', shape_version: 'claude-1', agent_version: null, armed_at: T, probe_expires_at: T, tickets: 3, decided_at: null, reason: null, ...over });
+  const entry = (over: Record<string, unknown>) => ({
+    state: 'probing',
+    shape_version: 'claude-1',
+    agent_version: null,
+    armed_at: T,
+    probe_expires_at: T,
+    tickets: 3,
+    decided_at: null,
+    reason: null,
+    ...over,
+  });
   it('W0-3 状态与 decided_at / reason 的配对:probing 无决定时间;failed 必带原因;admitted 无原因', () => {
-    const ok = (e: unknown) => CanaryAdmissionSchema.safeParse({ schema_version: 1, agents: { claude: e } }).success;
+    const ok = (e: unknown) =>
+      CanaryAdmissionSchema.safeParse({ schema_version: 1, agents: { claude: e } }).success;
     expect(ok(entry({}))).toBe(true);
     expect(ok(entry({ state: 'admitted', decided_at: T }))).toBe(true);
     expect(ok(entry({ state: 'failed', decided_at: T, reason: 'multi_marker' }))).toBe(true);
     expect(ok(entry({ state: 'failed', decided_at: T }))).toBe(false);
     expect(ok(entry({ state: 'admitted' }))).toBe(false);
     expect(ok(entry({ state: 'admitted', decided_at: T, reason: 'multi_marker' }))).toBe(false);
-    expect(CanaryAdmissionSchema.safeParse({ schema_version: 1, agents: { codex: entry({}) } }).success).toBe(false);
+    expect(
+      CanaryAdmissionSchema.safeParse({ schema_version: 1, agents: { codex: entry({}) } }).success,
+    ).toBe(false);
   });
 });
 
 describe('R21-11.4 墓碑 id 不得重复', () => {
   it('R21-11.4 重复 id → 拒;不同 id → 通过', () => {
     const e = (id: string) => ({ id, terminal: 'rejected', reason: 'vetoed', at: T });
-    expect(RsiTombstonesSchema.safeParse({ schema_version: 1, entries: [e(ID), e('ra_ffffffffffff')] }).success).toBe(true);
-    expect(RsiTombstonesSchema.safeParse({ schema_version: 1, entries: [e(ID), e(ID)] }).success).toBe(false);
+    expect(
+      RsiTombstonesSchema.safeParse({ schema_version: 1, entries: [e(ID), e('ra_ffffffffffff')] })
+        .success,
+    ).toBe(true);
+    expect(
+      RsiTombstonesSchema.safeParse({ schema_version: 1, entries: [e(ID), e(ID)] }).success,
+    ).toBe(false);
   });
 });

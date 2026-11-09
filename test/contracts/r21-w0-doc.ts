@@ -19,7 +19,12 @@ export function tableAfter(md: string, marker: string): string[][] {
   for (const l of lines) {
     if (l.startsWith('|')) {
       started = true;
-      rows.push(l.split('|').slice(1, -1).map((c) => c.trim()));
+      rows.push(
+        l
+          .split('|')
+          .slice(1, -1)
+          .map((c) => c.trim()),
+      );
     } else if (started) break;
   }
   const data = rows.slice(2); // 表头 + 分隔行
@@ -28,13 +33,17 @@ export function tableAfter(md: string, marker: string): string[][] {
 }
 
 /** 单元格里所有反引号 token */
-export const ticks = (cell: string): string[] => [...cell.matchAll(/`([^`]+)`/g)].map((m) => m[1] as string);
+export const ticks = (cell: string): string[] =>
+  [...cell.matchAll(/`([^`]+)`/g)].map((m) => m[1] as string);
 
 /** 条款分配表:条款号 → 首期(重复 / 空表都抛错) */
 export function clausePhaseMap(md: string = SEC24): Map<string, string> {
   const out = new Map<string, string>();
   for (const [cell, phase] of tableAfter(md, '<!-- W0-CLAUSE-PHASE -->')) {
-    for (const id of (cell ?? '').split('、').map((x) => x.trim()).filter((x) => x !== '')) {
+    for (const id of (cell ?? '')
+      .split('、')
+      .map((x) => x.trim())
+      .filter((x) => x !== '')) {
       if (!/^R21-\d+\.\d+a?$/.test(id)) throw new Error(`条款号格式不对:${id}`);
       if (out.has(id)) throw new Error(`条款 ${id} 重复分配`);
       out.set(id, phase as string);

@@ -5,7 +5,13 @@
  * 常量与枚举都在 `src/contracts/rsi.ts`(契约:不另起一份)。
  */
 import { z } from 'zod';
-import { IsoDateSchema, IsoTimestampSchema, RunIdSchema, SessionRefIdSchema, Sha256Schema } from './common.js';
+import {
+  IsoDateSchema,
+  IsoTimestampSchema,
+  RunIdSchema,
+  SessionRefIdSchema,
+  Sha256Schema,
+} from './common.js';
 import {
   RSI_AUDIT_KINDS,
   RSI_BOOTSTRAP_PHASES,
@@ -134,7 +140,12 @@ export function deployMatrixViolation(
   }
 }
 
-const TERMINAL_STATES: ReadonlySet<string> = new Set(['rejected', 'expired', 'rolled_back', 'retired']);
+const TERMINAL_STATES: ReadonlySet<string> = new Set([
+  'rejected',
+  'expired',
+  'rolled_back',
+  'retired',
+]);
 
 export const PersonalLifecycleRecordSchema = z
   .strictObject({
@@ -143,7 +154,11 @@ export const PersonalLifecycleRecordSchema = z
     category: z.enum(RSI_CANDIDATE_CATEGORIES),
     lifecycle: LifecycleSchema,
     deploy: DeployMapSchema,
-    watch: z.strictObject({ claude: WatchEntrySchema, pi: WatchEntrySchema, codex: WatchEntrySchema }),
+    watch: z.strictObject({
+      claude: WatchEntrySchema,
+      pi: WatchEntrySchema,
+      codex: WatchEntrySchema,
+    }),
     rollback: z
       .strictObject({
         phase: z.enum(RSI_ROLLBACK_PHASES),
@@ -162,7 +177,10 @@ export const PersonalLifecycleRecordSchema = z
     terminal_reason: TerminalReasonSchema.nullable(),
     overlaps_preset: z.boolean(),
     /** N4-2(R20-18.33):候选 ↔ 暂存提案关联;缺失 = null = 不消费不展示;创建时写入、之后不可变 */
-    source_proposal: z.strictObject({ run_id: RunIdSchema, proposal_id: z.string().min(1).max(128) }).nullable().optional(),
+    source_proposal: z
+      .strictObject({ run_id: RunIdSchema, proposal_id: z.string().min(1).max(128) })
+      .nullable()
+      .optional(),
     /** W0-2:创建时写入、之后不可变;缺失 = 旧版记录(不参与 G6 / shadow) */
     cluster_signature: RsiClusterSignatureSchema.optional(),
   })
@@ -170,10 +188,18 @@ export const PersonalLifecycleRecordSchema = z
     const v = deployMatrixViolation(r.lifecycle, r.deploy);
     if (v !== null) ctx.addIssue({ code: 'custom', path: ['deploy'], message: v });
     if ((r.lifecycle === 'rolling_back' || r.lifecycle === 'retiring') && r.rollback === null) {
-      ctx.addIssue({ code: 'custom', path: ['rollback'], message: `${r.lifecycle} 必须带 rollback 记录` });
+      ctx.addIssue({
+        code: 'custom',
+        path: ['rollback'],
+        message: `${r.lifecycle} 必须带 rollback 记录`,
+      });
     }
     if ((r.blocked_from !== null) !== (r.lifecycle === 'blocked')) {
-      ctx.addIssue({ code: 'custom', path: ['blocked_from'], message: '仅 blocked 状态带 blocked_from' });
+      ctx.addIssue({
+        code: 'custom',
+        path: ['blocked_from'],
+        message: '仅 blocked 状态带 blocked_from',
+      });
     }
     if (TERMINAL_STATES.has(r.lifecycle) && r.terminal_reason === null) {
       ctx.addIssue({ code: 'custom', path: ['terminal_reason'], message: '终态必须带终态理由' });
@@ -195,17 +221,28 @@ export const PersonalCommitJournalSchema = z
     old_head: GitSha.nullable(),
     target_tree: GitSha,
     new_commit: GitSha.nullable(),
-    phase: z.enum([...new Set([...RSI_COMMIT_PHASES, ...RSI_BOOTSTRAP_PHASES])] as [string, ...string[]]),
+    phase: z.enum([...new Set([...RSI_COMMIT_PHASES, ...RSI_BOOTSTRAP_PHASES])] as [
+      string,
+      ...string[],
+    ]),
     at: IsoTimestampSchema,
   })
   .superRefine((j, ctx) => {
     const boot = j.kind === 'bootstrap';
     const phases: readonly string[] = boot ? RSI_BOOTSTRAP_PHASES : RSI_COMMIT_PHASES;
     if (!phases.includes(j.phase)) {
-      ctx.addIssue({ code: 'custom', path: ['phase'], message: `${j.kind} 的 phase 不在其状态机内` });
+      ctx.addIssue({
+        code: 'custom',
+        path: ['phase'],
+        message: `${j.kind} 的 phase 不在其状态机内`,
+      });
     }
     if (boot && j.old_head !== null) {
-      ctx.addIssue({ code: 'custom', path: ['old_head'], message: 'bootstrap 无旧引用(old_head 必须为 null)' });
+      ctx.addIssue({
+        code: 'custom',
+        path: ['old_head'],
+        message: 'bootstrap 无旧引用(old_head 必须为 null)',
+      });
     }
     if (!boot && j.old_head === null) {
       ctx.addIssue({ code: 'custom', path: ['old_head'], message: '非 bootstrap 必须带 old_head' });
@@ -281,7 +318,8 @@ const AssignLineSchema = z
       }
     } else {
       if (l.reason !== null) bad('reason', 'treat / control 的 reason 为 null');
-      if (l.marker === null || l.candidate_id === null) bad('marker', 'treat / control 必须带 marker 与 candidate_id');
+      if (l.marker === null || l.candidate_id === null)
+        bad('marker', 'treat / control 必须带 marker 与 candidate_id');
       if (l.p <= 0) bad('p', 'treat / control 的 p > 0');
     }
   });
@@ -303,14 +341,20 @@ const StopLineSchema = z
       });
     }
   });
-export const RsiCanaryLedgerLineSchema = z.discriminatedUnion('kind', [AssignLineSchema, StopLineSchema]);
+export const RsiCanaryLedgerLineSchema = z.discriminatedUnion('kind', [
+  AssignLineSchema,
+  StopLineSchema,
+]);
 export type RsiCanaryLedgerLine = z.infer<typeof RsiCanaryLedgerLineSchema>;
 
 /** `.state/rsi/canary.json`(R21-6.10,十一键) */
 export const CanaryDocSchema = z.strictObject({
   candidate_id: RsiCandidateIdSchema,
   content_sha256: Sha256Schema,
-  body: z.string().min(1).refine((s) => byteLen(s) <= RSI_CANARY_INJECT_MAX_BYTES, '正文超过注入上限'),
+  body: z
+    .string()
+    .min(1)
+    .refine((s) => byteLen(s) <= RSI_CANARY_INJECT_MAX_BYTES, '正文超过注入上限'),
   content_sha12: Hex(12),
   p_by_agent: z.strictObject({ claude: Prob.optional(), pi: Prob.optional() }),
   agents_inject: z.array(GroupAgentSchema).max(2),
@@ -338,12 +382,16 @@ const AdmissionEntrySchema = z
     const bad = (path: string, message: string): void => {
       ctx.addIssue({ code: 'custom', path: [path], message });
     };
-    if ((e.state === 'probing') !== (e.decided_at === null)) bad('decided_at', '仅 probing 的 decided_at 为 null');
+    if ((e.state === 'probing') !== (e.decided_at === null))
+      bad('decided_at', '仅 probing 的 decided_at 为 null');
     if ((e.state === 'failed') !== (e.reason !== null)) bad('reason', '仅 failed 带原因');
   });
 export const CanaryAdmissionSchema = z.strictObject({
   schema_version: z.literal(1),
-  agents: z.strictObject({ claude: AdmissionEntrySchema.optional(), pi: AdmissionEntrySchema.optional() }),
+  agents: z.strictObject({
+    claude: AdmissionEntrySchema.optional(),
+    pi: AdmissionEntrySchema.optional(),
+  }),
 });
 export type CanaryAdmission = z.infer<typeof CanaryAdmissionSchema>;
 
@@ -387,7 +435,10 @@ export const RsiAuditLineSchema = z.strictObject({
   reason: z.string().min(1).max(64).optional(),
   hashes: z.array(Hex(16)).max(16).optional(),
   counts: z.record(z.string().max(64), NonNegInt).optional(),
-  seed: z.string().regex(/^[0-9a-f]{8,64}$/).optional(),
+  seed: z
+    .string()
+    .regex(/^[0-9a-f]{8,64}$/)
+    .optional(),
   exec: z
     .strictObject({
       started_at: IsoTimestampSchema,
@@ -433,4 +484,3 @@ export const RsiTombstonesSchema = z.strictObject({
     .refine((a) => new Set(a.map((e) => e.id)).size === a.length, 'id 不得重复'),
 });
 export type RsiTombstones = z.infer<typeof RsiTombstonesSchema>;
-

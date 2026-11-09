@@ -5,12 +5,7 @@
  * 失败**只禁自动生效**(`invalid`),不影响 `[rsi]` 的状态、L0 与 hint 计数行。
  * 相位闸经注入参数传入(缺省 {@link RSI_AUTO_PHASE});W0 时恒为 0,所以任何配置下 {@link isAutoLoopEffective} 都为假。
  */
-import {
-  RSI_AUTO_PHASE,
-  RsiAutoSchema,
-  phaseAtLeast,
-  type RsiAuto,
-} from '../contracts/rsi.js';
+import { RSI_AUTO_PHASE, RsiAutoSchema, phaseAtLeast, type RsiAuto } from '../contracts/rsi.js';
 import type { RsiConfig } from './config.js';
 
 export type RsiAutoConfig =

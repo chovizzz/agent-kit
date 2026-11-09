@@ -41,7 +41,13 @@ export const V1_W0_MUTATIONS: readonly V1W0Mutation[] = [
   {
     id: 'phase-promoted-early',
     clause: 'R21-0.1:把 RSI_AUTO_PHASE 提前而未实现对应条款 → 验收红',
-    edits: [{ file: RSI, anchor: 'export const RSI_AUTO_PHASE = 0;', replacement: 'export const RSI_AUTO_PHASE = 1;' }],
+    edits: [
+      {
+        file: RSI,
+        anchor: 'export const RSI_AUTO_PHASE = 0;',
+        replacement: 'export const RSI_AUTO_PHASE = 1;',
+      },
+    ],
     tests: [W0, AUTO],
     expectRed: ['W0 落地时 RSI_AUTO_PHASE = 0', 'W0 相位为 0', '能力默认拒绝', 'phaseAtLeast'],
     mustKill: ['W0 落地时 RSI_AUTO_PHASE = 0'],
@@ -81,7 +87,8 @@ export const V1_W0_MUTATIONS: readonly V1W0Mutation[] = [
       {
         file: RSI,
         anchor: "  'isolation_unverified',\n] as const);\nexport type RsiAutoPauseReason",
-        replacement: "  'isolation_unverified',\n  'extra_reason',\n] as const);\nexport type RsiAutoPauseReason",
+        replacement:
+          "  'isolation_unverified',\n  'extra_reason',\n] as const);\nexport type RsiAutoPauseReason",
       },
     ],
     tests: [W0],
@@ -98,7 +105,8 @@ export const V1_W0_MUTATIONS: readonly V1W0Mutation[] = [
   },
   {
     id: 'l-base-strict-again',
-    clause: 'R21-2.1:L-base 退回 strict(只放行 session)→ [rsi.auto] 写错一个键连累整个 [rsi] 变 off',
+    clause:
+      'R21-2.1:L-base 退回 strict(只放行 session)→ [rsi.auto] 写错一个键连累整个 [rsi] 变 off',
     edits: [
       {
         file: RSI,
@@ -116,8 +124,10 @@ export const V1_W0_MUTATIONS: readonly V1W0Mutation[] = [
     edits: [
       {
         file: RSI,
-        anchor: '  enabled: z.boolean().optional(),\n  profile: z.enum(RSI_AUTO_PROFILES).optional(),',
-        replacement: '  enabled: z.coerce.boolean().optional(),\n  profile: z.enum(RSI_AUTO_PROFILES).optional(),',
+        anchor:
+          '  enabled: z.boolean().optional(),\n  profile: z.enum(RSI_AUTO_PROFILES).optional(),',
+        replacement:
+          '  enabled: z.coerce.boolean().optional(),\n  profile: z.enum(RSI_AUTO_PROFILES).optional(),',
       },
     ],
     tests: [AUTO],
@@ -229,7 +239,7 @@ export const V1_W0_MUTATIONS: readonly V1W0Mutation[] = [
       {
         file: PERSONAL,
         anchor: "if (deploy.codex !== 'none') return",
-        replacement: "if (false) return",
+        replacement: 'if (false) return',
       },
     ],
     tests: [W0],
@@ -294,7 +304,8 @@ export const V1_W0_MUTATIONS: readonly V1W0Mutation[] = [
   },
   {
     id: 'lint-personal-read-not-carved-out',
-    clause: 'W0-11:personal/read/** 与 judge-signal.ts 后置收回 home-fs —— 变异:收回目标改成不存在的文件',
+    clause:
+      'W0-11:personal/read/** 与 judge-signal.ts 后置收回 home-fs —— 变异:收回目标改成不存在的文件',
     edits: [
       {
         file: 'eslint.config.js',
