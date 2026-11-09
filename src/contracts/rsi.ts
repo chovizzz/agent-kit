@@ -1106,10 +1106,13 @@ export const RSI_CAPABILITY_PHASE: Readonly<Record<string, RsiAutoPhaseName>> = 
   decide_better: 'V2',
   local_payload: 'V2',
 });
-/** 能力是否已到期;表里没有的能力一律 false(默认拒绝) */
+/** 能力是否已到期;表里没有的能力(含原型链上的键)一律 false(默认拒绝) */
 export function capabilityAvailable(key: string, phase: number = RSI_AUTO_PHASE): boolean {
+  // 普通对象有原型链(`toString` / `constructor` / `__proto__` 不是 undefined):只认自有键,阶段解析失败(-1)也拒绝
+  if (!Object.hasOwn(RSI_CAPABILITY_PHASE, key)) return false;
   const need = RSI_CAPABILITY_PHASE[key];
-  return need !== undefined && phaseAtLeast(need, phase);
+  if (need === undefined || phaseIndex(need) < 0) return false;
+  return phaseAtLeast(need, phase);
 }
 
 /** 熔断码的最早期(R21-10.2 的「期」列经 W0-1 订正:`rollback_storm` 属 V1b) */

@@ -1,11 +1,14 @@
 /**
  * §21.24 W0-11:条款追踪测试(R21-0.1「提前提升相位而未实现 → 验收红」的机械支撑)。
  *
- * 规则:对「首期 ≤ `RSI_AUTO_PHASE`」的每个 R21 条款(加上全部 `[V0]` 条款),要求 `test/**` 里至少有一个**非跳过、非占位、非空**的
- * `it('R21-x.y …')` / `test('R21-x.y …')` 标题,或在 {@link EXEMPT} 里带理由。W0 时相位为 0:只覆盖 R21-0.1 / R21-0.2。
- * 这是**追踪登记**:它不证明某个条款被充分测试,每条不变量仍需自己的负向用例与变异锚点;W-final 提升相位前,豁免表只能含非本期条款。
+ * 规则:对「首期 ≤ `RSI_AUTO_PHASE`」的每个 R21 条款(加上全部 `[V0]` 条款),要求 `test/**` 里至少有一个**在 AST 中真实注册**的
+ * `it('R21-x.y …')` / `test('R21-x.y …')`:调用名是裸标识符 `it` / `test`(不是 `.skip` / `.todo`、不在字符串或注释里)、回调体含至少一次调用
+ * (非空、非纯 `return`)、不在 `if (false)` 分支里;或在 {@link EXEMPT} 里带理由。W0 时相位为 0:只覆盖 R21-0.1 / R21-0.2。
+ * 这是**追踪登记**:无法机械证明「语义上非占位」,它不证明某个条款被充分测试,每条不变量仍需自己的负向用例与变异锚点;
+ * W-final 提升相位前,豁免表只能含非本期条款。
  */
 import * as path from 'node:path';
+import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 import { RSI_AUTO_PHASE, RSI_AUTO_PHASE_ORDER } from '../../src/contracts/rsi.js';
 import { readDir, readText } from '../../src/io/read-fs.js';
@@ -27,24 +30,58 @@ async function testFiles(dir: string): Promise<string[]> {
   return out;
 }
 
+const CLAUSE_RE = /R21-\d+\.\d+a?(?![0-9a-z])/g;
+
+const containsCall = (n: ts.Node): boolean => {
+  let found = false;
+  const visit = (x: ts.Node): void => {
+    if (found) return;
+    if (ts.isCallExpression(x) || ts.isNewExpression(x)) found = true;
+    else ts.forEachChild(x, visit);
+  };
+  visit(n);
+  return found;
+};
+
+/** 祖先里有 `if (false)` / `if (0)` 的 then 分支 */
+const inDeadBranch = (n: ts.Node): boolean => {
+  for (let p: ts.Node | undefined = n.parent, child: ts.Node = n; p; child = p, p = p.parent) {
+    if (ts.isIfStatement(p) && p.thenStatement === child) {
+      const c = p.expression;
+      if (c.kind === ts.SyntaxKind.FalseKeyword) return true;
+      if (ts.isNumericLiteral(c) && c.text === '0') return true;
+    }
+  }
+  return false;
+};
+
 /**
- * 从测试源码里提取「真实」的 R21 条款引用:`it(` / `test(`(不是 `.skip` / `.todo` / `.skipIf` / `.fails`)的首个字符串参数里出现条款号,
- * 且该调用的回调体不是空函数。条款号后面不得紧跟数字或字母(`R21-4.4` 不匹配 `R21-4.4a`)。
+ * AST 提取「真实」的 R21 条款引用。条款号后面不得紧跟数字或字母(`R21-4.4` 不匹配 `R21-4.4a`)。
  */
 export function realClauseRefs(src: string): Set<string> {
   const out = new Set<string>();
-  // 注释行不算(整行 `//` / `/*` / `*` 开头)
-  src = src
-    .split('\n')
-    .filter((l) => !/^\s*(\/\/|\/\*|\*)/.test(l))
-    .join('\n');
-  const re =
-    /(?:^|[^\w.])(?:it|test)\(\s*(['"`])((?:(?!\1)[^\\]|\\.)*)\1\s*,\s*(async\s*)?\(\s*\)\s*=>\s*(\{\s*\}|\{|[^{])/gm;
-  for (const m of src.matchAll(re)) {
-    const body = m[4] ?? '';
-    if (/^\{\s*\}$/.test(body)) continue; // 空函数体
-    for (const c of (m[2] as string).matchAll(/R21-\d+\.\d+a?(?![0-9a-z])/g)) out.add(c[0]);
-  }
+  const sf = ts.createSourceFile('x.test.ts', src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const visit = (n: ts.Node): void => {
+    if (
+      ts.isCallExpression(n) &&
+      ts.isIdentifier(n.expression) &&
+      (n.expression.text === 'it' || n.expression.text === 'test')
+    ) {
+      const [title, cb] = n.arguments;
+      if (
+        title !== undefined &&
+        ts.isStringLiteralLike(title) &&
+        cb !== undefined &&
+        (ts.isArrowFunction(cb) || ts.isFunctionExpression(cb)) &&
+        containsCall(cb.body) &&
+        !inDeadBranch(n)
+      ) {
+        for (const c of title.text.matchAll(CLAUSE_RE)) out.add(c[0]);
+      }
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
   return out;
 }
 
@@ -61,8 +98,9 @@ export function uncoveredClauses(
     else if (tag === 'V1') {
       const first = map.get(id);
       if (first === undefined) throw new Error(`${id} 没有首期`);
-      if (RSI_AUTO_PHASE_ORDER.indexOf(first as (typeof RSI_AUTO_PHASE_ORDER)[number]) <= phase)
-        need.push(id);
+      const idx = RSI_AUTO_PHASE_ORDER.indexOf(first as (typeof RSI_AUTO_PHASE_ORDER)[number]);
+      if (idx < 0) throw new Error(`${id} 的首期 ${first} 不在相位表里`);
+      if (idx <= phase) need.push(id);
     }
   }
   return need.filter((id) => !covered.has(id) && exempt[id] === undefined).sort();
@@ -83,14 +121,36 @@ describe('W0-11 条款追踪', async () => {
     expect(covered.has('R21-0.2')).toBe(true);
   });
 
-  it('R21-0.1 提前提升相位而未实现 → 追踪测试红(模拟相位 1 / 2:应覆盖的条款集合非空)', () => {
-    expect(uncoveredClauses(1, covered, tags, map).length).toBeGreaterThan(30);
-    expect(uncoveredClauses(2, covered, tags, map).length).toBeGreaterThan(
-      uncoveredClauses(1, covered, tags, map).length,
+  it('R21-0.1 追踪器能阻止提前提升相位(合成输入:缺哪条就报哪条;V1b 首期条款在相位 1 不要求)', () => {
+    const synTags = new Map([
+      ['R21-0.1', 'V0'],
+      ['R21-1.1', 'V1'],
+      ['R21-6.1', 'V1'],
+      ['R21-8.1', 'V2'],
+    ]);
+    const synMap = new Map([
+      ['R21-1.1', 'V1a'],
+      ['R21-6.1', 'V1b'],
+    ]);
+    const none = new Set<string>();
+    expect(uncoveredClauses(0, none, synTags, synMap, {})).toEqual(['R21-0.1']);
+    expect(uncoveredClauses(1, none, synTags, synMap, {})).toEqual(['R21-0.1', 'R21-1.1']);
+    expect(uncoveredClauses(2, none, synTags, synMap, {})).toEqual([
+      'R21-0.1',
+      'R21-1.1',
+      'R21-6.1',
+    ]);
+    // 补齐一条 → 只剩其余;豁免带理由才生效
+    expect(uncoveredClauses(2, new Set(['R21-0.1', 'R21-1.1']), synTags, synMap, {})).toEqual([
+      'R21-6.1',
+    ]);
+    expect(
+      uncoveredClauses(2, new Set(['R21-0.1', 'R21-1.1']), synTags, synMap, { 'R21-6.1': '理由' }),
+    ).toEqual([]);
+    // 缺首期的 V1 条款 → 抛错(不静默放过)
+    expect(() => uncoveredClauses(1, none, new Map([['R21-9.9', 'V1']]), new Map(), {})).toThrow(
+      /没有首期/,
     );
-    // 相位 1 应覆盖的条款不含 V1b 首期的条款
-    expect(uncoveredClauses(1, covered, tags, map)).not.toContain('R21-6.11');
-    expect(uncoveredClauses(2, covered, tags, map)).toContain('R21-6.11');
   });
 
   it('R21-0.1 豁免表:每项带非空理由、对应真实存在的条款;W0 为空', () => {
@@ -101,7 +161,7 @@ describe('W0-11 条款追踪', async () => {
     expect(Object.keys(EXEMPT)).toEqual([]);
   });
 
-  it('R21-0.1 提取器的反向对照:skip / todo / 空函数体 / 非标题位置 / 条款后缀字母都不算覆盖', () => {
+  it('R21-0.1 提取器的反向对照:skip / todo / 空体 / 纯 return / 字符串里 / 注释里 / if(false) / 非调用回调都不算覆盖', () => {
     const id = ['R21', '-9.9'].join('');
     const idA = ['R21', '-9.8a'].join('');
     const src = [
@@ -109,9 +169,12 @@ describe('W0-11 条款追踪', async () => {
       `it.todo('${id} todo');`,
       `it('${id} empty', () => {});`,
       `it('${id} empty2', async () => { });`,
-      `const s = "${id}";`,
+      `it('${id} only return', () => { return; });`,
+      `const s = "it('${id} fake', () => { x(); });";`,
       `// it('${id} in comment', () => { x(); })`,
+      `if (false) { it('${id} dead', () => { x(); }); }`,
       `it('${idA} suffix', () => { x(); });`,
+      `describe('${id}', () => { y(); });`,
     ].join('\n');
     const refs = realClauseRefs(src);
     expect(refs.has(id)).toBe(false);
@@ -121,6 +184,8 @@ describe('W0-11 条款追踪', async () => {
       `it('${id} real', () => { expect(1).toBe(1); });\ntest('${id} t', async () => { x(); });`,
     );
     expect(ok.has(id)).toBe(true);
+    // 表达式体回调(含调用)同样算
+    expect(realClauseRefs(`it('${id} expr', () => expect(1).toBe(1));`).has(id)).toBe(true);
   });
 
   it('R21-0.1 解析到的 [V1] 条款数不低于下限(防解析静默变空)', () => {

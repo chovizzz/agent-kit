@@ -19,6 +19,8 @@ import {
   type RsiIdentity,
   type RsiStateDoc,
 } from '../../src/rsi/state.js';
+import { carryConfirm, clearArmedListing } from '../../src/rsi/l0/state-mutate.js';
+import { tickStateMutator } from '../../src/rsi/services/tick-state.js';
 import { makeRsiFx, rsiToml, writeCfg, type RsiFx } from './rsi-fixture.js';
 
 const NOW = '2026-10-24T08:00:00.000Z';
@@ -366,5 +368,23 @@ describe('§21 W0-7 `auto_pause`:可选键(旧 state.json 照常通过),出现�
       auto_pause: { reasons: ['zzz'], diverged: false, owner_changed: false },
     });
     expect(parseRsiStateDoc(Buffer.from(both))).toEqual({ kind: 'invalid' });
+  });
+
+  it('R21-10.2 现有 state 写入方(tick 变更、confirm 的 clearArmedListing / carryConfirm)展开 prev,保留 auto_pause(端到端回归)', () => {
+    const paused = {
+      ...stateWith(null),
+      auto_pause: { reasons: ['user_paused'], diverged: true, owner_changed: false },
+    } as RsiState;
+    const mutate = tickStateMutator({ trigger: 'tick', now: () => new Date(NOW) });
+    const after = mutate(paused, {
+      outcome: 'ok',
+      duration_ms: 1,
+      files_read: 0,
+      bytes_read: 0,
+    } as never);
+    expect(after.auto_pause).toEqual(paused.auto_pause);
+    expect(clearArmedListing(paused).auto_pause).toEqual(paused.auto_pause);
+    expect(carryConfirm(paused, paused).auto_pause).toEqual(paused.auto_pause);
+    expect(RsiStateSchema.safeParse(after).success).toBe(true);
   });
 });

@@ -6330,7 +6330,7 @@ v3.1 已把用户决定列全;以下是落契约时新发现的契约细节取�
 
 R21-2.2 的「`RSI_AUTO_PHASE ≥ 1`」即 V1a,不变;R21-6.11 第 2 行的「`RSI_AUTO_PHASE < 1`」**改为「`< 2`(未到 V1b)」**;R21-4.1 的「≥ V3」、R21-16.2 的「≥ V6b」按具名读,不受影响。所有阶段判断经同一个函数(`phaseAtLeast`),不在调用处写裸整数。R21-0.2 适用于 V1a 与 V1b:各一个 PR 提升相位。
 
-**两个维度,唯一事实源是下面两张表**(测试逐行解析并与 `src/contracts/rsi.ts` 的常量双向比对):
+**两个维度,各有唯一事实源**:(2) 能力表由测试与 `src/contracts/rsi.ts` 的 `RSI_CAPABILITY_PHASE` **双向逐行比对**;(1) 条款首期表是**文档事实源**,由条款追踪测试解析并与正文的 `[V1]` 条款逐一对账(一个不漏、不重复、不多),不另设代码常量(运行时若需要条款映射,再以契约修订新增):
 
 (1) **条款的首个必须成立的期**(`[V1]` 标签不改)。条款「首期已到」不授权整条实现:条款内各事件 / 转移 / 判定器的最早可用期以 (2) 为准;条款自带「期」列的行(R21-4.1、4.2、10.2 等)以该列与 (2) 的较晚者为准。
 
@@ -6411,8 +6411,8 @@ R21-2.2 的「`RSI_AUTO_PHASE ≥ 1`」即 V1a,不变;R21-6.11 第 2 行的「`R
 
 **取代**设计稿 §10.3 第 2 项「用户当场同意 + 当场实测」及 R21-6.5「实测」的人工口径;被取代的只是这一动作。同意的承载:`[rsi.auto] enabled = true` 同时表示同意 kit 向 claude / pi 会话输出**仅含关联标记**的探针行(无任何候选内容);**候选正文的注入**仍须先通过准入、且候选进入 `canary`。(用户 Q2 选择「自动探针」,已知与 §10.3 第 2 项不符、要求写明取代关系;本条即该取代关系。)
 
-- **协议(V1b)**:`canary-admission.json`(`.state/rsi/`,0600)**唯一写入方 worker**(持 `rsi/lock` 与 `personal/lock`),每 agent 一项:`{state: probing|admitted|failed, shape_version, agent_version, armed_at, probe_expires_at, tickets, decided_at, reason}`。worker 在自动循环有效、agent ∈ {claude, pi}、钩子装了 canary 变体、无 `AUTO_PAUSE` 时置 `probing`,同时创建 `RSI_PROBE_SESSIONS`(= 3)张**探针票**(`.state/rsi/canary-probe/<agent>/<generation>-<i>`,空文件)。
-- **hint 只消费窄许可**:见 `probing` 且未过 `probe_expires_at`(= armed + `RSI_PROBE_WINDOW_DAYS` 个 UTC 日,= 7)、`AUTO_PAUSE` 不存在、`shape_version` / `agent_version` 与当前钩子 / agent 一致(现算,不等 worker)时,依次:① `createExclusive` 一张未用的探针票(全部用完 → 不输出;**有限次、原子**);② 分组账追加 `assign` 行(`arm=excluded`、`reason=admission_probe`、`candidate_id=null`、`marker=rsm_…`)并 `fsync`;③ 输出关联标记行。崩溃语义:任一步之后崩溃都只会「少探」、绝不重复授予。
+- **协议(V1b)**:`canary-admission.json`(`.state/rsi/`,0600)**唯一写入方 worker**(持 `rsi/lock` 与 `personal/lock`),每 agent 一项:`{state: probing|admitted|failed, shape_version, agent_version, generation, armed_at, probe_expires_at, tickets, decided_at, reason}`。worker 在自动循环有效、agent ∈ {claude, pi}、钩子装了 canary 变体、无 `AUTO_PAUSE` 时置 `probing`:`generation` 加 1、`tickets = RSI_PROBE_SESSIONS`(= 3)。**探针票**是 hint 的**占用标记**,不是预建文件:票号 `<generation>-<i>`(i = 1..tickets),对应占用文件 `.state/rsi/canary-probe/<agent>/<generation>-<i>.used`;worker 只持久化「本代允许消费几张」(即本文件的 `generation` 与 `tickets`),旧代的占用标记作废、不计入本代。
+- **hint 只消费窄许可**:见 `probing` 且未过 `probe_expires_at`(= armed + `RSI_PROBE_WINDOW_DAYS` 个 UTC 日,= 7)、`AUTO_PAUSE` 不存在、`shape_version` / `agent_version` 与当前钩子 / agent 一致(现算,不等 worker)时,依次:① 对 i = 1..`tickets` 依次 `createExclusive` 占用文件 `<generation>-<i>.used`,第一个成功者得票(全部已存在 → 不输出;**有限次、原子**,并发消费者至多 `tickets` 个成功);② 分组账追加 `assign` 行(`arm=excluded`、`reason=admission_probe`、`candidate_id=null`、`marker=rsm_…`)并 `fsync`;③ 输出关联标记行。崩溃语义:①之后崩溃 = 票已用、无账行无输出(少探);②之后崩溃 = 有账行无输出(账行带标记但会话里取不回,worker 按「标记未被取回」处理,本代最多因此 `failed(marker_not_retrieved)` 而重新 armed 下一代);绝不重复授予。验收:并发消费恰有 `tickets` 个成功者;①②③各崩溃点之后不超发;重新 armed 后旧代标记不被重用。
 - **判定(worker,读 reader 取回)**:三张探针票对应的三行账行,**每一行的标记都被恰好一个会话取回,且该会话取回的不同标记恰为 1 个**,且该会话文件已静止 ≥ `RSI_PROBE_QUIET_MINUTES`(= 60)(「完整读完」只保证本次读取完整,不保证会话已结束;静止是封存判据)→ 三者全部满足为 `admitted`;任一标记在静止后 `RSI_PROBE_WAIT_HOURS`(= 48)内仍未被任何会话取回 → `failed(marker_not_retrieved)`;任一会话取回 ≥ 2 个不同标记 → `failed(multi_marker)`;`probe_expires_at` 到期仍未凑齐 → `failed(probe_expired)`。
 - **准入的失效**:`admitted` 绑定 `shape_version` 与 `agent_version`;hint 每次现算当前值,不符 → 按 R21-6.11 第 4 行 `not_admitted`;此后任一经准入的会话被 R21-6.6 判为「多标记」→ 该 agent 回到 `failed(multi_marker)`(撤销准入,走更少影响方向)。`failed` 在 `shape_version` 或 `agent_version` 变化前不自动重探。
 - **R21-6.11 矩阵重列**(取代原表的第 2–4 行位置;顺序固定,先命中先用):1 同原第 1 行;2 自动循环未开启、`RSI_AUTO_PHASE < 2` 或 agent 为 codex → 无输出无写入;**2a(新)探针行**:`AUTO_PAUSE` 不存在、该 agent 的准入为 `probing` 且上述现算条件成立 → 消费探针票 → 一行 `assign`(`excluded` / `admission_probe`)→ 标记行,C6 否;**探针先于候选存在性检查**,与候选无关;2b 探针条件不成立 → 继续;3–8 同原表(第 3 行的「`canary.json` 不存在 / 无评估中候选 / 读取失败」只描述候选,不影响 2a)。
@@ -6463,7 +6463,7 @@ worker 持锁扫 `.state/reflect/<run>/proposals/` 暂存提案,**仅** `layer=p
 - `src/io/home-fs.ts` 授权 `src/rsi/personal/**`(只写 `.local/state/agent-kit/rsi-personal/**`);**后置覆盖**收回 `src/rsi/personal/read/**` 与 `src/rsi/personal/judge-signal.ts`(同 `self-spawn.ts` 写法)。
 - `runSync`(`src/io/exec.ts`)在 `src/rsi/**` 内只许 `src/rsi/personal/{commit,commit-journal,repo-check}.ts`(私有仓库唯一 git 出口的机械保证);`src/rsi/hooks/**` 不在自动入口闭包内、保持既有放行。
 - 自动入口(hint / poke / worker)import 闭包另禁 `src/rsi/contrib/publish/**`、`src/rsi/exec/host/**`、`src/rsi/exec/isolated/**`(R21-1.4)。
-- **条款追踪测试**:解析本节两张表;对「首期 ≤ `RSI_AUTO_PHASE`」的每个 R21 条款要求至少一个**非跳过、非占位、非空**的 `it('R21-x.y …')`,或带理由的豁免;W0 时相位为 0,只覆盖 R21-0.1 / 0.2。这是**追踪登记**,不替代每条不变量自己的负向用例与变异锚点。
+- **条款追踪测试**:解析本节两张表;对「首期 ≤ `RSI_AUTO_PHASE`」的每个 R21 条款要求至少一个**在测试源码 AST 中真实注册、非跳过、回调体含至少一次调用(非空 / 非纯 `return`)、不在 `if (false)` 分支里**的 `it('R21-x.y …')`(字符串 / 注释里的假调用不算),或带理由的豁免;语义上是否「非占位」无法机械证明的部分,由评审与每条不变量自己的负向用例 / 变异锚点负责;W0 时相位为 0,只覆盖 R21-0.1 / 0.2。这是**追踪登记**,不替代每条不变量自己的负向用例与变异锚点。
 
 #### W0-12 稳定码与枚举(R21-12.9 并入;§21.20 V0 行)
 
@@ -6863,6 +6863,7 @@ R21-12.9 的全部码并入 `src/contracts/rsi.ts` 既有枚举与 §20.3 稳定
       "state": "probing",
       "shape_version": "claude-1",
       "agent_version": "2.1.0",
+      "generation": 1,
       "armed_at": "2026-11-09T08:00:00.000Z",
       "probe_expires_at": "2026-11-16T08:00:00.000Z",
       "tickets": 3,
@@ -6885,6 +6886,7 @@ R21-12.9 的全部码并入 `src/contracts/rsi.ts` 既有枚举与 §20.3 稳定
       "state": "failed",
       "shape_version": "claude-1",
       "agent_version": "2.1.0",
+      "generation": 1,
       "armed_at": "2026-11-09T08:00:00.000Z",
       "probe_expires_at": "2026-11-16T08:00:00.000Z",
       "tickets": 3,

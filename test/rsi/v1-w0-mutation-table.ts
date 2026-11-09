@@ -72,13 +72,46 @@ export const V1_W0_MUTATIONS: readonly V1W0Mutation[] = [
     edits: [
       {
         file: RSI,
-        anchor: 'return need !== undefined && phaseAtLeast(need, phase);',
-        replacement: 'return need === undefined || phaseAtLeast(need, phase);',
+        anchor: 'if (!Object.hasOwn(RSI_CAPABILITY_PHASE, key)) return false;',
+        replacement: 'if (!Object.hasOwn(RSI_CAPABILITY_PHASE, key)) return true;',
       },
     ],
     tests: [W0],
     expectRed: ['能力默认拒绝'],
     mustKill: ['能力默认拒绝'],
+  },
+  {
+    id: 'capability-proto-bypass',
+    clause: 'W0-1:能力查询只认自有键(原型链上的 toString / constructor / __proto__ 不是能力)—— 变异:去掉自有键检查与阶段解析失败检查',
+    edits: [
+      {
+        file: RSI,
+        anchor: 'if (!Object.hasOwn(RSI_CAPABILITY_PHASE, key)) return false;',
+        replacement: '',
+      },
+      {
+        file: RSI,
+        anchor: 'if (need === undefined || phaseIndex(need) < 0) return false;',
+        replacement: 'if (need === undefined) return false;',
+      },
+    ],
+    tests: [W0],
+    expectRed: ['能力默认拒绝'],
+    mustKill: ['能力默认拒绝'],
+  },
+  {
+    id: 'journal-new-commit-optional',
+    clause: 'W0-5 / R21-3.6a:引用已更新 / 提交已生成的 journal 必须能指明提交对象',
+    edits: [
+      {
+        file: PERSONAL,
+        anchor: 'if (needsCommit && j.new_commit === null) {',
+        replacement: 'if (false) {',
+      },
+    ],
+    tests: [W0],
+    expectRed: ['负向矩阵 phase × new_commit'],
+    mustKill: ['负向矩阵 phase × new_commit'],
   },
   {
     id: 'enum-extra-pause-reason',

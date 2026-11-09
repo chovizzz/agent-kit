@@ -247,6 +247,17 @@ export const PersonalCommitJournalSchema = z
     if (!boot && j.old_head === null) {
       ctx.addIssue({ code: 'custom', path: ['old_head'], message: '非 bootstrap 必须带 old_head' });
     }
+    // 提交对象在 `objects_written`(commit-tree)时已存在;bootstrap 在 `committed` 起已存在:此后的 journal 必须能指明它
+    const needsCommit = boot
+      ? j.phase === 'committed' || j.phase === 'recorded'
+      : j.phase !== 'planned';
+    if (needsCommit && j.new_commit === null) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['new_commit'],
+        message: `${j.kind} 的 ${j.phase} 阶段必须带 new_commit`,
+      });
+    }
   });
 export type PersonalCommitJournal = z.infer<typeof PersonalCommitJournalSchema>;
 
@@ -372,6 +383,8 @@ const AdmissionEntrySchema = z
     state: z.enum(RSI_ADMISSION_STATES),
     shape_version: z.string().min(1).max(64),
     agent_version: z.string().min(1).max(64).nullable(),
+    /** 探针代数:worker 每次重新 armed 加 1;票号 `<generation>-<i>`(i = 1..tickets),旧代的票作废 */
+    generation: NonNegInt,
     armed_at: IsoTimestampSchema,
     probe_expires_at: IsoTimestampSchema,
     tickets: NonNegInt,

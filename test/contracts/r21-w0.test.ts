@@ -86,6 +86,10 @@ describe('W0-1 能力表:默认拒绝;文档表 ↔ RSI_CAPABILITY_PHASE 双向�
 
   it('R21-0.1 能力默认拒绝:不在表里 = 不可用;相位 0 时全部不可用;到期后只放行本期及更早', () => {
     expect(capabilityAvailable('no_such_capability', 9)).toBe(false); // 变异:缺省放行 → 红
+    // 原型链上的键不是能力(普通对象查表的陷阱):toString / constructor / __proto__ 任何相位都不可用
+    for (const k of ['toString', 'constructor', '__proto__', 'hasOwnProperty', 'valueOf']) {
+      expect(capabilityAvailable(k, 9), k).toBe(false);
+    }
     for (const k of Object.keys(RSI_CAPABILITY_PHASE))
       expect(capabilityAvailable(k), k).toBe(false);
     expect(capabilityAvailable('candidate_create', 1)).toBe(true);
@@ -405,12 +409,22 @@ describe('R21-3.6a 提交 journal:bootstrap 是单列状态机', () => {
       'worktree_synced',
       'recorded',
     ]) {
-      expect(PersonalCommitJournalSchema.safeParse(j({ phase })).success, phase).toBe(true);
+      // 提交对象在 objects_written(commit-tree)时已存在:此后的 journal 必须带 new_commit(planned 可为 null)
+      const new_commit = phase === 'planned' ? null : '2'.repeat(40);
+      expect(PersonalCommitJournalSchema.safeParse(j({ phase, new_commit })).success, phase).toBe(
+        true,
+      );
     }
     for (const phase of ['planned', 'initialized', 'committed', 'recorded']) {
       expect(
         PersonalCommitJournalSchema.safeParse(
-          j({ kind: 'bootstrap', old_head: null, candidate_ids: [], phase }),
+          j({
+            kind: 'bootstrap',
+            old_head: null,
+            candidate_ids: [],
+            phase,
+            new_commit: phase === 'committed' || phase === 'recorded' ? '2'.repeat(40) : null,
+          }),
         ).success,
         phase,
       ).toBe(true);
@@ -430,6 +444,25 @@ describe('R21-3.6a 提交 journal:bootstrap 是单列状态机', () => {
     expect(PersonalCommitJournalSchema.safeParse(j({ ref: 'refs/heads/main' })).success).toBe(
       false,
     );
+  });
+  it('R21-3.6a 负向矩阵 phase × new_commit:引用已更新 / 提交已生成却不指明提交对象 → 拒;planned 可为 null', () => {
+    for (const phase of ['objects_written', 'ref_updated', 'worktree_synced', 'recorded']) {
+      expect(PersonalCommitJournalSchema.safeParse(j({ phase })).success, phase).toBe(false);
+    }
+    for (const phase of ['committed', 'recorded']) {
+      expect(
+        PersonalCommitJournalSchema.safeParse(
+          j({ kind: 'bootstrap', old_head: null, candidate_ids: [], phase }),
+        ).success,
+        `bootstrap ${phase}`,
+      ).toBe(false);
+    }
+    expect(PersonalCommitJournalSchema.safeParse(j({ phase: 'planned' })).success).toBe(true);
+    expect(
+      PersonalCommitJournalSchema.safeParse(
+        j({ kind: 'bootstrap', old_head: null, candidate_ids: [], phase: 'initialized' }),
+      ).success,
+    ).toBe(true);
   });
 });
 
@@ -541,6 +574,7 @@ describe('W0-3 准入文件', () => {
     state: 'probing',
     shape_version: 'claude-1',
     agent_version: null,
+    generation: 1,
     armed_at: T,
     probe_expires_at: T,
     tickets: 3,

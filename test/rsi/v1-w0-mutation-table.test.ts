@@ -18,6 +18,8 @@ describe('W0 变异表', () => {
       'phase-promoted-early',
       'decide-better-default-true',
       'capability-default-allow',
+      'capability-proto-bypass',
+      'journal-new-commit-optional',
       'enum-extra-pause-reason',
       'enum-missing-capability',
       'l-base-strict-again',
