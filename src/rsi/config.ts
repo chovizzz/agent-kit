@@ -8,7 +8,7 @@
  *  - `off`:配置问题让 rsi 不启用(原因码见 R20-2.7);
  *  - `on`:`[rsi] enabled = true` 且 repo 合规。L-overlay / L-policy 失败时状态照算,只是 `block` 非空 = 「停止采集」(R20-2.8)。
  * 它**不**判断「是否拿锁」或「暂存区隐私闸怎么办」——那是 `gate.ts` 里两个互相独立的闸的事(同一个 `off` 对两者含义不同)。
- * L-session(P1)与 v3.1 的 L-auto / L-cap / L-contrib 不在 B2。
+ * L-session(P1)与 v3.1 的 L-auto / L-cap / L-contrib 不在 B2;§21 W0 起 L-base 放行 `auto` / `capability` / `contrib` 三个表(原样保存),L-auto 在 `auto-config.ts`。
  */
 import { createHash } from 'node:crypto';
 import * as path from 'node:path';
@@ -85,6 +85,13 @@ export interface RsiConfigOn {
    * 表缺失 = 字段缺省(只在配置里有 `[rsi.session]` 表时才出现,既有配置的结果形状不变)。
    */
   session?: Record<string, unknown> | null;
+  /**
+   * §21 W0-9:`[rsi.auto]` / `[rsi.capability]` / `[rsi.contrib]` 的原样 TOML 表(L-base 只验「表或缺省」;内容由 `auto-config.ts` 等各自的层校验)。
+   * 表缺失 = 键不出现(既有配置的结果形状不变)。
+   */
+  auto?: Record<string, unknown>;
+  capability?: Record<string, unknown>;
+  contrib?: Record<string, unknown>;
 }
 export type RsiConfig = RsiConfigOff | RsiConfigOn;
 
@@ -244,6 +251,9 @@ export async function loadRsiConfig(opts: LoadRsiConfigOptions = {}): Promise<Rs
     block,
     warnings: cfg.overlay === undefined ? ['overlay_absent'] : [],
     ...(cfg.session !== undefined ? { session: cfg.session } : {}),
+    ...(cfg.auto !== undefined ? { auto: cfg.auto } : {}),
+    ...(cfg.capability !== undefined ? { capability: cfg.capability } : {}),
+    ...(cfg.contrib !== undefined ? { contrib: cfg.contrib } : {}),
   };
 }
 

@@ -9,7 +9,7 @@ import tseslint from 'typescript-eslint';
  *  - LLM 出口:除 src/reflect/backends/** 外,任何文件不得 import / re-export / 动态 import `llm-exec`
  *    (命令层、reflect 干跑路径、judge 都经依赖注入拿后端);测试里只有 llm-exec / backends 的测试可以。
  *  - S0(sync / doctor / update,contracts §19)预写的三道授权闸,对应文件 S1/S6/S7 才建,规则先就位:
- *      · HOME 写出口 `src/io/home-fs.ts`:只许 `src/sync/apply.ts`、`src/update/install.ts` 及其测试引用;
+ *      · HOME 写出口 `src/io/home-fs.ts`:只许 `src/sync/apply.ts`、`src/update/install.ts`、`src/rsi/personal/**`(见下 §21 W0-11)及其测试引用;
  *      · 网络出口 `src/io/net.ts`:只许 `src/update/**`(launcher 除外)、`src/commands/update.ts` 及其测试引用;
  *        只有它自己可以 import 网络模块 / 用全局 fetch;
  *      · 启动器 `src/update/launcher.ts`:只许 `cli.ts`、`src/cli.ts`、`src/update/**`、`src/commands/update.ts` 及其测试引用;
@@ -24,6 +24,10 @@ import tseslint from 'typescript-eslint';
  *  - N4(contracts §20.18 R20-18.5 / R20-18.25):唯一控制终端出口 `src/io/tty.ts`(第五个出口)。`/dev/tty` 字面量与 `node:tty` 只许它自己;
  *    引用它的只有 `src/commands/judge-ingest.ts`、`src/judge/ingest/**` 及其测试;自动入口(poke / hint / worker / 顺带调度 / sync / update / §21)引用即红
  *    (`test/rsi/import-closure.test.ts` 另有 import 闭包断言)。
+ *  - §21 W0-11(contracts §21.24;V1i-10 以契约为准):个人层目录 `src/rsi/personal/**` 是 HOME 写出口 `home-fs.ts` 的第三个授权使用方,
+ *    **后置覆盖**收回 `src/rsi/personal/read/**` 与 `src/rsi/personal/judge-signal.ts`(只读侧 / 判定纯函数,仿 self-spawn.ts 的写法);
+ *    命令入口 `src/rsi/auto/**` 不拿 home-fs。`runSync`(git 出口)在 `src/rsi/**` 内只许 `src/rsi/personal/{commit,commit-journal,repo-check}.ts`
+ *    (私有仓库唯一 git 出口的机械保证;`src/rsi/hooks/**` 不在自动入口闭包内,保持既有放行)。
  *  - 另外禁网络模块与全局 fetch(A8 的运行期垫片是主判据,这里是便宜的第二道)、eval、动态 import、require。
  * 范围:cli.ts、src/、adapters/、test/、vitest.config.ts。ops/ 下的验收工具脚本(B17/B18)不在此列,
  * 它们本来就要读真实 HOME 做快照。
@@ -47,7 +51,7 @@ const MESSAGES = {
   cp: '子进程只经 src/io/exec.ts(runSync,git)、src/io/llm-exec.ts(runLlm,受控 LLM 出口)与 src/io/agent-probe.ts(版本探测)。',
   llm: 'LLM 出口 src/io/llm-exec.ts 只许 src/reflect/backends/** 引用;其余代码经依赖注入拿后端。',
   homeFs:
-    'HOME 写出口 src/io/home-fs.ts 只许 src/sync/apply.ts 与 src/update/install.ts(及其测试)引用。',
+    'HOME 写出口 src/io/home-fs.ts 只许 src/sync/apply.ts、src/update/install.ts 与 src/rsi/personal/**(read/ 与 judge-signal.ts 除外)(及其测试)引用。',
   hooksFs:
     'kit 钩子写出口 src/io/hooks-fs.ts 只许 src/rsi/hooks/**(及其测试)引用(contracts §20.15 R20-15.6)。',
   tty: '控制终端出口 src/io/tty.ts 是唯一可用 /dev/tty 字面量与 node:tty 的文件(contracts §20.18 R20-18.5)。',
@@ -59,6 +63,8 @@ const MESSAGES = {
     '启动器 src/update/launcher.ts 只许 cli.ts / src/cli.ts / src/update/** / src/commands/update.ts(及其测试)引用。',
   agentProbe:
     'agent 版本探测出口 src/io/agent-probe.ts(只跑 `pi --version`)只许 src/rsi/hooks/**(及其测试)引用(contracts §20.15-12 N1 订正 #3)。',
+  runSync:
+    '`src/rsi/**` 内 runSync(git 出口)只许 src/rsi/personal/{commit,commit-journal,repo-check}.ts(私有仓库唯一 git 出口,contracts §21.24 W0-11;src/rsi/hooks/** 除外)。',
   runSelf:
     'runSelf(spawn process.execPath)只许 src/update/launcher.ts 与零网络桥接 src/update/self-spawn.ts 引用。',
   sigstore: '`sigstore` 包(来源证明验签)只许 src/update/provenance.ts 引用。',
@@ -70,7 +76,7 @@ const MESSAGES = {
 /**
  * allowFs/allowCp/allowEnv/allowNet:该文件**自己**可以 import 对应的 node 模块(出口实现文件);
  * allowLlm/allowHomeFs/allowNetOut/allowLauncher/allowRunSelf:该文件可以 import 对应出口模块(授权使用方)。
- * @param {{ allowFs?: boolean; allowCp?: boolean; allowCpOnly?: boolean; allowEnv?: boolean; allowNet?: boolean; allowLlm?: boolean; allowTty?: boolean; allowTtyUse?: boolean; allowHomeFs?: boolean; allowHooksFs?: boolean; allowNetOut?: boolean; allowLauncher?: boolean; allowRunSelf?: boolean; allowAgentProbe?: boolean; allowSigstore?: boolean }} allow
+ * @param {{ allowFs?: boolean; allowCp?: boolean; allowCpOnly?: boolean; allowEnv?: boolean; allowNet?: boolean; allowLlm?: boolean; allowTty?: boolean; allowTtyUse?: boolean; allowHomeFs?: boolean; allowHooksFs?: boolean; allowNetOut?: boolean; allowLauncher?: boolean; allowRunSelf?: boolean; allowAgentProbe?: boolean; allowSigstore?: boolean; denyRunSync?: boolean }} allow
  */
 function restrictions(allow = {}) {
   /** @type {{name: string; message: string}[]} */
@@ -285,6 +291,10 @@ function restrictions(allow = {}) {
           ...(allow.allowRunSelf
             ? []
             : [{ group: EXEC_GROUP, importNames: ['runSelf'], message: MESSAGES.runSelf }]),
+          // §21 W0-11:`src/rsi/**` 内 runSync 的限域(命名导入 / import * / export-from 都被 importNames 拦下)
+          ...(allow.denyRunSync
+            ? [{ group: EXEC_GROUP, importNames: ['runSync'], message: MESSAGES.runSync }]
+            : []),
           ...(allow.allowAgentProbe
             ? []
             : [{ group: AGENT_PROBE_GROUP, message: MESSAGES.agentProbe }]),
@@ -357,6 +367,26 @@ export default tseslint.config(
   },
   ...tseslint.configs.recommended,
   { files: GUARDED, rules: restrictions() },
+  // §21 W0-11:`src/rsi/**` 内 runSync 限域(personal 三个文件放行;hooks 目录保持既有放行)。排在其它 `src/rsi/**` 专属块之前,
+  // 它们若要保留该限域须自带 denyRunSync(flat config 后面的同名规则整条替换前面的)。
+  { files: [`src/rsi/**/*.${EXT}`], rules: restrictions({ denyRunSync: true }) },
+  // §21 W0-11:个人层目录是 HOME 写出口的授权使用方,但只读侧与判定纯函数后置收回;三个 git 文件另放行 runSync。
+  {
+    files: [`src/rsi/personal/**/*.${EXT}`],
+    rules: restrictions({ allowHomeFs: true, denyRunSync: true }),
+  },
+  {
+    files: [
+      'src/rsi/personal/commit.ts',
+      'src/rsi/personal/commit-journal.ts',
+      'src/rsi/personal/repo-check.ts',
+    ],
+    rules: restrictions({ allowHomeFs: true }),
+  },
+  {
+    files: [`src/rsi/personal/read/**/*.${EXT}`, 'src/rsi/personal/judge-signal.ts'],
+    rules: restrictions({ denyRunSync: true }),
+  },
   { files: ['src/io/safe-fs.ts', 'src/io/read-fs.ts'], rules: restrictions({ allowFs: true }) },
   { files: ['src/io/paths.ts'], rules: restrictions({ allowEnv: true }) },
   { files: ['src/io/exec.ts'], rules: restrictions({ allowCp: true }) },

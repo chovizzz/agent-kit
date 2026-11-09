@@ -9,6 +9,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   RSI_COUNTER_CODES,
+  RSI_EXEC_NOT_RUN,
   RSI_EXIT1_CODES,
   RSI_FAIL_CLOSED_REASONS,
   RSI_INFO_LINE_CODES,
@@ -70,7 +71,8 @@ interface Cat {
 const CATS: Cat[] = [
   { name: 'usage', head: '`RSI_USAGE reason=`', enumCodes: RSI_USAGE_REASONS },
   { name: 'not_run', head: '`RSI_NOT_RUN reason=`', enumCodes: RSI_NOT_RUN_REASONS },
-  { name: 'top4', head: '顶层(4)', enumCodes: [RSI_SNAPSHOT_BUSY] },
+  // §21 W0-12:`RSI_EXEC_NOT_RUN`(R21-12.9,V6a 起发码)并入顶层(4)
+  { name: 'top4', head: '顶层(4)', enumCodes: [RSI_SNAPSHOT_BUSY, RSI_EXEC_NOT_RUN] },
   { name: 'top1', head: '顶层(1)', enumCodes: RSI_EXIT1_CODES },
   // R20-A6(R20-17.23):顶层(0)信息行
   { name: 'top0', head: '顶层(0)', enumCodes: RSI_INFO_LINE_CODES },

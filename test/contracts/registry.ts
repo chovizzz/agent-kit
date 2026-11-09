@@ -36,6 +36,21 @@ import {
   PayloadIntegritySchema,
 } from '../../src/contracts/index.js';
 import {
+  CandidateWorkingCopySchema,
+  CanaryAdmissionSchema,
+  CanaryDocSchema,
+  PersonalCommitJournalSchema,
+  PersonalHeadSchema,
+  PersonalLifecycleRecordSchema,
+  PersonalTxnSchema,
+  RsiAuditLineSchema,
+  RsiCanaryLedgerLineSchema,
+  RsiRevocationLineSchema,
+  RsiTombstonesSchema,
+  RsiVetoDocSchema,
+} from '../../src/contracts/rsi-personal.js';
+import {
+  RsiAutoSchema,
   RsiBaseSchema,
   RsiCountsSchema,
   RsiCursorSchema,
@@ -94,4 +109,18 @@ export const SCHEMAS: Readonly<Record<string, ZodType>> = {
   RsiTaintMark: RsiTaintMarkSchema,
   RsiStopMark: RsiStopMarkSchema,
   RsiLogLine: RsiLogLineSchema,
+  // §21 W0(contracts §21.24):个人层 schema 与 `[rsi.auto]`
+  RsiAuto: RsiAutoSchema,
+  PersonalLifecycleRecord: PersonalLifecycleRecordSchema,
+  PersonalCommitJournal: PersonalCommitJournalSchema,
+  PersonalHead: PersonalHeadSchema,
+  PersonalTxn: PersonalTxnSchema,
+  RsiRevocationLine: RsiRevocationLineSchema,
+  RsiCanaryLedgerLine: RsiCanaryLedgerLineSchema,
+  CanaryDoc: CanaryDocSchema,
+  CanaryAdmission: CanaryAdmissionSchema,
+  CandidateWorkingCopy: CandidateWorkingCopySchema,
+  RsiAuditLine: RsiAuditLineSchema,
+  RsiVetoDoc: RsiVetoDocSchema,
+  RsiTombstones: RsiTombstonesSchema,
 };

@@ -64,6 +64,11 @@ export const RSI_NOT_RUN_REASONS = Object.freeze([
   'run_not_pending',
   'dismiss_full',
   'run_scan_incomplete',
+  // §21 W0-12(R21-12.9):不在对应期之前发码,只是枚举常量
+  'not_diverged',
+  'phase_not_available',
+  'ticket_expired',
+  'no_runtime',
 ] as const);
 export const RSI_FAIL_CLOSED_REASONS = Object.freeze([
   'cfg_symlink',
@@ -101,6 +106,12 @@ export const RSI_FAIL_CLOSED_REASONS = Object.freeze([
   'hooks_ledger_invalid',
   // R20-A6(R20-17.8 / R20-17.23):`dismissed.json` 损坏时写路径不覆盖
   'dismissed_invalid',
+  // §21 W0-12(R21-12.9)
+  'personal_repo_invalid',
+  'candidate_invalid',
+  'ledger_line_invalid',
+  'txn_invalid',
+  'probe_error',
 ] as const);
 /** 顶层(0)信息行(R20-17.23):只在提醒条件下写 stderr,不改退出码 */
 export const RSI_INFO_LINE_CODES = Object.freeze([
@@ -120,6 +131,10 @@ export const RSI_EXIT1_CODES = Object.freeze([
   'RSI_INGEST_REJECTED',
   // R20-A5(R20-15.28):`rsi hooks` 确认输入不是 yes / EOF
   'RSI_HOOKS_DECLINED',
+  // §21 W0-12(R21-12.9)
+  'RSI_AUTO_RESUME_BLOCKED',
+  'RSI_CONTRIB_DEGRADED',
+  'RSI_EXEC_DECLINED',
 ] as const);
 /** 计数码(R20-3.0 总表「计数码」行;不改退出码,只进 `--json` 与日志;顺序照总表) */
 export const RSI_COUNTER_CODES = Object.freeze([
@@ -285,6 +300,10 @@ export const RsiBaseSchema = z.strictObject({
   exclude_dirs: z.array(z.string()).max(RSI_MAX_EXCLUDE_ITEMS).optional(),
   exclude_names: z.array(z.string()).max(RSI_MAX_EXCLUDE_ITEMS).optional(),
   session: z.record(z.string(), z.unknown()).optional(),
+  // §21 W0-9(R21-2.1 / §21.18 第 19 条订正):三个子表与 session 一样只验「表或缺省」,内容留给 L-auto / L-cap / L-contrib
+  auto: z.record(z.string(), z.unknown()).optional(),
+  capability: z.record(z.string(), z.unknown()).optional(),
+  contrib: z.record(z.string(), z.unknown()).optional(),
 });
 export type RsiBase = z.infer<typeof RsiBaseSchema>;
 
@@ -361,6 +380,44 @@ const RsiOutcomeSchema = z.enum(RSI_OUTCOMES);
 export type RsiOutcome = z.infer<typeof RsiOutcomeSchema>;
 const RsiTriggerSchema = z.enum(RSI_TRIGGERS);
 
+// ---------------------------------------------------------------------------
+// §21 W0:相位闸与熔断码(docs/contracts.md §21.24 W0-1;R21-0.1 / R21-10.2)
+// ---------------------------------------------------------------------------
+/** 相位有序表:**只追加、不插入、不重排**(R21-0.1,W0-1);`RSI_AUTO_PHASE` 取其下标 */
+export const RSI_AUTO_PHASE_ORDER = Object.freeze([
+  'V0',
+  'V1a',
+  'V1b',
+  'V1.5',
+  'V2',
+  'V3',
+  'V4',
+  'V5',
+  'V6a',
+  'V6b',
+] as const);
+export type RsiAutoPhaseName = (typeof RSI_AUTO_PHASE_ORDER)[number];
+/** 分期闸(R21-0.1):代码常量,由实现块提升,不读配置。W0 落地时为 0(V0);V1a / V1b 各自一个 PR 提升(R21-0.2) */
+export const RSI_AUTO_PHASE = 0;
+
+/** 熔断码(R21-10.2 码表;`state.json.auto_pause.reasons` 的封闭枚举) */
+export const RSI_AUTO_PAUSE_REASONS = Object.freeze([
+  'rollback_storm',
+  'gate_internal',
+  'apply_failed',
+  'personal_repo_invalid',
+  'budget_high_legacy',
+  'cost_high_legacy',
+  'no_observation',
+  'redaction_changed',
+  'user_vetoes',
+  'kit_major_changed',
+  'user_paused',
+  'isolation_unverified',
+] as const);
+export type RsiAutoPauseReason = (typeof RSI_AUTO_PAUSE_REASONS)[number];
+const RsiAutoPauseReasonSchema = z.enum(RSI_AUTO_PAUSE_REASONS);
+
 /** `.state/rsi/state.json`(R20-1.5 / R20-3.4.2 / R20-6.4 / R20-6.6) */
 export const RsiStateSchema = z.strictObject({
   schema_version: z.literal(1),
@@ -405,6 +462,19 @@ export const RsiStateSchema = z.strictObject({
       projects: NonNegInt,
       excluded: NonNegInt,
       unknown_sessions: NonNegInt,
+    })
+    .optional(),
+  /**
+   * §21 W0-7(R21-10.2 / R21-10.3):`auto_pause`。**可选**——缺失 = 无熔断、无分叉、无属主变更(旧 `state.json` 照常通过);
+   * 出现但非法(类型错、未知原因码、重复原因码)一律拒绝,不归零恢复。所有 `state.json` 写入方必须保留此键。
+   */
+  auto_pause: z
+    .strictObject({
+      reasons: z
+        .array(RsiAutoPauseReasonSchema)
+        .refine((a) => new Set(a).size === a.length, '不得重复'),
+      diverged: z.boolean(),
+      owner_changed: z.boolean(),
     })
     .optional(),
 });
@@ -674,6 +744,10 @@ export const RSI_USAGE_REASONS = Object.freeze([
   'missing:--json',
   'missing:--digest',
   'missing:--owner',
+  // §21 W0-12(R21-12.9)
+  'bad_date',
+  'unknown_id',
+  'bad_marker',
 ] as const);
 /**
  * 现有写入方拿不到 `rsi/lock` 时的命令级码(D3,§20.9 第 7 条):`<前缀>_NOT_RUN reason=locked`,退出 4,零调用零写入。
@@ -979,3 +1053,393 @@ export const RsiNoticeReadSchema = z
     collection_started_for: z.string().min(1).max(64).nullable(),
   })
   .refine((d) => sortedUniqueIds(d.proposals_notified), 'proposals_notified 须升序且唯一');
+
+// ---------------------------------------------------------------------------
+// §21 W0:常量、枚举与码表(docs/contracts.md §21.24;统计常量 / 闸词表 / 上限 / 保留期全部是代码常量,不可配置)
+// ---------------------------------------------------------------------------
+/** 判定开关(R21-7.9):V1a / V1b / V1.5 恒为假;V2 的契约修订才置真。为假时 canary 只会经回滚走向 `rolled_back` 或 `expired` */
+export const RSI_DECIDE_BETTER_ENABLED = false;
+
+/** 相位名 → 整数(R21-0.1) */
+export function phaseIndex(name: RsiAutoPhaseName): number {
+  return RSI_AUTO_PHASE_ORDER.indexOf(name);
+}
+/** 所有阶段判断经此函数(W0-1);`phase` 缺省取当前 {@link RSI_AUTO_PHASE},测试可注入 */
+export function phaseAtLeast(name: RsiAutoPhaseName, phase: number = RSI_AUTO_PHASE): boolean {
+  return phase >= phaseIndex(name);
+}
+
+/**
+ * 能力的最早可用期(W0-1 表 (2);默认拒绝:不在表里 = 尚未到期)。`docs/contracts.md` §21.24 的同名表与本常量由测试双向比对。
+ */
+export const RSI_CAPABILITY_PHASE: Readonly<Record<string, RsiAutoPhaseName>> = Object.freeze({
+  repo_bootstrap: 'V1a',
+  candidate_create: 'V1a',
+  gates_g0_g7: 'V1a',
+  shadow_count: 'V1a',
+  transition_proposed_to_shadow: 'V1a',
+  transition_to_rejected: 'V1a',
+  transition_shadow_to_expired: 'V1a',
+  revocation_credentials: 'V1a',
+  cmd_auto_status: 'V1a',
+  cmd_auto_pause: 'V1a',
+  cmd_auto_resume: 'V1a',
+  cmd_auto_clear: 'V1a',
+  cmd_auto_rebase_baseline: 'V1a',
+  cmd_veto: 'V1a',
+  cmd_report: 'V1a',
+  cmd_show: 'V1a',
+  hint_weekly_line: 'V1a',
+  transition_shadow_to_canary: 'V1b',
+  transition_canary_to_rolling_back: 'V1b',
+  transition_rolling_back_to_terminal: 'V1b',
+  deploy_none_to_injected: 'V1b',
+  deploy_removal_pending: 'V1b',
+  hint_canary: 'V1b',
+  admission_probe: 'V1b',
+  canary_ledger: 'V1b',
+  harm_test: 'V1b',
+  rollback_four_phase: 'V1b',
+  revocation_reconcile_grants: 'V1b',
+  cmd_rollback_to: 'V1b',
+  transition_canary_to_adopted: 'V2',
+  decide_better: 'V2',
+  local_payload: 'V2',
+});
+/** 能力是否已到期;表里没有的能力一律 false(默认拒绝) */
+export function capabilityAvailable(key: string, phase: number = RSI_AUTO_PHASE): boolean {
+  const need = RSI_CAPABILITY_PHASE[key];
+  return need !== undefined && phaseAtLeast(need, phase);
+}
+
+/** 熔断码的最早期(R21-10.2 的「期」列经 W0-1 订正:`rollback_storm` 属 V1b) */
+export const RSI_AUTO_PAUSE_REASON_PHASE: Readonly<Record<RsiAutoPauseReason, RsiAutoPhaseName>> =
+  Object.freeze({
+    rollback_storm: 'V1b',
+    gate_internal: 'V1a',
+    apply_failed: 'V2',
+    personal_repo_invalid: 'V1a',
+    budget_high_legacy: 'V1a',
+    cost_high_legacy: 'V1a',
+    no_observation: 'V1a',
+    redaction_changed: 'V1a',
+    user_vetoes: 'V1a',
+    kit_major_changed: 'V1a',
+    user_paused: 'V1a',
+    isolation_unverified: 'V6b',
+  });
+
+/** 顶层(4)码:`rsi exec-run` / `exec-prepare` 未运行(R21-12.9;V6a 起发码) */
+export const RSI_EXEC_NOT_RUN = 'RSI_EXEC_NOT_RUN';
+
+/** R21-1.9 展示标签 */
+export const RSI_AUTO_LABEL = '自动产出、未经人工核验';
+/** R21-6.3 关联标记行前缀(标记行 = 前缀 + 空格 + `rsm_` + 16 位十六进制,≤ 64 字节) */
+export const RSI_MARK_PREFIX = 'agent-kit RSI 关联标记:';
+export const RsiMarkerSchema = z.string().regex(/^rsm_[0-9a-f]{16}$/);
+
+// --- R21-7.1 统计常量 ---
+export const RSI_MIN_SESSIONS_PER_ARM = Object.freeze({ lite: 20, medium: 20, heavy: 30 } as const);
+export const RSI_MIN_CONTROL_EVENTS = 15;
+/** 待 V1.5 校准 */
+export const RSI_MIN_CONTROL_EVENTS_C3 = 30;
+export const RSI_MAX_RR_CI_WIDTH = 0.6;
+export const RSI_MAX_SESSIONS_PER_ARM = 120;
+export const RSI_MAX_CANARY_DAYS = 90;
+export const RSI_PERMUTATIONS = 2000;
+export const RSI_ALPHA_BETTER = 0.05;
+export const RSI_RR_BETTER_UPPER = 0.7;
+export const RSI_ALPHA_WORSE_TOTAL = 0.1;
+export const RSI_ALPHA_BETTER_LOOK = 0.025;
+export const RSI_LOOK_EVERY = 10;
+export const RSI_TOOLCALL_DROP_SUSPECT = 0.4;
+export const RSI_ANALYSIS_PLAN_VERSION = 1;
+/** 保护指标界限(待 V1.5 校准;边界一律:非劣效 = 上界严格小于界限) */
+export const RSI_PROTECT_BOUNDS = Object.freeze({
+  c1_rr: 1.15,
+  c2_gmr: 1.15,
+  c3_rr: 1.25,
+  c4_canary_bytes: 1536,
+  c5_rr: 1.15,
+  c6_pp: 5,
+} as const);
+/** canary 期随机概率(R21-6.2);adopted 期 0.8 / 0.2 属 V2 */
+export const RSI_CANARY_P = 0.5;
+/** R21-6.3 / M11:标记行 + treat 追加部分 ≤ 1536 字节;hint 总输出(计数行 200 + 1536)≤ 1736 */
+export const RSI_CANARY_INJECT_MAX_BYTES = 1536;
+export const RSI_HINT_CANARY_TOTAL_MAX_BYTES = 1736;
+
+// --- W0-2 / W0-3 / W0-9 常量 ---
+/** 教训类签名的 token Jaccard 下限(= `src/reflect/cluster.ts` 的 `DEFAULT_LESSON_JACCARD`,测试钉住两者相等) */
+export const RSI_LESSON_JACCARD = 0.5;
+export const RSI_SIGNATURE_MAX_TOKENS = 32;
+/** 自动探针准入(W0-3) */
+export const RSI_PROBE_SESSIONS = 3;
+export const RSI_PROBE_WINDOW_DAYS = 7;
+export const RSI_PROBE_QUIET_MINUTES = 60;
+export const RSI_PROBE_WAIT_HOURS = 48;
+/** `revocations.jsonl` 上限(W0-9):超出按读取失败处理;> 一半时 `rsi auto status` 提示 */
+export const RSI_REVOCATIONS_MAX_BYTES = 1024 * 1024;
+export const RSI_REVOCATIONS_WARN_BYTES = 512 * 1024;
+/** shadow 因名额被占排队的上限(V1i-9):30 个 UTC 日 */
+export const RSI_SHADOW_QUEUE_MAX_DAYS = 30;
+/** 候选 `transitions[]` 保留条数上限(R21-3.7) */
+export const RSI_TRANSITIONS_MAX = 256;
+/** shadow:有观测会话数与命中门槛(R21-4.1) */
+export const RSI_SHADOW_MIN_SESSIONS = 20;
+export const RSI_SHADOW_MIN_HITS = 2;
+/** R21-11.1 冷却(UTC 日) */
+export const RSI_COOLDOWN_DAYS = Object.freeze({
+  auto_rollback: 90,
+  expired: 30,
+  rejected_streak: 7,
+} as const);
+export const RSI_COOLDOWN_REJECT_STREAK = 5;
+/** R21-12.10 审计保留 */
+export const RSI_AUDIT_RETENTION_DAYS = 365;
+export const RSI_AUDIT_MAX_LINES = 20000;
+/** R21-5.1 G5:规则 / 踩坑单条上限(字节) */
+export const RSI_ATOM_MAX_BYTES = 600;
+
+// --- 候选状态机枚举(R21-3.7 / R21-4.1 / R21-4.2 / R21-4.6) ---
+export const RsiCandidateIdSchema = z.string().regex(/^ra_[0-9a-f]{12}$/);
+export const RSI_CANDIDATE_CATEGORIES = Object.freeze([
+  'rule',
+  'pitfall',
+  'method',
+  'subagent',
+  'capability_note',
+  'exec',
+] as const);
+export const RSI_LIFECYCLE_STATES = Object.freeze([
+  'proposed',
+  'shadow',
+  'blocked',
+  'canary',
+  'adopted',
+  'stable',
+  'retiring',
+  'rolling_back',
+  'rejected',
+  'expired',
+  'rolled_back',
+  'retired',
+] as const);
+export type RsiLifecycleState = (typeof RSI_LIFECYCLE_STATES)[number];
+export const RSI_DEPLOY_STATES = Object.freeze([
+  'none',
+  'injected',
+  'static_pending',
+  'static',
+  'withdraw_pending',
+  'removal_pending',
+] as const);
+export type RsiDeployState = (typeof RSI_DEPLOY_STATES)[number];
+/** R21-6.8 `watch.result` 唯一封闭枚举 */
+export const RSI_WATCH_RESULTS = Object.freeze([
+  'not_started',
+  'pending',
+  'passed',
+  'withdrawn_residual',
+  'withdrawn_ended',
+  'skipped',
+  'harm',
+] as const);
+/** R21-4.6 终态理由(含 N4-2 的 `judge_rejected`);数组顺序即 R21-4.4a 的优先级(靠前者高) */
+export const RSI_TERMINAL_REASONS = Object.freeze([
+  'vetoed',
+  'tainted',
+  'cleared',
+  'judge_rejected',
+  'auto_rollback',
+  'static_sync_timeout',
+  'auto_expired',
+  'no_hit',
+  'rejected_gate',
+] as const);
+/** R21-4.4a `target_terminal` 优先级(靠前者高;只升不降) */
+export const RSI_TARGET_TERMINALS = Object.freeze([
+  'rolled_back',
+  'retired',
+  'expired',
+  'shadow',
+] as const);
+/** R21-4.6 ① 正常转移原因码 */
+export const RSI_TRANSITION_REASONS_NORMAL = Object.freeze([
+  'ingested',
+  'gates_passed',
+  'shadow_hits_met',
+  'evidence_ready',
+  'decided_better',
+  'holdout_passed',
+  'deploy_injected',
+  'static_released',
+  'sync_ok',
+  'withdraw_done',
+  'residual_ended',
+  'exec_enabled',
+  'exec_unrestricted',
+  'compensation_done',
+  'revocation_reconciled',
+  'retire_done',
+] as const);
+/** R21-5.1 G1–G8 原因码(G0 = `g0_<ingest 拒绝子码>`,见 {@link rsiG0Reasons}) */
+export const RSI_GATE_REASONS = Object.freeze([
+  'g1_phrase',
+  'g1_invisible',
+  'g1_redact',
+  'g1_ctrl',
+  'g1_skill',
+  'g2_risky',
+  'g2_kit_ref',
+  'g2_project_feature',
+  'g2_safety_atom',
+  'g3_sessions',
+  'g3_days',
+  'g3_trigger',
+  'g3_attribution',
+  'g4_conflict',
+  'g4_override',
+  'g4_strength',
+  'g4_near_dup',
+  'g4_tombstone',
+  'g4_cooldown',
+  'g4_framework_path',
+  'g4_tools_expanded',
+  'g4_field_not_editable',
+  'g4_skill_size',
+  'g5_budget',
+  'g5_quota',
+  'g5_atom_bytes',
+  'g5_inject_bytes',
+  'g6_too_few',
+  'g6_too_broad',
+  'g7_queued',
+  'g8_worse',
+  'g8_dominated',
+  'g8_timeout',
+] as const);
+/** G0 原因码 = `g0_` + ingest 拒绝子码(A4-1:封闭集合即 {@link RSI_INGEST_REJECT_REASONS}) */
+export const rsiG0Reasons = (): string[] => RSI_INGEST_REJECT_REASONS.map((r) => `g0_${r}`);
+/** R21-4.6 ② 终止 / 异常原因码(不含 G 码;`harm_<指标>` 只取 c1|c2|c3|c4|c6) */
+export const RSI_HARM_METRICS = Object.freeze(['c1', 'c2', 'c3', 'c4', 'c6'] as const);
+export const RSI_TRANSITION_REASONS_TERMINATING = Object.freeze([
+  'harm_c1',
+  'harm_c2',
+  'harm_c3',
+  'harm_c4',
+  'harm_c6',
+  'limit_reached',
+  'vetoed',
+  'tainted',
+  'cleared',
+  'identity_changed',
+  'exec_post_check_failed',
+  'exec_timeout_unclean',
+  'static_sync_timeout',
+  'withdraw_120',
+  'no_hit',
+  'judge_reject',
+  'judge_injection',
+] as const);
+
+// --- 私有仓库 / journal / 回滚 / 撤销(R21-3.6a / R21-9.1 / R21-9.5) ---
+/** R21-3.6a `kind`;W0-5 追加 `bootstrap` */
+export const RSI_COMMIT_KINDS = Object.freeze([
+  'transition',
+  'rollback',
+  'clear',
+  'purge_rewrite',
+  'reconcile',
+  'identity_change',
+  'bootstrap',
+] as const);
+/** R21-3.6a 五个 phase */
+export const RSI_COMMIT_PHASES = Object.freeze([
+  'planned',
+  'objects_written',
+  'ref_updated',
+  'worktree_synced',
+  'recorded',
+] as const);
+/** W0-5 bootstrap 四个 phase */
+export const RSI_BOOTSTRAP_PHASES = Object.freeze([
+  'planned',
+  'initialized',
+  'committed',
+  'recorded',
+] as const);
+/** R21-9.1 回滚子状态 */
+export const RSI_ROLLBACK_PHASES = Object.freeze([
+  'rollback_requested',
+  'injection_disabled',
+  'static_removal_pending',
+  'rollback_complete',
+] as const);
+export const RSI_REVOCATION_BY = Object.freeze([
+  'worker',
+  'clear',
+  'rollback_to',
+  'veto',
+  'exec_event',
+] as const);
+
+// --- 分组账 / 准入(R21-6.4 / W0-3) ---
+export const RSI_LEDGER_ARMS = Object.freeze(['treat', 'control', 'excluded'] as const);
+/** `excluded` 行的 `reason`;W0-3 追加 `admission_probe` */
+export const RSI_LEDGER_EXCLUDED_REASONS = Object.freeze([
+  'paused',
+  'not_admitted',
+  'policy_mismatch',
+  'agent_not_injected',
+  'revoked',
+  'rng_error',
+  'permit_unreadable',
+  'admission_probe',
+] as const);
+export const RSI_ADMISSION_STATES = Object.freeze(['probing', 'admitted', 'failed'] as const);
+export const RSI_ADMISSION_FAIL_REASONS = Object.freeze([
+  'marker_not_retrieved',
+  'multi_marker',
+  'probe_expired',
+] as const);
+
+// --- 审计(R21-12.10) ---
+export const RSI_AUDIT_KINDS = Object.freeze([
+  'transition',
+  'sync',
+  'evaluation',
+  'exec_run',
+  'contrib_result',
+  'judge_signal',
+  'reconcile',
+  'pause',
+  'bootstrap',
+] as const);
+
+// --- 配置(R21-2.1) ---
+export const RSI_AUTO_PROFILES = Object.freeze(['lite', 'medium', 'heavy'] as const);
+export const RSI_AUTO_EXEC_VALUES = Object.freeze(['off', 'host_after_trial'] as const);
+/**
+ * `[rsi.auto]`(L-auto 层,R21-2.1 / W0-9):`strictObject`;`enabled` 只接受布尔(字符串 `"true"` 失败);失败只禁自动生效(`auto: invalid`),
+ * 不影响 `[rsi]` 本身(L-base 只验「表或缺省」)。`exec` 取值 V6a 之前可解析、无效果。
+ */
+export const RsiAutoSchema = z.strictObject({
+  enabled: z.boolean().optional(),
+  profile: z.enum(RSI_AUTO_PROFILES).optional(),
+  exec: z.enum(RSI_AUTO_EXEC_VALUES).optional(),
+});
+export type RsiAuto = z.infer<typeof RsiAutoSchema>;
+
+/** R21-12 子命令 → 能力键:对应能力未到期的子命令注册为命令桩(退出 64) */
+export const RSI_AUTO_SUBCOMMAND_CAPS = Object.freeze({
+  'auto status': 'cmd_auto_status',
+  'auto pause': 'cmd_auto_pause',
+  'auto resume': 'cmd_auto_resume',
+  'auto clear': 'cmd_auto_clear',
+  'auto rebase-baseline': 'cmd_auto_rebase_baseline',
+  veto: 'cmd_veto',
+  report: 'cmd_report',
+  show: 'cmd_show',
+  'rollback --to': 'cmd_rollback_to',
+} as const);

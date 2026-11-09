@@ -557,6 +557,63 @@ describe('lint 正向对照:同样的代码放到被授权的文件里不报错'
       expect(await lintAs(NET_IMP, 'src/update/policy.ts')).toEqual([]);
     });
 
+    it('§21 W0-11:src/rsi/personal/** 是 home-fs 的授权使用方,read/ 与 judge-signal.ts 后置收回;runSync 在 src/rsi/** 内只许 personal 三个 git 文件', async () => {
+      // 授权目录放行 home-fs(import / re-export),动态 import 仍被拦
+      for (const ok of [
+        'src/rsi/personal/home-state.ts',
+        'src/rsi/personal/personal-lock.ts',
+        'src/rsi/personal/gates/g0.ts',
+      ]) {
+        expect(await lintAs(HF_IMP, ok), ok).toEqual([]);
+        expect(await lintAs(HF_REX, ok), ok).toEqual([]);
+      }
+      // 负向:只读侧与判定纯函数不得引用 home-fs(后置覆盖);相邻前缀 / 命令入口 / 其它 rsi 文件同样不行
+      for (const bad of [
+        'src/rsi/personal/read/candidate-read.ts',
+        'src/rsi/personal/read/deep/x.ts',
+        'src/rsi/personal/judge-signal.ts',
+        'src/rsi/personal-extra/x.ts',
+        'src/rsi/auto/status.ts',
+        'src/rsi/hint.ts',
+        'src/rsi/worker.ts',
+        'src/rsi/hooks/command.ts',
+      ]) {
+        expect((await lintAs(HF_IMP, bad)).length, `${bad}: home-fs`).toBeGreaterThan(0);
+        expect((await lintAs(HF_REX, bad)).length, `${bad}: home-fs reexport`).toBeGreaterThan(0);
+      }
+      // runSync:三个 git 文件放行
+      for (const ok of [
+        'src/rsi/personal/commit.ts',
+        'src/rsi/personal/commit-journal.ts',
+        'src/rsi/personal/repo-check.ts',
+        // hooks 目录保持既有放行(不在自动入口闭包内)
+        'src/rsi/hooks/agent-version.ts',
+        // src/rsi 之外不受限
+        'src/foo.ts',
+        'src/update/install.ts',
+      ]) {
+        expect(await lintAs(RUN_SYNC, ok), `${ok}: runSync`).toEqual([]);
+      }
+      // 负向:其余 src/rsi/** 引用 runSync(命名导入 / import *)即红,personal 内其它文件、read/ 同样
+      const RS_NS = "import * as exec from '../io/exec.js';\nexport const r = exec;\n";
+      const RUN_SYNC_REX = "export { runSync } from '../io/exec.js';\n";
+      for (const bad of [
+        'src/rsi/hint.ts',
+        'src/rsi/poke.ts',
+        'src/rsi/worker.ts',
+        'src/rsi/auto/status.ts',
+        'src/rsi/personal/home-state.ts',
+        'src/rsi/personal/read/candidate-read.ts',
+        'src/rsi/personal/judge-signal.ts',
+        'src/rsi/personal/commit-extra.ts',
+      ]) {
+        expect((await lintAs(RUN_SYNC, bad)).length, `${bad}: runSync`).toBeGreaterThan(0);
+        expect((await lintAs(RUN_SYNC_REX, bad)).length, `${bad}: runSync reexport`).toBeGreaterThan(0);
+      }
+      // `import * as exec` 同样被 importNames 拦下(与 runSelf 同口径)
+      expect((await lintAs(RS_NS, 'src/rsi/hint.ts')).length).toBeGreaterThan(0);
+    });
+
     it('launcher.ts 本身不得引用 net / home-fs(最小权限)', async () => {
       expect((await lintAs(NET_IMP, 'src/update/launcher.ts')).length).toBeGreaterThan(0);
       expect((await lintAs(HF_IMP, 'src/update/launcher.ts')).length).toBeGreaterThan(0);

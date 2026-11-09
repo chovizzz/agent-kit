@@ -31,7 +31,14 @@ const FORBIDDEN_FILES: readonly string[] = [
   'src/commands/judge-ingest.ts',
   'src/io/tty.ts',
 ];
-const FORBIDDEN_PREFIXES: readonly string[] = ['src/reflect/backends/', 'src/judge/ingest/'];
+const FORBIDDEN_PREFIXES: readonly string[] = [
+  'src/reflect/backends/',
+  'src/judge/ingest/',
+  // §21 W0-11(R21-1.4 ①):自动入口另禁 E1 宿主执行器 / 隔离执行器 / 投稿发布出口(这些目录 V4–V6 才建;禁令先就位)
+  'src/rsi/contrib/publish/',
+  'src/rsi/exec/host/',
+  'src/rsi/exec/isolated/',
+];
 /** 网络相关的外部说明符(含 node: 前缀与子路径) */
 const NET_EXTERNALS = ['http', 'https', 'http2', 'net', 'tls', 'dgram', 'dns', 'undici', 'ws'];
 const FORBIDDEN_EXTERNAL = (spec: string): boolean => {
@@ -109,10 +116,17 @@ function specifiersOf(file: string, source: string): string[] {
   return out;
 }
 
-function resolveRelative(fromAbs: string, spec: string): string | undefined {
+function resolveRelative(
+  fromAbs: string,
+  spec: string,
+  virtual: Virtual = {},
+): string | undefined {
   const base = path.resolve(path.dirname(fromAbs), spec);
   const cands = [base.replace(/\.js$/, '.ts'), `${base}.ts`, path.join(base, 'index.ts')];
-  return cands.find((c) => c.endsWith('.ts') && existsSync(c));
+  // 虚拟文件(不落盘)也参与解析:禁止前缀目录 V4–V6 才建,负向用例靠它在今天就能演练
+  const isVirtual = (c: string): boolean =>
+    Object.hasOwn(virtual, path.relative(ROOT, c).split(path.sep).join('/'));
+  return cands.find((c) => c.endsWith('.ts') && (existsSync(c) || isVirtual(c)));
 }
 
 interface Closure {
@@ -135,7 +149,7 @@ function closureOf(entries: readonly string[], virtual: Virtual = {}): Closure {
     const source = virtual[rel] ?? readTextSync(abs);
     for (const spec of specifiersOf(abs, source)) {
       if (spec.startsWith('.')) {
-        const r = resolveRelative(abs, spec);
+        const r = resolveRelative(abs, spec, virtual);
         if (r === undefined) unresolved.push(`${rel} -> ${spec}`);
         else queue.push(r);
       } else {
@@ -242,6 +256,17 @@ describe('闭包检查器自身的对照(证明上面的"干净"不是检查器�
       expect(bad).toContain(f);
     }
     expect(bad).toContain('external:sigstore');
+  });
+
+  it('R21-1.4 §21 的三个禁止前缀:虚拟入口经 contrib/publish、exec/host、exec/isolated 引用时被抓到(负向);不引用时干净(正向对照)', () => {
+    for (const dir of ['contrib/publish', 'exec/host', 'exec/isolated']) {
+      const target = `src/rsi/${dir}/run.ts`;
+      const e = entry('r21ban', [`./${dir}/run.js`]);
+      const c = closureOf([e.path], { [e.path]: e.source, [target]: 'export const r = 1;\n' });
+      expect(violations(c), dir).toEqual([`file:${target}`]);
+    }
+    const ok = entry('r21ok', ['../contracts/rsi.js']);
+    expect(violations(closureOf([ok.path], { [ok.path]: ok.source }))).toEqual([]);
   });
 
   it('N4:judge --ingest 命令入口自己的闭包含 tty 与 ingest 服务(正向对照:检测器看得见);自动入口候选的闭包里一个都没有', () => {
