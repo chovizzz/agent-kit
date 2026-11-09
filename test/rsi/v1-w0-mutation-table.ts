@@ -82,7 +82,8 @@ export const V1_W0_MUTATIONS: readonly V1W0Mutation[] = [
   },
   {
     id: 'capability-proto-bypass',
-    clause: 'W0-1:能力查询只认自有键(原型链上的 toString / constructor / __proto__ 不是能力)—— 变异:去掉自有键检查与阶段解析失败检查',
+    clause:
+      'W0-1:能力查询只认自有键(原型链上的 toString / constructor / __proto__ 不是能力)—— 变异:去掉自有键检查与阶段解析失败检查',
     edits: [
       {
         file: RSI,
