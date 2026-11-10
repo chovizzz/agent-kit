@@ -807,3 +807,53 @@ R1 没有改动 reader,也没有改变 §2–§7 的任何计数:下面只是把
 - **存量信号不回填。** 重采按 `sig_id` 去重,旧行保持原样、没有三个结构字段;`src/signals/structure.ts` 的 `hasStructureFields` / `partitionByStructure` 让 reflect 把它们当 unknown 排除并计数。要让旧会话拿到字段,须先清掉 `.state/signals/<agent>/` 再重采。
 - **codex 0.149 之前的失败不可见**(§D1)这一口径信息只在 `CollectReport.tool_failures_scope`,不落盘;计数库里没有版本信息。需要跨版本比较失败率的消费者,按信号的 `agent_version` 与 `session_ref` 关联自己判断。
 - **反思器自己的会话**:cwd 落在本仓 `.state/` 之内(含相等),或路径含 `<.state|state>/reflect/cwd` 三段(另一棵 worktree / 另一个 `KIT_STATE_DIR` 的反思器会话;R3 的 llm-exec 若改了 cwd 命名须同步这里),采集时整条跳过,不产信号也不写计数;计入 `sessions_skipped_excluded`,并在命令输出顶层单列 `excluded_self_sessions`。
+
+## 12. W4 追加:`tool_error_class`、重试链、RSI 注入识别与取回标记(契约 R21-18 第 20 条、R21-6.6、R21-6.9、§21.24 W0-7)
+
+W4 只**追加**信号 / 计数行的可选键和 claude / pi 的注入识别,不改 §2–§7 任何既有计数口径;`sig_id` 算法不变(R21-18 第 40 条:仍只由 盐、`session_ref`、事件序号 决定,新键不进 `sig_id`)。**§7 的 jq oracle 不建模注入排除**:它数的是原始事件,与 reader 在「会话含 RSI 注入块」时必然不同(这是设计,不是缺陷);所以 oracle 对拍用的夹具不得含 `RSI_MARK_PREFIX`(`test/signals/w4-contracts.test.ts` 钉住),含注入块的夹具另由 `test/signals/w4-injection.test.ts` 的朴素参考实现对拍。
+
+### 12.1 `tool_error_class`(信号,可选)
+
+- 只挂在 `event_kind=tool_result_failed` 的信号上;取值 = 失败结果**文本**(`NormEvent.text` 的前 4096 个码元)按下表**自上而下、首个命中即用**映射出的枚举,**只存枚举,不存文本**。映射在管线里、排除判定之前用原文一次算出,与 reader 无关,所以四家共用同一张表。
+- 表(正则大小写不敏感;只增不改,要改口径就新增版本):
+
+| 顺序 | 类           | 命中的文本(任一)                                                                                                                                                                                                     |
+| ---- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1    | `permission` | `permission denied`、`EACCES`、`EPERM`、`operation not permitted`、`access (is) denied`、`forbidden`、`unauthorized`、`HTTP 401/403`                                                                                 |
+| 2    | `timeout`    | `timed out` / `time out` / `timeout`(含 `ETIMEDOUT`)、`deadline exceeded`                                                                                                                                            |
+| 3    | `network`    | `ECONNREFUSED/RESET/ABORTED`、`ENOTFOUND`、`EAI_AGAIN`、`EHOSTUNREACH`、`ENETUNREACH`、`network is unreachable`、`connection refused/reset/closed/failed`、`could not resolve host`、`getaddrinfo`、`socket hang up` |
+| 4    | `not_found`  | `ENOENT`、`no such file/directory/command`、`command not found`、`not found`、`does not exist`、`cannot find`、`HTTP 404`                                                                                            |
+| 5    | `conflict`   | `conflict`、`already exists`、`EEXIST`、`EBUSY`、`resource busy`、`has been modified since`、`index.lock`、`HTTP 409`                                                                                                |
+| 6    | `syntax`     | `syntax error`、`parse error`、`unexpected token`、`unexpected end of`、`unterminated`、`invalid json/syntax`、`malformed`                                                                                           |
+| —    | `other`      | **有文本但没命中以上任何一类**                                                                                                                                                                                       |
+
+- **没有失败文本时不写本字段**(不写 `other`):Codex 的 `item_completed` 结果事件没有文本;超长行(C8)的事件文本已被丢弃;文本只含空白。`other` 只表示「有文本但没命中」,否则 Codex 会整体落入 `other`,下游「按错误类可选加窄」就被错误收窄。
+- 外部内容会话的信号照样带本字段(只是枚举,不含文本)。旧信号(W4 之前采集)没有本字段,**存量信号不回填**(同 §11:要回填须清库重采)。
+
+### 12.2 重试链:`retry_chain_len`(信号,可选)与 `retry_chain_max`(计数行,可选)
+
+- **链**:同一会话内、**同一工具名**的**连续失败**。中间夹着别的工具的结果、用户消息、助手文本**都不断链**;该工具的一次**成功**结果(`tool_result` 且 `tool_failed !== true`)**结束**它的链(「成功结束」);会话读完时仍未成功的链就停在当前长度(「放弃」)。**每个会话一个追踪器,不跨会话**:前一个会话以某工具失败结尾,后一个会话以同一工具失败开头,后者从 1 起。
+- `retry_chain_len` 挂在 `tool_result_failed` 信号上,值 = **这次失败在其链里的序号**(链上第 1 次失败为 1,第 k 次为 k)。它只依赖此前的事件(前缀稳定),会话追加行不会改变已写信号的值。
+- `retry_chain_max`(`SessionStat`)= 该会话所有链的最大序号;没有失败、或没有可成链的失败时为 0。这是 C2 的会话标量(§21.24 W0-7)。被 §12.3 排除的事件**不进链**。
+- **没有工具名的失败不成链**(不能证明是同一工具):不写 `retry_chain_len`,也不影响 `retry_chain_max`。链的键是 reader 给事件的**完整**原始工具名(不做输出侧的截断 / 白名单处理;共享长前缀的两个名字是两个工具),只在内存里用(不落盘;`tool_result_failed` 信号仍不带 `tool_name`,见 §11)。
+- 各家的可用性:Claude(`tool_use_id` 回填)、Pi(`toolName`)有工具名;**Codex 与 Kimi 的 `tool_result` 事件没有工具名**(Codex 的 `item_completed` 无名字,Kimi 的 `tool.result` 未取名),所以这两家的失败信号**没有** `retry_chain_len`,且不写 `retry_chain_max`——它们的 C2 与 claude / pi **不可比**,分析层不得把缺键当 0。
+
+### 12.3 RSI 注入识别与排除(R21-6.9;仅 claude / pi)
+
+- **块**:一行 JSON 里任一字符串值(任意深度,含数组元素)中,**以 `RSI_MARK_PREFIX` 开头的行**(行首允许空格 / 制表符;只按 `\n` 切行,去行尾 `\r`;U+2028 / 孤立 `\r` 不是行分隔,同 C2)起,到下一个这样的行或该字符串结尾为止。前缀出现在**行中间**不算块。该行之后的各行(标签行、哈希行、正文,以 `\n` 连接)是块的**正文**。
+- **取回标记**:标记行恰为 `RSI_MARK_PREFIX + " " + rsm_<16 位十六进制>`(行尾允许空白)才取回该标记;前缀开头但形状不对的行仍是块(照常排除),只是取不到标记。取回只在「真注入」位置:该行的事件**只有** `user_message` / `meta` / `unknown`(或没有事件)时才取回并登记正文;块出现在带 `tool_call` / `tool_result` / `assistant_message` 事件的行里(模型或工具在引用别处的文本,例如 `cat` 了另一个会话文件)只排除、**不取回**,否则别的会话的标记会造成假「多标记」。
+- **整行忽略的行不参与识别**:被 reader 整行忽略、只记 ignored 而没有事件的行(Claude 的 `isSidechain` 行,C1 / C7)里的块既不取回标记、也不登记复述比对正文。
+- **外部内容属性先于排除累积**:被改写成 `meta` 的事件,其显式外部内容标记与外部工具名(`isExternalToolName`)仍记入会话级 `external_content`——改写丢掉工具名,不能因此把外部内容会话洗成非外部(外部会话的摘录一律为空)。
+- **排除**:块所在行的计数事件(`user_message` / `assistant_message` / `tool_call` / `tool_result`)被改写成无文本、无工具字段的 `meta` 事件(事件序号不变,故其余事件的 `sig_id` 不受影响;不产信号、不进 `user_messages` / `tool_calls` / `tool_failures`)。**粒度是事件**:一条用户消息既含块又含真实用户文本时整条被排除(块之后的文本也算块的正文)。
+- **复述**:事件文本与某个**此前已取回的块**的正文有**连续 16 个码点**(`RECITAL_MIN_CHARS`)以上相同的片段 → 同样改写成 `meta`;15 个码点不排除。码点计数(代理对算一个),**不做空白或大小写归一**(正文里多一个空格就断开);只与此前已见的块比对(第 k 个事件的判定只依赖 ≤ k 的行,会话追加行后重读,前面的结果不变)。块正文上限 4096 码点(`INJECTION_BODY_MAX_CHARS`;契约正文 ≤ 1536 字节,超出只可能是病态输入):**超过不截断,fail-closed**——reader 抛 `InjectionIndexLimitError`,管线记为 `read_error`(带类名,命令层可见),该会话不落信号与计数行;用迭代器取码点,不全量展开。事件文本整段参与比对,没有扫描上限。**每会话复述窗口总数上限 `INJECTION_WINDOWS_MAX` = 16384**(约 4 个满长块):超限同样 fail-closed(同一错误类),不是静默当「无复述」。**标记形状不对的块照常登记正文**(R21-6.9 排除「前缀块及其复述」,不限定标记合法;参与复述比对、占窗口额度),只是取不到标记。control 组的块只有标记行、没有正文,不产生复述比对对象。
+- **计数**:每个被改写的事件 +1 → `SessionStat.injection_excluded`。块在没有计数事件的行(例如 `isMeta` 的 user 行、Pi 的 `custom` 消息)里时,标记被取回、`injection_excluded` 不增。
+- **归并(R21-6.6)**:`rsi_markers`(去重、升序、≤ 4;**超过 4 个不同标记时按去重升序保留前 4 个**,分类仍为「多标记」)为空 → 「关联失败」;≥ 2 个不同 → 「多标记」;恰 1 个 → 正常(`classifyMarkerRetrieval`)。字段缺失 = 未采集,不是 0。
+- **未实测**:hook 输出在 claude / pi 会话文件里的真实落点(哪个行类型、哪个字段)要到 W10 才实测;这里的识别是对**任意字符串值**生效的通用规则,不依赖具体行类型。W10 若发现落点形状不符,修订本节。codex / kimi 不识别注入(`read()` 不带 `injection()`,行为与 W4 之前逐字节一致)。
+- claude 的 resume、pi 的 fork 会把同一注入块复制进多个会话文件,同一标记会出现在多条计数行里;下游分析按标记去重,不在 reader 层处理。
+
+### 12.4 `SessionStat` 的三个可选键与缺键语义
+
+- **字段间约束(schema 强制)**:`rsi_markers` 严格升序(即去重且有序);`rsi_markers` 与 `injection_excluded` 成组(全有或全无);`retry_chain_max` 独立可选(按 agent 能力,缺键 = 不可比 / 未测:codex / kimi 没有工具名,天然没有它);信号上的 `tool_error_class` / `retry_chain_len` 只允许出现在 `event_kind=tool_result_failed` 的信号上。旧行缺键仍通过。
+- `rsi_markers`(≤ 4 个,去重升序,形状 `rsm_` + 16 位十六进制)、`retry_chain_max`(整数 ≥ 0)、`injection_excluded`(整数 ≥ 0)。**claude / pi 总是写全三个键**;codex / kimi 现在一个都不写(将来若取回标记,只写 `rsi_markers` + `injection_excluded` 即合法,`retry_chain_max` 仍可缺)。
+- **缺键 = 未测,不是 0。** 旧计数行(W4 之前)与 codex / kimi 的行缺键照常通过校验;分析层不得把缺键当「0 个标记」或「0 次重试」。claude / pi 新采集的行**总是**带三个键(没有标记写 `[]`,没有失败写 `0`)。
+- 升级:存量信号不回填(同 §11);存量计数行在下一次重采时按 `session_ref` 就地更新成带三键的形状(`ts` 仍首写钉死)。如实说明这是单向兼容:新代码读旧文件没问题;**旧版 kit 读到带新键的文件**会因 `strictObject` 而 schema 校验失败(按各自既有的 fail-closed 路径处理)。

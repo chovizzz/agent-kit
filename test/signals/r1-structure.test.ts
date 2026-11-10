@@ -462,6 +462,9 @@ describe('存量信号兼容', () => {
         delete o['event_kind'];
         delete o['event_index'];
         delete o['tool_name'];
+        // W4 的两个失败侧字段只许出现在带 event_kind 的信号上:既然把 event_kind 剥掉成旧格式,它们也属于「新格式」,一并剥掉
+        delete o['tool_error_class'];
+        delete o['retry_chain_len'];
         return JSON.stringify(o);
       });
     await writeFile(w.io, file, `${legacy.join('\n')}\n`, { mode: 0o600 });
