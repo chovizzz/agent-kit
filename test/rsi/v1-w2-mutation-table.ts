@@ -1089,90 +1089,70 @@ export const V1_W2_RESULTS: readonly V1W2Result[] = [
     id: 'struct-git-symlink-unchecked',
     failed: 1,
     skipped: 0,
-    killedBy: [
-      'R21-3.4 结构校验 ① .git 是符号链接',
-    ],
+    killedBy: ['R21-3.4 结构校验 ① .git 是符号链接'],
     restored: true,
   },
   {
     id: 'struct-bare-unchecked',
     failed: 1,
     skipped: 0,
-    killedBy: [
-      'R21-3.4 结构校验 ① 裸仓库(core.bare = true)',
-    ],
+    killedBy: ['R21-3.4 结构校验 ① 裸仓库(core.bare = true)'],
     restored: true,
   },
   {
     id: 'struct-alternates-unchecked',
     failed: 1,
     skipped: 0,
-    killedBy: [
-      'R21-3.4 结构校验 R21-3.4 ② objects/info/alternates',
-    ],
+    killedBy: ['R21-3.4 结构校验 R21-3.4 ② objects/info/alternates'],
     restored: true,
   },
   {
     id: 'struct-config-worktree-unchecked',
     failed: 1,
     skipped: 0,
-    killedBy: [
-      'R21-3.4 结构校验 R21-3.4 ③ config.worktree',
-    ],
+    killedBy: ['R21-3.4 结构校验 R21-3.4 ③ config.worktree'],
     restored: true,
   },
   {
     id: 'struct-remote-unchecked',
     failed: 1,
     skipped: 0,
-    killedBy: [
-      'R21-3.4 结构校验 R21-3.4 ⑤ 有 remote(旧式 .git/remotes/ 定义,不经 config 键)',
-    ],
+    killedBy: ['R21-3.4 结构校验 R21-3.4 ⑤ 有 remote(旧式 .git/remotes/ 定义,不经 config 键)'],
     restored: true,
   },
   {
     id: 'struct-mode-unchecked',
     failed: 1,
     skipped: 0,
-    killedBy: [
-      'R21-3.4 结构校验 ⑥ 目录权限不是 0700',
-    ],
+    killedBy: ['R21-3.4 结构校验 ⑥ 目录权限不是 0700'],
     restored: true,
   },
   {
     id: 'struct-owner-unchecked',
     failed: 1,
     skipped: 0,
-    killedBy: [
-      'R21-3.4 结构校验 ⑥ 目录属主不是当前 uid',
-    ],
+    killedBy: ['R21-3.4 结构校验 ⑥ 目录属主不是当前 uid'],
     restored: true,
   },
   {
     id: 'struct-tree-gitattributes-unchecked',
     failed: 1,
     skipped: 0,
-    killedBy: [
-      'R21-3.4 结构校验 R21-3.4 ⑦ 树里有 .gitattributes(任意层级)',
-    ],
+    killedBy: ['R21-3.4 结构校验 R21-3.4 ⑦ 树里有 .gitattributes(任意层级)'],
     restored: true,
   },
   {
     id: 'struct-tree-symlink-unchecked',
     failed: 1,
     skipped: 0,
-    killedBy: [
-      'R21-3.4 结构校验 ⑦ 树里有符号链接(120000)',
-    ],
+    killedBy: ['R21-3.4 结构校验 ⑦ 树里有符号链接(120000)'],
     restored: true,
   },
   {
     id: 'struct-tree-exec-unchecked',
     failed: 1,
     skipped: 0,
-    killedBy: [
-      'R21-3.4 结构校验 ⑦ 树里有可执行位(100755)',
-    ],
+    killedBy: ['R21-3.4 结构校验 ⑦ 树里有可执行位(100755)'],
     restored: true,
   },
   {
@@ -1208,9 +1188,7 @@ export const V1_W2_RESULTS: readonly V1W2Result[] = [
     id: 'situ-stash-unchecked',
     failed: 1,
     skipped: 0,
-    killedBy: [
-      'R21-3.5 情形②:personal_repo_diverged(暂停新增生效,不碰仓库) 有 stash',
-    ],
+    killedBy: ['R21-3.5 情形②:personal_repo_diverged(暂停新增生效,不碰仓库) 有 stash'],
     restored: true,
   },
   {
@@ -1237,9 +1215,7 @@ export const V1_W2_RESULTS: readonly V1W2Result[] = [
     id: 'situ-record-missing-unchecked',
     failed: 1,
     skipped: 0,
-    killedBy: [
-      'R21-3.5 情形③:personal_repo_invalid(熔断) R21-3.5 记录提交不存在',
-    ],
+    killedBy: ['R21-3.5 情形③:personal_repo_invalid(熔断) R21-3.5 记录提交不存在'],
     restored: true,
   },
   {
