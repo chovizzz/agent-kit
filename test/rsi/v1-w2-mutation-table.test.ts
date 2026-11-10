@@ -47,6 +47,15 @@ describe('W2 变异表', () => {
       'bootstrap-observation-skipped',
       'index-flags-ignored-recovery',
       'tree-case-variants-allowed',
+      // 独立评审后追加
+      'tree-whole-replacement',
+      'delete-unmanaged-allowed',
+      'bootstrap-preinit-gate-removed',
+      'struct-info-attributes-unchecked',
+      'struct-replace-refs-unchecked',
+      'no-replace-objects-env-removed',
+      'lock-checked-after-init-writes',
+      'git-read-failure-as-absent',
     ]) {
       expect(ids, must).toContain(must);
     }

@@ -10,6 +10,7 @@ import { readHead, readJournal } from '../../../src/rsi/personal/home-state.js';
 import {
   BASE_FILES,
   git,
+  ID1,
   makeWorld,
   NEXT_FILES,
   NOW,
@@ -25,11 +26,17 @@ import {
 slowTests();
 
 describe('R21-3.6 commitPersonal', () => {
-  it('提交:整棵目标树重建、HEAD 前进一个提交、工作树与索引同步、head.json 记录、journal 已删;被去掉的文件从工作树消失', async () => {
+  it('提交:以 HEAD 树为底稿叠加 upsert / 显式 delete、HEAD 前进一个提交、工作树与索引同步、head.json 记录、journal 已删;被显式删除的文件从工作树消失', async () => {
     const w = await makeWorld('pc-ok-');
     const first = await setupRepo(w);
     const slim = [{ path: 'rules/only.md', content: 'only\n' }] as const;
-    const r = await withLock(w, (locks) => commitPersonal(repoDeps(w), locks, spec('2', slim)));
+    const r = await withLock(w, (locks) =>
+      commitPersonal(
+        repoDeps(w),
+        locks,
+        spec('2', slim, 'transition', [ID1], ['rules/base.md', `lifecycle/${ID1}.json`]),
+      ),
+    );
     if (r.status !== 'committed') throw new Error(JSON.stringify(r));
     expect(git(w, ['rev-parse', 'HEAD'])).toBe(r.commit);
     expect(git(w, ['rev-parse', `${r.commit}^`])).toBe(first);
@@ -170,7 +177,72 @@ describe('R21-3.6 commitPersonal', () => {
       const modes = git(w, ['ls-tree', '-r', 'HEAD'])
         .split('\n')
         .map((l) => l.slice(0, 6));
-      expect(modes).toEqual(['100644', '100644', '100644']);
+      expect(modes).toEqual(Array(5).fill('100644')); // 底稿 2 个 + 新增 3 个
+      expect(modes.length).toBe(5);
     });
   });
+});
+
+describe('R21-3.1 / R21-3.6 kit 管理路径:以 HEAD 树为底稿,用户文件保留,delete 只能落在管理命名空间内', () => {
+  async function userCommit(w: Awaited<ReturnType<typeof makeWorld>>, msg: string): Promise<void> {
+    git(w, ['add', '-A']);
+    git(w, ['commit', '-q', '-m', msg]);
+  }
+
+  it('情形①接受的用户新增文件(管理命名空间之内 rules/user.md、之外 notes/x.md)在下一次 kit 提交后原样保留(树、工作树、状态都干净)', async () => {
+    const w = await makeWorld('pc-keep-');
+    await setupRepo(w);
+    await writeUserFile(w, 'notes/x.md', 'mine\n');
+    await writeUserFile(w, 'rules/user.md', 'also mine\n');
+    await userCommit(w, 'user adds files');
+    const r = await withLock(w, (locks) =>
+      commitPersonal(repoDeps(w), locks, spec('2', NEXT_FILES)),
+    );
+    expect(r.status).toBe('committed');
+    const names = git(w, ['ls-tree', '-r', '--name-only', 'HEAD']).split('\n');
+    expect(names).toEqual(
+      expect.arrayContaining(['notes/x.md', 'rules/user.md', 'rules/new.md', 'rules/base.md']),
+    );
+    expect(await readUserFile(w, 'notes/x.md')).toBe('mine\n');
+    expect(await readUserFile(w, 'rules/user.md')).toBe('also mine\n');
+    expect(git(w, ['--no-optional-locks', 'status', '--porcelain', '--ignored'])).toBe('');
+    // 再来一次(只 upsert 一个文件)仍保留
+    const r2 = await withLock(w, (locks) =>
+      commitPersonal(repoDeps(w), locks, spec('3', [{ path: 'rules/new.md', content: 'v2\n' }])),
+    );
+    expect(r2.status).toBe('committed');
+    expect(await readUserFile(w, 'notes/x.md')).toBe('mine\n');
+  });
+
+  it('显式 delete 管理路径内的文件生效;删一个不存在的路径视为已删(幂等)', async () => {
+    const w = await makeWorld('pc-del-');
+    await setupRepo(w);
+    const r = await withLock(w, (locks) =>
+      commitPersonal(
+        repoDeps(w),
+        locks,
+        spec('2', [], 'transition', [ID1], ['rules/base.md', 'rules/never-existed.md']),
+      ),
+    );
+    expect(r.status).toBe('committed');
+    expect(git(w, ['ls-tree', '-r', '--name-only', 'HEAD'])).toBe(`lifecycle/${ID1}.json`);
+    expect(await exists(path.join(w.h.repoDir, 'rules/base.md'))).toBe(false);
+  });
+
+  it.each(['notes/x.md', 'README.md', '.git/config', 'rules/../notes/x.md', 'rules', ''])(
+    '试图 delete 非管理路径或畸形路径(%s)→ TreeSpecError,什么都没动',
+    async (target) => {
+      const w = await makeWorld('pc-delbad-');
+      await setupRepo(w);
+      await writeUserFile(w, 'notes/x.md', 'mine\n');
+      await userCommit(w, 'user adds');
+      const before = await snapshot(w);
+      await expect(
+        withLock(w, (locks) =>
+          commitPersonal(repoDeps(w), locks, spec('2', [], 'transition', [ID1], [target])),
+        ),
+      ).rejects.toBeInstanceOf(TreeSpecError);
+      expect(await snapshot(w)).toEqual(before);
+    },
+  );
 });

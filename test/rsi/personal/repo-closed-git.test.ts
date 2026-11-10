@@ -8,6 +8,8 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import { exists, readText } from '../../../src/io/read-fs.js';
 import * as safe from '../../../src/io/safe-fs.js';
 import { commitPersonal } from '../../../src/rsi/personal/commit.js';
+import { ensureEmptyDir } from '../../../src/rsi/personal/home-state.js';
+import { createClosedGit } from '../../../src/rsi/personal/repo-check.js';
 import { homeSnapshot } from '../../signals/helpers.js';
 import {
   BASE_FILES,
@@ -20,6 +22,7 @@ import {
   withLock,
   writeUserFile,
   makeWorld,
+  NOW,
   type World,
   slowTests,
 } from './repo-helpers.js';
@@ -239,6 +242,17 @@ describe('R21-3.6 封闭 git 配置', () => {
     vi.unstubAllEnvs();
     expect(git(w, ['rev-parse', 'refs/heads/rsi'])).toBe(r.commit);
     expect(await exists(path.join(w.dir, 'nowhere'))).toBe(false); // 对象没有写到继承来的对象目录
+  });
+
+  it('R21-3.6 封闭执行不读替换对象(GIT_NO_REPLACE_OBJECTS):refs/replace 对它不生效', async () => {
+    const w = await makeWorld('p-replace-');
+    await setupRepo(w);
+    const a = git(w, ['hash-object', '-w', '--stdin'], { input: 'A\n' });
+    const b = git(w, ['hash-object', '-w', '--stdin'], { input: 'B\n' });
+    git(w, ['replace', a, b]);
+    expect(git(w, ['cat-file', '-p', a])).toBe('B'); // 对照:普通 git 看到的是被替换后的内容
+    const closed = createClosedGit(w.h, await ensureEmptyDir(w.h), () => NOW);
+    expect(closed.run(['cat-file', '-p', a]).stdout).toBe('A\n');
   });
 
   it('R21-3.6 提交内容原样入库(--no-filters;不做换行转换),相同输入得到相同树', async () => {

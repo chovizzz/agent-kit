@@ -124,11 +124,12 @@ export const BASE_FILES = [
 
 export function spec(
   txn: string,
-  files: TreeSpec['files'],
+  files: TreeSpec['upserts'],
   kind: TreeSpec['kind'] = 'transition',
   ids: readonly string[] = [ID1],
+  deletes: readonly string[] = [],
 ): TreeSpec {
-  return { kind, txnId: txn.padEnd(16, '0'), candidateIds: ids, files };
+  return { kind, txnId: txn.padEnd(16, '0'), candidateIds: ids, upserts: files, deletes };
 }
 
 /** 建仓并提交第一棵树(BASE_FILES);返回提交结果的 commit */

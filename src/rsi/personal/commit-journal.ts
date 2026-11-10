@@ -13,6 +13,7 @@
  * bootstrap(W0-5):四个 phase `planned → initialized → committed → recorded`,不复用五 phase 的恢复谓词;恢复按观测到的引用值续做,任何不一致 → `personal_repo_invalid`(保留 journal)。
  */
 import { createHash } from 'node:crypto';
+import * as path from 'node:path';
 import { PersonalHeadSchema, type PersonalCommitJournal } from '../../contracts/rsi-personal.js';
 import { readDir, lstat } from '../../io/read-fs.js';
 import {
@@ -51,6 +52,8 @@ export interface OpCtx {
   now: () => Date;
   /** 当前 `[rsi] repo` 的 `owner_repo_fp` */
   ownerRepoFp: string;
+  /** 测试注入:当前 uid(缺省 `process.getuid()`) */
+  uid?: number;
   onStep?: StepHook;
 }
 
@@ -130,7 +133,7 @@ function indexEquals(git: ClosedGit, sha: string | null): boolean {
 }
 
 export function observeRepo(git: ClosedGit, j: PersonalCommitJournal): Observation {
-  const sym = git.run(['symbolic-ref', '-q', 'HEAD'], { readOnly: true });
+  const sym = gitOut(git, ['symbolic-ref', '-q', 'HEAD'], { readOnly: true });
   const st = statusEntries(git);
   if (st === null)
     throw new PersonalGitError('status', {
@@ -141,7 +144,7 @@ export function observeRepo(git: ClosedGit, j: PersonalCommitJournal): Observati
       timedOut: false,
     });
   return {
-    headSymbolic: sym.status === 0 && sym.stdout.trim() === j.ref,
+    headSymbolic: sym === j.ref,
     ref: revParse(git, j.ref),
     indexIsOld: indexEquals(git, j.old_head),
     indexIsNew: indexEquals(git, j.new_commit),
@@ -244,6 +247,29 @@ async function dirState(p: string): Promise<'missing' | 'empty' | 'nonempty'> {
   }
 }
 
+/**
+ * `git init` 之前的校验(planned 且目录缺失 / 为空):目录之下的每一级祖先(HOME 之下)都不是符号链接,目录自身是真实目录、属主为当前 uid、权限恰为 0700、确为空。
+ * 任何一项不满足都不 init(否则目录被换成指向外部的链接时,`git init` 会往外写)。
+ */
+async function preInitCheck(c: OpCtx): Promise<RepoInvalidWhy | null> {
+  const segs = path.relative(c.h.home, c.h.repoDir).split(path.sep);
+  let cur = c.h.home;
+  for (const seg of segs.slice(0, -1)) {
+    cur = path.join(cur, seg);
+    const a = await lstat(cur).catch(() => null);
+    if (a !== null && a.isSymbolicLink()) return 'ancestor_symlink';
+  }
+  const st = await lstat(c.h.repoDir).catch(() => null);
+  if (st === null) return 'repo_missing';
+  if (st.isSymbolicLink()) return 'repo_dir_symlink';
+  if (!st.isDirectory()) return 'repo_dir_not_directory';
+  const uid = c.uid ?? (typeof process.getuid === 'function' ? process.getuid() : undefined);
+  if (uid !== undefined && st.uid !== uid) return 'owner';
+  if ((st.mode & 0o777) !== 0o700) return 'mode';
+  if ((await readDir(c.h.repoDir)).length !== 0) return 'repo_dir_not_empty';
+  return null;
+}
+
 /** 全新建仓(调用方已用 `probeFirstTime` 证明首次、并持锁) */
 export async function bootstrapRepo(c: OpCtx): Promise<BootstrapResult> {
   const planned: PersonalCommitJournal = {
@@ -308,6 +334,8 @@ async function continueBootstrap(c: OpCtx, start: PersonalCommitJournal): Promis
       await assertLocks(c);
       if (dir === 'missing') await makeRepoDir(c.h);
       await c.onStep?.('bootstrap:dir_ready');
+      const bad = await preInitCheck(c);
+      if (bad !== null) return { status: 'invalid', why: bad };
       const r = c.git.init();
       if (r.status !== 0) throw new PersonalGitError('init', r);
     }

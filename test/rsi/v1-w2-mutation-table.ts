@@ -48,6 +48,7 @@ const LOCK = 'rsi/personal/repo-personal-lock.test.ts';
 const HOMEST = 'rsi/personal/repo-home-state.test.ts';
 const COMMITT = 'rsi/personal/repo-commit.test.ts';
 const LINT = 'lint/personal-single-git-exit.test.ts';
+const GITFAIL = 'rsi/personal/repo-gitfail.test.ts';
 
 const MATRIX_CASE = '恢复后一致、不出现 personal_repo_diverged';
 const WINDOW_CASE = '② 切到指向同一提交的另一分支';
@@ -529,7 +530,9 @@ export const V1_W2_MUTATIONS: readonly V1W2Mutation[] = [
   {
     id: 'tree-duplicate-paths-allowed',
     clause: 'R21-3.1:同一路径重复必须拒绝',
-    edits: [{ file: COMMIT, anchor: " || kind === 'file'", replacement: '' }],
+    edits: [
+      { file: COMMIT, anchor: "kind === 'file' && seen.src === 'upsert'", replacement: 'false' },
+    ],
     tests: [COMMITT],
     expectRed: ['同一路径重复'],
     mustKill: ['同一路径重复'],
@@ -774,6 +777,151 @@ export const V1_W2_MUTATIONS: readonly V1W2Mutation[] = [
     tests: [SITU],
     expectRed: ['索引标志(assume-unchanged)藏起了工作树改动'],
     mustKill: ['索引标志(assume-unchanged)藏起了工作树改动'],
+  },
+
+  // ---- 独立评审后追加(底稿提交、init 之前校验、info/attributes、替换对象、先锁后写、读取三态) ----
+  {
+    id: 'tree-whole-replacement',
+    clause: 'R21-3.6:提交以已接受 HEAD 的树为底稿(整棵替换会删掉情形①接受的用户文件)',
+    edits: [
+      {
+        file: COMMIT,
+        anchor: 'const base = readBaseTree(git, oldHead);',
+        replacement: 'const base: { path: string; sha: string }[] = [];',
+      },
+    ],
+    tests: [COMMITT],
+    expectRed: ['情形①接受的用户新增文件', '显式 delete 管理路径内的文件生效'],
+    mustKill: ['情形①接受的用户新增文件'],
+  },
+  {
+    id: 'delete-unmanaged-allowed',
+    clause: 'R21-3.6:delete 只许落在 kit 管理的命名空间内(非管理路径被改 / 删 → 拒绝提交)',
+    edits: [
+      {
+        file: COMMIT,
+        anchor: 'dsegs.length < 2 || !TOP_DIRS.has(dsegs[0] as string)',
+        replacement: 'false',
+      },
+    ],
+    tests: [COMMITT],
+    expectRed: ['试图 delete 非管理路径或畸形路径'],
+    mustKill: ['试图 delete 非管理路径或畸形路径'],
+  },
+  {
+    id: 'bootstrap-preinit-gate-removed',
+    clause: 'W0-5:git init 之前校验目录(链接 / 属主 / 权限 / 祖先 / 为空),不满足不 init',
+    edits: [
+      {
+        file: JOURNAL,
+        anchor: "if (bad !== null) return { status: 'invalid', why: bad };",
+        replacement: 'void bad;',
+      },
+    ],
+    tests: [BOOT],
+    expectRed: ['目录被换成指向外部空目录的符号链接'],
+    mustKill: ['目录被换成指向外部空目录的符号链接'],
+  },
+  {
+    id: 'preinit-dir-symlink-unchecked',
+    clause: 'W0-5:init 之前目录自身不得是符号链接',
+    edits: [{ file: JOURNAL, anchor: "return 'repo_dir_symlink';", replacement: 'void 0;' }],
+    tests: [BOOT],
+    expectRed: ['目录被换成指向外部空目录的符号链接'],
+    mustKill: ['目录被换成指向外部空目录的符号链接'],
+  },
+  {
+    id: 'preinit-ancestor-symlink-unchecked',
+    clause: 'W0-5:init 之前祖先目录不得有符号链接',
+    edits: [{ file: JOURNAL, anchor: "return 'ancestor_symlink';", replacement: 'void 0;' }],
+    tests: [BOOT],
+    expectRed: ['祖先目录(.local/share/agent-kit)被换成符号链接'],
+    mustKill: ['祖先目录(.local/share/agent-kit)被换成符号链接'],
+  },
+  {
+    id: 'preinit-mode-unchecked',
+    clause: 'W0-5:init 之前目录权限恰为 0700',
+    edits: [{ file: JOURNAL, anchor: "return 'mode';", replacement: 'void 0;' }],
+    tests: [BOOT],
+    expectRed: ['目录权限被放宽(0755)'],
+    mustKill: ['目录权限被放宽(0755)'],
+  },
+  {
+    id: 'preinit-owner-unchecked',
+    clause: 'W0-5:init 之前目录属主为当前 uid',
+    edits: [{ file: JOURNAL, anchor: "return 'owner';", replacement: 'void 0;' }],
+    tests: [BOOT],
+    expectRed: ['目录属主不是当前 uid'],
+    mustKill: ['目录属主不是当前 uid'],
+  },
+  {
+    id: 'struct-info-attributes-unchecked',
+    clause: 'R21-3.4 补充:.git/info/attributes 存在(任何形态)→ personal_repo_invalid',
+    edits: noop("return fail('info_attributes');"),
+    tests: [STRUCT],
+    expectRed: ['.git/info/attributes 是符号链接(哪怕悬空)', '→ info_attributes'],
+    mustKill: ['.git/info/attributes 是符号链接(哪怕悬空)'],
+  },
+  {
+    id: 'struct-grafts-unchecked',
+    clause: 'R21-3.4 补充:.git/info/grafts 存在 → personal_repo_invalid',
+    edits: noop("return fail('grafts');"),
+    tests: [STRUCT],
+    expectRed: ['.git/info/grafts → grafts'],
+    mustKill: ['.git/info/grafts → grafts'],
+  },
+  {
+    id: 'struct-shallow-unchecked',
+    clause: 'R21-3.4 补充:.git/shallow 存在 → personal_repo_invalid',
+    edits: noop("return fail('shallow');"),
+    tests: [STRUCT],
+    expectRed: ['.git/shallow → shallow'],
+    mustKill: ['.git/shallow → shallow'],
+  },
+  {
+    id: 'struct-replace-refs-unchecked',
+    clause: 'R21-3.4 补充:refs/replace/* 存在 → personal_repo_invalid',
+    edits: noop("return fail('replace_refs');"),
+    tests: [STRUCT],
+    expectRed: ['refs/replace/* 存在 → replace_refs'],
+    mustKill: ['refs/replace/* 存在 → replace_refs'],
+  },
+  {
+    id: 'no-replace-objects-env-removed',
+    clause: 'R21-3.6 补充:封闭 git 调用设 GIT_NO_REPLACE_OBJECTS=1',
+    edits: [{ file: CHECK, anchor: "GIT_NO_REPLACE_OBJECTS: '1',", replacement: '// 不设置' }],
+    tests: [CLOSED],
+    expectRed: ['封闭执行不读替换对象'],
+    mustKill: ['封闭执行不读替换对象'],
+  },
+  {
+    id: 'lock-checked-after-init-writes',
+    clause: 'R20-5.5:先复核锁,再做任何写入初始化(丢锁 → 不创建任何目录)',
+    edits: [
+      {
+        file: COMMIT,
+        anchor:
+          'await assertLockHandles(locks); // 先复核锁,再做任何写入初始化(丢锁 → 不创建任何目录)',
+        replacement: '// 不复核',
+      },
+    ],
+    tests: [BOOT],
+    expectRed: ['锁已丢 → 抛 lock_lost,没有创建任何目录'],
+    mustKill: ['锁已丢 → 抛 lock_lost,没有创建任何目录'],
+  },
+  {
+    id: 'git-read-failure-as-absent',
+    clause: '读取失败 ≠ 不存在:revParse / gitOut 三态,读取失败抛错',
+    edits: [
+      {
+        file: CHECK,
+        anchor: "throw new PersonalGitError(args[0] ?? 'git', r);",
+        replacement: 'return null;',
+      },
+    ],
+    tests: [GITFAIL],
+    expectRed: ['git 启动失败(PATH 里没有 git)'],
+    mustKill: ['git 启动失败(PATH 里没有 git)'],
   },
 
   // ---- 单一 git 出口(W0-11):源码里多出一个 runSync 引用 → 红 ----

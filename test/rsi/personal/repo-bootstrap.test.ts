@@ -257,3 +257,76 @@ describe('W0-5 bootstrap 恢复:结构校验先行、观测核对、丢锁即停
     expect(o.kind).toBe('ready');
   });
 });
+
+describe('W0-5 git init 之前的校验(planned + 目录缺失 / 为空):不满足就不 init', () => {
+  /** 崩溃在建目录之后、init 之前;返回 world */
+  async function crashedAtDirReady(): Promise<World> {
+    const w = await makeWorld('p-b-preinit-');
+    await expect(boot(w, crashAt('bootstrap:dir_ready'))).rejects.toBeInstanceOf(InjectedCrash);
+    return w;
+  }
+
+  it('对照:目录合格 → 续做成功', async () => {
+    const w = await crashedAtDirReady();
+    expect((await boot(w)).kind).toBe('ready');
+  });
+
+  it('目录被换成指向外部空目录的符号链接 → personal_repo_invalid,外部目录里没有 .git', async () => {
+    const w = await crashedAtDirReady();
+    const outside = path.join(w.dir, 'outside');
+    await safe.mkdirp(w.io, outside, 0o700);
+    await safe.rename(w.io, w.h.repoDir, path.join(w.dir, 'moved-away'));
+    await safe.symlink(w.io, outside, w.h.repoDir);
+    expect(await boot(w)).toMatchObject({
+      kind: 'invalid',
+      why: 'repo_dir_symlink',
+      breaker: 'personal_repo_invalid',
+    });
+    expect(await exists(path.join(outside, '.git'))).toBe(false);
+    expect(await readJournal(w.h)).toMatchObject({ kind: 'ok' });
+  });
+
+  it('祖先目录(.local/share/agent-kit)被换成符号链接 → ancestor_symlink,不 init', async () => {
+    const w = await crashedAtDirReady();
+    const share = path.join(w.home, '.local', 'share', 'agent-kit');
+    const moved = path.join(w.dir, 'moved-share');
+    await safe.rename(w.io, share, moved);
+    await safe.symlink(w.io, moved, share);
+    expect(await boot(w)).toMatchObject({ kind: 'invalid', why: 'ancestor_symlink' });
+    expect(await exists(path.join(moved, 'personal', '.git'))).toBe(false);
+  });
+
+  it('目录权限被放宽(0755)→ mode,不 init', async () => {
+    const w = await crashedAtDirReady();
+    await safe.chmod(w.io, w.h.repoDir, 0o755);
+    expect(await boot(w)).toMatchObject({ kind: 'invalid', why: 'mode' });
+    expect(await exists(path.join(w.h.repoDir, '.git'))).toBe(false);
+  });
+
+  it('目录属主不是当前 uid → owner,不 init', async () => {
+    const w = await crashedAtDirReady();
+    const uid = process.getuid?.() ?? 0;
+    const o = await withLock(w, (locks) =>
+      openPersonalRepo(repoDeps(w, { uid: uid + 1 }), locks, { bootstrap: true }),
+    );
+    expect(o).toMatchObject({ kind: 'invalid', why: 'owner' });
+    expect(await exists(path.join(w.h.repoDir, '.git'))).toBe(false);
+  });
+});
+
+describe('先复核锁,再做任何写入初始化', () => {
+  it('锁已丢 → 抛 lock_lost,没有创建任何目录(状态目录、空钩子目录、私有仓库目录)', async () => {
+    const w = await makeWorld('p-b-lostfirst-');
+    const locks = {
+      personal: {
+        assertHeld: async (): Promise<void> => {
+          throw new RsiLockError('lock_lost');
+        },
+      },
+    };
+    await expect(openPersonalRepo(repoDeps(w), locks, { bootstrap: true })).rejects.toMatchObject({
+      kind: 'lock_lost',
+    });
+    expect(await exists(path.join(w.home, '.local'))).toBe(false);
+  });
+});

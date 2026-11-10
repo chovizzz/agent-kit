@@ -3,12 +3,13 @@
  *
  * 调用方必须持 `personal/lock`(正常路径另持 `rsi/lock`,缩减入口下不持)。流程(每个提交点前 `assertHeld`,journal 见 `commit-journal.ts`):
  *   打开仓库(结构校验 R21-3.4 → journal 恢复 R21-3.6a → HEAD 判定 R21-3.5;只在情形①才继续,否则返回 `deferred`,R21-9.3a)
- *   → `hash-object -w --no-filters`、`mktree` 重建**整棵**目标树(候选集合 + 内容寻址快照)→ journal `planned`
+ *   → 以已接受 HEAD 的树为底稿,叠加 kit 管理路径的 upsert / 显式 delete(底稿里其它路径——含情形①接受的用户文件——原样保留),
+ *     `hash-object -w --no-filters`、`mktree -z` 重建目标树 → journal `planned`
  *   → `commit-tree` → journal `objects_written` → `update-ref refs/heads/rsi <新> <旧>`(带期望旧值的原子比较交换)→ journal `ref_updated`
  *   → `read-tree -m -u <旧> <新>`(两树合并同步工作树,**不用 `--reset`**:有冲突的未提交改动时 git 拒绝覆盖,按 `personal_repo_diverged` 处理)
  *   → journal `worktree_synced` → `recorded` → 写 `head.json` → 删 journal。
  * 不依赖 `git revert`,不用 `add` / `commit` 的高层路径;作者与提交者固定为 `RSI_PERSONAL_AUTHOR`。
- * 树约束(R21-3.1):顶层只许布局目录;任何位置不得出现 `.` 开头的名字(含 `.gitattributes` / `.gitmodules` / `.git`),文件一律 `100644`(无符号链接、无可执行位)。
+ * 树约束(R21-3.1):upsert / delete 的顶层只许布局目录(= kit 管理路径,见 {@link KIT_MANAGED_TOP_DIRS});路径段不得以 `.` 开头(含 `.gitattributes` / `.gitmodules` / `.git`),文件一律 `100644`。
  */
 import { PersonalHeadSchema } from '../../contracts/rsi-personal.js';
 import type { RsiAutoPauseReason } from '../../contracts/rsi.js';
@@ -70,8 +71,13 @@ export interface TreeSpec {
   /** journal 的 `txn_id`:`sha256(kind, candidate_ids, old_head, target_tree)` 前 16 位(W1 `ids.ts` 派生;崩溃重放得同一 id) */
   txnId: string;
   candidateIds: readonly string[];
-  /** 完整的目标树(不是增量) */
-  files: readonly TreeFile[];
+  /**
+   * 以已接受 HEAD 的树为底稿的**增量**:kit 管理路径(顶层在 {@link KIT_MANAGED_TOP_DIRS} 内)的 upsert。
+   * 底稿里没被点名的路径(含情形①接受的用户新增文件、任何非管理路径)原样保留。
+   */
+  upserts: readonly TreeFile[];
+  /** 显式 delete:只许落在 kit 管理的命名空间内;不存在的路径视为已删(崩溃重做幂等) */
+  deletes?: readonly string[];
   message?: string;
 }
 
@@ -79,8 +85,11 @@ export class TreeSpecError extends Error {
   readonly code = 'RSI_PERSONAL_TREE_SPEC';
 }
 
-/** R21-3.1 布局的顶层目录 */
-const TOP_DIRS: ReadonlySet<string> = new Set([
+/**
+ * **kit 管理路径** = R21-3.1 布局的顶层目录(整个子树);不在其中的路径(例如用户新增的 `notes/x.md`)不归 kit 管理:
+ * kit 提交绝不修改或删除它们(upsert / delete 指向它们 → {@link TreeSpecError})。
+ */
+export const KIT_MANAGED_TOP_DIRS: readonly string[] = Object.freeze([
   'rules',
   'pitfalls',
   'methods',
@@ -90,26 +99,39 @@ const TOP_DIRS: ReadonlySet<string> = new Set([
   'cases',
   'lifecycle',
 ]);
-/** 每一段必须以字母数字开头(所以 `.gitattributes` / `.gitmodules` / `.git` / `.` / `..` 都不可能出现) */
+const TOP_DIRS: ReadonlySet<string> = new Set(KIT_MANAGED_TOP_DIRS);
+/** upsert / delete 的每一段必须以字母数字开头(所以 `.gitattributes` / `.gitmodules` / `.git` / `.` / `..` 都不可能出现) */
 const SEGMENT_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
+type Leaf = { content: string } | { sha: string };
 interface DirNode {
-  files: Map<string, string>;
+  files: Map<string, Leaf>;
   dirs: Map<string, DirNode>;
 }
 
-function validateSpec(spec: TreeSpec): DirNode {
+/** 底稿:已接受 HEAD 的树里的全部文件(`ls-tree -r`);kit 自己的结构校验保证全是 100644 */
+function readBaseTree(git: ClosedGit, head: string): { path: string; sha: string }[] {
+  const out = gitMust(git, 'ls-tree', ['ls-tree', '-r', '-z', '--full-tree', head], {
+    readOnly: true,
+  });
+  const res: { path: string; sha: string }[] = [];
+  for (const ent of out.split('\0').filter((x) => x !== '')) {
+    const tab = ent.indexOf('\t');
+    const [mode, , sha] = ent.slice(0, tab).split(' ');
+    if (mode !== '100644' || sha === undefined) throw new Error(`底稿里有非 100644 条目:${ent}`);
+    res.push({ path: ent.slice(tab + 1), sha });
+  }
+  return res;
+}
+
+/** 底稿 + 增量 → 目标树节点。所有路径校验都在写任何对象之前 */
+function buildTarget(base: readonly { path: string; sha: string }[], spec: TreeSpec): DirNode {
   if (!/^[0-9a-f]{16}$/.test(spec.txnId)) throw new TreeSpecError('txnId 必须是 16 位十六进制');
   const root: DirNode = { files: new Map(), dirs: new Map() };
-  // 每一层的命名空间不区分大小写(大小写不敏感的卷上 `A` 与 `a` 是同一个名字):前缀(小写)→ 第一次见到的确切写法与类型
-  const names = new Map<string, { exact: string; kind: 'file' | 'dir' }>();
-  for (const f of spec.files) {
-    const segs = f.path.split('/');
-    if (segs.length < 2) throw new TreeSpecError(`顶层不许放文件:${f.path}`);
-    if (!TOP_DIRS.has(segs[0] as string)) throw new TreeSpecError(`不在 R21-3.1 布局内:${f.path}`);
-    for (const s of segs) {
-      if (!SEGMENT_RE.test(s)) throw new TreeSpecError(`路径段不合法:${f.path}`);
-    }
+  // 每一层的命名空间不区分大小写(大小写不敏感的卷上 `A` 与 `a` 是同一个名字):前缀(小写)→ 第一次见到的确切写法、类型与来源
+  const names = new Map<string, { exact: string; kind: 'file' | 'dir'; src: 'base' | 'upsert' }>();
+  const place = (p: string, leaf: Leaf, src: 'base' | 'upsert'): void => {
+    const segs = p.split('/');
     let node = root;
     let prefix = '';
     for (const [i, seg] of segs.entries()) {
@@ -117,12 +139,13 @@ function validateSpec(spec: TreeSpec): DirNode {
       const kind = i === segs.length - 1 ? 'file' : 'dir';
       const seen = names.get(prefix.toLowerCase());
       if (seen !== undefined) {
-        if (seen.exact !== prefix) throw new TreeSpecError(`大小写不同的同名路径:${f.path}`);
-        if (seen.kind !== kind || kind === 'file') {
-          throw new TreeSpecError(`重复路径或文件与目录同名:${f.path}`);
+        if (src === 'upsert') {
+          if (seen.exact !== prefix) throw new TreeSpecError(`大小写不同的同名路径:${p}`);
+          if (seen.kind !== kind) throw new TreeSpecError(`文件与目录同名:${p}`);
+          if (kind === 'file' && seen.src === 'upsert') throw new TreeSpecError(`重复路径:${p}`);
         }
       } else {
-        names.set(prefix.toLowerCase(), { exact: prefix, kind });
+        names.set(prefix.toLowerCase(), { exact: prefix, kind, src });
       }
       if (kind === 'dir') {
         let next = node.dirs.get(seg);
@@ -132,28 +155,56 @@ function validateSpec(spec: TreeSpec): DirNode {
         }
         node = next;
       } else {
-        node.files.set(seg, f.content);
+        node.files.set(seg, leaf);
+        if (names.get(prefix.toLowerCase())?.src === 'base' && src === 'upsert') {
+          names.set(prefix.toLowerCase(), { exact: prefix, kind, src });
+        }
       }
     }
+  };
+
+  const gone = new Set<string>();
+  for (const d of spec.deletes ?? []) {
+    const dsegs = d.split('/');
+    if (dsegs.length < 2 || !TOP_DIRS.has(dsegs[0] as string)) {
+      throw new TreeSpecError(`不许删除非 kit 管理路径:${d}`);
+    }
+    for (const s of dsegs) {
+      if (!SEGMENT_RE.test(s)) throw new TreeSpecError(`路径段不合法:${d}`);
+    }
+    gone.add(d);
+  }
+  for (const b of base) {
+    if (!gone.has(b.path)) place(b.path, { sha: b.sha }, 'base');
+  }
+  for (const f of spec.upserts) {
+    const segs = f.path.split('/');
+    if (segs.length < 2) throw new TreeSpecError(`顶层不许放文件:${f.path}`);
+    if (!TOP_DIRS.has(segs[0] as string)) throw new TreeSpecError(`不在 R21-3.1 布局内:${f.path}`);
+    for (const s of segs) {
+      if (!SEGMENT_RE.test(s)) throw new TreeSpecError(`路径段不合法:${f.path}`);
+    }
+    place(f.path, { content: f.content }, 'upsert');
   }
   return root;
 }
 
-/** 写 blob(`--no-filters`)与各层 tree,返回根树 sha。对象写进 odb 但没有引用,崩溃无害。 */
+/** 写新 blob(`--no-filters`)与各层 tree,返回根树 sha(底稿条目复用原 sha)。对象写进 odb 但没有引用,崩溃无害。 */
 function writeTree(git: ClosedGit, node: DirNode): string {
-  const lines: string[] = [];
-  for (const [name, content] of node.files) {
-    const sha = gitMust(git, 'hash-object', ['hash-object', '-w', '--no-filters', '--stdin'], {
-      input: content,
-    });
-    lines.push(`100644 blob ${sha}\t${name}`);
+  const entries: string[] = [];
+  for (const [name, leaf] of node.files) {
+    const sha =
+      'sha' in leaf
+        ? leaf.sha
+        : gitMust(git, 'hash-object', ['hash-object', '-w', '--no-filters', '--stdin'], {
+            input: leaf.content,
+          });
+    entries.push(`100644 blob ${sha}\t${name}\0`);
   }
   for (const [name, child] of node.dirs) {
-    lines.push(`040000 tree ${writeTree(git, child)}\t${name}`);
+    entries.push(`040000 tree ${writeTree(git, child)}\t${name}\0`);
   }
-  return gitMust(git, 'mktree', ['mktree'], {
-    input: lines.length === 0 ? '' : `${lines.join('\n')}\n`,
-  });
+  return gitMust(git, 'mktree', ['mktree', '-z'], { input: entries.join('') });
 }
 
 // ---------------------------------------------------------------------------
@@ -178,8 +229,14 @@ const invalid = (why: string): OpenResult & { kind: 'invalid' } => ({
   breaker: PERSONAL_REPO_INVALID,
 });
 
+async function assertLockHandles(locks: PersonalLocks): Promise<void> {
+  await locks.personal.assertHeld();
+  if (locks.rsi !== undefined) await locks.rsi.assertHeld();
+}
+
 async function makeCtx(deps: PersonalRepoDeps, locks: PersonalLocks): Promise<OpCtx> {
   const now = deps.now ?? ((): Date => new Date());
+  await assertLockHandles(locks); // 先复核锁,再做任何写入初始化(丢锁 → 不创建任何目录)
   const emptyDir = await ensureEmptyDir(deps.h);
   return {
     h: deps.h,
@@ -187,6 +244,7 @@ async function makeCtx(deps: PersonalRepoDeps, locks: PersonalLocks): Promise<Op
     locks,
     now,
     ownerRepoFp: deps.ownerRepoFp,
+    ...(deps.uid !== undefined ? { uid: deps.uid } : {}),
     ...(deps.onStep !== undefined ? { onStep: deps.onStep } : {}),
   };
 }
@@ -274,7 +332,11 @@ export type CommitResult =
   | { status: 'absent' }
   | { status: 'deferred'; reason: 'personal_repo_diverged' | 'personal_owner_changed'; why: string }
   | { status: 'invalid'; why: string; breaker: typeof PERSONAL_REPO_INVALID }
-  /** `update-ref` 的期望旧值不符(并发的第二个提交者):没有任何引用 / 索引 / 工作树被改 */
+  /**
+   * `update-ref` 的期望旧值不符(并发的第二个提交者):没有任何引用 / 索引 / 工作树被改。
+   * **注意**:本提交的在途 journal 可能仍留在盘上(`objects_written`),下一次恢复按 R21-3.6a 观测到「ref 是第三个值」→ `personal_repo_diverged`;
+   * 它不是可以直接重试的干净失败(若并发者是持锁的 kit 提交者,它会先丢弃该 journal 而不留下)。
+   */
   | { status: 'cas_failed'; expected: string; actual: string | null };
 
 export async function commitPersonal(
@@ -282,7 +344,6 @@ export async function commitPersonal(
   locks: PersonalLocks,
   spec: TreeSpec,
 ): Promise<CommitResult> {
-  const tree = validateSpec(spec);
   const open = await openPersonalRepo(deps, locks);
   if (open.kind === 'absent') return { status: 'absent' };
   if (open.kind === 'invalid') {
@@ -295,7 +356,8 @@ export async function commitPersonal(
   const { git } = ctx;
 
   await assertLocks(ctx);
-  const targetTree = writeTree(git, tree);
+  const base = readBaseTree(git, oldHead);
+  const targetTree = writeTree(git, buildTarget(base, spec));
   let j = await writePhase(
     ctx,
     {

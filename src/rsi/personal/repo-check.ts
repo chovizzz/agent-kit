@@ -61,6 +61,8 @@ export function createClosedGit(
       GIT_CONFIG_NOSYSTEM: '1',
       GIT_CONFIG_GLOBAL: EMPTY_CONFIG_FILE,
       GIT_TERMINAL_PROMPT: '0',
+      // 替换对象(refs/replace、grafts)会让对象库的内容与提交 / 树的 sha 脱节:封闭执行一律不读
+      GIT_NO_REPLACE_OBJECTS: '1',
       GIT_AUTHOR_NAME: RSI_PERSONAL_AUTHOR.name,
       GIT_AUTHOR_EMAIL: RSI_PERSONAL_AUTHOR.email,
       GIT_AUTHOR_DATE: date,
@@ -120,16 +122,31 @@ export function createClosedGit(
   };
 }
 
-/** 成功(退出码 0)时返回去掉末尾换行的 stdout,否则 null */
+/**
+ * 三态读取:退出码 0 → 去掉末尾换行的 stdout(存在);退出码 1 → null(**确认不存在**,如 `rev-parse --verify -q` 的缺失、`symbolic-ref -q` 的 detached);
+ * 其它一切(启动失败、超时、被信号杀死、128 等异常退出)→ 抛 {@link PersonalGitError}——读取失败绝不当成「不存在」继续。
+ */
 export function gitOut(git: ClosedGit, args: readonly string[], opts?: GitRunOpts): string | null {
   const r = git.run(args, opts);
-  return r.status === 0 ? r.stdout.replace(/\n$/, '') : null;
+  if (r.status === 0) return r.stdout.replace(/\n$/, '');
+  if (r.status === 1 && !r.timedOut && r.spawnError === undefined) return null;
+  throw new PersonalGitError(args[0] ?? 'git', r);
 }
 
-/** `rev-parse --verify -q <spec>`:存在则返回 40 位十六进制,否则 null */
+/** `rev-parse --verify -q <spec>`:存在 → 40 位十六进制;确认不存在 → null;读取失败 → 抛 */
 export function revParse(git: ClosedGit, spec: string): string | null {
   const out = gitOut(git, ['rev-parse', '--verify', '-q', spec], { readOnly: true });
-  return out !== null && /^[0-9a-f]{40}$/.test(out) ? out : null;
+  if (out === null) return null;
+  if (!/^[0-9a-f]{40}$/.test(out)) {
+    throw new PersonalGitError('rev-parse', {
+      status: 0,
+      signal: null,
+      stdout: out,
+      stderr: '',
+      timedOut: false,
+    });
+  }
+  return out;
 }
 
 export class PersonalGitError extends Error {
@@ -176,6 +193,13 @@ export type RepoInvalidWhy =
   | 'config_unreadable'
   | 'config_key'
   | 'remote'
+  | 'ancestor_symlink'
+  | 'repo_dir_not_empty'
+  | 'git_read_failed'
+  | 'info_attributes'
+  | 'grafts'
+  | 'shallow'
+  | 'replace_refs'
   | 'tree_unreadable'
   | 'tree_gitattributes'
   | 'tree_gitmodules'
@@ -223,7 +247,9 @@ export async function checkRepoStructure(
 ): Promise<StructureResult> {
   try {
     return await checkStructureInner(h, git, deps);
-  } catch {
+  } catch (e) {
+    // git 读取失败(启动失败 / 超时 / 异常退出):不当成「不存在」,按结构不合格处理
+    if (e instanceof PersonalGitError) return fail('git_read_failed', e.step);
     // lstat 报 ENOENT 之外的错误(不可访问等):不是我们能确认的合格仓库
     return fail('repo_missing', 'lstat 失败');
   }
@@ -277,6 +303,18 @@ async function checkStructureInner(
   for (const legacy of ['remotes', 'branches']) {
     if (await legacyRemoteSource(path.join(git.gitDir, legacy))) return fail('remote', legacy);
   }
+
+  // 不在白名单键里、却同样能改变 git 行为的文件:属性(过滤器 / eol)、嫁接、浅克隆、替换对象
+  if ((await lstatMaybe(path.join(git.gitDir, 'info', 'attributes'))) !== null) {
+    return fail('info_attributes');
+  }
+  if ((await lstatMaybe(path.join(git.gitDir, 'info', 'grafts'))) !== null) return fail('grafts');
+  if ((await lstatMaybe(path.join(git.gitDir, 'shallow'))) !== null) return fail('shallow');
+  const replaced = git.run(['for-each-ref', '--count=1', '--format=%(refname)', 'refs/replace'], {
+    readOnly: true,
+  });
+  if (replaced.status !== 0) return fail('git_read_failed', 'for-each-ref');
+  if (replaced.stdout.trim() !== '') return fail('replace_refs');
 
   return checkTree(git);
 }
@@ -368,7 +406,8 @@ export async function classifyRepo(
   const head = revParse(git, 'HEAD^{commit}');
   if (head === null) return { situation: 3, why: 'head_unreadable' };
   const base = git.run(['merge-base', record.head, head], { readOnly: true });
-  if (base.status !== 0) return { situation: 3, why: 'no_common_ancestor' };
+  if (base.status === 1) return { situation: 3, why: 'no_common_ancestor' };
+  if (base.status !== 0) throw new PersonalGitError('merge-base', base);
 
   // ②:分支不是 rsi(含 detached)
   if (gitOut(git, ['symbolic-ref', '-q', 'HEAD'], { readOnly: true }) !== 'refs/heads/rsi') {
@@ -381,7 +420,8 @@ export async function classifyRepo(
   if (indexFlagged(git)) return { situation: 2, why: 'index_flags' };
   // HEAD 必须是记录提交的后代(含相等):是记录的祖先(落后)或历史分叉都是 ②
   const desc = git.run(['merge-base', '--is-ancestor', record.head, head], { readOnly: true });
-  if (desc.status !== 0) return { situation: 2, why: 'head_not_descendant' };
+  if (desc.status === 1) return { situation: 2, why: 'head_not_descendant' };
+  if (desc.status !== 0) throw new PersonalGitError('merge-base --is-ancestor', desc);
   if (head === record.head) return { situation: 1, head, record: record.head };
 
   // `记录..HEAD` 只许新增文件,不得触碰既有文件(包括全部 origin=auto_rsi 文件)与 lifecycle/**

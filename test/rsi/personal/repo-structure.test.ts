@@ -190,3 +190,51 @@ describe('R21-3.4 结构校验', () => {
     await expectInvalid(w, 'tree_exec');
   });
 });
+
+describe('R21-3.4 之外同样能改变 git 行为的文件:属性、嫁接、浅克隆、替换对象', () => {
+  const infoDir = (w: World): string => path.join(w.h.repoDir, '.git', 'info');
+
+  it.each([
+    ['文件', 'text eol=crlf\n'],
+    ['空文件', ''],
+  ])('.git/info/attributes(%s)→ info_attributes', async (_n, content) => {
+    const w = await makeWorld('p-struct-attrs-');
+    await setupRepo(w);
+    await safe.mkdirp(w.io, infoDir(w), 0o700);
+    await safe.writeFile(w.io, path.join(infoDir(w), 'attributes'), content);
+    await expectInvalid(w, 'info_attributes');
+  });
+
+  it('.git/info/attributes 是符号链接(哪怕悬空)→ info_attributes', async () => {
+    const w = await makeWorld('p-struct-attrslink-');
+    await setupRepo(w);
+    await safe.mkdirp(w.io, infoDir(w), 0o700);
+    await safe.symlink(w.io, path.join(w.dir, 'nowhere'), path.join(infoDir(w), 'attributes'));
+    await expectInvalid(w, 'info_attributes');
+  });
+
+  it('.git/info/grafts → grafts', async () => {
+    const w = await makeWorld('p-struct-grafts-');
+    await setupRepo(w);
+    await safe.mkdirp(w.io, infoDir(w), 0o700);
+    await safe.writeFile(w.io, path.join(infoDir(w), 'grafts'), '');
+    await expectInvalid(w, 'grafts');
+  });
+
+  it('.git/shallow → shallow', async () => {
+    const w = await makeWorld('p-struct-shallow-');
+    await setupRepo(w);
+    await safe.writeFile(w.io, path.join(w.h.repoDir, '.git', 'shallow'), '');
+    await expectInvalid(w, 'shallow');
+  });
+
+  it('refs/replace/* 存在 → replace_refs', async () => {
+    const w = await makeWorld('p-struct-replace-');
+    const head = await setupRepo(w);
+    const other = git(w, ['commit-tree', EMPTY_TREE_SHA, '-m', 'other']);
+    git(w, ['update-ref', `refs/replace/${head}`, other]);
+    await expectInvalid(w, 'replace_refs');
+  });
+});
+
+const EMPTY_TREE_SHA = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
