@@ -853,7 +853,7 @@ W4 只**追加**信号 / 计数行的可选键和 claude / pi 的注入识别,�
 
 ### 12.4 `SessionStat` 的三个可选键与缺键语义
 
-- **字段间约束(schema 强制)**:`rsi_markers` 严格升序(即去重且有序);三键全有或全无;信号上的 `tool_error_class` / `retry_chain_len` 只允许出现在 `event_kind=tool_result_failed` 的信号上。旧行缺键仍通过。
-- `rsi_markers`(≤ 4 个,去重升序,形状 `rsm_` + 16 位十六进制)、`retry_chain_max`(整数 ≥ 0)、`injection_excluded`(整数 ≥ 0)。**三个键只由识别注入的 reader(claude / pi)一起写**;codex / kimi 的行没有这三个键。
+- **字段间约束(schema 强制)**:`rsi_markers` 严格升序(即去重且有序);`rsi_markers` 与 `injection_excluded` 成组(全有或全无);`retry_chain_max` 独立可选(按 agent 能力,缺键 = 不可比 / 未测:codex / kimi 没有工具名,天然没有它);信号上的 `tool_error_class` / `retry_chain_len` 只允许出现在 `event_kind=tool_result_failed` 的信号上。旧行缺键仍通过。
+- `rsi_markers`(≤ 4 个,去重升序,形状 `rsm_` + 16 位十六进制)、`retry_chain_max`(整数 ≥ 0)、`injection_excluded`(整数 ≥ 0)。**claude / pi 总是写全三个键**;codex / kimi 现在一个都不写(将来若取回标记,只写 `rsi_markers` + `injection_excluded` 即合法,`retry_chain_max` 仍可缺)。
 - **缺键 = 未测,不是 0。** 旧计数行(W4 之前)与 codex / kimi 的行缺键照常通过校验;分析层不得把缺键当「0 个标记」或「0 次重试」。claude / pi 新采集的行**总是**带三个键(没有标记写 `[]`,没有失败写 `0`)。
 - 升级:存量信号不回填(同 §11);存量计数行在下一次重采时按 `session_ref` 就地更新成带三键的形状(`ts` 仍首写钉死)。如实说明这是单向兼容:新代码读旧文件没问题;**旧版 kit 读到带新键的文件**会因 `strictObject` 而 schema 校验失败(按各自既有的 fail-closed 路径处理)。

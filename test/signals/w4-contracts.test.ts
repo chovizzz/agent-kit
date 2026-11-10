@@ -128,20 +128,24 @@ describe('SessionStat 追加键', () => {
         .success,
     ).toBe(true);
   });
-  it('字段间约束:三键全有或全无', () => {
+  it('字段间约束:rsi_markers 与 injection_excluded 成组;retry_chain_max 独立可选', () => {
     for (const keys of [
       ['rsi_markers'],
-      ['retry_chain_max'],
       ['injection_excluded'],
       ['rsi_markers', 'retry_chain_max'],
-      ['retry_chain_max', 'injection_excluded'],
     ]) {
       const part = Object.fromEntries(Object.entries(TRIPLE).filter(([k]) => keys.includes(k)));
       expect(SessionStatSchema.safeParse({ ...statBase, ...part }).success, keys.join()).toBe(
         false,
       );
     }
-    expect(SessionStatSchema.safeParse({ ...statBase, ...TRIPLE }).success).toBe(true); // 对照
+    // 正向:只有 markers + excluded、没有 retry_chain_max 的行通过(codex / kimi 将来的形状);单有 retry_chain_max 也通过
+    expect(
+      SessionStatSchema.safeParse({ ...statBase, rsi_markers: [M('0')], injection_excluded: 0 })
+        .success,
+    ).toBe(true);
+    expect(SessionStatSchema.safeParse({ ...statBase, retry_chain_max: 2 }).success).toBe(true);
+    expect(SessionStatSchema.safeParse({ ...statBase, ...TRIPLE }).success).toBe(true);
   });
   it('rsi_markers 必须严格升序', () => {
     for (const rsi_markers of [

@@ -376,17 +376,18 @@ export const V1_W4_MUTATIONS: readonly V1W4Mutation[] = [
   },
   {
     id: 'stat-keys-partial-allowed',
-    clause: 'W4 schema:SessionStat 三键全有或全无(放开)',
+    clause:
+      'W4 schema:rsi_markers 与 injection_excluded 成组(放开 → 允许 markers 有而 injection_excluded 缺)',
     edits: [
       {
         file: STAT,
-        anchor: 'if (n !== 0 && n !== 3) {',
+        anchor: 'if ((s.rsi_markers === undefined) !== (s.injection_excluded === undefined)) {',
         replacement: 'if (false) {',
       },
     ],
     tests: [CON],
-    expectRed: ['字段间约束:三键全有或全无'],
-    mustKill: ['字段间约束:三键全有或全无'],
+    expectRed: ['字段间约束:rsi_markers 与 injection_excluded 成组'],
+    mustKill: ['字段间约束:rsi_markers 与 injection_excluded 成组'],
   },
   {
     id: 'markers-not-strictly-ascending',

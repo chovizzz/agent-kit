@@ -58,14 +58,12 @@ export const SessionStatSchema = z
     injection_excluded: z.number().int().nonnegative().optional(),
   })
   .superRefine((s, ctx) => {
-    // W4 字段间约束:三键只由识别注入的 reader 一起写,全有或全无
-    const n = [s.rsi_markers, s.retry_chain_max, s.injection_excluded].filter(
-      (v) => v !== undefined,
-    ).length;
-    if (n !== 0 && n !== 3) {
+    // W4 字段间约束:rsi_markers 与 injection_excluded 同由识别注入的 reader 写,成组(全有或全无);
+    // retry_chain_max 独立可选(按 agent 能力:codex / kimi 没有工具名,缺键 = 不可比 / 未测)
+    if ((s.rsi_markers === undefined) !== (s.injection_excluded === undefined)) {
       ctx.addIssue({
         code: 'custom',
-        message: 'rsi_markers / retry_chain_max / injection_excluded 必须三键全有或全无',
+        message: 'rsi_markers 与 injection_excluded 必须成组(全有或全无)',
       });
     }
   });
