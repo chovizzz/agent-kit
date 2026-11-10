@@ -21,7 +21,10 @@ import {
   writeUserFile,
   makeWorld,
   type World,
+  slowTests,
 } from './repo-helpers.js';
+
+slowTests();
 
 let before = '';
 beforeAll(async () => {
@@ -49,7 +52,11 @@ describe('R21-3.6 封闭 git 配置', () => {
     const marker = path.join(w.dir, 'marker-global');
     await installHook(w, hooks, marker);
     const gitconfig = path.join(w.home, '.gitconfig');
-    await safe.writeFile(w.io, gitconfig, `[core]\n\thooksPath = ${hooks}\n[user]\n\tname = evil\n`);
+    await safe.writeFile(
+      w.io,
+      gitconfig,
+      `[core]\n\thooksPath = ${hooks}\n[user]\n\tname = evil\n`,
+    );
 
     // 活性对照:普通 git 读到这份全局配置时,钩子确实执行
     git(w, ['update-ref', 'refs/heads/ctrl', head], { env: { GIT_CONFIG_GLOBAL: gitconfig } });
@@ -116,7 +123,11 @@ describe('R21-3.6 封闭 git 配置', () => {
     }
     driver();
     await safe.mkdirp(w.io, path.join(w.h.repoDir, '.git', 'info'), 0o700);
-    await safe.writeFile(w.io, path.join(w.h.repoDir, '.git', 'info', 'attributes'), '* filter=evil\n');
+    await safe.writeFile(
+      w.io,
+      path.join(w.h.repoDir, '.git', 'info', 'attributes'),
+      '* filter=evil\n',
+    );
     return marker;
   }
 
@@ -131,7 +142,11 @@ describe('R21-3.6 封闭 git 配置', () => {
     await safe.remove(w.io, marker);
 
     const r = await withLock(w, (locks) => commitPersonal(repoDeps(w), locks, spec('2', NEXT)));
-    expect(r).toMatchObject({ status: 'invalid', why: 'config_key', breaker: 'personal_repo_invalid' });
+    expect(r).toMatchObject({
+      status: 'invalid',
+      why: 'config_key',
+      breaker: 'personal_repo_invalid',
+    });
     expect(await exists(marker), '过滤器不得执行').toBe(false);
   });
 
@@ -145,17 +160,18 @@ describe('R21-3.6 封闭 git 配置', () => {
     await safe.remove(w.io, marker);
 
     const r = await withLock(w, (locks) => commitPersonal(repoDeps(w), locks, spec('2', NEXT)));
-    expect(r).toMatchObject({ status: 'invalid', why: 'config_key', breaker: 'personal_repo_invalid' });
+    expect(r).toMatchObject({
+      status: 'invalid',
+      why: 'config_key',
+      breaker: 'personal_repo_invalid',
+    });
     expect(await exists(marker), 'include 链里的过滤器不得执行').toBe(false);
   });
 
   it('工作树里与目标冲突的用户未提交改动:git 拒绝覆盖,改动保留,按 personal_repo_diverged 处理(不是 read-tree --reset)', async () => {
     const w = await makeWorld('p-conflict-');
     await setupRepo(w);
-    const files = [
-      { path: 'rules/base.md', content: 'base rule v2\n' },
-      BASE_FILES[1],
-    ] as const;
+    const files = [{ path: 'rules/base.md', content: 'base rule v2\n' }, BASE_FILES[1]] as const;
     const r = await withLock(w, (locks) =>
       commitPersonal(
         repoDeps(w, {
@@ -172,7 +188,9 @@ describe('R21-3.6 封闭 git 配置', () => {
     expect(await readUserFile(w, 'rules/base.md')).toBe('USER EDIT\n');
     // journal 仍在(R21-3.6a):下一次恢复同样判 diverged,不动用户改动
     expect(await exists(path.join(w.h.stateDir, 'commit-journal.json'))).toBe(true);
-    const again = await withLock(w, (locks) => commitPersonal(repoDeps(w), locks, spec('3', files)));
+    const again = await withLock(w, (locks) =>
+      commitPersonal(repoDeps(w), locks, spec('3', files)),
+    );
     expect(again).toMatchObject({ status: 'deferred', reason: 'personal_repo_diverged' });
     expect(await readUserFile(w, 'rules/base.md')).toBe('USER EDIT\n');
   });
@@ -206,7 +224,9 @@ describe('R21-3.6 封闭 git 配置', () => {
     if (r.status !== 'committed') throw new Error(JSON.stringify(r));
     expect(await readText(path.join(w.h.repoDir, 'rules/crlf.md'))).toBe('a\r\nb\r\n');
     expect(gitRaw(w, ['cat-file', 'blob', 'HEAD:rules/crlf.md']).stdout).toBe('a\r\nb\r\n');
-    const again = await withLock(w, (locks) => commitPersonal(repoDeps(w), locks, spec('3', files)));
+    const again = await withLock(w, (locks) =>
+      commitPersonal(repoDeps(w), locks, spec('3', files)),
+    );
     if (again.status !== 'committed') throw new Error(JSON.stringify(again));
     expect(again.tree).toBe(r.tree); // 内容寻址:同一份文件集合 → 同一棵树
   });

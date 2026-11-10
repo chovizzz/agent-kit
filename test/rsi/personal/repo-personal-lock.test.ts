@@ -4,20 +4,16 @@
  */
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import {
-  RSI_LOCK_PARTIAL_GRACE_MS,
-  RSI_LOCK_TTL_MS,
-} from '../../../src/contracts/rsi.js';
+import { RSI_LOCK_PARTIAL_GRACE_MS, RSI_LOCK_TTL_MS } from '../../../src/contracts/rsi.js';
 import { KIT_VERSION } from '../../../src/contracts/meta.js';
 import { exists, lstat, readText } from '../../../src/io/read-fs.js';
 import * as safe from '../../../src/io/safe-fs.js';
 import { RsiLockError } from '../../../src/rsi/lock-error.js';
 import type { RsiLockDeps } from '../../../src/rsi/lock-read.js';
-import {
-  acquirePersonalLock,
-  withPersonalLock,
-} from '../../../src/rsi/personal/personal-lock.js';
-import { makeWorld, type World } from './repo-helpers.js';
+import { acquirePersonalLock, withPersonalLock } from '../../../src/rsi/personal/personal-lock.js';
+import { makeWorld, slowTests, type World } from './repo-helpers.js';
+
+slowTests();
 
 const lockFile = (w: World): string => path.join(w.h.stateDir, 'lock');
 const doc = (pid: number, nonce = 'a'.repeat(16), startedAt = new Date().toISOString()): string =>
@@ -78,7 +74,10 @@ describe('R20-5.5 协议(personal/lock)', () => {
     await plant(w, text);
     expect(await kind(acquirePersonalLock(w.h, alive()))).toBe('locked');
     expect(await readText(lockFile(w))).toBe(text);
-    expect(new RsiLockError('locked').toStable()).toMatchObject({ code: 'RSI_NOT_RUN', reason: 'locked' });
+    expect(new RsiLockError('locked').toStable()).toMatchObject({
+      code: 'RSI_NOT_RUN',
+      reason: 'locked',
+    });
   });
 
   it('locked_over_ttl:持有者存活但超过 15 分钟 → 只报 locked_over_ttl,不杀、不删', async () => {

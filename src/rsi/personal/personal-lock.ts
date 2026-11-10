@@ -28,7 +28,13 @@ import {
 } from '../../io/home-fs.js';
 import { statDirSafe } from '../../io/read-fs.js';
 import { RsiLockError } from '../lock-error.js';
-import { defaultAlive, readLock, RSI_DIR_OWNER, type LockRead, type RsiLockDeps } from '../lock-read.js';
+import {
+  defaultAlive,
+  readLock,
+  RSI_DIR_OWNER,
+  type LockRead,
+  type RsiLockDeps,
+} from '../lock-read.js';
 import {
   homeFsFor,
   PERSONAL_STATE_FILES,

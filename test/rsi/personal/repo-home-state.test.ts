@@ -10,7 +10,6 @@ import {
   RSI_TRANSITION_REASONS_NORMAL,
 } from '../../../src/contracts/rsi.js';
 import type { RsiRevocationLine } from '../../../src/contracts/rsi-personal.js';
-import { HomeWriteDeniedError } from '../../../src/io/home-fs.js';
 import { exists, lstat, readDir, readText } from '../../../src/io/read-fs.js';
 import * as safe from '../../../src/io/safe-fs.js';
 import {
@@ -27,7 +26,9 @@ import {
   writeHead,
   writeTxn,
 } from '../../../src/rsi/personal/home-state.js';
-import { ID1, makeWorld, type World } from './repo-helpers.js';
+import { ID1, makeWorld, slowTests, type World } from './repo-helpers.js';
+
+slowTests();
 
 const SHA40 = 'a'.repeat(40);
 const head = (w: World) => ({ schema_version: 1 as const, head: SHA40, owner_repo_fp: w.ownerFp });
@@ -97,8 +98,13 @@ describe('写出口只认假 HOME', () => {
     const w = await makeWorld('hs-outside-');
     const outside = path.dirname(w.dir); // KIT_TMP 的上级:不是「严格之内」
     const h = personalHome(w.io, outside);
-    await expect(writeHead(h, head(w))).rejects.toBeInstanceOf(HomeWriteDeniedError);
-    expect(await exists(path.join(outside, '.local', 'state', 'agent-kit', 'rsi-personal'))).toBe(false);
+    await expect(writeHead(h, head(w))).rejects.toMatchObject({
+      name: 'HomeWriteDeniedError',
+      code: 'HOME_BAD_HOME',
+    });
+    expect(await exists(path.join(outside, '.local', 'state', 'agent-kit', 'rsi-personal'))).toBe(
+      false,
+    );
   });
 
   it('home 必须是绝对路径', async () => {
@@ -139,7 +145,10 @@ describe('W0-9 revocations.jsonl:整文件原子重写,只增不删', () => {
       });
       await expect(appendRevocations(crashy, ok, [rev(2)])).rejects.toThrow(`crash@${stage}`);
       expect(await readText(file(w)), stage).toBe(before);
-      expect((await readDir(w.h.stateDir)).filter((e) => e.name.includes('.tmp-')), stage).toEqual([]);
+      expect(
+        (await readDir(w.h.stateDir)).filter((e) => e.name.includes('.tmp-')),
+        stage,
+      ).toEqual([]);
       await appendRevocations(w.h, ok, [rev(2)]);
       expect((await lines(w)).length).toBe(2);
     }
@@ -209,7 +218,9 @@ describe('owner_repo_fp 与封闭配置的空目录', () => {
     const dir = await ensureEmptyDir(w.h);
     expect((await lstat(dir)).mode & 0o777).toBe(0o700);
     expect(await readDir(dir)).toEqual([]);
-    await safe.writeFile(w.io, path.join(dir, 'reference-transaction'), '#!/bin/sh\n', { mode: 0o755 });
+    await safe.writeFile(w.io, path.join(dir, 'reference-transaction'), '#!/bin/sh\n', {
+      mode: 0o755,
+    });
     const err = await ensureEmptyDir(w.h).catch((e: unknown) => e);
     expect((err as PersonalStateError).kind).toBe('empty_dir_not_empty');
   });

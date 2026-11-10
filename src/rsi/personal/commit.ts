@@ -212,7 +212,11 @@ export async function openPersonalRepo(
     }
   }
 
-  const s = await checkRepoStructure(deps.h, c.git, deps.uid === undefined ? {} : { uid: deps.uid });
+  const s = await checkRepoStructure(
+    deps.h,
+    c.git,
+    deps.uid === undefined ? {} : { uid: deps.uid },
+  );
   if (!s.ok) return invalid(s.why);
 
   if (journal !== null) {

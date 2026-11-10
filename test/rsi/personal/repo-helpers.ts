@@ -3,6 +3,8 @@
  * 所有写都落在临时目录;真实 HOME 不被碰(个别用例用 homeSnapshot 前后断言)。测试里的 git 一律经 runSync(src/io/exec.ts),不用 mock。
  */
 import * as path from 'node:path';
+import { vi } from 'vitest';
+import { SLOW_TEST_TIMEOUT_MS } from '../../../vitest.config.js';
 import type { ExecResult } from '../../../src/io/exec.js';
 import { runSync } from '../../../src/io/exec.js';
 import { createIoContext, type IoContext } from '../../../src/io/paths.js';
@@ -211,4 +213,9 @@ export async function snapshot(w: World): Promise<Snapshot> {
 /** 本地 `.git/config` 追加(经真 git config,测试夹具用) */
 export function addLocalConfig(w: World, key: string, value: string): void {
   git(w, ['config', '--local', key, value]);
+}
+
+/** 每个用例要起几十次真 git 子进程(验证机高负载时单次十几秒):本文件内放宽用例超时(仓库的慢用例口径) */
+export function slowTests(): void {
+  vi.setConfig({ testTimeout: SLOW_TEST_TIMEOUT_MS, hookTimeout: SLOW_TEST_TIMEOUT_MS });
 }

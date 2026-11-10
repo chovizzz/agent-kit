@@ -5,7 +5,7 @@ import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { exists, lstat, readText } from '../../../src/io/read-fs.js';
 import * as safe from '../../../src/io/safe-fs.js';
-import { openPersonalRepo } from '../../../src/rsi/personal/commit.js';
+import { openPersonalRepo, type StepHook } from '../../../src/rsi/personal/commit.js';
 import { EMPTY_TREE } from '../../../src/rsi/personal/commit-journal.js';
 import {
   ensureEmptyDir,
@@ -24,11 +24,16 @@ import {
   repoDeps,
   withLock,
   type World,
+  slowTests,
 } from './repo-helpers.js';
 
-const boot = (w: World, onStep?: Parameters<typeof repoDeps>[1]['onStep']) =>
+slowTests();
+
+const boot = (w: World, onStep?: StepHook) =>
   withLock(w, (locks) =>
-    openPersonalRepo(repoDeps(w, onStep === undefined ? {} : { onStep }), locks, { bootstrap: true }),
+    openPersonalRepo(repoDeps(w, onStep === undefined ? {} : { onStep }), locks, {
+      bootstrap: true,
+    }),
   );
 
 describe('W0-5 首次建仓证明', () => {
@@ -57,7 +62,8 @@ describe('W0-5 首次建仓证明', () => {
     ],
     [
       '悬空符号链接(head.json)',
-      (w: World) => safe.symlink(w.io, path.join(w.dir, 'nowhere'), path.join(w.h.stateDir, 'head.json')),
+      (w: World) =>
+        safe.symlink(w.io, path.join(w.dir, 'nowhere'), path.join(w.h.stateDir, 'head.json')),
     ],
   ])('任一约定路径存在(%s)→ 不是首次', async (_name, plant) => {
     const w = await makeWorld('p-b-notfirst-');
@@ -108,28 +114,31 @@ describe('W0-5 bootstrap 成功路径', () => {
 });
 
 describe('W0-5 bootstrap 崩溃恢复(四个 phase 之间各注入一次)', () => {
-  it.each(['journal:planned', 'journal:initialized', 'journal:committed', 'journal:recorded', 'after:head'])(
-    '崩溃于 %s → 下一次持锁者续做,得到完整一致的仓库',
-    async (step) => {
-      const w = await makeWorld('p-b-crash-');
-      await expect(boot(w, crashAt(step))).rejects.toBeInstanceOf(InjectedCrash);
-      const j = await readJournal(w.h);
-      if (step === 'after:head') {
-        // head.json 已写、journal 未删:恢复只差删 journal
-        expect(await readHead(w.h)).toMatchObject({ kind: 'ok' });
-      } else {
-        expect(j.kind).toBe('ok'); // 还在途
-        expect(await readHead(w.h)).toEqual({ kind: 'absent' }); // head.json 只在 recorded 之后写
-      }
-      const o = await boot(w);
-      if (o.kind !== 'ready') throw new Error(`${step}: ${JSON.stringify(o)}`);
-      expect(await readJournal(w.h)).toEqual({ kind: 'absent' });
-      expect(await readHead(w.h)).toMatchObject({ kind: 'ok', value: { head: o.head } });
-      expect(git(w, ['rev-parse', 'refs/heads/rsi'])).toBe(o.head);
-      expect(git(w, ['rev-parse', 'refs/heads/rsi^{tree}'])).toBe(EMPTY_TREE);
-      expect(git(w, ['--no-optional-locks', 'status', '--porcelain', '--ignored'])).toBe('');
-    },
-  );
+  it.each([
+    'journal:planned',
+    'journal:initialized',
+    'journal:committed',
+    'journal:recorded',
+    'after:head',
+  ])('崩溃于 %s → 下一次持锁者续做,得到完整一致的仓库', async (step) => {
+    const w = await makeWorld('p-b-crash-');
+    await expect(boot(w, crashAt(step))).rejects.toBeInstanceOf(InjectedCrash);
+    const j = await readJournal(w.h);
+    if (step === 'after:head') {
+      // head.json 已写、journal 未删:恢复只差删 journal
+      expect(await readHead(w.h)).toMatchObject({ kind: 'ok' });
+    } else {
+      expect(j.kind).toBe('ok'); // 还在途
+      expect(await readHead(w.h)).toEqual({ kind: 'absent' }); // head.json 只在 recorded 之后写
+    }
+    const o = await boot(w);
+    if (o.kind !== 'ready') throw new Error(`${step}: ${JSON.stringify(o)}`);
+    expect(await readJournal(w.h)).toEqual({ kind: 'absent' });
+    expect(await readHead(w.h)).toMatchObject({ kind: 'ok', value: { head: o.head } });
+    expect(git(w, ['rev-parse', 'refs/heads/rsi'])).toBe(o.head);
+    expect(git(w, ['rev-parse', 'refs/heads/rsi^{tree}'])).toBe(EMPTY_TREE);
+    expect(git(w, ['--no-optional-locks', 'status', '--porcelain', '--ignored'])).toBe('');
+  });
 
   it('planned 且目录不存在(崩溃在建目录之前)→ 丢弃 journal,按首次重新建仓', async () => {
     const w = await makeWorld('p-b-planned-');

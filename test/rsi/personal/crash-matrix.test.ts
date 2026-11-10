@@ -27,7 +27,10 @@ import {
   withLock,
   writeUserFile,
   type World,
+  slowTests,
 } from './repo-helpers.js';
+
+slowTests();
 
 /** [步骤点, 崩溃后 `ref` 是否已指向新提交] */
 const STEPS: [string, 'old' | 'new'][] = [
@@ -114,7 +117,11 @@ const MODS: Mod[] = [
 ];
 
 /** 三个「窗口」:引用未更新 / 引用已更新工作树未同步 / 只差记录 */
-const WINDOWS = ['journal:objects_written', 'journal:ref_updated', 'journal:worktree_synced'] as const;
+const WINDOWS = [
+  'journal:objects_written',
+  'journal:ref_updated',
+  'journal:worktree_synced',
+] as const;
 
 describe('R21-3.6a 崩溃窗口里的用户改动:保留、diverged、journal 仍在', () => {
   for (const win of WINDOWS) {

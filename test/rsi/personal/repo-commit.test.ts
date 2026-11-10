@@ -19,7 +19,10 @@ import {
   snapshot,
   spec,
   withLock,
+  slowTests,
 } from './repo-helpers.js';
+
+slowTests();
 
 describe('R21-3.6 commitPersonal', () => {
   it('提交:整棵目标树重建、HEAD 前进一个提交、工作树与索引同步、head.json 记录、journal 已删;被去掉的文件从工作树消失', async () => {
@@ -54,7 +57,9 @@ describe('R21-3.6 commitPersonal', () => {
 
   it('首次尚无仓库:返回 absent(不自动建仓、不写任何东西);建仓走 openPersonalRepo({ bootstrap: true })', async () => {
     const w = await makeWorld('pc-absent-');
-    const r = await withLock(w, (locks) => commitPersonal(repoDeps(w), locks, spec('2', BASE_FILES)));
+    const r = await withLock(w, (locks) =>
+      commitPersonal(repoDeps(w), locks, spec('2', BASE_FILES)),
+    );
     expect(r).toEqual({ status: 'absent' });
     expect(await exists(w.h.repoDir)).toBe(false);
   });
@@ -104,7 +109,13 @@ describe('R21-3.6 commitPersonal', () => {
           { path: 'rules/a/b.md', content: '2' },
         ]),
       ).rejects.toBeInstanceOf(TreeSpecError);
-      await expect(commitPersonal(repoDeps(w), { personal: { assertHeld: async () => undefined } }, { ...spec('2', BASE_FILES), txnId: 'XYZ' })).rejects.toBeInstanceOf(TreeSpecError);
+      await expect(
+        commitPersonal(
+          repoDeps(w),
+          { personal: { assertHeld: async () => undefined } },
+          { ...spec('2', BASE_FILES), txnId: 'XYZ' },
+        ),
+      ).rejects.toBeInstanceOf(TreeSpecError);
     });
 
     it('正向对照:合法路径(含深层目录、点与连字符)通过,且全部是 100644', async () => {
@@ -117,7 +128,9 @@ describe('R21-3.6 commitPersonal', () => {
       ] as const;
       const r = await withLock(w, (locks) => commitPersonal(repoDeps(w), locks, spec('2', files)));
       expect(r.status).toBe('committed');
-      const modes = git(w, ['ls-tree', '-r', 'HEAD']).split('\n').map((l) => l.slice(0, 6));
+      const modes = git(w, ['ls-tree', '-r', 'HEAD'])
+        .split('\n')
+        .map((l) => l.slice(0, 6));
       expect(modes).toEqual(['100644', '100644', '100644']);
     });
   });

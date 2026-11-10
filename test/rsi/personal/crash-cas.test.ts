@@ -19,7 +19,10 @@ import {
   snapshot,
   spec,
   withLock,
+  slowTests,
 } from './repo-helpers.js';
+
+slowTests();
 
 const B_FILES = [...BASE_FILES, { path: 'rules/b.md', content: 'from B\n' }] as const;
 
@@ -27,7 +30,9 @@ describe('R21-3.6 update-ref 带期望旧值', () => {
   it('对照:无并发 → committed', async () => {
     const w = await makeWorld('p-cas-ctrl-');
     await setupRepo(w);
-    const r = await withLock(w, (locks) => commitPersonal(repoDeps(w), locks, spec('2', NEXT_FILES)));
+    const r = await withLock(w, (locks) =>
+      commitPersonal(repoDeps(w), locks, spec('2', NEXT_FILES)),
+    );
     expect(r.status).toBe('committed');
   });
 
@@ -68,7 +73,14 @@ describe('R21-3.6 update-ref 带期望旧值', () => {
         repoDeps(w, {
           onStep: (s) => {
             if (s !== 'before:update-ref') return;
-            const other = git(w, ['commit-tree', git(w, ['rev-parse', `${first}^{tree}`]), '-p', first, '-m', 'x']);
+            const other = git(w, [
+              'commit-tree',
+              git(w, ['rev-parse', `${first}^{tree}`]),
+              '-p',
+              first,
+              '-m',
+              'x',
+            ]);
             git(w, ['update-ref', 'refs/heads/rsi', other, first]);
           },
         }),

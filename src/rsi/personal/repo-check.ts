@@ -12,7 +12,7 @@
 import * as path from 'node:path';
 import type { PersonalHead } from '../../contracts/rsi-personal.js';
 import { runSync, type ExecResult } from '../../io/exec.js';
-import { lstat, type Stats } from '../../io/read-fs.js';
+import { lstat, readDir, type Stats } from '../../io/read-fs.js';
 import type { PersonalHome } from './home-state.js';
 
 /** 作者 / 提交者的常量身份(R21-3.6:不含邮箱字面量,不读用户全局配置) */
@@ -105,7 +105,16 @@ export function createClosedGit(
       runSync(
         h.io,
         'git',
-        [...closedConfig, '-c', `init.templateDir=${emptyDir}`, 'init', '-q', '-b', 'rsi', h.repoDir],
+        [
+          ...closedConfig,
+          '-c',
+          `init.templateDir=${emptyDir}`,
+          'init',
+          '-q',
+          '-b',
+          'rsi',
+          h.repoDir,
+        ],
         { cwd: h.repoDir, env: baseEnv(false) },
       ),
   };
@@ -136,7 +145,12 @@ export class PersonalGitError extends Error {
 }
 
 /** 必须成功的命令;失败抛 {@link PersonalGitError} */
-export function gitMust(git: ClosedGit, step: string, args: readonly string[], opts?: GitRunOpts): string {
+export function gitMust(
+  git: ClosedGit,
+  step: string,
+  args: readonly string[],
+  opts?: GitRunOpts,
+): string {
   const r = git.run(args, opts);
   if (r.status !== 0) throw new PersonalGitError(step, r);
   return r.stdout.replace(/\n$/, '');
@@ -186,6 +200,14 @@ async function lstatMaybe(p: string): Promise<Stats | null> {
     if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
     throw e;
   }
+}
+
+/** 该路径存在且不是空目录(旧式远端定义的来源);不存在 → false */
+async function legacyRemoteSource(p: string): Promise<boolean> {
+  const st = await lstatMaybe(p);
+  if (st === null) return false;
+  if (!st.isDirectory()) return true;
+  return (await readDir(p)).length > 0;
 }
 
 export interface StructureDeps {
@@ -251,6 +273,10 @@ async function checkStructureInner(
   const remotes = git.run(['remote'], { readOnly: true });
   if (remotes.status !== 0) return fail('config_unreadable', 'git remote');
   if (remotes.stdout.trim() !== '') return fail('remote', remotes.stdout.trim());
+  // 旧式远端定义(`.git/remotes/*`、`.git/branches/*`)`git remote` 不列出,单独核对:存在即不满足
+  for (const legacy of ['remotes', 'branches']) {
+    if (await legacyRemoteSource(path.join(git.gitDir, legacy))) return fail('remote', legacy);
+  }
 
   return checkTree(git);
 }
@@ -283,16 +309,9 @@ function checkTree(git: ClosedGit): StructureResult {
 // ---------------------------------------------------------------------------
 
 export type DivergedWhy =
-  | 'branch_not_rsi'
-  | 'stash'
-  | 'worktree_dirty'
-  | 'head_not_descendant'
-  | 'auto_output_changed';
+  'branch_not_rsi' | 'stash' | 'worktree_dirty' | 'head_not_descendant' | 'auto_output_changed';
 
-export type InvalidSituationWhy =
-  | 'record_missing'
-  | 'head_unreadable'
-  | 'no_common_ancestor';
+export type InvalidSituationWhy = 'record_missing' | 'head_unreadable' | 'no_common_ancestor';
 
 export type RepoSituation =
   /** ①:接受;`head` 是当前 HEAD(可能已是记录之后的新提交),调用方据此更新记录 */
@@ -325,7 +344,8 @@ export async function classifyRepo(
   record: PersonalHead,
   currentOwnerFp: string,
 ): Promise<RepoSituation> {
-  if (revParse(git, `${record.head}^{commit}`) === null) return { situation: 3, why: 'record_missing' };
+  if (revParse(git, `${record.head}^{commit}`) === null)
+    return { situation: 3, why: 'record_missing' };
   if (record.owner_repo_fp !== currentOwnerFp) return { situation: 4 };
   const head = revParse(git, 'HEAD^{commit}');
   if (head === null) return { situation: 3, why: 'head_unreadable' };
@@ -347,7 +367,16 @@ export async function classifyRepo(
 
   // `记录..HEAD` 只许新增文件,不得触碰既有文件(包括全部 origin=auto_rsi 文件)与 lifecycle/**
   const diff = git.run(
-    ['diff', '--name-status', '-z', '--no-renames', '--no-ext-diff', '--no-textconv', record.head, head],
+    [
+      'diff',
+      '--name-status',
+      '-z',
+      '--no-renames',
+      '--no-ext-diff',
+      '--no-textconv',
+      record.head,
+      head,
+    ],
     { readOnly: true },
   );
   if (diff.status !== 0) return { situation: 3, why: 'head_unreadable' };

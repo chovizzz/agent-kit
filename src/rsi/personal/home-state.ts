@@ -165,17 +165,10 @@ export const writeHead = (h: PersonalHome, head: PersonalHead): Promise<void> =>
   writeState(h, PERSONAL_STATE_FILES.head, canonicalJson(PersonalHeadSchema.parse(head)));
 
 export const writeJournal = (h: PersonalHome, j: PersonalCommitJournal): Promise<void> =>
-  writeState(
-    h,
-    PERSONAL_STATE_FILES.journal,
-    canonicalJson(PersonalCommitJournalSchema.parse(j)),
-  );
+  writeState(h, PERSONAL_STATE_FILES.journal, canonicalJson(PersonalCommitJournalSchema.parse(j)));
 
 export const removeJournal = (h: PersonalHome): Promise<void> =>
-  remove(
-    homeFsFor(h, [PERSONAL_STATE_FILES.journal]),
-    stateRel(PERSONAL_STATE_FILES.journal),
-  );
+  remove(homeFsFor(h, [PERSONAL_STATE_FILES.journal]), stateRel(PERSONAL_STATE_FILES.journal));
 
 export const writeTxn = (h: PersonalHome, t: PersonalTxn): Promise<void> => {
   const parsed = PersonalTxnSchema.parse(t);
@@ -239,7 +232,8 @@ export async function appendRevocations(
   if (cur.kind === 'invalid') throw new PersonalStateError('revocations_invalid', cur.why);
   const old = cur.kind === 'ok' ? cur.value.text : '';
   const text =
-    old + add.map((l) => `${JSON.stringify(sortedKeys(RsiRevocationLineSchema.parse(l)))}\n`).join('');
+    old +
+    add.map((l) => `${JSON.stringify(sortedKeys(RsiRevocationLineSchema.parse(l)))}\n`).join('');
   if (Buffer.byteLength(text, 'utf8') > RSI_REVOCATIONS_MAX_BYTES) {
     throw new PersonalStateError('revocations_too_large');
   }

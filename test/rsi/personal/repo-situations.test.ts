@@ -20,7 +20,10 @@ import {
   withLock,
   writeUserFile,
   type World,
+  slowTests,
 } from './repo-helpers.js';
+
+slowTests();
 
 const open = (w: World, over: Parameters<typeof repoDeps>[1] = {}) =>
   withLock(w, (locks) => openPersonalRepo(repoDeps(w, over), locks));
@@ -140,7 +143,9 @@ describe('R21-3.5 情形②:personal_repo_diverged(暂停新增生效,不碰仓�
   it('HEAD 是记录的祖先(用户把分支退回去了)', async () => {
     const w = await makeWorld('p-s2-behind-');
     const first = await setupRepo(w);
-    const c = await withLock(w, (locks) => commitPersonal(repoDeps(w), locks, spec('2', NEXT_FILES)));
+    const c = await withLock(w, (locks) =>
+      commitPersonal(repoDeps(w), locks, spec('2', NEXT_FILES)),
+    );
     expect(c.status).toBe('committed');
     git(w, ['reset', '-q', '--hard', first]);
     await expectDiverged(w, 'head_not_descendant');
@@ -149,7 +154,9 @@ describe('R21-3.5 情形②:personal_repo_diverged(暂停新增生效,不碰仓�
   it('历史分叉(用户在旧提交上另起提交,记录提交不是 HEAD 的祖先)', async () => {
     const w = await makeWorld('p-s2-fork-');
     const first = await setupRepo(w);
-    const c = await withLock(w, (locks) => commitPersonal(repoDeps(w), locks, spec('2', NEXT_FILES)));
+    const c = await withLock(w, (locks) =>
+      commitPersonal(repoDeps(w), locks, spec('2', NEXT_FILES)),
+    );
     expect(c.status).toBe('committed');
     git(w, ['reset', '-q', '--hard', first]);
     await writeUserFile(w, 'rules/fork.md', 'fork\n');
@@ -184,7 +191,12 @@ describe('R21-3.5 情形③:personal_repo_invalid(熔断)', () => {
   it('历史无共同祖先(rsi 被指到一个无关的根提交)', async () => {
     const w = await makeWorld('p-s3-root-');
     await setupRepo(w);
-    const root = git(w, ['commit-tree', '4b825dc642cb6eb9a060e54bf8d69288fbee4904', '-m', 'unrelated']);
+    const root = git(w, [
+      'commit-tree',
+      '4b825dc642cb6eb9a060e54bf8d69288fbee4904',
+      '-m',
+      'unrelated',
+    ]);
     git(w, ['update-ref', 'refs/heads/rsi', root]);
     expect(await open(w)).toMatchObject({
       kind: 'invalid',

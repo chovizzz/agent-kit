@@ -11,7 +11,7 @@ import {
   createClosedGit,
   type StructureResult,
 } from '../../../src/rsi/personal/repo-check.js';
-import { lstat } from '../../../src/io/read-fs.js';
+import { lstat, readText } from '../../../src/io/read-fs.js';
 import * as safe from '../../../src/io/safe-fs.js';
 import {
   git,
@@ -23,7 +23,10 @@ import {
   withLock,
   BASE_FILES,
   type World,
+  slowTests,
 } from './repo-helpers.js';
+
+slowTests();
 
 async function structure(w: World, uid?: number): Promise<StructureResult> {
   const closed = createClosedGit(w.h, await ensureEmptyDir(w.h), () => NOW);
@@ -34,10 +37,12 @@ async function expectInvalid(w: World, why: string): Promise<void> {
   const r = await structure(w);
   expect(r).toMatchObject({ ok: false, why });
   // 经提交原语走一遍:熔断 personal_repo_invalid,且不提交
-  const head = git(w, ['rev-parse', 'refs/heads/rsi']);
+  // 不经 git 读引用(worktree 链接之类的夹具会让 git 本身拒绝工作):松散引用文件的字节在前后必须一致
+  const refFile = path.join(w.h.repoDir, '.git', 'refs', 'heads', 'rsi');
+  const head = await readText(refFile);
   const c = await withLock(w, (locks) => commitPersonal(repoDeps(w), locks, spec('2', BASE_FILES)));
   expect(c).toMatchObject({ status: 'invalid', why, breaker: 'personal_repo_invalid' });
-  expect(git(w, ['rev-parse', 'refs/heads/rsi'])).toBe(head);
+  expect(await readText(refFile)).toBe(head);
 }
 
 /** 用 git 管道命令往 refs/heads/rsi 上造一个带指定条目的提交(绕过 commitPersonal 的树约束) */
@@ -123,10 +128,14 @@ describe('R21-3.4 结构校验', () => {
     const w = await makeWorld('p-struct-key-');
     await setupRepo(w);
     git(w, ['config', '--local', key, value]);
-    expect(await structure(w)).toMatchObject({ ok: false, why: 'config_key', detail: key.toLowerCase() });
+    expect(await structure(w)).toMatchObject({
+      ok: false,
+      why: 'config_key',
+      detail: key.toLowerCase(),
+    });
   });
 
-  it('⑤ 有 remote(legacy remotes/ 文件,不经 config 键)', async () => {
+  it('⑤ 有 remote(旧式 .git/remotes/ 定义,不经 config 键)', async () => {
     const w = await makeWorld('p-struct-remote-');
     await setupRepo(w);
     await safe.mkdirp(w.io, path.join(w.h.repoDir, '.git', 'remotes'), 0o700);

@@ -13,10 +13,7 @@
  * bootstrap(W0-5):四个 phase `planned → initialized → committed → recorded`,不复用五 phase 的恢复谓词;恢复按观测到的引用值续做,任何不一致 → `personal_repo_invalid`(保留 journal)。
  */
 import { createHash } from 'node:crypto';
-import {
-  PersonalHeadSchema,
-  type PersonalCommitJournal,
-} from '../../contracts/rsi-personal.js';
+import { PersonalHeadSchema, type PersonalCommitJournal } from '../../contracts/rsi-personal.js';
 import { readDir, lstat } from '../../io/read-fs.js';
 import {
   makeRepoDir,
@@ -87,7 +84,10 @@ export async function recordHeadAndFinish(c: OpCtx, commit: string): Promise<voi
   const cur = await readHead(c.h);
   const fp = cur.kind === 'ok' ? cur.value.owner_repo_fp : c.ownerRepoFp;
   await assertLocks(c);
-  await writeHead(c.h, PersonalHeadSchema.parse({ schema_version: 1, head: commit, owner_repo_fp: fp }));
+  await writeHead(
+    c.h,
+    PersonalHeadSchema.parse({ schema_version: 1, head: commit, owner_repo_fp: fp }),
+  );
   await c.onStep?.('after:head');
   await assertLocks(c);
   await removeJournal(c.h);
@@ -123,7 +123,14 @@ function indexEquals(git: ClosedGit, sha: string | null): boolean {
 export function observeRepo(git: ClosedGit, j: PersonalCommitJournal): Observation {
   const sym = git.run(['symbolic-ref', '-q', 'HEAD'], { readOnly: true });
   const st = statusEntries(git);
-  if (st === null) throw new PersonalGitError('status', { status: null, signal: null, stdout: '', stderr: '', timedOut: false });
+  if (st === null)
+    throw new PersonalGitError('status', {
+      status: null,
+      signal: null,
+      stdout: '',
+      stderr: '',
+      timedOut: false,
+    });
   return {
     headSymbolic: sym.status === 0 && sym.stdout.trim() === j.ref,
     ref: revParse(git, j.ref),
@@ -158,8 +165,7 @@ export function decideRecovery(
 }
 
 export type RecoveryResult =
-  | { outcome: 'discarded' | 'resynced' | 'recorded' }
-  | { outcome: 'diverged' };
+  { outcome: 'discarded' | 'resynced' | 'recorded' } | { outcome: 'diverged' };
 
 /** 两树合并同步工作树(R21-3.6):`read-tree -m -u <旧> <新>`;**不用 `--reset`**——有冲突的未提交改动时 git 拒绝覆盖 */
 export function syncWorktree(git: ClosedGit, oldHead: string, newCommit: string): boolean {
