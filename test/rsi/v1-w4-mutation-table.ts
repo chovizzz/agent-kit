@@ -142,7 +142,7 @@ export const V1_W4_MUTATIONS: readonly V1W4Mutation[] = [
     tests: [INJ],
     expectRed: [
       '行首(允许空格 / 制表符)以前缀开头才是块',
-      '只按 \\n 切行:U+2028 不是行分隔',
+      '只按 \\\\n 切行:U+2028 不是行分隔',
       'treat 块作为用户消息',
     ],
     mustKill: ['行首(允许空格 / 制表符)以前缀开头才是块'],
