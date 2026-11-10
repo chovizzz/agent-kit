@@ -419,9 +419,9 @@ export const CandidateWorkingCopySchema = z.strictObject({
   shadow: z.strictObject({
     sessions: NonNegInt,
     hits: NonNegInt,
-    /** 展示缓存,不是授权(W0-1) */
+    /** 首次达标日:只用于展示与排队排序,不参与授权或到期(W0-13) */
     canary_ready_since: IsoDateSchema.nullable(),
-    /** 因全局名额被占而排队的起算 UTC 日(`g7_queued`);相位未到的等待不计 */
+    /** 因全局名额被占而排队的起算 UTC 日(`g7_queued`):只有它驱动 30 日到期;不累计,资格中断或 W0-13 列出的入口后清零 */
     queued_since: IsoDateSchema.nullable(),
   }),
   evidence: z.strictObject({
