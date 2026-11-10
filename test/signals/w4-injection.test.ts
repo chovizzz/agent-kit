@@ -13,6 +13,7 @@ import {
   blocksInString,
   classifyMarkerRetrieval,
   findInjectionBlocks,
+  INJECTION_BODY_MAX_CHARS,
   INJECTION_WINDOWS_MAX,
   InjectionTracker,
   isInjectionAware,
@@ -122,31 +123,70 @@ describe('复述索引的会话级上限与块登记规则', () => {
     expect(buildSessionStat(bad)).toBeUndefined();
   });
 
-  it('标记形状不对的块:只排除所在事件,不登记正文(其后的复述不被排除);对照:合法标记的块登记', async () => {
+  it('标记形状不对的块:照常登记正文(后续复述被排除),只是不取回标记;对照:同一正文没有块时复述照常计入', async () => {
     const t = new InjectionTracker();
     t.addBlocks([{ marker: undefined, body: BODY }]);
-    expect(t.isRecital(BODY)).toBe(false);
-    t.addBlocks([{ marker: MARKER_A, body: BODY }]);
     expect(t.isRecital(BODY)).toBe(true);
+    expect(t.report().markers).toEqual([]);
 
     const w = await newWork('w4-cl-badmarker-');
-    const run = async (header: string) =>
+    const run = async (lines: ReturnType<typeof userLine>[]) =>
+      runFile(
+        createClaudeReader(),
+        await writeClaudeLines(w.io, { root: w.sessions, cwd: '/work/proj-a', id: uid(), lines }),
+      );
+    const bad = await run([
+      userLine(`${RSI_MARK_PREFIX} rsm_xyz\n${BODY}`),
+      userLine(`复述 ${BODY}`),
+    ]);
+    expect(bad.counts?.user_messages).toBe(0); // 块行与复述行都被排除
+    expect(bad.w4?.injectionExcluded).toBe(2);
+    expect(bad.w4?.markers).toEqual([]);
+    const none = await run([userLine(`复述 ${BODY}`)]);
+    expect(none.counts?.user_messages).toBe(1); // 对照
+  });
+
+  it('块正文超过 4096 码点 → fail-closed(InjectionIndexLimitError,不截断);恰 4096 照常', async () => {
+    expect(INJECTION_BODY_MAX_CHARS).toBe(4096);
+    const body = (n: number): string => '汉'.repeat(n);
+    const ok = new InjectionTracker();
+    ok.addBlocks([{ marker: MARKER_A, body: body(4096) }]);
+    expect(ok.isRecital(body(20))).toBe(true);
+    expect(() => new InjectionTracker().addBlocks([{ marker: MARKER_A, body: body(4097) }])).toThrow(
+      /窗口上限/,
+    );
+    const w = await newWork('w4-cl-longbody-');
+    const sess = async (n: number) =>
       runFile(
         createClaudeReader(),
         await writeClaudeLines(w.io, {
           root: w.sessions,
           cwd: '/work/proj-a',
           id: uid(),
-          lines: [userLine(`${header}\n${BODY}`), userLine(`复述 ${BODY}`)],
+          lines: [userLine(`${controlBlock()}\n${body(n)}`, { isMeta: true }), userLine('真实消息')],
         }),
       );
-    const bad = await run(`${RSI_MARK_PREFIX} rsm_xyz`);
-    expect(bad.counts?.user_messages).toBe(1); // 块行被排除,复述行照常计入
-    expect(bad.w4?.injectionExcluded).toBe(1);
-    expect(bad.w4?.markers).toEqual([]);
-    const good = await run(`${RSI_MARK_PREFIX} ${MARKER_A}`);
-    expect(good.counts?.user_messages).toBe(0); // 对照
-    expect(good.w4?.injectionExcluded).toBe(2);
+    expect((await sess(4096)).status).toBe('processed');
+    const bad = await sess(4097);
+    expect(bad).toMatchObject({ status: 'read_error', errorClass: 'InjectionIndexLimitError' });
+    expect(bad.signals).toEqual([]);
+  });
+
+  it('超过 4 个不同标记:去重升序保留前 4 个,分类仍为多标记', async () => {
+    const w = await newWork('w4-cl-five-');
+    const ms = [4, 2, 0, 3, 1].map(markerOf);
+    const r = await runFile(
+      createClaudeReader(),
+      await writeClaudeLines(w.io, {
+        root: w.sessions,
+        cwd: '/work/proj-a',
+        id: uid(),
+        lines: ms.map((m) => userLine(controlBlock(m), { isMeta: true })),
+      }),
+    );
+    expect(r.w4?.markers).toEqual([0, 1, 2, 3].map(markerOf));
+    expect(r.w4?.markers).toHaveLength(4);
+    expect(classifyMarkerRetrieval(r.w4?.markers)).toBe('multi_marker');
   });
 });
 

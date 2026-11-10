@@ -333,18 +333,32 @@ export const V1_W4_MUTATIONS: readonly V1W4Mutation[] = [
     mustKill: ['窗口总数超过 INJECTION_WINDOWS_MAX', '经管线:多块长会话超限'],
   },
   {
-    id: 'invalid-marker-block-registers-body',
-    clause: 'R21-6.9:标记形状不对的块只排除所在事件,不登记正文',
+    id: 'invalid-marker-block-body-not-registered',
+    clause: 'R21-6.9:标记形状不对的块照常登记正文(不登记 → 其复述漏排除)',
     edits: [
       {
         file: INJECTION,
-        anchor: 'if (b.marker === undefined) continue;',
-        replacement: 'if (b.marker === undefined) void 0;',
+        anchor: 'if (b.marker !== undefined) this.markerSet.add(b.marker);',
+        replacement: 'if (b.marker === undefined) continue;\n      this.markerSet.add(b.marker);',
       },
     ],
     tests: [INJ],
-    expectRed: ['标记形状不对的块:只排除所在事件'],
-    mustKill: ['标记形状不对的块:只排除所在事件'],
+    expectRed: ['标记形状不对的块:照常登记正文'],
+    mustKill: ['标记形状不对的块:照常登记正文'],
+  },
+  {
+    id: 'block-body-truncated',
+    clause: 'R21-6.9:块正文超过 4096 码点 fail-closed(恢复成截断 → 红)',
+    edits: [
+      {
+        file: INJECTION,
+        anchor: 'if (out.length >= max) throw new InjectionIndexLimitError();',
+        replacement: 'if (out.length >= max) break;',
+      },
+    ],
+    tests: [INJ],
+    expectRed: ['块正文超过 4096 码点'],
+    mustKill: ['块正文超过 4096 码点'],
   },
   {
     id: 'signal-fields-any-kind',

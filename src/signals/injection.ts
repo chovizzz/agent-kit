@@ -14,7 +14,7 @@ import { SESSION_MARKERS_MAX } from '../contracts/session-stat.js';
 
 /** 复述阈值(码点):连续重合 ≥ 此值判为复述;15 个不判。 */
 export const RECITAL_MIN_CHARS = 16;
-/** 参与复述比对的块正文上限(码点);正文本身 ≤ 1536 字节,更长的只可能是病态输入。 */
+/** 块正文上限(码点);契约正文 ≤ 1536 字节,更长的只可能是病态输入 → 抛 {@link InjectionIndexLimitError}(fail-closed),不截断。 */
 export const INJECTION_BODY_MAX_CHARS = 4096;
 /**
  * 每会话复述窗口总数上限(≈ 4 个满长块)。超限 = 该会话的注入识别无法再保证完整,fail-closed:
@@ -28,11 +28,11 @@ export class InjectionIndexLimitError extends Error {
   }
 }
 
-/** 取字符串的前 max 个码点(迭代器,不全量展开)。 */
-function firstCodePoints(s: string, max: number): string[] {
+/** 把块正文按码点取出(迭代器,不全量展开);超过 max 个码点 → fail-closed(契约:块正文 ≤ 1536 字节,超长只可能是病态输入),不截断。 */
+function bodyCodePoints(s: string, max: number): string[] {
   const out: string[] = [];
   for (const ch of s) {
-    if (out.length >= max) break;
+    if (out.length >= max) throw new InjectionIndexLimitError();
     out.push(ch);
   }
   return out;
@@ -108,10 +108,9 @@ export class InjectionTracker {
   /** 登记「可取回」的块:取标记、并把正文的 16 码点窗口放进复述比对集合。 */
   addBlocks(blocks: readonly InjectionBlock[]): void {
     for (const b of blocks) {
-      // 标记形状不对的块只排除它所在的事件:不取标记,也不登记正文(不参与复述)
-      if (b.marker === undefined) continue;
-      this.markerSet.add(b.marker);
-      const cps = firstCodePoints(b.body, INJECTION_BODY_MAX_CHARS);
+      // 标记形状不对的块照常登记正文(R21-6.9 排除「前缀块及其复述」,不限定标记合法),只是取不到标记
+      if (b.marker !== undefined) this.markerSet.add(b.marker);
+      const cps = bodyCodePoints(b.body, INJECTION_BODY_MAX_CHARS);
       for (let i = 0; i + RECITAL_MIN_CHARS <= cps.length; i++) {
         this.windows.add(cps.slice(i, i + RECITAL_MIN_CHARS).join(''));
         if (this.windows.size > INJECTION_WINDOWS_MAX) throw new InjectionIndexLimitError();
