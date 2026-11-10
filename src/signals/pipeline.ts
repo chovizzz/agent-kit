@@ -21,7 +21,7 @@ import type {
   TraceReader,
 } from '../contracts/reader.js';
 import { MAX_EXCERPT_CHARS, SignalSchema } from '../contracts/signal.js';
-import type { Signal, SignalEventKind } from '../contracts/signal.js';
+import type { Signal, SignalEventKind, ToolErrorClass } from '../contracts/signal.js';
 import type { RedactFailReason, Redactor } from '../contracts/redact.js';
 import type { ExcludePolicy, ProjectDecision } from './exclude.js';
 import { isExternalToolName } from './external-content.js';
@@ -32,6 +32,9 @@ import {
   PLACEHOLDER_OPEN,
 } from '../redact/placeholder.js';
 import { addCount, newCountRecord } from '../contracts/count-record.js';
+import { isInjectionAware } from './injection.js';
+import { RetryChainTracker } from './retry-chain.js';
+import { classifyToolError } from './tool-error-class.js';
 import { resolveAgentVersion } from './version.js';
 import type { ResolvedVersion } from './version.js';
 
@@ -98,6 +101,11 @@ export interface SessionResult {
   external?: boolean;
   /** 会话时间:meta.started_at,取不到则首个事件的 ts,都没有则 undefined(此时不写计数行,见 buildSessionStat) */
   sessionTs?: string;
+  /**
+   * W4:只有识别注入的 reader(claude / pi)才有;`SessionStat` 的三个可选键由它派生(缺 = 未测)。
+   * `retryChainMax` 由本管线从实际产出的事件流算(被注入排除的事件不进链)。
+   */
+  w4?: { markers: readonly string[]; injectionExcluded: number; retryChainMax: number };
   /** 已脱敏且通过复扫的信号 */
   signals: Signal[];
   dropped: number;
@@ -118,6 +126,9 @@ interface Candidate {
   truncated: boolean;
   /** D4:跨文件去重键(仅 claude / pi 带);由事件指纹 + 同指纹出现序号加盐哈希而来,不含原文 */
   eventKey?: string;
+  /** W4:只在 tool_result_failed 上;枚举 / 整数,不含文本 */
+  toolErrorClass?: ToolErrorClass;
+  retryChainLen?: number;
   result?: ExcerptResult;
 }
 
@@ -280,6 +291,7 @@ export async function processSession(
   let sessionExternal = false;
   const candidates: Candidate[] = [];
   let eventChain = '';
+  const retryChains = new RetryChainTracker();
   let index = 0;
   let settled = 0;
   let firstEventTs: string | undefined;
@@ -334,8 +346,18 @@ export async function processSession(
         }
       }
       if (ev.external_content === true || isExternalToolName(ev.tool_name)) sessionExternal = true;
+      // W4:重试链(同一工具连续失败)——成功结果结束链;只看实际产出的事件(被注入排除的已是 meta)
+      let retryChainLen: number | undefined;
+      if (ev.kind === 'tool_result') {
+        const key =
+          ev.tool_name !== undefined && ev.tool_name !== ''
+            ? ev.tool_name.slice(0, TOOL_NAME_WINDOW)
+            : undefined;
+        retryChainLen = retryChains.observe(key, ev.tool_failed === true);
+      }
       if (wantsSignal(ev)) {
         const text = ev.text;
+        const toolErrorClass = ev.kind === 'tool_result' ? classifyToolError(text) : undefined;
         let eventKey: string | undefined;
         if (EVENT_KEY_AGENTS.has(reader.agent)) {
           const textHash = createHash('sha256')
@@ -360,6 +382,9 @@ export async function processSession(
           text: text === undefined ? undefined : text.slice(0, TEXT_WINDOW),
           truncated: text !== undefined && text.length > TEXT_WINDOW,
           ...(eventKey !== undefined ? { eventKey } : {}),
+          // 失败文本只在这里(排除判定之前、原文还在内存时)映射成枚举;没有失败文本时不写
+          ...(toolErrorClass !== undefined ? { toolErrorClass } : {}),
+          ...(retryChainLen !== undefined ? { retryChainLen } : {}),
         });
       }
       if (decision !== undefined) await inStage('redact', settle);
@@ -413,6 +438,9 @@ export async function processSession(
           // 与 sigIdFor 用的序号是同一个 c.index(会话事件流内的位置,含不产信号的事件)
           event_index: c.index,
           ...(c.eventKey !== undefined ? { event_key: c.eventKey } : {}),
+          // W4:新键只进信号记录,不进 sig_id(R21-18 第 40 条)
+          ...(c.toolErrorClass !== undefined ? { tool_error_class: c.toolErrorClass } : {}),
+          ...(c.retryChainLen !== undefined ? { retry_chain_len: c.retryChainLen } : {}),
           // 外部内容会话不落 tool_name:调用名是模型读完外部内容之后自己写的,宿主拒绝执行也照样进 trace,
           // 白名单字符足以拼出指令性标记(如 SYSTEM:xxx),而 contracts #8 要求外部会话只留结构化计数
           ...(c.toolName !== undefined && !external ? { tool_name: c.toolName } : {}),
@@ -421,8 +449,18 @@ export async function processSession(
       base.signals.push(sig);
     }
     const sessionTs = meta.started_at ?? firstEventTs;
+    const inj = isInjectionAware(read) ? read.injection() : undefined;
     return {
       ...base,
+      ...(inj !== undefined
+        ? {
+            w4: {
+              markers: inj.markers,
+              injectionExcluded: inj.excluded,
+              retryChainMax: retryChains.max(),
+            },
+          }
+        : {}),
       counts,
       meta,
       version,

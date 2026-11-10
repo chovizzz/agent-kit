@@ -89,6 +89,8 @@ async function isClearlyNotPiSession(file: string): Promise<boolean> {
 
 export class PiReader extends JsonlTraceReader<PiState> {
   readonly agent: AgentId = 'pi';
+  /** R21-6.9 / R21-6.6(W4):识别 RSI 注入块、取回标记(spec §12.3) */
+  protected override readonly detectsInjection = true;
 
   protected async listSessionFiles(source: string): Promise<string[]> {
     const files = await walkFiles(source, {
