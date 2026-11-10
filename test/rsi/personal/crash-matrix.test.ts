@@ -156,7 +156,7 @@ describe('R21-3.6a 崩溃窗口里的用户改动:保留、diverged、journal �
 });
 
 describe('恢复先于 R21-3.5 判定,且不借机改归属', () => {
-  it('崩溃在 recorded 之后、head.json 之前,换了 [rsi] repo 再来:恢复沿用 head.json 原有的 owner_repo_fp,随后判 personal_owner_changed', async () => {
+  it('R21-3.5 崩溃在 recorded 之后、head.json 之前,换了 [rsi] repo 再来:恢复沿用 head.json 原有的 owner_repo_fp,随后判 personal_owner_changed', async () => {
     const w = await makeWorld('p-crash-owner-');
     await setupRepo(w);
     await expect(commitNext(w, 'journal:recorded')).rejects.toBeInstanceOf(InjectedCrash);
@@ -173,4 +173,61 @@ describe('恢复先于 R21-3.5 判定,且不借机改归属', () => {
     });
     expect(await readJournal(w.h)).toEqual({ kind: 'absent' });
   });
+});
+
+describe('R21-3.6a 恢复同样遵守「head.json 只在 journal 到达 recorded 后写」', () => {
+  it('R21-3.6a 崩溃在工作树同步之后(journal 仍是 ref_updated)→ 恢复先把 journal 持久化到 recorded,再写 head.json,最后删 journal', async () => {
+    const w = await makeWorld('p-crash-order-');
+    const first = await setupRepo(w);
+    await expect(commitNext(w, 'after:read-tree')).rejects.toBeInstanceOf(InjectedCrash);
+    const events: string[] = [];
+    const o = await withLock(w, (locks) =>
+      openPersonalRepo(
+        repoDeps(w, {
+          onStep: async (s) => {
+            events.push(s);
+            if (s === 'journal:recorded') {
+              // 此刻 journal 已落盘为 recorded,head.json 还是旧值
+              const j = await readJournal(w.h);
+              expect(j).toMatchObject({ kind: 'ok', value: { phase: 'recorded' } });
+              expect(await readHead(w.h)).toMatchObject({ kind: 'ok', value: { head: first } });
+            }
+            if (s === 'after:head') {
+              expect(await readJournal(w.h)).toMatchObject({
+                kind: 'ok',
+                value: { phase: 'recorded' },
+              });
+            }
+          },
+        }),
+        locks,
+      ),
+    );
+    expect(o.kind).toBe('ready');
+    expect(events.indexOf('journal:recorded')).toBeGreaterThanOrEqual(0);
+    expect(events.indexOf('journal:recorded')).toBeLessThan(events.indexOf('after:head'));
+    expect(events.indexOf('after:head')).toBeLessThan(events.indexOf('after:journal_removed'));
+  });
+});
+
+describe('R21-3.6a 索引标志(assume-unchanged / skip-worktree)让 status 看不见改动:不当成「干净」', () => {
+  it.each(['--assume-unchanged', '--skip-worktree'])(
+    '窗口 journal:ref_updated:update-index %s 之后又改了文件 → diverged,改动与 journal 原样保留',
+    async (flag) => {
+      const w = await makeWorld('p-flags-');
+      await setupRepo(w);
+      await expect(commitNext(w, 'journal:ref_updated')).rejects.toBeInstanceOf(InjectedCrash);
+      git(w, ['update-index', flag, 'rules/base.md']);
+      await writeUserFile(w, 'rules/base.md', 'HIDDEN EDIT\n');
+      // status 对被标记的文件什么都不报:这正是不能只信 status 的原因
+      expect(git(w, ['--no-optional-locks', 'status', '--porcelain', '--ignored'])).not.toContain(
+        'rules/base.md',
+      );
+      const before = await snapshot(w);
+      const o = await withLock(w, (locks) => openPersonalRepo(repoDeps(w), locks));
+      expect(o).toMatchObject({ kind: 'deferred', reason: 'personal_repo_diverged' });
+      expect(await snapshot(w)).toEqual(before);
+      expect(await readUserFile(w, 'rules/base.md')).toBe('HIDDEN EDIT\n');
+    },
+  );
 });

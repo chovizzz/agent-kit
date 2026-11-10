@@ -41,6 +41,12 @@ describe('W2 变异表', () => {
       'revocations-old-lines-dropped',
       'lock-reclaim-without-reread',
       'lock-assert-held-always-true',
+      // 评审后追加
+      'recovery-record-skips-recorded-phase',
+      'bootstrap-structure-check-skipped',
+      'bootstrap-observation-skipped',
+      'index-flags-ignored-recovery',
+      'tree-case-variants-allowed',
     ]) {
       expect(ids, must).toContain(must);
     }

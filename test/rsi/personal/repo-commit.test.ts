@@ -109,6 +109,13 @@ describe('R21-3.6 commitPersonal', () => {
           { path: 'rules/a/b.md', content: '2' },
         ]),
       ).rejects.toBeInstanceOf(TreeSpecError);
+      // 完全相同的路径出现两次
+      await expect(
+        run([
+          { path: 'rules/a.md', content: '1' },
+          { path: 'rules/a.md', content: '2' },
+        ]),
+      ).rejects.toBeInstanceOf(TreeSpecError);
       await expect(
         commitPersonal(
           repoDeps(w),
@@ -116,6 +123,38 @@ describe('R21-3.6 commitPersonal', () => {
           { ...spec('2', BASE_FILES), txnId: 'XYZ' },
         ),
       ).rejects.toBeInstanceOf(TreeSpecError);
+    });
+
+    it('rules/A 与 rules/a:大小写不敏感的同名路径一律拒绝(大小写不敏感的卷上无法检出)', async () => {
+      const w = await makeWorld('pc-case-');
+      await setupRepo(w);
+      const before = await snapshot(w);
+      const run = (files: { path: string; content: string }[]) =>
+        withLock(w, (locks) => commitPersonal(repoDeps(w), locks, spec('2', files)));
+      for (const files of [
+        [
+          { path: 'rules/A', content: '1' },
+          { path: 'rules/a/b.md', content: '2' },
+        ],
+        [
+          { path: 'rules/A/x.md', content: '1' },
+          { path: 'rules/a/y.md', content: '2' },
+        ],
+        [
+          { path: 'rules/a/x.md', content: '1' },
+          { path: 'rules/A', content: '2' },
+        ],
+      ]) {
+        await expect(run(files)).rejects.toBeInstanceOf(TreeSpecError);
+      }
+      expect(await snapshot(w)).toEqual(before);
+      // 对照:同一目录下大小写相同的多个文件、不同名字的目录并存没问题
+      const ok = await run([
+        { path: 'rules/a/x.md', content: '1' },
+        { path: 'rules/a/y.md', content: '2' },
+        { path: 'rules/b/x.md', content: '3' },
+      ]);
+      expect(ok.status).toBe('committed');
     });
 
     it('正向对照:合法路径(含深层目录、点与连字符)通过,且全部是 100644', async () => {

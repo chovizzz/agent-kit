@@ -37,7 +37,7 @@ async function kind(p: Promise<unknown>): Promise<string> {
 const alive = (over: RsiLockDeps = {}): RsiLockDeps => ({ isAlive: () => true, ...over });
 
 describe('R21-3.2 personal/lock 位置与权限', () => {
-  it('锁在 <HOME>/.local/state/agent-kit/rsi-personal/lock,文件 0600、目录 0700,内容含 pid / started_at / nonce / kit_version;释放后消失', async () => {
+  it('R21-3.2 锁在 <HOME>/.local/state/agent-kit/rsi-personal/lock,文件 0600、目录 0700,内容含 pid / started_at / nonce / kit_version;释放后消失', async () => {
     const w = await makeWorld('pl-basic-');
     const lock = await acquirePersonalLock(w.h, { pid: 4242 });
     expect(lock.path).toBe(lockFile(w));

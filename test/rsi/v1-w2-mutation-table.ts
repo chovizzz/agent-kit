@@ -480,7 +480,7 @@ export const V1_W2_MUTATIONS: readonly V1W2Mutation[] = [
     edits: [
       {
         file: JOURNAL,
-        anchor: "if (revParse(c.git, 'refs/heads/rsi') !== commit) return inconsistent();",
+        anchor: "if (revParse(c.git, 'refs/heads/rsi') !== done) return inconsistent();",
         replacement: 'void 0;',
       },
     ],
@@ -528,13 +528,22 @@ export const V1_W2_MUTATIONS: readonly V1W2Mutation[] = [
   },
   {
     id: 'tree-duplicate-paths-allowed',
-    clause: 'R21-3.1:同一路径(不区分大小写)重复必须拒绝',
-    edits: [
-      { file: COMMIT, anchor: 'if (seen.has(low))', replacement: "if (seen.has(low + '\\u0000'))" },
-    ],
+    clause: 'R21-3.1:同一路径重复必须拒绝',
+    edits: [{ file: COMMIT, anchor: " || kind === 'file'", replacement: '' }],
     tests: [COMMITT],
     expectRed: ['同一路径重复'],
     mustKill: ['同一路径重复'],
+  },
+  {
+    id: 'tree-case-variants-allowed',
+    clause:
+      'R21-3.1:树按不区分大小写的命名空间校验(大小写不同的同名路径在大小写不敏感的卷上无法检出)',
+    edits: [
+      { file: COMMIT, anchor: 'if (seen.exact !== prefix)', replacement: 'if (false as boolean)' },
+    ],
+    tests: [COMMITT],
+    expectRed: ['rules/A 与 rules/a:大小写不敏感的同名路径一律拒绝'],
+    mustKill: ['rules/A 与 rules/a:大小写不敏感的同名路径一律拒绝'],
   },
 
   // ---- W0-9 revocations.jsonl ----
@@ -671,6 +680,100 @@ export const V1_W2_MUTATIONS: readonly V1W2Mutation[] = [
     tests: [LOCK],
     expectRed: ['状态目录权限宽于 0700'],
     mustKill: ['状态目录权限宽于 0700'],
+  },
+
+  // ---- 评审(Pi R1)后追加的不变量 ----
+  {
+    id: 'recovery-record-skips-recorded-phase',
+    clause: 'R21-3.6a:head.json 只在 journal 到达 recorded 后写(恢复的「只差记录」分支同样遵守)',
+    edits: [
+      {
+        file: JOURNAL,
+        anchor: "await recordHeadAndFinish(c, await writePhase(c, j, { phase: 'recorded' }));",
+        replacement: "await recordHeadAndFinish(c, { ...j, phase: 'recorded' });",
+      },
+    ],
+    tests: [MATRIX],
+    expectRed: ['恢复先把 journal 持久化到 recorded'],
+    mustKill: ['恢复先把 journal 持久化到 recorded'],
+  },
+  {
+    id: 'bootstrap-structure-check-skipped',
+    clause:
+      'R21-3.4 先于一切:bootstrap 恢复(initialized / committed / recorded)读引用、写记录之前先做结构校验',
+    edits: [
+      {
+        file: JOURNAL,
+        anchor: "if (!repoCheck.ok) return { status: 'invalid', why: repoCheck.why };",
+        replacement: 'void repoCheck;',
+      },
+    ],
+    tests: [BOOT],
+    expectRed: ['结构校验先行'],
+    mustKill: ['结构校验先行'],
+  },
+  {
+    id: 'bootstrap-observation-skipped',
+    clause:
+      'W0-5:任何不一致的组合 → personal_repo_invalid(保留 journal);bootstrap 恢复同样核对 HEAD / 索引 / 工作树,不只看引用值',
+    edits: [
+      {
+        file: JOURNAL,
+        anchor: 'if (!bootstrapObserved(c, commit)) return inconsistent();',
+        replacement: 'void 0;',
+      },
+      {
+        file: JOURNAL,
+        anchor: 'if (!bootstrapObserved(c, done)) return inconsistent();',
+        replacement: 'void 0;',
+      },
+    ],
+    tests: [BOOT],
+    expectRed: ['→ bootstrap_inconsistent,journal 保留,不记录'],
+    mustKill: ['→ bootstrap_inconsistent,journal 保留,不记录'],
+  },
+  {
+    id: 'bootstrap-update-ref-lock-unchecked',
+    clause: 'R20-5.5:每个提交点前 assertHeld(bootstrap 写正式引用之前同样复核)',
+    edits: [
+      {
+        file: JOURNAL,
+        anchor: 'await assertLocks(c); // 正式引用被写之前复核锁',
+        replacement: '// 不复核',
+      },
+    ],
+    tests: [BOOT],
+    expectRed: ['正式引用被写之前丢锁'],
+    mustKill: ['正式引用被写之前丢锁'],
+  },
+  {
+    id: 'index-flags-ignored-recovery',
+    clause:
+      'R21-3.6a:assume-unchanged / skip-worktree 会让 status 看不见改动,恢复不得据此判「干净」',
+    edits: [
+      {
+        file: JOURNAL,
+        anchor: 'indexFlagged: indexFlagged(git),',
+        replacement: 'indexFlagged: false,',
+      },
+    ],
+    tests: [MATRIX],
+    expectRed: ['之后又改了文件 → diverged'],
+    mustKill: ['之后又改了文件 → diverged'],
+  },
+  {
+    id: 'index-flags-ignored-situation',
+    clause: 'R21-3.5 ①:工作树干净的判定不得被索引标志蒙混',
+    edits: [
+      {
+        file: CHECK,
+        anchor: "if (indexFlagged(git)) return { situation: 2, why: 'index_flags' };",
+        replacement: 'void 0;',
+      },
+    ],
+    tests: [SITU],
+    expectRed: ['索引标志(assume-unchanged)藏起了工作树改动'],
+    mustKill: ['索引标志(assume-unchanged)藏起了工作树改动'],
   },
 
   // ---- 单一 git 出口(W0-11):源码里多出一个 runSync 引用 → 红 ----

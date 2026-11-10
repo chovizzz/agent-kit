@@ -58,7 +58,7 @@ function forgeCommit(w: World, entries: { mode: string; name: string; content: s
 }
 
 describe('R21-3.4 结构校验', () => {
-  it('正向对照:干净仓库通过;属主为当前 uid、权限恰为 0700', async () => {
+  it('R21-3.4 正向对照:干净仓库通过;属主为当前 uid、权限恰为 0700', async () => {
     const w = await makeWorld('p-struct-ok-');
     await setupRepo(w);
     expect(await structure(w)).toEqual({ ok: true });
@@ -66,7 +66,7 @@ describe('R21-3.4 结构校验', () => {
     expect(st.mode & 0o777).toBe(0o700);
   });
 
-  it('① .git 是 gitdir 文件(不是真实目录)', async () => {
+  it('R21-3.4 ① .git 是 gitdir 文件(不是真实目录)', async () => {
     const w = await makeWorld('p-struct-gitfile-');
     await setupRepo(w);
     const moved = path.join(w.dir, 'moved-gitdir');
@@ -98,7 +98,7 @@ describe('R21-3.4 结构校验', () => {
     expect(await structure(w)).toMatchObject({ ok: false, why: 'bare' });
   });
 
-  it('② objects/info/alternates', async () => {
+  it('R21-3.4 ② objects/info/alternates', async () => {
     const w = await makeWorld('p-struct-alt-');
     await setupRepo(w);
     await safe.mkdirp(w.io, path.join(w.h.repoDir, '.git', 'objects', 'info'), 0o700);
@@ -110,7 +110,7 @@ describe('R21-3.4 结构校验', () => {
     await expectInvalid(w, 'alternates');
   });
 
-  it('③ config.worktree', async () => {
+  it('R21-3.4 ③ config.worktree', async () => {
     const w = await makeWorld('p-struct-cwt-');
     await setupRepo(w);
     await safe.writeFile(w.io, path.join(w.h.repoDir, '.git', 'config.worktree'), '[core]\n');
@@ -135,7 +135,7 @@ describe('R21-3.4 结构校验', () => {
     });
   });
 
-  it('⑤ 有 remote(旧式 .git/remotes/ 定义,不经 config 键)', async () => {
+  it('R21-3.4 ⑤ 有 remote(旧式 .git/remotes/ 定义,不经 config 键)', async () => {
     const w = await makeWorld('p-struct-remote-');
     await setupRepo(w);
     await safe.mkdirp(w.io, path.join(w.h.repoDir, '.git', 'remotes'), 0o700);
@@ -162,7 +162,7 @@ describe('R21-3.4 结构校验', () => {
     expect(await structure(w, uid)).toEqual({ ok: true }); // 对照:真实 uid 通过
   });
 
-  it('⑦ 树里有 .gitattributes(任意层级)', async () => {
+  it('R21-3.4 ⑦ 树里有 .gitattributes(任意层级)', async () => {
     const w = await makeWorld('p-struct-attr-');
     await setupRepo(w);
     forgeCommit(w, [{ mode: '100644', name: '.gitattributes', content: '* text\n' }]);

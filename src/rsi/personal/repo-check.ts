@@ -308,8 +308,8 @@ function checkTree(git: ClosedGit): StructureResult {
 // R21-3.5 HEAD 与工作树判定
 // ---------------------------------------------------------------------------
 
-export type DivergedWhy =
-  'branch_not_rsi' | 'stash' | 'worktree_dirty' | 'head_not_descendant' | 'auto_output_changed';
+export type DivergedWhy = 'index_flags';
+'branch_not_rsi' | 'stash' | 'worktree_dirty' | 'head_not_descendant' | 'auto_output_changed';
 
 export type InvalidSituationWhy = 'record_missing' | 'head_unreadable' | 'no_common_ancestor';
 
@@ -333,6 +333,19 @@ export function statusEntries(git: ClosedGit): { xy: string; path: string }[] | 
     .split('\0')
     .filter((x) => x !== '')
     .map((e) => ({ xy: e.slice(0, 2), path: e.slice(3) }));
+}
+
+/**
+ * 索引里是否有 assume-unchanged / skip-worktree 一类标志(`ls-files -v` 的标签不是 `H`)。这些标志让 `status` 看不见工作树里的真实改动,
+ * 所以「工作树干净」的判定(R21-3.5 ①、R21-3.6a 恢复)一律把它们当成不干净。只读。
+ */
+export function indexFlagged(git: ClosedGit): boolean {
+  const r = git.run(['ls-files', '-v', '-z'], { readOnly: true });
+  if (r.status !== 0) return true; // 读不出来就不当成干净
+  return r.stdout
+    .split('\0')
+    .filter((x) => x !== '')
+    .some((e) => e[0] !== 'H');
 }
 
 /**
@@ -360,6 +373,7 @@ export async function classifyRepo(
   const st = statusEntries(git);
   if (st === null) return { situation: 3, why: 'head_unreadable' };
   if (st.length !== 0) return { situation: 2, why: 'worktree_dirty' };
+  if (indexFlagged(git)) return { situation: 2, why: 'index_flags' };
   // HEAD 必须是记录提交的后代(含相等):是记录的祖先(落后)或历史分叉都是 ②
   const desc = git.run(['merge-base', '--is-ancestor', record.head, head], { readOnly: true });
   if (desc.status !== 0) return { situation: 2, why: 'head_not_descendant' };

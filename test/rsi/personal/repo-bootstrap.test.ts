@@ -4,6 +4,7 @@
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { exists, lstat, readText } from '../../../src/io/read-fs.js';
+import { RsiLockError } from '../../../src/rsi/lock-error.js';
 import * as safe from '../../../src/io/safe-fs.js';
 import { openPersonalRepo, type StepHook } from '../../../src/rsi/personal/commit.js';
 import { EMPTY_TREE } from '../../../src/rsi/personal/commit-journal.js';
@@ -157,5 +158,102 @@ describe('W0-5 bootstrap 崩溃恢复(四个 phase 之间各注入一次)', () =
     expect(o).toMatchObject({ kind: 'invalid', why: 'bootstrap_inconsistent' });
     expect(await exists(path.join(w.h.stateDir, 'commit-journal.json'))).toBe(true);
     expect(await readText(path.join(w.h.stateDir, 'commit-journal.json'))).toContain('"committed"');
+  });
+});
+
+describe('W0-5 bootstrap 恢复:结构校验先行、观测核对、丢锁即停', () => {
+  it.each(['journal:initialized', 'journal:committed', 'journal:recorded'])(
+    '崩溃于 %s 之后仓库配置被改成不合格(本地 core.sshCommand)→ 结构校验先行:personal_repo_invalid,journal 保留,没有写 head.json',
+    async (step) => {
+      const w = await makeWorld('p-b-struct-');
+      await expect(boot(w, crashAt(step))).rejects.toBeInstanceOf(InjectedCrash);
+      git(w, ['config', '--local', 'core.sshCommand', 'evil']);
+      const o = await boot(w);
+      expect(o).toMatchObject({
+        kind: 'invalid',
+        why: 'config_key',
+        breaker: 'personal_repo_invalid',
+      });
+      expect(await readHead(w.h)).toEqual({ kind: 'absent' }); // 不能先记录、后报错
+      expect(await readJournal(w.h)).toMatchObject({ kind: 'ok' }); // 恢复凭据还在
+    },
+  );
+
+  /** detached 需要一个存在的提交:空树根提交(崩溃点在 committed 之前没有 refs/heads/rsi,所以现造一个) */
+  const detachedTarget = (w: World): string =>
+    git(w, ['commit-tree', EMPTY_TREE, '-m', 'detached target']);
+
+  const MODS: [string, (w: World) => Promise<void>][] = [
+    [
+      '切到另一个分支',
+      async (w) => {
+        git(w, ['symbolic-ref', 'HEAD', 'refs/heads/other']);
+      },
+    ],
+    [
+      'detached HEAD',
+      async (w) => {
+        git(w, ['update-ref', '--no-deref', 'HEAD', detachedTarget(w)]);
+      },
+    ],
+    ['加了未跟踪文件', (w) => safe.writeFile(w.io, path.join(w.h.repoDir, 'scratch.txt'), 'x\n')],
+    [
+      '只改索引',
+      async (w) => {
+        const blob = git(w, ['hash-object', '-w', '--stdin'], { input: 'staged\n' });
+        git(w, ['update-index', '--add', '--cacheinfo', `100644,${blob},rules/x.md`]);
+      },
+    ],
+  ];
+
+  for (const step of ['journal:initialized', 'journal:committed'] as const) {
+    it.each(MODS)(
+      `崩溃于 ${step} 之后:%s → bootstrap_inconsistent,journal 保留,不记录`,
+      async (_n, mod) => {
+        const w = await makeWorld('p-b-obs-');
+        await expect(boot(w, crashAt(step))).rejects.toBeInstanceOf(InjectedCrash);
+        await mod(w);
+        const o = await boot(w);
+        expect(o).toMatchObject({ kind: 'invalid', why: 'bootstrap_inconsistent' });
+        expect(await readHead(w.h)).toEqual({ kind: 'absent' });
+        expect(await readJournal(w.h)).toMatchObject({ kind: 'ok' });
+      },
+    );
+  }
+
+  it('崩溃在建目录之后、git init 之前(planned,目录存在且为空)→ 续做:这是对契约 W0-5 的有意解释(空目录没有 .git,字面上过不了 R21-3.4),见汇报', async () => {
+    const w = await makeWorld('p-b-emptydir-');
+    await expect(boot(w, crashAt('bootstrap:dir_ready'))).rejects.toBeInstanceOf(InjectedCrash);
+    expect(await exists(w.h.repoDir)).toBe(true);
+    expect(await exists(path.join(w.h.repoDir, '.git'))).toBe(false);
+    const o = await boot(w);
+    expect(o.kind).toBe('ready');
+  });
+
+  it('正式引用被写之前丢锁(lock_lost)→ 立即停止:refs/heads/rsi 未被创建;之后持好锁再来可续做', async () => {
+    const w = await makeWorld('p-b-lost-');
+    const state = { lost: false };
+    const locks = {
+      personal: {
+        assertHeld: async (): Promise<void> => {
+          if (state.lost) throw new RsiLockError('lock_lost');
+        },
+      },
+    };
+    await expect(
+      openPersonalRepo(
+        repoDeps(w, {
+          onStep: (s) => {
+            if (s === 'bootstrap:before:update-ref') state.lost = true;
+          },
+        }),
+        locks,
+        { bootstrap: true },
+      ),
+    ).rejects.toMatchObject({ kind: 'lock_lost' });
+    expect(gitRaw(w, ['rev-parse', '--verify', '-q', 'refs/heads/rsi']).status).not.toBe(0);
+    expect(await readHead(w.h)).toEqual({ kind: 'absent' });
+    const o = await boot(w);
+    expect(o.kind).toBe('ready');
   });
 });

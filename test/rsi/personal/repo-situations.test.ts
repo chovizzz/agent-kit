@@ -45,7 +45,7 @@ async function expectDiverged(w: World, why: string): Promise<void> {
 }
 
 describe('R21-3.5 情形①:接受并更新记录', () => {
-  it('HEAD = 记录(无人动过):ready,记录不变', async () => {
+  it('R21-3.5 HEAD = 记录(无人动过):ready,记录不变', async () => {
     const w = await makeWorld('p-s1-same-');
     const head = await setupRepo(w);
     const o = await open(w);
@@ -104,7 +104,7 @@ describe('R21-3.5 情形①的边界:记录..HEAD 改 / 删了自动产出,或�
 });
 
 describe('R21-3.5 情形②:personal_repo_diverged(暂停新增生效,不碰仓库)', () => {
-  it('分支不是 rsi', async () => {
+  it('R21-3.5 分支不是 rsi', async () => {
     const w = await makeWorld('p-s2-branch-');
     await setupRepo(w);
     git(w, ['checkout', '-q', '-b', 'other']);
@@ -140,6 +140,15 @@ describe('R21-3.5 情形②:personal_repo_diverged(暂停新增生效,不碰仓�
     await expectDiverged(w, 'worktree_dirty');
   });
 
+  it('索引标志(assume-unchanged)藏起了工作树改动:status 为空也判 diverged', async () => {
+    const w = await makeWorld('p-s2-flags-');
+    await setupRepo(w);
+    git(w, ['update-index', '--assume-unchanged', 'rules/base.md']);
+    await writeUserFile(w, 'rules/base.md', 'hidden\n');
+    expect(git(w, ['--no-optional-locks', 'status', '--porcelain', '--ignored'])).toBe('');
+    await expectDiverged(w, 'index_flags');
+  });
+
   it('HEAD 是记录的祖先(用户把分支退回去了)', async () => {
     const w = await makeWorld('p-s2-behind-');
     const first = await setupRepo(w);
@@ -166,7 +175,7 @@ describe('R21-3.5 情形②:personal_repo_diverged(暂停新增生效,不碰仓�
 });
 
 describe('R21-3.5 情形③:personal_repo_invalid(熔断)', () => {
-  it('记录提交不存在', async () => {
+  it('R21-3.5 记录提交不存在', async () => {
     const w = await makeWorld('p-s3-missing-');
     await setupRepo(w);
     await writeHead(w.h, { schema_version: 1, head: 'd'.repeat(40), owner_repo_fp: w.ownerFp });
@@ -207,7 +216,7 @@ describe('R21-3.5 情形③:personal_repo_invalid(熔断)', () => {
 });
 
 describe('R21-3.5 情形④:personal_owner_changed', () => {
-  it('owner_repo_fp 与当前 [rsi] repo 不同:deferred,不碰仓库;相同则 ready(对照)', async () => {
+  it('R21-3.5 owner_repo_fp 与当前 [rsi] repo 不同:deferred,不碰仓库;相同则 ready(对照)', async () => {
     const w = await makeWorld('p-s4-');
     const head = await setupRepo(w);
     const before = await snapshot(w);

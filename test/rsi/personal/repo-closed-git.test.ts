@@ -4,7 +4,7 @@
  * 否则「不执行」可能只是夹具没生效(空转)。变异:去掉 core.hooksPath 覆盖、放行 filter.*、放行 include.*、改回 read-tree --reset。
  */
 import * as path from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { exists, readText } from '../../../src/io/read-fs.js';
 import * as safe from '../../../src/io/safe-fs.js';
 import { commitPersonal } from '../../../src/rsi/personal/commit.js';
@@ -26,6 +26,10 @@ import {
 
 slowTests();
 
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 let before = '';
 beforeAll(async () => {
   before = await homeSnapshot();
@@ -45,7 +49,7 @@ async function installHook(w: World, hooksDir: string, marker: string): Promise<
 }
 
 describe('R21-3.6 封闭 git 配置', () => {
-  it('用户全局钩子(~/.gitconfig 的 core.hooksPath)不执行', async () => {
+  it('R21-3.6 用户全局钩子(~/.gitconfig 的 core.hooksPath)不执行', async () => {
     const w = await makeWorld('p-glob-');
     const head = await setupRepo(w);
     const hooks = path.join(w.dir, 'global-hooks');
@@ -71,7 +75,7 @@ describe('R21-3.6 封闭 git 配置', () => {
     expect(git(w, ['log', '-1', '--format=%an|%ae|%cn|%ce'])).toBe('agent-kit-rsi||agent-kit-rsi|');
   });
 
-  it('仓库自带的 .git/hooks 钩子不执行(core.hooksPath 被覆盖为空目录)', async () => {
+  it('R21-3.6 仓库自带的 .git/hooks 钩子不执行(core.hooksPath 被覆盖为空目录)', async () => {
     const w = await makeWorld('p-hook-');
     const head = await setupRepo(w);
     const marker = path.join(w.dir, 'marker-local');
@@ -87,7 +91,7 @@ describe('R21-3.6 封闭 git 配置', () => {
     expect(await exists(marker), '本地钩子不得执行').toBe(false);
   });
 
-  it('本地配置里的 core.hooksPath 被结构校验拒绝(personal_repo_invalid),钩子不执行', async () => {
+  it('R21-3.6 本地配置里的 core.hooksPath 被结构校验拒绝(personal_repo_invalid),钩子不执行', async () => {
     const w = await makeWorld('p-hpcfg-');
     const head = await setupRepo(w);
     const hooks = path.join(w.dir, 'cfg-hooks');
@@ -168,7 +172,7 @@ describe('R21-3.6 封闭 git 配置', () => {
     expect(await exists(marker), 'include 链里的过滤器不得执行').toBe(false);
   });
 
-  it('工作树里与目标冲突的用户未提交改动:git 拒绝覆盖,改动保留,按 personal_repo_diverged 处理(不是 read-tree --reset)', async () => {
+  it('R21-3.6 工作树里与目标冲突的用户未提交改动:git 拒绝覆盖,改动保留,按 personal_repo_diverged 处理(不是 read-tree --reset)', async () => {
     const w = await makeWorld('p-conflict-');
     await setupRepo(w);
     const files = [{ path: 'rules/base.md', content: 'base rule v2\n' }, BASE_FILES[1]] as const;
@@ -215,7 +219,29 @@ describe('R21-3.6 封闭 git 配置', () => {
     expect(git(w, ['show', 'HEAD:rules/base.md'])).toBe('base rule');
   });
 
-  it('提交内容原样入库(--no-filters;不做换行转换),相同输入得到相同树', async () => {
+  it('继承环境里的 GIT_*(GIT_NAMESPACE / GIT_OBJECT_DIRECTORY / GIT_CONFIG_COUNT 等)不进入封闭执行', async () => {
+    const w = await makeWorld('p-env-');
+    await setupRepo(w);
+    const hooks = path.join(w.dir, 'env-hooks');
+    const marker = path.join(w.dir, 'marker-env');
+    await installHook(w, hooks, marker);
+    vi.stubEnv('GIT_NAMESPACE', 'evil');
+    vi.stubEnv('GIT_OBJECT_DIRECTORY', path.join(w.dir, 'nowhere'));
+    vi.stubEnv('GIT_COMMON_DIR', path.join(w.dir, 'nowhere-common'));
+    vi.stubEnv('GIT_ALTERNATE_OBJECT_DIRECTORIES', path.join(w.dir, 'nowhere-alt'));
+    vi.stubEnv('GIT_CONFIG_COUNT', '1');
+    vi.stubEnv('GIT_CONFIG_KEY_0', 'core.hooksPath');
+    vi.stubEnv('GIT_CONFIG_VALUE_0', hooks);
+    vi.stubEnv('GIT_CONFIG_PARAMETERS', `'core.hooksPath'='${hooks}'`);
+    const r = await withLock(w, (locks) => commitPersonal(repoDeps(w), locks, spec('2', NEXT)));
+    if (r.status !== 'committed') throw new Error(JSON.stringify(r));
+    expect(await exists(marker)).toBe(false);
+    vi.unstubAllEnvs();
+    expect(git(w, ['rev-parse', 'refs/heads/rsi'])).toBe(r.commit);
+    expect(await exists(path.join(w.dir, 'nowhere'))).toBe(false); // 对象没有写到继承来的对象目录
+  });
+
+  it('R21-3.6 提交内容原样入库(--no-filters;不做换行转换),相同输入得到相同树', async () => {
     const w = await makeWorld('p-bytes-');
     await setupRepo(w);
     const crlf = { path: 'rules/crlf.md', content: 'a\r\nb\r\n' };

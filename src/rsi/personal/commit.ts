@@ -101,7 +101,8 @@ interface DirNode {
 function validateSpec(spec: TreeSpec): DirNode {
   if (!/^[0-9a-f]{16}$/.test(spec.txnId)) throw new TreeSpecError('txnId 必须是 16 位十六进制');
   const root: DirNode = { files: new Map(), dirs: new Map() };
-  const seen = new Set<string>();
+  // 每一层的命名空间不区分大小写(大小写不敏感的卷上 `A` 与 `a` 是同一个名字):前缀(小写)→ 第一次见到的确切写法与类型
+  const names = new Map<string, { exact: string; kind: 'file' | 'dir' }>();
   for (const f of spec.files) {
     const segs = f.path.split('/');
     if (segs.length < 2) throw new TreeSpecError(`顶层不许放文件:${f.path}`);
@@ -109,22 +110,31 @@ function validateSpec(spec: TreeSpec): DirNode {
     for (const s of segs) {
       if (!SEGMENT_RE.test(s)) throw new TreeSpecError(`路径段不合法:${f.path}`);
     }
-    const low = f.path.toLowerCase();
-    if (seen.has(low)) throw new TreeSpecError(`重复路径(不区分大小写):${f.path}`);
-    seen.add(low);
     let node = root;
-    for (const dir of segs.slice(0, -1)) {
-      if (node.files.has(dir)) throw new TreeSpecError(`文件与目录同名:${f.path}`);
-      let next = node.dirs.get(dir);
-      if (next === undefined) {
-        next = { files: new Map(), dirs: new Map() };
-        node.dirs.set(dir, next);
+    let prefix = '';
+    for (const [i, seg] of segs.entries()) {
+      prefix = prefix === '' ? seg : `${prefix}/${seg}`;
+      const kind = i === segs.length - 1 ? 'file' : 'dir';
+      const seen = names.get(prefix.toLowerCase());
+      if (seen !== undefined) {
+        if (seen.exact !== prefix) throw new TreeSpecError(`大小写不同的同名路径:${f.path}`);
+        if (seen.kind !== kind || kind === 'file') {
+          throw new TreeSpecError(`重复路径或文件与目录同名:${f.path}`);
+        }
+      } else {
+        names.set(prefix.toLowerCase(), { exact: prefix, kind });
       }
-      node = next;
+      if (kind === 'dir') {
+        let next = node.dirs.get(seg);
+        if (next === undefined) {
+          next = { files: new Map(), dirs: new Map() };
+          node.dirs.set(seg, next);
+        }
+        node = next;
+      } else {
+        node.files.set(seg, f.content);
+      }
     }
-    const leaf = segs[segs.length - 1] as string;
-    if (node.dirs.has(leaf)) throw new TreeSpecError(`文件与目录同名:${f.path}`);
-    node.files.set(leaf, f.content);
   }
   return root;
 }
@@ -333,7 +343,6 @@ export async function commitPersonal(
   }
   await ctx.onStep?.('after:read-tree');
   j = await writePhase(ctx, j, { phase: 'worktree_synced' });
-  await writePhase(ctx, j, { phase: 'recorded' });
-  await recordHeadAndFinish(ctx, commit);
+  await recordHeadAndFinish(ctx, await writePhase(ctx, j, { phase: 'recorded' }));
   return { status: 'committed', commit, tree: targetTree };
 }

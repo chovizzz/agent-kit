@@ -27,7 +27,7 @@ slowTests();
 const B_FILES = [...BASE_FILES, { path: 'rules/b.md', content: 'from B\n' }] as const;
 
 describe('R21-3.6 update-ref 带期望旧值', () => {
-  it('对照:无并发 → committed', async () => {
+  it('R21-3.6 对照:无并发 → committed', async () => {
     const w = await makeWorld('p-cas-ctrl-');
     await setupRepo(w);
     const r = await withLock(w, (locks) =>
@@ -36,7 +36,7 @@ describe('R21-3.6 update-ref 带期望旧值', () => {
     expect(r.status).toBe('committed');
   });
 
-  it('并发的第二个提交者(在 A 的 update-ref 之前先完成了一次提交)→ A 得到 cas_failed,B 的结果完好', async () => {
+  it('R21-3.6 并发的第二个提交者(在 A 的 update-ref 之前先完成了一次提交)→ A 得到 cas_failed,B 的结果完好', async () => {
     const w = await makeWorld('p-cas-b-');
     const first = await setupRepo(w);
     const box: { b?: Awaited<ReturnType<typeof commitPersonal>> } = {};

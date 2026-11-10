@@ -26,6 +26,8 @@ import {
 import {
   checkRepoStructure,
   gitMust,
+  gitOut,
+  indexFlagged,
   PersonalGitError,
   revParse,
   statusEntries,
@@ -80,7 +82,12 @@ export async function writePhase(
  * `recorded` 之后:写 `head.json`(已有且合法时沿用其 `owner_repo_fp`——恢复发生在 R21-3.5 ④ 之前,不能借机悄悄改归属),最后删 journal。
  * 先写 head、后删 journal:两步之间崩溃 → 下次恢复看到「全部等于 new_commit」,只差记录,幂等重做。
  */
-export async function recordHeadAndFinish(c: OpCtx, commit: string): Promise<void> {
+export async function recordHeadAndFinish(c: OpCtx, j: PersonalCommitJournal): Promise<void> {
+  // 协议不变量落成运行时闸:只有 journal 已(持久化)到达 recorded,才允许写 head.json
+  if (j.phase !== 'recorded' || j.new_commit === null) {
+    throw new Error('recordHeadAndFinish: journal 必须已到达 recorded');
+  }
+  const commit = j.new_commit;
   const cur = await readHead(c.h);
   const fp = cur.kind === 'ok' ? cur.value.owner_repo_fp : c.ownerRepoFp;
   await assertLocks(c);
@@ -110,6 +117,8 @@ export interface Observation {
   worktreeMatchesIndex: boolean;
   /** ⑤ 有未跟踪(`??`)或被忽略(`!!`)的文件 */
   hasUntrackedOrIgnored: boolean;
+  /** 索引里有 assume-unchanged / skip-worktree 等标志(`ls-files -v` 标签不是 `H`):`status` 会据此看不见真实改动,一律不当成「干净」 */
+  indexFlagged: boolean;
 }
 
 function indexEquals(git: ClosedGit, sha: string | null): boolean {
@@ -138,6 +147,7 @@ export function observeRepo(git: ClosedGit, j: PersonalCommitJournal): Observati
     indexIsNew: indexEquals(git, j.new_commit),
     worktreeMatchesIndex: !st.some((e) => e.xy !== '??' && e.xy !== '!!' && e.xy[1] !== ' '),
     hasUntrackedOrIgnored: st.some((e) => e.xy === '??' || e.xy === '!!'),
+    indexFlagged: indexFlagged(git),
   };
 }
 
@@ -154,7 +164,7 @@ export function decideRecovery(
   o: Observation,
   j: Pick<PersonalCommitJournal, 'old_head' | 'new_commit'>,
 ): RecoveryAction {
-  if (!o.headSymbolic || o.hasUntrackedOrIgnored) return 'diverged';
+  if (!o.headSymbolic || o.hasUntrackedOrIgnored || o.indexFlagged) return 'diverged';
   const clean = o.worktreeMatchesIndex;
   if (o.ref === j.old_head && o.indexIsOld && clean) return 'discard';
   if (j.new_commit !== null && o.ref === j.new_commit) {
@@ -192,11 +202,11 @@ export async function recoverCommitJournal(
     if (!syncWorktree(c.git, j.old_head as string, newCommit)) return { outcome: 'diverged' };
     await c.onStep?.('recovery:worktree_synced');
     const synced = await writePhase(c, j, { phase: 'worktree_synced' });
-    await writePhase(c, synced, { phase: 'recorded' });
-    await recordHeadAndFinish(c, newCommit);
+    await recordHeadAndFinish(c, await writePhase(c, synced, { phase: 'recorded' }));
     return { outcome: 'resynced' };
   }
-  await recordHeadAndFinish(c, newCommit);
+  // 只差记录:同样先把 journal 持久化到 recorded,再写 head.json(head.json 只在 journal 到达 recorded 后写)
+  await recordHeadAndFinish(c, await writePhase(c, j, { phase: 'recorded' }));
   return { outcome: 'recorded' };
 }
 
@@ -270,6 +280,19 @@ export async function recoverBootstrap(
   return continueBootstrap(c, j);
 }
 
+/**
+ * bootstrap 的观测核对(任何会写状态的步骤之前):HEAD 是指向 `refs/heads/rsi` 的符号引用、索引与工作树为空(无改动、无未跟踪 / 忽略文件、无索引标志),
+ * 且已有提交时索引树 = 该提交(空树)。不满足 → 不一致,保留 journal。bootstrap 不复用五 phase 的恢复谓词,但同样不只看一个引用值。
+ */
+function bootstrapObserved(c: OpCtx, commit: string | null): boolean {
+  if (gitOut(c.git, ['symbolic-ref', '-q', 'HEAD'], { readOnly: true }) !== 'refs/heads/rsi') {
+    return false;
+  }
+  const st = statusEntries(c.git);
+  if (st === null || st.length !== 0 || indexFlagged(c.git)) return false;
+  return commit === null || indexEquals(c.git, commit);
+}
+
 async function continueBootstrap(c: OpCtx, start: PersonalCommitJournal): Promise<BootstrapResult> {
   let j = start;
   if (j.phase === 'planned') {
@@ -278,24 +301,31 @@ async function continueBootstrap(c: OpCtx, start: PersonalCommitJournal): Promis
       // 目录已存在且非空:要么 git init 已完成(只差写 initialized),要么是别的东西
       const s = await checkRepoStructure(c.h, c.git);
       if (!s.ok) return { status: 'invalid', why: s.why };
-      if (revParse(c.git, 'refs/heads/rsi') !== null) return inconsistent();
+      if (revParse(c.git, 'refs/heads/rsi') !== null || !bootstrapObserved(c, null)) {
+        return inconsistent();
+      }
     } else {
       await assertLocks(c);
       if (dir === 'missing') await makeRepoDir(c.h);
+      await c.onStep?.('bootstrap:dir_ready');
       const r = c.git.init();
       if (r.status !== 0) throw new PersonalGitError('init', r);
     }
     j = await writePhase(c, j, { phase: 'initialized' });
   }
+  // 仓库此刻必须已存在:先做 R21-3.4 结构校验,再读引用、写任何状态(initialized / committed / recorded 的恢复同样如此)
+  const repoCheck = await checkRepoStructure(c.h, c.git);
+  if (!repoCheck.ok) return { status: 'invalid', why: repoCheck.why };
   if (j.phase === 'initialized') {
-    const s = await checkRepoStructure(c.h, c.git);
-    if (!s.ok) return { status: 'invalid', why: s.why };
     let commit = revParse(c.git, 'refs/heads/rsi');
+    if (!bootstrapObserved(c, commit)) return inconsistent();
     if (commit === null) {
       await assertLocks(c);
       const tree = gitMust(c.git, 'mktree', ['mktree'], { input: '' });
       if (tree !== EMPTY_TREE) return inconsistent();
       commit = gitMust(c.git, 'commit-tree', ['commit-tree', EMPTY_TREE, '-m', 'rsi: bootstrap']);
+      await c.onStep?.('bootstrap:before:update-ref');
+      await assertLocks(c); // 正式引用被写之前复核锁
       // 期望旧值为「不存在」的比较交换
       gitMust(c.git, 'update-ref', ['update-ref', 'refs/heads/rsi', commit, '']);
     } else if (
@@ -306,9 +336,10 @@ async function continueBootstrap(c: OpCtx, start: PersonalCommitJournal): Promis
     }
     j = await writePhase(c, j, { phase: 'committed', new_commit: commit });
   }
-  const commit = j.new_commit as string; // committed / recorded 的 journal 必带 new_commit(schema)
-  if (revParse(c.git, 'refs/heads/rsi') !== commit) return inconsistent();
+  const done = j.new_commit as string; // committed / recorded 的 journal 必带 new_commit(schema)
+  if (revParse(c.git, 'refs/heads/rsi') !== done) return inconsistent();
+  if (!bootstrapObserved(c, done)) return inconsistent();
   if (j.phase === 'committed') j = await writePhase(c, j, { phase: 'recorded' });
-  await recordHeadAndFinish(c, commit);
-  return { status: 'created', commit };
+  await recordHeadAndFinish(c, j);
+  return { status: 'created', commit: done };
 }
