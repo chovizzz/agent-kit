@@ -349,11 +349,8 @@ export async function processSession(
       // W4:重试链(同一工具连续失败)——成功结果结束链;只看实际产出的事件(被注入排除的已是 meta)
       let retryChainLen: number | undefined;
       if (ev.kind === 'tool_result') {
-        const key =
-          ev.tool_name !== undefined && ev.tool_name !== ''
-            ? ev.tool_name.slice(0, TOOL_NAME_WINDOW)
-            : undefined;
-        retryChainLen = retryChains.observe(key, ev.tool_failed === true);
+        // 链的身份用 reader 给的**完整**原始工具名(只在内存里用,不落盘),不复用输出侧的名字截断窗口
+        retryChainLen = retryChains.observe(ev.tool_name, ev.tool_failed === true);
       }
       if (wantsSignal(ev)) {
         const text = ev.text;

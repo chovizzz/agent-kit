@@ -163,6 +163,18 @@ describe('retry_chain_len / retry_chain_max(经管线,claude)', () => {
     expect(lens).toEqual([1, 1, 2]);
   });
 
+  it('链的身份用完整原始工具名:共享 192 字符前缀的两个名字是两个工具', async () => {
+    const A = `${'x'.repeat(192)}A`;
+    const B = `${'x'.repeat(192)}B`;
+    const { lens } = await chain([
+      ...fail('l1', A),
+      ...fail('l2', B),
+      ...ok('l3', B), // B 成功:只结束 B 的链
+      ...fail('l4', A),
+    ]);
+    expect(lens).toEqual([1, 1, 2]);
+  });
+
   it('没有失败 → retry_chain_max = 0、信号不带 retry_chain_len', async () => {
     const { r, lens } = await chain([...ok('e1', 'Bash')]);
     expect(lens).toEqual([]);

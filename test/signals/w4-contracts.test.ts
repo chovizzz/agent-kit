@@ -35,6 +35,7 @@ const statBase = {
   external_content: false,
   counts: { user_messages: 1, tool_calls: 0, tool_failures: 0, unknown_event_types: {} },
 };
+const CTX = { cwd: '/work/proj-a', version: '2.1.294' };
 const M = (c: string): string => `rsm_${c.repeat(16)}`;
 
 describe('Signal 追加键', () => {
@@ -115,11 +116,15 @@ describe('升级路径:旧库(无新键)被新代码重采', () => {
       root: w.sessions,
       cwd: '/work/proj-a',
       id: 'up1',
+      // collect 靠行内的 cwd 判定项目归属,所以每行都带 cwd(版本号同理,走 session_meta)
       lines: [
-        userLine(controlBlock(), { isMeta: true }),
-        userLine('你好'),
-        assistantLine([{ type: 'tool_use', id: 'u1', name: 'Bash', input: { command: 'x' } }]),
-        userLine([{ type: 'tool_result', tool_use_id: 'u1', is_error: true, content: 'timeout' }]),
+        userLine(controlBlock(), { isMeta: true, ...CTX }),
+        userLine('你好', CTX),
+        assistantLine([{ type: 'tool_use', id: 'u1', name: 'Bash', input: { command: 'x' } }], CTX),
+        userLine(
+          [{ type: 'tool_result', tool_use_id: 'u1', is_error: true, content: 'timeout' }],
+          CTX,
+        ),
       ],
     });
     const overlay = await writeOverlay(w, selftestOverlayToml());

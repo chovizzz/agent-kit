@@ -16,10 +16,6 @@ import { SESSION_MARKERS_MAX } from '../contracts/session-stat.js';
 export const RECITAL_MIN_CHARS = 16;
 /** 参与复述比对的块正文上限(码点);正文本身 ≤ 1536 字节,更长的只可能是病态输入。 */
 export const INJECTION_BODY_MAX_CHARS = 4096;
-/** 复述比对时每个事件文本最多扫的码元数。 */
-export const RECITAL_SCAN_MAX_UNITS = 1 << 20;
-/** 遍历一行 JSON 找字符串值时最多访问的节点数(防病态宽对象)。 */
-export const INJECTION_WALK_MAX_NODES = 200_000;
 
 /** 前缀之后必须恰是 `空格 + rsm_<16 位十六进制>`(行尾允许空白)。 */
 const MARKER_TAIL_RE = /^ (rsm_[0-9a-f]{16})[ \t]*$/;
@@ -56,11 +52,10 @@ export function blocksInString(s: string): InjectionBlock[] {
 /** 一行已解析 JSON 里全部字符串值(任意深度,含数组)里的块。 */
 export function findInjectionBlocks(root: unknown): InjectionBlock[] {
   const out: InjectionBlock[] = [];
-  let visited = 0;
+  // 显式栈、无节点预算:工作量与该行已解析的体量同阶(行长有硬上限),不会因「预算耗尽」而静默漏检
   const stack: unknown[] = [root];
-  while (stack.length > 0 && visited < INJECTION_WALK_MAX_NODES) {
+  while (stack.length > 0) {
     const v = stack.pop();
-    visited++;
     if (typeof v === 'string') out.push(...blocksInString(v));
     else if (Array.isArray(v)) for (const x of v) stack.push(x);
     else if (typeof v === 'object' && v !== null) for (const x of Object.values(v)) stack.push(x);
@@ -103,8 +98,7 @@ export class InjectionTracker {
   /** 文本里是否有与已登记正文连续 ≥ 16 码点相同的片段。 */
   isRecital(text: string): boolean {
     if (this.windows.size === 0) return false;
-    const src = text.length > RECITAL_SCAN_MAX_UNITS ? text.slice(0, RECITAL_SCAN_MAX_UNITS) : text;
-    const cps = Array.from(src);
+    const cps = Array.from(text);
     for (let i = 0; i + RECITAL_MIN_CHARS <= cps.length; i++) {
       if (this.windows.has(cps.slice(i, i + RECITAL_MIN_CHARS).join(''))) return true;
     }

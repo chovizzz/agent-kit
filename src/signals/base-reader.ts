@@ -32,6 +32,7 @@ import { provisionalSessionRef, sessionRefFor } from './ids.js';
 import { openReadonlyLines, statReadonly } from './open-readonly.js';
 import { findInjectionBlocks, InjectionTracker } from './injection.js';
 import type { InjectionAwareRead } from './injection.js';
+import { isExternalToolName } from './external-content.js';
 
 export type JsonObject = Record<string, unknown>;
 
@@ -426,7 +427,11 @@ export abstract class JsonlTraceReader<S = undefined> implements TraceReader {
         if (outcome.meta) applyMeta(outcome.meta);
 
         let lineEvents: readonly ParsedEvent[] = outcome.events ?? [];
-        if (injection !== undefined) {
+        // 被 reader 整行忽略的行(Claude 侧链等,只记 ignored、没有事件;C1 / C7)不参与注入识别:
+        // 否则侧链里的块会给主线造出假「多标记」,或登记出本不该有的复述比对正文
+        const lineIgnored =
+          (outcome.ignoredDuplicateKinds?.length ?? 0) > 0 && (outcome.events?.length ?? 0) === 0;
+        if (injection !== undefined && !lineIgnored) {
           // R21-6.9:块所在行的计数事件、以及与已取回块正文连续 ≥ 16 码点重合的事件,改写成无文本的 meta(序号不变、不产信号)
           const blocks = findInjectionBlocks(obj);
           if (blocks.length > 0 && lineEvents.every((e) => INJECTION_SOURCE_KINDS.has(e.kind))) {
@@ -438,6 +443,9 @@ export abstract class JsonlTraceReader<S = undefined> implements TraceReader {
               (blocks.length > 0 || (ev.text !== undefined && injection.isRecital(ev.text)));
             if (!hit) return ev;
             injection.noteExcluded();
+            // 被改写前先把事件的外部内容属性(显式标记 / 外部工具名)记到会话级:改写会丢掉工具名,
+            // 否则「外部结果里夹着注入块」会把外部内容会话洗成非外部,摘录得以落盘
+            if (ev.external_content === true || isExternalToolName(ev.tool_name)) external = true;
             return {
               kind: 'meta',
               raw_type: ev.raw_type,

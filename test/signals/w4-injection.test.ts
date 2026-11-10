@@ -276,6 +276,64 @@ describe('claude:块所在事件与复述事件不计入计数 / 信号,标记�
     expect(r.w4?.injectionExcluded).toBe(1);
   });
 
+  it('整行忽略的侧链行不参与识别:侧链里的块不取回标记、不登记复述正文(对照:同样的块在主线里就生效)', async () => {
+    const w = await newWork('w4-cl-side-');
+    const recital = `复述 ${BODY}`;
+    const run = async (sidechain: boolean) =>
+      runFile(
+        createClaudeReader(),
+        await writeClaudeLines(w.io, {
+          root: w.sessions,
+          cwd: '/work/proj-a',
+          id: uid(),
+          lines: [
+            userLine(controlBlock(MARKER_A), { isMeta: true }),
+            userLine(`${controlBlock(MARKER_B)}\n${BODY}`, {
+              isMeta: true,
+              isSidechain: sidechain,
+            }),
+            userLine(recital),
+          ],
+        }),
+      );
+    const side = await run(true);
+    expect(side.w4?.markers).toEqual([MARKER_A]);
+    expect(side.counts?.user_messages).toBe(1); // 复述行照常计入:侧链里的正文没被登记
+    expect(side.w4?.injectionExcluded).toBe(0);
+    const main = await run(false);
+    expect(main.w4?.markers).toEqual([MARKER_A, MARKER_B].sort());
+    expect(main.counts?.user_messages).toBe(0); // 对照:主线里的同一个块让复述行被排除
+    expect(main.w4?.injectionExcluded).toBe(1);
+  });
+
+  it('被排除的外部内容事件仍把会话记为外部内容:后续信号摘录为空(对照:非外部工具时摘录保留)', async () => {
+    const w = await newWork('w4-cl-ext-');
+    const run = async (toolName: string) =>
+      runFile(
+        createClaudeReader(),
+        await writeClaudeLines(w.io, {
+          root: w.sessions,
+          cwd: '/work/proj-a',
+          id: uid(),
+          lines: [
+            // 工具调用的入参里夹着注入块 → 该 tool_call 事件被排除(改写成 meta,工具名随之丢掉)
+            assistantLine([
+              { type: 'tool_use', id: 'x1', name: toolName, input: { url: controlBlock() } },
+            ]),
+            userLine('随后一条与注入无关的普通消息'),
+          ],
+        }),
+      );
+    const external = await run('WebFetch');
+    expect(external.external).toBe(true);
+    expect(external.signals.length).toBeGreaterThan(0);
+    expect(external.signals.every((x) => x.excerpt_redacted === '')).toBe(true);
+    expect(external.w4?.injectionExcluded).toBe(1);
+    const plain = await run('Bash');
+    expect(plain.external).toBe(false);
+    expect(plain.signals.some((x) => x.excerpt_redacted.includes('普通消息'))).toBe(true);
+  });
+
   it('同一会话两个不同标记 → 多标记;一个都没有 → 关联失败;恰一个 → ok', async () => {
     const w = await newWork('w4-cl-multi-');
     const mk = async (lines: Parameters<typeof writeClaudeLines>[1]['lines']) =>

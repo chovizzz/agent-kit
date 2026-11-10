@@ -253,6 +253,50 @@ export const V1_W4_MUTATIONS: readonly V1W4Mutation[] = [
     mustKill: ['没有工具名的失败不成链'],
   },
   {
+    id: 'sidechain-block-scanned',
+    clause: 'R21-6.9 × C1:整行忽略的侧链行也参与注入识别(取回标记、登记复述正文)',
+    edits: [
+      {
+        file: BASE,
+        anchor: 'if (injection !== undefined && !lineIgnored) {',
+        replacement: 'if (injection !== undefined) {',
+      },
+    ],
+    tests: [INJ],
+    expectRed: ['整行忽略的侧链行不参与识别'],
+    mustKill: ['整行忽略的侧链行不参与识别'],
+  },
+  {
+    id: 'excluded-event-loses-external',
+    clause: 'contracts #8:被排除(改写成 meta)的外部内容事件不再把会话记为外部内容',
+    edits: [
+      {
+        file: BASE,
+        anchor:
+          'if (ev.external_content === true || isExternalToolName(ev.tool_name)) external = true;',
+        replacement: 'void isExternalToolName;',
+      },
+    ],
+    tests: [INJ],
+    expectRed: ['被排除的外部内容事件仍把会话记为外部内容'],
+    mustKill: ['被排除的外部内容事件仍把会话记为外部内容'],
+  },
+  {
+    id: 'retry-key-truncated',
+    clause: '§21.24 W0-7:重试链按完整原始工具名建键(改成截断 192 码元)',
+    edits: [
+      {
+        file: PIPE,
+        anchor: 'retryChainLen = retryChains.observe(ev.tool_name, ev.tool_failed === true);',
+        replacement:
+          'retryChainLen = retryChains.observe(ev.tool_name?.slice(0, 192), ev.tool_failed === true);',
+      },
+    ],
+    tests: [SIG],
+    expectRed: ['链的身份用完整原始工具名'],
+    mustKill: ['链的身份用完整原始工具名'],
+  },
+  {
     id: 'tool-error-empty-is-other',
     clause: 'R21-18 第 20 条:没有失败文本时不写 tool_error_class(改成写 other)',
     edits: [
