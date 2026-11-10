@@ -257,7 +257,9 @@ async function preInitCheck(c: OpCtx): Promise<RepoInvalidWhy | null> {
   for (const seg of segs.slice(0, -1)) {
     cur = path.join(cur, seg);
     const a = await lstat(cur).catch(() => null);
-    if (a !== null && a.isSymbolicLink()) return 'ancestor_symlink';
+    if (a === null) return 'ancestor_unreadable'; // 读取失败不当成「没问题」
+    if (a.isSymbolicLink()) return 'ancestor_symlink';
+    if (!a.isDirectory()) return 'ancestor_not_dir';
   }
   const st = await lstat(c.h.repoDir).catch(() => null);
   if (st === null) return 'repo_missing';

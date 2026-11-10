@@ -296,6 +296,49 @@ describe('W0-5 git init 之前的校验(planned + 目录缺失 / 为空):不满�
     expect(await exists(path.join(moved, 'personal', '.git'))).toBe(false);
   });
 
+  it('祖先 lstat 读取失败(上级目录不可搜索)→ ancestor_unreadable,不 init', async () => {
+    const w = await makeWorld('p-b-ancunread-');
+    const share = path.join(w.home, '.local', 'share');
+    const o = await withLock(w, async (locks) => {
+      try {
+        return await openPersonalRepo(
+          repoDeps(w, {
+            onStep: async (s) => {
+              if (s === 'bootstrap:dir_ready') await safe.chmod(w.io, share, 0o000);
+            },
+          }),
+          locks,
+          { bootstrap: true },
+        );
+      } finally {
+        await safe.chmod(w.io, share, 0o755);
+      }
+    });
+    expect(o).toMatchObject({ kind: 'invalid', why: 'ancestor_unreadable' });
+    expect(await exists(path.join(w.h.repoDir, '.git'))).toBe(false);
+  });
+
+  it('祖先是普通文件(不是目录)→ ancestor_not_dir,不 init', async () => {
+    const w = await makeWorld('p-b-ancfile-');
+    const agentKit = path.join(w.home, '.local', 'share', 'agent-kit');
+    const moved = path.join(w.dir, 'moved-agent-kit');
+    const o = await withLock(w, (locks) =>
+      openPersonalRepo(
+        repoDeps(w, {
+          onStep: async (s) => {
+            if (s !== 'bootstrap:dir_ready') return;
+            await safe.rename(w.io, agentKit, moved);
+            await safe.writeFile(w.io, agentKit, 'i am a file');
+          },
+        }),
+        locks,
+        { bootstrap: true },
+      ),
+    );
+    expect(o).toMatchObject({ kind: 'invalid', why: 'ancestor_not_dir' });
+    expect(await exists(path.join(moved, 'personal', '.git'))).toBe(false);
+  });
+
   it('目录权限被放宽(0755)→ mode,不 init', async () => {
     const w = await crashedAtDirReady();
     await safe.chmod(w.io, w.h.repoDir, 0o755);

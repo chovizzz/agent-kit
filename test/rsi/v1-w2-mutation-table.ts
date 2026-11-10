@@ -839,6 +839,34 @@ export const V1_W2_MUTATIONS: readonly V1W2Mutation[] = [
     mustKill: ['祖先目录(.local/share/agent-kit)被换成符号链接'],
   },
   {
+    id: 'preinit-ancestor-read-failure-swallowed',
+    clause: 'W0-5:init 之前祖先 lstat 读取失败 → invalid(不吞错)',
+    edits: [
+      {
+        file: JOURNAL,
+        anchor: "if (a === null) return 'ancestor_unreadable';",
+        replacement: 'void 0;',
+      },
+    ],
+    tests: [BOOT],
+    expectRed: ['祖先 lstat 读取失败(上级目录不可搜索)'],
+    mustKill: ['祖先 lstat 读取失败(上级目录不可搜索)'],
+  },
+  {
+    id: 'preinit-ancestor-not-dir-unchecked',
+    clause: 'W0-5:init 之前祖先必须是目录',
+    edits: [
+      {
+        file: JOURNAL,
+        anchor: "if (!a.isDirectory()) return 'ancestor_not_dir';",
+        replacement: 'void 0;',
+      },
+    ],
+    tests: [BOOT],
+    expectRed: ['祖先是普通文件(不是目录)'],
+    mustKill: ['祖先是普通文件(不是目录)'],
+  },
+  {
     id: 'preinit-mode-unchecked',
     clause: 'W0-5:init 之前目录权限恰为 0700',
     edits: [{ file: JOURNAL, anchor: "return 'mode';", replacement: 'void 0;' }],

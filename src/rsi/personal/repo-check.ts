@@ -194,6 +194,8 @@ export type RepoInvalidWhy =
   | 'config_key'
   | 'remote'
   | 'ancestor_symlink'
+  | 'ancestor_unreadable'
+  | 'ancestor_not_dir'
   | 'repo_dir_not_empty'
   | 'git_read_failed'
   | 'info_attributes'
