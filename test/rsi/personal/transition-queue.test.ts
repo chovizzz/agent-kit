@@ -54,7 +54,7 @@ describe('M13-1 前置任一不成立不推进(逐项各一例;queued_since 同�
     expect((res as Transitioned).next.lifecycle).toBe('canary');
   });
 
-  const ITEMS: Array<[string, Parameters<typeof input>[0], string]> = [
+  const ITEMS: Array<[string, NonNullable<Parameters<typeof input>[0]>, string]> = [
     ['相位 1(V1b 能力未到期)', { ctx: { phase: 1 } }, 'phase_not_available'],
     ['配置无效', { facts: { config_valid: false } }, 'config_invalid'],
     ['enabled 为假', { facts: { enabled: false } }, 'auto_disabled'],
