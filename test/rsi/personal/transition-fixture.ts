@@ -4,7 +4,7 @@
 import type { PersonalLifecycleRecord } from '../../../src/contracts/rsi-personal.js';
 import type { RsiLifecycleState } from '../../../src/contracts/rsi.js';
 import type {
-  PromoteFacts,
+  PromoteBase,
   TransitionCtx,
   TransitionEvent,
 } from '../../../src/rsi/personal/transition-table.js';
@@ -99,7 +99,7 @@ const ev = <K extends TransitionEvent['kind']>(
 ): Ev<K> => ({ kind, evidence, ...rest }) as Ev<K>;
 
 /** 推进事实(全部成立、名额空闲、会话与命中刚好达标) */
-export function FACTS(o: Partial<PromoteFacts> = {}): PromoteFacts {
+export function FACTS(o: Partial<PromoteBase> = {}): PromoteBase {
   return {
     config_valid: true,
     enabled: true,
@@ -130,7 +130,7 @@ export const E = {
     evidence = 'q1',
   ): Ev<'shadow_queue_expired'> => ev('shadow_queue_expired', { queued_since }, evidence),
   promote: (evidence = 'p1', o: Partial<Ev<'shadow_promote'>> = {}): Ev<'shadow_promote'> =>
-    ev('shadow_promote', FACTS(o), evidence),
+    ev('shadow_promote', { ...FACTS(), queued_since: null, ...o }, evidence),
   veto: (evidence = 'v1'): Ev<'veto'> => ev('veto', {}, evidence),
   taint: (evidence = 't1'): Ev<'taint'> => ev('taint', {}, evidence),
   clear: (evidence = 'c1'): Ev<'clear'> => ev('clear', {}, evidence),

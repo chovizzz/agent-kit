@@ -90,7 +90,7 @@ export const V1_W1_MUTATIONS: readonly V1W1Mutation[] = [
     edits: [
       {
         file: ENGINE,
-        anchor: 'if (UNIMPLEMENTED_LIFECYCLES.has(record.lifecycle)) {',
+        anchor: 'if (isUnimplementedLifecycle(record.lifecycle)) {',
         replacement: 'if (false) {',
       },
     ],
@@ -341,6 +341,42 @@ export const V1_W1_MUTATIONS: readonly V1W1Mutation[] = [
     tests: [ENG],
     expectRed: ['终态收到', '终态 veto 的三件事'],
     mustKill: ['终态 veto 的三件事'],
+  },
+  {
+    id: 'M13-6-promote-guard-expiry-removed',
+    clause: 'M13-6:到期先于推进是转移入口的不变量 —— 去掉 shadow_to_canary 守卫里的排队到期检查',
+    edits: [{ file: TABLE, anchor: 'queueExpiryBlocker(e.queued_since, ctx) ??', replacement: '' }],
+    tests: [QUEUE, ROWS],
+    expectRed: ['M13-6 直接投 shadow_promote', 'shadow_to_canary'],
+    mustKill: ['M13-6 直接投 shadow_promote'],
+  },
+  {
+    id: 'window-replay-reason-downgrade',
+    clause: 'R21-4.4a:窗口外重放不得降级终态理由(优先级只升不降)—— 去掉理由优先级比较',
+    edits: [
+      {
+        file: ENGINE,
+        anchor: 'if (terminalPriority(reason) < terminalPriority(rb.reason)) rb.reason = reason;',
+        replacement: 'rb.reason = reason;',
+      },
+    ],
+    tests: [ENG],
+    expectRed: [
+      '幂等窗口外的重放',
+      '完整优先级链',
+      'veto 与 judge_reject 两种到达顺序',
+      'judge_reject 与 harm 的两种顺序',
+      '并列保留先到者',
+    ],
+    mustKill: ['幂等窗口外的重放'],
+  },
+  {
+    id: 'table-rows-unfrozen',
+    clause: 'W1:转移表行对象冻结 —— 去掉 Object.freeze',
+    edits: [{ file: TABLE, anchor: 'return Object.freeze({', replacement: 'return ({' }],
+    tests: [ENG],
+    expectRed: ['转移表不可变'],
+    mustKill: ['转移表不可变'],
   },
   // ---------------------------------------------------------------- M13-1 前置逐项(「逐个删去该项检查」)
   dropCheck(

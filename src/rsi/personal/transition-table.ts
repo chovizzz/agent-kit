@@ -76,7 +76,7 @@ const Evidence = z.string().min(1).max(128);
 const NonNegInt = z.number().int().nonnegative();
 
 /** `shadow → canary` 的推进事实(W0-13;M13-1 逐项前置)。全部必填:缺一项 = 输入校验失败(fail-closed) */
-export const PromoteFactsSchema = z.strictObject({
+export const PromoteBaseSchema = z.strictObject({
   config_valid: z.boolean(),
   enabled: z.boolean(),
   authorized: z.boolean(),
@@ -92,6 +92,14 @@ export const PromoteFactsSchema = z.strictObject({
   current_cluster_signature: RsiClusterSignatureSchema.nullable(),
   /** 全局评估名额被占(R21-6.8;名额的占用判定见 {@link evaluationSlotOccupied}) */
   slot_occupied: z.boolean(),
+});
+export type PromoteBase = z.infer<typeof PromoteBaseSchema>;
+/**
+ * 推进**事件**携带的事实 = 资格事实 + 排队起算日。`shadow → canary` 的守卫自己检查排队到期(到期先于推进是转移入口的不变量,
+ * 不只是 `decideShadowStep` 的行为):直接投 `shadow_promote` 也绕不过。`queued_since` 为 `null` = 没在排队。
+ */
+export const PromoteFactsSchema = PromoteBaseSchema.extend({
+  queued_since: IsoDateSchema.nullable(),
 });
 export type PromoteFacts = z.infer<typeof PromoteFactsSchema>;
 
@@ -173,7 +181,7 @@ type Ev<K extends EventKind> = Extract<TransitionEvent, { kind: K }>;
 // 原因码 / 终态理由 / 目标终态(R21-4.4a、R21-4.6)
 // ---------------------------------------------------------------------------
 /** R21-4.4a ①:终止事件(已在 `rolling_back` 或终态时再来的那一类) */
-export const TERMINATION_KINDS: ReadonlySet<EventKind> = new Set<EventKind>([
+const TERMINATION_KIND_SET: ReadonlySet<EventKind> = new Set<EventKind>([
   'veto',
   'taint',
   'clear',
@@ -181,6 +189,7 @@ export const TERMINATION_KINDS: ReadonlySet<EventKind> = new Set<EventKind>([
   'harm',
   'canary_limit',
 ]);
+export const isTerminationKind = (k: EventKind): boolean => TERMINATION_KIND_SET.has(k);
 
 /** 终止事件的转移原因码(封闭枚举内) */
 export function terminationReason(e: TransitionEvent): string {
@@ -252,7 +261,10 @@ export function utcDayDiff(a: string, b: string): number {
 export function queueExpired(queuedSince: string | null, today: string): boolean {
   return queuedSince !== null && utcDayDiff(today, queuedSince) >= RSI_SHADOW_QUEUE_MAX_DAYS;
 }
-/** 进入 canary 以来的 UTC 日数;找不到进入记录(超过 256 条被合并)→ `Infinity`(走向更少生效) */
+/**
+ * 进入 canary 以来的 UTC 日数;找不到进入记录(超过 256 条被合并)→ `Infinity`:**保守策略**,视为已超 90 日、立即允许到期回滚
+ * (走向更少生效,R21-1.6 ②),绝不会因此无限延长注入。
+ */
 export function canaryDays(record: PersonalLifecycleRecord, today: string): number {
   for (let i = record.transitions.length - 1; i >= 0; i--) {
     const t = record.transitions[i];
@@ -288,7 +300,7 @@ export function influenceBlocker(ctx: TransitionCtx): Guard {
 /** `shadow → canary` 的资格(W0-13 第 ② 步;不含名额)。第一个不成立的项的守卫码,全部成立返回 `null` */
 export function promoteEligibilityBlocker(
   record: PersonalLifecycleRecord,
-  f: PromoteFacts,
+  f: PromoteBase,
   ctx: TransitionCtx,
 ): Guard {
   if (!capabilityAvailable('transition_shadow_to_canary', ctx.phase)) return 'phase_not_available';
@@ -321,7 +333,12 @@ export function promoteEligibilityBlocker(
 }
 
 /** 全局评估名额(R21-6.8 / G7):被占 → 守卫码 */
-export function slotBlocker(f: PromoteFacts): Guard {
+/** W0-13 第 ① 步:排队已满 30 个 UTC 日 → 拒绝推进(应走 `shadow_queue_expired`);转移守卫与 `decideShadowStep` 共用 */
+export function queueExpiryBlocker(queuedSince: string | null, ctx: TransitionCtx): Guard {
+  return queueExpired(queuedSince, utcDay(ctx.now)) ? 'queue_expired' : null;
+}
+
+export function slotBlocker(f: Pick<PromoteBase, 'slot_occupied'>): Guard {
   return f.slot_occupied ? 'slot_occupied' : null;
 }
 
@@ -387,10 +404,12 @@ export interface TransitionRow {
   recovery: string;
 }
 
+// 恢复文案按真实机制写:重放事件只在 `transitions[]` 窗口内是空操作(且空操作不带 effects),**不能**靠重放补齐未完成的 effects;
+// 未完成的 effects(黑名单、墓碑、冷却、审计、外部部署)由调用方的持久化事务 / outbox 续做(实现与崩溃测试归 W7)。
 const RECOVER_AUTH =
-  '以私有仓库权威 lifecycle/<id>.json 为准续做(R21-3.8);同一 idem_key 重放为空操作';
+  '权威 lifecycle/<id>.json 为准(R21-3.8);窗口内同一 idem_key 重放为空操作;未完成的 effects 由调用方事务 / outbox 续做,不靠重放';
 const RECOVER_TXN =
-  '按 rsi-personal/txn/<id>.json 续做(R21-9.6),续做可再崩溃再续;同一 idem_key 重放为空操作';
+  '涉及部署 / 回滚:按 rsi-personal/txn/<id>.json 事务续做(R21-9.6,续做可再崩溃再续);窗口内同一 idem_key 重放为空操作;外部部署 effects 须事务续做,不靠重放';
 
 /** 区分原因的指纹片段:同类事件的不同原因(如 harm 的指标、judge 的两种原因)不会撞同一个键 */
 function discriminator(e: TransitionEvent): string {
@@ -430,7 +449,7 @@ interface Spec<K extends EventKind> {
 
 function row<K extends EventKind>(s: Spec<K>): TransitionRow {
   const dim = s.dim ?? 'lifecycle';
-  return {
+  return Object.freeze({
     name: s.name,
     dim,
     kind: s.kind,
@@ -446,8 +465,11 @@ function row<K extends EventKind>(s: Spec<K>): TransitionRow {
     guard: (r, e, ctx) => s.guard(r, e as Ev<K>, ctx),
     evidence: eventEvidence,
     clock: 'ctx.now',
-    recovery: dim === 'lifecycle' || s.shape === 'simple' ? RECOVER_AUTH : RECOVER_TXN,
-  };
+    recovery:
+      (dim === 'lifecycle' || s.shape === 'simple') && s.shape !== 'enter_rollback'
+        ? RECOVER_AUTH
+        : RECOVER_TXN,
+  });
 }
 
 const NONE = (): Guard => null;
@@ -626,7 +648,10 @@ ROW_LIST.push(
         ? ['transition_shadow_to_canary', 'exec_admission']
         : ['transition_shadow_to_canary'],
     reason: () => 'shadow_hits_met',
-    guard: (r, e, ctx) => promoteEligibilityBlocker(r, e, ctx) ?? slotBlocker(e),
+    guard: (r, e, ctx) =>
+      queueExpiryBlocker(e.queued_since, ctx) ??
+      promoteEligibilityBlocker(r, e, ctx) ??
+      slotBlocker(e),
   }),
 );
 
@@ -774,18 +799,21 @@ for (let i = 0; i < RSI_ROLLBACK_PHASES.length - 1; i++) {
 export const TRANSITION_TABLE: readonly TransitionRow[] = Object.freeze(ROW_LIST);
 
 /** 本期**没有任何行**的个人生命周期状态:收到任何事件一律 `phase_not_available`(表外 = 默认拒绝) */
-export const UNIMPLEMENTED_LIFECYCLES: ReadonlySet<RsiLifecycleState> = new Set<RsiLifecycleState>([
+const UNIMPLEMENTED_SET: ReadonlySet<RsiLifecycleState> = new Set<RsiLifecycleState>([
   'blocked',
   'adopted',
   'stable',
   'retiring',
 ]);
-export const TERMINAL_LIFECYCLES: ReadonlySet<RsiLifecycleState> = new Set<RsiLifecycleState>([
+const TERMINAL_SET: ReadonlySet<RsiLifecycleState> = new Set<RsiLifecycleState>([
   'rejected',
   'expired',
   'rolled_back',
   'retired',
 ]);
+// 不导出可变 Set:调用方只能问,不能改
+export const isUnimplementedLifecycle = (l: RsiLifecycleState): boolean => UNIMPLEMENTED_SET.has(l);
+export const isTerminalLifecycle = (l: RsiLifecycleState): boolean => TERMINAL_SET.has(l);
 
 export function rowsOfKind(kind: EventKind): readonly TransitionRow[] {
   return TRANSITION_TABLE.filter((r) => r.kind === kind);

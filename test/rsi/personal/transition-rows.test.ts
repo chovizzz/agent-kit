@@ -238,6 +238,11 @@ const CASES: Case[] = [
         ev: E.promote('p2', { slot_occupied: true }),
         guard: 'slot_occupied',
       },
+      {
+        label: '排队已满 30 日(到期先于推进)',
+        ev: E.promote('p9', { queued_since: '2026-10-11' }),
+        guard: 'queue_expired',
+      },
       { label: 'auto_paused(增加影响被禁止)', ctx: { auto_paused: true }, guard: 'auto_paused' },
       {
         label: '自动循环无效',

@@ -16,7 +16,7 @@ import {
   evaluationSlotOccupied,
   queueExpired,
   utcDayDiff,
-  type PromoteFacts,
+  type PromoteBase,
   type TransitionCtx,
 } from '../../../src/rsi/personal/transition-table.js';
 import { E, FACTS, OTHER_SIG, ctxFor, rec } from './transition-fixture.js';
@@ -24,7 +24,7 @@ import { E, FACTS, OTHER_SIG, ctxFor, rec } from './transition-fixture.js';
 const QUEUED = '2026-11-05';
 const input = (
   o: {
-    facts?: Partial<PromoteFacts>;
+    facts?: Partial<PromoteBase>;
     ctx?: Partial<TransitionCtx>;
     shadow?: Partial<ShadowStepInput['shadow']>;
     record?: ReturnType<typeof rec>;
@@ -402,6 +402,38 @@ describe('M13-7 canary_ready_since 只排序,不参与到期或授权', () => {
     );
     expect(phase1.action === 'wait' && phase1.patch.canary_ready_since).toBe('2026-11-10');
     expect(phase1.action === 'wait' && phase1.blocker).toBe('phase_not_available');
+  });
+});
+
+describe('M13-6 到期先于推进是转移入口的不变量', () => {
+  it('M13-6 直接投 shadow_promote:queued_since 已满 30 日且名额空闲 → 拒(queue_expired);差一天 → 放行(正向对照)', () => {
+    const r = rec('shadow');
+    const bad = transition(r, E.promote('p', { queued_since: '2026-10-11' }), ctxFor(r));
+    expect(isRefusal(bad) && [bad.refused, bad.guard]).toEqual(['guard_false', 'queue_expired']);
+    const old = transition(r, E.promote('p', { queued_since: '2026-10-01' }), ctxFor(r));
+    expect(isRefusal(old) && old.guard).toBe('queue_expired');
+    const ok = transition(r, E.promote('p', { queued_since: '2026-10-12' }), ctxFor(r));
+    expect(isRefusal(ok)).toBe(false);
+    expect(isRefusal(transition(r, E.promote('p'), ctxFor(r)))).toBe(false);
+  });
+
+  it('M13-6 排队 29 / 30 / 31 个 UTC 日:29 → promote,30 与 31 → expire', () => {
+    const run = (q: string): string =>
+      decideShadowStep(input({ shadow: { queued_since: q } })).action;
+    expect([run('2026-10-12'), run('2026-10-11'), run('2026-10-10')]).toEqual([
+      'promote',
+      'expire',
+      'expire',
+    ]);
+  });
+
+  it('M13-6 跨 UTC 午夜:23:59:59Z 仍是第 29 日,00:00:00Z 起是第 30 日', () => {
+    const run = (now: string): string =>
+      decideShadowStep(input({ ctx: { now }, shadow: { queued_since: '2026-10-11' } })).action;
+    expect(run('2026-11-09T23:59:59Z')).toBe('promote');
+    expect(run('2026-11-10T00:00:00Z')).toBe('expire');
+    // 带偏移的时间戳按 UTC 折算:+08:00 的 2026-11-10T07:59 = UTC 11-09 23:59
+    expect(run('2026-11-10T07:59:00+08:00')).toBe('promote');
   });
 });
 

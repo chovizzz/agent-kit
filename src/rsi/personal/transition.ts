@@ -11,6 +11,12 @@
  *  6. 能力:每个 `caps` 键经 `capabilityAvailable(key, ctx.phase)` → `phase_not_available`(默认拒绝);
  *  7. 守卫 → `guard_false`(带守卫码);
  *  8. 应用;出参再过一次 schema,不过 = `candidate_invalid`(fail-closed,引擎自己不产出非法记录)。
+ *
+ * **调用方前置条件 / 保证边界**:
+ *  - 幂等只在 `record.transitions[]` 的 256 条窗口内成立。窗口外的重复事件不保证是空操作,但只会走「终止事件自环」,
+ *    **不会增加影响、不会回退 `rollback.phase`、不会降级 `target_terminal` 或终态理由**(R21-4.4a 的只升不降)。
+ *  - 重复事件返回**空 effects**。未完成的 effects(黑名单、墓碑、冷却、审计、外部部署)由调用方的持久化事务 / outbox 续做,
+ *    **不能靠事件重放补齐**(实现与崩溃测试归 W7)。
  */
 import { z } from 'zod';
 import { IsoDateSchema } from '../../contracts/common.js';
@@ -29,12 +35,12 @@ import {
 } from '../../contracts/rsi-personal.js';
 import { idemKey } from './ids.js';
 import {
-  PromoteFactsSchema,
-  TERMINAL_LIFECYCLES,
-  TERMINATION_KINDS,
+  PromoteBaseSchema,
+  isTerminalLifecycle,
+  isTerminationKind,
+  isUnimplementedLifecycle,
   TransitionCtxSchema,
   TransitionEventSchema,
-  UNIMPLEMENTED_LIFECYCLES,
   promoteEligibilityBlocker,
   queueExpired,
   rowsOfKind,
@@ -143,8 +149,7 @@ function onTerminal(
   event: TransitionEvent,
   ctx: TransitionCtx,
 ): TransitionResult {
-  if (!TERMINATION_KINDS.has(event.kind))
-    return refuse('illegal_transition', undefined, 'terminal');
+  if (!isTerminationKind(event.kind)) return refuse('illegal_transition', undefined, 'terminal');
   if (!capabilityAvailable('transition_to_rejected', ctx.phase)) {
     return refuse('phase_not_available', undefined, 'transition_to_rejected');
   }
@@ -206,11 +211,11 @@ export function transition(recordIn: unknown, eventIn: unknown, ctxIn: unknown):
   }
 
   // 3. 本期没有行的状态
-  if (UNIMPLEMENTED_LIFECYCLES.has(record.lifecycle)) {
+  if (isUnimplementedLifecycle(record.lifecycle)) {
     return refuse('phase_not_available', undefined, `lifecycle=${record.lifecycle}`);
   }
   // 4. 终态
-  if (TERMINAL_LIFECYCLES.has(record.lifecycle)) return onTerminal(record, event, ctx);
+  if (isTerminalLifecycle(record.lifecycle)) return onTerminal(record, event, ctx);
 
   // 5. 查行
   const row = candidates.find(
@@ -345,7 +350,7 @@ function apply(
   if (event.kind === 'veto') {
     effects.push({ type: 'blacklist_veto', id: final.id, content_sha256: final.content_sha256 });
   }
-  if (!TERMINAL_LIFECYCLES.has(record.lifecycle) && TERMINAL_LIFECYCLES.has(final.lifecycle)) {
+  if (!isTerminalLifecycle(record.lifecycle) && isTerminalLifecycle(final.lifecycle)) {
     const tr = final.terminal_reason;
     effects.push({
       type: 'write_tombstone',
@@ -378,7 +383,7 @@ function apply(
 const ShadowStepInputSchema = z.strictObject({
   record: PersonalLifecycleRecordSchema,
   ctx: TransitionCtxSchema,
-  facts: PromoteFactsSchema,
+  facts: PromoteBaseSchema,
   /** 工作副本里的两个日期(`canary_ready_since` 只排序;`queued_since` 只数 G7 等待) */
   shadow: z.strictObject({
     canary_ready_since: IsoDateSchema.nullable(),
@@ -450,7 +455,7 @@ export function decideShadowStep(input: ShadowStepInput): ShadowStep {
     action: 'promote',
     patch: { canary_ready_since: ready, queued_since: null },
     blocker: null,
-    event: { kind: 'shadow_promote', evidence, ...facts },
+    event: { kind: 'shadow_promote', evidence, ...facts, queued_since: shadow.queued_since },
   };
 }
 

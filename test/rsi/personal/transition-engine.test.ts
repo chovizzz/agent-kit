@@ -11,7 +11,8 @@ import {
   type TransitionResult,
 } from '../../../src/rsi/personal/transition.js';
 import {
-  TERMINATION_KINDS,
+  canaryDays,
+  isTerminationKind,
   TRANSITION_TABLE,
   type TransitionCtx,
   type TransitionEvent,
@@ -353,7 +354,7 @@ describe('R21-4.4 任何离开注入的路径必经 rolling_back', () => {
       const res = step(injected(), ev);
       expect(res.next.lifecycle, ev.kind).toBe('rolling_back');
       expect(Object.values(res.next.deploy), ev.kind).not.toContain('injected');
-      expect(TERMINATION_KINDS.has(ev.kind)).toBe(true);
+      expect(isTerminationKind(ev.kind)).toBe(true);
     }
   });
 
@@ -581,6 +582,66 @@ describe('R21-4.1 正向合法链(每步通过)', () => {
     expect(isRefusal(d89) && d89.guard).toBe('limit_not_reached');
     const d90 = transition(c, E.limit('l', 0), at('2027-01-30T00:00:00Z'));
     expect(isRefusal(d90)).toBe(false);
+  });
+});
+
+describe('R21-4.1 canary 限期边界与保守策略', () => {
+  const at = (iso: string): ReturnType<typeof ctxFor> => ctxFor(injected(), { now: iso });
+  it('canary 89 / 90 / 91 个 UTC 日:89 拒,90 与 91 放行', () => {
+    const c = injected();
+    const g = (iso: string): string | boolean | undefined => {
+      const r = transition(c, E.limit('l', 0), at(iso));
+      return isRefusal(r) ? r.guard : true;
+    };
+    expect(g('2027-01-29T12:00:00Z')).toBe('limit_not_reached');
+    expect(g('2027-01-30T12:00:00Z')).toBe(true);
+    expect(g('2027-01-31T12:00:00Z')).toBe(true);
+  });
+  it('canary 跨 UTC 午夜:第 89 日 23:59:59Z 拒,第 90 日 00:00:00Z 放行', () => {
+    const c = injected();
+    const a = transition(c, E.limit('l', 0), at('2027-01-29T23:59:59Z'));
+    expect(isRefusal(a) && a.guard).toBe('limit_not_reached');
+    expect(isRefusal(transition(c, E.limit('l', 0), at('2027-01-30T00:00:00Z')))).toBe(false);
+  });
+  it('canaryDays 找不到进入记录 → Infinity(保守:立即允许到期回滚,绝不无限延长注入)', () => {
+    const noEntry = rec('canary', { transitions: [entry(1)] });
+    expect(canaryDays(noEntry, '2026-11-10')).toBe(Number.POSITIVE_INFINITY);
+    expect(canaryDays(injected(), '2026-11-10')).toBe(9);
+    expect(isRefusal(transition(noEntry, E.limit('l', 0), ctxFor(noEntry)))).toBe(false);
+  });
+});
+
+describe('R21-4.4a 幂等窗口外的重放不增加影响、不回退、不降级', () => {
+  it('窗口外重放 limit 事件 E:先用 E 进入 rolling_back,推进阶段,再用 257 个不同证据的 veto 把 E 的键挤出窗口;重放 E 后阶段不回退、target 与理由不降级、deploy 不增加', () => {
+    const E1 = E.limit('E');
+    let r = step(injected(), E1).next;
+    r = run(r, E.advance('injection_disabled', 'a1'), E.advance('static_removal_pending', 'a2'));
+    for (let i = 0; i < 257; i++) r = step(r, E.veto(`flood-${i}`)).next;
+    expect(r.transitions).toHaveLength(256);
+    // 前提:E 的键确已不在窗口里(正向锚点:重放不是 duplicate_idem_key)
+    const replay = step(r, E1);
+    expect(replay.noop_reason).not.toBe('duplicate_idem_key');
+    expect(replay.next.rollback?.phase).toBe('static_removal_pending');
+    expect(replay.next.rollback?.target_terminal).toBe('rolled_back');
+    expect(replay.next.rollback?.reason).toBe('vetoed');
+    expect(replay.next.deploy).toEqual({ claude: 'removal_pending', pi: 'none', codex: 'none' });
+    expect(replay.next.lifecycle).toBe('rolling_back');
+  });
+});
+
+describe('W1 转移表不可变', () => {
+  it('每一行与表本身都被冻结;不导出可变 Set', async () => {
+    expect(Object.isFrozen(TRANSITION_TABLE)).toBe(true);
+    for (const row of TRANSITION_TABLE) expect(Object.isFrozen(row), row.name).toBe(true);
+    expect(TRANSITION_TABLE.length).toBeGreaterThan(30);
+    const mod = (await import('../../../src/rsi/personal/transition-table.js')) as Record<
+      string,
+      unknown
+    >;
+    for (const [k, v] of Object.entries(mod)) expect(v instanceof Set, k).toBe(false);
+    expect(() => {
+      (TRANSITION_TABLE[0] as unknown as { name: string }).name = 'x';
+    }).toThrow();
   });
 });
 
