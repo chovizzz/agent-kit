@@ -449,7 +449,7 @@ interface Spec<K extends EventKind> {
 
 function row<K extends EventKind>(s: Spec<K>): TransitionRow {
   const dim = s.dim ?? 'lifecycle';
-  return Object.freeze({
+  const out: TransitionRow = {
     name: s.name,
     dim,
     kind: s.kind,
@@ -469,7 +469,8 @@ function row<K extends EventKind>(s: Spec<K>): TransitionRow {
       (dim === 'lifecycle' || s.shape === 'simple') && s.shape !== 'enter_rollback'
         ? RECOVER_AUTH
         : RECOVER_TXN,
-  });
+  };
+  return Object.freeze(out);
 }
 
 const NONE = (): Guard => null;

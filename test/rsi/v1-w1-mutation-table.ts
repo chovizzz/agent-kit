@@ -373,7 +373,7 @@ export const V1_W1_MUTATIONS: readonly V1W1Mutation[] = [
   {
     id: 'table-rows-unfrozen',
     clause: 'W1:转移表行对象冻结 —— 去掉 Object.freeze',
-    edits: [{ file: TABLE, anchor: 'return Object.freeze({', replacement: 'return ({' }],
+    edits: [{ file: TABLE, anchor: 'return Object.freeze(out);', replacement: 'return out;' }],
     tests: [ENG],
     expectRed: ['转移表不可变'],
     mustKill: ['转移表不可变'],
