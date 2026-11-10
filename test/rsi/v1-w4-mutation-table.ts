@@ -54,6 +54,7 @@ export const V1_W4_MUTATIONS: readonly V1W4Mutation[] = [
       'control 块(只有标记行)作为用户消息',
       '工具结果里被引用的块',
       '被注入排除的结果事件不进链',
+      '被排除的外部内容事件仍把会话记为外部内容',
     ],
     mustKill: ['control 块(只有标记行)作为用户消息', '工具结果里被引用的块'],
   },
