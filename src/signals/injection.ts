@@ -24,7 +24,7 @@ export const INJECTION_WINDOWS_MAX = 16_384;
 
 export class InjectionIndexLimitError extends Error {
   constructor() {
-    super('注入块复述索引超过每会话窗口上限');
+    super('注入块超出复述索引上限(正文码点数或每会话窗口数)');
   }
 }
 

@@ -94,7 +94,7 @@ describe('复述索引的会话级上限与块登记规则', () => {
     const run = (): void => {
       for (let k = 0; k < 5; k++) over.addBlocks([{ marker: markerOf(k), body: uniqueBody(k) }]);
     };
-    expect(run).toThrow(/窗口上限/);
+    expect(run).toThrow(/复述索引上限/);
   });
 
   it('经管线:多块长会话超限 → read_error(带类名)、不产信号、不写计数行;对照:3 个块的会话照常 processed', async () => {
@@ -152,9 +152,9 @@ describe('复述索引的会话级上限与块登记规则', () => {
     const ok = new InjectionTracker();
     ok.addBlocks([{ marker: MARKER_A, body: body(4096) }]);
     expect(ok.isRecital(body(20))).toBe(true);
-    expect(() => new InjectionTracker().addBlocks([{ marker: MARKER_A, body: body(4097) }])).toThrow(
-      /窗口上限/,
-    );
+    expect(() =>
+      new InjectionTracker().addBlocks([{ marker: MARKER_A, body: body(4097) }]),
+    ).toThrow(/复述索引上限/);
     const w = await newWork('w4-cl-longbody-');
     const sess = async (n: number) =>
       runFile(
@@ -163,7 +163,10 @@ describe('复述索引的会话级上限与块登记规则', () => {
           root: w.sessions,
           cwd: '/work/proj-a',
           id: uid(),
-          lines: [userLine(`${controlBlock()}\n${body(n)}`, { isMeta: true }), userLine('真实消息')],
+          lines: [
+            userLine(`${controlBlock()}\n${body(n)}`, { isMeta: true }),
+            userLine('真实消息'),
+          ],
         }),
       );
     expect((await sess(4096)).status).toBe('processed');
