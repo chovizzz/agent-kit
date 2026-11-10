@@ -5729,6 +5729,9 @@ agent-kit judge --confirm-reflector --run <run_id> [--proposal <id>]… --write 
 - R21-4.4 `[V1]` **任何离开注入的路径都先停注入**:`lifecycle` 离开 `canary` / `adopted` / `stable` 一律经 `rolling_back` 或 `retiring`(R21-9.1 四段,第二段停注入);不存在直接改 `lifecycle` 字段到终态的路径。`proposed` / `shadow` / `blocked` 没有部署,直接进终态。
 - R21-4.4a `[V1]` **重复终止事件**:①处于 `rolling_back` / `retiring` 的候选再收到终止事件(`veto`、taint、`harm_*`、`clear`、E1 停用事件):追加一条 `dim=lifecycle`、`from` 与 `to` 都等于**实际当前状态**(`rolling_back` 或 `retiring`)的转移记录,**不重置**已完成的补偿阶段;`target_terminal` 只能按优先级升级、不能降级:`rolled_back` > `retired` > `expired` > `shadow`(例如 E1 身份变化中途被 `veto` → 目标升为 `rolled_back`;`retiring` 中途检出伤害 → 目标升为 `rolled_back`);`terminal_reason` 取优先级最高者:`vetoed` > `tainted` > `cleared` > `auto_rollback` > `static_sync_timeout` > `auto_expired` > `no_hit` > `rejected_gate`。②已在终态的候选:`veto` 只写黑名单(R21-11.3),其余终止事件是空操作(只写审计)。③同一 `idem_key` 的事件重复到达是空操作。
 - R21-4.5 `[V1]` 每个转移函数的四件事(守卫、幂等键、注入的时钟、崩溃恢复)在实现里显式写出;测试对每条转移各一个「守卫为假不转移」与「同一 `idem_key` 执行两次只转移一次」用例,对每个非终态各一个 `veto` 与 taint 用例。
+
+> **冻结后订正 W0-16(2026-11-10,用户选择框)**:「同一 `idem_key` 只转移一次」限于该转移仍在 `transitions[]` 256 条窗口内;窗口外重复不得增加影响、回退阶段或降级终态。正文见 §21.24 W0-16。
+
 - R21-4.6 `[V1]` **终态理由码**(`terminal_reason`,封闭枚举):`auto_rollback`(R21-7.4 / R21-8.4 / 控制图 / C4)、`auto_expired`、`vetoed`、`no_hit`、`rejected_gate`、`tainted`、`static_sync_timeout`、`cleared`。**转移原因码** `reason` 为封闭枚举,分两类:①**正常转移**:`ingested`(→ proposed)、`gates_passed`(→ shadow)、`shadow_hits_met`(→ canary)、`evidence_ready`(blocked → shadow)、`decided_better`(→ adopted)、`holdout_passed`(→ stable)、`deploy_injected`、`static_released`(→ static_pending)、`sync_ok`(→ static)、`withdraw_done`、`residual_ended`、`exec_enabled`、`exec_unrestricted`、`compensation_done`(rolling_back → 终态)、`revocation_reconciled`(R21-9.5)、`retire_done`;②**终止 / 异常**:G0–G8 原因码(R21-5.1)、`harm_c1|harm_c2|harm_c3|harm_c4|harm_c6`、`limit_reached`、`vetoed`、`tainted`、`cleared`、`identity_changed`、`exec_post_check_failed`、`exec_timeout_unclean`、`static_sync_timeout`、`withdraw_120`、`no_hit`。
 
 > **冻结后订正 N4-2(R20-18.35)**:R21-4.6 的 `terminal_reason` 封闭枚举追加 `judge_rejected`(R21-4.4a ① 优先级:`vetoed > tainted > cleared > judge_rejected > auto_rollback > …`),转移 `reason` 的「终止 / 异常」类追加 `judge_reject`、`judge_injection`;与 R21-12.9 的稳定码枚举同在 `src/contracts/rsi.ts`、各自一份(R21-12.9 不含转移 reason)。
@@ -6316,7 +6319,7 @@ v3.1 已把用户决定列全;以下是落契约时新发现的契约细节取�
 
 **冻结后订正 W0-15(2026-11-10,W2 实现口径澄清与订正)**:提交改为「已接受 HEAD 底稿 + 受管变更」,kit 管理命名空间 `KIT_MANAGED_TOP_DIRS`;结构校验追加 `.git/info/attributes` / grafts / shallow / replace refs 与 `GIT_NO_REPLACE_OBJECTS=1`;git 读取三态;bootstrap `planned`+空目录经 pre-init 校验后续做;journal 损坏、`cas_failed` 语义、先锁后写、作者常量与 `owner_repo_fp` 格式。**取代关系**:R21-3.6「目标树」的整树读法(改为底稿 + 受管变更;purge 历史改写例外,R21-11.6 不变但重建的树保留无关用户文件);W0-5 中「已存在目录一律先做结构校验」对 `planned`+空目录的适用(改为 pre-init 校验)。**未改**:R20-5.5 锁协议(残余照旧)。
 
-**冻结后订正 W0-16(2026-11-10,W1 实现口径澄清)**:UTC 日期差口径、到期检查进入推进守卫、幂等限于 256 条窗口(窗口外不增加影响)、effects 由调用方 outbox 续做、R21-2.2 上下文字段、`gate_g8` / `exec_admission` 默认拒绝、原因码借用与归属。**取代关系**:无(只补原文未定的细节)。**未改**:R21-4.x、R21-2.2 原文、能力表。
+**冻结后订正 W0-16(2026-11-10,W1 实现口径澄清)**:UTC 日期差口径、到期检查进入推进守卫、幂等限于 256 条窗口(窗口外不增加影响)、effects 由调用方 outbox 续做、R21-2.2 上下文字段、`gate_g8` / `exec_admission` 默认拒绝、原因码借用与归属。**取代关系**:R21-4.5「同一 `idem_key` 执行两次只转移一次」改为窗口内保证(用户 2026-11-10 选择框,原位已标注);其余只补原文未定的细节。**未改**:R21-4.1–4.4a、R21-4.6、R21-2.2 原文、能力表。
 
 ### 21.24 V1 拆期与 W0 订正(冻结后订正 W0-1 … W0-12;2026-11-09,依据用户 2026-11-04 选择框 Q1–Q5、V1i-2、V1i-4…10 按规划稿处理,2026-11-09 选「现在开工 W0 + V1a」)
 
@@ -6569,13 +6572,13 @@ W2(私有仓库与提交原语)实现时契约未定或需收紧的点。实现�
 - **已知残余(不变)**:personal/lock 与 R20-5.5 同协议,陈旧锁回收的「复读后删除」窗口仍在(§20 已登记);提交的最后防线是 `update-ref` 期望旧值。修复须订正 R20-5.5 并连带 A1,另立事项。
 - **交给后续块**:锁序 `rsi/lock → personal/lock` 的反向取锁守卫在 A1 的 `lock.ts`,W7 接 worker 时补;`home-fs` 纯建目录授权(现借占位 planScope)另立事项。
 
-#### W0-16 W1 实现口径澄清(2026-11-10;R21-4.1 / 4.4a / 4.5 / 4.6、R21-2.2、W0-13)
+#### W0-16 W1 实现口径澄清与 R21-4.5 订正(2026-11-10;R21-4.1 / 4.4a / 4.5 / 4.6、R21-2.2、W0-13)
 
 W1(纯转移引擎,`src/rsi/personal/{ids,transition-table,transition}.ts`)实现时契约未定的点:
 
 - **日数口径**:「满 N 个 UTC 日」= `UTC 日期(今天) − UTC 日期(起点) ≥ N`(按日期差,不按经过的小时):排队到期 N = 30(第 29 日不到期、第 30 日到期),canary 上限 N = `RSI_MAX_CANARY_DAYS`。找不到进入 canary 的记录(例如被历史上限合并掉)→ 视为已到期,立即允许经回滚到 `expired`(保守方向)。
 - **到期是转移入口的不变量**:`shadow → canary` 的守卫自己检查排队到期(推进事件必须携带 `queued_since` 与当天日期),已到期 → 拒绝;不依赖调用方先走辅助判定函数。
-- **幂等的范围**:`idem_key` = 候选 id、维度、agent、起止状态、事件种类与区分原因 / 证据的定长编码(不含时钟)。同一键重复执行为空操作的保证**只在 `transitions[]` 保留窗口(256 条)内**;窗口外的重复事件不保证空操作,但不得增加影响、不得回退 `rollback.phase`、不得降级 `target_terminal`(由状态机本身保证,有测试)。
+- **R21-4.5 订正:幂等限于转移历史窗口**(用户 2026-11-10 选择框「接受窗口幂等,订正 R21-4.5」;取代 R21-4.5「同一 `idem_key` 执行两次只转移一次」的无条件读法):`idem_key` = 候选 id、维度、agent、起止状态、事件种类与区分原因 / 证据的定长编码(不含时钟)。同一 `idem_key` 在对应转移仍保留于 `transitions[]` 的 256 条窗口内重复执行 → `noop`,空 entries、空 effects。记录被淘汰后不再保证去重;重复事件仍**不得**增加影响、回退 `rollback.phase` 或降低 `target_terminal` / 终态理由优先级(由状态机本身保证,有窗口外重放测试)。此窗口保证不构成外部 effects 的恰好一次保证。理由:正常候选的转移只有十几条,触发须同一候选先累积 256 条以上;持久去重索引的代价(每候选多一份不随历史裁剪的集合)不值得。
 - **效果由调用方续做**:引擎是纯函数,返回类型化 effects(生命周期提交、黑名单、墓碑、冷却、审计、部署变更);重复事件返回空 effects。未完成的 effects 由调用方的持久化事务 / outbox 续做,不能靠事件重放补齐——实现与崩溃测试归 W7。
 - **R21-2.2 的上下文**:转移上下文追加 `auto_loop_effective` 与 `auto_paused`(调用方持锁时读取并传入);只拦增加影响的转移(`shadow → canary`、`→ injected`),减少影响的转移照常。
 - **能力表之外的键默认拒绝**:`gate_g8`(G8,V3)与 `exec_admission`(exec 类部署,V6a)尚未登记进 `RSI_CAPABILITY_PHASE`,一律 `phase_not_available`;相位 ≥ V3 时 G8 未实现,`shadow → canary` 先 fail-closed(`g8_not_implemented`)。V3 / V6a 的契约修订须把这两个键补进能力表。
