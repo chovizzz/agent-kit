@@ -20,6 +20,7 @@ import {
   snapshot,
   spec,
   withLock,
+  writeUserFile,
   slowTests,
 } from './repo-helpers.js';
 
