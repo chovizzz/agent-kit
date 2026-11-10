@@ -3710,17 +3710,19 @@ agent-kit __rsi --background          (内部入口,不进 --help、不在 COMMA
 
 **稳定码总表(R20-3.0;实现从 `src/contracts/rsi.ts` 的一份枚举生成,测试断言文档与枚举一致)** (订正见 §20.14 B3 订正 B3b-3、B3c-7) (订正见 §20.14 B4 订正 #1)
 
-| 类别                                    | 码                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | 退出 |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---- |
-| `RSI_USAGE reason=`                     | `unknown_subcommand`、`unknown_arg`、`missing:--agent`、`bad_agent`、`mode_conflict`、`not_tty`、`paths_requires_tty`、`write_requires_mode`、`bad_path`、`root_mismatch`、`missing:--digest`、`missing:--json`、`missing:--owner`                                                                                                                                                                                                                                                                                                                                                                                                                | 2    |
-| `RSI_NOT_RUN reason=`                   | `off`、`stopped`、`collect_blocked`、`locked`、`locked_over_ttl`、`not_confirmed`、`no_journal`、`binding_changed`、`purge_pending`、`digest_backlog`、`policy_changed`、`rate_limited`、`run_not_pending`、`dismiss_full`、`run_scan_incomplete`                                                                                                                                                                                                                                                                                                                                                                                                 | 4    |
-| 顶层(4)                                 | `RSI_SNAPSHOT_BUSY`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | 4    |
-| 顶层(1)                                 | `RSI_RUN_TAINTED`、`RSI_RUN_ATTRIBUTION_UNKNOWN`、`RSI_PURGE_NOT_EXCLUDED`、`RSI_CONFIRM_DECLINED`、`RSI_CONFIRM_STALE`、`RSI_HOOKS_DECLINED`、`RSI_INGEST_TOO_LARGE`、`RSI_STAGING_FULL`、`RSI_INGEST_REJECTED`                                                                                                                                                                                                                                                                                                                                                                                                                                  | 1    |
-| 顶层(0)(信息行,stderr,不改退出码)       | `RSI_PROPOSALS_READY`、`RSI_COLLECTION_STARTED`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | 0    |
-| `RSI_HOOKS_NOT_RUN reason=`             | `locked`、`agent_not_installed`、`restore_not_latest`、`shape_unverified`、`config_unparsable`、`config_shape_unsupported`、`config_not_canonical`、`foreign_kit_entry`、`ambiguous_entry`、`conflicting_shape_unowned`、`stale_plan`、`config_changed_during_write`、`config_changed_since_install`、`txn_residue_unknown`、`duplicate_in_local`、`duplicate_check_failed`、`agent_dir_overridden`、`residue_not_discardable`                                                                                                                                                                                                                    | 4    |
-| `RSI_HOOKS_WARN reason=`                | `prune_incomplete`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | 0    |
-| `RSI_FAIL_CLOSED reason=`               | 配置:`cfg_symlink`、`cfg_owner`、`cfg_perm`、`cfg_not_regular`、`cfg_too_large`、`cfg_unreadable`、`cfg_parse`、`cfg_schema`、`repo_invalid`、`overlay_invalid`、`exclude_invalid`;状态:`state_invalid`、`state_dir_unsafe`、`index_invalid`、`cursor_invalid`、`counts_invalid`、`snapshot_invalid`、`journal_invalid`、`signal_store_corrupt`、`salt_invalid`、`redactor_init`、`staging_too_large`、`staging_unsafe_entry`;运行:`lock_lost`、`write_denied`、`purge_incomplete`、`output_leak`、`stdin_unreadable`、`internal`;kit 钩子(A5):`hooks_target_unsafe`、`hooks_backup_invalid`、`hooks_ledger_invalid`;记账(A6):`dismissed_invalid` | 3    |
-| 计数码(不改退出码,只进 `--json` 与日志) | `RSI_FILE_TOO_LARGE`、`RSI_LIMIT_FILES`、`RSI_LIMIT_BYTES`、`RSI_LIMIT_TIME`、`RSI_LIMIT_DEPTH`、`RSI_LIMIT_ENTRIES`、`RSI_INDEX_FULL`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | —    |
+| 类别                                    | 码                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | 退出 |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---- |
+| `RSI_USAGE reason=`                     | `unknown_subcommand`、`unknown_arg`、`missing:--agent`、`bad_agent`、`mode_conflict`、`not_tty`、`paths_requires_tty`、`write_requires_mode`、`bad_path`、`root_mismatch`、`missing:--digest`、`missing:--json`、`missing:--owner`、`bad_date`、`unknown_id`、`bad_marker`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | 2    |
+| `RSI_NOT_RUN reason=`                   | `off`、`stopped`、`collect_blocked`、`locked`、`locked_over_ttl`、`not_confirmed`、`no_journal`、`binding_changed`、`purge_pending`、`digest_backlog`、`policy_changed`、`rate_limited`、`run_not_pending`、`dismiss_full`、`run_scan_incomplete`、`not_diverged`、`phase_not_available`、`ticket_expired`、`no_runtime`                                                                                                                                                                                                                                                                                                                                                                                                                                              | 4    |
+| 顶层(4)                                 | `RSI_SNAPSHOT_BUSY`、`RSI_EXEC_NOT_RUN`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | 4    |
+| 顶层(1)                                 | `RSI_RUN_TAINTED`、`RSI_RUN_ATTRIBUTION_UNKNOWN`、`RSI_PURGE_NOT_EXCLUDED`、`RSI_CONFIRM_DECLINED`、`RSI_CONFIRM_STALE`、`RSI_HOOKS_DECLINED`、`RSI_INGEST_TOO_LARGE`、`RSI_STAGING_FULL`、`RSI_INGEST_REJECTED`、`RSI_AUTO_RESUME_BLOCKED`、`RSI_CONTRIB_DEGRADED`、`RSI_EXEC_DECLINED`                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | 1    |
+| 顶层(0)(信息行,stderr,不改退出码)       | `RSI_PROPOSALS_READY`、`RSI_COLLECTION_STARTED`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | 0    |
+| `RSI_HOOKS_NOT_RUN reason=`             | `locked`、`agent_not_installed`、`restore_not_latest`、`shape_unverified`、`config_unparsable`、`config_shape_unsupported`、`config_not_canonical`、`foreign_kit_entry`、`ambiguous_entry`、`conflicting_shape_unowned`、`stale_plan`、`config_changed_during_write`、`config_changed_since_install`、`txn_residue_unknown`、`duplicate_in_local`、`duplicate_check_failed`、`agent_dir_overridden`、`residue_not_discardable`                                                                                                                                                                                                                                                                                                                                        | 4    |
+| `RSI_HOOKS_WARN reason=`                | `prune_incomplete`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | 0    |
+| `RSI_FAIL_CLOSED reason=`               | 配置:`cfg_symlink`、`cfg_owner`、`cfg_perm`、`cfg_not_regular`、`cfg_too_large`、`cfg_unreadable`、`cfg_parse`、`cfg_schema`、`repo_invalid`、`overlay_invalid`、`exclude_invalid`;状态:`state_invalid`、`state_dir_unsafe`、`index_invalid`、`cursor_invalid`、`counts_invalid`、`snapshot_invalid`、`journal_invalid`、`signal_store_corrupt`、`salt_invalid`、`redactor_init`、`staging_too_large`、`staging_unsafe_entry`;运行:`lock_lost`、`write_denied`、`purge_incomplete`、`output_leak`、`stdin_unreadable`、`internal`;kit 钩子(A5):`hooks_target_unsafe`、`hooks_backup_invalid`、`hooks_ledger_invalid`;记账(A6):`dismissed_invalid`;个人层(§21 W0-12):`personal_repo_invalid`、`candidate_invalid`、`ledger_line_invalid`、`txn_invalid`、`probe_error` | 3    |
+| 计数码(不改退出码,只进 `--json` 与日志) | `RSI_FILE_TOO_LARGE`、`RSI_LIMIT_FILES`、`RSI_LIMIT_BYTES`、`RSI_LIMIT_TIME`、`RSI_LIMIT_DEPTH`、`RSI_LIMIT_ENTRIES`、`RSI_INDEX_FULL`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | —    |
+
+> **冻结后订正 W0-12(2026-11-09;R21-12.9、§21.24)**:上表已并入 §21 的稳定码——`RSI_USAGE` 追加 `bad_date`、`unknown_id`、`bad_marker`;`RSI_NOT_RUN` 追加 `not_diverged`、`phase_not_available`、`ticket_expired`、`no_runtime`(`rate_limited` 早已在);顶层(1)追加 `RSI_AUTO_RESUME_BLOCKED`、`RSI_CONTRIB_DEGRADED`、`RSI_EXEC_DECLINED`;顶层(4)追加 `RSI_EXEC_NOT_RUN`;`RSI_FAIL_CLOSED` 追加个人层五码。这些码在对应期(V1a / V1b / V4 / V5 / V6a / V6b)之前只是枚举常量、没有发码路径。
 
 > **A4 订正 #2(R20-16.21)**:上表 P1 预留的 `RSI_INGEST_TOO_LARGE`、`RSI_STAGING_FULL`、`RSI_DIGEST_*`(落实为 `RSI_DIGEST_REJECTED`)、`RSI_SESSION_*`(落实为 `RSI_SESSION_DENIED`)随 A4 启用,另增 `RSI_INGEST_REJECTED`;`RSI_NOT_RUN reason=` 追加 `purge_pending`、`digest_backlog`、`policy_changed`。
 
@@ -5584,6 +5586,8 @@ agent-kit judge --confirm-reflector --run <run_id> [--proposal <id>]… --write 
 - R21-0.1 `[V0]` **分期闸是代码常量**:`RSI_AUTO_PHASE`(整数枚举,当前实现到哪一期)由实现块提升,不读配置。某期之前的子命令注册为命令桩(退出 64,§7);某期之前的配置键可解析但无效果,`rsi auto status --json` 的 `phase` 字段如实报告。变异:把 `RSI_AUTO_PHASE` 提前而未实现对应条款 → 该期验收红。
 - R21-0.2 `[V0]` 带契约 / schema 变更的期串行实现(v3.1 §10.2 末段);两期不得在同一 PR 里同时提升 `RSI_AUTO_PHASE`。
 
+> **冻结后订正 W0-1(2026-11-09,用户 Q5 拆期;正文 §21.24)**:上表 V1 行与 V1.5 行的前置「V1」**被取代**——V1 拆为 **V1a(只观察)** 与 **V1b(canary、分组账、变差检验、回滚)**,新增行见 §21.24 W0-1;R21-0.1 的「整数枚举」由 §21.24 的相位表定义(V0=0、V1a=1、V1b=2、V1.5=3、V2=4、V3=5、V4=6、V5=7、V6a=8、V6b=9,只追加不重排);R21-0.2 对 V1a、V1b 各自适用(各一个 PR 提升相位)。条款上的 `[V1]` 标签不改,各条款的首个必须成立的期与各能力的最早可用期以 §21.24 的两张表为准。设计稿 §10.3 第 2 项「用户当场同意」被 W0-3 取代。
+
 ### 21.1 范围与不变量
 
 - R21-1.1 `[V1]` **只有个人层**:自动循环的全部产出(规则、踩坑、方法 / 技能、子代理、能力缺口记录、E1)只写 §21.3 的私有仓库与本机状态目录,只经本机 payload(§21.8)生效。不存在团队层、团队仓库、团队 PR、远端状态同步(v3.1 T0)。
@@ -5615,6 +5619,8 @@ agent-kit judge --confirm-reflector --run <run_id> [--proposal <id>]… --write 
 | `rsi.contrib.fork_owner`          | string                                                | 不设     | `[V4]`;R21-17.6 字符集;等于上游 owner(不区分大小写)→ L-contrib 失败 `fork_is_upstream`                       |
 | `rsi.contrib.export_dir`          | string                                                | 不设     | `[V4]`;R21-17.4 的导出守卫(绝对路径、`realpath` 在 HOME 内、链上无符号链接)                                  |
 
+> **冻结后订正 W0-9(2026-11-09;§21.18 第 19 条)**:`src/rsi/config.ts` 已实现(A2),`RsiBaseSchema` 原为 `strictObject`;现对 `auto`、`capability`、`contrib` 与 `session` 一样只校验「表或缺省」,`RsiAutoSchema` 落在 `src/contracts/rsi.ts`、L-auto 解析在 `src/rsi/auto-config.ts`(失败 = `auto: invalid`,只禁自动生效)。L-cap / L-contrib 随 V5 / V4 实装。R21-2.2 的「`RSI_AUTO_PHASE ≥ 1`」即 V1a(W0-1)。
+
 - R21-2.2 `[V1]` **开启自动循环的有效条件** = R20-1.3 状态为 `confirmed` 且 `rsi.auto.enabled === true` 且 L-auto 通过 且 `RSI_AUTO_PHASE ≥ 1`。不满足时 worker 照常做 §20 的 L0,hint 只出计数行(`--canary` 按 R21-6.11 第 1、2 行处理)。**事件分类**(此处与 `auto_paused` 共用):「增加影响」的转移(`shadow → canary`、`canary → adopted`、`adopted → stable`、任一 agent 的 `→ injected` / `→ static_pending` / `→ static`、恢复注入、写入或放宽 `exec-enabled.json`)被禁止;采集、闸、shadow 计数、伤害判定、到期、`veto`、taint、回滚、退役、撤销路径、撤销凭据对账(R21-9.5)照常执行。
 - R21-2.3 `[V1]` 开启自动循环时 claude / pi 的会话授权缺省为 S2(M10;R20 §20.10 的 `[rsi.session] auto` 缺省值随之改,codex 保持 S1);S2 的上限不变(每会话 ≤ 1、每天 ≤ 1、`stop_hook_active` 不续)。
 
@@ -5625,9 +5631,17 @@ agent-kit judge --confirm-reflector --run <run_id> [--proposal <id>]… --write 
 - R21-3.3 `[V1]` **锁序**(全局,不可反转):`rsi/lock`(仓库,R20-5.3)→ `personal/lock`(HOME)→ sync 锁(§19.5)。全部为试锁。worker 与 §21.12 的 `--write` 前台命令按此序获取;`rsi auto clear --write` 在 `[rsi]` 不可用时只拿后两把(R21-9.5)。update 的自动同步只拿 update 锁 → sync 锁,不拿前两把,无环。
 - R21-3.4 `[V1]` **结构校验**(每次操作前,先于 R21-3.5;任一不满足 → 熔断 `personal_repo_invalid`):`.git` 是真实目录(不是 gitdir 文件、不是符号链接、不是 worktree 链接);非裸仓库;无 `objects/info/alternates`;无 `config.worktree`;仓库本地 `.git/config` 只含白名单键(`core.repositoryformatversion`、`core.filemode`、`core.bare`、`core.logallrefupdates`、`core.ignorecase`、`core.precomposeunicode`),出现其它任何键(含 `include.*`、`filter.*`、`remote.*`、`core.hooksPath`、`core.sshCommand`)即不满足;`git remote` 为空;目录属主为当前 uid、权限恰为 0700;树满足 R21-3.1 的禁止项。
 - R21-3.5 `[V1]` **HEAD 与工作树判定**(结构校验通过之后;机械判定,v3.1 §3.2)。**第 0 步(优先)**:`commit-journal.json` 存在 → 先按 R21-3.6a 的恢复优先级处理,处理完才做下面的判定(kit 自己未完成的提交不会被当成人工分叉)。①当前分支为 `rsi`、无 stash、工作树干净(`status --porcelain --ignored` 为空)、HEAD 是 `head.json` 记录提交的后代,且 `记录..HEAD` 只新增文件、不触碰任何 `origin=auto_rsi` 文件与 `lifecycle/**` → 接受,更新记录;②分支不是 `rsi`、有 stash、工作树不干净、HEAD 是记录的祖先、或 `记录..HEAD` 改 / 删了自动产出 → `personal_repo_diverged`:暂停**新增**生效(不熔断,R21-10.3);撤销照常,但**不触碰私有仓库的任何引用、索引与工作树**(R21-9.3a);`rsi auto status` 提示二选一(回到记录提交 / `rsi auto rebase-baseline`);③记录提交不存在或历史无共同祖先 → 熔断 `personal_repo_invalid`。④`owner_repo_fp` 与当前 `[rsi] repo` 不同 → `personal_owner_changed`:暂停新增生效,`rsi auto rebase-baseline --adopt-owner`(TTY)确认后改写记录;撤销照常。
+
+> **冻结后订正 W0-5(2026-11-09,用户 Q4)**:情形③「记录提交不存在」对**首次建仓**设窄例外:持 `personal/lock`、`lstat` 证明约定路径全部不存在时由 worker 在 `enabled=true ∧ confirmed` 的第一次个人层一步里自动建仓(`git init -b rsi`,journal `kind=bootstrap`),不判 `personal_repo_invalid`;否则仍按本条处理。bootstrap 状态机与恢复见 §21.24 W0-5。
+
 - R21-3.6 `[V1]` **私有仓库提交原语** `commitPersonal(ctx, lockHandles, treeSpec)`(新,`src/rsi/personal/commit.ts`):调用方必须持 `personal/lock`(正常路径另持 `rsi/lock`,缩减入口下不持);只在 R21-3.5 判为情形①时执行(否则返回 `deferred`,R21-9.3a)。按「候选集合 + 内容寻址快照」以底层命令重建目标树并提交:`hash-object -w --no-filters`、`mktree`、`commit-tree`、`update-ref refs/heads/rsi <新> <旧>`(带期望旧值,原子比较交换),再以 `read-tree -m -u <旧> <新>` 做两树合并同步工作树——**不用 `--reset`**,工作树里有与目标冲突的未提交改动时 git 拒绝覆盖,kit 按 `personal_repo_diverged` 处理;不依赖 `git revert`、不用 `add` / `commit` 的高层路径。git 子进程一律 `runSync('git', …)`,环境与 R21-17.8 的封闭执行配置相同(`GIT_CONFIG_NOSYSTEM=1`、`GIT_CONFIG_GLOBAL` 指向空文件、清除继承的 `GIT_*`、`-c core.hooksPath=<空目录>`、`-c core.fsmonitor=false`、`-c core.attributesFile=`、`-c protocol.allow=never` 且**不放行任何协议**、`-c commit.gpgsign=false`);作者与提交者固定为常量身份 `RSI_PERSONAL_AUTHOR`(不含邮箱字面量,不读用户全局配置)。因本地配置已被 R21-3.4 限为白名单、全局与系统配置被屏蔽,不存在可被调用的过滤器、钩子或外部程序。变异:去掉 `core.hooksPath` 覆盖、放行本地 `filter.*`、放行 `include.*`、改回 `read-tree --reset` → 对应夹具(全局钩子、本地过滤器、include 链、工作树里有用户未提交改动)的测试红。
 - R21-3.6a `[V1]` **提交 journal 与恢复优先级**:`personal/lock` 串行化所有提交,同一时刻至多一个在途提交,journal 为单文件 `rsi-personal/commit-journal.json`(`PersonalCommitJournal`,`strictObject`,0600):`{schema_version, txn_id, kind: transition|rollback|clear|purge_rewrite|reconcile|identity_change, candidate_ids, ref: "refs/heads/rsi", old_head, target_tree, new_commit, phase, at}`,`phase` ∈ `planned → objects_written → ref_updated → worktree_synced → recorded`,每一步先 `fsync` journal 再做下一步;`recorded` 之后更新 `head.json`,最后删除 journal。**恢复**(下一次任何持 `personal/lock` 者,先于 R21-3.5 的判定)先读五个观测值:①HEAD 是否为指向 `journal.ref` 的符号引用(不是 detached,不是别的分支);②`journal.ref` 的值;③索引树(`diff-index --cached` 与 `old_head` / `new_commit` 比较);④工作树(`diff` 与二者比较);⑤未跟踪与忽略文件(`status --porcelain --ignored` 的 `??` / `!!` 项)。**只允许三种组合继续**:a)①是、②=`old_head`、③④都等于 `old_head`、⑤无 → 提交未生效:丢弃 journal(新对象无引用、无害),由调用方从头重做;b)①是、②=`new_commit`、③④都等于 `old_head`、⑤无 → 引用已更新、工作树未同步:以 `read-tree -m -u <old> <new>` 补同步,再更新 `head.json`、删 journal;c)①是、②=`new_commit`、③④都等于 `new_commit`、⑤无 → 只差记录:更新 `head.json`、删 journal。**其余任何组合**(切到同一提交的其它分支、detached HEAD、只改了索引、工作树混合、出现未跟踪文件、引用为第三个值)→ 保留 journal,判 `personal_repo_diverged`,不改引用、索引与工作树。`head.json` 只在 journal 到达 `recorded` 后写,所以「已提交但 `head.json` 未更新」一定由 journal 识别,不会被 R21-3.5 ②误判。验收:在五个 `phase` 之间各注入一次崩溃,恢复后 HEAD、索引、工作树、`head.json` 一致且不出现 `personal_repo_diverged`;另在崩溃窗口里分别①改一个工作树文件、②切到指向同一提交的另一分支、③进入 detached HEAD、④只改索引、⑤加一个未跟踪文件,恢复后用户的改动都保留、状态为 `personal_repo_diverged`、journal 仍在。
+
+> **冻结后订正 W0-5(2026-11-09)**:`kind` 追加 `bootstrap`,其 `old_head` 为 null、`phase` 取四段(`planned → initialized → committed → recorded`),**不复用**本条的五 phase 恢复谓词;`PersonalCommitJournal` schema 见 `src/contracts/rsi-personal.ts`。
+
 - R21-3.7 `[V1]` **`PersonalLifecycleRecord`**(新 schema,`strictObject`,私有仓库 `lifecycle/<id>.json`;只增字段不改):
+
+> **冻结后订正 W0-2 / W0-7(2026-11-09)**:上表 `PersonalLifecycleRecord` 追加可选键 `cluster_signature`(Q1 签名:来源聚类的机械判据;创建时写入、之后不可变;缺失 = 旧版记录;**与 `AtomFrontmatter.signature` 无关**),与 N4-2 的 `source_proposal` 同为 `strictObject` 内的可选键。schema 落在 `src/contracts/rsi-personal.ts`,R21-4.3 组合矩阵由 `deployMatrixViolation` 与 `superRefine` 一律拒绝非法组合。
 
 | 字段                  | 类型 / 取值                                                                                                                                                                   |
 | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -5654,6 +5668,8 @@ agent-kit judge --confirm-reflector --run <run_id> [--proposal <id>]… --write 
 - R21-3.8 `[V1]` **权威副本与工作副本**:私有仓库的 `lifecycle/<id>.json` 是权威副本;`.state/rsi/candidates/<id>.json` 是工作副本(含 shadow 命中计数、证据归属、监视期的中间统计)。同步检查点:每次 `lifecycle` / `deploy` / `rollback` 维度的转移都经一次 `commitPersonal` 写入权威副本,写成功后才更新工作副本对应字段;工作副本的统计字段在两次转移之间可以领先。判定:权威副本领先于工作副本(崩溃于两步之间)→ 以权威副本为准续做;两者在转移历史上分叉(同一 `idem_key` 不同结果)→ `candidate_invalid`(安全阻断)。
 - R21-3.9 `[V1]` **与 §18 不混用**(修订 §18,§21.18 第 4 条):`PersonalLifecycleRecord` 只出现在私有仓库;§18 的 `LifecycleRecord`、`attest` / `promote` / `retire` 只用于框架仓库自己的原子(人工路径)。现有代码对这一范围的实际强制是 `layer=personal` → 退出 2 `PERSONAL_LAYER_P2`(§18.2 不变),外加个人层产物从不写进框架仓库的 `rules/` 等目录;「只服务框架仓库」是范围声明,不是新增的仓库身份守卫。§18.5 理由码不变,`terminal_reason` 是独立枚举。
 - R21-3.10 `[V1]` **原子字段**:个人层规则 / 踩坑沿用 `AtomFrontmatter`,取 `layer=personal`、`origin=auto_rsi`、`strength=should`;踩坑另要求 `kind=fact`、`volatility=volatile` 与非空 `trigger`(若 `AtomFrontmatter` 无 `trigger` 字段,V1 schema 落地时**追加可选字段**,不改既有字段)。`origin=auto_rsi` 是唯一能让候选进本机 payload 的来源值。
+
+> **冻结后订正 W0-6(2026-11-09)**:`AtomFrontmatter` 已追加可选 `trigger`(1..200 字符);候选来源、类别判据与候选 id 派生见 §21.24 W0-6。
 
 ### 21.4 候选状态机:统一转移表(两个正交维度)
 
@@ -5684,6 +5700,8 @@ agent-kit judge --confirm-reflector --run <run_id> [--proposal <id>]… --write 
 | `retiring → <target_terminal>`     | 经撤销路径移除完成(与 R21-9.1 同四段);`target_terminal` 缺省 `retired`,经 R21-4.4a 升级后为 `rolled_back`;升级不改变状态名、不重做已完成的补偿阶段,完成时按当时的有效目标转移      | —          | V2  |
 
 > **冻结后订正 N4-2(R20-18.35)**:上表追加事件 `judge_reject`——`proposed | shadow | blocked → rejected`,`canary | adopted | stable → rolling_back`(`target_terminal = rolled_back`);守卫 = 关联提案上通过完整校验的 `session_confirmed` 记录**或 `proven` 的 `spawned` 记录**(N4 订正 #5,Q-N4-9 = B)且 `verdict = reject` 或 `injection_suspected = true`;原因码 `judge_reject` / `judge_injection`,终态理由 `judge_rejected`。**只向终止方向**,永不放行 / 加速 / 跳过闸(R21-1.5 不变)。
+
+> **冻结后订正 W0-1 / W0-10(2026-11-09)**:上表在 **V1a 只有**:`(无)→proposed`、`proposed→shadow`、`proposed→rejected`、`shadow→expired`、`shadow→rejected`、`proposed|shadow→rejected`(clear)、`judge_reject` 对 `proposed|shadow` 的终止;**V1b 才有** `shadow→canary`、`canary→rolling_back`、`rolling_back→<target_terminal>`(能力键见 §21.24)。V1a 里达标的 shadow 候选只记展示缓存 `canary_ready_since`、留在 `shadow`(待用户拍板的保守默认,§21.24 W0-1);V1i-9:因全局名额被占而排队满 30 个 UTC 日 → `expired`(`limit_reached`)。
 
 - R21-4.2 `[V1]` **维度二:本机部署**(每 agent):`none → injected → static_pending → static → removal_pending → none`,另有撤回支路 `static → withdraw_pending → injected`。
 
@@ -5728,6 +5746,9 @@ agent-kit judge --confirm-reflector --run <run_id> [--proposal <id>]… --write 
 
 - R21-5.2 `[V1]` G0–G7 按编号顺序执行,首个红即停;任一闸实现抛错 → B2 `gate_internal`(熔断),**不**记为 `rejected`。
 - R21-5.3 `[V1]` **自动配额**(v3.1 §3.5,常量):每个渲染目标预算的 25%(claude `max_lines=200` 中 50 行;其它 16384 字节中 4096 字节),lite 档只用一半(12.5%);配额内 规则 50% / 踩坑 30% / 技能触发描述 20%(逻辑分类,渲染后共用 `rules` 文件的同一份预算);预置技能不计入。新增使配额占用 ≥ 80% 时必须同时配对退役一条,否则 G5 拒;本代循环越过 80% 而未配对 = 实现缺陷 → B2。
+
+> **冻结后订正 W0-10(V1i-8)**:V1 里 `medium` 与 `lite` 同行为,自动配额按 lite 的 12.5%。
+
 - R21-5.4 `[V1]` 关联标记行与 treat 追加的标签 / 哈希行(R21-6.3)对 G1 / G2 豁免,豁免只按标记的精确字节前缀与内容哈希匹配,不按「看起来像标记」。
 
 ### 21.6 灰度:分组账、关联标记与 hint canary 模式
@@ -5738,6 +5759,9 @@ agent-kit judge --confirm-reflector --run <run_id> [--proposal <id>]… --write 
 - R21-6.3 `[V1]` **关联标记**(每个被随机的会话都输出,两组相同):一行 `RSI_MARK_PREFIX` + 空格 + 随机会话标记(`rsm_` + 16 位十六进制),≤ 64 字节,不含任何候选内容。**treat 组**在标记行之后追加:R21-1.9 标签一行、候选内容哈希前 12 位一行、候选正文;标记行 + 追加部分 ≤ 1536 字节(M11)。**control 组**只有标记行。不含路径、项目名、摘录。
 - R21-6.4 `[V1]` **分组账** `.state/rsi/canary-ledger.jsonl`(`RsiCanaryLedgerLine`,0600,`O_APPEND` 单行、不拿锁,与 R20-5.1 末行同类),行为两种 `kind` 的联合:`assign` = `{kind, at, agent, marker, candidate_id, arm: "treat"|"control"|"excluded", reason, p, background_fp, background_fp_ex, policy_fp, case_set_sha256, overlaps_preset, hint_version}`,`reason` 在 treat / control 为 `null`,在 excluded 取封闭枚举 `paused | not_admitted | policy_mismatch | agent_not_injected | revoked | rng_error | permit_unreadable`(`marker` 在 excluded 行为 `null`,因为未输出标记);`stop` = `{kind, at, candidate_id, reason, revocation_ref}`(R21-9.1 第二段):`revocation_ref` 在普通 stop 行为 `null`;在撤销对账写的 stop 行(`reason=revocation_reconciled`)为必填的 16 位十六进制(对应凭据行的 sha256 前 16 位),同一 `revocation_ref` 至多一行,`reason=revocation_reconciled` 而 `revocation_ref` 为 `null` 的行过不了 schema。`arm=excluded` 表示「未随机」(准入未过、暂停、策略指纹不符、失败兜底),`p=0`,不进分析、计入 C6 分母说明。`at` 只到秒;无路径、无项目 key。`background_fp` = 当前本机已同步 payload 的 `payload_sha256`(§19.8)前 16 位;`background_fp_ex` = 去掉当前候选托管块后的同一哈希(静态前后配对用,R21-8.4)。
 - R21-6.5 `[V1]` **准入**:某 agent 开分组之前,必须在真实会话里实测一次:①标记进了会话记录且被 reader 取回;②「每会话开始一次」的钩子形状确实每会话只触发一次(§10.3 动作 2)。未通过的 agent 的 `--canary` 调用一律 `arm=excluded`。准入结果记 `.state/rsi/canary-admission.json`。
+
+> **冻结后订正 W0-3(2026-11-09,用户 Q2 = 自动探针;取代设计稿 §10.3 第 2 项的「当场同意 + 当场实测」)**:准入改由 worker 自动安排:开启后探针票限次、hint 只消费窄许可并输出**仅标记行**、worker 读 reader 取回后写 `canary-admission.json`(唯一写入方);失效、静止判据与 R21-6.4 / R21-6.11 的相应订正见 §21.24 W0-3。pi 的 canary 变体归 V1b(W0-4)。
+
 - R21-6.6 `[V1]` **会话归并**:reader 在一个会话记录里取回 0 个标记 → 该会话「关联失败」(计入 C6);取回 ≥ 2 个不同标记 → 「多标记」,整会话排除出分析并计入 C6(可判、可测)。
 - R21-6.7 `[V1]` **资格与 ITT**:资格 = 会话所属项目在**会话开始之前**30 个 UTC 日内出现过目标签名;只用会话开始前的数据判定。hint 不知道会话项目(R20-1.9 不变,不读 cwd / stdin),因此分组对项目盲,资格在分析时由 L0 归属现算(§21.22 Q-B)。主分析 ITT:全部被随机(`arm ∈ treat|control`)且资格成立的会话进分母;关联失败的按最坏情况做敏感性分析。
 - R21-6.8 `[V1]` **评估名额与释放**(全局至多一个候选占用):占用条件 = `lifecycle ∈ canary|adopted`,或 `lifecycle = stable` 且**不满足**下文的释放条件(占用与释放互补:任一参与 agent 的 `watch.result ∈ not_started|pending|withdrawn_residual` 都占用,包括 claude / pi 已 `passed`、codex 仍在等待 20 个转前会话的情形)。`watch.result` 封闭枚举:`not_started`(启动条件尚未满足)、`pending`(监视中)、`passed`(R21-8.4②)、`withdrawn_residual`(R21-8.6 撤回后回到 0.8 / 0.2 的常驻注入,只做 R21-7.4 的变差监视,最多 120 个该 agent 的有观测会话)、`withdrawn_ended`(常驻注入满 120 会话后经撤销路径移除,`deploy → none`,原因 `residual_ended`)、`skipped`(启动条件已不可能满足:codex 在 claude 或 pi 任一不是 `passed` 时置为 `skipped`)、`harm`(候选随之回滚)。**释放**:每个参与 agent 的 `watch.result ∈ passed|withdrawn_ended|skipped` 时释放;候选进入 `rolling_back` 时释放(回滚期间不占名额,它只会减少影响)。若释放时没有任何 agent 处于 `static` → 候选 `rolling_back`(`target_terminal=expired`,原因 `withdraw_120`)。其余候选在 `shadow` 排队(G7)。
@@ -5759,6 +5783,8 @@ agent-kit judge --confirm-reflector --run <run_id> [--proposal <id>]… --write 
 
 **未落账不注入**:第 6、7 行的 stdout 只在账行 `O_APPEND` 写入并 `fsync` 成功之后输出。计数行(若本次也输出)按 R20-3.3 的原有规则独立判定,与本表无关;两部分合计 ≤ 200 + 1536 字节。纯文本模式(无 `--format`)不走本表。
 
+> **冻结后订正 W0-3(2026-11-09,用户 Q2)**:①第 2 行的「`RSI_AUTO_PHASE < 1`」改为「`< 2`(未到 V1b)」;②新增**第 2a 行(探针行)**,顺序在第 2 行之后、第 3 行之前:`AUTO_PAUSE` 不存在、该 agent 的 `canary-admission.json` 为 `probing` 且 `shape_version` / `agent_version` 现算一致 → 消费一张探针票 → 分组账一行 `arm=excluded` / `reason=admission_probe` / `candidate_id=null` / `marker` 非空 → 输出仅含标记的一行,C6 否;**探针先于候选存在性检查**,与候选无关;③R21-6.4 `assign` 行 excluded 的 `reason` 封闭枚举追加 `admission_probe`(唯一允许 `marker` 非空且 `candidate_id` 为 null 的取值)。正文与失效规则见 §21.24 W0-3。
+
 ### 21.7 固定分析计划与统计常量
 
 - R21-7.1 `[V1]` **常量**(写进 `src/contracts/rsi.ts`,不可配置;标「待 V1.5 校准」的数值只能由 V1.5 报告后的契约修订改):`RSI_MIN_SESSIONS_PER_ARM`(lite / medium 20、heavy 30)、`RSI_MIN_CONTROL_EVENTS=15`(主判据)、`RSI_MIN_CONTROL_EVENTS_C3=30`(待 V1.5 校准)、`RSI_MAX_RR_CI_WIDTH=0.6`(双侧 90% 区间)、`RSI_MAX_SESSIONS_PER_ARM=120`、`RSI_MAX_CANARY_DAYS=90`、`RSI_PERMUTATIONS=2000`、`RSI_ALPHA_BETTER=0.05`(单侧)、`RSI_RR_BETTER_UPPER=0.7`、`RSI_ALPHA_WORSE_TOTAL=0.10`、`RSI_ALPHA_BETTER_LOOK=0.025`、`RSI_LOOK_EVERY=10`、`RSI_TOOLCALL_DROP_SUSPECT=0.40`、`RSI_ANALYSIS_PLAN_VERSION`。保护指标界限(待 V1.5 校准):C1 率比 < 1.15;C2 几何均值比 < 1.15;C3 率比 < 1.25;C4 绝对上限(canary ≤ 1536 字节 / 会话;常驻 ≤ 自动配额);C5 率比 < 1.15(标注 ≥ 200 条后才可用);C6 两组完整率差 < 5 个百分点。边界一律:非劣效 = 上界**严格小于**界限;伤害 = 下界**严格大于** 1(或 C6 差值下界严格大于 5 个百分点);生效 = 上界**小于等于** 0.7 且单侧 p ≤ α。
@@ -5767,6 +5793,9 @@ agent-kit judge --confirm-reflector --run <run_id> [--proposal <id>]… --write 
 - R21-7.4 `[V1]` **判变差**(不需要三重门槛,只用置换 p 值):总 α = 0.10 在 C1、C2、C3、C6 四项间平分(各 0.025,Bonferroni);每项按 Lan–DeMets O'Brien–Fleming 型 spending,信息时间 t = min(1, 对照组有观测会话数 / 120),每 `RSI_LOOK_EVERY` 个新有观测会话查看一次;任一越过边界 → `rolling_back`(`harm_<指标>`);C4 越限即回滚。canary 与 adopted 各用独立的查看计划(信息不累计);`background_fp` 换段后新段从 t = 0 重新计。判定关闭(R21-7.9)时**变差方向照常生效**。
 - R21-7.4a `[V1]` **判变差的稀疏分层规则**(现在就定,不等附录):某次查看时,并层(R21-7.2)之后仍有任一组 < 2 个会话的层,本次查看把该层剔除出置换检验,剔除的会话数写进审计;剔除后无层可用 → 本次查看**不判定、不消耗 α**,信息时间照常推进,下一次查看重试;到上限时仍从未完成过一次有效查看 → 按「证据不足」走 R21-7.6(经回滚到 `expired`)。这一规则只作用于不需要区间的变差方向;正向方向的稀疏处理仍属 `§21.7a`(R21-7.13 ③)。
 - R21-7.5 `[V2]` **留出组**(adopted):注入 0.8 / 留出 0.2;留出组 ≥ `RSI_MIN_SESSIONS_PER_ARM` 且全部保护指标非劣效 → `stable`;变差方向同 R21-7.4;到上限仍证据不足 → `rolling_back`(`target_terminal=expired`)。
+
+> **冻结后订正 W0-10(V1i-7)**:OBF 消耗取**累计** `α*(t_k)`(偏向回滚);`Φ`、`Φ⁻¹` 用固定有理逼近,数值夹具写容差。
+
 - R21-7.6 `[V1]` **证据不足**:区间过宽、指标缺失、两组零事件 → 不判生效;到上限 → 经回滚到 `expired`(M9 A)。
 - R21-7.7 `[V1]` **背景分段**:注入阶段按分组账 `background_fp` 分段,跨段不合并;主分析只用当前段,之前的段只作敏感性分析(v3.1 §0a.2)。本机 payload 漂移(登记表报告某托管块被用户改过)期间分析暂停,不计入任何组。
 - R21-7.8 `[V1]` `overlaps_preset=true` 的候选照常评估,在报告与功效模拟里单列。
@@ -5806,11 +5835,14 @@ agent-kit judge --confirm-reflector --run <run_id> [--proposal <id>]… --write 
 - R21-9.4 `[V2]` 撤销路径在 `stopped` 状态下不由 worker 执行(worker 不运行),但前台 `rsi auto clear --write` / `rsi rollback --to --write` / `rsi veto` 可执行(与 `rsi purge --write` 同类,完成的是用户已授权的减少影响;R20-1.3 `stopped` 行的允许写集合随之追加,§21.18 第 42 条)。
   验收:仓库可达、状态为 `stopped`、`exec-enabled.json` 仍有 E1 条目时,前台 `rsi auto clear --write` 退出 0 完成撤销且不改启用表;之后 `rsi confirm` 恢复,worker 第一次拿锁先对账删除该条目,期间与之后 `exec-run` 对该候选都零调用。
 - R21-9.5 `[V1]` **缩减权限撤销与撤销凭据**:
-  - **撤销凭据** `rsi-personal/revocations.jsonl`(`RsiRevocationLine`,0600,持 `personal/lock` 追加并 `fsync`;只增不删):`{at, candidate_id, content_sha256, identity12, reason, by: worker|clear|rollback_to|veto|exec_event}`。凭据是「该候选的这份内容不得再注入、不得再部署、不得再执行」的权威记录,优先于仓库 `.state` 里的任何缓存。
-  - **缩减入口**:`[rsi]` 配置不可用(`off`)或 `owner_repo_fp` 指向的仓库已不存在时 worker 不运行,但 `rsi auto clear [--write]` 仍可用:只读写 HOME 侧(登记表、`rsi-personal/`、私有仓库、本机 payload),只拿 `personal/lock` → sync 锁。它为每个非终态候选写撤销凭据(第二段完成),按 R21-9.3a 处理私有仓库(干净则提交,否则 `deferred`),以「上次已同步版本减去凭据所列候选」重渲染本机 payload,经撤销路径清理 HOME(第四段);仓库 `.state` 下的 `canary.json`、分组账、`exec-enabled.json`、工作副本**不访问**,记为待对账,不把访问不到的文件当作已改写。
-  - **对账先于授予**:任何会授予影响的写入(写 `canary.json`、写或放宽 `exec-enabled.json`、渲染本机 payload、任一「增加影响」的转移)都必须在持 `personal/lock` 时重读 `revocations.jsonl`;凡被凭据列出的候选一律不授予。worker(含配置恢复、旧仓库重新可达、换回旧仓库的情形)每次拿锁后第一件事是**对账**:对每条凭据,**无论**仓库里该候选的工作副本是否已是终态,都核对并清理对应的授予缓存(去掉 `canary.json` 条目、删 `exec-enabled.json` 条目、补分组账 `kind=stop` 行——stop 行带 `revocation_ref` = 该凭据行的 sha256 前 16 位,已有同值的行即不重复写);工作副本不是终态时再推进到终态(原因 `revocation_reconciled`);对账未完成前不做任何增加影响的转移。`canary.json.revocation_gen` 记生成时凭据的行数,hint 与 `exec-run` 见到行数更多时照样以凭据内容为准(不信任缓存)。
-  - **旧 worker 仍在运行**:它写 `canary.json` / `exec-enabled.json` 之前必须拿 `personal/lock` 并重读凭据(上一条),拿不到就放弃本次写入;已经写出的旧缓存被 hint 与 `exec-run` 的凭据检查拦住。
-  - R20-1.3 `off` 行的允许写集合随之追加这一项(§21.18 第 42 条;§21.22 Q-C)。验收:①`off` 下 clear 后,把原仓库恢复为可达并重新启用配置,下一次 hint 对被清候选为 `excluded`、`exec-run` 零调用,worker 首次运行完成对账;②clear 过程中原仓库不可达,clear 仍以退出 0 完成且未创建任何仓库 `.state` 文件;③旧仓库 worker 持 `rsi/lock` 时并发 clear,两者经 `personal/lock` 串行,结果中被清候选没有任何授予写入;④工作副本已是终态但 `canary.json` / `exec-enabled.json` 仍残留该候选:下一次对账后两处都不含该候选,分组账只多一条 stop 行。
+
+> **冻结后订正 W0-1 / W0-9(2026-11-09)**:①撤销凭据与「对账先于授予 / 提交前锁内重读」**自 V1a 起生效**(`rsi auto clear` 对 `proposed` / `shadow` 的 `off` 缩减入口亦然),`canary.json` / 分组账 / payload 的清理部分归 V1b;②`revocations.jsonl` **不新增 home-fs 追加原语**,改为持 `personal/lock` 的整文件原子重写(语义等价「只增不删」),上限 `RSI_REVOCATIONS_MAX_BYTES`。
+
+- **撤销凭据** `rsi-personal/revocations.jsonl`(`RsiRevocationLine`,0600,持 `personal/lock` 追加并 `fsync`;只增不删):`{at, candidate_id, content_sha256, identity12, reason, by: worker|clear|rollback_to|veto|exec_event}`。凭据是「该候选的这份内容不得再注入、不得再部署、不得再执行」的权威记录,优先于仓库 `.state` 里的任何缓存。
+- **缩减入口**:`[rsi]` 配置不可用(`off`)或 `owner_repo_fp` 指向的仓库已不存在时 worker 不运行,但 `rsi auto clear [--write]` 仍可用:只读写 HOME 侧(登记表、`rsi-personal/`、私有仓库、本机 payload),只拿 `personal/lock` → sync 锁。它为每个非终态候选写撤销凭据(第二段完成),按 R21-9.3a 处理私有仓库(干净则提交,否则 `deferred`),以「上次已同步版本减去凭据所列候选」重渲染本机 payload,经撤销路径清理 HOME(第四段);仓库 `.state` 下的 `canary.json`、分组账、`exec-enabled.json`、工作副本**不访问**,记为待对账,不把访问不到的文件当作已改写。
+- **对账先于授予**:任何会授予影响的写入(写 `canary.json`、写或放宽 `exec-enabled.json`、渲染本机 payload、任一「增加影响」的转移)都必须在持 `personal/lock` 时重读 `revocations.jsonl`;凡被凭据列出的候选一律不授予。worker(含配置恢复、旧仓库重新可达、换回旧仓库的情形)每次拿锁后第一件事是**对账**:对每条凭据,**无论**仓库里该候选的工作副本是否已是终态,都核对并清理对应的授予缓存(去掉 `canary.json` 条目、删 `exec-enabled.json` 条目、补分组账 `kind=stop` 行——stop 行带 `revocation_ref` = 该凭据行的 sha256 前 16 位,已有同值的行即不重复写);工作副本不是终态时再推进到终态(原因 `revocation_reconciled`);对账未完成前不做任何增加影响的转移。`canary.json.revocation_gen` 记生成时凭据的行数,hint 与 `exec-run` 见到行数更多时照样以凭据内容为准(不信任缓存)。
+- **旧 worker 仍在运行**:它写 `canary.json` / `exec-enabled.json` 之前必须拿 `personal/lock` 并重读凭据(上一条),拿不到就放弃本次写入;已经写出的旧缓存被 hint 与 `exec-run` 的凭据检查拦住。
+- R20-1.3 `off` 行的允许写集合随之追加这一项(§21.18 第 42 条;§21.22 Q-C)。验收:①`off` 下 clear 后,把原仓库恢复为可达并重新启用配置,下一次 hint 对被清候选为 `excluded`、`exec-run` 零调用,worker 首次运行完成对账;②clear 过程中原仓库不可达,clear 仍以退出 0 完成且未创建任何仓库 `.state` 文件;③旧仓库 worker 持 `rsi/lock` 时并发 clear,两者经 `personal/lock` 串行,结果中被清候选没有任何授予写入;④工作副本已是终态但 `canary.json` / `exec-enabled.json` 仍残留该候选:下一次对账后两处都不含该候选,分组账只多一条 stop 行。
 - R21-9.6 `[V1]` 回滚每个子状态都可注入崩溃并续做;续做再崩溃同样可续。
 
 ### 21.10 熔断 `auto_paused`
@@ -5904,7 +5936,10 @@ agent-kit rsi exec-confirm <id>                                           [V6a]
 > **冻结后订正 N4-2(R20-18.37)**:`rsi show <id>` 追加固定段「关联提案裁决」(`source_proposal` 非 null 时):`judge_provenance`、`verdict`、`overfit`、`injection`,自报记录另带 `declared` 厂商 / 模型与 `SELF_REPORT_LABEL_JUDGE`;无路径、过泄漏闸。
 
 - R21-12.9 `[V1]` **稳定码追加**(`src/contracts/rsi.ts` 的同一份枚举;动态后缀一律是封闭集合):`RSI_USAGE reason=` 追加 `bad_date`、`unknown_id`、`bad_marker`;`RSI_NOT_RUN reason=` 追加 `not_diverged`、`phase_not_available`、`rate_limited`、`ticket_expired`、`no_runtime`;顶层(1)追加 `RSI_AUTO_RESUME_BLOCKED`、`RSI_CONTRIB_DEGRADED`(V4)、`RSI_EXEC_DECLINED`(V6a);顶层(4)追加 `RSI_EXEC_NOT_RUN`(V6a,`reason` 取 R21-16.2b 守卫的封闭码表);`RSI_FAIL_CLOSED reason=` 追加 `personal_repo_invalid`、`candidate_invalid`、`ledger_line_invalid`、`txn_invalid`、`probe_error`。G0 的 `g0_<子码>` 子码集合 = ingest 受控入口的原因码表(A4 落地时登记在同一文件);`harm_<指标>` 只取 `c1|c2|c3|c4|c6`。熔断码(R21-10.2)只进 `--json` 与日志,不作 stderr 顶层码。
-  > **冻结后订正 A4-1(2026-11-02,R20-16.17)**:`g0_<子码>` 的封闭集合即 R20-16.17 列出的 ingest 拒绝 `reason`,登记在 `src/contracts/rsi.ts`;`rate_limited` 与 ingest 名额共用同一枚举项(R20-16.15 第 4 步)。
+
+> **冻结后订正 W0-12(2026-11-09)**:本条的码已并入 `src/contracts/rsi.ts` 既有枚举与 §20.3 总表(`rsi-codes-table` 双向一致);V4–V6 的码在对应期之前只是枚举常量。
+> **冻结后订正 A4-1(2026-11-02,R20-16.17)**:`g0_<子码>` 的封闭集合即 R20-16.17 列出的 ingest 拒绝 `reason`,登记在 `src/contracts/rsi.ts`;`rate_limited` 与 ingest 名额共用同一枚举项(R20-16.15 第 4 步)。
+
 - R21-12.10 `[V1]` **审计** `.state/rsi/audit.jsonl`(`RsiAuditLine`,0600):每个转移、每次同步、每次评估查看(含置换种子)、每次 E1 运行、每次投稿结果一行 `canonicalJsonLine` 的 `{at, kind, id, dim?, agent?, from?, to?, reason?, hashes?, counts?, seed?, exec?}`,其中 `exec` = `{started_at, ended_at, exit_code, duration_ms, cpu_ms, max_rss_kib, post_check: pass|undeclared_write|unchecked|error}`;无路径、无文本;保留 365 个 UTC 日、上限 20000 行,超出先按月汇总再删;分组账保留到候选终态后 90 个 UTC 日,之后只留聚合计数(修订 R20-7.1,§21.18 第 17 条)。
 
 ### 21.13 可见性:`rsi status` 追加键、周报与 `rsi report`
@@ -6056,6 +6091,8 @@ agent-kit rsi exec-confirm <id>                                           [V6a]
 
 > **冻结后订正 N1-3 / N1-4(2026-11-02,R20-15.5)**:上表第 45 行的条数改为 12 条 + `kit-hooks` 三条 = 15 条(第 13 条的 pi 扩展即其中之一,不重复计入);第 29 行「F8 不变;kit 只读 agent 配置」改为「F8 对 sync 不变;kit 只经 `rsi hooks --write` 写 kit 钩子条目(§20.15),其余只读」。
 
+> **冻结后订正 W0-9(2026-11-09,V1i-6 ①)**:上表第 19 行「影响已实现代码」栏的「否(规划):`src/rsi/config.ts` 未实现(A2)」**被取代**为「**是**:`src/rsi/config.ts` 已实现(A2),`RsiBaseSchema`(strict)改为对 `auto` / `capability` / `contrib` 只验表或缺省,新增 `RsiAutoSchema` 与 L-auto;`test/rsi/config.test.ts` 与 `test/contracts` 示例随之改」。第 3 / 18 行的「规划」口径同样以 §21.24 W0-1 的两张表为准(V1a / V1b)。
+
 ### 21.19 与 §20 / R20-A0 的衔接
 
 **§20 条款的去留**:
@@ -6099,16 +6136,18 @@ agent-kit rsi exec-confirm <id>                                           [V6a]
 
 各期验收沿用 v3.1 §10.2 的表(验收项与变异点逐条引用本节条款);下面只列必须由契约测试钉死、且 v3.1 表里没有逐字写出的项:
 
-| 期   | 补充验收(机器可判)                                                                                                                                                                                                                                                                                                                                                                                                                               | 补充变异点                                                                                                                      |
-| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
-| V0   | 本节稳定码 / 原因码 / 熔断码在 `src/contracts/rsi.ts` 有唯一枚举,测试断言文档与枚举一致(同 §19 的做法)                                                                                                                                                                                                                                                                                                                                           | 枚举多一项或少一项                                                                                                              |
-| V1   | R21-4.3 非法组合矩阵全部 `candidate_invalid`;每个非终态的 `veto` / taint / 到期都先停注入(R21-4.4);control 组也输出关联标记;`AUTO_PAUSE` 或策略指纹不符时下一次 hint 即 `excluded`;`off` 下 clear 与旧仓库 worker 经 `personal/lock` 互斥;R21-1.6 计时口径(假时钟推进 365 天、零会话 → 无任何候选走向更多生效);R21-3.6 用户全局钩子与本地过滤器不执行;R21-6.11 hint 总输出 ≤ 1736 字节、codex 恒无 canary;R21-9.5 `off` 下 `rsi auto clear` 可用 | 日历计时用于 shadow → canary;`commitPersonal` 继承全局配置;hint 在纯文本模式附 canary;撤销路径检查 `auto_paused`                |
-| V1.5 | `RSI_DECIDE_BETTER_ENABLED` 在报告通过且 `§21.7a` 写入、夹具通过前为假;附录缺任一项时 `canary → adopted` 的转移函数拒绝(R21-7.13)                                                                                                                                                                                                                                                                                                                | 常量缺省为真                                                                                                                    |
-| V2   | `AUTO_SYNC_DECLINE_REASONS` 追加三码且在 §19 文本中出现(`test/contracts/sync-update.test.ts` 的同一断言);锁序反向时测试红                                                                                                                                                                                                                                                                                                                        | 先拿 sync 锁后拿 `rsi/lock`                                                                                                     |
-| V4   | 草稿目录与 `export` 的权限、HOME 内判定(macOS `/var` 软链形态的临时目录各跑一遍)                                                                                                                                                                                                                                                                                                                                                                 | `export_dir` 链上符号链接被接受                                                                                                 |
-| V5   | `restored` 不在任何枚举里                                                                                                                                                                                                                                                                                                                                                                                                                        | 停用终态写成 `restored`                                                                                                         |
-| V6a  | `RSI_AUTO_PHASE < V6b` 时真实 `runIsolated` / `runHostScript` 拒绝;`exec-run` 对 `arm=control` 的标记拒绝;worker 闭包不含 `exec/host/**`                                                                                                                                                                                                                                                                                                         | 准入守卫缺任一项仍进 canary;control 会话也执行                                                                                  |
-| V6a  | R21-16.2b 的「旧 treat 标记 + 暂停 / STOP / 熔断 / 探针失败 / 探针到期 / 撤销 / 拒绝」十种情形执行器零调用;R21-16.2c 三种并发交错;R21-3.6a 五个 phase 的崩溃恢复(V1 起);R21-9.5 三项验收(V1 起);R21-6.11 结果矩阵每行一例(V1 起)                                                                                                                                                                                                                 | 守卫在拿锁后不复查;worker 不重读拒绝标记就写启用表;恢复时用 `read-tree --reset`;缩减 clear 写仓库 `.state`;账行写失败仍输出标记 |
+| 期  | 补充验收(机器可判)                                                                                                                                                                                                                                                                                                                                                                                                                               | 补充变异点                                                                                                       |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| V0  | 本节稳定码 / 原因码 / 熔断码在 `src/contracts/rsi.ts` 有唯一枚举,测试断言文档与枚举一致(同 §19 的做法)                                                                                                                                                                                                                                                                                                                                           | 枚举多一项或少一项                                                                                               |
+| V1  | R21-4.3 非法组合矩阵全部 `candidate_invalid`;每个非终态的 `veto` / taint / 到期都先停注入(R21-4.4);control 组也输出关联标记;`AUTO_PAUSE` 或策略指纹不符时下一次 hint 即 `excluded`;`off` 下 clear 与旧仓库 worker 经 `personal/lock` 互斥;R21-1.6 计时口径(假时钟推进 365 天、零会话 → 无任何候选走向更多生效);R21-3.6 用户全局钩子与本地过滤器不执行;R21-6.11 hint 总输出 ≤ 1736 字节、codex 恒无 canary;R21-9.5 `off` 下 `rsi auto clear` 可用 | 日历计时用于 shadow → canary;`commitPersonal` 继承全局配置;hint 在纯文本模式附 canary;撤销路径检查 `auto_paused` |
+
+> **冻结后订正 W0-1(2026-11-09)**:上表 V1 行的验收按 V1a / V1b 拆分——R21-4.3 矩阵、R21-1.6 计时、R21-3.6 全局钩子 / 过滤器、`off` 下 clear 与旧仓库 worker 互斥(V1a 范围:`proposed` / `shadow`)归 **V1a**;control 组标记、`AUTO_PAUSE` / 策略指纹即 `excluded`、hint 总输出 ≤ 1736 字节且 codex 恒无 canary、四段回滚各子状态崩溃续做归 **V1b**。补充验收(W0):相位提升前后「某期之前的子命令是桩、能力未到期时转移被拒」。
+> | V1.5 | `RSI_DECIDE_BETTER_ENABLED` 在报告通过且 `§21.7a` 写入、夹具通过前为假;附录缺任一项时 `canary → adopted` 的转移函数拒绝(R21-7.13) | 常量缺省为真 |
+> | V2 | `AUTO_SYNC_DECLINE_REASONS` 追加三码且在 §19 文本中出现(`test/contracts/sync-update.test.ts` 的同一断言);锁序反向时测试红 | 先拿 sync 锁后拿 `rsi/lock` |
+> | V4 | 草稿目录与 `export` 的权限、HOME 内判定(macOS `/var` 软链形态的临时目录各跑一遍) | `export_dir` 链上符号链接被接受 |
+> | V5 | `restored` 不在任何枚举里 | 停用终态写成 `restored` |
+> | V6a | `RSI_AUTO_PHASE < V6b` 时真实 `runIsolated` / `runHostScript` 拒绝;`exec-run` 对 `arm=control` 的标记拒绝;worker 闭包不含 `exec/host/**` | 准入守卫缺任一项仍进 canary;control 会话也执行 |
+> | V6a | R21-16.2b 的「旧 treat 标记 + 暂停 / STOP / 熔断 / 探针失败 / 探针到期 / 撤销 / 拒绝」十种情形执行器零调用;R21-16.2c 三种并发交错;R21-3.6a 五个 phase 的崩溃恢复(V1 起);R21-9.5 三项验收(V1 起);R21-6.11 结果矩阵每行一例(V1 起) | 守卫在拿锁后不复查;worker 不重读拒绝标记就写启用表;恢复时用 `read-tree --reset`;缩减 clear 写仓库 `.state`;账行写失败仍输出标记 |
 
 ### 21.21 契约自洽性核对表
 
@@ -6255,3 +6294,846 @@ v3.1 已把用户决定列全;以下是落契约时新发现的契约细节取�
 **冻结后订正 N4-1(2026-11-03)**:用户拍板 N4 = B(`judge --ingest`,人工确认的自报厂商,个人层也可用)。按节首规则原位加标注并在此记录:①§21.19 衔接表 `§20.10 P1 / P2 占位` 行末句「`judge --ingest` 与 N4 对个人层不再需要(只影响 §18 手动路径)」**被取代**(已在原位删除线并指回 §20.18-8 ⑥);②§21.18 第 13 行「`judge` 永不自动」**保持**,仅追加澄清(`judge --ingest` 是前台 TTY 命令,不属自动路径);③§21 其余正文(R21-1.3 / 1.5、R21-4.1、R21-5.1 G0–G9)**不改**:它们本就不引用 judge 记录,自报裁决不能放行任何候选(R20-18.25 ②;N4-1 当时的「V1 不读」已被 N4-2 限定为「机器闸不读」)。④是否让自动循环以「只收紧」方向消费该记录:已由 N4-2 定为是(见下)。规则正文在 §20.18;评审记录见 §20.18-10。
 
 **冻结后订正 N4-2(2026-11-03,用户第二批拍板 Q-N4-3 = B、Q-N4-4 = B)**:个人层自动循环可消费通过完整校验的 `session_confirmed` 记录(**N4 订正 #5 追加:以及 `proven` 的 `spawned` 记录**,用户第三批拍板 Q-N4-9 = B),**只用于终止**对应候选;`rsi show` 显示关联提案的自报裁决。按节首规则原位加标注并在此记录:①R21-3.7 加可选关联键 `source_proposal`;②R21-4.1 追加事件 `judge_reject` 的两类转移,R21-4.6 追加原因码(`judge_reject`、`judge_injection`、`judge_rejected`)与优先级;③R21-12.8 追加 `rsi show` 展示段;④§21.18 追加第 46–48 行。**不改**:G0–G9(R21-5.1)、R21-1.3 / 1.5、灰度 / 分组账 / 熔断。N4-1 ②「§21 其余正文不改」据此限定为 G0–G9 与禁令清单。规则正文在 §20.18-6a(R20-18.32–18.39);待定夺 Q-N4-8 见 §20.18-9;Q-N4-9 已定(N4 订正 #5,R20-18.32a)。
+
+**冻结后订正 W0(2026-11-09,用户 2026-11-04 选择框 Q1–Q5、V1i-2、V1i-4…10 按规划稿处理,2026-11-09 选「现在开工 W0 + V1a」)**:V1 拆为 V1a(只观察)与 V1b(canary、分组账、变差检验、回滚)(Q5);签名取来源聚类的机械判据(Q1);准入改自动探针,取代设计稿 §10.3 第 2 项「用户当场同意」(Q2);pi 的 canary 变体进 V1b(Q3);私有仓库由 worker 自动建(Q4);候选来源与 id 派生(V1i-2);文件形状与度量标量(V1i-4);设计稿 §10.2 V1 行与契约 R21-7.9 对齐(V1i-5);`config.ts` 已实现而非「规划」、`revocations.jsonl` 改整文件原子重写(V1i-6);OBF 累计、medium=lite、shadow 排队上限、lint 授权路径(V1i-7…10)。按节首规则原位加标注并在此记录:R21-0.1 / 0.2、R21-2.1 / 2.2、R21-3.5 / 3.6a / 3.7 / 3.10、R21-4.1、R21-5.3、R21-6.5 / 6.11、R21-7.6(旁)、R21-9.5、R21-12.9、§21.18 第 19 行、§21.20 V1 行(W0-1 … W0-12,正文 §21.24)。**取代关系**:§21.0 分期表 V1 行与 V1.5 前置;设计稿 §10.3 第 2 项「当场同意」与 R21-6.5「实测」的人工口径;规划稿 Q3 推荐 A;§21.18 第 19 行「影响已实现代码」栏。**评审**:W0 订正草稿经 Pi(GPT-6.1 Sol)评审,逐轮结论与采纳 / 未采纳处置见 PR 描述;第 1 轮采纳的修订已并入 §21.24(探针票限次与静止判据、准入绑定版本与失效、bootstrap 单列状态机与首次建仓证明、V1a 的撤销凭据与锁内重读、行级能力表、`cluster_signature` 入权威记录、`auto_pause` 非法值不归零)。**未改**:任何用户已拍板的 U / M / P / T 决定、G0–G9、R21-1.3 / 1.5、R21-7.9 / 7.13。
+
+### 21.24 V1 拆期与 W0 订正(冻结后订正 W0-1 … W0-12;2026-11-09,依据用户 2026-11-04 选择框 Q1–Q5、V1i-2、V1i-4…10 按规划稿处理,2026-11-09 选「现在开工 W0 + V1a」)
+
+按节首规则:原位加标注、本节写正文、§21.23 记录。本节**不改**任何已冻结条款的 `[V1]` 标签;被取代的原文在原位以删除线或标注指回本节。W0 只落契约、schema、枚举与 lint 骨架,`RSI_AUTO_PHASE` 仍为 0(R21-0.1)。
+
+#### W0-1 拆期(Q5):V1 → V1a + V1b
+
+**取代** §21.0 分期表 V1 行与 V1.5 行的前置「V1」:
+
+| 期   | 内容                                                                                                                                                                                                                                                                                                                                                               | 进入条件                                                                       |
+| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------ |
+| V1a  | 个人层「只观察」:私有仓库(含 W0-5 自动建仓)、暂存提案 → 候选(W0-6)、G0–G7、shadow(只统计命中)、`rsi auto status / pause / resume / clear / rebase-baseline`、`rsi veto`、`rsi report`、`rsi show`、审计、冷却 / 指纹 / 墓碑、撤销凭据与对账、taint 与 `judge_reject` 对 `proposed` / `shadow` 的终止。**无注入、无分组账、无 hint canary、无四段回滚、无变差检验** | A1–A5 已实装;§10.3 动作 1(用户打开 `[rsi.auto] enabled`,同时授权自动建仓)      |
+| V1b  | canary、分组账、关联标记、`--canary` 与自动探针准入(W0-3)、pi canary 变体(W0-4)、ITT、变差检验、四段回滚与撤销路径、`rsi rollback --to`、`rollback_storm` 类熔断                                                                                                                                                                                                   | V1a 已发;**判定默认关**(R21-7.9);准入由自动探针完成,不再需要用户当场动作(W0-3) |
+| V1.5 | 同原表                                                                                                                                                                                                                                                                                                                                                             | V1b                                                                            |
+
+**R21-0.1 相位整数**(补「整数枚举」未定义):`RSI_AUTO_PHASE_ORDER` 是**只追加、不插入、不重排**的有序表,`RSI_AUTO_PHASE` 取其下标;W0 之后仍为 0。
+
+<!-- W0-PHASE-ORDER -->
+
+| 相位 | 整数 |
+| ---- | ---- |
+| V0   | 0    |
+| V1a  | 1    |
+| V1b  | 2    |
+| V1.5 | 3    |
+| V2   | 4    |
+| V3   | 5    |
+| V4   | 6    |
+| V5   | 7    |
+| V6a  | 8    |
+| V6b  | 9    |
+
+R21-2.2 的「`RSI_AUTO_PHASE ≥ 1`」即 V1a,不变;R21-6.11 第 2 行的「`RSI_AUTO_PHASE < 1`」**改为「`< 2`(未到 V1b)」**;R21-4.1 的「≥ V3」、R21-16.2 的「≥ V6b」按具名读,不受影响。所有阶段判断经同一个函数(`phaseAtLeast`),不在调用处写裸整数。R21-0.2 适用于 V1a 与 V1b:各一个 PR 提升相位。
+
+**两个维度,各有唯一事实源**:(2) 能力表由测试与 `src/contracts/rsi.ts` 的 `RSI_CAPABILITY_PHASE` **双向逐行比对**;(1) 条款首期表是**文档事实源**,由条款追踪测试解析并与正文的 `[V1]` 条款逐一对账(一个不漏、不重复、不多),不另设代码常量(运行时若需要条款映射,再以契约修订新增):
+
+(1) **条款的首个必须成立的期**(`[V1]` 标签不改)。条款「首期已到」不授权整条实现:条款内各事件 / 转移 / 判定器的最早可用期以 (2) 为准;条款自带「期」列的行(R21-4.1、4.2、10.2 等)以该列与 (2) 的较晚者为准。
+
+<!-- W0-CLAUSE-PHASE -->
+
+| 条款                                                                                                | 首期 |
+| --------------------------------------------------------------------------------------------------- | ---- |
+| R21-1.1、R21-1.2、R21-1.3、R21-1.4、R21-1.5、R21-1.6、R21-1.7、R21-1.8、R21-1.9                     | V1a  |
+| R21-2.1、R21-2.2、R21-2.3                                                                           | V1a  |
+| R21-3.1、R21-3.2、R21-3.3、R21-3.4、R21-3.5、R21-3.6、R21-3.6a、R21-3.7、R21-3.8、R21-3.9、R21-3.10 | V1a  |
+| R21-4.1、R21-4.3、R21-4.4a、R21-4.5、R21-4.6                                                        | V1a  |
+| R21-4.2、R21-4.4                                                                                    | V1b  |
+| R21-5.1、R21-5.2、R21-5.3                                                                           | V1a  |
+| R21-5.4                                                                                             | V1b  |
+| R21-6.1、R21-6.2、R21-6.3、R21-6.4、R21-6.5、R21-6.6、R21-6.7、R21-6.8、R21-6.9、R21-6.10、R21-6.11 | V1b  |
+| R21-7.1、R21-7.8、R21-7.9、R21-7.13                                                                 | V1a  |
+| R21-7.2、R21-7.4、R21-7.4a、R21-7.6、R21-7.7                                                        | V1b  |
+| R21-9.5                                                                                             | V1a  |
+| R21-9.1、R21-9.2、R21-9.3、R21-9.3a、R21-9.6                                                        | V1b  |
+| R21-10.1、R21-10.2、R21-10.3、R21-10.4                                                              | V1a  |
+| R21-11.1、R21-11.2、R21-11.3、R21-11.4、R21-11.5、R21-11.6                                          | V1a  |
+| R21-12.1、R21-12.2、R21-12.3、R21-12.4、R21-12.5、R21-12.6、R21-12.8、R21-12.9、R21-12.10           | V1a  |
+| R21-12.7                                                                                            | V1b  |
+| R21-13.1、R21-13.2、R21-13.3                                                                        | V1a  |
+
+(2) **能力的最早可用期**(转移、事件、判定器、命令;运行时与测试共用 `phaseAtLeast`;未到期的能力:转移函数返回内部拒绝 `phase_not_available`〔不是用户可见稳定码〕,命令注册为桩退出 64。**默认拒绝**:表里没有的能力视为尚未到期):
+
+<!-- W0-CAPABILITY-PHASE -->
+
+| 能力键                                | 最早期 |
+| ------------------------------------- | ------ |
+| `repo_bootstrap`                      | V1a    |
+| `candidate_create`                    | V1a    |
+| `gates_g0_g7`                         | V1a    |
+| `shadow_count`                        | V1a    |
+| `transition_proposed_to_shadow`       | V1a    |
+| `transition_to_rejected`              | V1a    |
+| `transition_shadow_to_expired`        | V1a    |
+| `revocation_credentials`              | V1a    |
+| `cmd_auto_status`                     | V1a    |
+| `cmd_auto_pause`                      | V1a    |
+| `cmd_auto_resume`                     | V1a    |
+| `cmd_auto_clear`                      | V1a    |
+| `cmd_auto_rebase_baseline`            | V1a    |
+| `cmd_veto`                            | V1a    |
+| `cmd_report`                          | V1a    |
+| `cmd_show`                            | V1a    |
+| `hint_weekly_line`                    | V1a    |
+| `transition_shadow_to_canary`         | V1b    |
+| `transition_canary_to_rolling_back`   | V1b    |
+| `transition_rolling_back_to_terminal` | V1b    |
+| `deploy_none_to_injected`             | V1b    |
+| `deploy_removal_pending`              | V1b    |
+| `hint_canary`                         | V1b    |
+| `admission_probe`                     | V1b    |
+| `canary_ledger`                       | V1b    |
+| `harm_test`                           | V1b    |
+| `rollback_four_phase`                 | V1b    |
+| `revocation_reconcile_grants`         | V1b    |
+| `cmd_rollback_to`                     | V1b    |
+| `transition_canary_to_adopted`        | V2     |
+| `decide_better`                       | V2     |
+| `local_payload`                       | V2     |
+
+**V1a 的具体形态**:①`shadow→canary`、`canary→*`、`rolling_back→*` 与 deploy 维度全部转移不存在;②`rsi rollback --to` 是桩(退出 64);hint `--canary` 走 R21-6.11 第 2 行;③**R21-9.5 的撤销凭据与「对账先于授予 / 提交前锁内重读」在 V1a 就生效**(这是 `off` 下 clear 与旧 worker 互斥、已清候选不被旧快照复活的唯一屏障):`rsi auto clear` 对 `proposed` / `shadow` 先在 `personal/lock` 下写撤销凭据(`by=clear`),再提交私有仓库终态(`cleared`);worker **每次**提交私有仓库前持 `personal/lock` 重读 `revocations.jsonl` 与权威 `lifecycle/<id>.json`,凡被凭据列出或权威已是终态的候选不得被旧工作副本推进(终态不可复活);`personal_repo_diverged` 下按 R21-9.3a 推迟私有仓库部分(不触碰引用 / 索引 / 工作树),工作副本记 `repo_removal_deferred=true`;`canary.json` / 分组账 / payload 的清理(R21-9.5 的 V1b 部分)在 V1a 不存在,对账只推进状态;④§21.20 V1 行验收拆分:R21-4.3 矩阵、R21-1.6 计时、R21-3.6 全局钩子 / 过滤器、`off` 下 clear 与旧 worker 互斥(V1a 范围:`proposed` / `shadow`)归 V1a;control 组标记、`AUTO_PAUSE` / 策略指纹即 `excluded`、hint ≤ 1736 字节、codex 无 canary、四段回滚归 V1b。
+
+**V1a 里「达标」的 shadow 候选(保守默认;待用户拍板)**:满足「≥ 20 有观测会话且签名命中 ≥ 2」的 `shadow` 候选在工作副本记 `canary_ready_since`(UTC 日),**只是展示缓存,不是授权**:留在 `shadow`;V1i-9 的 30 个 UTC 日排队计时(W0-10)**只在「因全局评估名额被占而排队」(`g7_queued`)时累计,因相位未到而等待不计时**。V1b 上线后进入 canary 时必须重新核对:当前授权与配置、taint、冷却 / 墓碑 / 黑名单、`content_sha256` 与 `cluster_signature` 未变、证据仍有效、名额空闲;排序键固定为 `(canary_ready_since, 候选 id)` 升序,工作副本丢失后由权威记录与信号库重算。
+
+#### W0-2 签名(Q1,补 V1i-1)
+
+候选的「签名」= 其来源聚类的机械判据,候选创建时算出,写入 `PersonalLifecycleRecord` 的**可选键 `cluster_signature`**(创建时写入、之后不可变;缺失 = 旧版记录,不参与 G6 / shadow,按 `candidate_invalid` 之外的「无签名」处理);**与 `AtomFrontmatter.signature`(归因签名)无关**。
+
+- 来源为 `tool_fail_retry` 聚类:`{kind: "tool", tool_name, tool_error_class?}`,存储信号带 `tool_error_class` 时可选加窄(只收窄不放宽)。
+- 来源为 `explicit_lesson` 聚类:`{kind: "lesson", rep_tokens}`(≤ 32 个归一化 token,升序去重),命中判据 = 与代表集的 token Jaccard ≥ `RSI_LESSON_JACCARD`(= `src/reflect/cluster.ts` 的 `DEFAULT_LESSON_JACCARD`,0.5)。
+- 只用结构化字段与已脱敏摘录;**不接受反思器输出的自由签名字段**(信任边界)。G6 回放、shadow 命中、R21-6.7 资格、`stable → retiring` 零命中、主判据「目标聚类复发率」、G3 踩坑 `trigger` 均引用此定义。旧信号无 `tool_error_class` 时只靠 `tool_name`。
+
+#### W0-3 准入改为自动探针(Q2,补 V1i-3)
+
+**取代**设计稿 §10.3 第 2 项「用户当场同意 + 当场实测」及 R21-6.5「实测」的人工口径;被取代的只是这一动作。同意的承载:`[rsi.auto] enabled = true` 同时表示同意 kit 向 claude / pi 会话输出**仅含关联标记**的探针行(无任何候选内容);**候选正文的注入**仍须先通过准入、且候选进入 `canary`。(用户 Q2 选择「自动探针」,已知与 §10.3 第 2 项不符、要求写明取代关系;本条即该取代关系。)
+
+- **协议(V1b)**:`canary-admission.json`(`.state/rsi/`,0600)**唯一写入方 worker**(持 `rsi/lock` 与 `personal/lock`),每 agent 一项:`{state: probing|admitted|failed, shape_version, agent_version, generation, armed_at, probe_expires_at, tickets, decided_at, reason}`。worker 在自动循环有效、agent ∈ {claude, pi}、钩子装了 canary 变体、无 `AUTO_PAUSE` 时置 `probing`:`generation` 加 1、`tickets = RSI_PROBE_SESSIONS`(= 3)。**探针票**是 hint 的**占用标记**,不是预建文件:票号 `<generation>-<i>`(i = 1..tickets),对应占用文件 `.state/rsi/canary-probe/<agent>/<generation>-<i>.used`;worker 只持久化「本代允许消费几张」(即本文件的 `generation` 与 `tickets`),旧代的占用标记作废、不计入本代。
+- **hint 只消费窄许可**:见 `probing` 且未过 `probe_expires_at`(= armed + `RSI_PROBE_WINDOW_DAYS` 个 UTC 日,= 7)、`AUTO_PAUSE` 不存在、`shape_version` / `agent_version` 与当前钩子 / agent 一致(现算,不等 worker)时,依次:① 对 i = 1..`tickets` 依次 `createExclusive` 占用文件 `<generation>-<i>.used`,第一个成功者得票(全部已存在 → 不输出;**有限次、原子**,并发消费者至多 `tickets` 个成功);② 分组账追加 `assign` 行(`arm=excluded`、`reason=admission_probe`、`candidate_id=null`、`marker=rsm_…`)并 `fsync`;③ 输出关联标记行。崩溃语义:①之后崩溃 = 票已用、无账行无输出(少探);②之后崩溃 = 有账行无输出(账行带标记但会话里取不回,worker 按「标记未被取回」处理,本代最多因此 `failed(marker_not_retrieved)` 而重新 armed 下一代);绝不重复授予。验收:并发消费恰有 `tickets` 个成功者;①②③各崩溃点之后不超发;重新 armed 后旧代标记不被重用。
+- **判定(worker,读 reader 取回)**:三张探针票对应的三行账行,**每一行的标记都被恰好一个会话取回,且该会话取回的不同标记恰为 1 个**,且该会话文件已静止 ≥ `RSI_PROBE_QUIET_MINUTES`(= 60)(「完整读完」只保证本次读取完整,不保证会话已结束;静止是封存判据)→ 三者全部满足为 `admitted`;任一标记在静止后 `RSI_PROBE_WAIT_HOURS`(= 48)内仍未被任何会话取回 → `failed(marker_not_retrieved)`;任一会话取回 ≥ 2 个不同标记 → `failed(multi_marker)`;`probe_expires_at` 到期仍未凑齐 → `failed(probe_expired)`。
+- **准入的失效**:`admitted` 绑定 `shape_version` 与 `agent_version`;hint 每次现算当前值,不符 → 按 R21-6.11 第 4 行 `not_admitted`;此后任一经准入的会话被 R21-6.6 判为「多标记」→ 该 agent 回到 `failed(multi_marker)`(撤销准入,走更少影响方向)。`failed` 在 `shape_version` 或 `agent_version` 变化前不自动重探。
+- **R21-6.11 矩阵重列**(取代原表的第 2–4 行位置;顺序固定,先命中先用):1 同原第 1 行;2 自动循环未开启、`RSI_AUTO_PHASE < 2` 或 agent 为 codex → 无输出无写入;**2a(新)探针行**:`AUTO_PAUSE` 不存在、该 agent 的准入为 `probing` 且上述现算条件成立 → 消费探针票 → 一行 `assign`(`excluded` / `admission_probe`)→ 标记行,C6 否;**探针先于候选存在性检查**,与候选无关;2b 探针条件不成立 → 继续;3–8 同原表(第 3 行的「`canary.json` 不存在 / 无评估中候选 / 读取失败」只描述候选,不影响 2a)。
+- **R21-6.4 订正**:`assign` 行 excluded 的 `reason` 封闭枚举追加 `admission_probe`;该值是 `marker` 非空且 `candidate_id` 为 `null` 的**唯一**情形(schema 以 refine 钉死,反之亦然);其余字段(`p=0`、`background_fp`、`policy_fp`、`hint_version` 等)照常必填;「`arm=excluded` 表示未随机」不变,探针行同样不进分析。
+- 常量:`RSI_PROBE_SESSIONS`、`RSI_PROBE_WINDOW_DAYS`、`RSI_PROBE_QUIET_MINUTES`、`RSI_PROBE_WAIT_HOURS`。设计稿 §10.3 第 2 项原位加订正标注。
+
+#### W0-4 pi 的 canary 变体进 V1b(Q3)
+
+取代规划稿 Q3 推荐 A。pi 的 canary 变体(`rsi-hooks.ts` 中现为 `null`)与 `--canary` 对 pi 的路径在 V1b 内实现,并经 W0-3 的探针实测;pi 钩子形状证据级别在基线 d692da5 已是「实测运行」(pi ≥ 1.5.0),不再是「假设」。`before_agent_start` 若每轮触发,多标记按 W0-3 判 `failed(multi_marker)`,不放宽。
+
+#### W0-5 自动建仓(Q4,补 V1i-6②)
+
+- **窄例外**:R21-3.5 情形③「记录提交不存在」对**首次建仓**不适用。首次建仓的证明 = 在持 `personal/lock` 时,对 `personal/`、`rsi-personal/` 下全部约定路径(`personal` 目录、`.git`、`head.json`、`commit-journal.json`、`txn/`、`revocations.jsonl`)做 `lstat`,**全部确为不存在**(`ENOENT`);任一存在、不可访问、为悬空链接或 `lstat` 报其它错误 → 不是首次,按 R21-3.4 / 3.5 处理(`personal_repo_invalid`),**不建**。已有 `commit-journal.json` 者优先走恢复。
+- **触发**:`enabled=true ∧ R20-1.3 状态 confirmed ∧ L-auto 通过 ∧ phase ≥ V1a` 的第一次个人层一步,由 worker 持两把锁执行。
+- **bootstrap 状态机**(单列,不复用五 phase):journal `kind=bootstrap`,`old_head=null`,`phase` ∈ `planned → initialized → committed → recorded`。每步先 `fsync` journal:`planned`(journal 落盘)→ `initialized`(`git init -b rsi` 于固定目录,0700,`init.templateDir=<空目录>`,封闭 git 环境同 R21-3.6)→ `committed`(`hash-object` / `mktree` / `commit-tree` 空树;`update-ref refs/heads/rsi <新> ""`〔期望旧值为「不存在」的比较交换〕)→ `recorded`(写 `head.json`)后删 journal。**恢复**:`planned` 且目录不存在 → 丢弃 journal;`planned` 且目录存在 → 对目录做 R21-3.4 结构校验,通过且 `refs/heads/rsi` 不存在则继续 `initialized`,其余 `personal_repo_invalid`;`initialized` / `committed` 按观测到的引用值续做;任何不一致的组合 → `personal_repo_invalid`(保留 journal)。
+- journal `kind` 枚举追加 `bootstrap`。建好之前 `rsi auto status` 报 `personal_repo: absent`。建仓只在 kit 自己的目录里、无远端、无影响。
+
+#### W0-6 候选来源(V1i-2)
+
+worker 持锁扫 `.state/reflect/<run>/proposals/` 暂存提案,**仅** `layer=personal ∧ op=add ∧ targets.length=1` 且暂存规则文件可按 `judge --ingest` 同口径装载者成为候选(一提案一候选,Q-N4-10 = A;其余提案不变候选、不报错)。类别机械判:`kind=fact ∧ volatility=volatile ∧ trigger` 非空 → `pitfall`,其余 → `rule`。**候选 id** = `ra_` + sha256(`"v1|" + run_id + "|" + proposal_id + "|" + content_sha256`) 前 12 位十六进制(「kit 生成」由此派生,创建步骤崩溃重做得同一 id;48 位碰撞且内容哈希不同 → `candidate_invalid`)。私有仓库文件名用候选 id(`rules/ra_xxxx.md`),原子 frontmatter 的 `id` 保留提案目标 kebab id(供 G4 冲突检测)。`source_proposal`(N4-2)在 `(无) → proposed` 的同一次提交里写入。已成候选的提案不再算 A6「待审」。R21-3.10:`AtomFrontmatter` 追加可选 `trigger`。
+
+#### W0-7 文件形状与度量标量(V1i-4)
+
+- **C 指标计数**:C2 会话值 = 该会话最大重试链长(`retry_chain_max`);C1 = `tool_result_failed` 信号计数;C3 = `explicit_lesson ∪ user_correction` 计数(均为既有类型)。`SessionStat` 追加可选键(取回的标记 ≤ 4 个、`retry_chain_max`、`injection_excluded`)由 W4 落地,旧文件缺键照常通过。
+- **V1 的 `background_fp`** = SyncLedger 最近一次同步的包 payload 的 `payload_sha256` 前 16 位;无记录取全零常量。
+- `rsi status --json` 的 R21-13.1 键**全部输出**,V2+ 的键给惰性值(`null` / `0` / `not_available`)。
+- **新 schema**(`src/contracts/rsi-personal.ts`,全部 `strictObject`,带标记的合法 / 错误示例见本节末与 `test/contracts/registry.ts`):`PersonalLifecycleRecord`(含 N4-2 `source_proposal`、本节 `cluster_signature`)、`PersonalCommitJournal`、`PersonalHead`、`PersonalTxn`(`{schema_version, txn_id, candidate_id, kind, reason, target_terminal, phase, identity12, at}`)、`RsiRevocationLine`、`RsiCanaryLedgerLine`(`assign` / `stop` 判别联合)、`CanaryDoc`(十一键)、`CanaryAdmission`、`CandidateWorkingCopy`、`RsiAuditLine`、`RsiVetoDoc`、`RsiTombstones`。非法组合(R21-4.3 矩阵)由 `PersonalLifecycleRecord` 的 refine 一律拒绝,错误示例带「状态 / 阻断范围 / 原因码」。
+- **`RsiStateSchema`** 追加**可选**键 `auto_pause: {reasons[], diverged, owner_changed}`:缺失 = 空(旧 `state.json` 照常通过);出现但非法(类型错、未知原因码、重复)→ **拒绝**,不归零恢复(`state_invalid`)。如实说明:这是单向兼容(新 reader 读旧文件);旧版本 kit 读到含该键的文件过不了 `strictObject`,按 `state_invalid` 安全失败;所有 `state.json` 写入方必须保留该键。
+
+#### W0-8 设计稿 §10.2 V1 行(V1i-5)
+
+以契约为准:验收「变好生效」改为「判定开关为假时变好流也不生效」;变异「变好 α 放宽」改为「`RSI_DECIDE_BETTER_ENABLED` 缺省为真 → 红」;设计稿 §10.2 与 §10.3 原位加订正标注并拆 V1a / V1b,§15 记一笔。
+
+#### W0-9 配置与撤销凭据文件(V1i-6 ①③)
+
+- §21.18 第 19 行「影响已实现代码」订正为「**是**」:`src/rsi/config.ts` 已实现(A2),`RsiBaseSchema` 原为 `strictObject` 且只放行 `session`。改为对 `auto`、`capability`、`contrib` 与 `session` 一样只校验「表或缺省」;新增 `RsiAutoSchema`(`enabled`、`profile`、`exec`,`strictObject`)与 L-auto(失败 = 只禁自动生效,`auto: invalid`;L0、hint 计数照常)。L-cap / L-contrib 两层 V4 / V5 才做(V1 只让 L-base 放行这两个表)。
+- `revocations.jsonl` **不新增 home-fs 追加原语**:持 `personal/lock` 读全文 + 临时文件 fsync + rename 的整文件重写(读者要么看到旧版要么新版;语义等价「只增不删」)。常量 `RSI_REVOCATIONS_MAX_BYTES` = 1 MiB;> 512 KiB 时 `rsi auto status` 提示;> 1 MiB 按 R21-6.11 第 4a 行读取失败处理。
+
+#### W0-10 低优先项(V1i-7 … V1i-10,按规划稿建议)
+
+- V1i-7:OBF 消耗取**累计** `α*(t_k)`(偏向回滚);`Φ`、`Φ⁻¹` 用固定有理逼近并在夹具里写容差。
+- V1i-8:V1 里 `medium` 与 `lite` 同行为,自动配额按 lite 的 12.5%(V1 无渲染,无实际影响)。
+- V1i-9:`shadow` 因全局名额被占而排队满 30 个 UTC 日 → `expired`(`limit_reached`;走向更少生效,符合 R21-1.6 ②);范围见 W0-1。
+- V1i-10:以契约为准,eslint 头注释与授权块用 `src/rsi/personal/**`(写 HOME);命令入口 `src/rsi/auto/**` 不拿 home-fs。
+
+#### W0-11 lint 与测试骨架(契约追加;依 `docs/block-boundaries.md`「改 eslint 规则 = 契约变更」)
+
+- `src/io/home-fs.ts` 授权 `src/rsi/personal/**`(只写 `.local/state/agent-kit/rsi-personal/**`);**后置覆盖**收回 `src/rsi/personal/read/**` 与 `src/rsi/personal/judge-signal.ts`(同 `self-spawn.ts` 写法)。
+- `runSync`(`src/io/exec.ts`)在 `src/rsi/**` 内只许 `src/rsi/personal/{commit,commit-journal,repo-check}.ts`(直接导入由 lint 拦截,静态转出由 `test/lint/run-sync-relay.test.ts` 拦截:`src/io/exec.ts` 以外的模块不得转出 `runSync`;调用 `runSync` 的函数包装不在机械保证内,靠闭包与评审把关);`src/rsi/hooks/**` 不在自动入口闭包内、保持既有放行。
+- 自动入口(hint / poke / worker)import 闭包另禁 `src/rsi/contrib/publish/**`、`src/rsi/exec/host/**`、`src/rsi/exec/isolated/**`(R21-1.4)。
+- **条款追踪测试**:解析本节两张表;对「首期 ≤ `RSI_AUTO_PHASE`」的每个 R21 条款要求至少一个**在测试源码 AST 中真实注册、非跳过、回调体含至少一次调用(非空 / 非纯 `return`)、不在 `if (false)` 分支里**的 `it('R21-x.y …')`(字符串 / 注释里的假调用不算),或带理由的豁免;语义上是否「非占位」无法机械证明的部分,由评审与每条不变量自己的负向用例 / 变异锚点负责;W0 时相位为 0,只覆盖 R21-0.1 / 0.2。这是**追踪登记**,不替代每条不变量自己的负向用例与变异锚点。
+
+#### W0-12 稳定码与枚举(R21-12.9 并入;§21.20 V0 行)
+
+R21-12.9 的全部码并入 `src/contracts/rsi.ts` 既有枚举与 §20.3 稳定码总表(`rsi-codes-table` 双向一致):`RSI_USAGE reason=` 追加 `bad_date`、`unknown_id`、`bad_marker`;`RSI_NOT_RUN reason=` 追加 `not_diverged`、`phase_not_available`、`ticket_expired`、`no_runtime`(`rate_limited` 已在);顶层(1)追加 `RSI_AUTO_RESUME_BLOCKED`、`RSI_CONTRIB_DEGRADED`、`RSI_EXEC_DECLINED`;顶层(4)追加 `RSI_EXEC_NOT_RUN`;`RSI_FAIL_CLOSED reason=` 追加 `personal_repo_invalid`、`candidate_invalid`、`ledger_line_invalid`、`txn_invalid`、`probe_error`。这些码在对应期之前只是枚举常量(无发码路径)。另在同一文件新增:`RSI_AUTO_PAUSE_REASONS`(带各码最早期:`rollback_storm` 为 V1b)、终态理由(含 `judge_rejected`)、转移原因码、G 原因码、`RSI_DECIDE_BETTER_ENABLED = false`、R21-7.1 全部统计常量、`RSI_AUTO_LABEL`、`RSI_MARK_PREFIX`。
+
+#### W0 订正的合法 / 错误示例
+
+(各 schema 的带标记示例紧随其后,由 `test/contracts/examples.test.ts` 自动覆盖。)
+
+`PersonalLifecycleRecord` 合法(shadow,全 none,带 N4-2 `source_proposal` 与 W0-2 `cluster_signature`):
+
+<!-- example:valid schema=PersonalLifecycleRecord -->
+
+```json
+{
+  "schema_version": 1,
+  "id": "ra_0123456789ab",
+  "category": "rule",
+  "lifecycle": "shadow",
+  "deploy": {
+    "claude": "none",
+    "pi": "none",
+    "codex": "none"
+  },
+  "watch": {
+    "claude": null,
+    "pi": null,
+    "codex": null
+  },
+  "rollback": null,
+  "target_paths": ["rules/ra_0123456789ab.md"],
+  "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "fp_hmac": "0123456789abcdef",
+  "cluster_id": "c_3f2a9c1d",
+  "case_set_sha256": null,
+  "blocked_from": null,
+  "transitions": [
+    {
+      "dim": "lifecycle",
+      "from": "proposed",
+      "to": "shadow",
+      "at": "2026-11-09T08:00:00.000Z",
+      "reason": "gates_passed",
+      "idem_key": "0123456789abcdef"
+    }
+  ],
+  "transitions_dropped": 0,
+  "terminal_reason": null,
+  "overlaps_preset": false,
+  "source_proposal": {
+    "run_id": "run-20261109-01",
+    "proposal_id": "p1"
+  },
+  "cluster_signature": {
+    "kind": "tool",
+    "tool_name": "Bash"
+  }
+}
+```
+
+`PersonalLifecycleRecord` 错误:`shadow` 却有 agent 处于 `injected`(R21-4.3 非法组合)。状态 = 该候选 `candidate_invalid`,阻断范围 = 该候选停在当前状态、不得被任何自动路径推进,原因码 `RSI_FAIL_CLOSED reason=candidate_invalid`:
+
+<!-- example:invalid schema=PersonalLifecycleRecord -->
+
+```json
+{
+  "schema_version": 1,
+  "id": "ra_0123456789ab",
+  "category": "rule",
+  "lifecycle": "shadow",
+  "deploy": {
+    "claude": "injected",
+    "pi": "none",
+    "codex": "none"
+  },
+  "watch": {
+    "claude": null,
+    "pi": null,
+    "codex": null
+  },
+  "rollback": null,
+  "target_paths": ["rules/ra_0123456789ab.md"],
+  "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "fp_hmac": "0123456789abcdef",
+  "cluster_id": "c_3f2a9c1d",
+  "case_set_sha256": null,
+  "blocked_from": null,
+  "transitions": [
+    {
+      "dim": "lifecycle",
+      "from": "proposed",
+      "to": "shadow",
+      "at": "2026-11-09T08:00:00.000Z",
+      "reason": "gates_passed",
+      "idem_key": "0123456789abcdef"
+    }
+  ],
+  "transitions_dropped": 0,
+  "terminal_reason": null,
+  "overlaps_preset": false,
+  "source_proposal": {
+    "run_id": "run-20261109-01",
+    "proposal_id": "p1"
+  },
+  "cluster_signature": {
+    "kind": "tool",
+    "tool_name": "Bash"
+  }
+}
+```
+
+`PersonalCommitJournal` 合法(普通转移提交,`ref_updated`):
+
+<!-- example:valid schema=PersonalCommitJournal -->
+
+```json
+{
+  "schema_version": 1,
+  "txn_id": "0123456789abcdef",
+  "kind": "transition",
+  "candidate_ids": ["ra_0123456789ab"],
+  "ref": "refs/heads/rsi",
+  "old_head": "1111111111111111111111111111111111111111",
+  "target_tree": "3333333333333333333333333333333333333333",
+  "new_commit": "2222222222222222222222222222222222222222",
+  "phase": "ref_updated",
+  "at": "2026-11-09T08:00:00.000Z"
+}
+```
+
+`PersonalCommitJournal` 合法(W0-5 bootstrap,`old_head` 为 null):
+
+<!-- example:valid schema=PersonalCommitJournal -->
+
+```json
+{
+  "schema_version": 1,
+  "txn_id": "fedcba9876543210",
+  "kind": "bootstrap",
+  "candidate_ids": [],
+  "ref": "refs/heads/rsi",
+  "old_head": null,
+  "target_tree": "3333333333333333333333333333333333333333",
+  "new_commit": null,
+  "phase": "planned",
+  "at": "2026-11-09T08:00:00.000Z"
+}
+```
+
+`PersonalCommitJournal` 错误:`bootstrap` 带 `old_head`。状态 = journal 不合规,阻断范围 = 私有仓库一切写入,原因码 `RSI_FAIL_CLOSED reason=personal_repo_invalid`:
+
+<!-- example:invalid schema=PersonalCommitJournal -->
+
+```json
+{
+  "schema_version": 1,
+  "txn_id": "fedcba9876543210",
+  "kind": "bootstrap",
+  "candidate_ids": [],
+  "ref": "refs/heads/rsi",
+  "old_head": "1111111111111111111111111111111111111111",
+  "target_tree": "3333333333333333333333333333333333333333",
+  "new_commit": null,
+  "phase": "planned",
+  "at": "2026-11-09T08:00:00.000Z"
+}
+```
+
+`PersonalHead` 合法:
+
+<!-- example:valid schema=PersonalHead -->
+
+```json
+{
+  "schema_version": 1,
+  "head": "1111111111111111111111111111111111111111",
+  "owner_repo_fp": "0123456789abcdef"
+}
+```
+
+`PersonalHead` 错误:`head` 只有 39 位。状态 = `head.json` 不合规,阻断范围 = 私有仓库一切写入,原因码 `personal_repo_invalid`:
+
+<!-- example:invalid schema=PersonalHead -->
+
+```json
+{
+  "schema_version": 1,
+  "head": "111111111111111111111111111111111111111",
+  "owner_repo_fp": "0123456789abcdef"
+}
+```
+
+`PersonalTxn` 合法:
+
+<!-- example:valid schema=PersonalTxn -->
+
+```json
+{
+  "schema_version": 1,
+  "txn_id": "0123456789abcdef",
+  "candidate_id": "ra_0123456789ab",
+  "kind": "rollback",
+  "reason": "harm_c1",
+  "target_terminal": "rolled_back",
+  "phase": "injection_disabled",
+  "identity12": null,
+  "at": "2026-11-09T08:00:00.000Z"
+}
+```
+
+`PersonalTxn` 错误:`reason` 不在封闭枚举。状态 = txn 不合规,阻断范围 = 该候选的回滚 / 撤销续做,原因码 `RSI_FAIL_CLOSED reason=txn_invalid`:
+
+<!-- example:invalid schema=PersonalTxn -->
+
+```json
+{
+  "schema_version": 1,
+  "txn_id": "0123456789abcdef",
+  "candidate_id": "ra_0123456789ab",
+  "kind": "rollback",
+  "reason": "because",
+  "target_terminal": "rolled_back",
+  "phase": "injection_disabled",
+  "identity12": null,
+  "at": "2026-11-09T08:00:00.000Z"
+}
+```
+
+`RsiRevocationLine` 合法:
+
+<!-- example:valid schema=RsiRevocationLine -->
+
+```json
+{
+  "at": "2026-11-09T08:00:00.000Z",
+  "candidate_id": "ra_0123456789ab",
+  "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "identity12": null,
+  "reason": "cleared",
+  "by": "clear"
+}
+```
+
+`RsiRevocationLine` 错误:`by` 不在封闭枚举。状态 = 凭据行不合规,阻断范围 = hint 对该文件按读取失败处理(R21-6.11 第 4a 行,`permit_unreadable`),原因码 `ledger_line_invalid` 不适用(凭据文件另有读取失败语义):
+
+<!-- example:invalid schema=RsiRevocationLine -->
+
+```json
+{
+  "at": "2026-11-09T08:00:00.000Z",
+  "candidate_id": "ra_0123456789ab",
+  "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "identity12": null,
+  "reason": "cleared",
+  "by": "nobody"
+}
+```
+
+`RsiCanaryLedgerLine` 合法(`assign` / treat):
+
+<!-- example:valid schema=RsiCanaryLedgerLine -->
+
+```json
+{
+  "at": "2026-11-09T08:00:00.000Z",
+  "agent": "claude",
+  "background_fp": "0000000000000000",
+  "background_fp_ex": "0000000000000000",
+  "policy_fp": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "case_set_sha256": null,
+  "overlaps_preset": false,
+  "hint_version": 1,
+  "kind": "assign",
+  "marker": "rsm_0123456789abcdef",
+  "candidate_id": "ra_0123456789ab",
+  "arm": "treat",
+  "reason": null,
+  "p": 0.5
+}
+```
+
+`RsiCanaryLedgerLine` 合法(W0-3 探针行:`excluded` / `admission_probe`,`marker` 非空、`candidate_id` 为 null):
+
+<!-- example:valid schema=RsiCanaryLedgerLine -->
+
+```json
+{
+  "at": "2026-11-09T08:00:00.000Z",
+  "agent": "claude",
+  "background_fp": "0000000000000000",
+  "background_fp_ex": "0000000000000000",
+  "policy_fp": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "case_set_sha256": null,
+  "overlaps_preset": false,
+  "hint_version": 1,
+  "kind": "assign",
+  "marker": "rsm_fedcba9876543210",
+  "candidate_id": null,
+  "arm": "excluded",
+  "reason": "admission_probe",
+  "p": 0
+}
+```
+
+`RsiCanaryLedgerLine` 合法(撤销对账写的 `stop` 行,`revocation_ref` 必填):
+
+<!-- example:valid schema=RsiCanaryLedgerLine -->
+
+```json
+{
+  "kind": "stop",
+  "at": "2026-11-09T08:00:00.000Z",
+  "candidate_id": "ra_0123456789ab",
+  "reason": "revocation_reconciled",
+  "revocation_ref": "0123456789abcdef"
+}
+```
+
+`RsiCanaryLedgerLine` 错误:`admission_probe` 行带了 `candidate_id`。状态 = 账行不合规,阻断范围 = 该行不进任何分析,原因码 `RSI_FAIL_CLOSED reason=ledger_line_invalid`:
+
+<!-- example:invalid schema=RsiCanaryLedgerLine -->
+
+```json
+{
+  "at": "2026-11-09T08:00:00.000Z",
+  "agent": "claude",
+  "background_fp": "0000000000000000",
+  "background_fp_ex": "0000000000000000",
+  "policy_fp": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "case_set_sha256": null,
+  "overlaps_preset": false,
+  "hint_version": 1,
+  "kind": "assign",
+  "marker": "rsm_fedcba9876543210",
+  "candidate_id": "ra_0123456789ab",
+  "arm": "excluded",
+  "reason": "admission_probe",
+  "p": 0
+}
+```
+
+`CanaryDoc` 合法(十一键):
+
+<!-- example:valid schema=CanaryDoc -->
+
+```json
+{
+  "candidate_id": "ra_0123456789ab",
+  "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "body": "优先先读报错再改代码。",
+  "content_sha12": "aaaaaaaaaaaa",
+  "p_by_agent": {
+    "claude": 0.5,
+    "pi": 0.5
+  },
+  "agents_inject": ["claude", "pi"],
+  "background_fp": "0000000000000000",
+  "background_fp_ex": "0000000000000000",
+  "policy_fp": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "revocation_gen": 0,
+  "generation": 1
+}
+```
+
+`CanaryDoc` 错误:`body` 为空。状态 = `canary.json` 不合规,阻断范围 = hint 按 R21-6.11 第 3 行(读取 / 解析失败)不输出、不写,原因码无(静默不注入):
+
+<!-- example:invalid schema=CanaryDoc -->
+
+```json
+{
+  "candidate_id": "ra_0123456789ab",
+  "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "body": "",
+  "content_sha12": "aaaaaaaaaaaa",
+  "p_by_agent": {
+    "claude": 0.5,
+    "pi": 0.5
+  },
+  "agents_inject": ["claude", "pi"],
+  "background_fp": "0000000000000000",
+  "background_fp_ex": "0000000000000000",
+  "policy_fp": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "revocation_gen": 0,
+  "generation": 1
+}
+```
+
+`CanaryAdmission` 合法(`probing`):
+
+<!-- example:valid schema=CanaryAdmission -->
+
+```json
+{
+  "schema_version": 1,
+  "agents": {
+    "claude": {
+      "state": "probing",
+      "shape_version": "claude-1",
+      "agent_version": "2.1.0",
+      "generation": 1,
+      "armed_at": "2026-11-09T08:00:00.000Z",
+      "probe_expires_at": "2026-11-16T08:00:00.000Z",
+      "tickets": 3,
+      "decided_at": null,
+      "reason": null
+    }
+  }
+}
+```
+
+`CanaryAdmission` 错误:`failed` 却没有原因码。状态 = 准入文件不合规,阻断范围 = hint 按 R21-6.11 第 4a 行 `permit_unreadable`,原因码 `permit_unreadable`:
+
+<!-- example:invalid schema=CanaryAdmission -->
+
+```json
+{
+  "schema_version": 1,
+  "agents": {
+    "claude": {
+      "state": "failed",
+      "shape_version": "claude-1",
+      "agent_version": "2.1.0",
+      "generation": 1,
+      "armed_at": "2026-11-09T08:00:00.000Z",
+      "probe_expires_at": "2026-11-16T08:00:00.000Z",
+      "tickets": 3,
+      "decided_at": "2026-11-09T08:00:00.000Z",
+      "reason": null
+    }
+  }
+}
+```
+
+`CandidateWorkingCopy` 合法(教训类签名):
+
+<!-- example:valid schema=CandidateWorkingCopy -->
+
+```json
+{
+  "schema_version": 1,
+  "id": "ra_0123456789ab",
+  "cluster_signature": {
+    "kind": "lesson",
+    "rep_tokens": ["fixture", "read", "test"]
+  },
+  "source": {
+    "run_id": "run-20261109-01",
+    "proposal_id": "p1"
+  },
+  "shadow": {
+    "sessions": 12,
+    "hits": 1,
+    "canary_ready_since": null,
+    "queued_since": null
+  },
+  "evidence": {
+    "sessions": ["s_0123456789abcdef"],
+    "days": ["2026-11-08"]
+  },
+  "stats": {
+    "sessions_observed": 12,
+    "sessions_treat": 0,
+    "sessions_control": 0,
+    "bytes_injected": 0
+  },
+  "repo_removal_deferred": false
+}
+```
+
+`CandidateWorkingCopy` 错误:`rep_tokens` 未升序。状态 = 工作副本不合规,阻断范围 = 该候选按权威副本重建(R21-3.8),原因码 `candidate_invalid`:
+
+<!-- example:invalid schema=CandidateWorkingCopy -->
+
+```json
+{
+  "schema_version": 1,
+  "id": "ra_0123456789ab",
+  "cluster_signature": {
+    "kind": "lesson",
+    "rep_tokens": ["test", "read"]
+  },
+  "source": {
+    "run_id": "run-20261109-01",
+    "proposal_id": "p1"
+  },
+  "shadow": {
+    "sessions": 12,
+    "hits": 1,
+    "canary_ready_since": null,
+    "queued_since": null
+  },
+  "evidence": {
+    "sessions": ["s_0123456789abcdef"],
+    "days": ["2026-11-08"]
+  },
+  "stats": {
+    "sessions_observed": 12,
+    "sessions_treat": 0,
+    "sessions_control": 0,
+    "bytes_injected": 0
+  },
+  "repo_removal_deferred": false
+}
+```
+
+`RsiAuditLine` 合法:
+
+<!-- example:valid schema=RsiAuditLine -->
+
+```json
+{
+  "at": "2026-11-09T08:00:00.000Z",
+  "kind": "transition",
+  "id": "ra_0123456789ab",
+  "dim": "lifecycle",
+  "from": "proposed",
+  "to": "shadow",
+  "reason": "gates_passed"
+}
+```
+
+`RsiAuditLine` 错误:`kind` 不在封闭枚举。状态 = 审计行不合规,阻断范围 = 该行不写入,原因码 `internal`:
+
+<!-- example:invalid schema=RsiAuditLine -->
+
+```json
+{
+  "at": "2026-11-09T08:00:00.000Z",
+  "kind": "surprise",
+  "id": "ra_0123456789ab"
+}
+```
+
+`RsiVetoDoc` 合法:
+
+<!-- example:valid schema=RsiVetoDoc -->
+
+```json
+{
+  "schema_version": 1,
+  "entries": [
+    {
+      "candidate_id": "ra_0123456789ab",
+      "fp_hmac": "0123456789abcdef",
+      "near_fp": ["01234567"],
+      "at": "2026-11-09T08:00:00.000Z"
+    }
+  ]
+}
+```
+
+`RsiVetoDoc` 错误:`near_fp` 项只有 7 位。状态 = `veto.json` 不合规,阻断范围 = 自动路径 fail-closed(不得生成新候选),原因码 `RSI_FAIL_CLOSED reason=state_invalid`:
+
+<!-- example:invalid schema=RsiVetoDoc -->
+
+```json
+{
+  "schema_version": 1,
+  "entries": [
+    {
+      "candidate_id": "ra_0123456789ab",
+      "fp_hmac": "0123456789abcdef",
+      "near_fp": ["0123456"],
+      "at": "2026-11-09T08:00:00.000Z"
+    }
+  ]
+}
+```
+
+`RsiTombstones` 合法:
+
+<!-- example:valid schema=RsiTombstones -->
+
+```json
+{
+  "schema_version": 1,
+  "entries": [
+    {
+      "id": "ra_0123456789ab",
+      "terminal": "rejected",
+      "reason": "vetoed",
+      "at": "2026-11-09T08:00:00.000Z"
+    }
+  ]
+}
+```
+
+`RsiTombstones` 错误:同一 `id` 出现两次。状态 = `tombstones.json` 不合规,阻断范围 = ingest / G4 fail-closed,原因码 `RSI_FAIL_CLOSED reason=state_invalid`:
+
+<!-- example:invalid schema=RsiTombstones -->
+
+```json
+{
+  "schema_version": 1,
+  "entries": [
+    {
+      "id": "ra_0123456789ab",
+      "terminal": "rejected",
+      "reason": "vetoed",
+      "at": "2026-11-09T08:00:00.000Z"
+    },
+    {
+      "id": "ra_0123456789ab",
+      "terminal": "expired",
+      "reason": "no_hit",
+      "at": "2026-11-09T08:00:00.000Z"
+    }
+  ]
+}
+```
+
+`RsiAuto`(`[rsi.auto]` 表,L-auto)合法:
+
+<!-- example:valid schema=RsiAuto -->
+
+```json
+{
+  "enabled": true,
+  "profile": "medium"
+}
+```
+
+`RsiAuto` 错误:`enabled` 是字符串 `"true"`(R21-2.1)。状态 = `auto: invalid`,阻断范围 = 只禁自动生效(L0、hint 计数照常,`[rsi]` 不变 `off`),原因码无:
+
+<!-- example:invalid schema=RsiAuto -->
+
+```json
+{
+  "enabled": "true"
+}
+```
+
+`RsiState` 合法(带可选 `auto_pause`;缺失该键的旧文件同样合法):
+
+<!-- example:valid schema=RsiState -->
+
+```json
+{
+  "schema_version": 1,
+  "confirm": null,
+  "projects_ack_generation": 0,
+  "attempt": null,
+  "last_tick": null,
+  "consecutive_failures": 0,
+  "breaker": null,
+  "auto_pause": {
+    "reasons": ["user_paused"],
+    "diverged": false,
+    "owner_changed": false
+  }
+}
+```
+
+`RsiState` 错误:`auto_pause.reasons` 含未知熔断码(不归零恢复)。状态 = `state.json` 不可读,阻断范围 = 自动路径空操作、`rsi status` 退出 3,原因码 `state_invalid`:
+
+<!-- example:invalid schema=RsiState -->
+
+```json
+{
+  "schema_version": 1,
+  "confirm": null,
+  "projects_ack_generation": 0,
+  "attempt": null,
+  "last_tick": null,
+  "consecutive_failures": 0,
+  "breaker": null,
+  "auto_pause": {
+    "reasons": ["not_a_reason"],
+    "diverged": false,
+    "owner_changed": false
+  }
+}
+```

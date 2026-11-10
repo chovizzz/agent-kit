@@ -4,6 +4,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  RSI_EXEC_NOT_RUN,
   RSI_FAIL_CLOSED_REASONS,
   RSI_NOT_RUN_REASONS,
   RSI_SNAPSHOT_BUSY,
@@ -139,6 +140,7 @@ describe('稳定码枚举与 docs/contracts.md §20.3 总表一致(R20-3.0)', as
     );
   });
   it('顶层 RSI_SNAPSHOT_BUSY(退出 4)', () => {
-    expect(rowCodes('顶层(4)')).toEqual([RSI_SNAPSHOT_BUSY]);
+    // §21 W0-12:`RSI_EXEC_NOT_RUN`(R21-12.9)并入顶层(4)
+    expect(rowCodes('顶层(4)')).toEqual([RSI_SNAPSHOT_BUSY, RSI_EXEC_NOT_RUN]);
   });
 });

@@ -89,6 +89,8 @@ export const AtomFrontmatterSchema = z
     origin: z.string().min(1).optional(),
     supersedes: z.array(KebabIdSchema).optional(),
     merged_from: z.array(KebabIdSchema).optional(),
+    /** §21 W0-6(R21-3.10):个人层踩坑的触发条件(非空;只增不改的可选字段,旧原子不受影响) */
+    trigger: z.string().min(1).max(200).optional(),
   })
   .superRefine((fm, ctx) => {
     if (fm.strength === 'must' && fm.verifier.type === 'none') {
