@@ -37,6 +37,9 @@ const INJECTION = 'src/signals/injection.ts';
 const RETRY = 'src/signals/retry-chain.ts';
 const TEC = 'src/signals/tool-error-class.ts';
 const PIPE = 'src/signals/pipeline.ts';
+const SIGNAL = 'src/contracts/signal.ts';
+const STAT = 'src/contracts/session-stat.ts';
+const CON = 'signals/w4-contracts.test.ts';
 
 export const V1_W4_MUTATIONS: readonly V1W4Mutation[] = [
   {
@@ -137,7 +140,11 @@ export const V1_W4_MUTATIONS: readonly V1W4Mutation[] = [
       },
     ],
     tests: [INJ],
-    expectRed: ['行首(允许空格 / 制表符)以前缀开头才是块', 'treat 块作为用户消息'],
+    expectRed: [
+      '行首(允许空格 / 制表符)以前缀开头才是块',
+      '只按 \\n 切行:U+2028 不是行分隔',
+      'treat 块作为用户消息',
+    ],
     mustKill: ['行首(允许空格 / 制表符)以前缀开头才是块'],
   },
   {
@@ -221,7 +228,11 @@ export const V1_W4_MUTATIONS: readonly V1W4Mutation[] = [
       },
     ],
     tests: [SIG],
-    expectRed: ['同一工具连续失败累加', '穿插:别的工具的失败 / 成功、用户消息都不断链'],
+    expectRed: [
+      '同一工具连续失败累加',
+      '穿插:别的工具的失败 / 成功、用户消息都不断链',
+      '链的身份用完整原始工具名',
+    ],
     mustKill: ['穿插:别的工具的失败 / 成功、用户消息都不断链'],
   },
   {
@@ -236,7 +247,16 @@ export const V1_W4_MUTATIONS: readonly V1W4Mutation[] = [
       },
     ],
     tests: [SIG],
-    expectRed: ['跨会话不连'],
+    expectRed: [
+      '跨会话不连',
+      '放弃:会话结束时链仍未成功',
+      '穿插:别的工具的失败 / 成功、用户消息都不断链',
+      '没有失败 → retry_chain_max = 0',
+      '被注入排除的结果事件不进链',
+      '找不到工具名的失败',
+      '链的身份用完整原始工具名',
+      '成功结束:失败失败成功再失败',
+    ],
     mustKill: ['跨会话不连'],
   },
   {
@@ -296,6 +316,77 @@ export const V1_W4_MUTATIONS: readonly V1W4Mutation[] = [
     tests: [SIG],
     expectRed: ['链的身份用完整原始工具名'],
     mustKill: ['链的身份用完整原始工具名'],
+  },
+  {
+    id: 'injection-index-unbounded',
+    clause: '复述索引会话级上限:去掉上限检查 → 超限不再 fail-closed',
+    edits: [
+      {
+        file: INJECTION,
+        anchor:
+          'if (this.windows.size > INJECTION_WINDOWS_MAX) throw new InjectionIndexLimitError();',
+        replacement: 'void INJECTION_WINDOWS_MAX;',
+      },
+    ],
+    tests: [INJ],
+    expectRed: ['窗口总数超过 INJECTION_WINDOWS_MAX', '经管线:多块长会话超限'],
+    mustKill: ['窗口总数超过 INJECTION_WINDOWS_MAX', '经管线:多块长会话超限'],
+  },
+  {
+    id: 'invalid-marker-block-registers-body',
+    clause: 'R21-6.9:标记形状不对的块只排除所在事件,不登记正文',
+    edits: [
+      {
+        file: INJECTION,
+        anchor: 'if (b.marker === undefined) continue;',
+        replacement: 'if (b.marker === undefined) void 0;',
+      },
+    ],
+    tests: [INJ],
+    expectRed: ['标记形状不对的块:只排除所在事件'],
+    mustKill: ['标记形状不对的块:只排除所在事件'],
+  },
+  {
+    id: 'signal-fields-any-kind',
+    clause: 'W4 schema:tool_error_class / retry_chain_len 只允许在 tool_result_failed 信号上(放开)',
+    edits: [
+      {
+        file: SIGNAL,
+        anchor: "s.event_kind !== 'tool_result_failed'",
+        replacement: 'false',
+      },
+    ],
+    tests: [CON],
+    expectRed: ['字段间约束:tool_error_class / retry_chain_len 只许出现在'],
+    mustKill: ['字段间约束:tool_error_class / retry_chain_len 只许出现在'],
+  },
+  {
+    id: 'stat-keys-partial-allowed',
+    clause: 'W4 schema:SessionStat 三键全有或全无(放开)',
+    edits: [
+      {
+        file: STAT,
+        anchor: 'if (n !== 0 && n !== 3) {',
+        replacement: 'if (false) {',
+      },
+    ],
+    tests: [CON],
+    expectRed: ['字段间约束:三键全有或全无'],
+    mustKill: ['字段间约束:三键全有或全无'],
+  },
+  {
+    id: 'markers-not-strictly-ascending',
+    clause: 'W4 schema:rsi_markers 严格升序(改成只要求相邻不等)',
+    edits: [
+      {
+        file: STAT,
+        anchor: '(a[i - 1] as string) < m',
+        replacement: '(a[i - 1] as string) !== m',
+      },
+    ],
+    tests: [CON],
+    expectRed: ['rsi_markers 必须严格升序'],
+    mustKill: ['rsi_markers 必须严格升序'],
   },
   {
     id: 'tool-error-empty-is-other',

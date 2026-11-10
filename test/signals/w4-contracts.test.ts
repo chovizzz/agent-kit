@@ -38,9 +38,13 @@ const statBase = {
 const CTX = { cwd: '/work/proj-a', version: '2.1.294' };
 const M = (c: string): string => `rsm_${c.repeat(16)}`;
 
+const FAILED = { ...sigBase, event_kind: 'tool_result_failed' };
+const TRIPLE = { rsi_markers: [M('0')], retry_chain_max: 0, injection_excluded: 0 };
+
 describe('Signal 追加键', () => {
   it('旧信号(缺新键)仍通过;新键合法值通过(正向)', () => {
     expect(SignalSchema.safeParse(sigBase).success).toBe(true);
+    expect(SignalSchema.safeParse(FAILED).success).toBe(true);
     for (const tool_error_class of [
       'timeout',
       'not_found',
@@ -51,7 +55,7 @@ describe('Signal 追加键', () => {
       'other',
     ]) {
       expect(
-        SignalSchema.safeParse({ ...sigBase, tool_error_class, retry_chain_len: 3 }).success,
+        SignalSchema.safeParse({ ...FAILED, tool_error_class, retry_chain_len: 3 }).success,
       ).toBe(true);
     }
   });
@@ -65,15 +69,29 @@ describe('Signal 追加键', () => {
       { retry_chain_len: '2' },
       { phase_sequence: [] },
     ]) {
-      expect(SignalSchema.safeParse({ ...sigBase, ...extra }).success, JSON.stringify(extra)).toBe(
+      expect(SignalSchema.safeParse({ ...FAILED, ...extra }).success, JSON.stringify(extra)).toBe(
         false,
       );
     }
   });
+  it('字段间约束:tool_error_class / retry_chain_len 只许出现在 tool_result_failed 信号上', () => {
+    for (const kind of [undefined, 'user_message', 'tool_call']) {
+      const base = kind === undefined ? sigBase : { ...sigBase, event_kind: kind };
+      for (const extra of [{ tool_error_class: 'other' }, { retry_chain_len: 1 }]) {
+        expect(
+          SignalSchema.safeParse({ ...base, ...extra }).success,
+          `${String(kind)} ${JSON.stringify(extra)}`,
+        ).toBe(false);
+      }
+    }
+    // 对照:同样的字段放在 tool_result_failed 上通过
+    expect(SignalSchema.safeParse({ ...FAILED, tool_error_class: 'other' }).success).toBe(true);
+    expect(SignalSchema.safeParse({ ...FAILED, retry_chain_len: 1 }).success).toBe(true);
+  });
 });
 
 describe('SessionStat 追加键', () => {
-  it('旧计数行(缺三键)仍通过;新键合法值通过(正向)', () => {
+  it('旧计数行(缺三键)仍通过;三键齐全的合法值通过(正向)', () => {
     expect(SessionStatSchema.safeParse(statBase).success).toBe(true);
     expect(
       SessionStatSchema.safeParse({
@@ -83,7 +101,9 @@ describe('SessionStat 追加键', () => {
         injection_excluded: 2,
       }).success,
     ).toBe(true);
-    expect(SessionStatSchema.safeParse({ ...statBase, rsi_markers: [] }).success).toBe(true);
+    expect(SessionStatSchema.safeParse({ ...statBase, ...TRIPLE, rsi_markers: [] }).success).toBe(
+      true,
+    );
   });
   it('非法值被拒:标记形状、重复、> 4 个、负数 / 小数;仍是 strictObject', () => {
     expect(SESSION_MARKERS_MAX).toBe(4);
@@ -99,12 +119,44 @@ describe('SessionStat 追加键', () => {
       { marker_count: 1 },
     ]) {
       expect(
-        SessionStatSchema.safeParse({ ...statBase, ...extra }).success,
+        SessionStatSchema.safeParse({ ...statBase, ...TRIPLE, ...extra }).success,
         JSON.stringify(extra),
       ).toBe(false);
     }
     expect(
-      SessionStatSchema.safeParse({ ...statBase, rsi_markers: five.slice(0, 4) }).success,
+      SessionStatSchema.safeParse({ ...statBase, ...TRIPLE, rsi_markers: five.slice(0, 4) })
+        .success,
+    ).toBe(true);
+  });
+  it('字段间约束:三键全有或全无', () => {
+    for (const keys of [
+      ['rsi_markers'],
+      ['retry_chain_max'],
+      ['injection_excluded'],
+      ['rsi_markers', 'retry_chain_max'],
+      ['retry_chain_max', 'injection_excluded'],
+    ]) {
+      const part = Object.fromEntries(Object.entries(TRIPLE).filter(([k]) => keys.includes(k)));
+      expect(SessionStatSchema.safeParse({ ...statBase, ...part }).success, keys.join()).toBe(
+        false,
+      );
+    }
+    expect(SessionStatSchema.safeParse({ ...statBase, ...TRIPLE }).success).toBe(true); // 对照
+  });
+  it('rsi_markers 必须严格升序', () => {
+    for (const rsi_markers of [
+      [M('1'), M('0')],
+      [M('0'), M('0')],
+      [M('0'), M('2'), M('1')],
+    ]) {
+      expect(
+        SessionStatSchema.safeParse({ ...statBase, ...TRIPLE, rsi_markers }).success,
+        rsi_markers.join(),
+      ).toBe(false);
+    }
+    expect(
+      SessionStatSchema.safeParse({ ...statBase, ...TRIPLE, rsi_markers: [M('0'), M('1')] })
+        .success,
     ).toBe(true);
   });
 });

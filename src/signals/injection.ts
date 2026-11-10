@@ -16,6 +16,27 @@ import { SESSION_MARKERS_MAX } from '../contracts/session-stat.js';
 export const RECITAL_MIN_CHARS = 16;
 /** 参与复述比对的块正文上限(码点);正文本身 ≤ 1536 字节,更长的只可能是病态输入。 */
 export const INJECTION_BODY_MAX_CHARS = 4096;
+/**
+ * 每会话复述窗口总数上限(≈ 4 个满长块)。超限 = 该会话的注入识别无法再保证完整,fail-closed:
+ * 抛 {@link InjectionIndexLimitError},管线记为 read_error(带类名),该会话不落任何信号与计数行——不是静默当「无复述」。
+ */
+export const INJECTION_WINDOWS_MAX = 16_384;
+
+export class InjectionIndexLimitError extends Error {
+  constructor() {
+    super('注入块复述索引超过每会话窗口上限');
+  }
+}
+
+/** 取字符串的前 max 个码点(迭代器,不全量展开)。 */
+function firstCodePoints(s: string, max: number): string[] {
+  const out: string[] = [];
+  for (const ch of s) {
+    if (out.length >= max) break;
+    out.push(ch);
+  }
+  return out;
+}
 
 /** 前缀之后必须恰是 `空格 + rsm_<16 位十六进制>`(行尾允许空白)。 */
 const MARKER_TAIL_RE = /^ (rsm_[0-9a-f]{16})[ \t]*$/;
@@ -56,7 +77,7 @@ export function findInjectionBlocks(root: unknown): InjectionBlock[] {
   const stack: unknown[] = [root];
   while (stack.length > 0) {
     const v = stack.pop();
-    if (typeof v === 'string') out.push(...blocksInString(v));
+    if (typeof v === 'string') for (const b of blocksInString(v)) out.push(b);
     else if (Array.isArray(v)) for (const x of v) stack.push(x);
     else if (typeof v === 'object' && v !== null) for (const x of Object.values(v)) stack.push(x);
   }
@@ -87,10 +108,13 @@ export class InjectionTracker {
   /** 登记「可取回」的块:取标记、并把正文的 16 码点窗口放进复述比对集合。 */
   addBlocks(blocks: readonly InjectionBlock[]): void {
     for (const b of blocks) {
-      if (b.marker !== undefined) this.markerSet.add(b.marker);
-      const cps = Array.from(b.body).slice(0, INJECTION_BODY_MAX_CHARS);
+      // 标记形状不对的块只排除它所在的事件:不取标记,也不登记正文(不参与复述)
+      if (b.marker === undefined) continue;
+      this.markerSet.add(b.marker);
+      const cps = firstCodePoints(b.body, INJECTION_BODY_MAX_CHARS);
       for (let i = 0; i + RECITAL_MIN_CHARS <= cps.length; i++) {
         this.windows.add(cps.slice(i, i + RECITAL_MIN_CHARS).join(''));
+        if (this.windows.size > INJECTION_WINDOWS_MAX) throw new InjectionIndexLimitError();
       }
     }
   }

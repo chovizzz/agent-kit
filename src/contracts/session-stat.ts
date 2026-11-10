@@ -33,27 +33,42 @@ export const SESSION_MARKERS_MAX = 4;
 /** 随机会话标记的形状(R21-6.3):`rsm_` + 16 位十六进制。 */
 export const SESSION_MARKER_RE = /^rsm_[0-9a-f]{16}$/;
 
-export const SessionStatSchema = z.strictObject({
-  session_ref: SessionRefIdSchema,
-  project_key: z.string().min(1),
-  ts: IsoTimestampSchema,
-  external_content: z.boolean(),
-  counts: SessionStatCountsSchema,
-  /**
-   * W4 追加(R21-6.6 / R21-6.9 / V1i-4),全部可选;旧行缺键照常通过。**缺键 = 未测(不是 0)**:
-   * 只有经 W4 reader(claude / pi)采集的行才写这三个键,codex / kimi 不写。
-   * `rsi_markers`:取回的随机会话标记,去重、升序、≤ 4;0 个 = 「关联失败」,≥ 2 个 = 「多标记」(`classifyMarkerRetrieval`)。
-   */
-  rsi_markers: z
-    .array(z.string().regex(SESSION_MARKER_RE))
-    .max(SESSION_MARKERS_MAX)
-    .refine((a) => new Set(a).size === a.length, { message: 'rsi_markers 不得重复' })
-    .optional(),
-  /** 每会话最大重试链长(整数 ≥ 0;无失败 = 0);C2 的会话标量(§21.24 W0-7)。 */
-  retry_chain_max: z.number().int().nonnegative().optional(),
-  /** 被识别为 RSI 注入块或其复述、因而排除出计数的事件数(R21-6.9)。 */
-  injection_excluded: z.number().int().nonnegative().optional(),
-});
+export const SessionStatSchema = z
+  .strictObject({
+    session_ref: SessionRefIdSchema,
+    project_key: z.string().min(1),
+    ts: IsoTimestampSchema,
+    external_content: z.boolean(),
+    counts: SessionStatCountsSchema,
+    /**
+     * W4 追加(R21-6.6 / R21-6.9 / V1i-4),全部可选;旧行缺键照常通过。**缺键 = 未测(不是 0)**:
+     * 只有经 W4 reader(claude / pi)采集的行才写这三个键,codex / kimi 不写。
+     * `rsi_markers`:取回的随机会话标记,去重、升序、≤ 4;0 个 = 「关联失败」,≥ 2 个 = 「多标记」(`classifyMarkerRetrieval`)。
+     */
+    rsi_markers: z
+      .array(z.string().regex(SESSION_MARKER_RE))
+      .max(SESSION_MARKERS_MAX)
+      .refine((a) => a.every((m, i) => i === 0 || (a[i - 1] as string) < m), {
+        message: 'rsi_markers 必须严格升序(即去重且有序)',
+      })
+      .optional(),
+    /** 每会话最大重试链长(整数 ≥ 0;无失败 = 0);C2 的会话标量(§21.24 W0-7)。 */
+    retry_chain_max: z.number().int().nonnegative().optional(),
+    /** 被识别为 RSI 注入块或其复述、因而排除出计数的事件数(R21-6.9)。 */
+    injection_excluded: z.number().int().nonnegative().optional(),
+  })
+  .superRefine((s, ctx) => {
+    // W4 字段间约束:三键只由识别注入的 reader 一起写,全有或全无
+    const n = [s.rsi_markers, s.retry_chain_max, s.injection_excluded].filter(
+      (v) => v !== undefined,
+    ).length;
+    if (n !== 0 && n !== 3) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'rsi_markers / retry_chain_max / injection_excluded 必须三键全有或全无',
+      });
+    }
+  });
 export type SessionStat = z.infer<typeof SessionStatSchema>;
 
 /** 月份文件名;`yyyymm` 的月份必须 01..12(防路径片段)。 */
