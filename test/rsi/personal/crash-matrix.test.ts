@@ -219,10 +219,10 @@ describe('R21-3.6a 索引标志(assume-unchanged / skip-worktree)让 status 看�
       await expect(commitNext(w, 'journal:ref_updated')).rejects.toBeInstanceOf(InjectedCrash);
       git(w, ['update-index', flag, 'rules/base.md']);
       await writeUserFile(w, 'rules/base.md', 'HIDDEN EDIT\n');
-      // status 对被标记的文件什么都不报:这正是不能只信 status 的原因
-      expect(git(w, ['--no-optional-locks', 'status', '--porcelain', '--ignored'])).not.toContain(
-        'rules/base.md',
-      );
+      // 前提:status 看不见工作树里的这处改动(只剩「HEAD 已前进、索引还是旧的」的暂存列差异,工作树列为空)——这正是不能只信 status 的原因
+      const st = git(w, ['--no-optional-locks', 'status', '--porcelain', '--ignored']);
+      expect(st).toContain('M  rules/base.md');
+      expect(st).not.toMatch(/^.M rules\/base\.md$/m);
       const before = await snapshot(w);
       const o = await withLock(w, (locks) => openPersonalRepo(repoDeps(w), locks));
       expect(o).toMatchObject({ kind: 'deferred', reason: 'personal_repo_diverged' });
