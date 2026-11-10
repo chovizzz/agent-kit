@@ -6316,6 +6316,8 @@ v3.1 已把用户决定列全;以下是落契约时新发现的契约细节取�
 
 **冻结后订正 W0-15(2026-11-10,W2 实现口径澄清与订正)**:提交改为「已接受 HEAD 底稿 + 受管变更」,kit 管理命名空间 `KIT_MANAGED_TOP_DIRS`;结构校验追加 `.git/info/attributes` / grafts / shallow / replace refs 与 `GIT_NO_REPLACE_OBJECTS=1`;git 读取三态;bootstrap `planned`+空目录经 pre-init 校验后续做;journal 损坏、`cas_failed` 语义、先锁后写、作者常量与 `owner_repo_fp` 格式。**取代关系**:R21-3.6「目标树」的整树读法(改为底稿 + 受管变更;purge 历史改写例外,R21-11.6 不变但重建的树保留无关用户文件);W0-5 中「已存在目录一律先做结构校验」对 `planned`+空目录的适用(改为 pre-init 校验)。**未改**:R20-5.5 锁协议(残余照旧)。
 
+**冻结后订正 W0-16(2026-11-10,W1 实现口径澄清)**:UTC 日期差口径、到期检查进入推进守卫、幂等限于 256 条窗口(窗口外不增加影响)、effects 由调用方 outbox 续做、R21-2.2 上下文字段、`gate_g8` / `exec_admission` 默认拒绝、原因码借用与归属。**取代关系**:无(只补原文未定的细节)。**未改**:R21-4.x、R21-2.2 原文、能力表。
+
 ### 21.24 V1 拆期与 W0 订正(冻结后订正 W0-1 … W0-12;2026-11-09,依据用户 2026-11-04 选择框 Q1–Q5、V1i-2、V1i-4…10 按规划稿处理,2026-11-09 选「现在开工 W0 + V1a」)
 
 按节首规则:原位加标注、本节写正文、§21.23 记录。本节**不改**任何已冻结条款的 `[V1]` 标签;被取代的原文在原位以删除线或标注指回本节。W0 只落契约、schema、枚举与 lint 骨架,`RSI_AUTO_PHASE` 仍为 0(R21-0.1)。
@@ -6566,6 +6568,19 @@ W2(私有仓库与提交原语)实现时契约未定或需收紧的点。实现�
 - **常量与格式**:`RSI_PERSONAL_AUTHOR` = name `agent-kit-rsi`、邮箱空串(提交作者与提交者固定,`src/rsi/personal/repo-check.ts`;后续迁入 `src/contracts/rsi.ts`);`owner_repo_fp` = `sha256(realpath + "\n" + dev + "\n" + ino)` 十六进制前 16 位。
 - **已知残余(不变)**:personal/lock 与 R20-5.5 同协议,陈旧锁回收的「复读后删除」窗口仍在(§20 已登记);提交的最后防线是 `update-ref` 期望旧值。修复须订正 R20-5.5 并连带 A1,另立事项。
 - **交给后续块**:锁序 `rsi/lock → personal/lock` 的反向取锁守卫在 A1 的 `lock.ts`,W7 接 worker 时补;`home-fs` 纯建目录授权(现借占位 planScope)另立事项。
+
+#### W0-16 W1 实现口径澄清(2026-11-10;R21-4.1 / 4.4a / 4.5 / 4.6、R21-2.2、W0-13)
+
+W1(纯转移引擎,`src/rsi/personal/{ids,transition-table,transition}.ts`)实现时契约未定的点:
+
+- **日数口径**:「满 N 个 UTC 日」= `UTC 日期(今天) − UTC 日期(起点) ≥ N`(按日期差,不按经过的小时):排队到期 N = 30(第 29 日不到期、第 30 日到期),canary 上限 N = `RSI_MAX_CANARY_DAYS`。找不到进入 canary 的记录(例如被历史上限合并掉)→ 视为已到期,立即允许经回滚到 `expired`(保守方向)。
+- **到期是转移入口的不变量**:`shadow → canary` 的守卫自己检查排队到期(推进事件必须携带 `queued_since` 与当天日期),已到期 → 拒绝;不依赖调用方先走辅助判定函数。
+- **幂等的范围**:`idem_key` = 候选 id、维度、agent、起止状态、事件种类与区分原因 / 证据的定长编码(不含时钟)。同一键重复执行为空操作的保证**只在 `transitions[]` 保留窗口(256 条)内**;窗口外的重复事件不保证空操作,但不得增加影响、不得回退 `rollback.phase`、不得降级 `target_terminal`(由状态机本身保证,有测试)。
+- **效果由调用方续做**:引擎是纯函数,返回类型化 effects(生命周期提交、黑名单、墓碑、冷却、审计、部署变更);重复事件返回空 effects。未完成的 effects 由调用方的持久化事务 / outbox 续做,不能靠事件重放补齐——实现与崩溃测试归 W7。
+- **R21-2.2 的上下文**:转移上下文追加 `auto_loop_effective` 与 `auto_paused`(调用方持锁时读取并传入);只拦增加影响的转移(`shadow → canary`、`→ injected`),减少影响的转移照常。
+- **能力表之外的键默认拒绝**:`gate_g8`(G8,V3)与 `exec_admission`(exec 类部署,V6a)尚未登记进 `RSI_CAPABILITY_PHASE`,一律 `phase_not_available`;相位 ≥ V3 时 G8 未实现,`shadow → canary` 先 fail-closed(`g8_not_implemented`)。V3 / V6a 的契约修订须把这两个键补进能力表。
+- **原因码借用**:`rolling_back` 自环、`injected → removal_pending`、`removal_pending → none` 无专属原因码,沿用触发事件的原因与 `compensation_done`;`rollback.reason` 存转移原因码,优先级先映射为终态理由再比较,并列保留先到者。
+- **归属**:创建行 `(无) → proposed` 在 W3(W1 只派生候选 id);入口清零 `queued_since`(W0-13 列出的入口)由 W3 的 worker 执行。
 
 #### W0 订正的合法 / 错误示例
 
