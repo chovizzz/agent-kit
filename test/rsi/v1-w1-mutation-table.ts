@@ -557,7 +557,21 @@ export const V1_W1_MUTATIONS: readonly V1W1Mutation[] = [
     'M13-4:全局名额互斥 —— 名额检查去掉',
     "return f.slot_occupied ? 'slot_occupied' : null;",
     [QUEUE, ROWS],
-    ['M13-4 名额被占', 'M13-4 两个候选同时具备资格', 'shadow_to_canary'],
+    [
+      'M13-4 名额被占',
+      'M13-4 两个候选同时具备资格',
+      'shadow_to_canary',
+      // 主代理验收(r21w1-tbl):名额检查去掉后,依赖「名额被占 → 不推进」的其它判定同样变红
+      'M13-1 正向对照:全部成立且名额空闲',
+      'M13-2 权威 lifecycle 已是 rejected',
+      'M13-5 相位未到等待 > 30 日',
+      'M13-6 排队第 30 日名额恰好释放',
+      'M13-7 重建后日期变化',
+      'M13-6 直接投 shadow_promote',
+      'M13-6 排队 29 / 30 / 31 个 UTC 日',
+      'M13-6 跨 UTC 午夜',
+      '缺字段 / 多余字段 → invalid',
+    ],
     ['M13-4 名额被占', 'M13-4 两个候选同时具备资格'],
   ),
   {
