@@ -142,7 +142,7 @@ export const V1_W4_MUTATIONS: readonly V1W4Mutation[] = [
     tests: [INJ],
     expectRed: [
       '行首(允许空格 / 制表符)以前缀开头才是块',
-      '只按 \\\\n 切行:U+2028 不是行分隔',
+      'U+2028 不是行分隔',
       'treat 块作为用户消息',
     ],
     mustKill: ['行首(允许空格 / 制表符)以前缀开头才是块'],
@@ -186,7 +186,7 @@ export const V1_W4_MUTATIONS: readonly V1W4Mutation[] = [
       },
     ],
     tests: [INJ],
-    expectRed: ['追踪器:去重、升序、≤ 4'],
+    expectRed: ['追踪器:去重、升序、≤ 4', '超过 4 个不同标记:去重升序保留前 4 个'],
     mustKill: ['追踪器:去重、升序、≤ 4'],
   },
   {
@@ -256,6 +256,7 @@ export const V1_W4_MUTATIONS: readonly V1W4Mutation[] = [
       '找不到工具名的失败',
       '链的身份用完整原始工具名',
       '成功结束:失败失败成功再失败',
+      'sig_id 只由 (盐, session_ref, 事件序号) 决定',
     ],
     mustKill: ['跨会话不连'],
   },
@@ -435,4 +436,254 @@ export const V1_W4_MUTATIONS: readonly V1W4Mutation[] = [
 ];
 
 /** 实测结果(主代理在验证机上执行变异后填写;W4 实装块不执行,故留空) */
-export const V1_W4_RESULTS: readonly V1W4Result[] = [];
+/** 实测结果:作业 r21w4-mut3 @ b31f206(dolphin),BASE 62 条全过,25/25 被杀、逐文件 sha256 还原核对通过;其中 3 条的表外多红已补入 expectRed(主代理验收)。 */
+export const V1_W4_RESULTS: readonly V1W4Result[] = [
+  {
+    id: 'marker-block-counted',
+    failed: 4,
+    skipped: 0,
+    killedBy: [
+      'claude:块所在事件与复述事件不计入计数 / 信号,标记被取回 control 块(只有标记行)作为用户消息:同样不计入、不产信号;标记照取',
+      'claude:块所在事件与复述事件不计入计数 / 信号,标记被取回 工具结果里被引用的块(cat 了别的会话):排除计数但不取回标记(避免假「多标记」)',
+      'claude:块所在事件与复述事件不计入计数 / 信号,标记被取回 被排除的外部内容事件仍把会话记为外部内容:后续信号摘录为空(对照:非外部工具时摘录保留)',
+      'retry_chain_len / retry_chain_max(经管线,claude) 被注入排除的结果事件不进链(正向:真实失败照常计链)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'recital-threshold-15',
+    failed: 5,
+    skipped: 0,
+    killedBy: [
+      '块识别(纯函数) RECITAL_MIN_CHARS 是 16(契约 R21-6.9)',
+      '复述阈值:16 码点排除、15 码点不排除(边界各一例) 连续重合 16 码点 → 复述;15 码点 → 不是;17 → 是',
+      '复述阈值:16 码点排除、15 码点不排除(边界各一例) 按码点不是码元:代理对算一个字',
+      '复述阈值:16 码点排除、15 码点不排除(边界各一例) 与朴素最长公共子串参考实现对拍(确定性伪随机,含拼接复述)',
+      'claude:块所在事件与复述事件不计入计数 / 信号,标记被取回 复述:后续消息 / 助手文本 / 工具调用里与正文连续 ≥ 16 字重合的都被排除;15 字的不排除',
+    ],
+    restored: true,
+  },
+  {
+    id: 'recital-threshold-17',
+    failed: 5,
+    skipped: 0,
+    killedBy: [
+      '块识别(纯函数) RECITAL_MIN_CHARS 是 16(契约 R21-6.9)',
+      '复述阈值:16 码点排除、15 码点不排除(边界各一例) 连续重合 16 码点 → 复述;15 码点 → 不是;17 → 是',
+      '复述阈值:16 码点排除、15 码点不排除(边界各一例) 按码点不是码元:代理对算一个字',
+      '复述阈值:16 码点排除、15 码点不排除(边界各一例) 与朴素最长公共子串参考实现对拍(确定性伪随机,含拼接复述)',
+      'claude:块所在事件与复述事件不计入计数 / 信号,标记被取回 复述:后续消息 / 助手文本 / 工具调用里与正文连续 ≥ 16 字重合的都被排除;15 字的不排除',
+    ],
+    restored: true,
+  },
+  {
+    id: 'sig-id-includes-new-field',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '信号上的 tool_error_class;sig_id 不变(第 40 条) sig_id 只由 (盐, session_ref, 事件序号) 决定:新字段非空时仍等于 sigIdFor;改失败文本(类变了)sig_id 不变',
+    ],
+    restored: true,
+  },
+  {
+    id: 'marker-retrieved-from-quoted',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'claude:块所在事件与复述事件不计入计数 / 信号,标记被取回 工具结果里被引用的块(cat 了别的会话):排除计数但不取回标记(避免假「多标记」)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'block-prefix-anywhere',
+    failed: 3,
+    skipped: 0,
+    killedBy: [
+      '块识别(纯函数) 行首(允许空格 / 制表符)以前缀开头才是块;取回标记要求形状恰好;正文 = 标记行之后各行',
+      '块识别(纯函数) 只按 \\n 切行:U+2028 不是行分隔(同 reader 的 C2)',
+      'claude:块所在事件与复述事件不计入计数 / 信号,标记被取回 treat 块作为用户消息:不计 user_messages、不产信号;对照:去掉前缀就被计入',
+    ],
+    restored: true,
+  },
+  {
+    id: 'multi-marker-threshold',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      '标记归并 R21-6.6 0 个 → 关联失败;1 个 → ok;≥ 2 个不同 → 多标记;同一标记重复不算多;缺键 → 未采集',
+      'claude:块所在事件与复述事件不计入计数 / 信号,标记被取回 同一会话两个不同标记 → 多标记;一个都没有 → 关联失败;恰一个 → ok',
+    ],
+    restored: true,
+  },
+  {
+    id: 'zero-marker-not-failure',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      '标记归并 R21-6.6 0 个 → 关联失败;1 个 → ok;≥ 2 个不同 → 多标记;同一标记重复不算多;缺键 → 未采集',
+      'claude:块所在事件与复述事件不计入计数 / 信号,标记被取回 同一会话两个不同标记 → 多标记;一个都没有 → 关联失败;恰一个 → ok',
+    ],
+    restored: true,
+  },
+  {
+    id: 'markers-unsorted',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      '复述索引的会话级上限与块登记规则 超过 4 个不同标记:去重升序保留前 4 个,分类仍为多标记',
+      '标记归并 R21-6.6 追踪器:去重、升序、≤ 4',
+    ],
+    restored: true,
+  },
+  {
+    id: 'codex-kimi-detect-injection',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'codex / kimi 不识别注入(行为与引入前一致,不写三键) read() 不带 injection();claude / pi 带',
+    ],
+    restored: true,
+  },
+  {
+    id: 'retry-success-not-ending',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'RetryChainTracker(纯函数) 同一工具连续失败累加;该工具成功结束链;别的工具的结果不断链',
+      'retry_chain_len / retry_chain_max(经管线,claude) 成功结束:失败失败成功再失败 → 序号 1、2、(成功断链)、1;max = 2',
+    ],
+    restored: true,
+  },
+  {
+    id: 'retry-other-tool-breaks-chain',
+    failed: 3,
+    skipped: 0,
+    killedBy: [
+      'RetryChainTracker(纯函数) 同一工具连续失败累加;该工具成功结束链;别的工具的结果不断链',
+      'retry_chain_len / retry_chain_max(经管线,claude) 穿插:别的工具的失败 / 成功、用户消息都不断链',
+      'retry_chain_len / retry_chain_max(经管线,claude) 链的身份用完整原始工具名:共享 192 字符前缀的两个名字是两个工具',
+    ],
+    restored: true,
+  },
+  {
+    id: 'retry-chain-across-sessions',
+    failed: 7,
+    skipped: 0,
+    killedBy: [
+      'retry_chain_len / retry_chain_max(经管线,claude) 放弃:会话结束时链仍未成功 → 停在当前长度(max = 3)',
+      'retry_chain_len / retry_chain_max(经管线,claude) 跨会话不连:前一个会话以 Bash 失败结尾,后一个以 Bash 失败开头 → 后者从 1 起',
+      'retry_chain_len / retry_chain_max(经管线,claude) 穿插:别的工具的失败 / 成功、用户消息都不断链',
+      'retry_chain_len / retry_chain_max(经管线,claude) 没有失败 → retry_chain_max = 0、信号不带 retry_chain_len',
+      'retry_chain_len / retry_chain_max(经管线,claude) 被注入排除的结果事件不进链(正向:真实失败照常计链)',
+      'retry_chain_len / retry_chain_max(经管线,claude) 找不到工具名的失败(tool_use_id 对不上)→ 不成链,但仍有 tool_error_class',
+      '信号上的 tool_error_class;sig_id 不变(第 40 条) sig_id 只由 (盐, session_ref, 事件序号) 决定:新字段非空时仍等于 sigIdFor;改失败文本(类变了)sig_id 不变',
+    ],
+    restored: true,
+  },
+  {
+    id: 'retry-unnamed-chains',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'RetryChainTracker(纯函数) 没有工具名的失败不成链、不改状态',
+      'retry_chain_len / retry_chain_max(经管线,claude) 找不到工具名的失败(tool_use_id 对不上)→ 不成链,但仍有 tool_error_class',
+    ],
+    restored: true,
+  },
+  {
+    id: 'sidechain-block-scanned',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'claude:块所在事件与复述事件不计入计数 / 信号,标记被取回 整行忽略的侧链行不参与识别:侧链里的块不取回标记、不登记复述正文(对照:同样的块在主线里就生效)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'excluded-event-loses-external',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'claude:块所在事件与复述事件不计入计数 / 信号,标记被取回 被排除的外部内容事件仍把会话记为外部内容:后续信号摘录为空(对照:非外部工具时摘录保留)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'retry-key-truncated',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'retry_chain_len / retry_chain_max(经管线,claude) 链的身份用完整原始工具名:共享 192 字符前缀的两个名字是两个工具',
+    ],
+    restored: true,
+  },
+  {
+    id: 'injection-index-unbounded',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      '复述索引的会话级上限与块登记规则 窗口总数超过 INJECTION_WINDOWS_MAX → 抛 InjectionIndexLimitError(不是静默当无复述);未超则正常',
+      '复述索引的会话级上限与块登记规则 经管线:多块长会话超限 → read_error(带类名)、不产信号、不写计数行;对照:3 个块的会话照常 processed',
+    ],
+    restored: true,
+  },
+  {
+    id: 'invalid-marker-block-body-not-registered',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '复述索引的会话级上限与块登记规则 标记形状不对的块:照常登记正文(后续复述被排除),只是不取回标记;对照:同一正文没有块时复述照常计入',
+    ],
+    restored: true,
+  },
+  {
+    id: 'block-body-truncated',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '复述索引的会话级上限与块登记规则 块正文超过 4096 码点 → fail-closed(InjectionIndexLimitError,不截断);恰 4096 照常',
+    ],
+    restored: true,
+  },
+  {
+    id: 'signal-fields-any-kind',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'Signal 追加键 字段间约束:tool_error_class / retry_chain_len 只许出现在 tool_result_failed 信号上',
+    ],
+    restored: true,
+  },
+  {
+    id: 'stat-keys-partial-allowed',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'SessionStat 追加键 字段间约束:rsi_markers 与 injection_excluded 成组;retry_chain_max 独立可选',
+    ],
+    restored: true,
+  },
+  {
+    id: 'markers-not-strictly-ascending',
+    failed: 1,
+    skipped: 0,
+    killedBy: ['SessionStat 追加键 rsi_markers 必须严格升序'],
+    restored: true,
+  },
+  {
+    id: 'tool-error-empty-is-other',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'tool_error_class 固定映射表 没有失败文本(缺失 / 空 / 纯空白)→ undefined(不写字段,不写 other)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'tool-error-table-reversed',
+    failed: 1,
+    skipped: 0,
+    killedBy: ['tool_error_class 固定映射表 有序、首个命中即用:多类重叠归到靠前的类'],
+    restored: true,
+  },
+];
