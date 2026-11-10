@@ -212,17 +212,27 @@ describe('R21-3.6a 恢复同样遵守「head.json 只在 journal 到达 recorded
 
 describe('R21-3.6a 索引标志(assume-unchanged / skip-worktree)让 status 看不见改动:不当成「干净」', () => {
   it.each(['--assume-unchanged', '--skip-worktree'])(
-    '窗口 journal:ref_updated:update-index %s 之后又改了文件 → diverged,改动与 journal 原样保留',
+    '窗口 journal:ref_updated:update-index %s 标记了一个提交不涉及的文件、又改了它 → diverged,改动与 journal 原样保留(之后又改了文件 → diverged)',
     async (flag) => {
       const w = await makeWorld('p-flags-');
       await setupRepo(w);
-      await expect(commitNext(w, 'journal:ref_updated')).rejects.toBeInstanceOf(InjectedCrash);
+      // 这次提交只新增 rules/new.md,rules/base.md 不在其中:此时若误判「干净」,恢复会顺利补同步,而不是被 git 拒绝
+      const only = [{ path: 'rules/new.md', content: 'new rule\n' }];
+      await expect(
+        withLock(w, (locks) =>
+          commitPersonal(
+            repoDeps(w, { onStep: crashAt('journal:ref_updated') }),
+            locks,
+            spec('2', only),
+          ),
+        ),
+      ).rejects.toBeInstanceOf(InjectedCrash);
       git(w, ['update-index', flag, 'rules/base.md']);
       await writeUserFile(w, 'rules/base.md', 'HIDDEN EDIT\n');
-      // 前提:status 看不见工作树里的这处改动(只剩「HEAD 已前进、索引还是旧的」的暂存列差异,工作树列为空)——这正是不能只信 status 的原因
-      const st = git(w, ['--no-optional-locks', 'status', '--porcelain', '--ignored']);
-      expect(st).toContain('M  rules/base.md');
-      expect(st).not.toMatch(/^.M rules\/base\.md$/m);
+      // 前提:status 对这处改动什么都不报
+      expect(git(w, ['--no-optional-locks', 'status', '--porcelain', '--ignored'])).not.toContain(
+        'rules/base.md',
+      );
       const before = await snapshot(w);
       const o = await withLock(w, (locks) => openPersonalRepo(repoDeps(w), locks));
       expect(o).toMatchObject({ kind: 'deferred', reason: 'personal_repo_diverged' });

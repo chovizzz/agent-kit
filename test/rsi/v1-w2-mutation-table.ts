@@ -81,7 +81,10 @@ export const V1_W2_MUTATIONS: readonly V1W2Mutation[] = [
       { file: CHECK, anchor: '`core.hooksPath=${emptyDir}`,', replacement: "'core.abbrev=auto'," },
     ],
     tests: [CLOSED],
-    expectRed: ['用户全局钩子(~/.gitconfig 的 core.hooksPath)不执行'],
+    expectRed: [
+      '用户全局钩子(~/.gitconfig 的 core.hooksPath)不执行',
+      '仓库自带的 .git/hooks 钩子不执行',
+    ],
     mustKill: ['用户全局钩子(~/.gitconfig 的 core.hooksPath)不执行'],
   },
   {
@@ -341,7 +344,14 @@ export const V1_W2_MUTATIONS: readonly V1W2Mutation[] = [
       },
     ],
     tests: [MATRIX],
-    expectRed: [MATRIX_CASE, WINDOW_CASE],
+    expectRed: [
+      MATRIX_CASE,
+      WINDOW_CASE,
+      '① 改工作树文件',
+      '③ detached HEAD',
+      '④ 只改索引',
+      '⑤ 加未跟踪文件',
+    ],
     mustKill: [MATRIX_CASE, WINDOW_CASE],
   },
   {
@@ -355,7 +365,7 @@ export const V1_W2_MUTATIONS: readonly V1W2Mutation[] = [
       },
     ],
     tests: [MATRIX],
-    expectRed: [MATRIX_CASE],
+    expectRed: [MATRIX_CASE, '对照:没有用户改动时同样三个窗口都能恢复'],
     mustKill: [MATRIX_CASE],
   },
   {
@@ -369,7 +379,7 @@ export const V1_W2_MUTATIONS: readonly V1W2Mutation[] = [
       },
     ],
     tests: [MATRIX],
-    expectRed: [MATRIX_CASE],
+    expectRed: [MATRIX_CASE, '换了 [rsi] repo 再来', '恢复先把 journal 持久化到 recorded'],
     mustKill: [MATRIX_CASE],
   },
   {
@@ -398,7 +408,7 @@ export const V1_W2_MUTATIONS: readonly V1W2Mutation[] = [
       },
     ],
     tests: [MATRIX],
-    expectRed: [MATRIX_CASE],
+    expectRed: [MATRIX_CASE, '恢复先把 journal 持久化到 recorded'],
     mustKill: [MATRIX_CASE],
   },
   {
@@ -413,7 +423,13 @@ export const V1_W2_MUTATIONS: readonly V1W2Mutation[] = [
       },
     ],
     tests: [MATRIX],
-    expectRed: [MATRIX_CASE, WINDOW_CASE],
+    expectRed: [
+      MATRIX_CASE,
+      WINDOW_CASE,
+      '对照:没有用户改动时同样三个窗口都能恢复',
+      '换了 [rsi] repo 再来',
+      '恢复先把 journal 持久化到 recorded',
+    ],
     mustKill: [MATRIX_CASE],
   },
   {
@@ -502,12 +518,18 @@ export const V1_W2_MUTATIONS: readonly V1W2Mutation[] = [
       },
     ],
     tests: [COMMITT],
-    expectRed: ['.gitmodules', '隐藏文件'],
+    expectRed: [
+      '.gitmodules',
+      '隐藏文件',
+      '路径逃逸 ..',
+      '.git 目录里',
+      '试图 delete 非管理路径或畸形路径',
+    ],
     mustKill: ['.gitmodules'],
   },
   {
     id: 'tree-top-level-files-allowed',
-    clause: 'R21-3.1:顶层只许布局目录(不许顶层文件)',
+    clause: 'R21-3.1:顶层不许放文件(包括与布局目录同名的顶层文件,如 pitfalls)',
     edits: [
       {
         file: COMMIT,
@@ -516,8 +538,8 @@ export const V1_W2_MUTATIONS: readonly V1W2Mutation[] = [
       },
     ],
     tests: [COMMITT],
-    expectRed: ['顶层文件'],
-    mustKill: ['顶层文件'],
+    expectRed: ['与布局目录同名的顶层文件'],
+    mustKill: ['与布局目录同名的顶层文件'],
   },
   {
     id: 'tree-layout-dirs-unchecked',
@@ -561,7 +583,7 @@ export const V1_W2_MUTATIONS: readonly V1W2Mutation[] = [
       },
     ],
     tests: [HOMEST],
-    expectRed: ['追加:旧行原样保留为新文件的前缀'],
+    expectRed: ['追加:旧行原样保留为新文件的前缀', '重写中途失败(任一 home-fs 阶段)', '超过 1 MiB'],
     mustKill: ['追加:旧行原样保留为新文件的前缀'],
   },
   {
@@ -667,7 +689,11 @@ export const V1_W2_MUTATIONS: readonly V1W2Mutation[] = [
       },
     ],
     tests: [LOCK],
-    expectRed: ['locked_over_ttl:持有者存活但超过 15 分钟', 'locked:持有者进程存活且未超 TTL'],
+    expectRed: [
+      'locked_over_ttl:持有者存活但超过 15 分钟',
+      'locked:持有者进程存活且未超 TTL',
+      '回收前复读',
+    ],
     mustKill: ['locked_over_ttl:持有者存活但超过 15 分钟'],
   },
   {
@@ -791,7 +817,7 @@ export const V1_W2_MUTATIONS: readonly V1W2Mutation[] = [
       },
     ],
     tests: [COMMITT],
-    expectRed: ['情形①接受的用户新增文件', '显式 delete 管理路径内的文件生效'],
+    expectRed: ['情形①接受的用户新增文件', '显式 delete 管理路径内的文件生效', '正向对照:合法路径'],
     mustKill: ['情形①接受的用户新增文件'],
   },
   {
@@ -819,7 +845,14 @@ export const V1_W2_MUTATIONS: readonly V1W2Mutation[] = [
       },
     ],
     tests: [BOOT],
-    expectRed: ['目录被换成指向外部空目录的符号链接'],
+    expectRed: [
+      '目录被换成指向外部空目录的符号链接',
+      '祖先目录(.local/share/agent-kit)被换成符号链接',
+      '祖先 lstat 读取失败',
+      '祖先是普通文件',
+      '目录权限被放宽(0755)',
+      '目录属主不是当前 uid',
+    ],
     mustKill: ['目录被换成指向外部空目录的符号链接'],
   },
   {

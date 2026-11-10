@@ -82,6 +82,7 @@ describe('R21-3.6 commitPersonal', () => {
       ['路径逃逸 ..', 'rules/../outside.md'],
       ['绝对路径', '/etc/passwd'],
       ['顶层文件', 'README.md'],
+      ['与布局目录同名的顶层文件', 'pitfalls'],
       ['不在布局内的顶层目录', 'notes/x.md'],
       ['空段', 'rules//x.md'],
       ['控制字符', 'rules/x\ny.md'],
