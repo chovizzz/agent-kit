@@ -308,8 +308,13 @@ function checkTree(git: ClosedGit): StructureResult {
 // R21-3.5 HEAD 与工作树判定
 // ---------------------------------------------------------------------------
 
-export type DivergedWhy = 'index_flags';
-'branch_not_rsi' | 'stash' | 'worktree_dirty' | 'head_not_descendant' | 'auto_output_changed';
+export type DivergedWhy =
+  | 'branch_not_rsi'
+  | 'stash'
+  | 'worktree_dirty'
+  | 'index_flags'
+  | 'head_not_descendant'
+  | 'auto_output_changed';
 
 export type InvalidSituationWhy = 'record_missing' | 'head_unreadable' | 'no_common_ancestor';
 
