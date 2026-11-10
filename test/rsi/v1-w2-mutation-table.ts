@@ -1024,4 +1024,776 @@ export const V1_W2_MUTATIONS: readonly V1W2Mutation[] = [
 ];
 
 /** 实测结果(主代理在验证机上执行变异后填写;W2 实装块不执行,故留空) */
-export const V1_W2_RESULTS: readonly V1W2Result[] = [];
+/** 实测结果:r21w2-mutfinal2 @ claw,de8cf48,75/75 KILLED,problems=0 */
+export const V1_W2_RESULTS: readonly V1W2Result[] = [
+  {
+    id: 'hookspath-override-removed',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'R21-3.6 封闭 git 配置 R21-3.6 仓库自带的 .git/hooks 钩子不执行(core.hooksPath 被覆盖为空目录)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'global-config-leaks',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'R21-3.6 封闭 git 配置 R21-3.6 用户全局钩子(~/.gitconfig 的 core.hooksPath)不执行',
+      'R21-3.6 封闭 git 配置 R21-3.6 仓库自带的 .git/hooks 钩子不执行(core.hooksPath 被覆盖为空目录)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'local-filter-allowed',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'R21-3.6 封闭 git 配置 本地过滤器 filter.*:被结构校验拒绝,clean / smudge 都不执行',
+      'R21-3.4 结构校验 ④ 本地配置含非白名单键 filter.evil.clean',
+    ],
+    restored: true,
+  },
+  {
+    id: 'include-allowed',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'R21-3.6 封闭 git 配置 include 链(include.path 指向带过滤器的文件):被结构校验拒绝,过滤器不执行',
+      'R21-3.4 结构校验 ④ 本地配置含非白名单键 include.path',
+    ],
+    restored: true,
+  },
+  {
+    id: 'read-tree-reset',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'R21-3.6 封闭 git 配置 R21-3.6 工作树里与目标冲突的用户未提交改动:git 拒绝覆盖,改动保留,按 personal_repo_diverged 处理(不是 read-tree --reset)',
+      'R21-3.6 封闭 git 配置 工作树里与目标无关的用户未提交改动:两树合并保留它,提交照常完成(--reset 会抹掉它)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'author-from-caller',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'R21-3.6 封闭 git 配置 R21-3.6 用户全局钩子(~/.gitconfig 的 core.hooksPath)不执行',
+      'R21-3.6 commitPersonal 作者与提交者是常量身份 agent-kit-rsi,时间取注入的时钟;提交信息含 kind 与 txn_id',
+    ],
+    restored: true,
+  },
+  {
+    id: 'struct-git-symlink-unchecked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'R21-3.4 结构校验 ① .git 是符号链接',
+    ],
+    restored: true,
+  },
+  {
+    id: 'struct-bare-unchecked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'R21-3.4 结构校验 ① 裸仓库(core.bare = true)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'struct-alternates-unchecked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'R21-3.4 结构校验 R21-3.4 ② objects/info/alternates',
+    ],
+    restored: true,
+  },
+  {
+    id: 'struct-config-worktree-unchecked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'R21-3.4 结构校验 R21-3.4 ③ config.worktree',
+    ],
+    restored: true,
+  },
+  {
+    id: 'struct-remote-unchecked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'R21-3.4 结构校验 R21-3.4 ⑤ 有 remote(旧式 .git/remotes/ 定义,不经 config 键)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'struct-mode-unchecked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'R21-3.4 结构校验 ⑥ 目录权限不是 0700',
+    ],
+    restored: true,
+  },
+  {
+    id: 'struct-owner-unchecked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'R21-3.4 结构校验 ⑥ 目录属主不是当前 uid',
+    ],
+    restored: true,
+  },
+  {
+    id: 'struct-tree-gitattributes-unchecked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'R21-3.4 结构校验 R21-3.4 ⑦ 树里有 .gitattributes(任意层级)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'struct-tree-symlink-unchecked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'R21-3.4 结构校验 ⑦ 树里有符号链接(120000)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'struct-tree-exec-unchecked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'R21-3.4 结构校验 ⑦ 树里有可执行位(100755)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'situ-add-only-weakened',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'R21-3.5 情形①的边界:记录..HEAD 改 / 删了自动产出,或触碰 lifecycle/** → ② 改了 rules/ 下的自动产出文件',
+      'R21-3.5 情形①的边界:记录..HEAD 改 / 删了自动产出,或触碰 lifecycle/** → ② 删了自动产出文件',
+    ],
+    restored: true,
+  },
+  {
+    id: 'situ-lifecycle-unchecked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'R21-3.5 情形①的边界:记录..HEAD 改 / 删了自动产出,或触碰 lifecycle/** → ② 在 lifecycle/ 下新增文件(即使只是新增也算触碰 lifecycle/**)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'situ-branch-unchecked',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'R21-3.5 情形②:personal_repo_diverged(暂停新增生效,不碰仓库) R21-3.5 分支不是 rsi',
+      'R21-3.5 情形②:personal_repo_diverged(暂停新增生效,不碰仓库) detached HEAD',
+    ],
+    restored: true,
+  },
+  {
+    id: 'situ-stash-unchecked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'R21-3.5 情形②:personal_repo_diverged(暂停新增生效,不碰仓库) 有 stash',
+    ],
+    restored: true,
+  },
+  {
+    id: 'situ-dirty-unchecked',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'R21-3.5 情形②:personal_repo_diverged(暂停新增生效,不碰仓库) 工作树不干净(已跟踪文件被改)',
+      'R21-3.5 情形②:personal_repo_diverged(暂停新增生效,不碰仓库) 工作树不干净(未跟踪文件)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'situ-descendant-unchecked',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'R21-3.5 情形②:personal_repo_diverged(暂停新增生效,不碰仓库) HEAD 是记录的祖先(用户把分支退回去了)',
+      'R21-3.5 情形②:personal_repo_diverged(暂停新增生效,不碰仓库) 历史分叉(用户在旧提交上另起提交,记录提交不是 HEAD 的祖先)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'situ-record-missing-unchecked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'R21-3.5 情形③:personal_repo_invalid(熔断) R21-3.5 记录提交不存在',
+    ],
+    restored: true,
+  },
+  {
+    id: 'situ-no-common-ancestor-unchecked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'R21-3.5 情形③:personal_repo_invalid(熔断) 历史无共同祖先(rsi 被指到一个无关的根提交)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'situ-owner-unchecked',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      '恢复先于 R21-3.5 判定,且不借机改归属 R21-3.5 崩溃在 recorded 之后、head.json 之前,换了 [rsi] repo 再来:恢复沿用 head.json 原有的 owner_repo_fp,随后判 personal_owner_changed',
+      'R21-3.5 情形④:personal_owner_changed R21-3.5 owner_repo_fp 与当前 [rsi] repo 不同:deferred,不碰仓库;相同则 ready(对照)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'recovery-head-json-only',
+    failed: 26,
+    skipped: 0,
+    killedBy: [
+      'R21-3.6a 崩溃矩阵:五个 phase 之间各注入一次崩溃 崩溃于 after:update-ref → 恢复后一致、不出现 personal_repo_diverged',
+      'R21-3.6a 崩溃矩阵:五个 phase 之间各注入一次崩溃 崩溃于 journal:ref_updated → 恢复后一致、不出现 personal_repo_diverged',
+      'R21-3.6a 崩溃矩阵:五个 phase 之间各注入一次崩溃 崩溃于 before:read-tree → 恢复后一致、不出现 personal_repo_diverged',
+      'R21-3.6a 崩溃矩阵:五个 phase 之间各注入一次崩溃 崩溃于 after:read-tree → 恢复后一致、不出现 personal_repo_diverged',
+      'R21-3.6a 崩溃矩阵:五个 phase 之间各注入一次崩溃 崩溃于 journal:worktree_synced → 恢复后一致、不出现 personal_repo_diverged',
+      'R21-3.6a 崩溃矩阵:五个 phase 之间各注入一次崩溃 崩溃于 journal:recorded → 恢复后一致、不出现 personal_repo_diverged',
+      'R21-3.6a 崩溃窗口里的用户改动:保留、diverged、journal 仍在 窗口 journal:objects_written:① 改工作树文件',
+      'R21-3.6a 崩溃窗口里的用户改动:保留、diverged、journal 仍在 窗口 journal:objects_written:② 切到指向同一提交的另一分支',
+      'R21-3.6a 崩溃窗口里的用户改动:保留、diverged、journal 仍在 窗口 journal:objects_written:③ detached HEAD',
+      'R21-3.6a 崩溃窗口里的用户改动:保留、diverged、journal 仍在 窗口 journal:objects_written:④ 只改索引',
+      'R21-3.6a 崩溃窗口里的用户改动:保留、diverged、journal 仍在 窗口 journal:objects_written:⑤ 加未跟踪文件',
+      'R21-3.6a 崩溃窗口里的用户改动:保留、diverged、journal 仍在 窗口 journal:ref_updated:① 改工作树文件',
+      'R21-3.6a 崩溃窗口里的用户改动:保留、diverged、journal 仍在 窗口 journal:ref_updated:② 切到指向同一提交的另一分支',
+      'R21-3.6a 崩溃窗口里的用户改动:保留、diverged、journal 仍在 窗口 journal:ref_updated:③ detached HEAD',
+      'R21-3.6a 崩溃窗口里的用户改动:保留、diverged、journal 仍在 窗口 journal:ref_updated:④ 只改索引',
+      'R21-3.6a 崩溃窗口里的用户改动:保留、diverged、journal 仍在 窗口 journal:ref_updated:⑤ 加未跟踪文件',
+      'R21-3.6a 崩溃窗口里的用户改动:保留、diverged、journal 仍在 窗口 journal:worktree_synced:① 改工作树文件',
+      'R21-3.6a 崩溃窗口里的用户改动:保留、diverged、journal 仍在 窗口 journal:worktree_synced:② 切到指向同一提交的另一分支',
+      'R21-3.6a 崩溃窗口里的用户改动:保留、diverged、journal 仍在 窗口 journal:worktree_synced:③ detached HEAD',
+      'R21-3.6a 崩溃窗口里的用户改动:保留、diverged、journal 仍在 窗口 journal:worktree_synced:④ 只改索引',
+      'R21-3.6a 崩溃窗口里的用户改动:保留、diverged、journal 仍在 窗口 journal:worktree_synced:⑤ 加未跟踪文件',
+      'R21-3.6a 崩溃窗口里的用户改动:保留、diverged、journal 仍在 对照:没有用户改动时同样三个窗口都能恢复(见上一组),用户改动才是 diverged 的原因',
+      '恢复先于 R21-3.5 判定,且不借机改归属 R21-3.5 崩溃在 recorded 之后、head.json 之前,换了 [rsi] repo 再来:恢复沿用 head.json 原有的 owner_repo_fp,随后判 personal_owner_changed',
+      'R21-3.6a 恢复同样遵守「head.json 只在 journal 到达 recorded 后写」 R21-3.6a 崩溃在工作树同步之后(journal 仍是 ref_updated)→ 恢复先把 journal 持久化到 recorded,再写 head.json,最后删 journal',
+      'R21-3.6a 索引标志(assume-unchanged / skip-worktree)让 status 看不见改动:不当成「干净」 窗口 journal:ref_updated:update-index --assume-unchanged 标记了一个提交不涉及的文件、又改了它 → diverged,改动与 journal 原样保留(之后又改了文件 → diverged)',
+      'R21-3.6a 索引标志(assume-unchanged / skip-worktree)让 status 看不见改动:不当成「干净」 窗口 journal:ref_updated:update-index --skip-worktree 标记了一个提交不涉及的文件、又改了它 → diverged,改动与 journal 原样保留(之后又改了文件 → diverged)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'recovery-only-discard-continues',
+    failed: 4,
+    skipped: 0,
+    killedBy: [
+      'R21-3.6a 崩溃矩阵:五个 phase 之间各注入一次崩溃 崩溃于 after:update-ref → 恢复后一致、不出现 personal_repo_diverged',
+      'R21-3.6a 崩溃矩阵:五个 phase 之间各注入一次崩溃 崩溃于 journal:ref_updated → 恢复后一致、不出现 personal_repo_diverged',
+      'R21-3.6a 崩溃矩阵:五个 phase 之间各注入一次崩溃 崩溃于 before:read-tree → 恢复后一致、不出现 personal_repo_diverged',
+      'R21-3.6a 崩溃窗口里的用户改动:保留、diverged、journal 仍在 对照:没有用户改动时同样三个窗口都能恢复(见上一组),用户改动才是 diverged 的原因',
+    ],
+    restored: true,
+  },
+  {
+    id: 'recovery-record-combination-disabled',
+    failed: 6,
+    skipped: 0,
+    killedBy: [
+      'R21-3.6a 崩溃矩阵:五个 phase 之间各注入一次崩溃 崩溃于 after:read-tree → 恢复后一致、不出现 personal_repo_diverged',
+      'R21-3.6a 崩溃矩阵:五个 phase 之间各注入一次崩溃 崩溃于 journal:worktree_synced → 恢复后一致、不出现 personal_repo_diverged',
+      'R21-3.6a 崩溃矩阵:五个 phase 之间各注入一次崩溃 崩溃于 journal:recorded → 恢复后一致、不出现 personal_repo_diverged',
+      'R21-3.6a 崩溃矩阵:五个 phase 之间各注入一次崩溃 崩溃于 after:head → 恢复后一致、不出现 personal_repo_diverged',
+      '恢复先于 R21-3.5 判定,且不借机改归属 R21-3.5 崩溃在 recorded 之后、head.json 之前,换了 [rsi] repo 再来:恢复沿用 head.json 原有的 owner_repo_fp,随后判 personal_owner_changed',
+      'R21-3.6a 恢复同样遵守「head.json 只在 journal 到达 recorded 后写」 R21-3.6a 崩溃在工作树同步之后(journal 仍是 ref_updated)→ 恢复先把 journal 持久化到 recorded,再写 head.json,最后删 journal',
+    ],
+    restored: true,
+  },
+  {
+    id: 'recovery-discard-combination-disabled',
+    failed: 3,
+    skipped: 0,
+    killedBy: [
+      'R21-3.6a 崩溃矩阵:五个 phase 之间各注入一次崩溃 崩溃于 journal:planned → 恢复后一致、不出现 personal_repo_diverged',
+      'R21-3.6a 崩溃矩阵:五个 phase 之间各注入一次崩溃 崩溃于 journal:objects_written → 恢复后一致、不出现 personal_repo_diverged',
+      'R21-3.6a 崩溃矩阵:五个 phase 之间各注入一次崩溃 崩溃于 before:update-ref → 恢复后一致、不出现 personal_repo_diverged',
+    ],
+    restored: true,
+  },
+  {
+    id: 'head-json-before-recorded',
+    failed: 6,
+    skipped: 0,
+    killedBy: [
+      'R21-3.6a 崩溃矩阵:五个 phase 之间各注入一次崩溃 崩溃于 journal:ref_updated → 恢复后一致、不出现 personal_repo_diverged',
+      'R21-3.6a 崩溃矩阵:五个 phase 之间各注入一次崩溃 崩溃于 before:read-tree → 恢复后一致、不出现 personal_repo_diverged',
+      'R21-3.6a 崩溃矩阵:五个 phase 之间各注入一次崩溃 崩溃于 after:read-tree → 恢复后一致、不出现 personal_repo_diverged',
+      'R21-3.6a 崩溃矩阵:五个 phase 之间各注入一次崩溃 崩溃于 journal:worktree_synced → 恢复后一致、不出现 personal_repo_diverged',
+      'R21-3.6a 崩溃矩阵:五个 phase 之间各注入一次崩溃 崩溃于 journal:recorded → 恢复后一致、不出现 personal_repo_diverged',
+      'R21-3.6a 恢复同样遵守「head.json 只在 journal 到达 recorded 后写」 R21-3.6a 崩溃在工作树同步之后(journal 仍是 ref_updated)→ 恢复先把 journal 持久化到 recorded,再写 head.json,最后删 journal',
+    ],
+    restored: true,
+  },
+  {
+    id: 'recovery-skipped-before-classification',
+    failed: 13,
+    skipped: 0,
+    killedBy: [
+      'R21-3.6a 崩溃矩阵:五个 phase 之间各注入一次崩溃 崩溃于 journal:planned → 恢复后一致、不出现 personal_repo_diverged',
+      'R21-3.6a 崩溃矩阵:五个 phase 之间各注入一次崩溃 崩溃于 journal:objects_written → 恢复后一致、不出现 personal_repo_diverged',
+      'R21-3.6a 崩溃矩阵:五个 phase 之间各注入一次崩溃 崩溃于 before:update-ref → 恢复后一致、不出现 personal_repo_diverged',
+      'R21-3.6a 崩溃矩阵:五个 phase 之间各注入一次崩溃 崩溃于 after:update-ref → 恢复后一致、不出现 personal_repo_diverged',
+      'R21-3.6a 崩溃矩阵:五个 phase 之间各注入一次崩溃 崩溃于 journal:ref_updated → 恢复后一致、不出现 personal_repo_diverged',
+      'R21-3.6a 崩溃矩阵:五个 phase 之间各注入一次崩溃 崩溃于 before:read-tree → 恢复后一致、不出现 personal_repo_diverged',
+      'R21-3.6a 崩溃矩阵:五个 phase 之间各注入一次崩溃 崩溃于 after:read-tree → 恢复后一致、不出现 personal_repo_diverged',
+      'R21-3.6a 崩溃矩阵:五个 phase 之间各注入一次崩溃 崩溃于 journal:worktree_synced → 恢复后一致、不出现 personal_repo_diverged',
+      'R21-3.6a 崩溃矩阵:五个 phase 之间各注入一次崩溃 崩溃于 journal:recorded → 恢复后一致、不出现 personal_repo_diverged',
+      'R21-3.6a 崩溃矩阵:五个 phase 之间各注入一次崩溃 崩溃于 after:head → 恢复后一致、不出现 personal_repo_diverged',
+      'R21-3.6a 崩溃窗口里的用户改动:保留、diverged、journal 仍在 对照:没有用户改动时同样三个窗口都能恢复(见上一组),用户改动才是 diverged 的原因',
+      '恢复先于 R21-3.5 判定,且不借机改归属 R21-3.5 崩溃在 recorded 之后、head.json 之前,换了 [rsi] repo 再来:恢复沿用 head.json 原有的 owner_repo_fp,随后判 personal_owner_changed',
+      'R21-3.6a 恢复同样遵守「head.json 只在 journal 到达 recorded 后写」 R21-3.6a 崩溃在工作树同步之后(journal 仍是 ref_updated)→ 恢复先把 journal 持久化到 recorded,再写 head.json,最后删 journal',
+    ],
+    restored: true,
+  },
+  {
+    id: 'recovery-adopts-new-owner',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '恢复先于 R21-3.5 判定,且不借机改归属 R21-3.5 崩溃在 recorded 之后、head.json 之前,换了 [rsi] repo 再来:恢复沿用 head.json 原有的 owner_repo_fp,随后判 personal_owner_changed',
+    ],
+    restored: true,
+  },
+  {
+    id: 'cas-without-expected-old',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'R21-3.6 update-ref 带期望旧值 R21-3.6 并发的第二个提交者(在 A 的 update-ref 之前先完成了一次提交)→ A 得到 cas_failed,B 的结果完好',
+      'R21-3.6 update-ref 带期望旧值 引用被第三方挪走(不经 kit)→ A 得到 cas_failed;journal 保留,下一次恢复判 diverged,不动引用',
+    ],
+    restored: true,
+  },
+  {
+    id: 'lock-not-rechecked-before-update-ref',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'R20-5.5 lock_lost:提交点前复核锁,丢锁立即停止、不再写 update-ref 之前锁丢了 → 抛 lock_lost,引用 / 工作树没动;下一次恢复把未生效的提交丢弃',
+    ],
+    restored: true,
+  },
+  {
+    id: 'first-time-proof-weak',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W0-5 首次建仓证明 lstat 报 ENOENT 以外的错误(rsi-personal 被一个普通文件占位 → ENOTDIR)→ 不是首次',
+    ],
+    restored: true,
+  },
+  {
+    id: 'bootstrap-ref-mismatch-ignored',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W0-5 bootstrap 崩溃恢复(四个 phase 之间各注入一次) committed 之后引用被改成别的值 → personal_repo_invalid,保留 journal',
+    ],
+    restored: true,
+  },
+  {
+    id: 'tree-dot-names-allowed',
+    failed: 6,
+    skipped: 0,
+    killedBy: [
+      'R21-3.6 commitPersonal 目标树约束(R21-3.1):违规一律 TreeSpecError,仓库原样 .gitattributes',
+      'R21-3.6 commitPersonal 目标树约束(R21-3.1):违规一律 TreeSpecError,仓库原样 .gitmodules',
+      'R21-3.6 commitPersonal 目标树约束(R21-3.1):违规一律 TreeSpecError,仓库原样 .git 目录里',
+      'R21-3.6 commitPersonal 目标树约束(R21-3.1):违规一律 TreeSpecError,仓库原样 隐藏文件',
+      'R21-3.6 commitPersonal 目标树约束(R21-3.1):违规一律 TreeSpecError,仓库原样 路径逃逸 ..',
+      'R21-3.1 / R21-3.6 kit 管理路径:以 HEAD 树为底稿,用户文件保留,delete 只能落在管理命名空间内 试图 delete 非管理路径或畸形路径(rules/../notes/x.md)→ TreeSpecError,什么都没动',
+    ],
+    restored: true,
+  },
+  {
+    id: 'tree-top-level-files-allowed',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'R21-3.6 commitPersonal 目标树约束(R21-3.1):违规一律 TreeSpecError,仓库原样 与布局目录同名的顶层文件',
+    ],
+    restored: true,
+  },
+  {
+    id: 'tree-layout-dirs-unchecked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'R21-3.6 commitPersonal 目标树约束(R21-3.1):违规一律 TreeSpecError,仓库原样 不在布局内的顶层目录',
+    ],
+    restored: true,
+  },
+  {
+    id: 'tree-duplicate-paths-allowed',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'R21-3.6 commitPersonal 目标树约束(R21-3.1):违规一律 TreeSpecError,仓库原样 同一路径重复(不区分大小写)/ 文件与目录同名 / 非法 txn_id',
+    ],
+    restored: true,
+  },
+  {
+    id: 'tree-case-variants-allowed',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'R21-3.6 commitPersonal 目标树约束(R21-3.1):违规一律 TreeSpecError,仓库原样 rules/A 与 rules/a:大小写不敏感的同名路径一律拒绝(大小写不敏感的卷上无法检出)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'revocations-old-lines-dropped',
+    failed: 3,
+    skipped: 0,
+    killedBy: [
+      'W0-9 revocations.jsonl:整文件原子重写,只增不删 追加:旧行原样保留为新文件的前缀,顺序保持',
+      'W0-9 revocations.jsonl:整文件原子重写,只增不删 重写中途失败(任一 home-fs 阶段):旧版原样可读,没有残留临时文件;随后正常追加成功',
+      'W0-9 revocations.jsonl:整文件原子重写,只增不删 超过 1 MiB:追加抛 revocations_too_large 且不写;文件本身 > 1 MiB 读取失败',
+    ],
+    restored: true,
+  },
+  {
+    id: 'revocations-cap-unchecked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W0-9 revocations.jsonl:整文件原子重写,只增不删 超过 1 MiB:追加抛 revocations_too_large 且不写;文件本身 > 1 MiB 读取失败',
+    ],
+    restored: true,
+  },
+  {
+    id: 'revocations-corrupt-overwritten',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W0-9 revocations.jsonl:整文件原子重写,只增不删 现有文件损坏 → 追加抛 revocations_invalid,不覆盖(不丢凭据)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'owner-fp-ignores-inode',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'owner_repo_fp 与封闭配置的空目录 owner_repo_fp:16 位十六进制;同目录稳定,不同目录不同,目录被换掉(inode 变)也不同',
+    ],
+    restored: true,
+  },
+  {
+    id: 'empty-dir-content-ignored',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'owner_repo_fp 与封闭配置的空目录 ensureEmptyDir:建 0700 空目录;里面有东西 → 抛 empty_dir_not_empty(钩子目录不能被塞内容)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'lock-reclaim-without-reread',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'R20-5.5 协议(personal/lock) 回收前复读:判定陈旧之后锁文件被别人换掉 → 不删(逐字节相同才删)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'lock-assert-held-always-true',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'R20-5.5 协议(personal/lock) lock_lost:nonce 被换(或锁被删)→ assertHeld 抛 lock_lost;release 不删别人的锁',
+    ],
+    restored: true,
+  },
+  {
+    id: 'lock-release-deletes-foreign',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'R20-5.5 协议(personal/lock) lock_lost:nonce 被换(或锁被删)→ assertHeld 抛 lock_lost;release 不删别人的锁',
+    ],
+    restored: true,
+  },
+  {
+    id: 'lock-over-ttl-reclaimed',
+    failed: 3,
+    skipped: 0,
+    killedBy: [
+      'R20-5.5 协议(personal/lock) locked:持有者进程存活且未超 TTL → locked,锁文件不动',
+      'R20-5.5 协议(personal/lock) locked_over_ttl:持有者存活但超过 15 分钟 → 只报 locked_over_ttl,不杀、不删',
+      'R20-5.5 协议(personal/lock) 回收前复读:判定陈旧之后锁文件被别人换掉 → 不删(逐字节相同才删)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'lock-state-dir-unsafe-ignored',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'R20-5.5 协议(personal/lock) 状态目录权限宽于 0700 → state_dir_unsafe(fail-closed,不自动收紧);目录是符号链接 → write_denied',
+    ],
+    restored: true,
+  },
+  {
+    id: 'recovery-record-skips-recorded-phase',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'R21-3.6a 恢复同样遵守「head.json 只在 journal 到达 recorded 后写」 R21-3.6a 崩溃在工作树同步之后(journal 仍是 ref_updated)→ 恢复先把 journal 持久化到 recorded,再写 head.json,最后删 journal',
+    ],
+    restored: true,
+  },
+  {
+    id: 'bootstrap-structure-check-skipped',
+    failed: 3,
+    skipped: 0,
+    killedBy: [
+      'W0-5 bootstrap 恢复:结构校验先行、观测核对、丢锁即停 崩溃于 journal:initialized 之后仓库配置被改成不合格(本地 core.sshCommand)→ 结构校验先行:personal_repo_invalid,journal 保留,没有写 head.json',
+      'W0-5 bootstrap 恢复:结构校验先行、观测核对、丢锁即停 崩溃于 journal:committed 之后仓库配置被改成不合格(本地 core.sshCommand)→ 结构校验先行:personal_repo_invalid,journal 保留,没有写 head.json',
+      'W0-5 bootstrap 恢复:结构校验先行、观测核对、丢锁即停 崩溃于 journal:recorded 之后仓库配置被改成不合格(本地 core.sshCommand)→ 结构校验先行:personal_repo_invalid,journal 保留,没有写 head.json',
+    ],
+    restored: true,
+  },
+  {
+    id: 'bootstrap-observation-skipped',
+    failed: 8,
+    skipped: 0,
+    killedBy: [
+      'W0-5 bootstrap 恢复:结构校验先行、观测核对、丢锁即停 崩溃于 journal:initialized 之后:切到另一个分支 → bootstrap_inconsistent,journal 保留,不记录',
+      'W0-5 bootstrap 恢复:结构校验先行、观测核对、丢锁即停 崩溃于 journal:initialized 之后:detached HEAD → bootstrap_inconsistent,journal 保留,不记录',
+      'W0-5 bootstrap 恢复:结构校验先行、观测核对、丢锁即停 崩溃于 journal:initialized 之后:加了未跟踪文件 → bootstrap_inconsistent,journal 保留,不记录',
+      'W0-5 bootstrap 恢复:结构校验先行、观测核对、丢锁即停 崩溃于 journal:initialized 之后:只改索引 → bootstrap_inconsistent,journal 保留,不记录',
+      'W0-5 bootstrap 恢复:结构校验先行、观测核对、丢锁即停 崩溃于 journal:committed 之后:切到另一个分支 → bootstrap_inconsistent,journal 保留,不记录',
+      'W0-5 bootstrap 恢复:结构校验先行、观测核对、丢锁即停 崩溃于 journal:committed 之后:detached HEAD → bootstrap_inconsistent,journal 保留,不记录',
+      'W0-5 bootstrap 恢复:结构校验先行、观测核对、丢锁即停 崩溃于 journal:committed 之后:加了未跟踪文件 → bootstrap_inconsistent,journal 保留,不记录',
+      'W0-5 bootstrap 恢复:结构校验先行、观测核对、丢锁即停 崩溃于 journal:committed 之后:只改索引 → bootstrap_inconsistent,journal 保留,不记录',
+    ],
+    restored: true,
+  },
+  {
+    id: 'bootstrap-update-ref-lock-unchecked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W0-5 bootstrap 恢复:结构校验先行、观测核对、丢锁即停 正式引用被写之前丢锁(lock_lost)→ 立即停止:refs/heads/rsi 未被创建;之后持好锁再来可续做',
+    ],
+    restored: true,
+  },
+  {
+    id: 'index-flags-ignored-recovery',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'R21-3.6a 索引标志(assume-unchanged / skip-worktree)让 status 看不见改动:不当成「干净」 窗口 journal:ref_updated:update-index --assume-unchanged 标记了一个提交不涉及的文件、又改了它 → diverged,改动与 journal 原样保留(之后又改了文件 → diverged)',
+      'R21-3.6a 索引标志(assume-unchanged / skip-worktree)让 status 看不见改动:不当成「干净」 窗口 journal:ref_updated:update-index --skip-worktree 标记了一个提交不涉及的文件、又改了它 → diverged,改动与 journal 原样保留(之后又改了文件 → diverged)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'index-flags-ignored-situation',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'R21-3.5 情形②:personal_repo_diverged(暂停新增生效,不碰仓库) 索引标志(assume-unchanged)藏起了工作树改动:status 为空也判 diverged',
+    ],
+    restored: true,
+  },
+  {
+    id: 'tree-whole-replacement',
+    failed: 3,
+    skipped: 0,
+    killedBy: [
+      'R21-3.6 commitPersonal 目标树约束(R21-3.1):违规一律 TreeSpecError,仓库原样 正向对照:合法路径(含深层目录、点与连字符)通过,且全部是 100644',
+      'R21-3.1 / R21-3.6 kit 管理路径:以 HEAD 树为底稿,用户文件保留,delete 只能落在管理命名空间内 情形①接受的用户新增文件(管理命名空间之内 rules/user.md、之外 notes/x.md)在下一次 kit 提交后原样保留(树、工作树、状态都干净)',
+      'R21-3.1 / R21-3.6 kit 管理路径:以 HEAD 树为底稿,用户文件保留,delete 只能落在管理命名空间内 显式 delete 管理路径内的文件生效;删一个不存在的路径视为已删(幂等)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'delete-unmanaged-allowed',
+    failed: 3,
+    skipped: 0,
+    killedBy: [
+      'R21-3.1 / R21-3.6 kit 管理路径:以 HEAD 树为底稿,用户文件保留,delete 只能落在管理命名空间内 试图 delete 非管理路径或畸形路径(notes/x.md)→ TreeSpecError,什么都没动',
+      'R21-3.1 / R21-3.6 kit 管理路径:以 HEAD 树为底稿,用户文件保留,delete 只能落在管理命名空间内 试图 delete 非管理路径或畸形路径(README.md)→ TreeSpecError,什么都没动',
+      'R21-3.1 / R21-3.6 kit 管理路径:以 HEAD 树为底稿,用户文件保留,delete 只能落在管理命名空间内 试图 delete 非管理路径或畸形路径(rules)→ TreeSpecError,什么都没动',
+    ],
+    restored: true,
+  },
+  {
+    id: 'bootstrap-preinit-gate-removed',
+    failed: 6,
+    skipped: 0,
+    killedBy: [
+      'W0-5 git init 之前的校验(planned + 目录缺失 / 为空):不满足就不 init 目录被换成指向外部空目录的符号链接 → personal_repo_invalid,外部目录里没有 .git',
+      'W0-5 git init 之前的校验(planned + 目录缺失 / 为空):不满足就不 init 祖先目录(.local/share/agent-kit)被换成符号链接 → ancestor_symlink,不 init',
+      'W0-5 git init 之前的校验(planned + 目录缺失 / 为空):不满足就不 init 祖先 lstat 读取失败(上级目录不可搜索)→ ancestor_unreadable,不 init',
+      'W0-5 git init 之前的校验(planned + 目录缺失 / 为空):不满足就不 init 祖先是普通文件(不是目录)→ ancestor_not_dir,不 init',
+      'W0-5 git init 之前的校验(planned + 目录缺失 / 为空):不满足就不 init 目录权限被放宽(0755)→ mode,不 init',
+      'W0-5 git init 之前的校验(planned + 目录缺失 / 为空):不满足就不 init 目录属主不是当前 uid → owner,不 init',
+    ],
+    restored: true,
+  },
+  {
+    id: 'preinit-dir-symlink-unchecked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W0-5 git init 之前的校验(planned + 目录缺失 / 为空):不满足就不 init 目录被换成指向外部空目录的符号链接 → personal_repo_invalid,外部目录里没有 .git',
+    ],
+    restored: true,
+  },
+  {
+    id: 'preinit-ancestor-symlink-unchecked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W0-5 git init 之前的校验(planned + 目录缺失 / 为空):不满足就不 init 祖先目录(.local/share/agent-kit)被换成符号链接 → ancestor_symlink,不 init',
+    ],
+    restored: true,
+  },
+  {
+    id: 'preinit-ancestor-read-failure-swallowed',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W0-5 git init 之前的校验(planned + 目录缺失 / 为空):不满足就不 init 祖先 lstat 读取失败(上级目录不可搜索)→ ancestor_unreadable,不 init',
+    ],
+    restored: true,
+  },
+  {
+    id: 'preinit-ancestor-not-dir-unchecked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W0-5 git init 之前的校验(planned + 目录缺失 / 为空):不满足就不 init 祖先是普通文件(不是目录)→ ancestor_not_dir,不 init',
+    ],
+    restored: true,
+  },
+  {
+    id: 'preinit-mode-unchecked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W0-5 git init 之前的校验(planned + 目录缺失 / 为空):不满足就不 init 目录权限被放宽(0755)→ mode,不 init',
+    ],
+    restored: true,
+  },
+  {
+    id: 'preinit-owner-unchecked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W0-5 git init 之前的校验(planned + 目录缺失 / 为空):不满足就不 init 目录属主不是当前 uid → owner,不 init',
+    ],
+    restored: true,
+  },
+  {
+    id: 'struct-info-attributes-unchecked',
+    failed: 3,
+    skipped: 0,
+    killedBy: [
+      'R21-3.4 之外同样能改变 git 行为的文件:属性、嫁接、浅克隆、替换对象 .git/info/attributes(文件)→ info_attributes',
+      'R21-3.4 之外同样能改变 git 行为的文件:属性、嫁接、浅克隆、替换对象 .git/info/attributes(空文件)→ info_attributes',
+      'R21-3.4 之外同样能改变 git 行为的文件:属性、嫁接、浅克隆、替换对象 .git/info/attributes 是符号链接(哪怕悬空)→ info_attributes',
+    ],
+    restored: true,
+  },
+  {
+    id: 'struct-grafts-unchecked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'R21-3.4 之外同样能改变 git 行为的文件:属性、嫁接、浅克隆、替换对象 .git/info/grafts → grafts',
+    ],
+    restored: true,
+  },
+  {
+    id: 'struct-shallow-unchecked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'R21-3.4 之外同样能改变 git 行为的文件:属性、嫁接、浅克隆、替换对象 .git/shallow → shallow',
+    ],
+    restored: true,
+  },
+  {
+    id: 'struct-replace-refs-unchecked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'R21-3.4 之外同样能改变 git 行为的文件:属性、嫁接、浅克隆、替换对象 refs/replace/* 存在 → replace_refs',
+    ],
+    restored: true,
+  },
+  {
+    id: 'no-replace-objects-env-removed',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'R21-3.6 封闭 git 配置 R21-3.6 封闭执行不读替换对象(GIT_NO_REPLACE_OBJECTS):refs/replace 对它不生效',
+    ],
+    restored: true,
+  },
+  {
+    id: 'lock-checked-after-init-writes',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '先复核锁,再做任何写入初始化 锁已丢 → 抛 lock_lost,没有创建任何目录(状态目录、空钩子目录、私有仓库目录)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'git-read-failure-as-absent',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'git 读取三态 git 启动失败(PATH 里没有 git)→ revParse / gitOut 抛 PersonalGitError,不当成「不存在」',
+    ],
+    restored: true,
+  },
+  {
+    id: 'runsync-in-home-state',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      '私有仓库唯一 git 出口:真实源码扫描 src/rsi/** 里能拿到 runSync 的文件 ⊆ {personal/commit.ts, commit-journal.ts, repo-check.ts} ∪ hooks/**;repo-check.ts 确实在列(扫描不空转)',
+      '违例夹具(真实 eslint 配置) W2 的源码与测试在真实配置下 lint 全绿(home-fs 只在 personal/** 授权)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'runsync-in-personal-lock',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      '私有仓库唯一 git 出口:真实源码扫描 src/rsi/** 里能拿到 runSync 的文件 ⊆ {personal/commit.ts, commit-journal.ts, repo-check.ts} ∪ hooks/**;repo-check.ts 确实在列(扫描不空转)',
+      '违例夹具(真实 eslint 配置) W2 的源码与测试在真实配置下 lint 全绿(home-fs 只在 personal/** 授权)',
+    ],
+    restored: true,
+  },
+];
