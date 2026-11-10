@@ -5701,7 +5701,7 @@ agent-kit judge --confirm-reflector --run <run_id> [--proposal <id>]… --write 
 
 > **冻结后订正 N4-2(R20-18.35)**:上表追加事件 `judge_reject`——`proposed | shadow | blocked → rejected`,`canary | adopted | stable → rolling_back`(`target_terminal = rolled_back`);守卫 = 关联提案上通过完整校验的 `session_confirmed` 记录**或 `proven` 的 `spawned` 记录**(N4 订正 #5,Q-N4-9 = B)且 `verdict = reject` 或 `injection_suspected = true`;原因码 `judge_reject` / `judge_injection`,终态理由 `judge_rejected`。**只向终止方向**,永不放行 / 加速 / 跳过闸(R21-1.5 不变)。
 
-> **冻结后订正 W0-1 / W0-10(2026-11-09)**:上表在 **V1a 只有**:`(无)→proposed`、`proposed→shadow`、`proposed→rejected`、`shadow→expired`、`shadow→rejected`、`proposed|shadow→rejected`(clear)、`judge_reject` 对 `proposed|shadow` 的终止;**V1b 才有** `shadow→canary`、`canary→rolling_back`、`rolling_back→<target_terminal>`(能力键见 §21.24)。V1a 里达标的 shadow 候选只记展示缓存 `canary_ready_since`、留在 `shadow`(待用户拍板的保守默认,§21.24 W0-1);V1i-9:因全局名额被占而排队满 30 个 UTC 日 → `expired`(`limit_reached`)。
+> **冻结后订正 W0-1 / W0-10(2026-11-09)**:上表在 **V1a 只有**:`(无)→proposed`、`proposed→shadow`、`proposed→rejected`、`shadow→expired`、`shadow→rejected`、`proposed|shadow→rejected`(clear)、`judge_reject` 对 `proposed|shadow` 的终止;**V1b 才有** `shadow→canary`、`canary→rolling_back`、`rolling_back→<target_terminal>`(能力键见 §21.24)。~~V1a 里达标的 shadow 候选只记展示缓存 `canary_ready_since`、留在 `shadow`(待用户拍板的保守默认,§21.24 W0-1)~~(**被 W0-13 取代**:V1a 与 V1b 同版发布,达标即按 `shadow→canary` 推进,见 §21.24 W0-13);V1i-9:因全局名额被占而排队满 30 个 UTC 日 → `expired`(`limit_reached`)。
 
 - R21-4.2 `[V1]` **维度二:本机部署**(每 agent):`none → injected → static_pending → static → removal_pending → none`,另有撤回支路 `static → withdraw_pending → injected`。
 
@@ -6297,6 +6297,8 @@ v3.1 已把用户决定列全;以下是落契约时新发现的契约细节取�
 
 **冻结后订正 W0(2026-11-09,用户 2026-11-04 选择框 Q1–Q5、V1i-2、V1i-4…10 按规划稿处理,2026-11-09 选「现在开工 W0 + V1a」)**:V1 拆为 V1a(只观察)与 V1b(canary、分组账、变差检验、回滚)(Q5);签名取来源聚类的机械判据(Q1);准入改自动探针,取代设计稿 §10.3 第 2 项「用户当场同意」(Q2);pi 的 canary 变体进 V1b(Q3);私有仓库由 worker 自动建(Q4);候选来源与 id 派生(V1i-2);文件形状与度量标量(V1i-4);设计稿 §10.2 V1 行与契约 R21-7.9 对齐(V1i-5);`config.ts` 已实现而非「规划」、`revocations.jsonl` 改整文件原子重写(V1i-6);OBF 累计、medium=lite、shadow 排队上限、lint 授权路径(V1i-7…10)。按节首规则原位加标注并在此记录:R21-0.1 / 0.2、R21-2.1 / 2.2、R21-3.5 / 3.6a / 3.7 / 3.10、R21-4.1、R21-5.3、R21-6.5 / 6.11、R21-7.6(旁)、R21-9.5、R21-12.9、§21.18 第 19 行、§21.20 V1 行(W0-1 … W0-12,正文 §21.24)。**取代关系**:§21.0 分期表 V1 行与 V1.5 前置;设计稿 §10.3 第 2 项「当场同意」与 R21-6.5「实测」的人工口径;规划稿 Q3 推荐 A;§21.18 第 19 行「影响已实现代码」栏。**评审**:W0 订正草稿经 Pi(GPT-6.1 Sol)评审,逐轮结论与采纳 / 未采纳处置见 PR 描述;第 1 轮采纳的修订已并入 §21.24(探针票限次与静止判据、准入绑定版本与失效、bootstrap 单列状态机与首次建仓证明、V1a 的撤销凭据与锁内重读、行级能力表、`cluster_signature` 入权威记录、`auto_pause` 非法值不归零)。**未改**:任何用户已拍板的 U / M / P / T 决定、G0–G9、R21-1.3 / 1.5、R21-7.9 / 7.13。
 
+**冻结后订正 W0-13(2026-11-10,用户选择框「V1a 就允许推进」;重估后「V1a 与 V1b 合成一期」)**:V1a 与 V1b 同一版本发布;达标 shadow 按 `shadow→canary` 推进(前置:相位 ≥ V1b、名额空闲、锁内对账与重新核对);相位仍分两个 PR 提升、其间不发版,发版闸拒绝相位 1 的产物。原位标注:§21.24 W0-1「达标」段(整段删除标注)、R21-4.1 的 W0-1 / W0-10 标注、§21.24 R21-0.2 句。**取代关系**:W0-1「保守默认;待用户拍板」段;R21-4.1 标注中「留在 shadow」一句;W0-1 分期表 V1b 行「V1a 已发」的发版含义;规划稿 V1a 25 人日与「V1b 等观察数据」。**未改**:三张相位表、R21-0.2、R21-7.9、W0-2 / W0-3 已落地的两项决定。
+
 ### 21.24 V1 拆期与 W0 订正(冻结后订正 W0-1 … W0-12;2026-11-09,依据用户 2026-11-04 选择框 Q1–Q5、V1i-2、V1i-4…10 按规划稿处理,2026-11-09 选「现在开工 W0 + V1a」)
 
 按节首规则:原位加标注、本节写正文、§21.23 记录。本节**不改**任何已冻结条款的 `[V1]` 标签;被取代的原文在原位以删除线或标注指回本节。W0 只落契约、schema、枚举与 lint 骨架,`RSI_AUTO_PHASE` 仍为 0(R21-0.1)。
@@ -6328,7 +6330,7 @@ v3.1 已把用户决定列全;以下是落契约时新发现的契约细节取�
 | V6a  | 8    |
 | V6b  | 9    |
 
-R21-2.2 的「`RSI_AUTO_PHASE ≥ 1`」即 V1a,不变;R21-6.11 第 2 行的「`RSI_AUTO_PHASE < 1`」**改为「`< 2`(未到 V1b)」**;R21-4.1 的「≥ V3」、R21-16.2 的「≥ V6b」按具名读,不受影响。所有阶段判断经同一个函数(`phaseAtLeast`),不在调用处写裸整数。R21-0.2 适用于 V1a 与 V1b:各一个 PR 提升相位。
+R21-2.2 的「`RSI_AUTO_PHASE ≥ 1`」即 V1a,不变;R21-6.11 第 2 行的「`RSI_AUTO_PHASE < 1`」**改为「`< 2`(未到 V1b)」**;R21-4.1 的「≥ V3」、R21-16.2 的「≥ V6b」按具名读,不受影响。所有阶段判断经同一个函数(`phaseAtLeast`),不在调用处写裸整数。R21-0.2 适用于 V1a 与 V1b:各一个 PR 提升相位。(W0-13:两个 PR 之间不发版,已发布版本的相位只能是 0 或 ≥ 2。)
 
 **两个维度,各有唯一事实源**:(2) 能力表由测试与 `src/contracts/rsi.ts` 的 `RSI_CAPABILITY_PHASE` **双向逐行比对**;(1) 条款首期表是**文档事实源**,由条款追踪测试解析并与正文的 `[V1]` 条款逐一对账(一个不漏、不重复、不多),不另设代码常量(运行时若需要条款映射,再以契约修订新增):
 
@@ -6397,7 +6399,9 @@ R21-2.2 的「`RSI_AUTO_PHASE ≥ 1`」即 V1a,不变;R21-6.11 第 2 行的「`R
 
 **V1a 的具体形态**:①`shadow→canary`、`canary→*`、`rolling_back→*` 与 deploy 维度全部转移不存在;②`rsi rollback --to` 是桩(退出 64);hint `--canary` 走 R21-6.11 第 2 行;③**R21-9.5 的撤销凭据与「对账先于授予 / 提交前锁内重读」在 V1a 就生效**(这是 `off` 下 clear 与旧 worker 互斥、已清候选不被旧快照复活的唯一屏障):`rsi auto clear` 对 `proposed` / `shadow` 先在 `personal/lock` 下写撤销凭据(`by=clear`),再提交私有仓库终态(`cleared`);worker **每次**提交私有仓库前持 `personal/lock` 重读 `revocations.jsonl` 与权威 `lifecycle/<id>.json`,凡被凭据列出或权威已是终态的候选不得被旧工作副本推进(终态不可复活);`personal_repo_diverged` 下按 R21-9.3a 推迟私有仓库部分(不触碰引用 / 索引 / 工作树),工作副本记 `repo_removal_deferred=true`;`canary.json` / 分组账 / payload 的清理(R21-9.5 的 V1b 部分)在 V1a 不存在,对账只推进状态;④§21.20 V1 行验收拆分:R21-4.3 矩阵、R21-1.6 计时、R21-3.6 全局钩子 / 过滤器、`off` 下 clear 与旧 worker 互斥(V1a 范围:`proposed` / `shadow`)归 V1a;control 组标记、`AUTO_PAUSE` / 策略指纹即 `excluded`、hint ≤ 1736 字节、codex 无 canary、四段回滚归 V1b。
 
-**V1a 里「达标」的 shadow 候选(保守默认;待用户拍板)**:满足「≥ 20 有观测会话且签名命中 ≥ 2」的 `shadow` 候选在工作副本记 `canary_ready_since`(UTC 日),**只是展示缓存,不是授权**:留在 `shadow`;V1i-9 的 30 个 UTC 日排队计时(W0-10)**只在「因全局评估名额被占而排队」(`g7_queued`)时累计,因相位未到而等待不计时**。V1b 上线后进入 canary 时必须重新核对:当前授权与配置、taint、冷却 / 墓碑 / 黑名单、`content_sha256` 与 `cluster_signature` 未变、证据仍有效、名额空闲;排序键固定为 `(canary_ready_since, 候选 id)` 升序,工作副本丢失后由权威记录与信号库重算。
+> **冻结后订正 W0-13(2026-11-10,用户选择框「V1a 就允许推进」+「V1a 与 V1b 合成一期」)**:下面这一整段**被取代**,现行规则见 §21.24 W0-13「达标 shadow 的推进」。
+
+~~**V1a 里「达标」的 shadow 候选(保守默认;待用户拍板)**~~:满足「≥ 20 有观测会话且签名命中 ≥ 2」的 `shadow` 候选在工作副本记 `canary_ready_since`(UTC 日),**只是展示缓存,不是授权**:留在 `shadow`;V1i-9 的 30 个 UTC 日排队计时(W0-10)**只在「因全局评估名额被占而排队」(`g7_queued`)时累计,因相位未到而等待不计时**。V1b 上线后进入 canary 时必须重新核对:当前授权与配置、taint、冷却 / 墓碑 / 黑名单、`content_sha256` 与 `cluster_signature` 未变、证据仍有效、名额空闲;排序键固定为 `(canary_ready_since, 候选 id)` 升序,工作副本丢失后由权威记录与信号库重算。
 
 #### W0-2 签名(Q1,补 V1i-1)
 
@@ -6468,6 +6472,32 @@ worker 持锁扫 `.state/reflect/<run>/proposals/` 暂存提案,**仅** `layer=p
 #### W0-12 稳定码与枚举(R21-12.9 并入;§21.20 V0 行)
 
 R21-12.9 的全部码并入 `src/contracts/rsi.ts` 既有枚举与 §20.3 稳定码总表(`rsi-codes-table` 双向一致):`RSI_USAGE reason=` 追加 `bad_date`、`unknown_id`、`bad_marker`;`RSI_NOT_RUN reason=` 追加 `not_diverged`、`phase_not_available`、`ticket_expired`、`no_runtime`(`rate_limited` 已在);顶层(1)追加 `RSI_AUTO_RESUME_BLOCKED`、`RSI_CONTRIB_DEGRADED`、`RSI_EXEC_DECLINED`;顶层(4)追加 `RSI_EXEC_NOT_RUN`;`RSI_FAIL_CLOSED reason=` 追加 `personal_repo_invalid`、`candidate_invalid`、`ledger_line_invalid`、`txn_invalid`、`probe_error`。这些码在对应期之前只是枚举常量(无发码路径)。另在同一文件新增:`RSI_AUTO_PAUSE_REASONS`(带各码最早期:`rollback_storm` 为 V1b)、终态理由(含 `judge_rejected`)、转移原因码、G 原因码、`RSI_DECIDE_BETTER_ENABLED = false`、R21-7.1 全部统计常量、`RSI_AUTO_LABEL`、`RSI_MARK_PREFIX`。
+
+#### W0-13 合期交付:V1a 与 V1b 同一版本发布(2026-11-10)
+
+**依据**:用户 2026-11-10 两次选择框。①问「V1a 命中一条已达标的 shadow 候选时怎么处理」,选「V1a 就允许推进」(选项原文:「达标后立即进入下一阶段。代价:V1a 要多实现升级与回退路径,范围扩大,风险也提前」;未选推荐的「保守留 shadow」)。②主代理重估后再问落地形态(依据:R21-6.11 第 2 行在相位 < 2 时 hint 无输出,只推状态不会注入任何内容,反而占全局名额、空走 `RSI_MAX_CANARY_DAYS`;要让推进真生效,须同时具备注入、准入探针、分组账、变差检验与四段回滚,即整个 V1b),选「V1a 与 V1b 合成一期」。
+
+**取代**:
+
+- W0-1 中「V1a 里『达标』的 shadow 候选(保守默认;待用户拍板)」整段(原位已加删除标注);
+- R21-4.1 原位标注(W0-1 / W0-10)中「V1a 里达标的 shadow 候选只记展示缓存、留在 `shadow`」一句;
+- W0-1 分期表 V1b 行进入条件「V1a 已发」的**发版**含义(改为「V1a 已实现并验收」,两期同版发布);
+- 规划稿 §3 的「V1a 约 25 人日、V1b 等 V1a 观察数据再定」(重估:合期约 46 人日,区间 36–54)。
+
+**不变**:相位整数表、条款首期表、能力表三张表一行不改;R21-0.2「各一个 PR 提升相位」照旧;`phaseAtLeast` 与未到期能力的拒绝照旧;`RSI_DECIDE_BETTER_ENABLED` 恒假(R21-7.9),canary 只会经回滚走向 `rolled_back` 或 `expired`;W0-3「`enabled = true` 即同意输出仅含标记的探针行」与 W0-2「`cluster_signature` 进权威记录」已在 W0 落地,本条不再改。
+
+**发版规则(闸)**:V1a 与 V1b 在同一个 npm 版本里首次对外可用。`RSI_AUTO_PHASE` 仍分两个 PR 提升(0→1、1→2),两者之间**不发版、不推 tag**;任何已发布版本的 `RSI_AUTO_PHASE` 只能是 0 或 ≥ 2。强制方式:发版前核对读**打包产物**里的 `RSI_AUTO_PHASE`,等于 1 → 拒绝发版并退出非 0(负向用例:相位 1 的产物被拒;正向对照:0 与 2 通过;变异锚点:去掉拒绝条件 → 测试红)。
+
+**达标 shadow 的推进**(取代上述整段):
+
+- `shadow` 候选满足「≥ 20 有观测会话且签名命中 ≥ 2」(R21-1.6 计时口径不变)时,工作副本记 `canary_ready_since`(UTC 日;首次达标日,之后不改)。
+- worker 在下一次持锁步里按 R21-4.1 执行 `shadow → canary`(原因 `shadow_hits_met`)。前置全部成立才推进:相位 ≥ V1b;评估名额空闲(R21-6.8 / G7);持 `personal/lock` 对账并重读撤销凭据(对账先于授予);重新核对当前授权与配置、taint、冷却 / 墓碑 / 黑名单、`content_sha256` 与 `cluster_signature` 未变、证据仍有效。任一不成立 → 留在 `shadow`、不推进、原因写审计。
+- 名额被占 → 留 `shadow`(`g7_queued`);排队计时按 V1i-9(W0-10)自 `canary_ready_since` 起累计,满 30 个 UTC 日 → `expired`(`limit_reached`)。多个排队候选按 `(canary_ready_since, 候选 id)` 升序取第一个;工作副本丢失后由权威记录与信号库重算。
+- 原段「因相位未到而等待不计时」随合期失去适用对象(已发布版本不存在相位 1),删除。
+
+**回退路径**:进入 `canary` 后只经 R21-4.4 的 `rolling_back` 离开——变差检验(R21-7.4 / 7.4a)、C4 越限、`rsi veto`、taint、`rsi auto clear`、`judge_reject`、到期(R21-7.6)——补偿按四段回滚(R21-9.1–9.6)。
+
+**规划与验收**:§21.20 的 V1a、V1b 两行验收须在首个发布版本之前全部满足;规划稿 W10 拆为 W10a(0→1,验 V1a 行)与 W10b(1→2,验 V1b 行、E2E、真实环境探针准入),两者之间不发版;上面的发版闸在 W10a 合并前就位。
 
 #### W0 订正的合法 / 错误示例
 
