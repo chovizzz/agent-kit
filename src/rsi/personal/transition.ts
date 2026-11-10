@@ -148,23 +148,24 @@ function onTerminal(
   if (!capabilityAvailable('transition_to_rejected', ctx.phase)) {
     return refuse('phase_not_available', undefined, 'transition_to_rejected');
   }
-  const effects: TransitionEffect[] = [
-    {
-      type: 'append_audit',
-      line: {
-        at: ctx.now,
-        kind: 'transition',
-        id: record.id,
-        dim: 'lifecycle',
-        from: record.lifecycle,
-        to: record.lifecycle,
-        reason: terminationReason(event),
-      },
-    },
-  ];
-  if (event.kind === 'veto') {
-    effects.push({ type: 'blacklist_veto', id: record.id, content_sha256: record.content_sha256 });
-  }
+  // R21-4.4a ②:`veto` 只写黑名单(R21-11.3);其余终止事件是空操作,只写审计
+  const effects: TransitionEffect[] =
+    event.kind === 'veto'
+      ? [{ type: 'blacklist_veto', id: record.id, content_sha256: record.content_sha256 }]
+      : [
+          {
+            type: 'append_audit',
+            line: {
+              at: ctx.now,
+              kind: 'transition',
+              id: record.id,
+              dim: 'lifecycle',
+              from: record.lifecycle,
+              to: record.lifecycle,
+              reason: terminationReason(event),
+            },
+          },
+        ];
   return { outcome: 'noop', noop_reason: 'terminal_state', next: record, entries: [], effects };
 }
 

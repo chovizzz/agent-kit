@@ -58,6 +58,10 @@ export const TransitionCtxSchema = z.strictObject({
   revocation_listed: z.boolean(),
   /** 同一临界区内重读的权威 `lifecycle/<id>.json` 的状态(M13-2:权威已终态而手里的副本还是 shadow → 不推进) */
   authoritative_lifecycle: z.enum(RSI_LIFECYCLE_STATES),
+  /** R21-2.2「开启自动循环的有效条件」成立(`confirmed` ∧ `enabled` ∧ L-auto 通过 ∧ 相位 ≥ V1a);不成立时「增加影响」的转移被禁止 */
+  auto_loop_effective: z.boolean(),
+  /** `auto_paused`(R21-10);暂停时「增加影响」的转移同样被禁止(减少影响的转移照常执行) */
+  auto_paused: z.boolean(),
 });
 export type TransitionCtx = z.infer<typeof TransitionCtxSchema>;
 
@@ -271,6 +275,16 @@ export function authorityBlocker(record: PersonalLifecycleRecord, ctx: Transitio
   return null;
 }
 
+/**
+ * R21-2.2 事件分类:「增加影响」的转移(`shadow → canary`、任一 agent 的 `→ injected`)在自动循环无效或 `auto_paused` 时被禁止。
+ * 减少影响的转移(veto、taint、回滚、到期、撤销)与采集 / 闸 / shadow 计数(含 `proposed → shadow`)照常执行,**不调用**本函数。
+ */
+export function influenceBlocker(ctx: TransitionCtx): Guard {
+  if (!ctx.auto_loop_effective) return 'auto_loop_not_effective';
+  if (ctx.auto_paused) return 'auto_paused';
+  return null;
+}
+
 /** `shadow → canary` 的资格(W0-13 第 ② 步;不含名额)。第一个不成立的项的守卫码,全部成立返回 `null` */
 export function promoteEligibilityBlocker(
   record: PersonalLifecycleRecord,
@@ -280,6 +294,8 @@ export function promoteEligibilityBlocker(
   if (!capabilityAvailable('transition_shadow_to_canary', ctx.phase)) return 'phase_not_available';
   const auth = authorityBlocker(record, ctx);
   if (auth !== null) return auth;
+  const influence = influenceBlocker(ctx);
+  if (influence !== null) return influence;
   if (record.category === 'exec') return 'category_exec_unsupported';
   if (record.cluster_signature === undefined) return 'no_cluster_signature';
   if (!f.config_valid) return 'config_invalid';
@@ -699,11 +715,17 @@ ROW_LIST.push(
     lifecycle: 'canary',
     from: 'none',
     to: 'injected',
-    caps: () => ['deploy_none_to_injected'],
+    // category=exec 的部署语义是 E1(R21-4.3a,V6a):本期没有能力键 → 默认拒绝(与 shadow → canary 同口径,不能经部署事件绕过)
+    caps: (_e, r) =>
+      r.category === 'exec'
+        ? ['deploy_none_to_injected', 'exec_admission']
+        : ['deploy_none_to_injected'],
     reason: () => 'deploy_injected',
     guard: (r, e, ctx) => {
       const auth = authorityBlocker(r, ctx);
       if (auth !== null) return auth;
+      const influence = influenceBlocker(ctx);
+      if (influence !== null) return influence;
       // R21-4.2:codex 恒不进入;只有 claude / pi 且通过 R21-6.5 准入
       if (e.agent === 'codex') return 'codex_not_participating';
       if (!e.admitted) return 'not_admitted';

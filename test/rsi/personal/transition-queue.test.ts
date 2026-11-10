@@ -74,6 +74,8 @@ describe('M13-1 前置任一不成立不推进(逐项各一例;queued_since 同�
     ['会话不足 20', { facts: { sessions: 19 } }, 'shadow_sessions_short'],
     ['命中不足 2', { facts: { hits: 1 } }, 'shadow_hits_short'],
     ['撤销凭据列出', { ctx: { revocation_listed: true } }, 'revoked'],
+    ['暂停中(auto_paused)', { ctx: { auto_paused: true } }, 'auto_paused'],
+    ['自动循环有效条件不成立', { ctx: { auto_loop_effective: false } }, 'auto_loop_not_effective'],
     [
       '旧版记录无 cluster_signature(不参与 shadow)',
       { record: rec('shadow', { cluster_signature: undefined }) },

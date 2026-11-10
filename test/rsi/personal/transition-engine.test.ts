@@ -119,9 +119,10 @@ describe('R21-4.5 每个非终态各一个 veto 与 taint 用例', () => {
         expect(res.noop_reason).toBe('terminal_state');
         expect(res.next).toEqual(r);
         expect(res.entries).toEqual([]);
-        expect(res.effects.some((e) => e.type === 'blacklist_veto')).toBe(kind === 'veto');
-        expect(res.effects.some((e) => e.type === 'append_audit')).toBe(true);
-        expect(res.effects.some((e) => e.type === 'commit_lifecycle')).toBe(false);
+        // R21-4.4a ②:veto 的 effects 恰为 [黑名单];其余终止事件恰为 [审计](精确集合,不是「包含」)
+        expect(res.effects.map((e) => e.type)).toEqual(
+          kind === 'veto' ? ['blacklist_veto'] : ['append_audit'],
+        );
       });
     }
   }
@@ -374,7 +375,7 @@ describe('R21-4.4a ② 终态:终止事件只写审计 / 黑名单,非终止事�
         expect(res.outcome, `${lc}/${ev.kind}`).toBe('noop');
         expect(res.next).toEqual(r);
         expect(res.entries).toEqual([]);
-        expect(res.effects.every((e) => e.type === 'append_audit')).toBe(true);
+        expect(res.effects.map((e) => e.type)).toEqual(['append_audit']);
       }
     }
     expect(step(injected(), E.clear()).outcome).toBe('transitioned');
@@ -395,7 +396,7 @@ describe('R21-4.4a ② 终态:终止事件只写审计 / 黑名单,非终止事�
     const res = step(r, E.veto('late'));
     expect(res.next).toEqual(r);
     expect(res.entries).toEqual([]);
-    expect(res.effects).toContainEqual({ type: 'blacklist_veto', id: ID, content_sha256: SHA });
+    expect(res.effects).toEqual([{ type: 'blacklist_veto', id: ID, content_sha256: SHA }]);
   });
 });
 
@@ -421,6 +422,63 @@ describe('R21-4.4a ② / R21-9.1 补充', () => {
     }
     const okRes = step(r, E.advance('injection_disabled', 'next'));
     expect(okRes.next.rollback?.phase).toBe('injection_disabled');
+  });
+});
+
+describe('R21-2.2 事件分类:增加影响被禁止,减少影响照常', () => {
+  const paused = { auto_paused: true } as const;
+  const ineffective = { auto_loop_effective: false } as const;
+
+  it('R21-2.2 暂停 / 自动循环无效下:shadow → canary 与 → injected 被拒(带守卫码);对照:正常环境放行', () => {
+    const sh = rec('shadow');
+    const cn = rec('canary');
+    const cases: Array<[string, Partial<TransitionCtx>, string]> = [
+      ['paused', paused, 'auto_paused'],
+      ['ineffective', ineffective, 'auto_loop_not_effective'],
+    ];
+    for (const [label, o, code] of cases) {
+      const a = transition(sh, E.promote(), ctxFor(sh, o));
+      expect(isRefusal(a) && [a.refused, a.guard], `promote/${label}`).toEqual([
+        'guard_false',
+        code,
+      ]);
+      const b = transition(cn, E.inject('claude'), ctxFor(cn, o));
+      expect(isRefusal(b) && [b.refused, b.guard], `inject/${label}`).toEqual([
+        'guard_false',
+        code,
+      ]);
+    }
+    expect(isRefusal(transition(sh, E.promote(), ctxFor(sh)))).toBe(false);
+    expect(isRefusal(transition(cn, E.inject('claude'), ctxFor(cn)))).toBe(false);
+  });
+
+  it('R21-2.2 同样的环境下,减少影响的转移与采集 / 闸 / shadow 计数 / 到期照常执行(proposed → shadow 不受暂停影响)', () => {
+    for (const o of [paused, ineffective, { ...paused, auto_loop_effective: false }]) {
+      const ok1 = (r: PersonalLifecycleRecord, e: TransitionEvent): string => step(r, e, o).outcome;
+      expect(ok1(rec('proposed'), E.gatesPassed('pz'))).toBe('transitioned');
+      expect(ok1(rec('proposed'), E.gateRed())).toBe('transitioned');
+      expect(ok1(rec('shadow'), E.noHit())).toBe('transitioned');
+      expect(ok1(rec('shadow'), E.queueExpired())).toBe('transitioned');
+      for (const e of [E.veto(), E.taint(), E.clear(), E.judge(), E.harm(), E.limit()]) {
+        expect(ok1(injected(), e), e.kind).toBe('transitioned');
+      }
+      const done = rec('rolling_back', {
+        rollback: { phase: 'rollback_complete', reason: 'vetoed', target_terminal: 'rolled_back' },
+        deploy: { claude: 'removal_pending', pi: 'none', codex: 'none' },
+      });
+      expect(ok1(done, E.removal('claude'))).toBe('transitioned');
+      expect(ok1(rec('rolling_back'), E.advance('injection_disabled'))).toBe('transitioned');
+    }
+  });
+
+  it('R21-4.2 category=exec 的 canary 经 deploy_inject 也不放行(E1 部署语义属 V6a,默认拒绝);撤销路径(veto)仍可走', () => {
+    const ex = rec('canary', { category: 'exec' });
+    const res = transition(ex, E.inject('claude'), ctxFor(ex));
+    expect(isRefusal(res) && res.refused).toBe('phase_not_available');
+    expect(step(ex, E.veto('ex-v')).next.lifecycle).toBe('rolling_back');
+    expect(isRefusal(transition(rec('canary'), E.inject('claude'), ctxFor(rec('canary'))))).toBe(
+      false,
+    );
   });
 });
 

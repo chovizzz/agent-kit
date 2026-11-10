@@ -286,6 +286,62 @@ export const V1_W1_MUTATIONS: readonly V1W1Mutation[] = [
     expectRed: ['shadow_to_expired_queue', 'M13-6 引擎守卫'],
     mustKill: ['shadow_to_expired_queue', 'M13-6 引擎守卫'],
   },
+  dropCheck(
+    'R21-2.2-auto-paused',
+    'R21-2.2:auto_paused 时「增加影响」的转移被禁止 —— 删去暂停检查',
+    "if (ctx.auto_paused) return 'auto_paused';",
+    [QUEUE, ROWS, ENG],
+    [
+      '暂停中(auto_paused)',
+      'shadow_to_canary',
+      'deploy_none_to_injected',
+      'R21-2.2 暂停 / 自动循环无效下',
+    ],
+    ['R21-2.2 暂停 / 自动循环无效下'],
+  ),
+  dropCheck(
+    'R21-2.2-auto-loop-not-effective',
+    'R21-2.2:自动循环有效条件不成立时「增加影响」的转移被禁止 —— 删去该检查',
+    "if (!ctx.auto_loop_effective) return 'auto_loop_not_effective';",
+    [QUEUE, ROWS, ENG],
+    [
+      '自动循环有效条件不成立',
+      'shadow_to_canary',
+      'deploy_none_to_injected',
+      'R21-2.2 暂停 / 自动循环无效下',
+    ],
+    ['R21-2.2 暂停 / 自动循环无效下'],
+  ),
+  {
+    id: 'exec-deploy-capability-key-removed',
+    clause: 'R21-4.2 / W0-1:category=exec 经 deploy_inject 也走默认拒绝;去掉 exec_admission → 红',
+    edits: [
+      {
+        file: TABLE,
+        anchor: "'deploy_none_to_injected', 'exec_admission'",
+        replacement: "'deploy_none_to_injected'",
+      },
+    ],
+    tests: [ROWS, ENG],
+    expectRed: ['deploy_none_to_injected', 'R21-4.2 category=exec 的 canary 经 deploy_inject'],
+    mustKill: ['R21-4.2 category=exec 的 canary 经 deploy_inject'],
+  },
+  {
+    id: 'terminal-veto-extra-effects',
+    clause: 'R21-4.4a ②:终态 veto 只写黑名单(effects 恰为 [黑名单]);多出别的 effect → 红',
+    edits: [
+      {
+        file: ENGINE,
+        anchor:
+          "? [{ type: 'blacklist_veto', id: record.id, content_sha256: record.content_sha256 }]",
+        replacement:
+          "? [{ type: 'blacklist_veto', id: record.id, content_sha256: record.content_sha256 }, { type: 'commit_lifecycle', id: record.id }]",
+      },
+    ],
+    tests: [ENG],
+    expectRed: ['终态收到', '终态 veto 的三件事'],
+    mustKill: ['终态 veto 的三件事'],
+  },
   // ---------------------------------------------------------------- M13-1 前置逐项(「逐个删去该项检查」)
   dropCheck(
     'M13-1-phase',

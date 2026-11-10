@@ -85,6 +85,8 @@ export function ctxFor(
     now: NOW,
     revocation_listed: false,
     authoritative_lifecycle: r.lifecycle,
+    auto_loop_effective: true,
+    auto_paused: false,
     ...o,
   };
 }

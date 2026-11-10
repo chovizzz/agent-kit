@@ -238,6 +238,12 @@ const CASES: Case[] = [
         ev: E.promote('p2', { slot_occupied: true }),
         guard: 'slot_occupied',
       },
+      { label: 'auto_paused(增加影响被禁止)', ctx: { auto_paused: true }, guard: 'auto_paused' },
+      {
+        label: '自动循环无效',
+        ctx: { auto_loop_effective: false },
+        guard: 'auto_loop_not_effective',
+      },
       { label: '配置无效', ev: E.promote('p3', { config_valid: false }), guard: 'config_invalid' },
       phase1,
     ],
@@ -387,6 +393,17 @@ const CASES: Case[] = [
       { label: 'codex 恒不进入', ev: E.inject('codex', 'i2'), guard: 'codex_not_participating' },
       { label: '未通过准入', ev: E.inject('claude', 'i3', false), guard: 'not_admitted' },
       { label: '撤销凭据列出(对账先于授予)', ctx: { revocation_listed: true }, guard: 'revoked' },
+      { label: 'auto_paused(增加影响被禁止)', ctx: { auto_paused: true }, guard: 'auto_paused' },
+      {
+        label: '自动循环无效',
+        ctx: { auto_loop_effective: false },
+        guard: 'auto_loop_not_effective',
+      },
+      {
+        label: 'category=exec 经部署事件也不放行',
+        rec: () => rec('canary', { category: 'exec' }),
+        refused: 'phase_not_available',
+      },
       phase1,
     ],
     check: (r) => {
