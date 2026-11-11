@@ -114,6 +114,16 @@ export function probeLinesOf(
   return out.sort((a, b) => a.atMs - b.atMs);
 }
 
+/** W0-18:同一票号或同一标记出现在多行(证据结构被破坏;与「探针是否凑齐 / 到期」无关,probing 与 admitted 都要查) */
+export function hasDuplicateProbeEvidence(
+  lines: readonly { marker: string; ticket: number }[],
+): boolean {
+  return (
+    new Set(lines.map((l) => l.ticket)).size !== lines.length ||
+    new Set(lines.map((l) => l.marker)).size !== lines.length
+  );
+}
+
 export function judgeProbe(
   agent: AdmAgent,
   entry: AdmEntry,
@@ -123,12 +133,7 @@ export function judgeProbe(
 ): ProbeVerdict {
   const lines = probeLinesOf(agent, entry, ledger);
   // W0-18:同一票号或同一标记出现在多行 → 本代 multi_marker(只收紧)
-  if (
-    new Set(lines.map((l) => l.ticket)).size !== lines.length ||
-    new Set(lines.map((l) => l.marker)).size !== lines.length
-  ) {
-    return { kind: 'failed', reason: 'multi_marker' };
-  }
+  if (hasDuplicateProbeEvidence(lines)) return { kind: 'failed', reason: 'multi_marker' };
   const views = lines.map((l) => ({ ...l, sightings: markers(l.marker) }));
   if (views.some((v) => v.sightings.some((s) => s.distinct_markers >= 2))) {
     return { kind: 'failed', reason: 'multi_marker' };
@@ -239,7 +244,11 @@ export function planAdmission(i: AdmissionPlanInput): AdmissionPlan {
       continue;
     }
     if (e.state === 'admitted') {
-      if (i.postAdmissionMultiMarker[agent]) {
+      // 已准入之后才出现本代重复探针行:同样撤销(W0-18);不重跑 judgeProbe,否则探针窗口到期会误撤已完成的准入
+      if (
+        i.postAdmissionMultiMarker[agent] ||
+        hasDuplicateProbeEvidence(probeLinesOf(agent, e, i.ledger))
+      ) {
         set(
           agent,
           { ...e, state: 'failed', decided_at: iso(nowMs), reason: 'multi_marker' },

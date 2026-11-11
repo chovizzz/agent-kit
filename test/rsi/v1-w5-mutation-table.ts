@@ -586,6 +586,20 @@ export const V1_W5_MUTATIONS: readonly V1W5Mutation[] = [
     mustKill: ['同一标记落在两个票号的行上'],
   },
   {
+    id: 'admission-admitted-duplicate-evidence-ignored',
+    clause: 'W0-18:已准入后本代出现重复探针票号 / 标记 → failed(multi_marker)',
+    edits: [
+      {
+        file: PLAN,
+        anchor: 'hasDuplicateProbeEvidence(probeLinesOf(agent, e, i.ledger))',
+        replacement: 'false',
+      },
+    ],
+    tests: [T_ADM],
+    expectRed: ['已 admitted 之后本代出现重复探针票号'],
+    mustKill: ['已 admitted 之后本代出现重复探针票号'],
+  },
+  {
     id: 'admission-retry-never',
     clause: 'W0-18:failed 满 RSI_PROBE_RETRY_DAYS 个 UTC 日自动重新 armed 下一代',
     edits: [drop(PLAN, "else if (retryDue(e, nowMs)) arm('retry');")],

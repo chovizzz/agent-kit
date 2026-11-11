@@ -295,6 +295,17 @@ describe('admitted / failed 之后', () => {
     });
     expect(p.next.agents.claude).toMatchObject({ state: 'failed', reason: 'multi_marker' });
   });
+  it('已 admitted 之后本代出现重复探针票号 → failed(multi_marker);探针窗口到期本身不撤销', () => {
+    const cur = withEntry(admitted({ probe_expires_at: '2026-11-10T06:00:00Z' }));
+    const dup = probeLine('rsm_00000000000000d1', '2026-11-10T04:00:00Z', 'claude', 1, 2);
+    expect(plan({ current: cur, ledger: LINES }).changed).toBe(false);
+    const p = plan({ current: cur, ledger: [...LINES, dup] });
+    expect(p.next.agents.claude).toMatchObject({
+      state: 'failed',
+      reason: 'multi_marker',
+      decided_at: '2026-11-10T12:00:00.000Z',
+    });
+  });
   it('admitted 且版本未变 → 不动', () => {
     expect(plan({ current: withEntry(admitted()) }).changed).toBe(false);
   });
