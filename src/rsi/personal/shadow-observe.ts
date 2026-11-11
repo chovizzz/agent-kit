@@ -67,6 +67,9 @@ export function makeShadowObserver(d: ShadowObserverDeps): ShadowObserver {
       }
       const wanted = new Set(sessions.map((s) => s.session_ref));
       const loaded = await loadSignals(d.io, d.redactor, { since: sinceIso.slice(0, 10) });
+      // `loadSignals` 对「JSON 合法但不合 schema」的信号行只计数、不抛错:这里必须当作信号库损坏(事实不可得),否则会话照计而命中证据静默消失
+      if (loaded.stats.dropped_schema > 0)
+        throw new Error('signal store has rows violating schema');
       return {
         sessions,
         signals: loaded.signals.filter((s) => wanted.has(s.session_ref)),

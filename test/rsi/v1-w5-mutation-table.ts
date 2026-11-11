@@ -683,6 +683,20 @@ export const V1_W5_MUTATIONS: readonly V1W5Mutation[] = [
     mustKill: ['「有观测会话」资格'],
   },
   {
+    id: 'shadow-observe-schema-drop-ignored',
+    clause: 'R21-1.5:信号库行不合 schema 属事实不可得,不得静默丢弃后照常计数',
+    edits: [
+      {
+        file: SOBS,
+        anchor: 'if (loaded.stats.dropped_schema > 0)',
+        replacement: 'if (false)',
+      },
+    ],
+    tests: [T_SHADOW],
+    expectRed: ['JSON 合法但不合 schema'],
+    mustKill: ['JSON 合法但不合 schema'],
+  },
+  {
     id: 'step-rebuild-counts-not-recomputed',
     clause: 'R21-3.8 / W3 遗留:重建工作副本后 sessions / hits 由计数重算',
     edits: [

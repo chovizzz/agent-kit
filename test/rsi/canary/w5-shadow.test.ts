@@ -404,6 +404,22 @@ describe('真实来源适配器(会话计数库 + 信号库)', () => {
     });
     await expect(obs.observe(SINCE)).rejects.toThrow('ledger invalid');
   });
+  it('信号库里有「JSON 合法但不合 schema」的行 → 抛错(事实不可得),不静默丢弃后照常计数', async () => {
+    const w = await setup('w5-observe-sigbad-', [stat(2, '2026-11-03T10:00:00Z')], retry(2));
+    await safe.writeFile(
+      w.io,
+      path.join(w.io.stateDir, 'signals', 'claude', '202611.jsonl'),
+      '{"sig_id":"bad"}\n',
+      { mode: 0o600 },
+    );
+    const obs = makeShadowObserver({
+      io: w.io,
+      classify: async () => 'P',
+      redactor: { pass2: () => ({ clean: true, hits: [] }) },
+      ledgerMarkers: async () => new Set(),
+    });
+    await expect(obs.observe(SINCE)).rejects.toThrow('violating schema');
+  });
   it('会话计数行不合 schema → 抛错(月文件按损坏处理,不跳过坏行)', async () => {
     const w = await setup('w5-observe-bad-', ['{"session_ref":"x"}'], []);
     const obs = makeShadowObserver({
