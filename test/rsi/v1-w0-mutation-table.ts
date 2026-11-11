@@ -272,6 +272,20 @@ export const V1_W0_MUTATIONS: readonly V1W0Mutation[] = [
     mustKill: ['stop 行:revocation_reconciled'],
   },
   {
+    id: 'revocation-reason-by-unchecked',
+    clause: 'W0-17:撤销凭据 reason 按写入方 by 约束 —— 变异:放行任意原因',
+    edits: [
+      {
+        file: PERSONAL,
+        anchor: '.refine((l) => RSI_REVOCATION_REASONS_BY[l.by].includes(l.reason), {',
+        replacement: '.refine(() => true, {',
+      },
+    ],
+    tests: [W0],
+    expectRed: ['写入方与原因不符', '正常转移码、G 码、identity_changed'],
+    mustKill: ['写入方与原因不符', '正常转移码、G 码、identity_changed'],
+  },
+  {
     id: 'matrix-codex-canary-allowed',
     clause: 'R21-4.3:canary / adopted 下 codex 恒 none —— 变异:放行',
     edits: [
@@ -530,6 +544,16 @@ export const V1_W0_RESULTS: readonly V1W0Result[] = [
     failed: 1,
     skipped: 0,
     killedBy: ['stop 行:revocation_reconciled'],
+    restored: true,
+  },
+  {
+    id: 'revocation-reason-by-unchecked',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'W0-17 撤销凭据:reason 按写入方 by 约束 写入方与原因不符 → 拒绝',
+      'W0-17 撤销凭据:reason 按写入方 by 约束 正常转移码、G 码、identity_changed 对任何写入方都拒绝',
+    ],
     restored: true,
   },
   {

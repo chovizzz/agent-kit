@@ -268,7 +268,8 @@ export const REV = (id: string, reason = 'cleared', sha = SHA): RsiRevocationLin
   content_sha256: sha,
   identity12: null,
   reason: reason as RsiRevocationLine['reason'],
-  by: 'clear',
+  // W0-17:写入方须与原因相符(clear→cleared、veto→vetoed,其余为 worker)
+  by: reason === 'cleared' ? 'clear' : reason === 'vetoed' ? 'veto' : 'worker',
 });
 
 export interface World3 {

@@ -1386,6 +1386,26 @@ export const RSI_REVOCATION_BY = Object.freeze([
   'veto',
   'exec_event',
 ] as const);
+/**
+ * W0-17:撤销凭据 `reason` 按写入方 `by` 约束(只取终止 / 异常原因码;正常转移码、G 码一律拒绝;
+ * `identity_changed` 不写凭据,R21-9.1)。`rollback_to` 的专属原因码契约未定(归 W7),暂允许全部回滚原因。
+ */
+const RSI_ROLLBACK_REVOCATION_REASONS = RSI_TRANSITION_REASONS_TERMINATING.filter(
+  (r) => r !== 'identity_changed',
+);
+export const RSI_REVOCATION_REASONS_BY: Readonly<
+  Record<(typeof RSI_REVOCATION_BY)[number], readonly string[]>
+> = Object.freeze({
+  clear: Object.freeze(['cleared']),
+  veto: Object.freeze(['vetoed']),
+  exec_event: Object.freeze(['exec_post_check_failed', 'exec_timeout_unclean']),
+  worker: Object.freeze(
+    RSI_ROLLBACK_REVOCATION_REASONS.filter(
+      (r) => !['cleared', 'vetoed', 'exec_post_check_failed', 'exec_timeout_unclean'].includes(r),
+    ),
+  ),
+  rollback_to: Object.freeze([...RSI_ROLLBACK_REVOCATION_REASONS]),
+});
 
 // --- 分组账 / 准入(R21-6.4 / W0-3) ---
 export const RSI_LEDGER_ARMS = Object.freeze(['treat', 'control', 'excluded'] as const);

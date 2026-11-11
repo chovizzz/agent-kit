@@ -26,6 +26,7 @@ import {
   RSI_LEDGER_EXCLUDED_REASONS,
   RSI_LIFECYCLE_STATES,
   RSI_REVOCATION_BY,
+  RSI_REVOCATION_REASONS_BY,
   RSI_ROLLBACK_PHASES,
   RSI_SIGNATURE_MAX_TOKENS,
   RSI_TARGET_TERMINALS,
@@ -286,14 +287,20 @@ export const PersonalTxnSchema = z.strictObject({
 export type PersonalTxn = z.infer<typeof PersonalTxnSchema>;
 
 /** `rsi-personal/revocations.jsonl` 的一行(R21-9.5) */
-export const RsiRevocationLineSchema = z.strictObject({
-  at: IsoTimestampSchema,
-  candidate_id: RsiCandidateIdSchema,
-  content_sha256: Sha256Schema,
-  identity12: Hex(12).nullable(),
-  reason: RsiTransitionReasonSchema,
-  by: z.enum(RSI_REVOCATION_BY),
-});
+export const RsiRevocationLineSchema = z
+  .strictObject({
+    at: IsoTimestampSchema,
+    candidate_id: RsiCandidateIdSchema,
+    content_sha256: Sha256Schema,
+    identity12: Hex(12).nullable(),
+    reason: RsiTransitionReasonSchema,
+    by: z.enum(RSI_REVOCATION_BY),
+  })
+  // W0-17:reason 必须是该写入方允许的终止原因(正常转移码、G 码、identity_changed 一律拒绝)
+  .refine((l) => RSI_REVOCATION_REASONS_BY[l.by].includes(l.reason), {
+    message: 'revocation_reason_not_allowed_for_by',
+    path: ['reason'],
+  });
 export type RsiRevocationLine = z.infer<typeof RsiRevocationLineSchema>;
 
 // --- R21-6.4 分组账 ---
