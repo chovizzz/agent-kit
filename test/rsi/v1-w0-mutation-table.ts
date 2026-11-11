@@ -547,6 +547,16 @@ export const V1_W0_RESULTS: readonly V1W0Result[] = [
     restored: true,
   },
   {
+    id: 'revocation-reason-by-unchecked',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'W0-17 撤销凭据:reason 按写入方 by 约束 写入方与原因不符 → 拒绝',
+      'W0-17 撤销凭据:reason 按写入方 by 约束 正常转移码、G 码、identity_changed 对任何写入方都拒绝',
+    ],
+    restored: true,
+  },
+  {
     id: 'matrix-codex-canary-allowed',
     failed: 1,
     skipped: 0,
