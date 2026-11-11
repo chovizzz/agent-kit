@@ -150,12 +150,25 @@ describe('第 4 行:已知候选的排除原因(固定顺序)', () => {
   it('AUTO_PAUSE 在场 → paused', async () => {
     expect(await reasonOf({ ...GOOD, pause: 'present' })).toBe('4:paused');
   });
-  it('准入文件不存在 / 该 agent 无条目 / 非 admitted / 版本不一致 → not_admitted', async () => {
+  it('准入文件不存在 / 该 agent 无条目 / failed / 版本不一致 → not_admitted', async () => {
     expect(await reasonOf({ ...GOOD, admission: { kind: 'absent' } })).toBe('4:not_admitted');
     expect(await reasonOf({ ...GOOD, admission: ok({ schema_version: 1, agents: {} }) })).toBe(
       '4:not_admitted',
     );
-    expect(await reasonOf({ ...GOOD, admission: ok(adm(probing())) })).toBe('4:not_admitted');
+    expect(
+      await reasonOf({
+        ...GOOD,
+        admission: ok(
+          adm(
+            probing({
+              state: 'failed',
+              decided_at: '2026-11-10T00:00:00Z',
+              reason: 'probe_expired',
+            }),
+          ),
+        ),
+      }),
+    ).toBe('4:not_admitted');
     expect(await reasonOf(GOOD, { shapeVersion: 'claude-9' })).toBe('4:not_admitted');
     expect(await reasonOf(GOOD, { agentVersion: '9.9.9' })).toBe('4:not_admitted');
     expect(await reasonOf(GOOD, { agentVersion: null })).toBe('4:not_admitted');

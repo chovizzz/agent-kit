@@ -200,14 +200,16 @@ describe('判定 probing:admitted / failed / pending', () => {
   it('旧代的探针行(at 早于本代 armed_at)不计入:新 arm 之后没有新行 → 不 admitted', () => {
     const p = run({
       current: withEntry(probing({ armed_at: '2026-11-10T10:00:00Z', generation: 2 })),
-      ledger: LINES.map((l, i) => probeLine(M[i] as string, `2026-11-09T0${i + 1}:00:00Z`)),
+      ledger: LINES.map((_l, i) => probeLine(M[i] as string, `2026-11-09T0${i + 1}:00:00Z`)),
     });
     expect(p.changed).toBe(false);
   });
   it('其它 agent 的探针行不计入 claude', () => {
     expect(
       run({
-        ledger: LINES.map((l, i) => probeLine(M[i] as string, `2026-11-10T0${i + 1}:00:00Z`, 'pi')),
+        ledger: LINES.map((_l, i) =>
+          probeLine(M[i] as string, `2026-11-10T0${i + 1}:00:00Z`, 'pi'),
+        ),
       }).changed,
     ).toBe(false);
   });
@@ -326,13 +328,14 @@ describe('标记取回视图(R21-6.6)', () => {
     expect(v(M[0])).toHaveLength(1);
     expect(v(M[1])).toEqual([]);
   });
-  const assign = (marker: string, at: string, arm: 'treat' | 'control'): RsiCanaryLedgerLine => ({
-    ...probeLine(marker, at),
-    arm,
-    reason: null,
-    candidate_id: CID,
-    p: 0.5,
-  });
+  const assign = (marker: string, at: string, arm: 'treat' | 'control'): RsiCanaryLedgerLine =>
+    ({
+      ...probeLine(marker, at),
+      arm,
+      reason: null,
+      candidate_id: CID,
+      p: 0.5,
+    }) as RsiCanaryLedgerLine;
   it('准入之后:取回 ≥ 2 个标记且其中有准入之后发出的 treat / control 标记 → true;只涉及探针标记或准入之前的标记 → false', () => {
     const ledger = [
       assign(M[0], '2026-11-10T06:00:00Z', 'treat'),
