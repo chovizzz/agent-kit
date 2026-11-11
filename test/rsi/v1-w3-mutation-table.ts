@@ -241,6 +241,21 @@ export const V1_W3_MUTATIONS: readonly V1W3Mutation[] = [
     mustKill: ['闸事实读取时丢锁'],
   },
   {
+    id: 'm13-5-nonhead-keeps-old-queue',
+    clause: 'M13-5 / W0-13:名额空闲时非队首的旧 queued_since 清零(不累计)',
+    edits: [
+      {
+        file: STEP,
+        anchor: 'patchShadow({ canary_ready_since: x.ready, queued_since: null })(x.wc);',
+        replacement:
+          'patchShadow({ canary_ready_since: x.ready, queued_since: x.wc.shadow.queued_since })(x.wc);',
+      },
+    ],
+    tests: [T_STEP],
+    expectRed: ['名额已释放、队首复核失败'],
+    mustKill: ['名额已释放、队首复核失败'],
+  },
+  {
     id: 'm13-6-expiry-skipped',
     clause: 'M13-6:判定顺序对调(排队到期不被处理,名额空闲就推进)',
     edits: [

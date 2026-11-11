@@ -720,4 +720,18 @@ describe('验收评审追加', () => {
     expect(w.working.get(A)?.shadow.canary_ready_since).toBeNull();
     expect(w.audits.some((a) => a.reason === 'ready_since_rebuilt')).toBe(false);
   });
+  it('M13-5 名额已释放、队首复核失败:非队首的旧 queued_since 立即清零,不沿用旧日期', async () => {
+    const w = world3({ phase: V1B });
+    addShadow(w, A, { shadow: { queued_since: '2026-10-20' } });
+    addShadow(w, B, { shadow: { queued_since: '2026-10-20' } });
+    const seen = new Map<string, number>();
+    w.promoteFacts.fn = async (r) => {
+      const n = (seen.get(r.id) ?? 0) + 1;
+      seen.set(r.id, n);
+      return r.id === A && n >= 2 ? null : promoteBaseFor(r);
+    };
+    await runPersonalStep(w.d);
+    expect(w.working.get(B)?.shadow.queued_since).toBeNull();
+    expect(w.working.get(A)?.shadow.queued_since).toBeNull();
+  });
 });

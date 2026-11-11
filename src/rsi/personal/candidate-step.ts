@@ -511,14 +511,12 @@ export async function runPersonalStep(d: StepDeps): Promise<StepResult> {
   const head2 = pickPromotionHead(
     decisions.map((x) => ({ id: x.rec.id, canary_ready_since: x.ready })),
   );
-  // 非队首:此时只记 canary_ready_since(只排序);G7 排队日期要等队首实际提交成功、并按重读的权威记录确认名额被占后再设
+  // 非队首:名额此刻空闲(它们被判为 promote),所以旧 queued_since 立即清零、只记 canary_ready_since(只排序);
+  // G7 排队日期要等队首实际提交成功、并按重读的权威记录确认名额被占后再从当日起算(不累计、不追溯)
   for (const x of decisions) {
     if (head2 !== null && x.rec.id === head2.id) continue;
-    if (x.ready === x.wc.shadow.canary_ready_since) continue;
-    const next = patchShadow({
-      canary_ready_since: x.ready,
-      queued_since: x.wc.shadow.queued_since,
-    })(x.wc);
+    if (x.ready === x.wc.shadow.canary_ready_since && x.wc.shadow.queued_since === null) continue;
+    const next = patchShadow({ canary_ready_since: x.ready, queued_since: null })(x.wc);
     if (next !== undefined) {
       await d.working.put(next);
       working.set(x.rec.id, next);
