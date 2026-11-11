@@ -5630,11 +5630,17 @@ agent-kit judge --confirm-reflector --run <run_id> [--proposal <id>]… --write 
 - R21-3.2 `[V1]` **HOME 侧个人层状态** `<真实 HOME>/.local/state/agent-kit/rsi-personal/`(0700,在 kit 条目 `.local/state/agent-kit/` 之内,经 home-fs 新授权写,§21.18 第 10 条):`lock`(个人层锁 `personal/lock`,协议同 R20-5.5)、`head.json`(kit 最近一次提交的 `head` 与 `owner_repo_fp` = `sha256(realpath([rsi] repo), dev, ino)` 前 16 位)、`commit-journal.json`(R21-3.6a)、`txn/<id>.json`(回滚与撤销 journal)、`revocations.jsonl`(撤销凭据,R21-9.5)、`last_local_sync.json`(本机 payload 的最近一次 safe 同步结果,**不写** `UpdateState`)。这些文件不依赖 `[rsi] repo`,`[rsi]` 关闭或换仓库后仍可找到。
 - R21-3.3 `[V1]` **锁序**(全局,不可反转):`rsi/lock`(仓库,R20-5.3)→ `personal/lock`(HOME)→ sync 锁(§19.5)。全部为试锁。worker 与 §21.12 的 `--write` 前台命令按此序获取;`rsi auto clear --write` 在 `[rsi]` 不可用时只拿后两把(R21-9.5)。update 的自动同步只拿 update 锁 → sync 锁,不拿前两把,无环。
 - R21-3.4 `[V1]` **结构校验**(每次操作前,先于 R21-3.5;任一不满足 → 熔断 `personal_repo_invalid`):`.git` 是真实目录(不是 gitdir 文件、不是符号链接、不是 worktree 链接);非裸仓库;无 `objects/info/alternates`;无 `config.worktree`;仓库本地 `.git/config` 只含白名单键(`core.repositoryformatversion`、`core.filemode`、`core.bare`、`core.logallrefupdates`、`core.ignorecase`、`core.precomposeunicode`),出现其它任何键(含 `include.*`、`filter.*`、`remote.*`、`core.hooksPath`、`core.sshCommand`)即不满足;`git remote` 为空;目录属主为当前 uid、权限恰为 0700;树满足 R21-3.1 的禁止项。
+
+> **冻结后订正 W0-15(2026-11-10)**:结构校验另拒绝 `.git/info/attributes`、`.git/info/grafts`、`.git/shallow`、`refs/replace/*`,封闭 git 设 `GIT_NO_REPLACE_OBJECTS=1`;git 读取失败按 `personal_repo_invalid` 处理。正文见 §21.24 W0-15。
+
 - R21-3.5 `[V1]` **HEAD 与工作树判定**(结构校验通过之后;机械判定,v3.1 §3.2)。**第 0 步(优先)**:`commit-journal.json` 存在 → 先按 R21-3.6a 的恢复优先级处理,处理完才做下面的判定(kit 自己未完成的提交不会被当成人工分叉)。①当前分支为 `rsi`、无 stash、工作树干净(`status --porcelain --ignored` 为空)、HEAD 是 `head.json` 记录提交的后代,且 `记录..HEAD` 只新增文件、不触碰任何 `origin=auto_rsi` 文件与 `lifecycle/**` → 接受,更新记录;②分支不是 `rsi`、有 stash、工作树不干净、HEAD 是记录的祖先、或 `记录..HEAD` 改 / 删了自动产出 → `personal_repo_diverged`:暂停**新增**生效(不熔断,R21-10.3);撤销照常,但**不触碰私有仓库的任何引用、索引与工作树**(R21-9.3a);`rsi auto status` 提示二选一(回到记录提交 / `rsi auto rebase-baseline`);③记录提交不存在或历史无共同祖先 → 熔断 `personal_repo_invalid`。④`owner_repo_fp` 与当前 `[rsi] repo` 不同 → `personal_owner_changed`:暂停新增生效,`rsi auto rebase-baseline --adopt-owner`(TTY)确认后改写记录;撤销照常。
 
 > **冻结后订正 W0-5(2026-11-09,用户 Q4)**:情形③「记录提交不存在」对**首次建仓**设窄例外:持 `personal/lock`、`lstat` 证明约定路径全部不存在时由 worker 在 `enabled=true ∧ confirmed` 的第一次个人层一步里自动建仓(`git init -b rsi`,journal `kind=bootstrap`),不判 `personal_repo_invalid`;否则仍按本条处理。bootstrap 状态机与恢复见 §21.24 W0-5。
 
 - R21-3.6 `[V1]` **私有仓库提交原语** `commitPersonal(ctx, lockHandles, treeSpec)`(新,`src/rsi/personal/commit.ts`):调用方必须持 `personal/lock`(正常路径另持 `rsi/lock`,缩减入口下不持);只在 R21-3.5 判为情形①时执行(否则返回 `deferred`,R21-9.3a)。按「候选集合 + 内容寻址快照」以底层命令重建目标树并提交:`hash-object -w --no-filters`、`mktree`、`commit-tree`、`update-ref refs/heads/rsi <新> <旧>`(带期望旧值,原子比较交换),再以 `read-tree -m -u <旧> <新>` 做两树合并同步工作树——**不用 `--reset`**,工作树里有与目标冲突的未提交改动时 git 拒绝覆盖,kit 按 `personal_repo_diverged` 处理;不依赖 `git revert`、不用 `add` / `commit` 的高层路径。git 子进程一律 `runSync('git', …)`,环境与 R21-17.8 的封闭执行配置相同(`GIT_CONFIG_NOSYSTEM=1`、`GIT_CONFIG_GLOBAL` 指向空文件、清除继承的 `GIT_*`、`-c core.hooksPath=<空目录>`、`-c core.fsmonitor=false`、`-c core.attributesFile=`、`-c protocol.allow=never` 且**不放行任何协议**、`-c commit.gpgsign=false`);作者与提交者固定为常量身份 `RSI_PERSONAL_AUTHOR`(不含邮箱字面量,不读用户全局配置)。因本地配置已被 R21-3.4 限为白名单、全局与系统配置被屏蔽,不存在可被调用的过滤器、钩子或外部程序。变异:去掉 `core.hooksPath` 覆盖、放行本地 `filter.*`、放行 `include.*`、改回 `read-tree --reset` → 对应夹具(全局钩子、本地过滤器、include 链、工作树里有用户未提交改动)的测试红。
+
+> **冻结后订正 W0-15(2026-11-10)**:提交的目标树改为「已接受 HEAD 底稿 + kit 管理命名空间内的 upsert / 显式 delete」,管理命名空间外的路径不得改动;`cas_failed` 会留下在途 journal。正文见 §21.24 W0-15。
+
 - R21-3.6a `[V1]` **提交 journal 与恢复优先级**:`personal/lock` 串行化所有提交,同一时刻至多一个在途提交,journal 为单文件 `rsi-personal/commit-journal.json`(`PersonalCommitJournal`,`strictObject`,0600):`{schema_version, txn_id, kind: transition|rollback|clear|purge_rewrite|reconcile|identity_change, candidate_ids, ref: "refs/heads/rsi", old_head, target_tree, new_commit, phase, at}`,`phase` ∈ `planned → objects_written → ref_updated → worktree_synced → recorded`,每一步先 `fsync` journal 再做下一步;`recorded` 之后更新 `head.json`,最后删除 journal。**恢复**(下一次任何持 `personal/lock` 者,先于 R21-3.5 的判定)先读五个观测值:①HEAD 是否为指向 `journal.ref` 的符号引用(不是 detached,不是别的分支);②`journal.ref` 的值;③索引树(`diff-index --cached` 与 `old_head` / `new_commit` 比较);④工作树(`diff` 与二者比较);⑤未跟踪与忽略文件(`status --porcelain --ignored` 的 `??` / `!!` 项)。**只允许三种组合继续**:a)①是、②=`old_head`、③④都等于 `old_head`、⑤无 → 提交未生效:丢弃 journal(新对象无引用、无害),由调用方从头重做;b)①是、②=`new_commit`、③④都等于 `old_head`、⑤无 → 引用已更新、工作树未同步:以 `read-tree -m -u <old> <new>` 补同步,再更新 `head.json`、删 journal;c)①是、②=`new_commit`、③④都等于 `new_commit`、⑤无 → 只差记录:更新 `head.json`、删 journal。**其余任何组合**(切到同一提交的其它分支、detached HEAD、只改了索引、工作树混合、出现未跟踪文件、引用为第三个值)→ 保留 journal,判 `personal_repo_diverged`,不改引用、索引与工作树。`head.json` 只在 journal 到达 `recorded` 后写,所以「已提交但 `head.json` 未更新」一定由 journal 识别,不会被 R21-3.5 ②误判。验收:在五个 `phase` 之间各注入一次崩溃,恢复后 HEAD、索引、工作树、`head.json` 一致且不出现 `personal_repo_diverged`;另在崩溃窗口里分别①改一个工作树文件、②切到指向同一提交的另一分支、③进入 detached HEAD、④只改索引、⑤加一个未跟踪文件,恢复后用户的改动都保留、状态为 `personal_repo_diverged`、journal 仍在。
 
 > **冻结后订正 W0-5(2026-11-09)**:`kind` 追加 `bootstrap`,其 `old_head` 为 null、`phase` 取四段(`planned → initialized → committed → recorded`),**不复用**本条的五 phase 恢复谓词;`PersonalCommitJournal` schema 见 `src/contracts/rsi-personal.ts`。
@@ -5723,6 +5729,9 @@ agent-kit judge --confirm-reflector --run <run_id> [--proposal <id>]… --write 
 - R21-4.4 `[V1]` **任何离开注入的路径都先停注入**:`lifecycle` 离开 `canary` / `adopted` / `stable` 一律经 `rolling_back` 或 `retiring`(R21-9.1 四段,第二段停注入);不存在直接改 `lifecycle` 字段到终态的路径。`proposed` / `shadow` / `blocked` 没有部署,直接进终态。
 - R21-4.4a `[V1]` **重复终止事件**:①处于 `rolling_back` / `retiring` 的候选再收到终止事件(`veto`、taint、`harm_*`、`clear`、E1 停用事件):追加一条 `dim=lifecycle`、`from` 与 `to` 都等于**实际当前状态**(`rolling_back` 或 `retiring`)的转移记录,**不重置**已完成的补偿阶段;`target_terminal` 只能按优先级升级、不能降级:`rolled_back` > `retired` > `expired` > `shadow`(例如 E1 身份变化中途被 `veto` → 目标升为 `rolled_back`;`retiring` 中途检出伤害 → 目标升为 `rolled_back`);`terminal_reason` 取优先级最高者:`vetoed` > `tainted` > `cleared` > `auto_rollback` > `static_sync_timeout` > `auto_expired` > `no_hit` > `rejected_gate`。②已在终态的候选:`veto` 只写黑名单(R21-11.3),其余终止事件是空操作(只写审计)。③同一 `idem_key` 的事件重复到达是空操作。
 - R21-4.5 `[V1]` 每个转移函数的四件事(守卫、幂等键、注入的时钟、崩溃恢复)在实现里显式写出;测试对每条转移各一个「守卫为假不转移」与「同一 `idem_key` 执行两次只转移一次」用例,对每个非终态各一个 `veto` 与 taint 用例。
+
+> **冻结后订正 W0-16(2026-11-10,用户选择框)**:「同一 `idem_key` 只转移一次」限于该转移仍在 `transitions[]` 256 条窗口内;窗口外重复不得增加影响、回退阶段或降级终态。正文见 §21.24 W0-16。
+
 - R21-4.6 `[V1]` **终态理由码**(`terminal_reason`,封闭枚举):`auto_rollback`(R21-7.4 / R21-8.4 / 控制图 / C4)、`auto_expired`、`vetoed`、`no_hit`、`rejected_gate`、`tainted`、`static_sync_timeout`、`cleared`。**转移原因码** `reason` 为封闭枚举,分两类:①**正常转移**:`ingested`(→ proposed)、`gates_passed`(→ shadow)、`shadow_hits_met`(→ canary)、`evidence_ready`(blocked → shadow)、`decided_better`(→ adopted)、`holdout_passed`(→ stable)、`deploy_injected`、`static_released`(→ static_pending)、`sync_ok`(→ static)、`withdraw_done`、`residual_ended`、`exec_enabled`、`exec_unrestricted`、`compensation_done`(rolling_back → 终态)、`revocation_reconciled`(R21-9.5)、`retire_done`;②**终止 / 异常**:G0–G8 原因码(R21-5.1)、`harm_c1|harm_c2|harm_c3|harm_c4|harm_c6`、`limit_reached`、`vetoed`、`tainted`、`cleared`、`identity_changed`、`exec_post_check_failed`、`exec_timeout_unclean`、`static_sync_timeout`、`withdraw_120`、`no_hit`。
 
 > **冻结后订正 N4-2(R20-18.35)**:R21-4.6 的 `terminal_reason` 封闭枚举追加 `judge_rejected`(R21-4.4a ① 优先级:`vetoed > tainted > cleared > judge_rejected > auto_rollback > …`),转移 `reason` 的「终止 / 异常」类追加 `judge_reject`、`judge_injection`;与 R21-12.9 的稳定码枚举同在 `src/contracts/rsi.ts`、各自一份(R21-12.9 不含转移 reason)。
@@ -5766,6 +5775,9 @@ agent-kit judge --confirm-reflector --run <run_id> [--proposal <id>]… --write 
 - R21-6.7 `[V1]` **资格与 ITT**:资格 = 会话所属项目在**会话开始之前**30 个 UTC 日内出现过目标签名;只用会话开始前的数据判定。hint 不知道会话项目(R20-1.9 不变,不读 cwd / stdin),因此分组对项目盲,资格在分析时由 L0 归属现算(§21.22 Q-B)。主分析 ITT:全部被随机(`arm ∈ treat|control`)且资格成立的会话进分母;关联失败的按最坏情况做敏感性分析。
 - R21-6.8 `[V1]` **评估名额与释放**(全局至多一个候选占用):占用条件 = `lifecycle ∈ canary|adopted`,或 `lifecycle = stable` 且**不满足**下文的释放条件(占用与释放互补:任一参与 agent 的 `watch.result ∈ not_started|pending|withdrawn_residual` 都占用,包括 claude / pi 已 `passed`、codex 仍在等待 20 个转前会话的情形)。`watch.result` 封闭枚举:`not_started`(启动条件尚未满足)、`pending`(监视中)、`passed`(R21-8.4②)、`withdrawn_residual`(R21-8.6 撤回后回到 0.8 / 0.2 的常驻注入,只做 R21-7.4 的变差监视,最多 120 个该 agent 的有观测会话)、`withdrawn_ended`(常驻注入满 120 会话后经撤销路径移除,`deploy → none`,原因 `residual_ended`)、`skipped`(启动条件已不可能满足:codex 在 claude 或 pi 任一不是 `passed` 时置为 `skipped`)、`harm`(候选随之回滚)。**释放**:每个参与 agent 的 `watch.result ∈ passed|withdrawn_ended|skipped` 时释放;候选进入 `rolling_back` 时释放(回滚期间不占名额,它只会减少影响)。若释放时没有任何 agent 处于 `static` → 候选 `rolling_back`(`target_terminal=expired`,原因 `withdraw_120`)。其余候选在 `shadow` 排队(G7)。
 - R21-6.9 `[V1]` **reader 注入识别**:reader 识别以 `RSI_MARK_PREFIX` 开头的内容块及其后的标签 / 哈希 / 正文,把它及其直接复述(与正文连续 16 字以上重合的消息片段)排除出显式教训、工具调用等全部计数,只用于取回标记与 C6;规则写进 `reader-counting-spec.md`(§21.18 第 20 条)。
+
+> **冻结后订正 W0-14(2026-11-10)**:排除粒度改为**事件**(块所在的计数事件整条排除,含同一事件里的其余文本),复述比对对象 = 处于真注入位置的前缀块(含标记不合法的),被引用的块只排除不登记;超长块正文与复述窗口超限 fail-closed。正文见 §21.24 W0-14。
+
 - R21-6.10 `[V1]` **hint `--canary` 的读集合与判定顺序**(细化 R20-3.3,§21.18 第 14 条):读集合在 R20-3.3.1 之外**只**追加 `.state/rsi/{canary.json, canary-admission.json, AUTO_PAUSE}` 与 HOME 侧 `rsi-personal/revocations.jsonl`(≤ 1MiB,超出按读取失败处理)的存在性与内容;不读私有仓库、不读信号库。`canary.json`(worker 持 `rsi/lock` 与 `personal/lock` 写,0600)= `{candidate_id, content_sha256, body, content_sha12, p_by_agent, agents_inject, background_fp, background_fp_ex, policy_fp, revocation_gen, generation}`。判定顺序与各分支的输出 / 写入见 R21-6.11 结果矩阵;其中「用当前配置现算 `policy_fp`(R20-6.9 的排除策略指纹)与 `canary.json.policy_fp` 不等」与「`revocations.jsonl` 含 `(candidate_id, content_sha256)`」都是 hint 自己现算的,不等 worker:排除写下或撤销凭据落盘后的下一次 hint 即停注入。
 - R21-6.11 `[V1]` **hint `--canary` 结果矩阵**(按顺序判定,先命中先用;「C6」列表示该会话是否进 C6 分母):
 
@@ -5822,6 +5834,8 @@ agent-kit judge --confirm-reflector --run <run_id> [--proposal <id>]… --write 
 
 - R21-9.1 `[V1]` **四段补偿流程**(`rollback.phase`,journal `rsi-personal/txn/<id>.json`;`retiring` 与 E1 授权身份变化也走同一流程,只是 `target_terminal` 不同):
 
+> **冻结后订正 W0-15(2026-11-10)**:第三段的私有仓库移除按「已接受 HEAD 底稿 + 显式 delete(只限 kit 管理命名空间)」提交,不整树替换。正文见 §21.24 W0-15。
+
 | 子状态                   | 动作                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | 完成判据(机器可判)                                                                                                                                                                   |
 | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `rollback_requested`     | 写 journal(含 `reason`、`target_terminal`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | journal 落盘(fsync)                                                                                                                                                                  |
@@ -5876,6 +5890,8 @@ agent-kit judge --confirm-reflector --run <run_id> [--proposal <id>]… --write 
 - R21-11.4 `[V1]` **墓碑**:终态 id 进 `.state/rsi/tombstones.json`,ingest 与 G4 拒复用。
 - R21-11.5 `[V1]` **taint 扩展**(修订 R20-4.7,§21.18 第 15 条):证据项目被排除或 purge 命中 → `proposed` / `shadow` / `blocked` 候选直接 `rejected`(`tainted`);已部署候选进 `rolling_back`(`tainted`)。「立即生效」收窄为:下一次 hint 起不再注入、不再作新证据;静态撤销单独报告完成;已进模型上下文的收不回。
 - R21-11.6 `[V1]` `rsi purge --write` 额外对私有仓库做历史改写(重建 `rsi` 分支,去掉含命中候选的提交内容),并报告「备份与系统级快照不在 kit 管辖范围」。
+
+> **冻结后订正 W0-15(2026-11-10)**:历史改写照旧;重建出的每一棵树都保留 kit 管理命名空间外的路径与未命中的用户文件。正文见 §21.24 W0-15。
 
 ### 21.12 命令面、退出码与稳定码
 
@@ -6299,6 +6315,12 @@ v3.1 已把用户决定列全;以下是落契约时新发现的契约细节取�
 
 **冻结后订正 W0-13(2026-11-10,用户选择框「V1a 就允许推进」;重估后「V1a 与 V1b 合成一期」)**:V1a 与 V1b 同一版本发布;达标 shadow 按 `shadow→canary` 推进(前置:相位 ≥ V1b、名额空闲、锁内对账与重新核对);相位仍分两个 PR 提升、其间不发版,发版闸(fail-closed,绑定同一 tarball)拒绝相位 1 的产物;`canary_ready_since` 只排序,G7 到期只数 `queued_since`(相位未到不计,保留原语义);新增不变量矩阵。原位标注:§21.24 W0-1「达标」段(整段删除标注)、R21-4.1 的 W0-1 / W0-10 标注、§21.24 R21-0.2 句。**取代关系**:W0-1「保守默认;待用户拍板」段;R21-4.1 标注中「留在 shadow」一句;W0-1 分期表 V1b 行「V1a 已发」的发版含义;规划稿 V1a 25 人日与「V1b 等观察数据」。**未改**:三张相位表、R21-0.2、R21-7.9、W0-2 / W0-3 已落地的两项决定。
 
+**冻结后订正 W0-14(2026-11-10,W4 实现口径澄清)**:登记 `tool_error_class` 有序映射与「无文本不写」、重试链定义与 codex / kimi 不可比、注入排除粒度为事件、处于登记位置的任何前缀块(含标记不合法的)均登记复述正文;工具结果 / 助手文本里被引用的块只排除、不登记、超长块正文与复述窗口超限 fail-closed、标记取回位置、`rsi_markers` 与 `injection_excluded` 成组而 `retry_chain_max` 独立可选的缺键语义;实现口径以 `docs/reader-counting-spec.md` §12 为准。**取代关系**:R21-6.9 的排除粒度由片段改为事件(原位已标注);其余只补原文未定的细节。**未改**:R21-18 第 20 / 40 条、R21-6.6。
+
+**冻结后订正 W0-15(2026-11-10,W2 实现口径澄清与订正)**:提交改为「已接受 HEAD 底稿 + 受管变更」,kit 管理命名空间 `KIT_MANAGED_TOP_DIRS`;结构校验追加 `.git/info/attributes` / grafts / shallow / replace refs 与 `GIT_NO_REPLACE_OBJECTS=1`;git 读取三态;bootstrap `planned`+空目录经 pre-init 校验后续做;journal 损坏、`cas_failed` 语义、先锁后写、作者常量与 `owner_repo_fp` 格式。**取代关系**:R21-3.6「目标树」的整树读法(改为底稿 + 受管变更;purge 历史改写例外,R21-11.6 不变但重建的树保留无关用户文件);W0-5 中「已存在目录一律先做结构校验」对 `planned`+空目录的适用(改为 pre-init 校验)。**未改**:R20-5.5 锁协议(残余照旧)。
+
+**冻结后订正 W0-16(2026-11-10,W1 实现口径澄清)**:UTC 日期差口径、到期检查进入推进守卫、幂等限于 256 条窗口(窗口外不增加影响)、effects 由调用方 outbox 续做、R21-2.2 上下文字段、`gate_g8` / `exec_admission` 默认拒绝、原因码借用与归属。**取代关系**:R21-4.5「同一 `idem_key` 执行两次只转移一次」改为窗口内保证(用户 2026-11-10 选择框,原位已标注);其余只补原文未定的细节。**未改**:R21-4.1–4.4a、R21-4.6、R21-2.2 原文、能力表。
+
 ### 21.24 V1 拆期与 W0 订正(冻结后订正 W0-1 … W0-12;2026-11-09,依据用户 2026-11-04 选择框 Q1–Q5、V1i-2、V1i-4…10 按规划稿处理,2026-11-09 选「现在开工 W0 + V1a」)
 
 按节首规则:原位加标注、本节写正文、§21.23 记录。本节**不改**任何已冻结条款的 `[V1]` 标签;被取代的原文在原位以删除线或标注指回本节。W0 只落契约、schema、枚举与 lint 骨架,`RSI_AUTO_PHASE` 仍为 0(R21-0.1)。
@@ -6431,7 +6453,7 @@ R21-2.2 的「`RSI_AUTO_PHASE ≥ 1`」即 V1a,不变;R21-6.11 第 2 行的「`R
 
 - **窄例外**:R21-3.5 情形③「记录提交不存在」对**首次建仓**不适用。首次建仓的证明 = 在持 `personal/lock` 时,对 `personal/`、`rsi-personal/` 下全部约定路径(`personal` 目录、`.git`、`head.json`、`commit-journal.json`、`txn/`、`revocations.jsonl`)做 `lstat`,**全部确为不存在**(`ENOENT`);任一存在、不可访问、为悬空链接或 `lstat` 报其它错误 → 不是首次,按 R21-3.4 / 3.5 处理(`personal_repo_invalid`),**不建**。已有 `commit-journal.json` 者优先走恢复。
 - **触发**:`enabled=true ∧ R20-1.3 状态 confirmed ∧ L-auto 通过 ∧ phase ≥ V1a` 的第一次个人层一步,由 worker 持两把锁执行。
-- **bootstrap 状态机**(单列,不复用五 phase):journal `kind=bootstrap`,`old_head=null`,`phase` ∈ `planned → initialized → committed → recorded`。每步先 `fsync` journal:`planned`(journal 落盘)→ `initialized`(`git init -b rsi` 于固定目录,0700,`init.templateDir=<空目录>`,封闭 git 环境同 R21-3.6)→ `committed`(`hash-object` / `mktree` / `commit-tree` 空树;`update-ref refs/heads/rsi <新> ""`〔期望旧值为「不存在」的比较交换〕)→ `recorded`(写 `head.json`)后删 journal。**恢复**:`planned` 且目录不存在 → 丢弃 journal;`planned` 且目录存在 → 对目录做 R21-3.4 结构校验,通过且 `refs/heads/rsi` 不存在则继续 `initialized`,其余 `personal_repo_invalid`;`initialized` / `committed` 按观测到的引用值续做;任何不一致的组合 → `personal_repo_invalid`(保留 journal)。
+- **bootstrap 状态机**(单列,不复用五 phase):journal `kind=bootstrap`,`old_head=null`,`phase` ∈ `planned → initialized → committed → recorded`。每步先 `fsync` journal:`planned`(journal 落盘)→ `initialized`(`git init -b rsi` 于固定目录,0700,`init.templateDir=<空目录>`,封闭 git 环境同 R21-3.6)→ `committed`(`hash-object` / `mktree` / `commit-tree` 空树;`update-ref refs/heads/rsi <新> ""`〔期望旧值为「不存在」的比较交换〕)→ `recorded`(写 `head.json`)后删 journal。**恢复**:`planned` 且目录不存在 → 丢弃 journal;`planned` 且目录存在 → 对目录做 R21-3.4 结构校验,通过且 `refs/heads/rsi` 不存在则继续 `initialized`,其余 `personal_repo_invalid`(**W0-15 窄例外**:目录存在但为空 → 改走 pre-init 校验后续做 `git init`,见 W0-15);`initialized` / `committed` 按观测到的引用值续做;任何不一致的组合 → `personal_repo_invalid`(保留 journal)。
 - journal `kind` 枚举追加 `bootstrap`。建好之前 `rsi auto status` 报 `personal_repo: absent`。建仓只在 kit 自己的目录里、无远端、无影响。
 
 #### W0-6 候选来源(V1i-2)
@@ -6521,6 +6543,47 @@ R21-12.9 的全部码并入 `src/contracts/rsi.ts` 既有枚举与 §20.3 稳定
 各实现块的变异表条目在 `clause` 字段以 `M13-<n>` 开头,W10b 的完整性测试按 ID 对账(每个 ID 至少一条变异、一条负向用例测试标题含该 ID)。**M13-9 的验收记录**:不进仓库(避免提交哈希自引用)。记录 = 验证机上对**待发 SHA 本身**跑的全量作业结果(`crq out <作业>` 第一行 `at <sha7>` 与 `RESULT=`),按受测 SHA 索引;`release-tag.mjs` 以参数接收作业名,自行取回该结果并核对 `at` 等于待打 tag 的 SHA、`RESULT=PASS`,不符即拒绝;CI 取不到验证机结果,不承担这一项(只跑上面的产物闸)。「豁免表无 V1a / V1b 条款」是另一个独立条件,由条款覆盖测试在同一全量作业里给出。
 
 **规划与验收**:§21.20 的 V1a、V1b 两行验收须在首个官方发行之前全部满足;规划稿 W10 拆为 W10a(发版闸 + 0→1,验 V1a 行)与 W10b(1→2,验 V1b 行、E2E、真实环境探针准入),两者之间不发版;发版闸在 W10a 合并前就位。
+
+#### W0-14 W4 实现口径澄清与 R21-6.9 局部订正(2026-11-10;R21-18 第 20 条、R21-6.6、R21-6.9)
+
+W4(信号与 reader 扩展)实现时,以下各点契约原文只给了枚举或原则、未定细节;实现口径以 `docs/reader-counting-spec.md` §12 为准。除下文「R21-6.9 局部订正」一条外,只登记要点与理由,不改已冻结条款:
+
+- **`tool_error_class` 映射**:失败文本前 4096 个码元按 §12.1 的有序正则表**首个命中即用**(`permission` → `timeout` → `network` → `not_found` → `conflict` → `syntax`,有文本未命中 → `other`);**没有失败文本时不写字段**(不写 `other`,否则 Codex 整体落入 `other`)。表只增不改,改口径另起版本。
+- **重试链**(W0-7 的 C2 标量):同一会话内、同一**完整**工具名的连续失败;别的工具、用户消息、助手文本不断链;该工具一次成功结束链;无工具名的失败不成链;每会话独立。codex / kimi 结果事件无工具名 ⇒ 无 `retry_chain_len` / `retry_chain_max`,其 C2 与 claude / pi **不可比**(W6 分层须按 agent 分开,不得把缺键当 0)。
+- **R21-6.9 局部订正:排除粒度 = 事件**(取代 R21-6.9「它及其直接复述」的片段级读法):块所在行的计数事件整条改写为 `meta`(事件序号不变,`sig_id` 不受影响),同一事件里块之外的真实文本随之被排除、该事件也不计入 `user_messages` 等计数。理由:各 agent 会话文件没有可靠的片段边界(块之后的文本无法与块正文区分),片段级保留会把注入正文漏进教训;事件级只会多排、不会漏排(走向更少把注入内容当信号)。R21-6.9 原位加订正标注。
+- **复述**:与此前已登记的前缀块正文连续 ≥ 16 码点相同 → 同样整事件排除。**登记条件只看位置、不看标记**:块所在行的事件只有 `user_message` / `meta` / `unknown`(真注入位置)时,无论标记形状是否合法都登记其正文;块出现在工具结果、工具调用或助手文本里(模型或工具在引用别处的文本)只排除该事件、**不登记**正文——否则用户随后正常引述同一段文字也会被误排。这是对 R21-6.9「直接复述」的位置限定,一并纳入本条订正。块正文超过 4096 码点(契约块正文 ≤ 1536 字节,只可能是病态输入)不截断,fail-closed;每会话复述窗口总数上限 `INJECTION_WINDOWS_MAX`,超限同样 fail-closed——该会话记 `read_error`,不落信号与计数行。
+- **标记取回位置**(R21-6.6):只在事件仅为 `user_message` / `meta` / `unknown` 的行取回;工具结果、助手文本里引用的块只排除、不取回(避免引用别的会话文件造成假「多标记」);整行忽略的侧链行不参与识别。hook 输出在真实会话文件里的落点在 W10 实测,不符则修订 §12.3。
+- **标记超过 4 个**:`rsi_markers` 去重升序后保留前 4 个;只要不同标记 ≥ 2 个,分类仍为「多标记」(超限不退化为缺键或 `[]`)。
+- **缺键语义**:`rsi_markers` 与 `injection_excluded` 成组(全有或全无,表示该行做过注入识别);`retry_chain_max` 按 agent 能力独立可选(codex / kimi 无工具名,永远没有它);缺键 = 未采集 / 不可比,不是 0。schema 以 refine 强制上述成组关系、两个新信号字段只允许在 `tool_result_failed` 上、`rsi_markers` 严格升序。claude / pi 新采集的行写全三键。存量信号不回填。
+- **交给后续块**:resume / fork 会把同一标记复制进多个会话文件,按标记去重归 W6 分析层;旧版 kit 读到带新键文件时的回退行为在 W10 发版前核对。
+
+#### W0-15 W2 实现口径澄清与订正(2026-11-10;R21-3.1、R21-3.4、R21-3.6 / 3.6a、W0-5)
+
+W2(私有仓库与提交原语)实现时契约未定或需收紧的点。实现在 `src/rsi/personal/{repo-check,commit,commit-journal,personal-lock,home-state}.ts`。
+
+- **提交 = 底稿 + 受管变更(订正 R21-3.6「目标树」的读法)**:kit 的每次私有仓库提交以已接受 HEAD 的树为底稿,调用方只给 kit 管理路径的 `upserts` 与显式 `deletes`;底稿里未点名的路径原样保留(含 R21-3.5 情形①接受的用户文件)。**kit 管理命名空间** `KIT_MANAGED_TOP_DIRS` = R21-3.1 布局的顶层目录 `rules`、`pitfalls`、`methods`、`agents`、`capabilities`、`exec`、`cases`、`lifecycle`(整个子树);其外的路径(如 `notes/`)kit 提交绝不修改或删除,upsert / delete 指向它们即拒绝(`TreeSpecError`)。管理命名空间内每个路径段必须以字母数字开头(排除 `.git*`、`.`、`..`),大小写不敏感地不得冲突;用户在管理命名空间内新增的文件保留,除非调用方显式 delete。理由:整树替换会在正常路径上删除已接受的用户文件。回滚 / clear 只能删除本事务或 kit 自己写过的受管路径。**例外:`rsi purge --write` 的历史改写(R21-11.6)不适用「只改 HEAD」**——它仍重建 `rsi` 分支、去掉各历史提交里命中候选的内容,但在重建出的每一棵树里同样保留管理命名空间外的路径与未命中的用户文件;R21-9.1 第三段(私有仓库移除)按普通提交执行。
+- **结构校验追加(收紧 R21-3.4)**:除七项外,另拒绝 `.git/info/attributes`(任何存在形态)、`.git/info/grafts`、`.git/shallow` 与任何 `refs/replace/*`;封闭 git 一律设 `GIT_NO_REPLACE_OBJECTS=1`。理由:这些仓库侧输入不在本地配置白名单之内,却能改变检出内容或历史解释。索引上的 assume-unchanged / skip-worktree 标志不算干净(情形判定与恢复都判 `diverged`,`DivergedWhy = index_flags`)。
+- **git 读取三态**:退出码 0 = 存在,1 = 确认不存在,其余(启动失败、超时、128 等)= 读取失败,按 `personal_repo_invalid`(`git_read_failed`)处理,不得当作「不存在」继续。
+- **bootstrap `planned` 且目录存在但为空(订正 W0-5)**:目录是 kit 在 `planned` 之后自建的,允许续做 `git init`,但 init 前必须过 **pre-init 校验**:①HOME 之下的各级祖先必须能读到(lstat 失败即拒绝)、是真目录、不是符号链接(并沿用 home-fs 既有的路径安全检查),**不要求** 0700、不自动 chmod;②私有仓库目录本身必须是真目录、属主为当前 uid、权限恰为 0700、确为空(与首次建仓时 kit 自建该目录的权限一致)。读取失败或无法确认为空同样拒绝。任一不满足 → `personal_repo_invalid`。其余已存在目录的情形仍先做完整结构校验。
+- **journal 文件损坏**(不可解析 / schema 不符)→ `personal_repo_invalid`(不猜测阶段、不删除)。
+- **`cas_failed` 不是干净失败**:`update-ref` 期望旧值不符时 journal 留在 `objects_written`,下一次恢复按 R21-3.6a 判 `diverged`;只有持锁的 kit 提交者会丢弃它。
+- **先锁后写**:提交入口先复核锁,再做任何 HOME 写入(含空钩子目录);锁已丢 → `lock_lost`,不创建任何目录。
+- **常量与格式**:`RSI_PERSONAL_AUTHOR` = name `agent-kit-rsi`、邮箱空串(提交作者与提交者固定,`src/rsi/personal/repo-check.ts`;后续迁入 `src/contracts/rsi.ts`);`owner_repo_fp` = `sha256(realpath + "\n" + dev + "\n" + ino)` 十六进制前 16 位。
+- **已知残余(不变)**:personal/lock 与 R20-5.5 同协议,陈旧锁回收的「复读后删除」窗口仍在(§20 已登记);提交的最后防线是 `update-ref` 期望旧值。修复须订正 R20-5.5 并连带 A1,另立事项。
+- **交给后续块**:锁序 `rsi/lock → personal/lock` 的反向取锁守卫在 A1 的 `lock.ts`,W7 接 worker 时补;`home-fs` 纯建目录授权(现借占位 planScope)另立事项。
+
+#### W0-16 W1 实现口径澄清与 R21-4.5 订正(2026-11-10;R21-4.1 / 4.4a / 4.5 / 4.6、R21-2.2、W0-13)
+
+W1(纯转移引擎,`src/rsi/personal/{ids,transition-table,transition}.ts`)实现时契约未定的点:
+
+- **日数口径**:「满 N 个 UTC 日」= `UTC 日期(今天) − UTC 日期(起点) ≥ N`(按日期差,不按经过的小时):排队到期 N = 30(第 29 日不到期、第 30 日到期),canary 上限 N = `RSI_MAX_CANARY_DAYS`。找不到进入 canary 的记录(例如被历史上限合并掉)→ 视为已到期,立即允许经回滚到 `expired`(保守方向)。
+- **到期是转移入口的不变量**:`shadow → canary` 的守卫自己检查排队到期(推进事件必须携带 `queued_since` 与当天日期),已到期 → 拒绝;不依赖调用方先走辅助判定函数。
+- **R21-4.5 订正:幂等限于转移历史窗口**(用户 2026-11-10 选择框「接受窗口幂等,订正 R21-4.5」;取代 R21-4.5「同一 `idem_key` 执行两次只转移一次」的无条件读法):`idem_key` = 候选 id、维度、agent、起止状态、事件种类与区分原因 / 证据的定长编码(不含时钟)。同一 `idem_key` 在对应转移仍保留于 `transitions[]` 的 256 条窗口内重复执行 → `noop`,空 entries、空 effects。记录被淘汰后不再保证去重;重复事件仍**不得**增加影响、回退 `rollback.phase` 或降低 `target_terminal` / 终态理由优先级(由状态机本身保证,有窗口外重放测试)。此窗口保证不构成外部 effects 的恰好一次保证。理由:正常候选的转移只有十几条,触发须同一候选先累积 256 条以上;持久去重索引的代价(每候选多一份不随历史裁剪的集合)不值得。
+- **效果由调用方续做**:引擎是纯函数,返回类型化 effects(生命周期提交、黑名单、墓碑、冷却、审计、部署变更);重复事件返回空 effects。未完成的 effects 由调用方的持久化事务 / outbox 续做,不能靠事件重放补齐——实现与崩溃测试归 W7。
+- **R21-2.2 的上下文**:转移上下文追加 `auto_loop_effective` 与 `auto_paused`(调用方持锁时读取并传入);只拦增加影响的转移(`shadow → canary`、`→ injected`),减少影响的转移照常。
+- **能力表之外的键默认拒绝**:`gate_g8`(G8,V3)与 `exec_admission`(exec 类部署,V6a)尚未登记进 `RSI_CAPABILITY_PHASE`,一律 `phase_not_available`;相位 ≥ V3 时 G8 未实现,`shadow → canary` 先 fail-closed(`g8_not_implemented`)。V3 / V6a 的契约修订须把这两个键补进能力表。
+- **原因码借用**:`rolling_back` 自环、`injected → removal_pending`、`removal_pending → none` 无专属原因码,沿用触发事件的原因与 `compensation_done`;`rollback.reason` 存转移原因码,优先级先映射为终态理由再比较,并列保留先到者。
+- **归属**:创建行 `(无) → proposed` 在 W3(W1 只派生候选 id);入口清零 `queued_since`(W0-13 列出的入口)由 W3 的 worker 执行。
 
 #### W0 订正的合法 / 错误示例
 
