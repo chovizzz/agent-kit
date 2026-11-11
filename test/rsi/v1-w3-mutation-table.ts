@@ -209,6 +209,35 @@ export const V1_W3_MUTATIONS: readonly V1W3Mutation[] = [
     mustKill: ['提交之后工作副本写入丢锁'],
   },
   {
+    id: 'terminal-veto-blacklist-skipped',
+    clause: 'R21-4.4a ②:终态上的 veto 仍写黑名单',
+    edits: [
+      {
+        file: STEP,
+        anchor: "if (line.reason === 'vetoed') {",
+        replacement: 'if (false as boolean) {',
+      },
+    ],
+    tests: [T_STEP],
+    expectRed: ['终态候选 + 匹配的 vetoed 凭据'],
+    mustKill: ['终态候选 + 匹配的 vetoed 凭据'],
+  },
+  {
+    id: 'gate-facts-lock-lost-as-internal',
+    clause: 'R21-3.6:闸事实读取丢锁不是 gate_internal,而是立即中止',
+    edits: [
+      {
+        file: STEP,
+        anchor:
+          "if (e instanceof RsiLockError && e.kind === 'lock_lost') return halt('lock_lost');\n      outcome = {",
+        replacement: 'outcome = {',
+      },
+    ],
+    tests: [T_STEP],
+    expectRed: ['闸事实读取时丢锁'],
+    mustKill: ['闸事实读取时丢锁'],
+  },
+  {
     id: 'm13-6-expiry-skipped',
     clause: 'M13-6:判定顺序对调(排队到期不被处理,名额空闲就推进)',
     edits: [

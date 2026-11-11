@@ -580,3 +580,30 @@ describe('评审第二轮追加', () => {
     expect(r2.halted).toBe('lock_lost');
   });
 });
+
+describe('评审第三轮追加', () => {
+  it('终态候选 + 匹配的 vetoed 凭据:黑名单效果落地,不提交、不改终态', async () => {
+    const w = world3();
+    const r = mkRec('rejected', { id: A });
+    w.store.put(r);
+    w.revs.value = { kind: 'ok', lines: [REV(A, 'vetoed')] };
+    const out = await runPersonalStep(w.d);
+    expect(w.effects.some((e) => e.type === 'blacklist_veto')).toBe(true);
+    expect(w.store.commits.length).toBe(0);
+    expect(out.reconciled).toEqual([]);
+    expect(life(w, A)).toBe('rejected');
+  });
+  it('闸事实读取时丢锁:立即 halted=lock_lost,不记 gate_internal,后续候选不再读事实', async () => {
+    const w = world3();
+    withNewProposal(w);
+    let calls = 0;
+    w.gateFacts.fn = async () => {
+      calls++;
+      throw new RsiLockError('lock_lost');
+    };
+    const r = await runPersonalStep(w.d);
+    expect(r.halted).toBe('lock_lost');
+    expect(r.breaker).toBeNull();
+    expect(calls).toBe(1);
+  });
+});

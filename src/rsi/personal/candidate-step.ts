@@ -219,7 +219,18 @@ export async function runPersonalStep(d: StepDeps): Promise<StepResult> {
     const rec = records.find(
       (r) => r.id === line.candidate_id && r.content_sha256 === line.content_sha256,
     );
-    if (rec === undefined || isTerminalLifecycle(rec.lifecycle)) continue;
+    if (rec === undefined) continue;
+    if (isTerminalLifecycle(rec.lifecycle)) {
+      // R21-4.4a ②:终态上的 veto 仍要写黑名单(效果幂等;其余终止事件对终态无事可做)
+      if (line.reason === 'vetoed') {
+        const r = await run(rec, {
+          kind: 'veto',
+          evidence: `revocation:${digest(canonicalJson(line)).slice(0, 16)}`,
+        });
+        if (r === 'halt') return out;
+      }
+      continue;
+    }
     if (rec.lifecycle !== 'proposed' && rec.lifecycle !== 'shadow') continue; // canary 及以上归 V1b / W7
     const evidence = `revocation:${digest(canonicalJson(line)).slice(0, 16)}`;
     const event: TransitionEvent =
@@ -315,6 +326,7 @@ export async function runPersonalStep(d: StepDeps): Promise<StepResult> {
       );
       outcome = runGates({ ...f, clusterBusy: busy });
     } catch (e) {
+      if (e instanceof RsiLockError && e.kind === 'lock_lost') return halt('lock_lost');
       outcome = {
         kind: 'internal' as const,
         gate: 'g0' as const,
