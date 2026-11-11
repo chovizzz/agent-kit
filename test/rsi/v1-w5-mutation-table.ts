@@ -91,7 +91,25 @@ export const V1_W5_MUTATIONS: readonly V1W5Mutation[] = [
       },
     ],
     tests: [T_WRITER],
-    expectRed: ['成功:0600', 'M13-4 名额互斥'],
+    expectRed: [
+      '成功:0600',
+      'M13-4 名额互斥',
+      'overlaps_preset 取权威记录里该候选 G4 的结果(调用方不能自带);true / false 各一',
+      '对账先于授予:撤销凭据列出该候选 → 拒绝、不写;列的是别的候选 / 别的内容哈希 → 不影响',
+      '对账屏障(R21-9.5):A 已终态但 canary.json 残留、stop 行未补 → 授予 B 被拒;对账完成后允许',
+      '对账屏障:有凭据而分组账不存在 / 为空 → 拒绝授予(账不存在不等于已补 stop);reconcileCaches 补 stop 后允许',
+      '空凭据集 + 不合规账 → 拒绝授予(坏账不因没有凭据而绕过);空凭据集 + 账不存在 → 允许',
+      '不可读缓存恢复:坏 JSON 缓存 + 已对账的历史凭据 → 授予被拒;对账清理移除不可读缓存后可恢复',
+      '正文含关联标记前缀',
+      'treat 输出超过 1536 字节',
+      '在列的 agent 没有 p',
+      'p_by_agent 有多余项',
+      '正文只取权威来源:来源给不出(null / 抛错)→ 拒绝、不写;写进文件的正文就是来源给的那一份',
+      '写点之前复核两把锁:任一把在写阶段丢失 → 抛错、没有 canary.json(也没有残留临时文件)',
+      'muteCanary(AUTO_PAUSE / 熔断):置为不注入、generation + 1;已不注入 / 无文件 → 不写',
+      'muteCanary 不需要 personal 锁,但需要 rsi 锁:丢锁 → 抛错、文件不变',
+      'removeCanary:删除缓存文件;丢锁 → 不删',
+    ],
     mustKill: ['成功:0600'],
   },
   // ---- R21-9.5 对账先于授予 / 撤销凭据 ----
@@ -151,7 +169,11 @@ export const V1_W5_MUTATIONS: readonly V1W5Mutation[] = [
       },
     ],
     tests: [T_PART, T_E2E],
-    expectRed: ['账行追加失败 → 不输出', '未落账不注入'],
+    expectRed: [
+      '账行追加失败 → 不输出',
+      '未落账不注入',
+      '②之后崩溃的等价情形:账行追加失败 → 票已用、不输出(绝不重复授予)',
+    ],
     mustKill: ['账行追加失败 → 不输出'],
   },
   {
@@ -205,7 +227,12 @@ export const V1_W5_MUTATIONS: readonly V1W5Mutation[] = [
     clause: 'R21-6.11 第 2 行(W0-3 订正):RSI_AUTO_PHASE < 2 → 无输出无写入(相位检查去掉)',
     edits: [drop(DECIDE, "!phaseAtLeast('V1b', i.phase) || ")],
     tests: [T_DECIDE, T_E2E],
-    expectRed: ['RSI_AUTO_PHASE 为 1', '缺省相位'],
+    expectRed: [
+      'RSI_AUTO_PHASE 为 1',
+      '缺省相位',
+      '第 2 行优先于探针:相位 1 时即使 probing 也不探',
+      '[rsi.auto] 未开启 / codex / 相位 1 → 第 2 行:无 canary 输出、无账',
+    ],
     mustKill: ['RSI_AUTO_PHASE 为 1'],
   },
   {
@@ -307,7 +334,7 @@ export const V1_W5_MUTATIONS: readonly V1W5Mutation[] = [
       },
     ],
     tests: [T_PART],
-    expectRed: ['随机为 treat', '随机为 control'],
+    expectRed: ['随机为 treat', '随机为 control', 'treat 概率取该 agent 的 p'],
     mustKill: ['随机为 treat', '随机为 control'],
   },
   {
@@ -332,7 +359,12 @@ export const V1_W5_MUTATIONS: readonly V1W5Mutation[] = [
     clause: 'W0-3:EEXIST = 这张已被占,试下一张(把 EEXIST 当作致命错误)',
     edits: [off(TICKET, "if ((e as NodeJS.ErrnoException).code === 'EEXIST') continue;")],
     tests: [T_PART],
-    expectRed: ['依次消费 3 张票'],
+    expectRed: [
+      '依次消费 3 张票',
+      '并发消费者至多 tickets 个成功(6 个并发 → 恰好 3 个输出、3 行账、3 个占用文件)',
+      '重新 armed(generation 加 1)后旧代的占用文件作废、不计入本代;旧代标记不被重用',
+      '②之后崩溃的等价情形:账行追加失败 → 票已用、不输出(绝不重复授予)',
+    ],
     mustKill: ['依次消费 3 张票'],
   },
   {
@@ -346,7 +378,11 @@ export const V1_W5_MUTATIONS: readonly V1W5Mutation[] = [
       },
     ],
     tests: [T_PART],
-    expectRed: ['重新 armed(generation 加 1)后旧代的占用文件作废'],
+    expectRed: [
+      '重新 armed(generation 加 1)后旧代的占用文件作废',
+      '依次消费 3 张票:每次输出仅含标记的一行 + 账行 excluded/admission_probe(candidate_id=null、marker 非空、p=0、背景指纹全零);第 4 次不输出',
+      '②之后崩溃的等价情形:账行追加失败 → 票已用、不输出(绝不重复授予)',
+    ],
     mustKill: ['重新 armed(generation 加 1)后旧代的占用文件作废'],
   },
   {
@@ -362,7 +398,11 @@ export const V1_W5_MUTATIONS: readonly V1W5Mutation[] = [
       },
     ],
     tests: [T_DOC, T_PART],
-    expectRed: ['control 只有标记行', 'control(u ≥ p)'],
+    expectRed: [
+      'control 只有标记行',
+      'control(u ≥ p)',
+      '两种组别的标记行都 ≤ 64 字节,不含路径 / 项目名',
+    ],
     mustKill: ['control 只有标记行'],
   },
   {
@@ -436,7 +476,7 @@ export const V1_W5_MUTATIONS: readonly V1W5Mutation[] = [
       },
     ],
     tests: [T_E2E],
-    expectRed: ['缺省相位'],
+    expectRed: ['缺省相位', '[rsi.auto] 未开启 / codex / 相位 1 → 第 2 行:无 canary 输出、无账'],
     mustKill: ['缺省相位'],
   },
   // ---- W0-3 准入判定(worker) ----
@@ -451,7 +491,10 @@ export const V1_W5_MUTATIONS: readonly V1W5Mutation[] = [
       },
     ],
     tests: [T_ADM],
-    expectRed: ['立即 failed(multi_marker)'],
+    expectRed: [
+      '立即 failed(multi_marker)',
+      '暂停 / 循环失效时不给 admitted(它是授予影响的前置),但失败照常判(只收紧)',
+    ],
     mustKill: ['立即 failed(multi_marker)'],
   },
   {
@@ -484,7 +527,10 @@ export const V1_W5_MUTATIONS: readonly V1W5Mutation[] = [
     clause: 'W0-3:每个标记被恰好一个会话取回(resume / fork 复制不算)',
     edits: [drop(PLAN, 'v.sightings.length === 1 &&')],
     tests: [T_ADM],
-    expectRed: ['一个标记被两个会话取回'],
+    expectRed: [
+      '一个标记被两个会话取回',
+      '某标记在其账行之后 48 小时仍无人取回 → failed(marker_not_retrieved);不足 48 小时 → 仍 probing',
+    ],
     mustKill: ['一个标记被两个会话取回'],
   },
   {
@@ -498,7 +544,12 @@ export const V1_W5_MUTATIONS: readonly V1W5Mutation[] = [
       },
     ],
     tests: [T_ADM],
-    expectRed: ['旧代的探针行'],
+    expectRed: [
+      '旧代的探针行',
+      '旧代 / 越界票号(0、tickets+1)的行不计入本代:既不充数也不阻止本代 admitted',
+      '旧代的重复票号不影响本代(只有本代的重复才算)',
+      'W0-18:旧代迟到行让账里行数多于本代票数 → 既不充数也不阻挡本代 admitted',
+    ],
     mustKill: ['旧代的探针行'],
   },
   {
@@ -530,7 +581,13 @@ export const V1_W5_MUTATIONS: readonly V1W5Mutation[] = [
     clause: 'W0-3:无 AUTO_PAUSE 时才 arm',
     edits: [drop(PLAN, ' && !i.autoPaused;')],
     tests: [T_ADM],
-    expectRed: ['不 arm:'],
+    expectRed: [
+      '不 arm:',
+      'probing 期间版本变了:旧版本的齐全证据不判 admitted,允许时重新 arm(generation + 1);暂停时原地等待',
+      '暂停 / 循环失效时不给 admitted(它是授予影响的前置),但失败照常判(只收紧)',
+      '满 7 日的自动重探仍受 arm 条件约束:暂停 / 循环无效 / 相位不足 / 版本不可知 / 钩子未装 → 不重探',
+      '前台显式 rearm 才让版本未变、未满 7 日的 failed 重探',
+    ],
     mustKill: ['不 arm:'],
   },
   {
@@ -540,7 +597,10 @@ export const V1_W5_MUTATIONS: readonly V1W5Mutation[] = [
       { file: PLAN, anchor: 'facts.agentVersion === null) return;', replacement: 'false) return;' },
     ],
     tests: [T_ADM],
-    expectRed: ['不 arm:'],
+    expectRed: [
+      '不 arm:',
+      '满 7 日的自动重探仍受 arm 条件约束:暂停 / 循环无效 / 相位不足 / 版本不可知 / 钩子未装 → 不重探',
+    ],
     mustKill: ['不 arm:'],
   },
   {
@@ -554,7 +614,29 @@ export const V1_W5_MUTATIONS: readonly V1W5Mutation[] = [
       },
     ],
     tests: [T_ADM],
-    expectRed: ['failed 未满 7 个 UTC 日且版本未变', 'admitted 且版本未变'],
+    expectRed: [
+      'failed 未满 7 个 UTC 日且版本未变',
+      'admitted 且版本未变',
+      '3 张票的 3 个标记各被恰好一个会话取回、各会话只取回 1 个标记、静止 ≥ 60 分钟 → admitted(decided_at = 当前)',
+      '静止恰好 60 分钟 → admitted;59 分钟 → 仍 probing',
+      '静止时长不可知(null)→ 不 admitted(fail-closed)',
+      '只有 2 行探针账 → 不 admitted',
+      '一个标记被两个会话取回(resume / fork 复制)→ 不 admitted',
+      '某标记在其账行之后 48 小时仍无人取回 → failed(marker_not_retrieved);不足 48 小时 → 仍 probing',
+      '旧代的探针行(probe_generation ≠ 当前代)不计入:新 arm 之后没有本代行 → 不 admitted',
+      '按代号而不是时间认行:本代的行即使 at 早于 armed_at 也计入(W0-18 取代时间窗)',
+      '旧代 / 越界票号(0、tickets+1)的行不计入本代:既不充数也不阻止本代 admitted',
+      '旧代的重复票号不影响本代(只有本代的重复才算)',
+      '票号缺一(1、2 号齐,3 号没有行)→ 不 admitted',
+      '其它 agent 的探针行不计入 claude',
+      'W0-18:本代只有两行、旧代 hint 迟到落的行带旧代号 → 不替本代凑数,不 admitted',
+      'W0-18:旧代迟到行让账里行数多于本代票数 → 既不充数也不阻挡本代 admitted',
+      '已 admitted 之后本代出现重复探针票号 → failed(multi_marker);探针窗口到期本身不撤销',
+      'failed 满 RSI_PROBE_RETRY_DAYS(7)个 UTC 日 → 自动重新 armed 下一代;按日期差,与时刻无关',
+      'failed 满 6 个 UTC 日(11-04 00:00 起算)→ 仍不重探',
+      'failed 的 decided_at 缺失 / 不可解析 → 不自动重探(fail-closed)',
+      '有变化才写:0600、schema 合法;第二次(无变化)返回 unchanged 且文件逐字节不变',
+    ],
     mustKill: ['failed 未满 7 个 UTC 日且版本未变'],
   },
   {
@@ -577,7 +659,10 @@ export const V1_W5_MUTATIONS: readonly V1W5Mutation[] = [
     clause: 'W0-18:同一 (probe_generation, probe_ticket) 出现两行 → failed(multi_marker)',
     edits: [drop(PLAN, 'new Set(lines.map((l) => l.ticket)).size !== lines.length ||')],
     tests: [T_ADM],
-    expectRed: ['同一 (probe_generation, probe_ticket) 出现两行'],
+    expectRed: [
+      '同一 (probe_generation, probe_ticket) 出现两行',
+      '已 admitted 之后本代出现重复探针票号 → failed(multi_marker);探针窗口到期本身不撤销',
+    ],
     mustKill: ['同一 (probe_generation, probe_ticket) 出现两行'],
   },
   {
@@ -641,7 +726,10 @@ export const V1_W5_MUTATIONS: readonly V1W5Mutation[] = [
       },
     ],
     tests: [T_ADM],
-    expectRed: ['满 7 日的自动重探仍受 arm 条件约束'],
+    expectRed: [
+      '满 7 日的自动重探仍受 arm 条件约束',
+      '前台显式 rearm 才让版本未变、未满 7 日的 failed 重探',
+    ],
     mustKill: ['满 7 日的自动重探仍受 arm 条件约束'],
   },
   {
@@ -665,7 +753,10 @@ export const V1_W5_MUTATIONS: readonly V1W5Mutation[] = [
     clause: 'W0-18:探针账行的 probe_ticket 取占到的票序 i',
     edits: [{ file: HINTP, anchor: 'ticket: grant.index', replacement: 'ticket: 1' }],
     tests: [T_PART],
-    expectRed: ['依次消费 3 张票'],
+    expectRed: [
+      '依次消费 3 张票',
+      '重新 armed(generation 加 1)后旧代的占用文件作废、不计入本代;旧代标记不被重用',
+    ],
     mustKill: ['依次消费 3 张票'],
   },
   {
@@ -721,7 +812,10 @@ export const V1_W5_MUTATIONS: readonly V1W5Mutation[] = [
       },
     ],
     tests: [T_ADM],
-    expectRed: ['到期先于成功'],
+    expectRed: [
+      '到期先于成功',
+      'probe_expires_at 到期仍未凑齐 → failed(probe_expired);到期当刻也算',
+    ],
     mustKill: ['到期先于成功'],
   },
   {
@@ -742,7 +836,13 @@ export const V1_W5_MUTATIONS: readonly V1W5Mutation[] = [
     clause: 'R21-9.5:全部凭据对账完成前不做任何授予(去掉统一对账屏障)',
     edits: [{ file: WRITER, anchor: 'if (!barrier.ok) return', replacement: 'if (false) return' }],
     tests: [T_WRITER],
-    expectRed: ['对账屏障(R21-9.5)'],
+    expectRed: [
+      '对账屏障(R21-9.5)',
+      '对账屏障:有凭据而分组账不存在 / 为空 → 拒绝授予(账不存在不等于已补 stop);reconcileCaches 补 stop 后允许',
+      '对账屏障:凭据列出的候选权威记录仍非终态 → 拒绝授予别的候选;账不合规同样拒绝',
+      '空凭据集 + 不合规账 → 拒绝授予(坏账不因没有凭据而绕过);空凭据集 + 账不存在 → 允许',
+      '不可读缓存恢复:坏 JSON 缓存 + 已对账的历史凭据 → 授予被拒;对账清理移除不可读缓存后可恢复',
+    ],
     mustKill: ['对账屏障(R21-9.5)'],
   },
   {
@@ -879,7 +979,12 @@ export const V1_W5_MUTATIONS: readonly V1W5Mutation[] = [
     clause: 'R21-4.1:首次达标需 ≥ 20 有观测会话',
     edits: [drop(SCOUNT, 'upTo.length >= RSI_SHADOW_MIN_SESSIONS &&')],
     tests: [T_SHADOW],
-    expectRed: ['未达标 → null'],
+    expectRed: [
+      '未达标 → null',
+      '首次达标日 = 同时满足 ≥ 20 会话且命中 ≥ 2 的最早 UTC 日',
+      '同一天的多个会话按当日全部会话之后的累计值判定',
+      'ReadySinceRecovery:历史里能证明达标的最早 UTC 日;未达标 / 读失败 / 无起点 → null',
+    ],
     mustKill: ['未达标 → null'],
   },
   {
@@ -953,7 +1058,11 @@ export const V1_W5_MUTATIONS: readonly V1W5Mutation[] = [
       },
     ],
     tests: [T_SHADOW],
-    expectRed: ['重建后 sessions / hits 取自计数端口'],
+    expectRed: [
+      '重建后 sessions / hits 取自计数端口',
+      'M3 observer 抛 lock_lost 原样传播:ShadowCountPort / ReadySinceRecovery 抛出,步骤立即 halted=lock_lost;普通错误仍映射 null',
+      '计数端口里丢锁(RsiLockError lock_lost)→ 步骤以 lock_lost 中止',
+    ],
     mustKill: ['重建后 sessions / hits 取自计数端口'],
   },
 ];
