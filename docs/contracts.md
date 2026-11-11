@@ -5709,6 +5709,8 @@ agent-kit judge --confirm-reflector --run <run_id> [--proposal <id>]… --write 
 
 > **冻结后订正 W0-1 / W0-10(2026-11-09)**:上表在 **V1a 只有**:`(无)→proposed`、`proposed→shadow`、`proposed→rejected`、`shadow→expired`、`shadow→rejected`、`proposed|shadow→rejected`(clear)、`judge_reject` 对 `proposed|shadow` 的终止;**V1b 才有** `shadow→canary`、`canary→rolling_back`、`rolling_back→<target_terminal>`(能力键见 §21.24)。~~V1a 里达标的 shadow 候选只记展示缓存 `canary_ready_since`、留在 `shadow`(待用户拍板的保守默认,§21.24 W0-1)~~(**被 W0-13 取代**:V1a 与 V1b 同版发布,达标即按 `shadow→canary` 推进,见 §21.24 W0-13);V1i-9:因全局名额被占而排队满 30 个 UTC 日 → `expired`(`limit_reached`)。
 
+> **冻结后订正 W0-17(2026-11-11)**:创建行「(无) → `proposed`」在 `transitions[]` 中记 `from = "none"`(`dim = lifecycle`;schema 要求非空字符串)。对 `dim = lifecycle`,`from = "none"` 只用于创建转移(`to = proposed`、`reason = ingested`);此限制不适用于部署维度(R21-4.2 的 `none → injected` 等照常)。正文见 §21.24 W0-17。
+
 - R21-4.2 `[V1]` **维度二:本机部署**(每 agent):`none → injected → static_pending → static → removal_pending → none`,另有撤回支路 `static → withdraw_pending → injected`。
 
 | 从 → 到(某 agent)                              | 事件 / 守卫                                                                                                                                              | 期  |
@@ -5853,6 +5855,9 @@ agent-kit judge --confirm-reflector --run <run_id> [--proposal <id>]… --write 
 > **冻结后订正 W0-1 / W0-9(2026-11-09)**:①撤销凭据与「对账先于授予 / 提交前锁内重读」**自 V1a 起生效**(`rsi auto clear` 对 `proposed` / `shadow` 的 `off` 缩减入口亦然),`canary.json` / 分组账 / payload 的清理部分归 V1b;②`revocations.jsonl` **不新增 home-fs 追加原语**,改为持 `personal/lock` 的整文件原子重写(语义等价「只增不删」),上限 `RSI_REVOCATIONS_MAX_BYTES`。
 
 - **撤销凭据** `rsi-personal/revocations.jsonl`(`RsiRevocationLine`,0600,持 `personal/lock` 追加并 `fsync`;只增不删):`{at, candidate_id, content_sha256, identity12, reason, by: worker|clear|rollback_to|veto|exec_event}`。凭据是「该候选的这份内容不得再注入、不得再部署、不得再执行」的权威记录,优先于仓库 `.state` 里的任何缓存。
+
+> **冻结后订正 W0-17(2026-11-11,用户选择框「按写入方约束原因」)**:`reason` 不再接受全部转移原因码,改按 `by` 约束(只取终止 / 异常原因码;正常转移码、G 码、`identity_changed` 一律拒绝),对照表见 §21.24 W0-17。
+
 - **缩减入口**:`[rsi]` 配置不可用(`off`)或 `owner_repo_fp` 指向的仓库已不存在时 worker 不运行,但 `rsi auto clear [--write]` 仍可用:只读写 HOME 侧(登记表、`rsi-personal/`、私有仓库、本机 payload),只拿 `personal/lock` → sync 锁。它为每个非终态候选写撤销凭据(第二段完成),按 R21-9.3a 处理私有仓库(干净则提交,否则 `deferred`),以「上次已同步版本减去凭据所列候选」重渲染本机 payload,经撤销路径清理 HOME(第四段);仓库 `.state` 下的 `canary.json`、分组账、`exec-enabled.json`、工作副本**不访问**,记为待对账,不把访问不到的文件当作已改写。
 - **对账先于授予**:任何会授予影响的写入(写 `canary.json`、写或放宽 `exec-enabled.json`、渲染本机 payload、任一「增加影响」的转移)都必须在持 `personal/lock` 时重读 `revocations.jsonl`;凡被凭据列出的候选一律不授予。worker(含配置恢复、旧仓库重新可达、换回旧仓库的情形)每次拿锁后第一件事是**对账**:对每条凭据,**无论**仓库里该候选的工作副本是否已是终态,都核对并清理对应的授予缓存(去掉 `canary.json` 条目、删 `exec-enabled.json` 条目、补分组账 `kind=stop` 行——stop 行带 `revocation_ref` = 该凭据行的 sha256 前 16 位,已有同值的行即不重复写);工作副本不是终态时再推进到终态(原因 `revocation_reconciled`);对账未完成前不做任何增加影响的转移。`canary.json.revocation_gen` 记生成时凭据的行数,hint 与 `exec-run` 见到行数更多时照样以凭据内容为准(不信任缓存)。
 - **旧 worker 仍在运行**:它写 `canary.json` / `exec-enabled.json` 之前必须拿 `personal/lock` 并重读凭据(上一条),拿不到就放弃本次写入;已经写出的旧缓存被 hint 与 `exec-run` 的凭据检查拦住。
@@ -6008,6 +6013,9 @@ agent-kit rsi exec-confirm <id>                                           [V6a]
   拿到锁后**按 1–7 再查一遍**(消除检查与执行之间的窗口),再做单次输入快照 → 运行(R21-16.5)→ 事后检测(R21-16.6)→ 审计。守卫只约束**新的调用**;正在运行的宿主进程不受守卫影响,只按 R21-16.5 的超时尽力终止。`exec-run` 由宿主 agent 按注入正文的指示调用;worker 从不调用它。**验收**:持有一条真实 treat 标记,分别在其后制造 `AUTO_PAUSE`、`STOP`、熔断码、`exec=off`、`[rsi.auto] enabled=false`、探针失败(版本与指纹不变)、探针版本常量变化、探针超过 7 天、撤销凭据、当前身份的拒绝标记,每种情形下 `runHostScript` 的调用次数都为 0;另有 `claude=open` / `pi=gated` 并存时 pi 的 control 标记被拒、claude 任意会话放行,以及只撤回 pi(`open → gated`)不影响 claude 的用例——撤回分别在正常与 `AUTO_PAUSE` 下做,中间态与完成态的许可都等于 R21-4.3a 的映射。
 
 - R21-16.2c `[V6a]` **停用协议(唯一方案:拒绝标记 + 事件,由 worker 收口)**:任何发现 E1 必须停用的一方(`exec-run` 检出身份变化、事后检测失败、超时清理不确定;前台 `rsi veto` / `rsi auto clear` / `rsi rollback --to` 针对 E1;worker 自己的伤害判定)先做两件**不拿 `rsi/lock`** 的事:①`createExclusive` 拒绝标记 `.state/rsi/exec-deny/<id>-<identity12>`(内容 `{at, reason}`;已存在即视为成功);②向 `.state/rsi/exec-events.jsonl` 单行追加 `{at, id, identity12, kind: identity_changed|post_check_failed|timeout_unclean|user_disable|harm}`。拒绝标记一落盘,下一次 `exec-run` 即被守卫 5 拦住(不等 worker)。前台撤销命令随后按各自流程写撤销凭据并(仓库可达时)持锁收紧启用表(R21-16.2a ②)。worker 持 `rsi/lock` → `personal/lock` 处理事件:推进生命周期(`rolling_back`;`identity_changed` 时 `target_terminal=shadow`,其余 `rolled_back`)、删除或收紧 `exec-enabled.json` 条目;除 `identity_changed` 外写撤销凭据。**`identity_changed` 是撤销凭据的唯一例外**:它只停用旧身份(旧身份的拒绝标记永久有效,不写候选级撤销凭据,R21-9.1 第二段的例外),同一候选以新身份经 `exec-prepare` / `exec-confirm` 后可重新进入 canary;旧身份永远不能被重新写入启用表(R21-16.2a ①)。拒绝标记只在候选进入终态 90 个 UTC 日后由 worker 删除。**并发验收**(注入交错):a)worker 读快照 → 拒绝标记落盘 → worker 写启用表:授予被锁内重读拦住;即便启用表里留下旧条目,`exec-run` 仍被守卫 5 拦住;b)两个 `exec-run` 同时检出身份变化:只产生一个拒绝标记、两条事件,worker 处理结果幂等;c)worker 处理事件时崩溃:重启后按 journal 续做,启用表最终不含该身份的条目,拒绝标记仍在;d)**端到端**:旧身份被拒绝 → 候选回 `shadow` → 新身份 prepare / confirm → 重新进 canary 并可在 treat 会话执行;旧身份在全过程中执行器零调用。
+
+> **冻结后订正 W0-17(2026-11-11)**:`by` = 撤销来源(§21.24 W0-17):worker 消费 `exec-run` 的 `post_check_failed` / `timeout_unclean` 事件时,分别以 `by = exec_event` 写 `exec_post_check_failed` / `exec_timeout_unclean` 凭据;前台命令(`clear` / `veto` / `rollback --to`)发起的撤销保留原 `by`;worker 自身伤害判定用 `by = worker`;journal 恢复遵循同样规则。`identity_changed` 仍不写撤销凭据。
+
 - R21-16.3 `[V6a]` **授权身份** = sha256(脚本内容、manifest、执行闭包(解释器路径与二进制哈希、本地辅助文件)、策略版本);与确认时不一致 → 不运行、`RSI_EXEC_DECLINED reason=identity_changed`,候选经 `rolling_back`(`target_terminal=shadow`)回到 `shadow` 等待重新确认(R21-4.1)。**单次输入快照**每次记哈希进审计,不要求等于试用输入。哈希不覆盖动态加载的系统库,文档如实写明。
 - R21-16.4 `[V6a]` **首次宿主运行确认**(入口 = `rsi exec-confirm <id>`,R21-16.2):必须在第一次 canary 运行之前、以及授权身份任一变化后的首次运行之前完成;需 TTY,展示脚本全文、manifest、闭包清单、强制层表中「部分强制」「不强制」各项与「遗留后台执行」风险;确认绑定授权身份;确认后脚本与辅助文件复制到执行器专用目录(0700),之后只执行这份副本。未确认或确认绑定的身份与当前不同 → 候选不进 canary(R21-16.2 d),`exec-run` 被守卫 6 拦住。
 - R21-16.5 `[V6a]` **宿主执行器 `runHostScript` 的强制层**(写进契约,不得在文档或输出里升格):
@@ -6321,6 +6329,8 @@ v3.1 已把用户决定列全;以下是落契约时新发现的契约细节取�
 
 **冻结后订正 W0-16(2026-11-10,W1 实现口径澄清)**:UTC 日期差口径、到期检查进入推进守卫、幂等限于 256 条窗口(窗口外不增加影响)、effects 由调用方 outbox 续做、R21-2.2 上下文字段、`gate_g8` / `exec_admission` 默认拒绝、原因码借用与归属。**取代关系**:R21-4.5「同一 `idem_key` 执行两次只转移一次」改为窗口内保证(用户 2026-11-10 选择框,原位已标注);其余只补原文未定的细节。**未改**:R21-4.1–4.4a、R21-4.6、R21-2.2 原文、能力表。
 
+**冻结后订正 W0-17(2026-11-11,W3 实现口径澄清与订正)**:创建行 `from = "none"`;撤销凭据 `reason` 按来源 `by` 约束(`by` = 撤销来源,worker 代写时保留来源)。**取代关系**:R21-9.5 凭据行 `reason` 由「任意转移原因码」收窄为按 `by` 的对照表(用户 2026-11-11 选择框,原位已标注);创建行只补原文未定的编码。**未改**:R21-9.1 各段动作、R21-4.1 其余各行、`by` 枚举。
+
 ### 21.24 V1 拆期与 W0 订正(冻结后订正 W0-1 … W0-12;2026-11-09,依据用户 2026-11-04 选择框 Q1–Q5、V1i-2、V1i-4…10 按规划稿处理,2026-11-09 选「现在开工 W0 + V1a」)
 
 按节首规则:原位加标注、本节写正文、§21.23 记录。本节**不改**任何已冻结条款的 `[V1]` 标签;被取代的原文在原位以删除线或标注指回本节。W0 只落契约、schema、枚举与 lint 骨架,`RSI_AUTO_PHASE` 仍为 0(R21-0.1)。
@@ -6585,6 +6595,25 @@ W1(纯转移引擎,`src/rsi/personal/{ids,transition-table,transition}.ts`)实�
 - **原因码借用**:`rolling_back` 自环、`injected → removal_pending`、`removal_pending → none` 无专属原因码,沿用触发事件的原因与 `compensation_done`;`rollback.reason` 存转移原因码,优先级先映射为终态理由再比较,并列保留先到者。
 - **归属**:创建行 `(无) → proposed` 在 W3(W1 只派生候选 id);入口清零 `queued_since`(W0-13 列出的入口)由 W3 的 worker 执行。
 
+#### W0-17 创建行 `from` 与撤销凭据原因(2026-11-11;R21-4.1、R21-9.1、R21-9.5、W0-16)
+
+W3(候选创建与闸)实现时发现的两处契约未定点,用户 2026-11-11 选择框拍板:
+
+- **创建行 `from`**:R21-4.1 表的创建行写作「(无) → `proposed`」;`PersonalLifecycleRecord.transitions[].from` 为非空字符串,创建行记 `from = "none"`(`dim = lifecycle`,原因 `ingested`)。`none` 不是生命周期状态;对 `dim = lifecycle`,`from = "none"` 只用于候选的创建转移(`to = proposed`)。部署维度的 `none` 是 R21-4.2 的合法状态,不受此限。
+- **撤销凭据 `reason` 按来源 `by` 约束**(`by` 表示**撤销来源**,不是实际写文件的进程;`RSI_REVOCATION_REASONS_BY`,`RsiRevocationLineSchema` 运行时校验;原选择框曾选「收窄为 5 个」,核对 R21-9.1 后发现回滚第二段 `injection_disabled` 先写的凭据带回滚原因,用户改选「按写入方约束原因」,本文按评审把「写入方」明确为来源):
+
+| `by`          | 允许的 `reason`                                                                                                                                                                                                                                                                                | 来源                                                                                          |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `clear`       | `cleared`                                                                                                                                                                                                                                                                                      | `rsi auto clear`(R21-9.5 缩减入口)                                                            |
+| `veto`        | `vetoed`                                                                                                                                                                                                                                                                                       | `rsi veto`                                                                                    |
+| `exec_event`  | `exec_post_check_failed`、`exec_timeout_unclean`                                                                                                                                                                                                                                               | `exec-run` 事后检测 / 超时清理(R21-16.2c);凭据由 worker 消费事件后写入,仍记 `by = exec_event` |
+| `worker`      | 终止 / 异常原因码中除 `cleared`、`vetoed`、`exec_post_check_failed`、`exec_timeout_unclean`、`identity_changed` 外的全部:`harm_c1`、`harm_c2`、`harm_c3`、`harm_c4`、`harm_c6`、`limit_reached`、`tainted`、`static_sync_timeout`、`withdraw_120`、`no_hit`、`judge_reject`、`judge_injection` | worker 的回滚第二段、taint、judge 终止                                                        |
+| `rollback_to` | 终止 / 异常原因码中除 `identity_changed` 外的全部                                                                                                                                                                                                                                              | `rsi rollback --to`;其专属原因码契约未定,归 W7 订正后收窄                                     |
+
+- **来源保留**:前台 `clear` / `veto` / `rollback --to` 发起、由 worker 续做(含 journal 崩溃恢复)的凭据,保留发起时的 `by`;worker 消费 `exec-run` 事件写的凭据记 `by = exec_event`。实现与崩溃续做测试归 W7。
+- 一律拒绝:正常转移码(含 `revocation_reconciled`)、G0–G8 码、`identity_changed`(R21-9.1:身份变化不写凭据,改用旧身份的拒绝标记)。读到不合规的行 → 按读取失败处理(hint 走 R21-6.11 第 4a 行 `permit_unreadable`;worker 对账 fail-closed)。
+- 对账(R21-9.5)把 `proposed` / `shadow` 工作副本推进到终态时,依据只认 `cleared` / `vetoed` / `tainted` / `judge_reject` / `judge_injection`;其余合法原因(回滚原因)出现在 `proposed` / `shadow` 候选上 → 本步「对账未完成」,不做任何增加影响的转移(W3 实现,不扩大到 V1b 的 canary 及以上对账,后者归 W7)。
+
 #### W0 订正的合法 / 错误示例
 
 (各 schema 的带标记示例紧随其后,由 `test/contracts/examples.test.ts` 自动覆盖。)
@@ -6835,6 +6864,21 @@ W1(纯转移引擎,`src/rsi/personal/{ids,transition-table,transition}.ts`)实�
   "identity12": null,
   "reason": "cleared",
   "by": "nobody"
+}
+```
+
+`RsiRevocationLine` 错误(W0-17):`by = clear` 只允许 `reason = cleared`。状态 = 凭据行不合规,阻断范围同上(hint `permit_unreadable`,worker 对账 fail-closed),原因码无:
+
+<!-- example:invalid schema=RsiRevocationLine -->
+
+```json
+{
+  "at": "2026-11-09T08:00:00.000Z",
+  "candidate_id": "ra_0123456789ab",
+  "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "identity12": null,
+  "reason": "harm_c1",
+  "by": "clear"
 }
 ```
 

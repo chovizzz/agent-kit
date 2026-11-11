@@ -35,6 +35,7 @@ import {
   PersonalCommitJournalSchema,
   PersonalLifecycleRecordSchema,
   RsiCanaryLedgerLineSchema,
+  RsiRevocationLineSchema,
   RsiTombstonesSchema,
   deployMatrixViolation,
 } from '../../src/contracts/rsi-personal.js';
@@ -567,6 +568,51 @@ describe('R21-6.4 分组账行:探针行是唯一 marker 非空且 candidate_id 
     expect(RsiCanaryLedgerLineSchema.safeParse(stop('harm_c1', '0123456789abcdef')).success).toBe(
       false,
     );
+  });
+});
+
+describe('W0-17 撤销凭据:reason 按写入方 by 约束', () => {
+  const line = (by: string, reason: string) =>
+    RsiRevocationLineSchema.safeParse({
+      at: T,
+      candidate_id: ID,
+      content_sha256: 'a'.repeat(64),
+      identity12: null,
+      reason,
+      by,
+    }).success;
+  it('各写入方的合法原因通过', () => {
+    expect(line('clear', 'cleared')).toBe(true);
+    expect(line('veto', 'vetoed')).toBe(true);
+    expect(line('exec_event', 'exec_post_check_failed')).toBe(true);
+    expect(line('exec_event', 'exec_timeout_unclean')).toBe(true);
+    for (const r of [
+      'harm_c1',
+      'harm_c6',
+      'limit_reached',
+      'tainted',
+      'judge_reject',
+      'judge_injection',
+    ]) {
+      expect(line('worker', r), r).toBe(true);
+    }
+    expect(line('rollback_to', 'harm_c2')).toBe(true);
+  });
+  it('写入方与原因不符 → 拒绝', () => {
+    expect(line('clear', 'harm_c1')).toBe(false);
+    expect(line('clear', 'vetoed')).toBe(false);
+    expect(line('veto', 'cleared')).toBe(false);
+    expect(line('worker', 'cleared')).toBe(false);
+    expect(line('worker', 'vetoed')).toBe(false);
+    expect(line('exec_event', 'harm_c1')).toBe(false);
+  });
+  it('正常转移码、G 码、identity_changed 对任何写入方都拒绝', () => {
+    for (const by of ['worker', 'clear', 'rollback_to', 'veto', 'exec_event']) {
+      expect(line(by, 'ingested'), by).toBe(false);
+      expect(line(by, 'revocation_reconciled'), by).toBe(false);
+      expect(line(by, 'g4_conflict'), by).toBe(false);
+      expect(line(by, 'identity_changed'), by).toBe(false);
+    }
   });
 });
 
