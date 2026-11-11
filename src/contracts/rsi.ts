@@ -1181,6 +1181,8 @@ export const RSI_PROBE_SESSIONS = 3;
 export const RSI_PROBE_WINDOW_DAYS = 7;
 export const RSI_PROBE_QUIET_MINUTES = 60;
 export const RSI_PROBE_WAIT_HOURS = 48;
+/** W0-18:准入 `failed` 后满 N 个 UTC 日(日期差口径,W0-16),worker 自动重新 armed 下一代 */
+export const RSI_PROBE_RETRY_DAYS = 7;
 /** `revocations.jsonl` 上限(W0-9):超出按读取失败处理;> 一半时 `rsi auto status` 提示 */
 export const RSI_REVOCATIONS_MAX_BYTES = 1024 * 1024;
 export const RSI_REVOCATIONS_WARN_BYTES = 512 * 1024;

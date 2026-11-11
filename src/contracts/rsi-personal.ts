@@ -320,6 +320,9 @@ const AssignLineSchema = z
     case_set_sha256: Sha256Schema.nullable(),
     overlaps_preset: z.boolean(),
     hint_version: NonNegInt,
+    /** W0-18:探针行绑定本代代号与票号(其余行为 null);worker 只认与当前代、未重复票号对得上的探针行 */
+    probe_generation: NonNegInt.nullable(),
+    probe_ticket: z.number().int().min(1).max(RSI_PROBE_SESSIONS).nullable(),
   })
   .superRefine((l, ctx) => {
     const bad = (path: string, message: string): void => {
@@ -329,6 +332,15 @@ const AssignLineSchema = z
       if (l.reason === null) return bad('reason', 'excluded 必须带原因码');
       if (l.p !== 0) bad('p', 'excluded 的 p 恒为 0');
       const probe = l.reason === 'admission_probe';
+      // W0-18:探针行必须同时带代号与票号、overlaps_preset 恒 false;非探针 excluded 行两者都为 null
+      if (probe) {
+        if (l.probe_generation === null || l.probe_ticket === null)
+          bad('probe_ticket', '探针行必须同时带 probe_generation 与 probe_ticket');
+        if (l.overlaps_preset)
+          bad('overlaps_preset', '探针行与候选无关,overlaps_preset 恒为 false');
+      } else if (l.probe_generation !== null || l.probe_ticket !== null) {
+        bad('probe_ticket', '非探针行的 probe_generation / probe_ticket 必须都为 null');
+      }
       // W0-3:探针行是唯一「marker 非空且 candidate_id 为 null」的情形,反之亦然
       if (probe !== (l.marker !== null && l.candidate_id === null)) {
         bad('marker', 'admission_probe 行 ⇔ marker 非空且 candidate_id 为 null');
@@ -338,6 +350,8 @@ const AssignLineSchema = z
       }
     } else {
       if (l.reason !== null) bad('reason', 'treat / control 的 reason 为 null');
+      if (l.probe_generation !== null || l.probe_ticket !== null)
+        bad('probe_ticket', 'treat / control 的 probe_generation / probe_ticket 为 null');
       if (l.marker === null || l.candidate_id === null)
         bad('marker', 'treat / control 必须带 marker 与 candidate_id');
       if (l.p <= 0) bad('p', 'treat / control 的 p > 0');
@@ -367,7 +381,7 @@ export const RsiCanaryLedgerLineSchema = z.discriminatedUnion('kind', [
 ]);
 export type RsiCanaryLedgerLine = z.infer<typeof RsiCanaryLedgerLineSchema>;
 
-/** `.state/rsi/canary.json`(R21-6.10,十一键) */
+/** `.state/rsi/canary.json`(R21-6.10;W0-18 起十二键,追加 `overlaps_preset`) */
 export const CanaryDocSchema = z.strictObject({
   candidate_id: RsiCandidateIdSchema,
   content_sha256: Sha256Schema,
@@ -383,6 +397,8 @@ export const CanaryDocSchema = z.strictObject({
   policy_fp: Sha256Schema,
   revocation_gen: NonNegInt,
   generation: NonNegInt,
+  /** W0-18:G4 算出的「与预置技能功能重叠」,hint 原样抄进 treat / control 账行 */
+  overlaps_preset: z.boolean(),
 });
 export type CanaryDoc = z.infer<typeof CanaryDocSchema>;
 
