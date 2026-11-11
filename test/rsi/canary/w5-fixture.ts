@@ -58,6 +58,7 @@ export function canaryDoc(over: Partial<CanaryDoc> = {}): CanaryDoc {
     policy_fp: POLICY,
     revocation_gen: 0,
     generation: 1,
+    overlaps_preset: false,
     ...over,
   };
 }

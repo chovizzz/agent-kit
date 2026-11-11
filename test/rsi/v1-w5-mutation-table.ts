@@ -480,8 +480,14 @@ export const V1_W5_MUTATIONS: readonly V1W5Mutation[] = [
   },
   {
     id: 'admission-old-generation-lines-counted',
-    clause: 'W0-3:旧代探针行不计入本代(账行无 generation,按 at ≥ armed_at 归代)',
-    edits: [off(PLAN, 'if (atMs < since) continue;')],
+    clause: 'W0-18:旧代探针行不计入本代(只认 probe_generation 等于当前代的行)',
+    edits: [
+      {
+        file: PLAN,
+        anchor: ' || l.probe_generation !== entry.generation',
+        replacement: '',
+      },
+    ],
     tests: [T_ADM],
     expectRed: ['旧代的探针行'],
     mustKill: ['旧代的探针行'],
@@ -530,7 +536,7 @@ export const V1_W5_MUTATIONS: readonly V1W5Mutation[] = [
   },
   {
     id: 'admission-failed-rearms-without-version-change',
-    clause: 'W0-3:failed 在 shape_version 或 agent_version 变化前不自动重探',
+    clause: 'W0-3 / W0-18:failed 未满 RSI_PROBE_RETRY_DAYS 且版本未变不自动重探',
     edits: [
       {
         file: PLAN,
@@ -539,16 +545,133 @@ export const V1_W5_MUTATIONS: readonly V1W5Mutation[] = [
       },
     ],
     tests: [T_ADM],
-    expectRed: ['failed 在版本变化之前不自动重探', 'admitted 且版本未变'],
-    mustKill: ['failed 在版本变化之前不自动重探'],
+    expectRed: ['failed 未满 7 个 UTC 日且版本未变', 'admitted 且版本未变'],
+    mustKill: ['failed 未满 7 个 UTC 日且版本未变'],
   },
   {
-    id: 'admission-used-tickets-ignored',
-    clause: 'W0-3:账行无 generation,本代票占满且行数恰为票数才判 admitted(旧代迟到行不得充数)',
-    edits: [drop(PLAN, 'usedTickets >= entry.tickets &&')],
+    id: 'admission-ticket-out-of-range-counted',
+    clause: 'W0-18:probe_ticket 在 1..tickets 之外的行不计入本代',
+    edits: [
+      {
+        file: PLAN,
+        anchor:
+          'if (l.probe_ticket === null || l.probe_ticket < 1 || l.probe_ticket > entry.tickets) continue;',
+        replacement: 'if (l.probe_ticket === null) continue;',
+      },
+    ],
     tests: [T_ADM],
-    expectRed: ['本代票没有占满'],
-    mustKill: ['本代票没有占满'],
+    expectRed: ['旧代 / 越界票号'],
+    mustKill: ['旧代 / 越界票号'],
+  },
+  {
+    id: 'admission-duplicate-ticket-ignored',
+    clause: 'W0-18:同一 (probe_generation, probe_ticket) 出现两行 → failed(multi_marker)',
+    edits: [drop(PLAN, 'new Set(lines.map((l) => l.ticket)).size !== lines.length ||')],
+    tests: [T_ADM],
+    expectRed: ['同一 (probe_generation, probe_ticket) 出现两行'],
+    mustKill: ['同一 (probe_generation, probe_ticket) 出现两行'],
+  },
+  {
+    id: 'admission-duplicate-marker-ignored',
+    clause: 'W0-18:同一标记落在两个票号的行上 → failed(multi_marker)(更少影响方向)',
+    edits: [
+      {
+        file: PLAN,
+        anchor: 'new Set(lines.map((l) => l.marker)).size !== lines.length',
+        replacement: 'false',
+      },
+    ],
+    tests: [T_ADM],
+    expectRed: ['同一标记落在两个票号的行上'],
+    mustKill: ['同一标记落在两个票号的行上'],
+  },
+  {
+    id: 'admission-retry-never',
+    clause: 'W0-18:failed 满 RSI_PROBE_RETRY_DAYS 个 UTC 日自动重新 armed 下一代',
+    edits: [drop(PLAN, "else if (retryDue(e, nowMs)) arm('retry');")],
+    tests: [T_ADM],
+    expectRed: ['自动重新 armed 下一代', '每种 failed 原因满 7 日'],
+    mustKill: ['自动重新 armed 下一代'],
+  },
+  {
+    id: 'admission-retry-too-early',
+    clause: 'W0-18:满 7 个 UTC 日(日期差口径),不足 7 日不重探',
+    edits: [
+      {
+        file: PLAN,
+        anchor: 'iso(at).slice(0, 10)) >= RSI_PROBE_RETRY_DAYS;',
+        replacement: 'iso(at).slice(0, 10)) >= RSI_PROBE_RETRY_DAYS - 1;',
+      },
+    ],
+    tests: [T_ADM],
+    expectRed: ['满 6 个 UTC 日'],
+    mustKill: ['满 6 个 UTC 日'],
+  },
+  {
+    id: 'admission-retry-ignores-arm-conditions',
+    clause: 'W0-18:自动重探仍要其余 armed 条件成立(暂停 / 循环无效等不重探)',
+    edits: [
+      {
+        file: PLAN,
+        anchor: 'if (mayArm && facts !== undefined) {',
+        replacement: 'if (facts !== undefined) {',
+      },
+    ],
+    tests: [T_ADM],
+    expectRed: ['满 7 日的自动重探仍受 arm 条件约束'],
+    mustKill: ['满 7 日的自动重探仍受 arm 条件约束'],
+  },
+  {
+    id: 'admission-retry-bad-decided-at',
+    clause: 'W0-18:decided_at 不可解析 → 不自动重探(fail-closed)',
+    edits: [off(PLAN, 'if (!Number.isFinite(at)) return false;')],
+    tests: [T_ADM],
+    expectRed: ['decided_at 缺失 / 不可解析'],
+    mustKill: ['decided_at 缺失 / 不可解析'],
+  },
+  {
+    id: 'probe-line-generation-not-bound',
+    clause: 'W0-18:探针账行的 probe_generation 取占到的票的代号',
+    edits: [{ file: HINTP, anchor: 'generation: grant.generation', replacement: 'generation: 0' }],
+    tests: [T_PART],
+    expectRed: ['依次消费 3 张票', '重新 armed(generation 加 1)后旧代的占用文件作废'],
+    mustKill: ['依次消费 3 张票'],
+  },
+  {
+    id: 'probe-line-ticket-not-bound',
+    clause: 'W0-18:探针账行的 probe_ticket 取占到的票序 i',
+    edits: [{ file: HINTP, anchor: 'ticket: grant.index', replacement: 'ticket: 1' }],
+    tests: [T_PART],
+    expectRed: ['依次消费 3 张票'],
+    mustKill: ['依次消费 3 张票'],
+  },
+  {
+    id: 'hint-overlaps-preset-not-copied',
+    clause: 'W0-18:hint 把 canary.json 的 overlaps_preset 原样抄进 treat / control 账行',
+    edits: [
+      {
+        file: HINTP,
+        anchor: 'overlaps_preset: f.doc?.overlaps_preset ?? false,',
+        replacement: 'overlaps_preset: false,',
+      },
+    ],
+    tests: [T_PART],
+    expectRed: ['overlaps_preset 原样抄自 canary.json'],
+    mustKill: ['overlaps_preset 原样抄自 canary.json'],
+  },
+  {
+    id: 'writer-overlaps-preset-not-from-record',
+    clause: 'W0-18:canary.json 的 overlaps_preset 取该候选 G4 结果(权威记录)',
+    edits: [
+      {
+        file: WRITER,
+        anchor: 'overlaps_preset: rec.overlaps_preset,',
+        replacement: 'overlaps_preset: false,',
+      },
+    ],
+    tests: [T_WRITER],
+    expectRed: ['overlaps_preset 取权威记录里该候选 G4 的结果'],
+    mustKill: ['overlaps_preset 取权威记录里该候选 G4 的结果'],
   },
   {
     id: 'admission-probing-version-change-ignored',

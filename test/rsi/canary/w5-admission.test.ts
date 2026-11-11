@@ -28,7 +28,6 @@ const FACTS: AgentFacts = {
   shapeVersion: 'claude-1',
   agentVersion: '2.1.0',
   maxUsedGeneration: 0,
-  usedTickets: 3,
 };
 const M = ['rsm_0000000000000001', 'rsm_0000000000000002', 'rsm_0000000000000003'] as const;
 
@@ -36,6 +35,8 @@ const probeLine = (
   marker: string,
   at: string,
   agent: 'claude' | 'pi' = 'claude',
+  generation = 1,
+  ticket = 1,
 ): RsiCanaryLedgerLine => ({
   kind: 'assign',
   at,
@@ -51,8 +52,10 @@ const probeLine = (
   case_set_sha256: null,
   overlaps_preset: false,
   hint_version: 1,
+  probe_generation: generation,
+  probe_ticket: ticket,
 });
-const LINES = M.map((m, i) => probeLine(m, `2026-11-10T0${i + 1}:00:00Z`));
+const LINES = M.map((m, i) => probeLine(m, `2026-11-10T0${i + 1}:00:00Z`, 'claude', 1, i + 1));
 const seen =
   (s: Record<string, MarkerSighting[]>) =>
   (m: string): readonly MarkerSighting[] =>
@@ -197,12 +200,50 @@ describe('判定 probing:admitted / failed / pending', () => {
     const p = run({ ledger: LINES.slice(0, 2), now: new Date('2026-11-17T00:00:00Z') });
     expect(p.next.agents.claude).toMatchObject({ state: 'failed', reason: 'probe_expired' });
   });
-  it('旧代的探针行(at 早于本代 armed_at)不计入:新 arm 之后没有新行 → 不 admitted', () => {
+  it('旧代的探针行(probe_generation ≠ 当前代)不计入:新 arm 之后没有本代行 → 不 admitted', () => {
     const p = run({
       current: withEntry(probing({ armed_at: '2026-11-10T10:00:00Z', generation: 2 })),
-      ledger: LINES.map((_l, i) => probeLine(M[i] as string, `2026-11-09T0${i + 1}:00:00Z`)),
+      ledger: LINES.map((_l, i) =>
+        probeLine(M[i] as string, `2026-11-10T1${i + 1}:00:00Z`, 'claude', 1, i + 1),
+      ),
     });
     expect(p.changed).toBe(false);
+  });
+  it('按代号而不是时间认行:本代的行即使 at 早于 armed_at 也计入(W0-18 取代时间窗)', () => {
+    const p = run({
+      current: withEntry(
+        probing({ armed_at: '2026-11-10T11:00:00Z', probe_expires_at: '2026-11-17T00:00:00Z' }),
+      ),
+    });
+    expect(p.next.agents.claude?.state).toBe('admitted');
+  });
+  it('旧代 / 越界票号(0、tickets+1)的行不计入本代:既不充数也不阻止本代 admitted', () => {
+    const stray = [
+      probeLine('rsm_00000000000000a1', '2026-11-10T04:00:00Z', 'claude', 0, 1),
+      probeLine('rsm_00000000000000a2', '2026-11-10T04:00:00Z', 'claude', 1, 4 as number),
+    ];
+    // 4 号票越界:schema 允许 1..RSI_PROBE_SESSIONS(3),这里绕过 schema 直接喂纯函数,验证判定自身也只认 1..tickets
+    expect(run({ ledger: [...LINES, ...stray] }).next.agents.claude?.state).toBe('admitted');
+    const two = [LINES[0] as RsiCanaryLedgerLine, LINES[1] as RsiCanaryLedgerLine];
+    expect(run({ ledger: [...stray, ...two] }).changed).toBe(false);
+  });
+  it('同一 (probe_generation, probe_ticket) 出现两行 → 本代 failed(multi_marker)', () => {
+    const dup = probeLine('rsm_00000000000000b1', '2026-11-10T04:00:00Z', 'claude', 1, 2);
+    const p = run({ ledger: [...LINES, dup] });
+    expect(p.next.agents.claude).toMatchObject({ state: 'failed', reason: 'multi_marker' });
+  });
+  it('同一标记落在两个票号的行上 → 本代 failed(multi_marker)', () => {
+    const dup = probeLine(M[0], '2026-11-10T04:00:00Z', 'claude', 1, 2);
+    const p = run({ ledger: [LINES[0] as RsiCanaryLedgerLine, dup] });
+    expect(p.next.agents.claude).toMatchObject({ state: 'failed', reason: 'multi_marker' });
+  });
+  it('旧代的重复票号不影响本代(只有本代的重复才算)', () => {
+    const oldDup = probeLine('rsm_00000000000000c1', '2026-11-09T04:00:00Z', 'claude', 0, 1);
+    const oldDup2 = probeLine('rsm_00000000000000c2', '2026-11-09T05:00:00Z', 'claude', 0, 1);
+    expect(run({ ledger: [oldDup, oldDup2, ...LINES] }).next.agents.claude?.state).toBe('admitted');
+  });
+  it('票号缺一(1、2 号齐,3 号没有行)→ 不 admitted', () => {
+    expect(run({ ledger: LINES.slice(0, 2) }).changed).toBe(false);
   });
   it('其它 agent 的探针行不计入 claude', () => {
     expect(
@@ -269,7 +310,7 @@ describe('admitted / failed 之后', () => {
       expect(p.next.agents.claude).toMatchObject({ state: 'probing', generation: 5 });
     }
   });
-  it('failed 在版本变化之前不自动重探;版本变了才重探', () => {
+  it('failed 未满 7 个 UTC 日且版本未变 → 不自动重探;版本变了才立即重探', () => {
     const failed = probing({ state: 'failed', decided_at: ARMED, reason: 'marker_not_retrieved' });
     expect(plan({ current: withEntry(failed) }).changed).toBe(false);
     const p = plan({
@@ -278,7 +319,59 @@ describe('admitted / failed 之后', () => {
     });
     expect(p.next.agents.claude?.state).toBe('probing');
   });
-  it('前台显式 rearm 才让版本未变的 failed 重探', () => {
+  const failedAt = (decided: string) =>
+    withEntry(
+      probing({ state: 'failed', decided_at: decided, reason: 'probe_expired', generation: 3 }),
+    );
+  it('failed 满 RSI_PROBE_RETRY_DAYS(7)个 UTC 日 → 自动重新 armed 下一代;按日期差,与时刻无关', () => {
+    // NOW = 2026-11-10T12:00Z。11-03 23:59:59 与 11-03 00:00:00 的日期差都是 7
+    for (const d of ['2026-11-03T23:59:59Z', '2026-11-03T00:00:00Z', '2026-10-01T00:00:00Z']) {
+      const p = plan({ current: failedAt(d) });
+      expect(p.next.agents.claude).toMatchObject({
+        state: 'probing',
+        generation: 4,
+        armed_at: '2026-11-10T12:00:00.000Z',
+        tickets: 3,
+        decided_at: null,
+        reason: null,
+      });
+      expect(p.changes[0]).toMatchObject({ from: 'failed', to: 'probing', reason: 'retry' });
+    }
+  });
+  it('failed 满 6 个 UTC 日(11-04 00:00 起算)→ 仍不重探', () => {
+    expect(plan({ current: failedAt('2026-11-04T00:00:00Z') }).changed).toBe(false);
+    expect(plan({ current: failedAt('2026-11-04T23:59:59Z') }).changed).toBe(false);
+  });
+  it('满 7 日的自动重探仍受 arm 条件约束:暂停 / 循环无效 / 相位不足 / 版本不可知 / 钩子未装 → 不重探', () => {
+    const cur = failedAt('2026-11-01T00:00:00Z');
+    expect(plan({ current: cur, autoPaused: true }).changed).toBe(false);
+    expect(plan({ current: cur, autoLoopEffective: false }).changed).toBe(false);
+    expect(plan({ current: cur, phase: 1 }).changed).toBe(false);
+    expect(
+      plan({ current: cur, agents: { claude: { ...FACTS, agentVersion: null }, pi: undefined } })
+        .changed,
+    ).toBe(false);
+    expect(
+      plan({
+        current: cur,
+        agents: { claude: { ...FACTS, hookCanaryInstalled: false }, pi: undefined },
+      }).changed,
+    ).toBe(false);
+  });
+  it('failed 的 decided_at 缺失 / 不可解析 → 不自动重探(fail-closed)', () => {
+    const noAt = withEntry(probing({ state: 'failed', reason: 'probe_expired' }));
+    expect(plan({ current: noAt }).changed).toBe(false);
+    expect(plan({ current: failedAt('not-a-date') }).changed).toBe(false);
+  });
+  it('每种 failed 原因满 7 日都自动重探(marker_not_retrieved / multi_marker / probe_expired)', () => {
+    for (const reason of ['marker_not_retrieved', 'multi_marker', 'probe_expired'] as const) {
+      const cur = withEntry(
+        probing({ state: 'failed', decided_at: '2026-11-01T00:00:00Z', reason }),
+      );
+      expect(plan({ current: cur }).next.agents.claude?.state).toBe('probing');
+    }
+  });
+  it('前台显式 rearm 才让版本未变、未满 7 日的 failed 重探', () => {
     const failed = probing({ state: 'failed', decided_at: ARMED, reason: 'probe_expired' });
     expect(plan({ current: withEntry(failed), rearm: ['claude'] }).next.agents.claude?.state).toBe(
       'probing',

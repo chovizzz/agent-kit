@@ -246,6 +246,9 @@ describe('第 2a 行:探针端到端', () => {
       reason: 'admission_probe',
       candidate_id: null,
       marker: 'rsm_0707070707070707',
+      probe_generation: 1,
+      probe_ticket: 1,
+      overlaps_preset: false,
     });
   });
 });

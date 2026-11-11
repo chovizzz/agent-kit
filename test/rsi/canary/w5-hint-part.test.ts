@@ -56,6 +56,8 @@ describe('第 6 / 7 行:随机、分组账、输出', () => {
         case_set_sha256: null,
         overlaps_preset: false,
         hint_version: 1,
+        probe_generation: null,
+        probe_ticket: null,
       },
     ]);
     expect(Buffer.byteLength(out, 'utf8')).toBeLessThanOrEqual(1536);
@@ -86,6 +88,24 @@ describe('第 6 / 7 行:随机、分组账、输出', () => {
     expect(out.includes(RSI_AUTO_LABEL)).toBe(true);
   });
 
+  it('overlaps_preset 原样抄自 canary.json(treat 与 control 都是;W0-18),其余 excluded 行同样带', async () => {
+    for (const u of [0.1, 0.9]) {
+      for (const v of [true, false]) {
+        const w = await makeCanaryWorld('w5-overlap-');
+        const s: PortState = { ...GOOD, canary: ok(canaryDoc({ overlaps_preset: v })) };
+        await runCanaryPart(runEnv(w, fakePort(s), { random: () => u }));
+        expect((await ledgerRows(w))[0]).toMatchObject({ overlaps_preset: v });
+      }
+    }
+    const w = await makeCanaryWorld('w5-overlap-ex-');
+    const s: PortState = {
+      ...GOOD,
+      pause: 'present',
+      canary: ok(canaryDoc({ overlaps_preset: true })),
+    };
+    await runCanaryPart(runEnv(w, fakePort(s)));
+    expect((await ledgerRows(w))[0]).toMatchObject({ arm: 'excluded', overlaps_preset: true });
+  });
   it('两种组别的标记行都 ≤ 64 字节,不含路径 / 项目名', async () => {
     const w = await makeCanaryWorld('w5-marker-');
     const out = await runCanaryPart(runEnv(w, fakePort(GOOD), { random: () => 0.5 }));
@@ -236,8 +256,12 @@ describe('第 2a 行:探针票(W0-3)', () => {
     ]);
     const rows = await ledgerRows(w);
     expect(rows).toHaveLength(3);
-    for (const r of rows) {
+    for (const [i, r] of rows.entries()) {
       expect(r).toMatchObject({
+        // W0-18:账行绑定占到的票的代号与票号;探针行 overlaps_preset 恒 false
+        probe_generation: 1,
+        probe_ticket: i + 1,
+        overlaps_preset: false,
         arm: 'excluded',
         reason: 'admission_probe',
         candidate_id: null,
@@ -278,6 +302,13 @@ describe('第 2a 行:探针票(W0-3)', () => {
     );
     expect(out).toBe(`${RSI_MARK_PREFIX} rsm_0909090909090909\n`);
     expect(await names(w)).toContain('2-1.used');
+    // W0-18:新代的账行带新代号与票号 1(旧代三行仍是代号 1)
+    expect((await ledgerRows(w)).map((r) => [r['probe_generation'], r['probe_ticket']])).toEqual([
+      [1, 1],
+      [1, 2],
+      [1, 3],
+      [2, 1],
+    ]);
     const markers = (await ledgerRows(w)).map((r) => r['marker']);
     expect(new Set(markers).size).toBe(markers.length);
   });

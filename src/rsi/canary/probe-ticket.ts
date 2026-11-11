@@ -15,6 +15,9 @@ import { CANARY_FILES, probeTicketName } from './files.js';
 export interface TicketGrant {
   /** 票号 `<generation>-<i>` */
   ticket: string;
+  /** 占到的票所属代号(账行 `probe_generation`,W0-18) */
+  generation: number;
+  /** 票序 i(账行 `probe_ticket`,W0-18) */
   index: number;
 }
 
@@ -30,7 +33,7 @@ export async function consumeProbeTicket(
     const name = probeTicketName(entry.generation, i);
     try {
       await createExclusive(io, path.join(dir, name), '', RSI_FILE_MODE);
-      return { ticket: `${entry.generation}-${i}`, index: i };
+      return { ticket: `${entry.generation}-${i}`, generation: entry.generation, index: i };
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === 'EEXIST') continue;
       throw e;

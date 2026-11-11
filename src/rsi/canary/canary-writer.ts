@@ -5,7 +5,7 @@
  *    {@link reconcileBarrier}(R21-9.5:**全部**凭据都已对账——canary.json 无残留条目、分组账已有对应 stop 行、权威记录已终态——否则不做任何授予;不只是「当前候选未被撤销」);
  *    ② 重读权威记录并核对该候选确在 `canary`、`content_sha256` 一致、且**没有别的候选占用评估名额**(M13-4,名额检查在锁内、按权威记录现算);
  *    ③ 跨字段语义校验({@link canaryDocProblem},与 hint 读侧同一份);④ `generation` = 现有文件的代数 + 1(现有文件读不到 / 不合规 → 从 1 起:覆盖它是安全方向),
- *    `revocation_gen` = 写入时撤销凭据的行数;⑤ 写。任何一步不成立 → 不写,返回拒绝码。
+ *    `revocation_gen` = 写入时撤销凭据的行数,`overlaps_preset` = 权威记录里该候选 G4 的结果(W0-18);⑤ 写。任何一步不成立 → 不写,返回拒绝码。
  *  - {@link muteCanary}:`AUTO_PAUSE` / 熔断(R21-10.1)——置为不注入(`agents_inject = []`、`p_by_agent = {}`),`generation + 1`。只减少影响,只需 `rsi/lock`。
  *  - {@link removeCanary}:撤销路径清理(R21-9.5):删文件。只需 `rsi/lock`。**生产里该调用必须发生在撤销凭据落盘之后**(凭据单独即可让 hint 停,清理只是收口)。
  */
@@ -183,6 +183,8 @@ export async function grantCanary(d: CanaryWriterDeps, g: GrantInput): Promise<G
     policy_fp: g.policy_fp,
     revocation_gen: rv.lines.length,
     generation,
+    // W0-18:取该候选权威记录里 G4 的结果(调用方不能自带)
+    overlaps_preset: rec.overlaps_preset,
   });
   if (!parsed.success) return { kind: 'refused', reason: 'doc_invalid:schema' };
   const problem = canaryDocProblem(parsed.data);

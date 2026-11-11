@@ -40,6 +40,8 @@ const ASSIGN: RsiCanaryLedgerLine = {
   case_set_sha256: null,
   overlaps_preset: false,
   hint_version: 1,
+  probe_generation: null,
+  probe_ticket: null,
 };
 const STOP = (reason: string, ref: string | null): RsiCanaryLedgerLine =>
   ({

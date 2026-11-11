@@ -53,6 +53,8 @@ function assignLine(
     p: number;
     doc: CanaryDoc | null;
     policyFp: string;
+    /** 探针行专用(W0-18):占到的票的代号与票号;其余行 `null` */
+    probe?: { generation: number; ticket: number };
   },
 ): RsiCanaryLedgerLine {
   return {
@@ -68,9 +70,11 @@ function assignLine(
     background_fp_ex: f.doc?.background_fp_ex ?? NO_BACKGROUND_FP,
     policy_fp: f.policyFp,
     case_set_sha256: null,
-    // CanaryDoc 没有 overlaps_preset(契约十一键里没有):hint 读不到登记表,不能知道;账行必填布尔,这里恒写 false(列入汇报「问题」)
-    overlaps_preset: false,
+    // W0-18:treat / control 行抄 canary.json 的 overlaps_preset;探针行(doc = null)与候选无关,恒 false
+    overlaps_preset: f.doc?.overlaps_preset ?? false,
     hint_version: CANARY_HINT_VERSION,
+    probe_generation: f.probe?.generation ?? null,
+    probe_ticket: f.probe?.ticket ?? null,
   };
 }
 
@@ -100,6 +104,8 @@ async function execute(env: CanaryRunEnv, d: CanaryDecision): Promise<string> {
           p: 0,
           doc: null,
           policyFp: env.policyFp,
+          // 同一 generation 与 i:取自占到的票(W0-18),不是另算
+          probe: { generation: grant.generation, ticket: grant.index },
         }),
       );
       return `${markerLine(marker)}\n`;

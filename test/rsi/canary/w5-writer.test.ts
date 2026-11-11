@@ -85,7 +85,17 @@ async function rig(o: { rsiFailAt?: number; personalFailAt?: number } = {}): Pro
 const file = (r: Rig): string => path.join(r.w.rsi, 'canary.json');
 
 describe('grantCanary:授予', () => {
-  it('成功:0600、十一键齐全、generation 从 1 起、revocation_gen = 写入时撤销凭据的行数;再次授予 generation + 1', async () => {
+  it('overlaps_preset 取权威记录里该候选 G4 的结果(调用方不能自带);true / false 各一', async () => {
+    for (const v of [true, false]) {
+      const r = await rig();
+      r.store.put(rec('canary', { overlaps_preset: v }));
+      expect((await grantCanary(r.d, GRANT)).kind).toBe('written');
+      const doc = JSON.parse(await readText(file(r))) as { overlaps_preset: boolean };
+      expect(doc.overlaps_preset).toBe(v);
+    }
+  });
+
+  it('成功:0600、十二键齐全、generation 从 1 起、revocation_gen = 写入时撤销凭据的行数;再次授予 generation + 1', async () => {
     const r = await rig();
     r.revs.value = {
       kind: 'ok',
@@ -108,6 +118,7 @@ describe('grantCanary:授予', () => {
         'p_by_agent',
         'policy_fp',
         'revocation_gen',
+        'overlaps_preset',
       ].sort(),
     );
     expect(doc['generation']).toBe(1);
