@@ -11,6 +11,7 @@ import type {
   CandidateWorkingCopy,
   PersonalLifecycleRecord,
 } from '../../contracts/rsi-personal.js';
+import { RsiLockError } from '../lock-error.js';
 import type { FactsProvider, ReadySinceRecovery, WorkingStore } from './candidate-ports.js';
 import {
   countShadow,
@@ -34,7 +35,9 @@ async function observeFor(
   if (sig === undefined || entered === null) return null;
   try {
     return { sig, obs: await observer.observe(entered) };
-  } catch {
+  } catch (e) {
+    // 锁丢失必须原样传播(步骤据此立即中止);只有普通读取 / 数据错误才映射为「事实不可得」
+    if (e instanceof RsiLockError) throw e;
     return null;
   }
 }

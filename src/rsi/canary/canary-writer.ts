@@ -1,7 +1,8 @@
 /**
  * `canary.json` 的写入方(docs/contracts.md R21-6.10、R21-9.5「对账先于授予」、R21-10.1、M13-4)。**worker 持 `rsi/lock` 与 `personal/lock` 写,0600**,
  * 经 `writeRsiFileAtomic`(临时文件 + rename)。三个入口:
- *  - {@link grantCanary}:授予影响(写一份「注入这个候选」的缓存)。**两把锁都要持**;在锁内依次:① 重读撤销凭据(读不到 → 拒绝;候选被列出 → 拒绝);
+ *  - {@link grantCanary}:授予影响(写一份「注入这个候选」的缓存)。**两把锁都要持**;在锁内依次:① 重读撤销凭据(读不到 → 拒绝;候选被列出 → 拒绝),并跑**统一对账屏障**
+ *    {@link reconcileBarrier}(R21-9.5:**全部**凭据都已对账——canary.json 无残留条目、分组账已有对应 stop 行、权威记录已终态——否则不做任何授予;不只是「当前候选未被撤销」);
  *    ② 重读权威记录并核对该候选确在 `canary`、`content_sha256` 一致、且**没有别的候选占用评估名额**(M13-4,名额检查在锁内、按权威记录现算);
  *    ③ 跨字段语义校验({@link canaryDocProblem},与 hint 读侧同一份);④ `generation` = 现有文件的代数 + 1(现有文件读不到 / 不合规 → 从 1 起:覆盖它是安全方向),
  *    `revocation_gen` = 写入时撤销凭据的行数;⑤ 写。任何一步不成立 → 不写,返回拒绝码。
@@ -19,6 +20,9 @@ import { canonicalJson } from '../../io/canonical-json.js';
 import type { IoContext } from '../../io/paths.js';
 import type { AuthoritativeStore, RevocationReader } from '../personal/candidate-ports.js';
 import { evaluationSlotOccupied } from '../personal/transition-table.js';
+import { isTerminalLifecycle } from '../personal/transition-table.js';
+import { readLedger, appendStopLine } from './ledger.js';
+import { revocationRefOf } from './files.js';
 import { removeRsiFile, writeRsiFileAtomic, type HeldLock } from './atomic-write.js';
 import { canaryDocProblem } from './canary-doc.js';
 import { CANARY_FILES, sha12Of } from './files.js';
@@ -50,6 +54,7 @@ export interface CanaryWriterDeps {
 export type GrantRefusal =
   | 'revocations_invalid'
   | 'revoked'
+  | 'reconcile_incomplete'
   | 'repo_unreadable'
   | 'candidate_not_canary'
   | 'content_changed'
@@ -63,6 +68,72 @@ export type GrantResult =
 const listed = (lines: readonly RsiRevocationLine[], id: string, sha: string): boolean =>
   lines.some((l) => l.candidate_id === id && l.content_sha256 === sha);
 
+/** 对账屏障的结果:每条未对账的凭据一个原因 */
+export type BarrierResult = { ok: true } | { ok: false; pending: string[] };
+
+/**
+ * R21-9.5 统一对账屏障(只读检查;调用方须已持两把锁):对**每条**凭据核对 ① canary.json 不再列出该 (id, sha);② 分组账已有 `revocation_ref` 相同的 stop 行;
+ * ③ 权威记录里与之匹配(id + sha)的候选已是终态(无记录 = 无事可做)。任一不成立 → 未对账 → 不得授予。账读不了 / 不合规也算未对账。
+ */
+export async function reconcileBarrier(
+  d: Pick<CanaryWriterDeps, 'rsiDir'>,
+  lines: readonly RsiRevocationLine[],
+  records: readonly PersonalLifecycleRecord[],
+): Promise<BarrierResult> {
+  const pending: string[] = [];
+  const ledger = await readLedger(d.rsiDir);
+  const stops = new Set<string>();
+  if (ledger.kind === 'ok') {
+    for (const l of ledger.lines)
+      if (l.kind === 'stop' && l.revocation_ref !== null) stops.add(l.revocation_ref);
+  }
+  const cache = await readCanaryDoc(d.rsiDir);
+  for (const l of lines) {
+    const ref = revocationRefOf(l);
+    if (cache.kind === 'unreadable') pending.push(`${ref}:cache_unreadable`);
+    else if (
+      cache.kind === 'ok' &&
+      cache.value.candidate_id === l.candidate_id &&
+      cache.value.content_sha256 === l.content_sha256
+    ) {
+      pending.push(`${ref}:cache_residual`);
+    }
+    if (ledger.kind === 'invalid') pending.push(`${ref}:ledger_invalid`);
+    else if (!stops.has(ref)) pending.push(`${ref}:stop_missing`);
+    const rec = records.find(
+      (r) => r.id === l.candidate_id && r.content_sha256 === l.content_sha256,
+    );
+    if (rec !== undefined && !isTerminalLifecycle(rec.lifecycle))
+      pending.push(`${ref}:record_not_terminal`);
+  }
+  return pending.length === 0 ? { ok: true } : { ok: false, pending };
+}
+
+/** 对账的缓存清理部分(调用方持两把锁):去掉 canary.json 里被凭据列出的条目、补 stop 行(同 ref 不重复)。状态推进由 W3 的对账步骤做 */
+export async function reconcileCaches(
+  d: CanaryWriterDeps,
+  lines: readonly RsiRevocationLine[],
+  at: Date,
+): Promise<void> {
+  for (const l of lines) {
+    const cur = await readCanaryDoc(d.rsiDir);
+    if (
+      cur.kind === 'ok' &&
+      cur.value.candidate_id === l.candidate_id &&
+      cur.value.content_sha256 === l.content_sha256
+    ) {
+      await removeCanary({ io: d.io, rsiDir: d.rsiDir, locks: { rsi: d.locks.rsi } });
+    }
+    await appendStopLine(d.io, d.rsiDir, d.locks.rsi, {
+      kind: 'stop',
+      at: `${at.toISOString().slice(0, 19)}Z`,
+      candidate_id: l.candidate_id,
+      reason: 'revocation_reconciled',
+      revocation_ref: revocationRefOf(l),
+    });
+  }
+}
+
 export async function grantCanary(d: CanaryWriterDeps, g: GrantInput): Promise<GrantResult> {
   await d.locks.rsi.assertHeld();
   await d.locks.personal.assertHeld();
@@ -72,9 +143,11 @@ export async function grantCanary(d: CanaryWriterDeps, g: GrantInput): Promise<G
   if (listed(rv.lines, g.candidate_id, g.content_sha256)) {
     return { kind: 'refused', reason: 'revoked' };
   }
-  // ② 权威记录:候选确在 canary、内容未变、名额没有被别的候选占用(M13-4)
+  // ② 权威记录:先过统一对账屏障(全部凭据),再核候选确在 canary、内容未变、名额没有被别的候选占用(M13-4)
   const all = await d.store.readAll();
   if (all.kind !== 'ok') return { kind: 'refused', reason: 'repo_unreadable' };
+  const barrier = await reconcileBarrier(d, rv.lines, all.value);
+  if (!barrier.ok) return { kind: 'refused', reason: 'reconcile_incomplete' };
   const rec: PersonalLifecycleRecord | undefined = all.value.find((r) => r.id === g.candidate_id);
   if (rec === undefined || rec.lifecycle !== 'canary') {
     return { kind: 'refused', reason: 'candidate_not_canary' };

@@ -591,6 +591,62 @@ export const V1_W5_MUTATIONS: readonly V1W5Mutation[] = [
     expectRed: ['现有准入文件不合规'],
     mustKill: ['现有准入文件不合规'],
   },
+  {
+    id: 'grant-barrier-removed',
+    clause: 'R21-9.5:全部凭据对账完成前不做任何授予(去掉统一对账屏障)',
+    edits: [{ file: WRITER, anchor: 'if (!barrier.ok) return', replacement: 'if (false) return' }],
+    tests: [T_WRITER],
+    expectRed: ['对账屏障(R21-9.5)'],
+    mustKill: ['对账屏障(R21-9.5)'],
+  },
+  {
+    id: 'grant-barrier-ignores-cache-residual',
+    clause: 'R21-9.5:canary.json 残留被凭据列出的条目 = 未对账',
+    edits: [
+      { file: WRITER, anchor: 'pending.push(`${ref}:cache_residual`);', replacement: 'void 0;' },
+    ],
+    tests: [T_WRITER],
+    expectRed: ['对账屏障(R21-9.5)'],
+    mustKill: ['对账屏障(R21-9.5)'],
+  },
+  {
+    id: 'grant-barrier-ignores-stop-missing',
+    clause: 'R21-9.5:分组账缺 stop 行 = 未对账',
+    edits: [
+      {
+        file: WRITER,
+        anchor: 'else if (!stops.has(ref)) pending.push(`${ref}:stop_missing`);',
+        replacement: 'else void 0;',
+      },
+    ],
+    tests: [T_WRITER],
+    expectRed: ['对账屏障(R21-9.5)'],
+    mustKill: ['对账屏障(R21-9.5)'],
+  },
+  {
+    id: 'grant-barrier-ignores-nonterminal',
+    clause: 'R21-9.5:凭据列出的候选权威记录仍非终态 = 未对账',
+    edits: [
+      {
+        file: WRITER,
+        anchor: 'pending.push(`${ref}:record_not_terminal`);',
+        replacement: 'void 0;',
+      },
+    ],
+    tests: [T_WRITER],
+    expectRed: ['仍非终态'],
+    mustKill: ['仍非终态'],
+  },
+  {
+    id: 'shadow-observe-swallows-lock-lost',
+    clause: '既有停止语义:锁丢失原样传播,不被映射成事实不可得',
+    edits: [
+      { file: SFACTS, anchor: 'if (e instanceof RsiLockError) throw e;', replacement: 'void 0;' },
+    ],
+    tests: [T_SHADOW],
+    expectRed: ['M3 observer 抛 lock_lost'],
+    mustKill: ['M3 observer 抛 lock_lost'],
+  },
   // ---- shadow 计数(W0-2 / W0-13 / R21-1.7 / R21-3.8) ----
   {
     id: 'shadow-facts-fail-open',

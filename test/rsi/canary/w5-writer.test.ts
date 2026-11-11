@@ -7,17 +7,22 @@ import { describe, expect, it } from 'vitest';
 import { exists, lstat, readText } from '../../../src/io/read-fs.js';
 import {
   grantCanary,
+  reconcileCaches,
   muteCanary,
   removeCanary,
   type CanaryWriterDeps,
   type GrantInput,
 } from '../../../src/rsi/canary/canary-writer.js';
 import type { RevocationRead } from '../../../src/rsi/personal/candidate-ports.js';
+import { writeFile } from '../../../src/io/safe-fs.js';
+import { revocationRefOf } from '../../../src/rsi/canary/files.js';
+import { appendStopLine } from '../../../src/rsi/canary/ledger.js';
 import { MemStore } from '../personal/w3-fixture.js';
 import { SHA as TSHA, entry, rec } from '../personal/transition-fixture.js';
 import {
   BODY,
   CID,
+  canaryDoc,
   OTHER_CID,
   POLICY,
   REVOKE,
@@ -86,6 +91,7 @@ describe('grantCanary:授予', () => {
       kind: 'ok',
       lines: [REVOKE(OTHER_CID, 'd'.repeat(64)), REVOKE(OTHER_CID, 'e'.repeat(64))],
     };
+    await reconcileCaches(r.d, r.revs.value.kind === 'ok' ? r.revs.value.lines : [], new Date());
     const res = await grantCanary(r.d, GRANT);
     expect(res.kind).toBe('written');
     const doc = JSON.parse(await readText(file(r))) as Record<string, unknown>;
@@ -118,7 +124,70 @@ describe('grantCanary:授予', () => {
     expect(await grantCanary(r.d, GRANT)).toEqual({ kind: 'refused', reason: 'revoked' });
     expect(await exists(file(r))).toBe(false);
     r.revs.value = { kind: 'ok', lines: [REVOKE(CID, 'd'.repeat(64)), REVOKE(OTHER_CID, SHA)] };
+    await reconcileCaches(r.d, r.revs.value.lines, new Date());
     expect((await grantCanary(r.d, GRANT)).kind).toBe('written');
+  });
+
+  it('对账屏障(R21-9.5):A 已终态但 canary.json 残留、stop 行未补 → 授予 B 被拒;对账完成后允许', async () => {
+    const r = await rig();
+    const A = OTHER_CID;
+    const SA = 'd'.repeat(64);
+    r.store.put(rec('rejected', { id: A, content_sha256: SA }));
+    await writeFile(
+      r.w.io,
+      file(r),
+      JSON.stringify(canaryDoc({ candidate_id: A, content_sha256: SA })),
+      {
+        mode: 0o600,
+      },
+    );
+    r.revs.value = { kind: 'ok', lines: [REVOKE(A, SA)] };
+    expect(await grantCanary(r.d, GRANT)).toEqual({
+      kind: 'refused',
+      reason: 'reconcile_incomplete',
+    });
+    expect((JSON.parse(await readText(file(r))) as { candidate_id: string }).candidate_id).toBe(A);
+    // 只补 stop 行、缓存仍残留 → 仍拒绝
+    await appendStopLine(r.w.io, r.w.rsi, r.d.locks.rsi, {
+      kind: 'stop',
+      at: '2026-11-10T12:00:00Z',
+      candidate_id: A,
+      reason: 'revocation_reconciled',
+      revocation_ref: revocationRefOf(REVOKE(A, SA)),
+    });
+    expect(await grantCanary(r.d, GRANT)).toEqual({
+      kind: 'refused',
+      reason: 'reconcile_incomplete',
+    });
+    await reconcileCaches(r.d, [REVOKE(A, SA)], new Date());
+    expect((await grantCanary(r.d, GRANT)).kind).toBe('written');
+  });
+
+  it('对账屏障:凭据列出的候选权威记录仍非终态 → 拒绝授予别的候选;账不合规同样拒绝', async () => {
+    const r = await rig();
+    r.store.put(rec('shadow', { id: OTHER_CID, content_sha256: 'd'.repeat(64) }));
+    r.revs.value = { kind: 'ok', lines: [REVOKE(OTHER_CID, 'd'.repeat(64))] };
+    await reconcileCaches(r.d, r.revs.value.lines, new Date());
+    expect(await grantCanary(r.d, GRANT)).toEqual({
+      kind: 'refused',
+      reason: 'reconcile_incomplete',
+    });
+    const r2 = await rig();
+    r2.revs.value = { kind: 'ok', lines: [REVOKE(OTHER_CID, 'd'.repeat(64))] };
+    await writeFile(r2.w.io, path.join(r2.w.rsi, 'canary-ledger.jsonl'), 'bad\n', { mode: 0o600 });
+    expect(await grantCanary(r2.d, GRANT)).toEqual({
+      kind: 'refused',
+      reason: 'reconcile_incomplete',
+    });
+  });
+
+  it('M2 adopted 期:本块只给 canary 授予;adopted 候选(V2 推进路径)→ 拒绝(fail-closed,留端口)', async () => {
+    const r = await rig();
+    r.store.put(rec('adopted', { deploy: { claude: 'injected', pi: 'none', codex: 'none' } }));
+    expect(await grantCanary(r.d, GRANT)).toEqual({
+      kind: 'refused',
+      reason: 'candidate_not_canary',
+    });
   });
 
   it('撤销凭据读不到(invalid)→ 拒绝、不写(不是「没有撤销」)', async () => {

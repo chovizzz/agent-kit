@@ -217,7 +217,7 @@ export async function appendFile(
  * `mode` 必填(新建文件的权限,不改已有文件权限)。路径守卫同其它写函数。
  * **保证的边界(如实)**:`O_APPEND` 让每次底层 `write` 的定位与写入原子地落在文件尾;本函数据此让小于一个文件系统块的单行落成一次底层写。
  * 这不是「任意文件系统、任意故障下都不交错」的保证(`PIPE_BUF` 只对管道 / FIFO 成立):短写发生时本函数抛错,但已写出的前缀留在文件里,
- * 读者(逐行 schema 校验)会把这样的账判为不合规并 fail-closed——调用方因此把「抛错」当作未落账、不输出。
+ * worker / 分析读账时(逐行 schema 校验)会把这样的账判为不合规并 fail-closed;这**不**意味着后续 hint 会停止注入(hint 不读账)。调用方把「抛错」当作未落账、不输出。
  */
 export async function appendFileSynced(
   ctx: IoContext,

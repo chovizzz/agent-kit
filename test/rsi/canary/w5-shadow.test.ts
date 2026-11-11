@@ -314,6 +314,20 @@ describe('W3 遗留:重建工作副本后 sessions / hits 由计数重算', () =
     await runPersonalStep(w4.d);
     expect(called).toBe(0);
   });
+  it('M3 observer 抛 lock_lost 原样传播:ShadowCountPort / ReadySinceRecovery 抛出,步骤立即 halted=lock_lost;普通错误仍映射 null', async () => {
+    const lost: ShadowObserver = {
+      observe: async () => {
+        throw new RsiLockError('lock_lost');
+      },
+    };
+    await expect(makeShadowCountPort(lost).count(shadowRec())).rejects.toThrow();
+    await expect(makeReadySinceRecovery(lost).recover(shadowRec())).rejects.toThrow();
+    const w = world3();
+    w.store.put(shadowRec({ source_proposal: { run_id: 'run-1', proposal_id: '2026-11-05-001' } }));
+    w.d.shadowCounts = makeShadowCountPort(lost);
+    expect((await runPersonalStep(w.d)).halted).toBe('lock_lost');
+    expect(await makeShadowCountPort(failing).count(shadowRec())).toBeNull();
+  });
   it('计数端口里丢锁(RsiLockError lock_lost)→ 步骤以 lock_lost 中止', async () => {
     const w = world3();
     w.store.put(shadowRec({ source_proposal: src }));
