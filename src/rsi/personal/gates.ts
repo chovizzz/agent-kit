@@ -295,13 +295,60 @@ export function quotaOf(total: number, profile: 'lite' | 'medium' | 'heavy'): nu
   return total * AUTO_QUOTA_RATIO * (profile === 'heavy' ? 1 : 0.5);
 }
 
+/** 固定预算与单位(R21-5.3):由 target 派生,不信任收集器传入的 total / unit */
+export const QUOTA_TARGET_BUDGET = Object.freeze({
+  claude: { unit: 'lines', total: 200 },
+  pi: { unit: 'bytes', total: 16384 },
+  codex: { unit: 'bytes', total: 16384 },
+} as const);
+/** 必须各出现恰好一次的目标集合 */
+export const QUOTA_REQUIRED_TARGETS = Object.freeze(['claude', 'pi', 'codex'] as const);
+
+const nonNegInt = (n: unknown): n is number =>
+  typeof n === 'number' && Number.isInteger(n) && n >= 0;
+
+/**
+ * 收集器输入的运行时校验:目标集合必须恰好是 {@link QUOTA_REQUIRED_TARGETS}(缺失 / 重复 / 多余 → 不可用),
+ * total / unit 必须等于固定值,所有数量必须是有限非负整数。任何不符 → 抛 {@link GateUnavailableError}(= internal),
+ * 既不当作通过,也不记成候选的配额违规。
+ */
+export function validatedQuotaTargets(targets: readonly unknown[]): readonly GateQuotaTarget[] {
+  const out: GateQuotaTarget[] = [];
+  const seen = new Set<string>();
+  for (const raw of targets) {
+    const t = raw as Partial<GateQuotaTarget> | null;
+    if (t === null || typeof t !== 'object') throw new GateUnavailableError('budget.targets');
+    const name = String(t.target);
+    if (!(QUOTA_REQUIRED_TARGETS as readonly string[]).includes(name) || seen.has(name)) {
+      throw new GateUnavailableError(`budget.targets:${name}`);
+    }
+    seen.add(name);
+    const fixed = QUOTA_TARGET_BUDGET[name as keyof typeof QUOTA_TARGET_BUDGET];
+    if (t.unit !== fixed.unit || t.total !== fixed.total) {
+      throw new GateUnavailableError(`budget.targets:${name}:budget`);
+    }
+    const u = t.used;
+    if (
+      u === undefined ||
+      !nonNegInt(u.rule) ||
+      !nonNegInt(u.pitfall) ||
+      !nonNegInt(u.skill) ||
+      !nonNegInt(t.add)
+    ) {
+      throw new GateUnavailableError(`budget.targets:${name}:counts`);
+    }
+    out.push(t as GateQuotaTarget);
+  }
+  if (seen.size !== QUOTA_REQUIRED_TARGETS.length) throw new GateUnavailableError('budget.targets');
+  return out;
+}
+
 export function g5(f: GateFacts): GateVerdict {
   const d = f.draft;
   const b = need(f.budget, 'budget');
   if (!b.renderLevelOk) return red('g5_budget');
-  if (b.targets.length === 0) throw new GateUnavailableError('budget.targets');
   const cls = d.category; // 'rule' | 'pitfall'(V1);技能类 V3
-  for (const t of b.targets) {
+  for (const t of validatedQuotaTargets(b.targets)) {
     const quota = quotaOf(t.total, b.profile);
     const usedAll = t.used.rule + t.used.pitfall + t.used.skill;
     if (usedAll + t.add > quota) return red('g5_quota');

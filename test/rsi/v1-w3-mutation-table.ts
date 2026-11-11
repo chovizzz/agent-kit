@@ -147,8 +147,8 @@ export const V1_W3_MUTATIONS: readonly V1W3Mutation[] = [
       },
       {
         file: STEP,
-        anchor: 'queued_since: wc.shadow.queued_since ?? today,',
-        replacement: 'queued_since: wc.shadow.queued_since,',
+        anchor: '(wc.shadow.queued_since ?? today)',
+        replacement: 'wc.shadow.queued_since',
       },
     ],
     tests: [T_STEP],
@@ -254,6 +254,86 @@ export const V1_W3_MUTATIONS: readonly V1W3Mutation[] = [
     tests: [T_STEP],
     expectRed: ['名额已释放、队首复核失败'],
     mustKill: ['名额已释放、队首复核失败'],
+  },
+  {
+    id: 'm13-5-tail-queues-on-any-blocker',
+    clause: 'M13-5 / W0-13:尾部只有重判结果确为 slot_occupied 才设排队日期',
+    edits: [{ file: STEP, anchor: "step3.blocker === 'slot_occupied'", replacement: 'true' }],
+    tests: [T_STEP],
+    expectRed: ['尾部重判资格失败'],
+    mustKill: ['尾部重判资格失败'],
+  },
+  {
+    id: 'm13-5-tail-facts-unavailable-queues',
+    clause: 'M13-5:尾部事实不可得仍设排队日期',
+    edits: [
+      {
+        file: STEP,
+        anchor: "await clearQueue(cur, wc, 'promote_facts_unavailable');\n        continue;",
+        replacement:
+          '{\n          const q = patchShadow({ canary_ready_since: wc.shadow.canary_ready_since, queued_since: wc.shadow.queued_since ?? today })(wc);\n          if (q !== undefined) { await d.working.put(q); working.set(cur.id, q); }\n        }\n        continue;',
+      },
+    ],
+    tests: [T_STEP],
+    expectRed: ['尾部事实不可得'],
+    mustKill: ['尾部事实不可得'],
+  },
+  {
+    id: 'g5-targets-set-unchecked',
+    clause: 'R21-5.3:必须检查的目标集合(缺失 / 重复 → internal)',
+    edits: [
+      {
+        file: GATES,
+        anchor:
+          "if (seen.size !== QUOTA_REQUIRED_TARGETS.length) throw new GateUnavailableError('budget.targets');",
+        replacement: 'void 0;',
+      },
+    ],
+    tests: [T_GATES],
+    expectRed: ['目标集合必须恰好是 claude / pi / codex 各一次'],
+    mustKill: ['目标集合必须恰好是 claude / pi / codex 各一次'],
+  },
+  {
+    id: 'g5-collector-budget-trusted',
+    clause: 'R21-5.3:固定预算与单位由 target 派生,不信任收集器',
+    edits: [
+      {
+        file: GATES,
+        anchor: 'if (t.unit !== fixed.unit || t.total !== fixed.total) {',
+        replacement: 'if (false as boolean) {',
+      },
+    ],
+    tests: [T_GATES],
+    expectRed: ['total / unit 必须等于由 target 派生的固定值'],
+    mustKill: ['total / unit 必须等于由 target 派生的固定值'],
+  },
+  {
+    id: 'g5-counts-unvalidated',
+    clause: 'R21-5.3:数量必须是有限非负整数',
+    edits: [
+      {
+        file: GATES,
+        anchor: "typeof n === 'number' && Number.isInteger(n) && n >= 0;",
+        replacement: "typeof n === 'number';",
+      },
+    ],
+    tests: [T_GATES],
+    expectRed: ['数量必须是有限非负整数'],
+    mustKill: ['数量必须是有限非负整数'],
+  },
+  {
+    id: 'reconcile-incomplete-still-grants',
+    clause: 'R21-9.5:对账未完成前不做增加影响的转移',
+    edits: [
+      {
+        file: STEP,
+        anchor: 'const noGrant = out.breaker !== null || out.reconcileIncomplete;',
+        replacement: 'const noGrant = out.breaker !== null;',
+      },
+    ],
+    tests: [T_STEP],
+    expectRed: ['对账未完成'],
+    mustKill: ['对账未完成'],
   },
   {
     id: 'm13-6-expiry-skipped',
@@ -557,8 +637,8 @@ export const V1_W3_MUTATIONS: readonly V1W3Mutation[] = [
     edits: [
       {
         file: STEP,
-        anchor: 'if (!evaluationSlotOccupied(after.filter((o) => o.id !== cur.id))) continue;',
-        replacement: 'void 0;',
+        anchor: 'slot_occupied: evaluationSlotOccupied(after.filter((o) => o.id !== cur.id)),',
+        replacement: 'slot_occupied: true,',
       },
       { file: STEP, anchor: 'let headPromoted = false;', replacement: 'let headPromoted = true;' },
     ],
@@ -608,8 +688,8 @@ export const V1_W3_MUTATIONS: readonly V1W3Mutation[] = [
     edits: [
       {
         file: GATES,
-        anchor: 'for (const t of b.targets) {',
-        replacement: 'for (const t of b.targets.slice(0, 1)) {',
+        anchor: 'for (const t of validatedQuotaTargets(b.targets)) {',
+        replacement: 'for (const t of validatedQuotaTargets(b.targets).slice(0, 1)) {',
       },
     ],
     tests: [T_GATES],

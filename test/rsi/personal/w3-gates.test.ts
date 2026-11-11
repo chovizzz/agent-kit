@@ -245,58 +245,92 @@ describe('G4 冲突 / 重复 / 冷却', () => {
 
 describe('G5 预算与配额(R21-5.3:每目标、每分类、lite 12.5%)', () => {
   type T = NonNullable<GateFacts['budget']>['targets'][number];
-  const tgt = (o: Partial<T>): T => ({
-    target: 'claude',
-    unit: 'lines',
-    total: 200,
-    used: { rule: 0, pitfall: 0, skill: 0 },
-    add: 3,
-    ...o,
-  });
+  const zero = { rule: 0, pitfall: 0, skill: 0 };
+  const claude = (o: Partial<T> = {}): T =>
+    ({ target: 'claude', unit: 'lines', total: 200, used: zero, add: 3, ...o }) as T;
+  const bytes = (target: 'pi' | 'codex', o: Partial<T> = {}): T =>
+    ({ target, unit: 'bytes', total: 16384, used: zero, add: 250, ...o }) as T;
+  /** 完整目标集合(claude / pi / codex),按需覆盖 */
+  const all = (o: { claude?: Partial<T>; pi?: Partial<T>; codex?: Partial<T> } = {}): T[] => [
+    claude(o.claude),
+    bytes('pi', o.pi),
+    bytes('codex', o.codex),
+  ];
   const b = (o: Partial<NonNullable<GateFacts['budget']>>, d?: CandidateDraft): GateFacts => {
     const f = goodFacts(d);
     return { ...f, budget: { ...(f.budget as NonNullable<GateFacts['budget']>), ...o } };
   };
+  const paired = { pairedRetirement: true };
   it('绿', () => expect(g5(goodFacts())).toBeNull());
   it('渲染后 level 不是 ok → g5_budget', () =>
     expect(g5(b({ renderLevelOk: false }))).toEqual(red('g5_budget')));
-  it('claude 按行:lite 档 200 行预算的 12.5% = 25 行;超出 → g5_quota,恰好用满且已配对则放行', () => {
-    expect(g5(b({ targets: [tgt({ add: 26 })], pairedRetirement: true }))).toEqual(red('g5_quota'));
-    // 规则份额 50% = 12.5 行:总量够但规则份额超 → g5_quota
-    expect(g5(b({ targets: [tgt({ add: 13 })], pairedRetirement: true }))).toEqual(red('g5_quota'));
-    expect(g5(b({ targets: [tgt({ add: 12 })], pairedRetirement: true }))).toBeNull();
+  it('claude 按行:lite 档 200 行预算的 12.5% = 25 行;规则份额 12.5 行', () => {
+    expect(g5(b({ targets: all({ claude: { add: 26 } }), ...paired }))).toEqual(red('g5_quota'));
+    expect(g5(b({ targets: all({ claude: { add: 13 } }), ...paired }))).toEqual(red('g5_quota'));
+    expect(g5(b({ targets: all({ claude: { add: 12 } }), ...paired }))).toBeNull();
   });
   it('其它目标按字节:16384 的 12.5% = 2048;规则份额 1024', () => {
-    const pi = (add: number): T => tgt({ target: 'pi', unit: 'bytes', total: 16384, add });
-    expect(g5(b({ targets: [pi(1025)], pairedRetirement: true }))).toEqual(red('g5_quota'));
-    expect(g5(b({ targets: [pi(1024)], pairedRetirement: true }))).toBeNull();
+    expect(g5(b({ targets: all({ pi: { add: 1025 } }), ...paired }))).toEqual(red('g5_quota'));
+    expect(g5(b({ targets: all({ pi: { add: 1024 } }), ...paired }))).toBeNull();
   });
   it('分类份额:总量未超但踩坑 30% 份额已满 → g5_quota;heavy 档额度翻倍', () => {
     const pit = draftOf({ kind: 'fact', volatility: 'volatile', trigger: 'pnpm test' });
-    const t = tgt({ used: { rule: 0, pitfall: 7, skill: 0 }, add: 1 }); // 份额 25 × 0.3 = 7.5
-    expect(g5(b({ targets: [t], pairedRetirement: true }, pit))).toEqual(red('g5_quota'));
-    expect(g5(b({ targets: [t], pairedRetirement: true, profile: 'heavy' }, pit))).toBeNull();
+    const targets = all({ claude: { used: { rule: 0, pitfall: 7, skill: 0 }, add: 1 } });
+    expect(g5(b({ targets, ...paired }, pit))).toEqual(red('g5_quota'));
+    expect(g5(b({ targets, ...paired, profile: 'heavy' }, pit))).toBeNull();
   });
-  it('任一目标超额即红(第二个目标超,第一个没超)', () => {
-    const ok = tgt({ add: 1 });
-    const bad = tgt({ target: 'codex', unit: 'bytes', total: 16384, add: 5000 });
-    expect(g5(b({ targets: [ok, bad], pairedRetirement: true }))).toEqual(red('g5_quota'));
+  it('任一目标超额即红(codex 超,claude / pi 没超)', () => {
+    expect(g5(b({ targets: all({ codex: { add: 5000 } }), ...paired }))).toEqual(red('g5_quota'));
   });
   it('占用越过 80% 且无配对退役 → g5_quota;配对后放行', () => {
-    const t = tgt({ used: { rule: 8, pitfall: 6, skill: 4 }, add: 2 }); // 20 / 25 = 80%
-    expect(g5(b({ targets: [t] }))).toEqual(red('g5_quota'));
-    expect(g5(b({ targets: [t], pairedRetirement: true }))).toBeNull();
+    const targets = all({ claude: { used: { rule: 8, pitfall: 6, skill: 4 }, add: 2 } }); // 20 / 25
+    expect(g5(b({ targets }))).toEqual(red('g5_quota'));
+    expect(g5(b({ targets, ...paired }))).toBeNull();
   });
   it('单条超过 600 字节 → g5_atom_bytes', () => {
     const d = draftOf({ body: { do: '甲'.repeat(300) } });
-    expect(g5(b({ pairedRetirement: true }, d))).toEqual(red('g5_atom_bytes'));
+    expect(g5(b({ ...paired }, d))).toEqual(red('g5_atom_bytes'));
   });
   it('注入追加字节(标记行 + 标签 + 哈希行 + 正文)在 M11 上限内', () => {
     expect(injectBytes(draftOf())).toBeLessThanOrEqual(1536);
   });
-  it('预算探针不可用(null)或没有任何目标 → 抛', () => {
+  it('预算探针不可用(null)→ 抛', () => {
     expect(() => g5({ ...goodFacts(), budget: null })).toThrow();
-    expect(() => g5(b({ targets: [] }))).toThrow();
+  });
+  it('目标集合必须恰好是 claude / pi / codex 各一次:缺失 / 重复 / 多余 / 空 → 不可用(internal,不是通过也不是配额违规)', () => {
+    for (const targets of [
+      [],
+      [claude(), bytes('pi')],
+      [...all(), claude()],
+      [claude(), claude(), bytes('pi')],
+      [...all(), { ...claude(), target: 'gemini' } as unknown as T],
+    ]) {
+      expect(
+        () => g5(b({ targets, ...paired })),
+        JSON.stringify(targets.map((t) => t.target)),
+      ).toThrow();
+      expect(runGates(b({ targets, ...paired }))).toMatchObject({ kind: 'internal', gate: 'g5' });
+    }
+  });
+  it('total / unit 必须等于由 target 派生的固定值(收集器给错 → internal,不是放宽额度)', () => {
+    for (const bad of [
+      { claude: { total: 400 } },
+      { claude: { unit: 'bytes' } },
+      { pi: { unit: 'lines' } },
+      { pi: { total: 1_000_000 } },
+      { codex: { total: 0 } },
+    ] as const) {
+      expect(() => g5(b({ targets: all(bad as never), ...paired }))).toThrow();
+    }
+  });
+  it('数量必须是有限非负整数:NaN / Infinity / 负数 / 小数 / 缺字段 → internal', () => {
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, -1, 1.5]) {
+      expect(() => g5(b({ targets: all({ claude: { add: bad } }), ...paired }))).toThrow();
+      expect(() =>
+        g5(b({ targets: all({ pi: { used: { rule: bad, pitfall: 0, skill: 0 } } }), ...paired })),
+      ).toThrow();
+    }
+    expect(() => g5(b({ targets: all({ claude: { used: undefined } }), ...paired }))).toThrow();
   });
 });
 

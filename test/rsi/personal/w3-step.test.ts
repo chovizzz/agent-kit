@@ -734,4 +734,53 @@ describe('验收评审追加', () => {
     expect(w.working.get(B)?.shadow.queued_since).toBeNull();
     expect(w.working.get(A)?.shadow.queued_since).toBeNull();
   });
+  it('M13-5 队首提交后给尾部设排队日期前逐个重判:尾部事实不可得 → 保持清零,不设排队日期', async () => {
+    const w = world3({ phase: V1B });
+    addShadow(w, A);
+    addShadow(w, B);
+    const seen = new Map<string, number>();
+    w.promoteFacts.fn = async (r) => {
+      const n = (seen.get(r.id) ?? 0) + 1;
+      seen.set(r.id, n);
+      // B:第 1 次(首轮判定)可得,之后(队首提交后的重判)不可得
+      return r.id === B && n >= 2 ? null : promoteBaseFor(r);
+    };
+    await runPersonalStep(w.d);
+    expect(life(w, A)).toBe('canary');
+    expect(w.working.get(B)?.shadow.queued_since).toBeNull();
+  });
+  it('M13-5 队首提交后尾部重判资格失败(如凭据新增列出):不设排队日期;仅 slot_occupied 才设', async () => {
+    const w = world3({ phase: V1B });
+    addShadow(w, A);
+    addShadow(w, B);
+    const seen = new Map<string, number>();
+    w.promoteFacts.fn = async (r) => {
+      const n = (seen.get(r.id) ?? 0) + 1;
+      seen.set(r.id, n);
+      return promoteBaseFor(r, r.id === B && n >= 2 ? { authorized: false } : {});
+    };
+    await runPersonalStep(w.d);
+    expect(w.working.get(B)?.shadow.queued_since).toBeNull();
+  });
+  it('M13-5 对账未完成:有合法但无法映射的凭据 → reconcileIncomplete,本步不做任何增加影响的转移(合格 shadow 不推进);创建与闸不受影响', async () => {
+    const w = world3({ phase: V1B });
+    addShadow(w, A);
+    addShadow(w, C);
+    eligible(w);
+    w.revs.value = { kind: 'ok', lines: [REV(C, 'harm_c1')] };
+    const id = withNewProposal(w);
+    const r = await runPersonalStep(w.d);
+    expect(r.reconcileIncomplete).toBe(true);
+    expect(r.unmappedRevocations).toEqual([C]);
+    expect(life(w, A)).toBe('shadow');
+    expect(r.created).toEqual([id]);
+  });
+  it('对账完整时 reconcileIncomplete 为假,合格 shadow 照常推进(对照)', async () => {
+    const w = world3({ phase: V1B });
+    addShadow(w, A);
+    eligible(w);
+    const r = await runPersonalStep(w.d);
+    expect(r.reconcileIncomplete).toBe(false);
+    expect(life(w, A)).toBe('canary');
+  });
 });

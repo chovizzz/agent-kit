@@ -78,6 +78,8 @@ const RECONCILE_BASIS: Readonly<
 export interface StepResult {
   /** 凭据原因无法映射到终态理由的候选(未转移,凭据仍阻止推进) */
   unmappedRevocations: string[];
+  /** 有合法但无法映射的凭据:对账未完成,本步不做任何增加影响的转移(创建与闸不受影响:它们不增加影响) */
+  reconcileIncomplete: boolean;
   /** 因事实不可得 / 前置不成立而清零 queued_since 的候选与原因 */
   queueCleared: { id: string; reason: string }[];
   created: string[];
@@ -135,6 +137,7 @@ export async function runPersonalStep(d: StepDeps): Promise<StepResult> {
   const out: StepResult = {
     created: [],
     unmappedRevocations: [],
+    reconcileIncomplete: false,
     queueCleared: [],
     skipped: [],
     reconciled: [],
@@ -258,6 +261,7 @@ export async function runPersonalStep(d: StepDeps): Promise<StepResult> {
     const basis = RECONCILE_BASIS[line.reason];
     if (basis === undefined) {
       out.unmappedRevocations.push(rec.id);
+      out.reconcileIncomplete = true;
       continue;
     }
     const r = await run(rec, { kind: 'revocation_reconcile', evidence, basis });
@@ -431,7 +435,7 @@ export async function runPersonalStep(d: StepDeps): Promise<StepResult> {
     event?: TransitionEvent;
   }[] = [];
   // 本步已发现 gate_internal(B2):不再授予任何影响(只做到期 / 收紧类转移)
-  const noGrant = out.breaker !== null;
+  const noGrant = out.breaker !== null || out.reconcileIncomplete;
   for (const rec of records.filter((r) => r.lifecycle === 'shadow').sort(byId)) {
     const wc = working.get(rec.id);
     if (wc === undefined) continue;
@@ -585,10 +589,40 @@ export async function runPersonalStep(d: StepDeps): Promise<StepResult> {
       const wc = working.get(x.rec.id);
       const cur = after.find((r) => r.id === x.rec.id);
       if (wc === undefined || cur === undefined || cur.lifecycle !== 'shadow') continue;
-      if (!evaluationSlotOccupied(after.filter((o) => o.id !== cur.id))) continue;
+      // 逐个候选重新收集环境 / 撤销 / 推进事实,并基于最新权威记录再判一次:只有结果确为 slot_occupied 才设排队日期;
+      // 事实不可得或其它资格失败 → 清零(不累计)
+      const rv3 = await d.revocations.read();
+      if (rv3.kind === 'invalid') return halt('revocations_invalid');
+      const env3 = await d.env.read();
+      const pf3 = await d.facts.promoteFacts(cur, wc);
+      if (pf3 === null) {
+        await clearQueue(cur, wc, 'promote_facts_unavailable');
+        continue;
+      }
+      const step3 = decideShadowStep({
+        record: cur,
+        ctx: ctxOf(
+          env3,
+          d.now().toISOString(),
+          rv3.lines.some(
+            (l) => l.candidate_id === cur.id && l.content_sha256 === cur.content_sha256,
+          ),
+          cur,
+        ),
+        facts: {
+          ...pf3,
+          slot_occupied: evaluationSlotOccupied(after.filter((o) => o.id !== cur.id)),
+        },
+        shadow: {
+          canary_ready_since: wc.shadow.canary_ready_since,
+          queued_since: wc.shadow.queued_since,
+        },
+        evidence: `shadow:${today}`,
+      });
+      if (step3.action !== 'wait') continue;
       const next = patchShadow({
-        canary_ready_since: wc.shadow.canary_ready_since,
-        queued_since: wc.shadow.queued_since ?? today,
+        canary_ready_since: step3.patch.canary_ready_since,
+        queued_since: step3.blocker === 'slot_occupied' ? (wc.shadow.queued_since ?? today) : null,
       })(wc);
       if (next !== undefined) {
         await d.working.put(next);

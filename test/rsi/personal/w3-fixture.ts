@@ -184,6 +184,13 @@ export function goodFacts(draft: CandidateDraft = draftOf()): GateFacts {
           used: { rule: 0, pitfall: 0, skill: 0 },
           add: 250,
         },
+        {
+          target: 'codex',
+          unit: 'bytes',
+          total: 16384,
+          used: { rule: 0, pitfall: 0, skill: 0 },
+          add: 250,
+        },
       ],
     },
     replay: { hitSessions: 5, totalSessions: 20 },

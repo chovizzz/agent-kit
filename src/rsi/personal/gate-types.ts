@@ -79,14 +79,14 @@ export type QuotaClass = 'rule' | 'pitfall' | 'skill';
  * 一个渲染目标的预算与自动配额占用(R21-5.3)。计量单位按目标:claude 数行(`max_lines = 200`),其它目标数字节(16384)。
  * `used` = 各分类已占用(同单位),`add` = 本候选渲染后新增(同单位;由收集器按渲染结果给,G5 不自己猜渲染行数)。
  */
-export interface GateQuotaTarget {
-  target: 'claude' | 'pi' | 'codex';
-  unit: 'lines' | 'bytes';
-  /** 该目标的预算总量(claude 200 行;其它 16384 字节) */
-  total: number;
+interface QuotaCounts {
   used: Readonly<Record<QuotaClass, number>>;
   add: number;
 }
+/** 判别联合:claude 只能按行(200),其它目标只能按字节(16384);`g5` 另做运行时校验(类型之外的收集器输入不可信) */
+export type GateQuotaTarget =
+  | ({ target: 'claude'; unit: 'lines'; total: number } & QuotaCounts)
+  | ({ target: 'pi' | 'codex'; unit: 'bytes'; total: number } & QuotaCounts);
 
 export interface GateBudget {
   /** 渲染后各目标 `level=ok`(与自动配额分开:这一项只说渲染预算) */
