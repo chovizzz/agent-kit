@@ -294,6 +294,22 @@ export const V1_W3_MUTATIONS: readonly V1W3Mutation[] = [
     mustKill: ['目标集合必须恰好是 claude / pi / codex 各一次'],
   },
   {
+    id: 'g5-budget-red-before-validation',
+    clause: 'R21-5.3:无效配额事实归 internal,不被 g5_budget 红灯掩盖(主代理验收第 3 轮)',
+    edits: [
+      {
+        file: GATES,
+        anchor:
+          "const targets = validatedQuotaTargets(b.targets);\n  if (!b.renderLevelOk) return red('g5_budget');",
+        replacement:
+          "if (!b.renderLevelOk) return red('g5_budget');\n  const targets = validatedQuotaTargets(b.targets);",
+      },
+    ],
+    tests: [T_GATES],
+    expectRed: ['配额事实无效时即使渲染 level 不是 ok 也归 internal'],
+    mustKill: ['配额事实无效时即使渲染 level 不是 ok 也归 internal'],
+  },
+  {
     id: 'g5-collector-budget-trusted',
     clause: 'R21-5.3:固定预算与单位由 target 派生,不信任收集器',
     edits: [
@@ -735,8 +751,8 @@ export const V1_W3_MUTATIONS: readonly V1W3Mutation[] = [
       },
     ],
     tests: [T_RECON],
-    expectRed: ['依据 %s → rejected'],
-    mustKill: ['依据 %s → rejected'],
+    expectRed: ['→ rejected,原因 revocation_reconciled,终态理由'],
+    mustKill: ['→ rejected,原因 revocation_reconciled,终态理由'],
   },
   {
     id: 'reconcile-reason-wrong',
@@ -749,8 +765,8 @@ export const V1_W3_MUTATIONS: readonly V1W3Mutation[] = [
       },
     ],
     tests: [T_RECON],
-    expectRed: ['依据 %s → rejected'],
-    mustKill: ['依据 %s → rejected'],
+    expectRed: ['→ rejected,原因 revocation_reconciled,终态理由'],
+    mustKill: ['→ rejected,原因 revocation_reconciled,终态理由'],
   },
   {
     id: 'reconcile-veto-no-blacklist',

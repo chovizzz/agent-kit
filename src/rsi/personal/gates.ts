@@ -347,9 +347,11 @@ export function validatedQuotaTargets(targets: readonly unknown[]): readonly Gat
 export function g5(f: GateFacts): GateVerdict {
   const d = f.draft;
   const b = need(f.budget, 'budget');
+  // 先校验收集器给的配额事实:无效事实必须抛(→ internal),不能被预算红灯掩盖成候选违规
+  const targets = validatedQuotaTargets(b.targets);
   if (!b.renderLevelOk) return red('g5_budget');
   const cls = d.category; // 'rule' | 'pitfall'(V1);技能类 V3
-  for (const t of validatedQuotaTargets(b.targets)) {
+  for (const t of targets) {
     const quota = quotaOf(t.total, b.profile);
     const usedAll = t.used.rule + t.used.pitfall + t.used.skill;
     if (usedAll + t.add > quota) return red('g5_quota');

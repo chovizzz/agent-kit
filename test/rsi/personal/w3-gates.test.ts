@@ -312,6 +312,15 @@ describe('G5 预算与配额(R21-5.3:每目标、每分类、lite 12.5%)', () =>
       expect(runGates(b({ targets, ...paired }))).toMatchObject({ kind: 'internal', gate: 'g5' });
     }
   });
+  it('配额事实无效时即使渲染 level 不是 ok 也归 internal(先校验事实,再判预算红灯)', () => {
+    for (const targets of [[claude(), bytes('pi')], all({ claude: { add: Number.NaN } })]) {
+      expect(() => g5(b({ targets, renderLevelOk: false }))).toThrow();
+      expect(runGates(b({ targets, renderLevelOk: false }))).toMatchObject({
+        kind: 'internal',
+        gate: 'g5',
+      });
+    }
+  });
   it('total / unit 必须等于由 target 派生的固定值(收集器给错 → internal,不是放宽额度)', () => {
     for (const bad of [
       { claude: { total: 400 } },
