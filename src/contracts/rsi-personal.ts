@@ -332,9 +332,14 @@ const AssignLineSchema = z
       if (l.reason === null) return bad('reason', 'excluded 必须带原因码');
       if (l.p !== 0) bad('p', 'excluded 的 p 恒为 0');
       const probe = l.reason === 'admission_probe';
-      // W0-18:探针行 ⇔ probe_generation / probe_ticket 都非空
-      if (probe !== (l.probe_generation !== null && l.probe_ticket !== null)) {
-        bad('probe_ticket', 'admission_probe 行 ⇔ probe_generation 与 probe_ticket 都非空');
+      // W0-18:探针行必须同时带代号与票号、overlaps_preset 恒 false;非探针 excluded 行两者都为 null
+      if (probe) {
+        if (l.probe_generation === null || l.probe_ticket === null)
+          bad('probe_ticket', '探针行必须同时带 probe_generation 与 probe_ticket');
+        if (l.overlaps_preset)
+          bad('overlaps_preset', '探针行与候选无关,overlaps_preset 恒为 false');
+      } else if (l.probe_generation !== null || l.probe_ticket !== null) {
+        bad('probe_ticket', '非探针行的 probe_generation / probe_ticket 必须都为 null');
       }
       // W0-3:探针行是唯一「marker 非空且 candidate_id 为 null」的情形,反之亦然
       if (probe !== (l.marker !== null && l.candidate_id === null)) {

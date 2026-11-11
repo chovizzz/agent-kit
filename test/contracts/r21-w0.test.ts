@@ -548,6 +548,16 @@ describe('R21-6.4 分组账行:探针行是唯一 marker 非空且 candidate_id 
         assign({ arm: 'excluded', reason: 'paused', p: 0, marker: null, probe_ticket: 1 }),
       ).success,
     ).toBe(false);
+    const plain = (over: Record<string, unknown>) =>
+      RsiCanaryLedgerLineSchema.safeParse(
+        assign({ arm: 'excluded', reason: 'paused', p: 0, marker: null, ...over }),
+      ).success;
+    expect(plain({})).toBe(true);
+    expect(plain({ probe_generation: 1 })).toBe(false);
+    expect(plain({ probe_generation: 1, probe_ticket: 1 })).toBe(false);
+    expect(RsiCanaryLedgerLineSchema.safeParse(probe({ overlaps_preset: true })).success).toBe(
+      false,
+    );
   });
   it('R21-6.4 负向:探针行带 candidate_id / 无 marker;非探针 excluded 带 marker;treat 缺 marker、p=0;excluded p≠0;codex 不参与分组', () => {
     expect(

@@ -263,8 +263,36 @@ export const V1_W0_MUTATIONS: readonly V1W0Mutation[] = [
     edits: [
       {
         file: PERSONAL,
-        anchor: 'if (probe !== (l.probe_generation !== null && l.probe_ticket !== null)) {',
-        replacement: 'if (false) {',
+        anchor: 'if (l.probe_generation === null || l.probe_ticket === null)',
+        replacement: 'if (false)',
+      },
+    ],
+    tests: [W0],
+    expectRed: ['W0-18 探针行绑定代号与票号'],
+    mustKill: ['W0-18 探针行绑定代号与票号'],
+  },
+  {
+    id: 'probe-binding-allowed-on-plain-excluded',
+    clause: 'W0-18:非探针 excluded 行的 probe_generation / probe_ticket 必须都为 null —— 变异:放行',
+    edits: [
+      {
+        file: PERSONAL,
+        anchor: '} else if (l.probe_generation !== null || l.probe_ticket !== null) {',
+        replacement: '} else if (false) {',
+      },
+    ],
+    tests: [W0],
+    expectRed: ['W0-18 探针行绑定代号与票号'],
+    mustKill: ['W0-18 探针行绑定代号与票号'],
+  },
+  {
+    id: 'probe-overlaps-preset-unchecked',
+    clause: 'W0-18:探针行 overlaps_preset 恒 false —— 变异:不查',
+    edits: [
+      {
+        file: PERSONAL,
+        anchor: 'if (l.overlaps_preset)\n',
+        replacement: 'if (false)\n',
       },
     ],
     tests: [W0],
@@ -277,8 +305,9 @@ export const V1_W0_MUTATIONS: readonly V1W0Mutation[] = [
     edits: [
       {
         file: PERSONAL,
-        anchor: 'if (l.probe_generation !== null || l.probe_ticket !== null)',
-        replacement: 'if (false)',
+        anchor:
+          "if (l.probe_generation !== null || l.probe_ticket !== null)\n        bad('probe_ticket', 'treat / control",
+        replacement: "if (false)\n        bad('probe_ticket', 'treat / control",
       },
     ],
     tests: [W0],

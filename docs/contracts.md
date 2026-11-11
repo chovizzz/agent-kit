@@ -6337,7 +6337,7 @@ v3.1 已把用户决定列全;以下是落契约时新发现的契约细节取�
 
 **冻结后订正 W0-17(2026-11-11,W3 实现口径澄清与订正)**:创建行 `from = "none"`;撤销凭据 `reason` 按来源 `by` 约束(`by` = 撤销来源,worker 代写时保留来源)。**取代关系**:R21-9.5 凭据行 `reason` 由「任意转移原因码」收窄为按 `by` 的对照表(用户 2026-11-11 选择框,原位已标注);创建行只补原文未定的编码。**未改**:R21-9.1 各段动作、R21-4.1 其余各行、`by` 枚举。
 
-**冻结后订正 W0-18(2026-11-11,W5 实现口径订正)**:探针账行加 `probe_generation` / `probe_ticket` 并按代号与票号认行;`canary.json` 加 `overlaps_preset`(十二键);`failed` 满 7 个 UTC 日自动重探;未取回标记的 48 小时从账行 `at` 起算;版本来源与 pi canary 变体归 W10b。**取代关系**:W0-3「`failed` 在版本变化前不自动重探」与「按三张票对应的三行账行」认行的口径(用户 2026-11-11 选择框,原位已标注);R21-6.10「十一键」改为十二键。**未改**:R21-6.11 矩阵行序、探针票占用协议、`RSI_PROBE_*` 既有常量。
+**冻结后订正 W0-18(2026-11-11,W5 实现口径订正)**:探针账行加 `probe_generation` / `probe_ticket` 并按代号与票号认行;`canary.json` 加 `overlaps_preset`(十二键);`failed` 满 7 个 UTC 日自动重探;未取回标记的 48 小时从账行 `at` 起算;版本来源与 pi canary 变体归 W10b。**取代关系**:W0-3「`failed` 在版本变化前不自动重探」与「按三张票对应的三行账行」认行的口径、「48 小时未取回」的起点(改为探针账行 `at`)、W0-4 的交付块归属(pi canary 变体与版本来源移至 W10b)(用户 2026-11-11 选择框,均已原位标注);R21-6.10「十一键」改为十二键。**未改**:R21-6.11 矩阵行序、探针票占用协议、`RSI_PROBE_*` 既有常量。
 
 ### 21.24 V1 拆期与 W0 订正(冻结后订正 W0-1 … W0-12;2026-11-09,依据用户 2026-11-04 选择框 Q1–Q5、V1i-2、V1i-4…10 按规划稿处理,2026-11-09 选「现在开工 W0 + V1a」)
 
@@ -6458,6 +6458,9 @@ R21-2.2 的「`RSI_AUTO_PHASE ≥ 1`」即 V1a,不变;R21-6.11 第 2 行的「`R
 - **协议(V1b)**:`canary-admission.json`(`.state/rsi/`,0600)**唯一写入方 worker**(持 `rsi/lock` 与 `personal/lock`),每 agent 一项:`{state: probing|admitted|failed, shape_version, agent_version, generation, armed_at, probe_expires_at, tickets, decided_at, reason}`。worker 在自动循环有效、agent ∈ {claude, pi}、钩子装了 canary 变体、无 `AUTO_PAUSE` 时置 `probing`:`generation` 加 1、`tickets = RSI_PROBE_SESSIONS`(= 3)。**探针票**是 hint 的**占用标记**,不是预建文件:票号 `<generation>-<i>`(i = 1..tickets),对应占用文件 `.state/rsi/canary-probe/<agent>/<generation>-<i>.used`;worker 只持久化「本代允许消费几张」(即本文件的 `generation` 与 `tickets`),旧代的占用标记作废、不计入本代。
 - **hint 只消费窄许可**:见 `probing` 且未过 `probe_expires_at`(= armed + `RSI_PROBE_WINDOW_DAYS` 个 UTC 日,= 7)、`AUTO_PAUSE` 不存在、`shape_version` / `agent_version` 与当前钩子 / agent 一致(现算,不等 worker)时,依次:① 对 i = 1..`tickets` 依次 `createExclusive` 占用文件 `<generation>-<i>.used`,第一个成功者得票(全部已存在 → 不输出;**有限次、原子**,并发消费者至多 `tickets` 个成功);② 分组账追加 `assign` 行(`arm=excluded`、`reason=admission_probe`、`candidate_id=null`、`marker=rsm_…`)并 `fsync`;③ 输出关联标记行。崩溃语义:①之后崩溃 = 票已用、无账行无输出(少探);②之后崩溃 = 有账行无输出(账行带标记但会话里取不回,worker 按「标记未被取回」处理,本代最多因此 `failed(marker_not_retrieved)` 而重新 armed 下一代);绝不重复授予。验收:并发消费恰有 `tickets` 个成功者;①②③各崩溃点之后不超发;重新 armed 后旧代标记不被重用。
 - **判定(worker,读 reader 取回)**:三张探针票对应的三行账行,**每一行的标记都被恰好一个会话取回,且该会话取回的不同标记恰为 1 个**,且该会话文件已静止 ≥ `RSI_PROBE_QUIET_MINUTES`(= 60)(「完整读完」只保证本次读取完整,不保证会话已结束;静止是封存判据)→ 三者全部满足为 `admitted`;任一标记在静止后 `RSI_PROBE_WAIT_HOURS`(= 48)内仍未被任何会话取回 → `failed(marker_not_retrieved)`;任一会话取回 ≥ 2 个不同标记 → `failed(multi_marker)`;`probe_expires_at` 到期仍未凑齐 → `failed(probe_expired)`。
+
+  > **冻结后订正 W0-18(2026-11-11)**:认行改为只认 `probe_generation` 等于当前代、`probe_ticket` 在 1..`tickets` 内且不重复的探针账行(重复票号 → `failed(multi_marker)`);「48 小时未取回」的起点改为该探针账行的 `at`。正文见 §21.24 W0-18。
+
 - **准入的失效**:`admitted` 绑定 `shape_version` 与 `agent_version`;hint 每次现算当前值,不符 → 按 R21-6.11 第 4 行 `not_admitted`;此后任一经准入的会话被 R21-6.6 判为「多标记」→ 该 agent 回到 `failed(multi_marker)`(撤销准入,走更少影响方向)。`failed` 在 `shape_version` 或 `agent_version` 变化前不自动重探。
 
   > **冻结后订正 W0-18(2026-11-11,用户选择框「失败后允许自动重探」)**:上句「`failed` 在版本变化前不自动重探」改为:`failed` 满 `RSI_PROBE_RETRY_DAYS`(= 7)个 UTC 日后 worker 自动重新 armed 下一代;版本变化时照旧立即重探。「48 小时未取回」的起点为该探针账行的 `at`。正文见 §21.24 W0-18。
@@ -6469,6 +6472,8 @@ R21-2.2 的「`RSI_AUTO_PHASE ≥ 1`」即 V1a,不变;R21-6.11 第 2 行的「`R
 #### W0-4 pi 的 canary 变体进 V1b(Q3)
 
 取代规划稿 Q3 推荐 A。pi 的 canary 变体(`rsi-hooks.ts` 中现为 `null`)与 `--canary` 对 pi 的路径在 V1b 内实现,并经 W0-3 的探针实测;pi 钩子形状证据级别在基线 d692da5 已是「实测运行」(pi ≥ 1.5.0),不再是「假设」。`before_agent_start` 若每轮触发,多标记按 W0-3 判 `failed(multi_marker)`,不放宽。
+
+> **冻结后订正 W0-18(2026-11-11,用户选择框「归 W10b 真实环境准入」)**:pi 的 canary 变体与 `--canary` 对 pi 的路径、以及 hint 现算 `agent_version` 的生产来源,在 W10b 实现并经真实会话探针实测;此前 fail-closed。正文见 §21.24 W0-18。
 
 #### W0-5 自动建仓(Q4,补 V1i-6②)
 
