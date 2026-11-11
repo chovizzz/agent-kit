@@ -174,6 +174,34 @@ describe('grantCanary:授予', () => {
     expect((await grantCanary(r.d, GRANT)).kind).toBe('written');
   });
 
+  it('对账屏障:有凭据而分组账不存在 / 为空 → 拒绝授予(账不存在不等于已补 stop);reconcileCaches 补 stop 后允许', async () => {
+    const A = OTHER_CID;
+    const SA = 'd'.repeat(64);
+    const ledgerFile = (x: Awaited<ReturnType<typeof rig>>): string =>
+      path.join(x.w.rsi, 'canary-ledger.jsonl');
+    // 账不存在:A 已终态、canary.json 不含 A,唯一缺的是 stop 行
+    const r = await rig();
+    r.store.put(rec('rejected', { id: A, content_sha256: SA }));
+    r.revs.value = { kind: 'ok', lines: [REVOKE(A, SA)] };
+    expect(await exists(ledgerFile(r))).toBe(false);
+    expect(await grantCanary(r.d, GRANT)).toEqual({
+      kind: 'refused',
+      reason: 'reconcile_incomplete',
+    });
+    expect(await exists(file(r))).toBe(false);
+    await reconcileCaches(r.d, [REVOKE(A, SA)], new Date());
+    expect((await grantCanary(r.d, GRANT)).kind).toBe('written');
+    // 账为空文件:同样拒绝
+    const r2 = await rig();
+    r2.store.put(rec('rejected', { id: A, content_sha256: SA }));
+    r2.revs.value = { kind: 'ok', lines: [REVOKE(A, SA)] };
+    await writeFile(r2.w.io, ledgerFile(r2), '', { mode: 0o600 });
+    expect(await grantCanary(r2.d, GRANT)).toEqual({
+      kind: 'refused',
+      reason: 'reconcile_incomplete',
+    });
+  });
+
   it('对账屏障:凭据列出的候选权威记录仍非终态 → 拒绝授予别的候选;账不合规同样拒绝', async () => {
     const r = await rig();
     r.store.put(rec('shadow', { id: OTHER_CID, content_sha256: 'd'.repeat(64) }));

@@ -752,13 +752,28 @@ export const V1_W5_MUTATIONS: readonly V1W5Mutation[] = [
     edits: [
       {
         file: WRITER,
-        anchor: "if (ledger.kind === 'ok' && !stops.has(ref)) pending.push(`${ref}:stop_missing`);",
+        anchor: 'if (!stops.has(ref)) pending.push(`${ref}:stop_missing`);',
         replacement: 'void 0;',
       },
     ],
     tests: [T_WRITER],
     expectRed: ['对账屏障(R21-9.5)'],
     mustKill: ['对账屏障(R21-9.5)'],
+  },
+  {
+    id: 'grant-barrier-stop-only-when-ledger-exists',
+    clause: 'R21-9.5:账不存在 ≠ 已补 stop(主代理验收复评 H4-R)—— 变异:只在账存在时检查',
+    edits: [
+      {
+        file: WRITER,
+        anchor: 'if (!stops.has(ref)) pending.push(`${ref}:stop_missing`);',
+        replacement:
+          "if (ledger.kind === 'ok' && !stops.has(ref)) pending.push(`${ref}:stop_missing`);",
+      },
+    ],
+    tests: [T_WRITER],
+    expectRed: ['有凭据而分组账不存在'],
+    mustKill: ['有凭据而分组账不存在'],
   },
   {
     id: 'grant-barrier-ignores-nonterminal',

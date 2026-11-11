@@ -100,7 +100,8 @@ export async function reconcileBarrier(
     ) {
       pending.push(`${ref}:cache_residual`);
     }
-    if (ledger.kind === 'ok' && !stops.has(ref)) pending.push(`${ref}:stop_missing`);
+    // 账不存在 ≠ 已对账:要证明 stop 行存在,账不存在(stops 为空)同样算缺(主代理验收复评 H4-R)
+    if (!stops.has(ref)) pending.push(`${ref}:stop_missing`);
     const rec = records.find(
       (r) => r.id === l.candidate_id && r.content_sha256 === l.content_sha256,
     );
