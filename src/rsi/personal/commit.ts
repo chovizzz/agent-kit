@@ -408,3 +408,48 @@ export async function commitPersonal(
   await recordHeadAndFinish(ctx, await writePhase(ctx, j, { phase: 'recorded' }));
   return { status: 'committed', commit, tree: targetTree };
 }
+
+// ---------------------------------------------------------------------------
+// readPersonalFiles(W3 的读侧:权威副本 `lifecycle/<id>.json` 与原子文件)
+// ---------------------------------------------------------------------------
+
+export type ReadFilesResult =
+  | { status: 'ok'; head: string; files: { path: string; content: string }[] }
+  | { status: 'absent' }
+  | { status: 'deferred'; reason: 'personal_repo_diverged' | 'personal_owner_changed'; why: string }
+  | { status: 'invalid'; why: string; breaker: typeof PERSONAL_REPO_INVALID };
+
+/**
+ * 读已接受 HEAD 的树里某些顶层目录下的文件(只读 `ls-tree` / `cat-file`,不碰引用、索引与工作树)。调用方必须持 `personal/lock`。
+ * 与 `commitPersonal` 走同一个 `openPersonalRepo`(结构校验 → journal 恢复 → HEAD 判定),所以 `absent` / `deferred` / `invalid` 的语义一致;
+ * git 读取失败 = `invalid`(`git_read_failed`),**不会**当成「没有文件」返回空列表。放在本文件内,是为了私有仓库的 git 出口只在 W2 的三个授权文件里。
+ */
+export async function readPersonalFiles(
+  deps: PersonalRepoDeps,
+  locks: PersonalLocks,
+  dirs: readonly string[],
+): Promise<ReadFilesResult> {
+  const open = await openPersonalRepo(deps, locks);
+  if (open.kind === 'absent') return { status: 'absent' };
+  if (open.kind === 'invalid') return { status: 'invalid', why: open.why, breaker: open.breaker };
+  if (open.kind === 'deferred') {
+    return { status: 'deferred', reason: open.reason, why: open.why };
+  }
+  try {
+    await assertLocks(open.ctx);
+    const files: { path: string; content: string }[] = [];
+    for (const b of readBaseTree(open.ctx.git, open.head)) {
+      if (!dirs.some((d) => b.path.startsWith(`${d}/`))) continue;
+      const content = gitMust(open.ctx.git, 'cat-file', ['cat-file', 'blob', b.sha], {
+        readOnly: true,
+      });
+      files.push({ path: b.path, content });
+    }
+    return { status: 'ok', head: open.head, files };
+  } catch (e) {
+    if (e instanceof PersonalGitError || (e instanceof Error && !('code' in e))) {
+      return { status: 'invalid', why: 'git_read_failed', breaker: PERSONAL_REPO_INVALID };
+    }
+    throw e;
+  }
+}
