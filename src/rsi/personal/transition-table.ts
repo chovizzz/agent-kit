@@ -132,6 +132,12 @@ export const TransitionEventSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('veto'), evidence: Evidence }),
   z.strictObject({ kind: z.literal('taint'), evidence: Evidence }),
   z.strictObject({ kind: z.literal('clear'), evidence: Evidence }),
+  /** R21-9.5 撤销凭据对账(V1a:proposed / shadow);`basis` = 凭据所依据的终止原因,终态理由按它显式映射(不兜底 clear) */
+  z.strictObject({
+    kind: z.literal('revocation_reconcile'),
+    evidence: Evidence,
+    basis: z.enum(['veto', 'taint', 'clear', 'judge_reject']),
+  }),
   z.strictObject({ kind: z.literal('judge_reject'), evidence: Evidence, ...JudgeSchema }),
   z.strictObject({
     kind: z.literal('harm'),
@@ -185,6 +191,7 @@ const TERMINATION_KIND_SET: ReadonlySet<EventKind> = new Set<EventKind>([
   'veto',
   'taint',
   'clear',
+  'revocation_reconcile',
   'judge_reject',
   'harm',
   'canary_limit',
@@ -200,6 +207,8 @@ export function terminationReason(e: TransitionEvent): string {
       return 'tainted';
     case 'clear':
       return 'cleared';
+    case 'revocation_reconcile':
+      return 'revocation_reconciled';
     case 'judge_reject':
       return e.injection_suspected ? 'judge_injection' : 'judge_reject';
     case 'harm':
@@ -425,6 +434,8 @@ function discriminator(e: TransitionEvent): string {
       return e.agent;
     case 'rollback_advance':
       return e.to;
+    case 'revocation_reconcile':
+      return e.basis;
     default:
       return '-';
   }
@@ -598,6 +609,32 @@ for (const from of ['proposed', 'shadow'] as const) {
       reason: (e) => terminationReason(e),
       terminal: () => 'judge_rejected',
       guard: (r, e, ctx) => terminationGuard(e, r, ctx),
+    }),
+  );
+}
+
+// --- proposed|shadow → rejected:撤销凭据对账(R21-9.5;原因 revocation_reconciled,终态理由按凭据依据映射) ---
+const RECONCILE_TERMINAL: Readonly<
+  Record<'veto' | 'taint' | 'clear' | 'judge_reject', TerminalReason>
+> = Object.freeze({
+  veto: 'vetoed',
+  taint: 'tainted',
+  clear: 'cleared',
+  judge_reject: 'judge_rejected',
+});
+for (const from of ['proposed', 'shadow'] as const) {
+  ROW_LIST.push(
+    row({
+      name: `${from}_to_rejected_reconcile`,
+      kind: 'revocation_reconcile',
+      shape: 'to_terminal',
+      lifecycle: from,
+      from,
+      to: 'rejected',
+      caps: () => [...CAPS_REJECT, 'revocation_credentials'],
+      reason: () => 'revocation_reconciled',
+      terminal: (e) => RECONCILE_TERMINAL[e.basis],
+      guard: NONE,
     }),
   );
 }

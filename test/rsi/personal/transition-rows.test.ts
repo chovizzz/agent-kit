@@ -162,6 +162,14 @@ const CASES: Case[] = [
         check: rejectedCheck('cleared', 'cleared'),
       },
       {
+        row: `${from}_to_rejected_reconcile`,
+        rec: r,
+        ev: { kind: 'revocation_reconcile', evidence: 'rv1', basis: 'clear' },
+        minPhase: 1,
+        falseCases: [phase0],
+        check: rejectedCheck('revocation_reconciled', 'cleared'),
+      },
+      {
         row: `${from}_to_rejected_judge`,
         rec: r,
         ev: E.judge(),
@@ -490,7 +498,7 @@ describe('R21-4.5 覆盖完整性:表里每一行都有用例', () => {
     const tableNames = TRANSITION_TABLE.map((r) => r.name);
     expect(new Set(tableNames).size).toBe(tableNames.length);
     expect(CASES.map((c) => c.row).sort()).toEqual([...tableNames].sort());
-    expect(tableNames.length).toBe(32);
+    expect(tableNames.length).toBe(34); // W3 追加两行:proposed / shadow 的撤销对账(R21-9.5)
   });
 });
 
