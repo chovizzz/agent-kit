@@ -103,6 +103,11 @@ export const V1_W3_MUTATIONS: readonly V1W3Mutation[] = [
         anchor: 'if (fresh.record.lifecycle !== rec.lifecycle) {',
         replacement: 'if (false as boolean) {',
       },
+      {
+        file: APPLY,
+        anchor: 'if (canonicalJson(fresh.record) !== canonicalJson(rec)) {',
+        replacement: 'if (false as boolean) {',
+      },
     ],
     tests: [T_STEP],
     expectRed: ['M13-2 权威记录在列出之后已是终态'],
@@ -191,6 +196,11 @@ export const V1_W3_MUTATIONS: readonly V1W3Mutation[] = [
     edits: [
       {
         file: STEP,
+        anchor: 'if (queueExpired(wc.shadow.queued_since, today)) {',
+        replacement: 'if (false as boolean) {',
+      },
+      {
+        file: STEP,
         anchor: "if (step.action === 'expire' && step.event !== undefined) {",
         replacement: 'if (false as boolean) {',
       },
@@ -206,8 +216,14 @@ export const V1_W3_MUTATIONS: readonly V1W3Mutation[] = [
     edits: [
       {
         file: STEP,
-        anchor: 'queued_since: wc.shadow.queued_since,',
-        replacement: 'queued_since: wc.shadow.canary_ready_since ?? wc.shadow.queued_since,',
+        anchor: `      facts,
+      shadow: {
+        canary_ready_since: wc.shadow.canary_ready_since,
+        queued_since: wc.shadow.queued_since,`,
+        replacement: `      facts,
+      shadow: {
+        canary_ready_since: wc.shadow.canary_ready_since,
+        queued_since: wc.shadow.canary_ready_since ?? wc.shadow.queued_since,`,
       },
     ],
     tests: [T_STEP],
@@ -391,6 +407,56 @@ export const V1_W3_MUTATIONS: readonly V1W3Mutation[] = [
     tests: [T_GATES],
     expectRed: ['G6 边界'],
     mustKill: ['G6 边界'],
+  },
+  {
+    id: 'apply-snapshot-overwrite',
+    clause: 'R21-3.8 / 锁内重读:同生命周期但快照已变时不得用旧快照覆盖',
+    edits: [
+      {
+        file: APPLY,
+        anchor: 'if (canonicalJson(fresh.record) !== canonicalJson(rec)) {',
+        replacement: 'if (false as boolean) {',
+      },
+    ],
+    tests: [T_STEP],
+    expectRed: ['同生命周期但快照已变'],
+    mustKill: ['同生命周期但快照已变'],
+  },
+  {
+    id: 'lock-lost-swallowed',
+    clause: 'R21-3.6 / W0-15:丢锁立即中止',
+    edits: [
+      {
+        file: STEP,
+        anchor: "if (e instanceof RsiLockError && e.kind === 'lock_lost') {",
+        replacement: 'if (false as boolean) {',
+      },
+    ],
+    tests: [T_STEP],
+    expectRed: ['提交时丢锁(lock_lost)'],
+    mustKill: ['提交时丢锁(lock_lost)'],
+  },
+  {
+    id: 'noop-effects-dropped',
+    clause: 'R21-4.4a ②:终态上的 veto 仍写黑名单(空操作不丢效果)',
+    edits: [
+      {
+        file: APPLY,
+        anchor: "await landEffects(d, res.effects);\n    return { kind: 'noop' };",
+        replacement: "return { kind: 'noop' };",
+      },
+    ],
+    tests: [T_STEP],
+    expectRed: ['终态上的终止事件是空操作'],
+    mustKill: ['终态上的终止事件是空操作'],
+  },
+  {
+    id: 'gate-internal-still-grants',
+    clause: 'R21-5.2 / B2:gate_internal 在同一步立即停止授予影响',
+    edits: [{ file: STEP, anchor: 'if (noGrant) continue;', replacement: 'void 0;' }],
+    tests: [T_STEP],
+    expectRed: ['gate_internal 熔断在同一步立即生效'],
+    mustKill: ['gate_internal 熔断在同一步立即生效'],
   },
   // ---- W0-6 候选来源 / 创建行 ----
   {

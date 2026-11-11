@@ -18,7 +18,7 @@ import type {
 } from './candidate-ports.js';
 import { txnId } from './ids.js';
 import { createHash } from 'node:crypto';
-import { transition, isRefusal, type Refusal } from './transition.js';
+import { transition, isRefusal, type Refusal, type TransitionEffect } from './transition.js';
 import type { TransitionEvent } from './transition-table.js';
 
 export interface ApplyDeps {
@@ -32,7 +32,8 @@ export interface ApplyDeps {
 }
 
 export type ApplyResult =
-  | { kind: 'transitioned'; next: PersonalLifecycleRecord }
+  /** `effectsFailed`:权威副本已提交,之后的工作副本 / 审计 / 效果落地失败(提交前的失败一律抛出,不会落到这里) */
+  | { kind: 'transitioned'; next: PersonalLifecycleRecord; effectsFailed?: string }
   | { kind: 'noop' }
   | { kind: 'refused'; refusal: Refusal }
   /** 权威记录已不是调用方手里的状态(M13-2):不推进 */
@@ -58,6 +59,10 @@ export async function applyEvent(
   if (fresh.record.lifecycle !== rec.lifecycle) {
     return { kind: 'stale', authoritative: fresh.record.lifecycle };
   }
+  // 同生命周期也要整份一致:否则提交会用旧快照整份覆盖权威副本里较新的字段
+  if (canonicalJson(fresh.record) !== canonicalJson(rec)) {
+    return { kind: 'stale', authoritative: 'snapshot_changed' };
+  }
   const rv = await d.revocations.read();
   if (rv.kind === 'invalid') return { kind: 'halt', halt: 'revocations_invalid', why: rv.why };
   const env = await d.env.read();
@@ -73,7 +78,11 @@ export async function applyEvent(
     auto_paused: env.autoPaused,
   });
   if (isRefusal(res)) return { kind: 'refused', refusal: res };
-  if (res.outcome === 'noop') return { kind: 'noop' };
+  if (res.outcome === 'noop') {
+    // 空操作只跳过提交与工作副本;引擎给的审计 / 黑名单等效果(终态上的 veto 等,R21-4.4a ②)照常落地
+    await landEffects(d, res.effects);
+    return { kind: 'noop' };
+  }
 
   const json = canonicalJson(res.next);
   const c = await d.store.commit({

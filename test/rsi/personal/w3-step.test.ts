@@ -7,12 +7,14 @@ import type {
   CandidateWorkingCopy,
   PersonalLifecycleRecord,
 } from '../../../src/contracts/rsi-personal.js';
+import { applyEvent } from '../../../src/rsi/personal/candidate-apply.js';
+import { RsiLockError } from '../../../src/rsi/lock-error.js';
 import { runPersonalStep, entryReset } from '../../../src/rsi/personal/candidate-step.js';
 import { candidateId } from '../../../src/rsi/personal/ids.js';
 import { rec as mkRec, SIG } from './transition-fixture.js';
 import {
   draftOf,
-  goodFacts,
+  gateFactsNoBusy,
   promoteBaseFor,
   REV,
   staged,
@@ -74,8 +76,7 @@ const life = (w: World3, id: string): string | undefined => w.store.records.get(
 function withNewProposal(w: World3): string {
   w.stagedList = [staged()];
   w.gateFacts.fn = async () => {
-    const { clusterBusy: _c, ...rest } = goodFacts(draftOf());
-    return rest;
+    return gateFactsNoBusy();
   };
   const d = draftOf();
   return d.id;
@@ -163,8 +164,7 @@ describe('闸结果 → 转移(R21-5.2)', () => {
     const w = world3();
     const id = withNewProposal(w);
     w.gateFacts.fn = async () => {
-      const { clusterBusy: _c, ...rest } = goodFacts(draftOf());
-      return { ...rest, tombstoned: true };
+      return gateFactsNoBusy(draftOf(), { tombstoned: true });
     };
     const r = await runPersonalStep(w.d);
     expect(r.gated).toEqual([{ id, outcome: 'red:g4_tombstone' }]);
@@ -178,8 +178,7 @@ describe('闸结果 → 转移(R21-5.2)', () => {
     const w = world3();
     const id = withNewProposal(w);
     w.gateFacts.fn = async () => {
-      const { clusterBusy: _c, ...rest } = goodFacts(draftOf());
-      return { ...rest, replay: null };
+      return gateFactsNoBusy(draftOf(), { replay: null });
     };
     const r = await runPersonalStep(w.d);
     expect(r.breaker).toBe('gate_internal');
@@ -232,8 +231,7 @@ describe('权威副本不可用时中止', () => {
     const w = world3();
     const id = withNewProposal(w);
     w.gateFacts.fn = async () => {
-      const { clusterBusy: _c, ...rest } = goodFacts(draftOf());
-      return { ...rest, cooldownActive: true };
+      return gateFactsNoBusy(draftOf(), { cooldownActive: true });
     };
     w.effectsFail.value = true;
     const r = await runPersonalStep(w.d);
@@ -463,5 +461,71 @@ describe('入口清零 queued_since(W0-13)', () => {
     const r = await runPersonalStep(w.d);
     expect(r.queueReset).toBe(true);
     expect(life(w, A)).toBe('shadow');
+  });
+});
+
+describe('评审后追加的负向用例', () => {
+  it('提交时丢锁(lock_lost)→ 立即中止 halted=lock_lost,不提交、不改状态,也不被记成 effectsFailed', async () => {
+    const w = world3({ phase: V1B });
+    addShadow(w, A);
+    eligible(w);
+    w.store.throwOnCommit = new RsiLockError('lock_lost');
+    const r = await runPersonalStep(w.d);
+    expect(r.halted).toBe('lock_lost');
+    expect(r.effectsFailed).toEqual([]);
+    expect(life(w, A)).toBe('shadow');
+  });
+  it('提交前的其它错误不被吞(向上抛,不伪装成提交后失败)', async () => {
+    const w = world3({ phase: V1B });
+    addShadow(w, A);
+    eligible(w);
+    w.store.throwOnCommit = new Error('disk on fire');
+    await expect(runPersonalStep(w.d)).rejects.toThrow('disk on fire');
+  });
+  it('gate_internal 熔断在同一步立即生效:另一个合格 shadow 不进入 canary,出错候选也不被拒', async () => {
+    const w = world3({ phase: V1B });
+    const id = withNewProposal(w);
+    w.gateFacts.fn = async () => {
+      return gateFactsNoBusy(draftOf(), { replay: null });
+    };
+    addShadow(w, B);
+    eligible(w);
+    const r = await runPersonalStep(w.d);
+    expect(r.breaker).toBe('gate_internal');
+    expect(life(w, id)).toBe('proposed');
+    expect(life(w, B)).toBe('shadow');
+  });
+  it('M13-6 排队到期先于事实读取与 no-hit:事实不可得 / 同时 no-hit 也按 limit_reached 到期', async () => {
+    const w = world3({ phase: V1B });
+    addShadow(w, A, { shadow: { queued_since: '2026-10-11' } });
+    addShadow(w, B, { shadow: { queued_since: '2026-10-11' } });
+    w.promoteFacts.fn = async (r) =>
+      r.id === A ? null : promoteBaseFor(r, { sessions: 20, hits: 1 });
+    await runPersonalStep(w.d);
+    for (const id of [A, B]) {
+      expect(life(w, id)).toBe('expired');
+      expect(w.store.records.get(id)?.transitions.at(-1)?.reason).toBe('limit_reached');
+    }
+  });
+  it('同生命周期但快照已变:不用旧快照整份覆盖权威副本(stale,不提交)', async () => {
+    const w = world3({ phase: V1B });
+    const r = addShadow(w, A);
+    const res = await applyEvent(
+      w.d,
+      { ...r, overlaps_preset: true },
+      { kind: 'veto', evidence: 'x' },
+    );
+    expect(res).toEqual({ kind: 'stale', authoritative: 'snapshot_changed' });
+    expect(w.store.commits.length).toBe(0);
+  });
+  it('终态上的终止事件是空操作,但引擎给的效果照常落地:veto → 黑名单,clear → 审计;都不提交', async () => {
+    const w = world3({ phase: V1B });
+    const r = mkRec('rejected', { id: A });
+    w.store.put(r);
+    expect(await applyEvent(w.d, r, { kind: 'veto', evidence: 'v' })).toEqual({ kind: 'noop' });
+    expect(w.effects.some((e) => e.type === 'blacklist_veto')).toBe(true);
+    expect(await applyEvent(w.d, r, { kind: 'clear', evidence: 'c' })).toEqual({ kind: 'noop' });
+    expect(w.audits.length).toBe(1);
+    expect(w.store.commits.length).toBe(0);
   });
 });

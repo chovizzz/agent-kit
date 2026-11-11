@@ -19,7 +19,8 @@ import type { DedupeTarget } from '../../reflect/dedupe.js';
 import type { CommitResult, TreeSpec } from './commit.js';
 import type { GateFacts } from './gate-types.js';
 import type { StagedProposal } from './candidate-source.js';
-import type { PromoteBase, TransitionEffect } from './transition-table.js';
+import type { TransitionEffect } from './transition.js';
+import type { PromoteBase } from './transition-table.js';
 
 /** 私有仓库(权威副本)的读结果。`deferred` = 人工分叉 / 换了仓库(R21-3.5 情形 ② / ④):不读不写,暂停增加影响 */
 export type RepoRead<T> =

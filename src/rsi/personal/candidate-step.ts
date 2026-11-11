@@ -17,6 +17,7 @@ import type {
   PersonalLifecycleRecord,
 } from '../../contracts/rsi-personal.js';
 import { canonicalJson } from '../../io/canonical-json.js';
+import { RsiLockError } from '../lock-error.js';
 import { applyEvent, type ApplyDeps } from './candidate-apply.js';
 import type {
   FactsProvider,
@@ -43,6 +44,7 @@ import { decideShadowStep, pickPromotionHead } from './transition.js';
 import {
   evaluationSlotOccupied,
   isTerminalLifecycle,
+  queueExpired,
   utcDay,
   type TransitionCtx,
   type TransitionEvent,
@@ -146,7 +148,7 @@ export async function runPersonalStep(d: StepDeps): Promise<StepResult> {
   if (rv0.kind === 'invalid') return halt('revocations_invalid');
 
   // ① 入口清零
-  let working = new Map((await d.working.list()).map((w) => [w.id, w]));
+  const working = new Map((await d.working.list()).map((w) => [w.id, w]));
   const cur: WorkerMarks = { ...baseMarks, repoReachable: true };
   if (entryReset(await d.marks.read(), cur)) {
     for (const w of working.values()) {
@@ -169,9 +171,12 @@ export async function runPersonalStep(d: StepDeps): Promise<StepResult> {
     try {
       r = await applyEvent(d, rec, event, wcAfter, working.get(rec.id));
     } catch (e) {
-      // 提交已成功但效果 / 审计落地失败:记下来,不回滚(权威副本为准)
-      out.effectsFailed.push(`${rec.id}:${e instanceof Error ? e.message : 'error'}`);
-      return 'other';
+      // 抛出 = 提交之前(或提交本身)失败:锁丢失立即中止;其它错误不吞,向上抛(提交后的落地失败由 applyEvent 内部分类,不会到这里)
+      if (e instanceof RsiLockError && e.kind === 'lock_lost') {
+        out.halted = 'lock_lost';
+        return 'halt';
+      }
+      throw e;
     }
     if (r.kind === 'halt') {
       out.halted = r.halt;
@@ -179,6 +184,7 @@ export async function runPersonalStep(d: StepDeps): Promise<StepResult> {
       return 'halt';
     }
     if (r.kind === 'transitioned') {
+      if (r.effectsFailed !== undefined) out.effectsFailed.push(`${rec.id}:${r.effectsFailed}`);
       out.transitions.push(`${rec.id}: ${rec.lifecycle} -> ${r.next.lifecycle}`);
       const w = wcAfter?.(working.get(rec.id));
       if (w !== undefined) working.set(rec.id, w);
@@ -338,9 +344,28 @@ export async function runPersonalStep(d: StepDeps): Promise<StepResult> {
     ready: string | null;
     event?: TransitionEvent;
   }[] = [];
+  // 本步已发现 gate_internal(B2):不再授予任何影响(只做到期 / 收紧类转移)
+  const noGrant = out.breaker !== null;
   for (const rec of records.filter((r) => r.lifecycle === 'shadow').sort(byId)) {
     const wc = working.get(rec.id);
     if (wc === undefined) continue;
+    // W0-13 ①:排队到期先于一切(含事实读取与 no-hit),只依赖 queued_since 与日期
+    if (queueExpired(wc.shadow.queued_since, today)) {
+      const r = await run(
+        rec,
+        {
+          kind: 'shadow_queue_expired',
+          evidence: `shadow:${today}`,
+          queued_since: wc.shadow.queued_since,
+        },
+        patchShadow({
+          canary_ready_since: wc.shadow.canary_ready_since,
+          queued_since: wc.shadow.queued_since,
+        }),
+      );
+      if (r === 'halt') return out;
+      continue;
+    }
     const pf = await d.facts.promoteFacts(rec, wc);
     if (pf === null) continue; // 事实不可得:不推进、不动计时
     const revoked = rvNow.lines.some(
@@ -376,6 +401,7 @@ export async function runPersonalStep(d: StepDeps): Promise<StepResult> {
       continue;
     }
     if (step.action === 'promote' && step.event !== undefined) {
+      if (noGrant) continue;
       decisions.push({ rec, wc, ready: step.patch.canary_ready_since, event: step.event });
       continue;
     }

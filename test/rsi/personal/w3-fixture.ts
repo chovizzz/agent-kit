@@ -26,7 +26,8 @@ import { buildDraft, type StagedProposal } from '../../../src/rsi/personal/candi
 import type { StepDeps } from '../../../src/rsi/personal/candidate-step.js';
 import type { CommitResult, TreeSpec } from '../../../src/rsi/personal/commit.js';
 import type { CandidateDraft, GateFacts } from '../../../src/rsi/personal/gate-types.js';
-import type { PromoteBase, TransitionEffect } from '../../../src/rsi/personal/transition-table.js';
+import type { TransitionEffect } from '../../../src/rsi/personal/transition.js';
+import type { PromoteBase } from '../../../src/rsi/personal/transition-table.js';
 
 export const NOW = new Date('2026-11-10T12:00:00.000Z');
 export const TODAY = '2026-11-10';
@@ -175,6 +176,16 @@ export function goodFacts(draft: CandidateDraft = draftOf()): GateFacts {
   };
 }
 
+/** 闸事实(不含 clusterBusy:那一项由步骤自己按权威记录计算) */
+export function gateFactsNoBusy(
+  draft: CandidateDraft = draftOf(),
+  over: Partial<Omit<GateFacts, 'clusterBusy'>> = {},
+): Omit<GateFacts, 'clusterBusy'> {
+  const f: Partial<GateFacts> = { ...goodFacts(draft) };
+  delete f.clusterBusy;
+  return { ...(f as Omit<GateFacts, 'clusterBusy'>), ...over };
+}
+
 // ---------------------------------------------------------------------------
 // 内存端口
 // ---------------------------------------------------------------------------
@@ -188,6 +199,7 @@ export class MemStore implements AuthoritativeStore {
   readOverride = new Map<string, PersonalLifecycleRecord>();
   readAllCount = 0;
   failCommit: CommitResult | null = null;
+  throwOnCommit: Error | null = null;
 
   put(r: PersonalLifecycleRecord): void {
     this.records.set(r.id, PersonalLifecycleRecordSchema.parse(r));
@@ -214,6 +226,7 @@ export class MemStore implements AuthoritativeStore {
       : { kind: 'ok', head: all.head, record: structuredClone(r) };
   }
   async commit(spec: TreeSpec): Promise<CommitResult> {
+    if (this.throwOnCommit !== null) throw this.throwOnCommit;
     if (this.failCommit !== null) return this.failCommit;
     this.commits.push(spec);
     for (const f of spec.upserts) {
