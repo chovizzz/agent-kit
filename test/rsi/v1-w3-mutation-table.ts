@@ -704,8 +704,8 @@ export const V1_W3_MUTATIONS: readonly V1W3Mutation[] = [
     edits: [
       {
         file: GATES,
-        anchor: 'for (const t of validatedQuotaTargets(b.targets)) {',
-        replacement: 'for (const t of validatedQuotaTargets(b.targets).slice(0, 1)) {',
+        anchor: 'for (const t of targets) {',
+        replacement: 'for (const t of targets.slice(0, 1)) {',
       },
     ],
     tests: [T_GATES],
