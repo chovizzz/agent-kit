@@ -90,6 +90,11 @@ export interface WorkerMarks {
   policyFp: string;
   repoReachable: boolean;
   revocationCount: number;
+  /**
+   * 入口事件代数:`rsi auto pause` / `resume`、`enabled` 翻转等入口每发生一次加 1(装配处维护)。
+   * 只比较两次观测的最终布尔值会漏掉两次 tick 之间「pause → resume」这类来回,所以用单调计数补上。
+   */
+  resetGen: number;
 }
 export interface MarksStore {
   read(): Promise<WorkerMarks | null>;

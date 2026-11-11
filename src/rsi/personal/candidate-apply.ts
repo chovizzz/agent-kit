@@ -7,6 +7,7 @@ import type {
   PersonalLifecycleRecord,
 } from '../../contracts/rsi-personal.js';
 import { canonicalJson } from '../../io/canonical-json.js';
+import { RsiLockError } from '../lock-error.js';
 import type {
   AuditSink,
   AuthoritativeStore,
@@ -33,7 +34,13 @@ export interface ApplyDeps {
 
 export type ApplyResult =
   /** `effectsFailed`:权威副本已提交,之后的工作副本 / 审计 / 效果落地失败(提交前的失败一律抛出,不会落到这里) */
-  | { kind: 'transitioned'; next: PersonalLifecycleRecord; effectsFailed?: string }
+  | {
+      kind: 'transitioned';
+      next: PersonalLifecycleRecord;
+      effectsFailed?: string;
+      /** 提交后发现丢锁:转移已提交,但调用方必须立即结束本步(不得继续任何写出口) */
+      lockLost?: true;
+    }
   | { kind: 'noop' }
   | { kind: 'refused'; refusal: Refusal }
   /** 权威记录已不是调用方手里的状态(M13-2):不推进 */
@@ -106,6 +113,7 @@ export async function applyEvent(
       kind: 'transitioned',
       next: res.next,
       effectsFailed: e instanceof Error ? e.message : 'error',
+      ...(e instanceof RsiLockError && e.kind === 'lock_lost' ? { lockLost: true as const } : {}),
     };
   }
   return { kind: 'transitioned', next: res.next };

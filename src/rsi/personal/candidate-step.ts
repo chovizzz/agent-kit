@@ -83,6 +83,7 @@ export function entryReset(prev: WorkerMarks | null, cur: WorkerMarks): boolean 
   return (
     prev.enabled !== cur.enabled ||
     prev.paused !== cur.paused ||
+    cur.resetGen > prev.resetGen ||
     prev.policyFp !== cur.policyFp ||
     (!prev.repoReachable && cur.repoReachable) ||
     cur.revocationCount > prev.revocationCount
@@ -185,6 +186,11 @@ export async function runPersonalStep(d: StepDeps): Promise<StepResult> {
     }
     if (r.kind === 'transitioned') {
       if (r.effectsFailed !== undefined) out.effectsFailed.push(`${rec.id}:${r.effectsFailed}`);
+      if (r.lockLost === true) {
+        out.halted = 'lock_lost';
+        out.transitions.push(`${rec.id}: ${rec.lifecycle} -> ${r.next.lifecycle}`);
+        return 'halt';
+      }
       out.transitions.push(`${rec.id}: ${rec.lifecycle} -> ${r.next.lifecycle}`);
       const w = wcAfter?.(working.get(rec.id));
       if (w !== undefined) working.set(rec.id, w);
@@ -275,11 +281,17 @@ export async function runPersonalStep(d: StepDeps): Promise<StepResult> {
     }
     head = c.commit;
     known.add(draft.id);
-    const wc = newWorkingCopy(draft, dr.signals);
-    await d.working.put(wc);
-    working.set(draft.id, wc);
-    await d.audit.append([creationAudit(rec, now)]);
+    // 已提交:先登记创建事实,再落地工作副本与审计(失败不抹掉 created;丢锁立即结束)
     out.created.push(draft.id);
+    const wc = newWorkingCopy(draft, dr.signals);
+    try {
+      await d.working.put(wc);
+      working.set(draft.id, wc);
+      await d.audit.append([creationAudit(rec, now)]);
+    } catch (e) {
+      if (e instanceof RsiLockError && e.kind === 'lock_lost') return halt('lock_lost');
+      out.effectsFailed.push(`${draft.id}:${e instanceof Error ? e.message : 'error'}`);
+    }
   }
   re = await reload();
   if (re === null) return out;

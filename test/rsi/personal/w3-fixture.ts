@@ -271,6 +271,8 @@ export interface World3 {
   };
   now: { value: Date };
   effectsFail: { value: boolean };
+  /** 工作副本写入失败(提交之后的落地失败)注入 */
+  putFail: { error: Error | null };
 }
 
 export function promoteBaseFor(
@@ -307,16 +309,18 @@ export function world3(over: { phase?: number } = {}): World3 {
       policyFp: 'p1',
       repoReachable: true,
       revocationCount: 0,
+      resetGen: 0,
     },
   };
   const env: StepEnv = {
     phase: over.phase ?? 1,
     autoLoopEffective: true,
     autoPaused: false,
-    marks: { enabled: true, paused: false, policyFp: 'p1' },
+    marks: { enabled: true, paused: false, policyFp: 'p1', resetGen: 0 },
   };
   const now = { value: NOW };
   const effectsFail = { value: false };
+  const putFail: { error: Error | null } = { error: null };
   const w: World3 = {
     store,
     working,
@@ -331,6 +335,7 @@ export function world3(over: { phase?: number } = {}): World3 {
     promoteFacts: { fn: async () => null },
     now,
     effectsFail,
+    putFail,
     d: undefined as unknown as StepDeps,
   };
   const facts: FactsProvider = {
@@ -345,7 +350,10 @@ export function world3(over: { phase?: number } = {}): World3 {
     store,
     working: {
       list: async () => [...working.values()].map((x) => structuredClone(x)),
-      put: async (c) => void working.set(c.id, structuredClone(c)),
+      put: async (c) => {
+        if (putFail.error !== null) throw putFail.error;
+        working.set(c.id, structuredClone(c));
+      },
     },
     revocations: { read: async () => revs.value },
     audit: { append: async (l) => void audits.push(...l) },

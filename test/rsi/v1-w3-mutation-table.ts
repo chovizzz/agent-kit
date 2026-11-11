@@ -191,6 +191,24 @@ export const V1_W3_MUTATIONS: readonly V1W3Mutation[] = [
   },
   // ---- M13-6 到期先于推进 ----
   {
+    id: 'm13-5-entry-reset-generation-dropped',
+    clause: 'M13-5 / W0-13:pause→resume 来回(最终布尔值不变)也是入口事件',
+    edits: [{ file: STEP, anchor: 'cur.resetGen > prev.resetGen ||', replacement: '' }],
+    tests: [T_STEP],
+    expectRed: ['两次 tick 之间 pause → resume', 'entryReset:各入口事件各自成立'],
+    mustKill: ['两次 tick 之间 pause → resume'],
+  },
+  {
+    id: 'post-commit-lock-lost-continues',
+    clause: 'R21-3.6 / W0-15:提交之后发现丢锁也立即结束步骤',
+    edits: [
+      { file: STEP, anchor: 'if (r.lockLost === true) {', replacement: 'if (false as boolean) {' },
+    ],
+    tests: [T_STEP],
+    expectRed: ['提交之后工作副本写入丢锁'],
+    mustKill: ['提交之后工作副本写入丢锁'],
+  },
+  {
     id: 'm13-6-expiry-skipped',
     clause: 'M13-6:判定顺序对调(排队到期不被处理,名额空闲就推进)',
     edits: [

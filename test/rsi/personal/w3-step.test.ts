@@ -392,6 +392,7 @@ describe('shadow 步', () => {
       policyFp: 'p1',
       repoReachable: true,
       revocationCount: 0,
+      resetGen: 0,
     };
     eligible(w);
     await runPersonalStep(w.d);
@@ -406,12 +407,14 @@ describe('入口清零 queued_since(W0-13)', () => {
     policyFp: 'p1',
     repoReachable: true,
     revocationCount: 0,
+    resetGen: 0,
   };
   it('entryReset:各入口事件各自成立;无变化不清零', () => {
     expect(entryReset(null, marks)).toBe(true);
     expect(entryReset(marks, marks)).toBe(false);
     expect(entryReset(marks, { ...marks, enabled: false })).toBe(true);
     expect(entryReset(marks, { ...marks, paused: true })).toBe(true);
+    expect(entryReset(marks, { ...marks, resetGen: 1 })).toBe(true);
     expect(entryReset(marks, { ...marks, policyFp: 'p2' })).toBe(true);
     expect(entryReset({ ...marks, repoReachable: false }, marks)).toBe(true);
     expect(entryReset(marks, { ...marks, revocationCount: 1 })).toBe(true);
@@ -527,5 +530,53 @@ describe('评审后追加的负向用例', () => {
     expect(await applyEvent(w.d, r, { kind: 'clear', evidence: 'c' })).toEqual({ kind: 'noop' });
     expect(w.audits.length).toBe(1);
     expect(w.store.commits.length).toBe(0);
+  });
+});
+
+describe('评审第二轮追加', () => {
+  it('M13-5 两次 tick 之间 pause → resume(最终布尔值不变):入口代数递增,旧排队日期被清空而不是立即到期', async () => {
+    const w = world3({ phase: V1A });
+    addShadow(w, A, { shadow: { queued_since: '2026-09-01' } });
+    w.env.marks.resetGen = 1;
+    eligible(w);
+    const r = await runPersonalStep(w.d);
+    expect(r.queueReset).toBe(true);
+    expect(life(w, A)).toBe('shadow');
+    expect(w.working.get(A)?.shadow.queued_since).toBeNull();
+  });
+  it('提交之后工作副本写入丢锁:转移已提交并登记,但立即中止(halted=lock_lost),不再调用后续端口', async () => {
+    const w = world3({ phase: V1B });
+    addShadow(w, A);
+    eligible(w);
+    w.putFail.error = new RsiLockError('lock_lost');
+    const r = await runPersonalStep(w.d);
+    expect(r.halted).toBe('lock_lost');
+    expect(life(w, A)).toBe('canary');
+    expect(r.transitions).toEqual([`${A}: shadow -> canary`]);
+    expect(w.audits).toEqual([]);
+  });
+  it('提交之后工作副本写入的普通失败:记 effectsFailed,步骤继续', async () => {
+    const w = world3({ phase: V1B });
+    addShadow(w, A);
+    eligible(w);
+    w.putFail.error = new Error('disk full');
+    const r = await runPersonalStep(w.d);
+    expect(r.halted).toBeNull();
+    expect(r.effectsFailed.length).toBeGreaterThan(0);
+    expect(life(w, A)).toBe('canary');
+  });
+  it('创建提交成功后工作副本写入失败:created 仍登记该 id;丢锁则立即中止', async () => {
+    const w = world3();
+    const id = withNewProposal(w);
+    w.putFail.error = new Error('disk full');
+    const r = await runPersonalStep(w.d);
+    expect(r.created).toEqual([id]);
+    expect(r.effectsFailed.some((x) => x.startsWith(id))).toBe(true);
+    const w2 = world3();
+    const id2 = withNewProposal(w2);
+    w2.putFail.error = new RsiLockError('lock_lost');
+    const r2 = await runPersonalStep(w2.d);
+    expect(r2.created).toEqual([id2]);
+    expect(r2.halted).toBe('lock_lost');
   });
 });
