@@ -28,13 +28,45 @@ export const SessionStatCountsSchema = CountsSchema.extend({
 });
 export type SessionStatCounts = z.infer<typeof SessionStatCountsSchema>;
 
-export const SessionStatSchema = z.strictObject({
-  session_ref: SessionRefIdSchema,
-  project_key: z.string().min(1),
-  ts: IsoTimestampSchema,
-  external_content: z.boolean(),
-  counts: SessionStatCountsSchema,
-});
+/** W4(R21-6.6):一个会话记录里至多存几个取回的标记(去重后;≥ 2 个不同标记 = 「多标记」,存 4 个足以判定)。 */
+export const SESSION_MARKERS_MAX = 4;
+/** 随机会话标记的形状(R21-6.3):`rsm_` + 16 位十六进制。 */
+export const SESSION_MARKER_RE = /^rsm_[0-9a-f]{16}$/;
+
+export const SessionStatSchema = z
+  .strictObject({
+    session_ref: SessionRefIdSchema,
+    project_key: z.string().min(1),
+    ts: IsoTimestampSchema,
+    external_content: z.boolean(),
+    counts: SessionStatCountsSchema,
+    /**
+     * W4 追加(R21-6.6 / R21-6.9 / V1i-4),全部可选;旧行缺键照常通过。**缺键 = 未测(不是 0)**:
+     * 只有经 W4 reader(claude / pi)采集的行才写这三个键,codex / kimi 不写。
+     * `rsi_markers`:取回的随机会话标记,去重、升序、≤ 4;0 个 = 「关联失败」,≥ 2 个 = 「多标记」(`classifyMarkerRetrieval`)。
+     */
+    rsi_markers: z
+      .array(z.string().regex(SESSION_MARKER_RE))
+      .max(SESSION_MARKERS_MAX)
+      .refine((a) => a.every((m, i) => i === 0 || (a[i - 1] as string) < m), {
+        message: 'rsi_markers 必须严格升序(即去重且有序)',
+      })
+      .optional(),
+    /** 每会话最大重试链长(整数 ≥ 0;无失败 = 0);C2 的会话标量(§21.24 W0-7)。 */
+    retry_chain_max: z.number().int().nonnegative().optional(),
+    /** 被识别为 RSI 注入块或其复述、因而排除出计数的事件数(R21-6.9)。 */
+    injection_excluded: z.number().int().nonnegative().optional(),
+  })
+  .superRefine((s, ctx) => {
+    // W4 字段间约束:rsi_markers 与 injection_excluded 同由识别注入的 reader 写,成组(全有或全无);
+    // retry_chain_max 独立可选(按 agent 能力:codex / kimi 没有工具名,缺键 = 不可比 / 未测)
+    if ((s.rsi_markers === undefined) !== (s.injection_excluded === undefined)) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'rsi_markers 与 injection_excluded 必须成组(全有或全无)',
+      });
+    }
+  });
 export type SessionStat = z.infer<typeof SessionStatSchema>;
 
 /** 月份文件名;`yyyymm` 的月份必须 01..12(防路径片段)。 */

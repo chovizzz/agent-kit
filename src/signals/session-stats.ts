@@ -76,6 +76,14 @@ export function buildSessionStat(r: SessionResult): SessionStat | undefined {
     ts: r.sessionTs,
     external_content: r.external === true,
     counts,
+    // W4:缺 = 未测;只有识别注入的 reader(claude / pi)才写。标记已去重升序 ≤ 4(reader 保证,契约再校验)
+    ...(r.w4 !== undefined
+      ? {
+          rsi_markers: [...r.w4.markers],
+          retry_chain_max: r.w4.retryChainMax,
+          injection_excluded: r.w4.injectionExcluded,
+        }
+      : {}),
   } satisfies SessionStat);
 }
 

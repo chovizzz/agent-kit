@@ -35,42 +35,84 @@ export type SignalEventKind = z.infer<typeof SignalEventKindSchema>;
 export const TOOL_NAME_RE = /^[A-Za-z0-9_.:()<>+-]{1,96}$/;
 export const ToolNameSchema = z.string().regex(TOOL_NAME_RE);
 
+/**
+ * R21-18 第 20 条(V1,W4):工具失败的错误类,封闭枚举,**只存枚举、不存文本**。
+ * 映射表(有序、首个命中即用)在 `src/signals/tool-error-class.ts` 与 `docs/reader-counting-spec.md` §12.1;
+ * `other` = 「有失败文本但没命中任何一类」,没有失败文本时**不写**本字段(不写 `other`)。
+ */
+export const TOOL_ERROR_CLASSES = [
+  'timeout',
+  'not_found',
+  'permission',
+  'network',
+  'conflict',
+  'syntax',
+  'other',
+] as const;
+export const ToolErrorClassSchema = z.enum(TOOL_ERROR_CLASSES);
+export type ToolErrorClass = z.infer<typeof ToolErrorClassSchema>;
+
 /** L0 追加(D4):去重键字符集与长度。 */
 export const EVENT_KEY_RE = /^[A-Za-z0-9_.:-]{1,128}$/;
 export const EventKeySchema = z.string().regex(EVENT_KEY_RE);
 
 /** 设计 §6.2 的信号结构。 */
-export const SignalSchema = z.strictObject({
-  /** 稳定哈希(同一输入同一值);不含原文 */
-  sig_id: z.string().regex(/^sig_[0-9a-f]{16}$/),
-  agent: AgentIdSchema,
-  agent_version: z.string().min(1),
-  agent_version_source: AgentVersionSourceSchema,
-  /** 会话路径哈希(加盐策略见 docs/contracts.md Q-N7) */
-  session_ref: SessionRefIdSchema,
-  /** 项目哈希;覆盖层允许名单内可用明文 */
-  project_key: z.string().min(1),
-  ts: IsoTimestampSchema,
-  type: SignalTypeSchema,
-  /** 已脱敏摘录,≤300 字;涉及外部内容的会话为空串(只保留结构化计数) */
-  excerpt_redacted: z.string().refine((s) => Array.from(s).length <= MAX_EXCERPT_CHARS, {
-    message: `excerpt_redacted 超过 ${MAX_EXCERPT_CHARS} 字`,
-  }),
-  external_content: z.boolean(),
-  confidence: z.number().min(0).max(1),
-  loaded_rule_ids: z.array(z.string()),
-  /** R0 追加(#22),全部可选;`sig_id` 的算法不变(仍只由 session_ref 与事件序号决定)。 */
-  event_kind: SignalEventKindSchema.optional(),
-  /** 会话内事件序号,与 `sigIdFor` 用的序号相同 */
-  event_index: z.number().int().nonnegative().optional(),
-  tool_name: ToolNameSchema.optional(),
-  /**
-   * L0 追加(D4,`docs/reader-counting-spec.md` §8.1):跨文件去重键,= 加盐 sha256(agent + 源事件 id)。
-   * 可选:无跨文件重复的 agent(kimi/codex)与旧信号都没有它。契约层只约束字符集与长度
-   * (非空、≤128、`[A-Za-z0-9_.:-]`),不规定编码;原文 uuid 不得入库由 pipeline 负责。
-   */
-  event_key: EventKeySchema.optional(),
-});
+export const SignalSchema = z
+  .strictObject({
+    /** 稳定哈希(同一输入同一值);不含原文 */
+    sig_id: z.string().regex(/^sig_[0-9a-f]{16}$/),
+    agent: AgentIdSchema,
+    agent_version: z.string().min(1),
+    agent_version_source: AgentVersionSourceSchema,
+    /** 会话路径哈希(加盐策略见 docs/contracts.md Q-N7) */
+    session_ref: SessionRefIdSchema,
+    /** 项目哈希;覆盖层允许名单内可用明文 */
+    project_key: z.string().min(1),
+    ts: IsoTimestampSchema,
+    type: SignalTypeSchema,
+    /** 已脱敏摘录,≤300 字;涉及外部内容的会话为空串(只保留结构化计数) */
+    excerpt_redacted: z.string().refine((s) => Array.from(s).length <= MAX_EXCERPT_CHARS, {
+      message: `excerpt_redacted 超过 ${MAX_EXCERPT_CHARS} 字`,
+    }),
+    external_content: z.boolean(),
+    confidence: z.number().min(0).max(1),
+    loaded_rule_ids: z.array(z.string()),
+    /** R0 追加(#22),全部可选;`sig_id` 的算法不变(仍只由 session_ref 与事件序号决定)。 */
+    event_kind: SignalEventKindSchema.optional(),
+    /** 会话内事件序号,与 `sigIdFor` 用的序号相同 */
+    event_index: z.number().int().nonnegative().optional(),
+    tool_name: ToolNameSchema.optional(),
+    /**
+     * L0 追加(D4,`docs/reader-counting-spec.md` §8.1):跨文件去重键,= 加盐 sha256(agent + 源事件 id)。
+     * 可选:无跨文件重复的 agent(kimi/codex)与旧信号都没有它。契约层只约束字符集与长度
+     * (非空、≤128、`[A-Za-z0-9_.:-]`),不规定编码;原文 uuid 不得入库由 pipeline 负责。
+     */
+    event_key: EventKeySchema.optional(),
+    /**
+     * W4 追加(R21-18 第 20 条,V1),全部可选;旧信号缺键照常通过。**新键都不进 `sig_id`**(第 40 条:算法不变)。
+     * `tool_error_class`:只挂在 `event_kind=tool_result_failed` 的信号上,且仅当该事件有失败文本时才有。
+     */
+    tool_error_class: ToolErrorClassSchema.optional(),
+    /**
+     * 同一工具连续失败链的长度(整数 ≥ 1),只挂在 `tool_result_failed` 信号上,
+     * 值 = 该次失败在其链里的序号(第 1 次失败为 1,链上第 k 次失败为 k;前缀稳定:后续事件不改前面信号的值)。
+     * 定义见 `docs/reader-counting-spec.md` §12.2;没有 tool_name 的失败不成链,不写本字段。
+     */
+    retry_chain_len: z.number().int().min(1).optional(),
+  })
+  .superRefine((s, ctx) => {
+    // W4 字段间约束:两个失败侧字段只允许出现在 tool_result_failed 信号上
+    if (
+      (s.tool_error_class !== undefined || s.retry_chain_len !== undefined) &&
+      s.event_kind !== 'tool_result_failed'
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        message:
+          'tool_error_class / retry_chain_len 只允许出现在 event_kind=tool_result_failed 的信号上',
+      });
+    }
+  });
 export type Signal = z.infer<typeof SignalSchema>;
 
 /** `signals collect --dry` 的报告(只含计数与哈希,不含会话正文)。 */
