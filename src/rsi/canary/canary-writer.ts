@@ -88,6 +88,8 @@ export async function reconcileBarrier(
       if (l.kind === 'stop' && l.revocation_ref !== null) stops.add(l.revocation_ref);
   }
   const cache = await readCanaryDoc(d.rsiDir);
+  // 账不合规是整体问题(与有无凭据无关):空凭据集也不得绕过
+  if (ledger.kind === 'invalid') pending.push('ledger_invalid');
   for (const l of lines) {
     const ref = revocationRefOf(l);
     if (cache.kind === 'unreadable') pending.push(`${ref}:cache_unreadable`);
@@ -98,8 +100,7 @@ export async function reconcileBarrier(
     ) {
       pending.push(`${ref}:cache_residual`);
     }
-    if (ledger.kind === 'invalid') pending.push(`${ref}:ledger_invalid`);
-    else if (!stops.has(ref)) pending.push(`${ref}:stop_missing`);
+    if (ledger.kind === 'ok' && !stops.has(ref)) pending.push(`${ref}:stop_missing`);
     const rec = records.find(
       (r) => r.id === l.candidate_id && r.content_sha256 === l.content_sha256,
     );
@@ -109,18 +110,20 @@ export async function reconcileBarrier(
   return pending.length === 0 ? { ok: true } : { ok: false, pending };
 }
 
-/** 对账的缓存清理部分(调用方持两把锁):去掉 canary.json 里被凭据列出的条目、补 stop 行(同 ref 不重复)。状态推进由 W3 的对账步骤做 */
+/** 对账的缓存清理部分(调用方持 `rsi/lock`;只需这一把):去掉 canary.json 里被凭据列出的条目(缓存不可读也移除)、补 stop 行(同 ref 不重复)。状态推进由 W3 的对账步骤做 */
 export async function reconcileCaches(
-  d: CanaryWriterDeps,
+  d: Pick<CanaryWriterDeps, 'io' | 'rsiDir'> & { locks: { rsi: HeldLock } },
   lines: readonly RsiRevocationLine[],
   at: Date,
 ): Promise<void> {
   for (const l of lines) {
     const cur = await readCanaryDoc(d.rsiDir);
+    // 不合规 / 不可读的缓存同样移除(hint 本来就不会用它;留着只会让屏障永远拒绝授予):确认不了内容时按「收紧」处理
     if (
-      cur.kind === 'ok' &&
-      cur.value.candidate_id === l.candidate_id &&
-      cur.value.content_sha256 === l.content_sha256
+      cur.kind === 'unreadable' ||
+      (cur.kind === 'ok' &&
+        cur.value.candidate_id === l.candidate_id &&
+        cur.value.content_sha256 === l.content_sha256)
     ) {
       await removeCanary({ io: d.io, rsiDir: d.rsiDir, locks: { rsi: d.locks.rsi } });
     }

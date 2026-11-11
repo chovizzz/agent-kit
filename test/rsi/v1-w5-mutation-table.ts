@@ -615,8 +615,8 @@ export const V1_W5_MUTATIONS: readonly V1W5Mutation[] = [
     edits: [
       {
         file: WRITER,
-        anchor: 'else if (!stops.has(ref)) pending.push(`${ref}:stop_missing`);',
-        replacement: 'else void 0;',
+        anchor: "if (ledger.kind === 'ok' && !stops.has(ref)) pending.push(`${ref}:stop_missing`);",
+        replacement: 'void 0;',
       },
     ],
     tests: [T_WRITER],
@@ -646,6 +646,34 @@ export const V1_W5_MUTATIONS: readonly V1W5Mutation[] = [
     tests: [T_SHADOW],
     expectRed: ['M3 observer 抛 lock_lost'],
     mustKill: ['M3 observer 抛 lock_lost'],
+  },
+  {
+    id: 'grant-barrier-ledger-check-inside-loop',
+    clause: 'R21-9.5:账不合规不得因凭据集为空而绕过屏障',
+    edits: [
+      {
+        file: WRITER,
+        anchor: "if (ledger.kind === 'invalid') pending.push('ledger_invalid');",
+        replacement: 'void 0;',
+      },
+    ],
+    tests: [T_WRITER],
+    expectRed: ['空凭据集 + 不合规账'],
+    mustKill: ['空凭据集 + 不合规账'],
+  },
+  {
+    id: 'reconcile-keeps-unreadable-cache',
+    clause: 'R21-9.5:不可读缓存可由对账清理收口,否则屏障永远拒绝授予',
+    edits: [
+      {
+        file: WRITER,
+        anchor: "cur.kind === 'unreadable' ||",
+        replacement: 'false ||',
+      },
+    ],
+    tests: [T_WRITER],
+    expectRed: ['不可读缓存'],
+    mustKill: ['不可读缓存'],
   },
   // ---- shadow 计数(W0-2 / W0-13 / R21-1.7 / R21-3.8) ----
   {

@@ -181,6 +181,40 @@ describe('grantCanary:授予', () => {
     });
   });
 
+  it('空凭据集 + 不合规账 → 拒绝授予(坏账不因没有凭据而绕过);空凭据集 + 账不存在 → 允许', async () => {
+    const r = await rig();
+    await writeFile(r.w.io, path.join(r.w.rsi, 'canary-ledger.jsonl'), 'bad\n', { mode: 0o600 });
+    expect(await grantCanary(r.d, GRANT)).toEqual({
+      kind: 'refused',
+      reason: 'reconcile_incomplete',
+    });
+    expect(await exists(file(r))).toBe(false);
+    const r2 = await rig();
+    expect((await grantCanary(r2.d, GRANT)).kind).toBe('written');
+  });
+
+  it('不可读缓存恢复:坏 JSON 缓存 + 已对账的历史凭据 → 授予被拒;对账清理移除不可读缓存后可恢复', async () => {
+    const r = await rig();
+    const A = OTHER_CID;
+    const SA = 'd'.repeat(64);
+    r.store.put(rec('rejected', { id: A, content_sha256: SA }));
+    r.revs.value = { kind: 'ok', lines: [REVOKE(A, SA)] };
+    await writeFile(r.w.io, file(r), '{bad', { mode: 0o600 });
+    await appendStopLine(r.w.io, r.w.rsi, r.d.locks.rsi, {
+      kind: 'stop',
+      at: '2026-11-10T12:00:00Z',
+      candidate_id: A,
+      reason: 'revocation_reconciled',
+      revocation_ref: revocationRefOf(REVOKE(A, SA)),
+    });
+    expect(await grantCanary(r.d, GRANT)).toEqual({
+      kind: 'refused',
+      reason: 'reconcile_incomplete',
+    });
+    await reconcileCaches(r.d, [REVOKE(A, SA)], new Date());
+    expect((await grantCanary(r.d, GRANT)).kind).toBe('written');
+  });
+
   it('M2 adopted 期:本块只给 canary 授予;adopted 候选(V2 推进路径)→ 拒绝(fail-closed,留端口)', async () => {
     const r = await rig();
     r.store.put(rec('adopted', { deploy: { claude: 'injected', pi: 'none', codex: 'none' } }));
