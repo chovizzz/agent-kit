@@ -38,6 +38,7 @@ import {
   type CandidateDraft,
   type GateFacts,
   type GateId,
+  type GateQuotaTarget,
   type GateOutcome,
   type GateVerdict,
 } from './gate-types.js';
