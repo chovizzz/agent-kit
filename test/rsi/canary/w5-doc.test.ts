@@ -37,8 +37,10 @@ describe('渲染', () => {
 describe('M11:treat 输出预算 ≤ 1536 字节(含标记行与末尾换行)', () => {
   const fits = (n: number): string | null => canaryDocProblem(canaryDoc({ body: 'a'.repeat(n) }));
   it('边界:恰好 1536 字节通过,多 1 字节被拒', () => {
-    let lo = 1;
-    while (fits(lo + 1) === null) lo++;
+    // 不用「循环到被拒为止」:预算检查被去掉时那种写法永不终止(会拖死整个测试进程而不是干净地红)。按空正文的开销直接算出边界。
+    const overhead = Buffer.byteLength(treatText(M, canaryDoc({ body: '' })), 'utf8');
+    const lo = RSI_CANARY_INJECT_MAX_BYTES - overhead;
+    expect(lo).toBeGreaterThan(0);
     expect(fits(lo)).toBeNull();
     expect(fits(lo + 1)).toBe('treat_over_budget');
     expect(Buffer.byteLength(treatText(M, canaryDoc({ body: 'a'.repeat(lo) })), 'utf8')).toBe(

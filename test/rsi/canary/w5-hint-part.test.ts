@@ -64,22 +64,26 @@ describe('第 6 / 7 行:随机、分组账、输出', () => {
     expect((await lstat(path.join(w.rsi, 'canary-ledger.jsonl'))).mode & 0o777).toBe(0o600);
   });
 
-  it('随机为 control(u ≥ p):只输出标记行,不含标签 / 哈希 / 正文;账行 arm=control', async () => {
-    const w = await makeCanaryWorld('w5-control-');
-    const out = await runCanaryPart(runEnv(w, fakePort(GOOD), { random: () => 0.5 }));
-    expect(out).toBe(`${RSI_MARK_PREFIX} ${M1}\n`);
-    expect(out.includes(RSI_AUTO_LABEL)).toBe(false);
-    expect(out.includes('做:')).toBe(false);
-    const rows = await ledgerRows(w);
-    expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({
-      arm: 'control',
-      marker: M1,
-      candidate_id: CID,
-      p: 0.5,
-      reason: null,
-    });
-  });
+  // u = p(边界)与 u > p(远离边界)都要测:只测边界时,比较方向写反(`u > p`)在 u = p 处与正确实现同样给出 control
+  it.each([0.5, 0.9])(
+    '随机为 control(u ≥ p,u=%s):只输出标记行,不含标签 / 哈希 / 正文;账行 arm=control',
+    async (u) => {
+      const w = await makeCanaryWorld('w5-control-');
+      const out = await runCanaryPart(runEnv(w, fakePort(GOOD), { random: () => u }));
+      expect(out).toBe(`${RSI_MARK_PREFIX} ${M1}\n`);
+      expect(out.includes(RSI_AUTO_LABEL)).toBe(false);
+      expect(out.includes('做:')).toBe(false);
+      const rows = await ledgerRows(w);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        arm: 'control',
+        marker: M1,
+        candidate_id: CID,
+        p: 0.5,
+        reason: null,
+      });
+    },
+  );
 
   it('treat 概率取该 agent 的 p:p=1 时任何 u ∈ [0,1) 都是 treat', async () => {
     const w = await makeCanaryWorld('w5-p1-');

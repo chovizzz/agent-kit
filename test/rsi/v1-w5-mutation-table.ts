@@ -311,9 +311,18 @@ export const V1_W5_MUTATIONS: readonly V1W5Mutation[] = [
     mustKill: ['随机为 treat', '随机为 control'],
   },
   {
-    id: 'probe-grant-unchecked',
-    clause: 'W0-3:票全部被占 → 不输出(未得票也输出)',
-    edits: [off(HINTP, "if (grant === null) return '';")],
+    id: 'probe-exhausted-returns-grant',
+    // 原变异「去掉 hint 里的 `if (grant === null) return ''`」是等价变异:null 继续往下走会在 `grant.generation` 抛 TypeError,
+    // 被 runCanaryPart 的外层 catch(第 8 行 fail-closed)吞成 '',可观察行为不变,故换成在源头让「票占满」仍给出伪票。
+    clause: 'W0-3:票全部被占 → 不输出(占满时 consumeProbeTicket 仍返回一张伪票 → 照常落账、输出)',
+    edits: [
+      {
+        file: TICKET,
+        anchor: '  return null;',
+        replacement:
+          '  const index = entry.tickets + 1;\n  return { ticket: `${entry.generation}-${index}`, generation: entry.generation, index };',
+      },
+    ],
     tests: [T_PART],
     expectRed: ['第 4 次不输出'],
     mustKill: ['第 4 次不输出'],
@@ -757,8 +766,9 @@ export const V1_W5_MUTATIONS: readonly V1W5Mutation[] = [
       },
     ],
     tests: [T_WRITER],
-    expectRed: ['对账屏障(R21-9.5)'],
-    mustKill: ['对账屏障(R21-9.5)'],
+    // R21-9.5 原用例的残留缓存本身就拦住授予,独立钉住「缺 stop 行」的是「有凭据而分组账不存在 / 为空」(主代理验收复评 H4-R)
+    expectRed: ['对账屏障:有凭据而分组账不存在'],
+    mustKill: ['对账屏障:有凭据而分组账不存在'],
   },
   {
     id: 'grant-barrier-stop-only-when-ledger-exists',
