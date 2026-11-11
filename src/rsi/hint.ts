@@ -12,18 +12,29 @@
  * **不读**盐、信号库、会话计数、会话根、`cursor.json`、STOP 内容;不拿锁。计数由 `counts.json` + 当前配置 + 当前索引现算(R20-4.6),
  * 盐指纹只用 `projects.json` 与 `counts.json` 各自的 `salt_fp` 互相核对(`attribution.ts`)。
  *
+ * `--canary`(R21-6.2 / R21-6.10 / R21-6.11,V1b):`--agent <id> --format <f> --canary`(必须带 `--format`;纯文本模式不走矩阵)。读集合再追加 `.state/rsi/{canary.json,
+ * canary-admission.json,AUTO_PAUSE}` 与 HOME 侧 `rsi-personal/revocations.jsonl`(只读,见 `canary/permit-read.ts`);唯一多出的写入是分组账一行(`O_APPEND` + `fsync`)与探针票占用文件。
+ * 计数行与 canary 部分**独立判定**、合并成一个 `additionalContext`(计数行 ≤ 200 + canary 部分 ≤ 1536 = 1736 字节)。
+ *
  * 输出:模板之一加 `\n`,经唯一出口 {@link finalizeHint}(> 200 字节 → 空串);计数显示 `min(n, 9999)`,超过写 `9999+`。
  * 全部计算、字节校验与预算检查在去重写入**之前**完成;去重标记(`.state/rsi/hint/<agent>-<窗口>`,独占创建,`EEXIST` → 空串)是唯一的写入,
  * 输出空串的调用零写入。
  */
 import * as path from 'node:path';
 import { ExitCode } from '../contracts/exit-codes.js';
-import { formatHintOutput, isHintFormat, type HintFormat } from '../contracts/rsi-hooks.js';
+import {
+  PRODUCTION_SHAPES,
+  formatHintOutput,
+  isHintFormat,
+  type HintFormat,
+} from '../contracts/rsi-hooks.js';
 import {
   RSI_AGENT_IDS,
+  RSI_AUTO_PHASE,
   RSI_DIR_MODE,
   RSI_FILE_MODE,
   RSI_HINT_BUDGET_MS,
+  RSI_HINT_CANARY_TOTAL_MAX_BYTES,
   RSI_HINT_COUNT_CAP,
   RSI_HINT_DEDUP_MS,
   RSI_HINT_MAX_BYTES,
@@ -37,10 +48,14 @@ import {
   type RsiProjectIndex,
   type RsiState,
 } from '../contracts/rsi.js';
-import type { WriteAudit } from '../io/paths.js';
+import { getRealHome, type WriteAudit } from '../io/paths.js';
 import { lstat } from '../io/read-fs.js';
 import { createExclusive, mkdirp } from '../io/safe-fs.js';
 import type { AttributionProbe, IndexStatus } from './attribution.js';
+import { isAutoLoopEffective, resolveAutoConfig } from './auto-config.js';
+import { runCanaryPart } from './canary/canary-hint.js';
+import { makePermitPort } from './canary/permit-read.js';
+import { cryptoBytes, cryptoUnit } from './canary/rng.js';
 import { buildRsiPolicy, policyFingerprint } from './config.js';
 import { armedListingForHint } from './l0/armed-listing.js';
 import { rsiDirReadonly } from './lock-read.js';
@@ -67,6 +82,13 @@ export interface RunHintDeps {
   clockMs?: () => number;
   open?: OpenRsiIoDeps;
   probe?: AttributionProbe;
+  /** `--canary`(R21-6.2):随机源、相位、HOME、agent 版本现算,全部可注入;缺省取生产实现 */
+  random?: () => number;
+  randomBytes?: (n: number) => Uint8Array;
+  phase?: number;
+  home?: string;
+  /** 当前 agent 版本;`null` = 现算不出(契约未给 hint 的取版本方式,缺省恒为 null → 探针与准入一律 fail-closed) */
+  agentVersion?: (agent: RsiAgentId) => string | null;
 }
 
 /** 计数显示:`min(n, 9999)`,超过写 `9999+`(R20-3.3.2) */
@@ -116,15 +138,17 @@ function parseJson(b: Buffer): unknown {
  */
 function parseHintArgs(
   argv: readonly string[],
-): { agent: RsiAgentId; format: HintFormat | undefined } | undefined {
-  if (argv.length !== 2 && argv.length !== 4) return undefined;
+): { agent: RsiAgentId; format: HintFormat | undefined; canary: boolean } | undefined {
+  if (argv.length !== 2 && argv.length !== 4 && argv.length !== 5) return undefined;
   if (argv[0] !== '--agent') return undefined;
   const id = argv[1];
   if (!(RSI_AGENT_IDS as readonly string[]).includes(id as string)) return undefined;
-  if (argv.length === 2) return { agent: id as RsiAgentId, format: undefined };
+  if (argv.length === 2) return { agent: id as RsiAgentId, format: undefined, canary: false };
   const f = argv[3];
   if (argv[2] !== '--format' || f === undefined || !isHintFormat(f)) return undefined;
-  return { agent: id as RsiAgentId, format: f };
+  // `--canary` 只接在 `--format <f>` 之后(R21-6.11:纯文本模式不走矩阵 → 没有 `--format` 的 `--canary` 是参数错误)
+  if (argv.length === 5 && argv[4] !== '--canary') return undefined;
+  return { agent: id as RsiAgentId, format: f, canary: argv.length === 5 };
 }
 
 /** 只 lstat 判存在;无法确认 = 当作在场(→ 空串) */
@@ -137,22 +161,32 @@ async function exists(file: string): Promise<boolean> {
   }
 }
 
-/** 计算候选输出(不写盘);空串 = 不输出 */
+interface Composed {
+  /** 计数行(已过 `finalizeHint`);空串 = 本次没有计数行(只在 `--canary` 调用里出现,普通调用此时返回 null) */
+  text: string;
+  agent: RsiAgentId;
+  format: HintFormat | undefined;
+  io: Parameters<typeof rsiDir>[0];
+  /** 仅 `--canary`:R21-6.11 第 1 行已放行(状态 confirmed、配置可用)后,canary 部分需要的现算值 */
+  canary: null | {
+    rsiDir: string;
+    autoLoopEffective: boolean;
+    policyFp: string;
+  };
+}
+
+/** 计算候选输出(不写盘);`null` = 不输出 */
 async function compose(
   argv: readonly string[],
   env: Env,
   deps: RunHintDeps,
   over: () => boolean,
-): Promise<{
-  text: string;
-  agent: RsiAgentId;
-  format: HintFormat | undefined;
-  io: Parameters<typeof rsiDir>[0];
-} | null> {
+): Promise<Composed | null> {
   if (autoSkip(env, 'hint') !== null) return null;
   const parsed = parseHintArgs(argv); // 其它参数一律空串(R20-3.3.5)
   if (parsed === undefined) return null;
   const { agent, format } = parsed;
+  const wantCanary = parsed.canary;
   const open = await openRsiIo(
     {
       argv: [],
@@ -191,75 +225,119 @@ async function compose(
   const docState: Omit<RsiState, 'confirm'> | null =
     doc.kind === 'ok' || doc.kind === 'confirm_schema_invalid' ? doc.state : null;
 
-  let text = '';
-  if (st.state === 'armed') {
-    const a = armedListingForHint(docState, policyFingerprint(policy), policy.agents);
-    if (a === null) return null;
-    text = armedTemplate(a.projects);
-  } else if (st.state === 'confirmed') {
-    const idxBytes = get('projects.json');
-    let indexStatus: IndexStatus = 'absent';
-    let index: RsiProjectIndex | null = null;
-    if (idxBytes !== null) {
-      const p = RsiProjectIndexSchema.safeParse(parseJson(idxBytes));
-      if (!p.success) return null; // 索引损坏 → 空串(R20-3.3.1)
-      indexStatus = 'ok';
-      index = p.data;
+  if (st.state !== 'armed' && st.state !== 'confirmed') return null;
+  // 计数行(R20-3.3):`null` = 本次没有计数行(计数侧的任何失败 / 不够显示)。普通调用此时整体返回 null;
+  // `--canary` 调用里它**不影响** canary 部分(R21-6.11:两部分独立判定)
+  const count = await (async (): Promise<string | null> => {
+    let text = '';
+    if (st.state === 'armed') {
+      const a = armedListingForHint(docState, policyFingerprint(policy), policy.agents);
+      if (a === null) return null;
+      text = armedTemplate(a.projects);
+    } else if (st.state === 'confirmed') {
+      const idxBytes = get('projects.json');
+      let indexStatus: IndexStatus = 'absent';
+      let index: RsiProjectIndex | null = null;
+      if (idxBytes !== null) {
+        const p = RsiProjectIndexSchema.safeParse(parseJson(idxBytes));
+        if (!p.success) return null; // 索引损坏 → 空串(R20-3.3.1)
+        indexStatus = 'ok';
+        index = p.data;
+      }
+      const cntBytes = get('counts.json');
+      let counts: RsiCounts | null = null;
+      if (cntBytes !== null) {
+        const p = RsiCountsSchema.safeParse(parseJson(cntBytes));
+        if (!p.success) return null;
+        counts = p.data;
+      }
+      const stats = await projectStats({
+        config,
+        indexStatus,
+        index,
+        counts,
+        ackGen: docState?.projects_ack_generation ?? 0,
+        now: (deps.now ?? ((): Date => new Date()))(),
+        ...(deps.probe !== undefined ? { probe: deps.probe } : {}),
+      });
+      // R20-17.16 / R20-17.4:M = 待审 run 里的提案数(排除已忽略);读取集合追加 `reflect/` 子项列举、各 run 的 report.json、dismissed.json(订正 ⑥)。
+      // hint 不读 notice.json。扫描结果未知(子项过多 / 总读取超限)→ 本次空输出,零写入。
+      const dismissed = await readDismissed(d.kind === 'ok' ? d.dir : null);
+      const scan = await scanPending(
+        {
+          stateDir: d.kind === 'ok' ? path.dirname(d.dir) : io.stateDir,
+          staged: counts?.staged ?? [],
+          classify: stats.classify,
+          dismissed: dismissed.ids,
+          notified: null,
+        },
+        { over },
+      );
+      if (!scan.known) return null;
+      if (over()) return null;
+      // R20-17.17:暂存 run 目录数达到上限 → 换成一行满区提示(只数目录,不扫字节;不暗示 dismiss 能释放容量)
+      if (scan.runDirs >= RSI_STAGING_MAX_RUNS) {
+        text = RSI_HINT_STAGING_FULL_LINE;
+      } else {
+        const M = scan.pending.reduce((sum, r) => sum + r.proposals, 0);
+        const c: HintCounts = {
+          N: stats.N,
+          K: stats.K,
+          M,
+          P: stats.P,
+          n: stats.n,
+          X: stats.X,
+          U: stats.U,
+        };
+        if (!(c.K >= RSI_HINT_MIN_CLUSTERS || c.M >= 1 || c.n >= 1)) return null;
+        text = confirmedTemplate(c);
+      }
     }
-    const cntBytes = get('counts.json');
-    let counts: RsiCounts | null = null;
-    if (cntBytes !== null) {
-      const p = RsiCountsSchema.safeParse(parseJson(cntBytes));
-      if (!p.success) return null;
-      counts = p.data;
-    }
-    const stats = await projectStats({
-      config,
-      indexStatus,
-      index,
-      counts,
-      ackGen: docState?.projects_ack_generation ?? 0,
-      now: (deps.now ?? ((): Date => new Date()))(),
-      ...(deps.probe !== undefined ? { probe: deps.probe } : {}),
-    });
-    // R20-17.16 / R20-17.4:M = 待审 run 里的提案数(排除已忽略);读取集合追加 `reflect/` 子项列举、各 run 的 report.json、dismissed.json(订正 ⑥)。
-    // hint 不读 notice.json。扫描结果未知(子项过多 / 总读取超限)→ 本次空输出,零写入。
-    const dismissed = await readDismissed(d.kind === 'ok' ? d.dir : null);
-    const scan = await scanPending(
-      {
-        stateDir: d.kind === 'ok' ? path.dirname(d.dir) : io.stateDir,
-        staged: counts?.staged ?? [],
-        classify: stats.classify,
-        dismissed: dismissed.ids,
-        notified: null,
-      },
-      { over },
-    );
-    if (!scan.known) return null;
-    if (over()) return null;
-    // R20-17.17:暂存 run 目录数达到上限 → 换成一行满区提示(只数目录,不扫字节;不暗示 dismiss 能释放容量)
-    if (scan.runDirs >= RSI_STAGING_MAX_RUNS) {
-      text = RSI_HINT_STAGING_FULL_LINE;
-    } else {
-      const M = scan.pending.reduce((sum, r) => sum + r.proposals, 0);
-      const c: HintCounts = {
-        N: stats.N,
-        K: stats.K,
-        M,
-        P: stats.P,
-        n: stats.n,
-        X: stats.X,
-        U: stats.U,
-      };
-      if (!(c.K >= RSI_HINT_MIN_CLUSTERS || c.M >= 1 || c.n >= 1)) return null;
-      text = confirmedTemplate(c);
-    }
-  } else {
-    return null;
+    const out = finalizeHint(text);
+    return out === '' ? null : out;
+  })();
+  if (over()) return null;
+  if (!wantCanary) return count === null ? null : { text: count, agent, format, io, canary: null };
+  return {
+    text: count ?? '',
+    agent,
+    format,
+    io,
+    // R21-6.11 第 1 行:只有 `confirmed`(且 `.state/rsi` 目录存在)才进入 canary 部分
+    canary:
+      st.state === 'confirmed' && d.kind === 'ok'
+        ? {
+            rsiDir: d.dir,
+            autoLoopEffective: isAutoLoopEffective(
+              true,
+              resolveAutoConfig(config),
+              deps.phase ?? RSI_AUTO_PHASE,
+            ),
+            policyFp: policyFingerprint(policy),
+          }
+        : null,
+  };
+}
+
+/**
+ * 计数行的去重(唯一的计数侧写入):30 分钟窗口内同一 agent 只输出一次。已有标记 → 只读判定即返回空串,不做任何写尝试。
+ * 返回要输出的计数行(空串 = 本次不输出计数行)。
+ */
+async function dedupedCount(c: Composed, nowMs: number): Promise<string> {
+  if (c.text === '') return '';
+  const markerName = `${c.agent}-${windowIndex(nowMs, RSI_HINT_DEDUP_MS)}`;
+  const ro = await rsiDirReadonly(c.io);
+  if (ro.kind === 'unsafe') return '';
+  if (ro.kind === 'ok' && (await exists(path.join(ro.dir, 'hint', markerName)))) return '';
+  const dir = await rsiDir(c.io);
+  const hintDir = path.join(dir, 'hint');
+  await mkdirp(c.io, hintDir, RSI_DIR_MODE);
+  try {
+    await createExclusive(c.io, path.join(hintDir, markerName), '', RSI_FILE_MODE);
+  } catch {
+    return '';
   }
-  const out = finalizeHint(text);
-  if (out === '' || over()) return null;
-  return { text: out, agent, format, io };
+  return c.text;
 }
 
 /** 返回要写到 stdout 的文本(空串 = 不输出)。从不抛错 */
@@ -271,21 +349,45 @@ export async function runHint(argv: readonly string[], deps: RunHintDeps = {}): 
     const env: Env = deps.env ?? {};
     const c = await compose(argv, env, deps, over);
     if (c === null) return '';
-    // 去重(唯一写入):30 分钟窗口内同一 agent 只输出一次。已有标记 → 只读判定即返回空串,不做任何写尝试
-    const nowMs = (deps.now ?? ((): Date => new Date()))().getTime();
-    const markerName = `${c.agent}-${windowIndex(nowMs, RSI_HINT_DEDUP_MS)}`;
-    const ro = await rsiDirReadonly(c.io);
-    if (ro.kind === 'unsafe') return '';
-    if (ro.kind === 'ok' && (await exists(path.join(ro.dir, 'hint', markerName)))) return '';
-    const dir = await rsiDir(c.io);
-    const hintDir = path.join(dir, 'hint');
-    await mkdirp(c.io, hintDir, RSI_DIR_MODE);
+    const now = deps.now ?? ((): Date => new Date());
+    let countOut = '';
     try {
-      await createExclusive(c.io, path.join(hintDir, markerName), '', RSI_FILE_MODE);
+      countOut = await dedupedCount(c, now().getTime());
     } catch {
+      // 计数行的写入失败只丢计数行;`--canary` 部分独立判定(R21-6.11)。普通调用此时 canary 部分不存在,结果仍是空串
+      if (c.canary === null) return '';
+    }
+    let canaryOut = '';
+    if (c.canary !== null) {
+      // `--canary`(R21-6.2):不受 30 分钟去重约束;与计数行独立判定。canary 部分只在账行落盘之后才返回文本(未落账不注入)
+      const shape = PRODUCTION_SHAPES[c.agent];
+      canaryOut = await runCanaryPart({
+        io: c.io,
+        rsiDir: c.canary.rsiDir,
+        agent: c.agent,
+        autoLoopEffective: c.canary.autoLoopEffective,
+        phase: deps.phase ?? RSI_AUTO_PHASE,
+        policyFp: c.canary.policyFp,
+        shapeVersion: shape.shape_version,
+        agentVersion: (deps.agentVersion ?? ((): null => null))(c.agent),
+        nowMs: now().getTime(),
+        port: makePermitPort(c.canary.rsiDir, deps.home ?? getRealHome(env)),
+        now,
+        random: deps.random ?? cryptoUnit,
+        randomBytes: deps.randomBytes ?? cryptoBytes,
+        over,
+      });
+    }
+    const combined = countOut + canaryOut;
+    if (combined === '') return '';
+    // 合计 ≤ 200 + 1536(R21-6.11);两部分各自已受限,这里是最后一道(超限不输出)
+    if (
+      c.canary !== null &&
+      Buffer.byteLength(combined, 'utf8') > RSI_HINT_CANARY_TOTAL_MAX_BYTES
+    ) {
       return '';
     }
-    return c.format === undefined ? c.text : formatHintOutput(c.format, c.text);
+    return c.format === undefined ? combined : formatHintOutput(c.format, combined);
   } catch {
     return '';
   }

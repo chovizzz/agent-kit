@@ -211,6 +211,39 @@ export async function appendFile(
 }
 
 /**
+ * 单行追加并 `fsync`(R21-6.4 分组账 / R21-6.11「未落账不注入」:调用方只在本函数成功返回之后才输出):
+ * `O_WRONLY|O_APPEND|O_CREAT|O_NOFOLLOW`,不拿锁;打开后对**句柄**核对为普通文件且 `nlink == 1`(不是则拒绝、不写),
+ * 一次 `writeFile` 写完后 `sync()`,成功才返回。`mode` 必填(新建文件的权限,不改已有文件权限)。路径守卫同其它写函数。
+ * 单行原子性靠 `O_APPEND` 与调用方把每行限在 PIPE_BUF 级别以内;本函数不校验行内容。
+ */
+export async function appendFileSynced(
+  ctx: IoContext,
+  target: string,
+  data: string | Uint8Array,
+  mode: number,
+): Promise<void> {
+  audit(ctx, 'appendFileSynced', target);
+  const abs = assertWritable(ctx, target);
+  const NOFOLLOW = fs.constants.O_NOFOLLOW ?? 0;
+  if (NOFOLLOW === 0) throw new WriteDeniedError('写入被拒绝:平台不支持 O_NOFOLLOW');
+  const h = await fsp.open(
+    abs,
+    fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_CREAT | NOFOLLOW,
+    mode,
+  );
+  try {
+    const st = await h.stat();
+    if (!st.isFile() || st.nlink > 1) {
+      throw new WriteDeniedError(`写入被拒绝:追加目标不是单链接的普通文件:${abs}`);
+    }
+    await h.writeFile(data);
+    await h.sync();
+  } finally {
+    await h.close();
+  }
+}
+
+/**
  * 独占创建并写入(R20-A0,contracts §5 safe-fs 导出表 / §20.9 第 4 条):`O_CREAT|O_EXCL|O_NOFOLLOW`,目标已存在则失败、**不覆盖、不改动**
  * 已有文件。错误分两类,调用方须分开处理:
  *  - 路径守卫拒绝(`WriteDeniedError`):根外、`..` 逃逸、悬空符号链接、指向根外的链接、硬链接(nlink>1)—— fail-closed,不是「被占用」;
