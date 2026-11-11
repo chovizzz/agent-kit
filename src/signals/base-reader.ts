@@ -30,6 +30,9 @@ import { addCount, newCountRecord, toCountRecord } from '../contracts/count-reco
 import type { CountRecord } from '../contracts/count-record.js';
 import { provisionalSessionRef, sessionRefFor } from './ids.js';
 import { openReadonlyLines, statReadonly } from './open-readonly.js';
+import { findInjectionBlocks, InjectionTracker } from './injection.js';
+import type { InjectionAwareRead } from './injection.js';
+import { isExternalToolName } from './external-content.js';
 
 export type JsonObject = Record<string, unknown>;
 
@@ -49,6 +52,20 @@ export const LINE_TOO_LARGE_KEY = '<line-too-large>';
  */
 export const LINE_TOO_DEEP_KEY = '<line-too-deep>';
 export const NO_TYPE_KEY = '<no-type>';
+
+/** R21-6.9:出现注入块 / 复述时会被改成 meta 的事件种类(参与 user_messages / tool_calls / tool_failures 计数的那几种)。 */
+const INJECTION_COUNTED_KINDS: ReadonlySet<NormEventKind> = new Set<NormEventKind>([
+  'user_message',
+  'assistant_message',
+  'tool_call',
+  'tool_result',
+]);
+/** 一行里只有这些种类的事件(或没有事件)时,其中的注入块才算「真注入」、取回标记;带工具调用 / 结果 / 助手文本的行里的块只是被引用的文本,只排除、不取回。 */
+const INJECTION_SOURCE_KINDS: ReadonlySet<NormEventKind> = new Set<NormEventKind>([
+  'user_message',
+  'meta',
+  'unknown',
+]);
 
 /** 行级检查钩子的缺省触发间隔(R20-6.8 / `RSI_CHECKPOINT_LINES`;字节间隔保证少行大文件也能及时检查) */
 const LINE_HOOK_EVERY_LINES = RSI_CHECKPOINT_LINES;
@@ -217,6 +234,11 @@ export abstract class JsonlTraceReader<S = undefined> implements TraceReader {
   abstract readonly agent: AgentId;
   /** 数字时间戳是否按毫秒接受(Kimi 为 true,口径 C3) */
   protected readonly acceptEpochMs: boolean = false;
+  /**
+   * R21-6.9 / R21-6.6(W4):是否识别 RSI 注入块并取回标记。只有 claude / pi 打开;关闭时 `read()` 不带 `injection()`,
+   * 事件与计数与引入前逐字节一致(codex / kimi 不受影响)。
+   */
+  protected readonly detectsInjection: boolean = false;
 
   /** 只读枚举 source 下的主会话文件(绝对路径);子代理/侧链文件不得返回(C1)。 */
   protected abstract listSessionFiles(source: string): Promise<string[]>;
@@ -294,6 +316,7 @@ export abstract class JsonlTraceReader<S = undefined> implements TraceReader {
     let started = false;
 
     const bump = (rec: CountRecord, key: string): void => addCount(rec, key);
+    const injection = this.detectsInjection ? new InjectionTracker() : undefined;
 
     // 可选行级检查钩子(B4b,D6):预扫与正文共用同一组累计值;不传时 `lineTick` / `lineFlush` 是空操作
     const hook = opts.onLines;
@@ -403,8 +426,36 @@ export abstract class JsonlTraceReader<S = undefined> implements TraceReader {
         for (const k of outcome.ignoredDuplicateKinds ?? []) bump(ignored, k);
         if (outcome.meta) applyMeta(outcome.meta);
 
+        let lineEvents: readonly ParsedEvent[] = outcome.events ?? [];
+        // 被 reader 整行忽略的行(Claude 侧链等,只记 ignored、没有事件;C1 / C7)不参与注入识别:
+        // 否则侧链里的块会给主线造出假「多标记」,或登记出本不该有的复述比对正文
+        const lineIgnored =
+          (outcome.ignoredDuplicateKinds?.length ?? 0) > 0 && (outcome.events?.length ?? 0) === 0;
+        if (injection !== undefined && !lineIgnored) {
+          // R21-6.9:块所在行的计数事件、以及与已取回块正文连续 ≥ 16 码点重合的事件,改写成无文本的 meta(序号不变、不产信号)
+          const blocks = findInjectionBlocks(obj);
+          if (blocks.length > 0 && lineEvents.every((e) => INJECTION_SOURCE_KINDS.has(e.kind))) {
+            injection.addBlocks(blocks);
+          }
+          lineEvents = lineEvents.map((ev): ParsedEvent => {
+            const hit =
+              INJECTION_COUNTED_KINDS.has(ev.kind) &&
+              (blocks.length > 0 || (ev.text !== undefined && injection.isRecital(ev.text)));
+            if (!hit) return ev;
+            injection.noteExcluded();
+            // 被改写前先把事件的外部内容属性(显式标记 / 外部工具名)记到会话级:改写会丢掉工具名,
+            // 否则「外部结果里夹着注入块」会把外部内容会话洗成非外部,摘录得以落盘
+            if (ev.external_content === true || isExternalToolName(ev.tool_name)) external = true;
+            return {
+              kind: 'meta',
+              raw_type: ev.raw_type,
+              ...(ev.ts !== undefined ? { ts: ev.ts } : {}),
+            };
+          });
+        }
+
         const lineTs = self.lineTimestamp(obj);
-        for (const ev of outcome.events ?? []) {
+        for (const ev of lineEvents) {
           const ts =
             normalizeTs(ev.ts, self.acceptEpochMs) ??
             normalizeTs(lineTs, self.acceptEpochMs) ??
@@ -433,7 +484,7 @@ export abstract class JsonlTraceReader<S = undefined> implements TraceReader {
       extra = self.finishCounts(state);
     }
 
-    return {
+    const result: SessionRead = {
       events: {
         [Symbol.asyncIterator]() {
           if (started) throw new Error('SessionRead.events 只能迭代一次');
@@ -460,6 +511,9 @@ export abstract class JsonlTraceReader<S = undefined> implements TraceReader {
         loaded_rule_paths: [...rulePaths],
       }),
     };
+    if (injection === undefined) return result;
+    const aware: InjectionAwareRead = { ...result, injection: () => injection.report() };
+    return aware;
   }
 }
 
