@@ -14,6 +14,7 @@ import {
   type PersonalLifecycleRecord,
   type RsiRevocationLine,
 } from '../../contracts/rsi-personal.js';
+import { RsiLockError } from '../lock-error.js';
 import { canonicalJson } from '../../io/canonical-json.js';
 import type { IoContext } from '../../io/paths.js';
 import type { AuthoritativeStore, RevocationReader } from '../personal/candidate-ports.js';
@@ -26,8 +27,6 @@ import { readCanaryDoc } from './permit-read.js';
 export interface GrantInput {
   candidate_id: string;
   content_sha256: string;
-  /** 注入正文(候选原子的正文文本;必须满足 {@link canaryDocProblem} 的预算) */
-  body: string;
   p_by_agent: CanaryDoc['p_by_agent'];
   agents_inject: CanaryDoc['agents_inject'];
   background_fp: string;
@@ -41,6 +40,11 @@ export interface CanaryWriterDeps {
   locks: { rsi: HeldLock; personal: HeldLock };
   revocations: RevocationReader;
   store: Pick<AuthoritativeStore, 'readAll'>;
+  /**
+   * 注入正文的**权威来源**(装配处从私有仓库里该候选的原子文件渲染;调用方不能自带正文——否则「声明的哈希」与「实际输出的正文」没有绑定)。
+   * 在两把锁内、核对完权威记录之后调用;返回 `null` 或抛错 = 拿不到 → 拒绝授予。
+   */
+  bodyOf(rec: PersonalLifecycleRecord): Promise<string | null>;
 }
 
 export type GrantRefusal =
@@ -50,6 +54,7 @@ export type GrantRefusal =
   | 'candidate_not_canary'
   | 'content_changed'
   | 'slot_occupied'
+  | 'body_unavailable'
   | `doc_invalid:${string}`;
 
 export type GrantResult =
@@ -79,13 +84,21 @@ export async function grantCanary(d: CanaryWriterDeps, g: GrantInput): Promise<G
   if (evaluationSlotOccupied(all.value.filter((r) => r.id !== g.candidate_id))) {
     return { kind: 'refused', reason: 'slot_occupied' };
   }
+  // 正文只取权威来源
+  let body: string | null = null;
+  try {
+    body = await d.bodyOf(rec);
+  } catch (e) {
+    if (e instanceof RsiLockError) throw e;
+  }
+  if (body === null) return { kind: 'refused', reason: 'body_unavailable' };
   // ③ ④ 文档
   const prev = await readCanaryDoc(d.rsiDir);
   const generation = (prev.kind === 'ok' ? prev.value.generation : 0) + 1;
   const parsed = CanaryDocSchema.safeParse({
     candidate_id: g.candidate_id,
     content_sha256: g.content_sha256,
-    body: g.body,
+    body,
     content_sha12: sha12Of(g.content_sha256),
     p_by_agent: g.p_by_agent,
     agents_inject: [...g.agents_inject].sort(),

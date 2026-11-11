@@ -20,7 +20,7 @@
 import { phaseAtLeast, type RsiAgentId } from '../../contracts/rsi.js';
 import type { CanaryAdmission, CanaryDoc } from '../../contracts/rsi-personal.js';
 import { canaryDocProblem } from './canary-doc.js';
-import type { PermitPort, Read3 } from './permit-read.js';
+import type { PermitPort, Read3 } from './permit-port.js';
 
 export type AdmissionEntry = NonNullable<
   CanaryAdmission['agents'][keyof CanaryAdmission['agents']]

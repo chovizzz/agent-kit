@@ -28,6 +28,7 @@ const FACTS: AgentFacts = {
   shapeVersion: 'claude-1',
   agentVersion: '2.1.0',
   maxUsedGeneration: 0,
+  usedTickets: 3,
 };
 const M = ['rsm_0000000000000001', 'rsm_0000000000000002', 'rsm_0000000000000003'] as const;
 
@@ -209,6 +210,28 @@ describe('判定 probing:admitted / failed / pending', () => {
         ledger: LINES.map((l, i) => probeLine(M[i] as string, `2026-11-10T0${i + 1}:00:00Z`, 'pi')),
       }).changed,
     ).toBe(false);
+  });
+  it('本代票没有占满(usedTickets < tickets)→ 不 admitted:账里的行可能是旧代 hint 迟到落的', () => {
+    const p = run({ agents: { claude: { ...FACTS, usedTickets: 2 }, pi: undefined } });
+    expect(p.changed).toBe(false);
+  });
+  it('旧代迟到的探针行让行数多于本代票数 → 不 admitted(只会阻止准入)', () => {
+    const extra = probeLine('rsm_0000000000000009', '2026-11-10T04:00:00Z');
+    expect(run({ ledger: [...LINES, extra] }).changed).toBe(false);
+  });
+  it('已到期时即使证据齐全也判 probe_expired(到期先于成功)', () => {
+    const p = run({ now: new Date('2026-11-17T00:00:00Z') });
+    expect(p.next.agents.claude).toMatchObject({ state: 'failed', reason: 'probe_expired' });
+  });
+  it('probing 期间版本变了:旧版本的齐全证据不判 admitted,允许时重新 arm(generation + 1);暂停时原地等待', () => {
+    const f = { ...FACTS, agentVersion: '2.2.0' };
+    const p = run({ agents: { claude: f, pi: undefined } });
+    expect(p.next.agents.claude).toMatchObject({
+      state: 'probing',
+      generation: 2,
+      agent_version: '2.2.0',
+    });
+    expect(run({ agents: { claude: f, pi: undefined }, autoPaused: true }).changed).toBe(false);
   });
   it('暂停 / 循环失效时不给 admitted(它是授予影响的前置),但失败照常判(只收紧)', () => {
     expect(run({ autoPaused: true }).changed).toBe(false);

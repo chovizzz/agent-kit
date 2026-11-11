@@ -21,23 +21,15 @@ import { RSI_REVOCATIONS_MAX_BYTES } from '../../contracts/rsi.js';
 import { lstat, readFileSafe } from '../../io/read-fs.js';
 import { RSI_FILE_OWNER } from '../lock-read.js';
 import { CANARY_FILES } from './files.js';
+import type { PauseRead, PermitPort, Read3 } from './permit-port.js';
 
-export type Read3<T> = { kind: 'absent' } | { kind: 'ok'; value: T } | { kind: 'unreadable' };
-export type PauseRead = 'absent' | 'present' | 'unreadable';
+export type { PauseRead, PermitPort, Read3 } from './permit-port.js';
 
 /** 与 `src/rsi/personal/home-state.ts` 的 `PERSONAL_STATE_REL` / `PERSONAL_STATE_FILES.revocations` 同值(测试钉住) */
 export const REVOCATIONS_REL = '.local/state/agent-kit/rsi-personal/revocations.jsonl';
 
 /** `canary.json` / `canary-admission.json` 的读取上限(远大于合法内容:正文 ≤ 1536 字节) */
 const DOC_MAX_BYTES = 64 * 1024;
-
-/** hint 看到的四个输入,惰性读取(判定顺序决定哪些会被读到) */
-export interface PermitPort {
-  pause(): Promise<PauseRead>;
-  admission(): Promise<Read3<CanaryAdmission>>;
-  canary(): Promise<Read3<CanaryDoc>>;
-  revocations(): Promise<Read3<readonly RsiRevocationLine[]>>;
-}
 
 async function readJsonDoc<T>(
   file: string,

@@ -50,6 +50,8 @@ export interface AgentFacts {
   agentVersion: string | null;
   /** 磁盘上已出现过的最大探针代数(`canary-probe/<agent>/<g>-<i>.used`);保证新代不与遗留占用文件撞名 */
   maxUsedGeneration: number;
+  /** 当前条目所在代(`entry.generation`)已被占用的探针票文件数;用来识别账里属于旧代的迟到探针行(账行无 generation 字段) */
+  usedTickets: number;
 }
 
 export interface AdmissionPlanInput {
@@ -116,13 +118,20 @@ export function judgeProbe(
   ledger: readonly RsiCanaryLedgerLine[],
   markers: MarkerView,
   nowMs: number,
+  usedTickets: number,
 ): ProbeVerdict {
   const lines = probeLinesOf(agent, entry, ledger);
   const views = lines.map((l) => ({ ...l, sightings: markers(l.marker) }));
   if (views.some((v) => v.sightings.some((s) => s.distinct_markers >= 2))) {
     return { kind: 'failed', reason: 'multi_marker' };
   }
+  // 到期先于成功:取回时间不在视图里,到期时没有「已凑齐」的证据 → 一律 probe_expired(走更少影响)
+  if (nowMs >= Date.parse(entry.probe_expires_at)) {
+    return { kind: 'failed', reason: 'probe_expired' };
+  }
+  // 本代恰好占满全部票、且账里自 armed_at 起恰好这么多探针行:旧代 hint 迟到落的行会让行数多于本代票数 → 不满足(只会阻止准入,不会放行)
   const complete =
+    usedTickets >= entry.tickets &&
     lines.length === entry.tickets &&
     views.every(
       (v) =>
@@ -140,8 +149,6 @@ export function judgeProbe(
   ) {
     return { kind: 'failed', reason: 'marker_not_retrieved' };
   }
-  if (nowMs >= Date.parse(entry.probe_expires_at))
-    return { kind: 'failed', reason: 'probe_expired' };
   return { kind: 'pending' };
 }
 
@@ -195,7 +202,7 @@ export function planAdmission(i: AdmissionPlanInput): AdmissionPlan {
       continue;
     }
     if (e.state === 'probing') {
-      const v = judgeProbe(agent, e, i.ledger, i.markers, nowMs);
+      const v = judgeProbe(agent, e, i.ledger, i.markers, nowMs, facts?.usedTickets ?? 0);
       if (v.kind === 'failed') {
         set(
           agent,
@@ -203,7 +210,10 @@ export function planAdmission(i: AdmissionPlanInput): AdmissionPlan {
           'probing',
           v.reason,
         );
-      } else if (v.kind === 'admitted' && mayArm) {
+      } else if (facts !== undefined && versionsChanged(e, facts)) {
+        // probing 期间 shape_version / agent_version 变了:旧版本的证据不能判 admitted;允许时重新 arm(generation + 1),否则原地等待
+        if (mayArm) arm('version_changed');
+      } else if (v.kind === 'admitted' && mayArm && facts !== undefined) {
         set(
           agent,
           { ...e, state: 'admitted', decided_at: iso(nowMs), reason: null },

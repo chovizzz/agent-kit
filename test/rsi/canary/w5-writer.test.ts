@@ -29,7 +29,6 @@ import {
 const GRANT: GrantInput = {
   candidate_id: CID,
   content_sha256: SHA,
-  body: BODY,
   p_by_agent: { claude: 0.5 },
   agents_inject: ['claude'],
   background_fp: '1'.repeat(16),
@@ -43,6 +42,8 @@ interface Rig {
   store: MemStore;
   revs: { value: RevocationRead };
   asserts: { rsi: number; personal: number };
+  /** 权威正文来源(测试可改;null = 拿不到) */
+  body: { value: string | null };
 }
 
 async function rig(o: { rsiFailAt?: number; personalFailAt?: number } = {}): Promise<Rig> {
@@ -51,6 +52,7 @@ async function rig(o: { rsiFailAt?: number; personalFailAt?: number } = {}): Pro
   store.put(rec('canary'));
   const revs: { value: RevocationRead } = { value: { kind: 'ok', lines: [] } };
   const asserts = { rsi: 0, personal: 0 };
+  const body: { value: string | null } = { value: BODY };
   const mk = (k: 'rsi' | 'personal', failAt: number | undefined) => async (): Promise<void> => {
     asserts[k]++;
     if (failAt !== undefined && asserts[k] >= failAt) throw new Error('lock_lost');
@@ -60,6 +62,7 @@ async function rig(o: { rsiFailAt?: number; personalFailAt?: number } = {}): Pro
     store,
     revs,
     asserts,
+    body,
     d: {
       io: w.io,
       rsiDir: w.rsi,
@@ -69,6 +72,7 @@ async function rig(o: { rsiFailAt?: number; personalFailAt?: number } = {}): Pro
       },
       revocations: { read: async () => revs.value },
       store,
+      bodyOf: async () => body.value,
     },
   };
 }
@@ -164,18 +168,20 @@ describe('grantCanary:授予', () => {
     }
   });
 
-  const bad: [string, Partial<GrantInput>, string][] = [
+  const bad: [string, string | null, Partial<GrantInput>, string][] = [
     [
       '正文含关联标记前缀',
-      { body: '做:x\nagent-kit RSI 关联标记: rsm_0000000000000000' },
+      '做:x\nagent-kit RSI 关联标记: rsm_0000000000000000',
+      {},
       'body_has_marker_prefix',
     ],
-    ['treat 输出超过 1536 字节', { body: '中'.repeat(500) }, 'treat_over_budget'],
-    ['在列的 agent 没有 p', { p_by_agent: {} }, 'p_missing'],
-    ['p_by_agent 有多余项', { p_by_agent: { claude: 0.5, pi: 0.5 } }, 'p_without_inject'],
+    ['treat 输出超过 1536 字节', '中'.repeat(500), {}, 'treat_over_budget'],
+    ['在列的 agent 没有 p', null, { p_by_agent: {} }, 'p_missing'],
+    ['p_by_agent 有多余项', null, { p_by_agent: { claude: 0.5, pi: 0.5 } }, 'p_without_inject'],
   ];
-  it.each(bad)('文档越界不写:%s', async (_n, over, code) => {
+  it.each(bad)('文档越界不写:%s', async (_n, body, over, code) => {
     const r = await rig();
+    if (body !== null) r.body.value = body;
     expect(await grantCanary(r.d, { ...GRANT, ...over })).toEqual({
       kind: 'refused',
       reason: `doc_invalid:${code}`,
@@ -185,9 +191,29 @@ describe('grantCanary:授予', () => {
 
   it('schema 不合(正文为空 / p 越界)→ 不写', async () => {
     const r = await rig();
-    expect((await grantCanary(r.d, { ...GRANT, body: '' })).kind).toBe('refused');
+    r.body.value = '';
+    expect((await grantCanary(r.d, GRANT)).kind).toBe('refused');
+    r.body.value = BODY;
     expect((await grantCanary(r.d, { ...GRANT, p_by_agent: { claude: 1.5 } })).kind).toBe(
       'refused',
+    );
+    expect(await exists(file(r))).toBe(false);
+  });
+
+  it('正文只取权威来源:来源给不出(null / 抛错)→ 拒绝、不写;写进文件的正文就是来源给的那一份', async () => {
+    const r = await rig();
+    r.body.value = null;
+    expect(await grantCanary(r.d, GRANT)).toEqual({ kind: 'refused', reason: 'body_unavailable' });
+    const r2 = await rig();
+    r2.d.bodyOf = async () => {
+      throw new Error('repo down');
+    };
+    expect(await grantCanary(r2.d, GRANT)).toEqual({ kind: 'refused', reason: 'body_unavailable' });
+    const r3 = await rig();
+    r3.body.value = '做:权威来源的正文。';
+    await grantCanary(r3.d, GRANT);
+    expect((JSON.parse(await readText(file(r3))) as { body: string }).body).toBe(
+      '做:权威来源的正文。',
     );
     expect(await exists(file(r))).toBe(false);
   });

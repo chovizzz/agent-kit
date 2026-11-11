@@ -24,7 +24,7 @@ export const CANARY_HINT_VERSION = 1;
 /** 探针行没有候选,也读不到登记表(R21-6.10 的读集合不含它):`background_fp` / `background_fp_ex` 取 W0-7 的「无记录」全零常量 */
 export const NO_BACKGROUND_FP = '0'.repeat(16);
 
-/** 分组账一行的字节上限(含换行):远小于 PIPE_BUF(4096),`O_APPEND` 单次写不会被拆开 */
+/** 分组账一行的字节上限(含换行):远小于一个文件系统块,让一行落成一次底层 `write`(保证边界见 `safe-fs.appendFileSynced` 的注释) */
 export const LEDGER_LINE_MAX_BYTES = 2048;
 
 /** 分组账 `at` 只到秒(R21-6.4):`2026-11-10T12:00:00Z` */

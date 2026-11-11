@@ -502,8 +502,8 @@ export const V1_W5_MUTATIONS: readonly V1W5Mutation[] = [
     edits: [
       {
         file: PLAN,
-        anchor: "} else if (v.kind === 'admitted' && mayArm) {",
-        replacement: "} else if (v.kind === 'admitted') {",
+        anchor: "} else if (v.kind === 'admitted' && mayArm && facts !== undefined) {",
+        replacement: "} else if (v.kind === 'admitted' && facts !== undefined) {",
       },
     ],
     tests: [T_ADM],
@@ -541,6 +541,42 @@ export const V1_W5_MUTATIONS: readonly V1W5Mutation[] = [
     tests: [T_ADM],
     expectRed: ['failed 在版本变化之前不自动重探', 'admitted 且版本未变'],
     mustKill: ['failed 在版本变化之前不自动重探'],
+  },
+  {
+    id: 'admission-used-tickets-ignored',
+    clause: 'W0-3:账行无 generation,本代票占满且行数恰为票数才判 admitted(旧代迟到行不得充数)',
+    edits: [drop(PLAN, 'usedTickets >= entry.tickets &&')],
+    tests: [T_ADM],
+    expectRed: ['本代票没有占满'],
+    mustKill: ['本代票没有占满'],
+  },
+  {
+    id: 'admission-probing-version-change-ignored',
+    clause: 'W0-3:probing 期间版本变化不得用旧版本证据判 admitted',
+    edits: [
+      {
+        file: PLAN,
+        anchor: '} else if (facts !== undefined && versionsChanged(e, facts)) {',
+        replacement: '} else if (false) {',
+      },
+    ],
+    tests: [T_ADM],
+    expectRed: ['probing 期间版本变了'],
+    mustKill: ['probing 期间版本变了'],
+  },
+  {
+    id: 'admission-success-before-expiry',
+    clause: 'W0-3:probe_expires_at 到期仍未凑齐 → failed(到期先于成功)',
+    edits: [
+      {
+        file: PLAN,
+        anchor: 'if (nowMs >= Date.parse(entry.probe_expires_at)) {',
+        replacement: 'if (false) {',
+      },
+    ],
+    tests: [T_ADM],
+    expectRed: ['到期先于成功'],
+    mustKill: ['到期先于成功'],
   },
   {
     id: 'admission-corrupt-file-overwritten',
