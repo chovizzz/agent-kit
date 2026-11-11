@@ -352,7 +352,7 @@ export const V1_W5_MUTATIONS: readonly V1W5Mutation[] = [
       },
     ],
     tests: [T_PART],
-    expectRed: ['第 4 次不输出'],
+    expectRed: ['第 4 次不输出', '并发消费者至多 tickets 个成功'],
     mustKill: ['第 4 次不输出'],
   },
   {
