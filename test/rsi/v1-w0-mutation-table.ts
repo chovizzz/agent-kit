@@ -258,6 +258,34 @@ export const V1_W0_MUTATIONS: readonly V1W0Mutation[] = [
     mustKill: ['正向:treat / control / 各 excluded 原因 / 探针行'],
   },
   {
+    id: 'probe-binding-unchecked',
+    clause: 'W0-18:探针行 ⇔ probe_generation / probe_ticket 都非空 —— 变异:不查',
+    edits: [
+      {
+        file: PERSONAL,
+        anchor: 'if (probe !== (l.probe_generation !== null && l.probe_ticket !== null)) {',
+        replacement: 'if (false) {',
+      },
+    ],
+    tests: [W0],
+    expectRed: ['W0-18 探针行绑定代号与票号'],
+    mustKill: ['W0-18 探针行绑定代号与票号'],
+  },
+  {
+    id: 'probe-binding-allowed-on-treat',
+    clause: 'W0-18:treat / control 行的 probe_generation / probe_ticket 必须为 null —— 变异:放行',
+    edits: [
+      {
+        file: PERSONAL,
+        anchor: 'if (l.probe_generation !== null || l.probe_ticket !== null)',
+        replacement: 'if (false)',
+      },
+    ],
+    tests: [W0],
+    expectRed: ['W0-18 探针行绑定代号与票号'],
+    mustKill: ['W0-18 探针行绑定代号与票号'],
+  },
+  {
     id: 'stop-reconciled-ref-unchecked',
     clause: 'R21-6.4:reason=revocation_reconciled 而 revocation_ref 为 null 的行过不了 schema',
     edits: [

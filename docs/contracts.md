@@ -5769,6 +5769,9 @@ agent-kit judge --confirm-reflector --run <run_id> [--proposal <id>]… --write 
   > **冻结后订正 N1-2(2026-11-02,R20-15.10 / R20-15.30)**:`--canary` 钩子由 `rsi hooks --install` 写入(claude `SessionStart` matcher `startup`,与普通 hint 形状二选一、不得同时装),不再依赖用户手贴;安装不等于通过 R21-6.5 的准入。
 - R21-6.3 `[V1]` **关联标记**(每个被随机的会话都输出,两组相同):一行 `RSI_MARK_PREFIX` + 空格 + 随机会话标记(`rsm_` + 16 位十六进制),≤ 64 字节,不含任何候选内容。**treat 组**在标记行之后追加:R21-1.9 标签一行、候选内容哈希前 12 位一行、候选正文;标记行 + 追加部分 ≤ 1536 字节(M11)。**control 组**只有标记行。不含路径、项目名、摘录。
 - R21-6.4 `[V1]` **分组账** `.state/rsi/canary-ledger.jsonl`(`RsiCanaryLedgerLine`,0600,`O_APPEND` 单行、不拿锁,与 R20-5.1 末行同类),行为两种 `kind` 的联合:`assign` = `{kind, at, agent, marker, candidate_id, arm: "treat"|"control"|"excluded", reason, p, background_fp, background_fp_ex, policy_fp, case_set_sha256, overlaps_preset, hint_version}`,`reason` 在 treat / control 为 `null`,在 excluded 取封闭枚举 `paused | not_admitted | policy_mismatch | agent_not_injected | revoked | rng_error | permit_unreadable`(`marker` 在 excluded 行为 `null`,因为未输出标记);`stop` = `{kind, at, candidate_id, reason, revocation_ref}`(R21-9.1 第二段):`revocation_ref` 在普通 stop 行为 `null`;在撤销对账写的 stop 行(`reason=revocation_reconciled`)为必填的 16 位十六进制(对应凭据行的 sha256 前 16 位),同一 `revocation_ref` 至多一行,`reason=revocation_reconciled` 而 `revocation_ref` 为 `null` 的行过不了 schema。`arm=excluded` 表示「未随机」(准入未过、暂停、策略指纹不符、失败兜底),`p=0`,不进分析、计入 C6 分母说明。`at` 只到秒;无路径、无项目 key。`background_fp` = 当前本机已同步 payload 的 `payload_sha256`(§19.8)前 16 位;`background_fp_ex` = 去掉当前候选托管块后的同一哈希(静态前后配对用,R21-8.4)。
+
+> **冻结后订正 W0-18(2026-11-11,用户选择框)**:`assign` 行追加 `probe_generation` / `probe_ticket`(探针行必填、其余行为 `null`);treat / control 行的 `overlaps_preset` 取自 `canary.json`。正文见 §21.24 W0-18。
+
 - R21-6.5 `[V1]` **准入**:某 agent 开分组之前,必须在真实会话里实测一次:①标记进了会话记录且被 reader 取回;②「每会话开始一次」的钩子形状确实每会话只触发一次(§10.3 动作 2)。未通过的 agent 的 `--canary` 调用一律 `arm=excluded`。准入结果记 `.state/rsi/canary-admission.json`。
 
 > **冻结后订正 W0-3(2026-11-09,用户 Q2 = 自动探针;取代设计稿 §10.3 第 2 项的「当场同意 + 当场实测」)**:准入改由 worker 自动安排:开启后探针票限次、hint 只消费窄许可并输出**仅标记行**、worker 读 reader 取回后写 `canary-admission.json`(唯一写入方);失效、静止判据与 R21-6.4 / R21-6.11 的相应订正见 §21.24 W0-3。pi 的 canary 变体归 V1b(W0-4)。
@@ -5781,6 +5784,9 @@ agent-kit judge --confirm-reflector --run <run_id> [--proposal <id>]… --write 
 > **冻结后订正 W0-14(2026-11-10)**:排除粒度改为**事件**(块所在的计数事件整条排除,含同一事件里的其余文本),复述比对对象 = 处于真注入位置的前缀块(含标记不合法的),被引用的块只排除不登记;超长块正文与复述窗口超限 fail-closed。正文见 §21.24 W0-14。
 
 - R21-6.10 `[V1]` **hint `--canary` 的读集合与判定顺序**(细化 R20-3.3,§21.18 第 14 条):读集合在 R20-3.3.1 之外**只**追加 `.state/rsi/{canary.json, canary-admission.json, AUTO_PAUSE}` 与 HOME 侧 `rsi-personal/revocations.jsonl`(≤ 1MiB,超出按读取失败处理)的存在性与内容;不读私有仓库、不读信号库。`canary.json`(worker 持 `rsi/lock` 与 `personal/lock` 写,0600)= `{candidate_id, content_sha256, body, content_sha12, p_by_agent, agents_inject, background_fp, background_fp_ex, policy_fp, revocation_gen, generation}`。判定顺序与各分支的输出 / 写入见 R21-6.11 结果矩阵;其中「用当前配置现算 `policy_fp`(R20-6.9 的排除策略指纹)与 `canary.json.policy_fp` 不等」与「`revocations.jsonl` 含 `(candidate_id, content_sha256)`」都是 hint 自己现算的,不等 worker:排除写下或撤销凭据落盘后的下一次 hint 即停注入。
+
+> **冻结后订正 W0-18(2026-11-11)**:`canary.json` 追加第十二键 `overlaps_preset`(worker 由 G4 写入);读集合不变。正文见 §21.24 W0-18。
+
 - R21-6.11 `[V1]` **hint `--canary` 结果矩阵**(按顺序判定,先命中先用;「C6」列表示该会话是否进 C6 分母):
 
 | #   | 情形                                                                                                         | stdout              | 写入                                                  | C6  |
@@ -6331,6 +6337,8 @@ v3.1 已把用户决定列全;以下是落契约时新发现的契约细节取�
 
 **冻结后订正 W0-17(2026-11-11,W3 实现口径澄清与订正)**:创建行 `from = "none"`;撤销凭据 `reason` 按来源 `by` 约束(`by` = 撤销来源,worker 代写时保留来源)。**取代关系**:R21-9.5 凭据行 `reason` 由「任意转移原因码」收窄为按 `by` 的对照表(用户 2026-11-11 选择框,原位已标注);创建行只补原文未定的编码。**未改**:R21-9.1 各段动作、R21-4.1 其余各行、`by` 枚举。
 
+**冻结后订正 W0-18(2026-11-11,W5 实现口径订正)**:探针账行加 `probe_generation` / `probe_ticket` 并按代号与票号认行;`canary.json` 加 `overlaps_preset`(十二键);`failed` 满 7 个 UTC 日自动重探;未取回标记的 48 小时从账行 `at` 起算;版本来源与 pi canary 变体归 W10b。**取代关系**:W0-3「`failed` 在版本变化前不自动重探」与「按三张票对应的三行账行」认行的口径(用户 2026-11-11 选择框,原位已标注);R21-6.10「十一键」改为十二键。**未改**:R21-6.11 矩阵行序、探针票占用协议、`RSI_PROBE_*` 既有常量。
+
 ### 21.24 V1 拆期与 W0 订正(冻结后订正 W0-1 … W0-12;2026-11-09,依据用户 2026-11-04 选择框 Q1–Q5、V1i-2、V1i-4…10 按规划稿处理,2026-11-09 选「现在开工 W0 + V1a」)
 
 按节首规则:原位加标注、本节写正文、§21.23 记录。本节**不改**任何已冻结条款的 `[V1]` 标签;被取代的原文在原位以删除线或标注指回本节。W0 只落契约、schema、枚举与 lint 骨架,`RSI_AUTO_PHASE` 仍为 0(R21-0.1)。
@@ -6451,6 +6459,9 @@ R21-2.2 的「`RSI_AUTO_PHASE ≥ 1`」即 V1a,不变;R21-6.11 第 2 行的「`R
 - **hint 只消费窄许可**:见 `probing` 且未过 `probe_expires_at`(= armed + `RSI_PROBE_WINDOW_DAYS` 个 UTC 日,= 7)、`AUTO_PAUSE` 不存在、`shape_version` / `agent_version` 与当前钩子 / agent 一致(现算,不等 worker)时,依次:① 对 i = 1..`tickets` 依次 `createExclusive` 占用文件 `<generation>-<i>.used`,第一个成功者得票(全部已存在 → 不输出;**有限次、原子**,并发消费者至多 `tickets` 个成功);② 分组账追加 `assign` 行(`arm=excluded`、`reason=admission_probe`、`candidate_id=null`、`marker=rsm_…`)并 `fsync`;③ 输出关联标记行。崩溃语义:①之后崩溃 = 票已用、无账行无输出(少探);②之后崩溃 = 有账行无输出(账行带标记但会话里取不回,worker 按「标记未被取回」处理,本代最多因此 `failed(marker_not_retrieved)` 而重新 armed 下一代);绝不重复授予。验收:并发消费恰有 `tickets` 个成功者;①②③各崩溃点之后不超发;重新 armed 后旧代标记不被重用。
 - **判定(worker,读 reader 取回)**:三张探针票对应的三行账行,**每一行的标记都被恰好一个会话取回,且该会话取回的不同标记恰为 1 个**,且该会话文件已静止 ≥ `RSI_PROBE_QUIET_MINUTES`(= 60)(「完整读完」只保证本次读取完整,不保证会话已结束;静止是封存判据)→ 三者全部满足为 `admitted`;任一标记在静止后 `RSI_PROBE_WAIT_HOURS`(= 48)内仍未被任何会话取回 → `failed(marker_not_retrieved)`;任一会话取回 ≥ 2 个不同标记 → `failed(multi_marker)`;`probe_expires_at` 到期仍未凑齐 → `failed(probe_expired)`。
 - **准入的失效**:`admitted` 绑定 `shape_version` 与 `agent_version`;hint 每次现算当前值,不符 → 按 R21-6.11 第 4 行 `not_admitted`;此后任一经准入的会话被 R21-6.6 判为「多标记」→ 该 agent 回到 `failed(multi_marker)`(撤销准入,走更少影响方向)。`failed` 在 `shape_version` 或 `agent_version` 变化前不自动重探。
+
+  > **冻结后订正 W0-18(2026-11-11,用户选择框「失败后允许自动重探」)**:上句「`failed` 在版本变化前不自动重探」改为:`failed` 满 `RSI_PROBE_RETRY_DAYS`(= 7)个 UTC 日后 worker 自动重新 armed 下一代;版本变化时照旧立即重探。「48 小时未取回」的起点为该探针账行的 `at`。正文见 §21.24 W0-18。
+
 - **R21-6.11 矩阵重列**(取代原表的第 2–4 行位置;顺序固定,先命中先用):1 同原第 1 行;2 自动循环未开启、`RSI_AUTO_PHASE < 2` 或 agent 为 codex → 无输出无写入;**2a(新)探针行**:`AUTO_PAUSE` 不存在、该 agent 的准入为 `probing` 且上述现算条件成立 → 消费探针票 → 一行 `assign`(`excluded` / `admission_probe`)→ 标记行,C6 否;**探针先于候选存在性检查**,与候选无关;2b 探针条件不成立 → 继续;3–8 同原表(第 3 行的「`canary.json` 不存在 / 无评估中候选 / 读取失败」只描述候选,不影响 2a)。
 - **R21-6.4 订正**:`assign` 行 excluded 的 `reason` 封闭枚举追加 `admission_probe`;该值是 `marker` 非空且 `candidate_id` 为 `null` 的**唯一**情形(schema 以 refine 钉死,反之亦然);其余字段(`p=0`、`background_fp`、`policy_fp`、`hint_version` 等)照常必填;「`arm=excluded` 表示未随机」不变,探针行同样不进分析。
 - 常量:`RSI_PROBE_SESSIONS`、`RSI_PROBE_WINDOW_DAYS`、`RSI_PROBE_QUIET_MINUTES`、`RSI_PROBE_WAIT_HOURS`。设计稿 §10.3 第 2 项原位加订正标注。
@@ -6475,7 +6486,7 @@ worker 持锁扫 `.state/reflect/<run>/proposals/` 暂存提案,**仅** `layer=p
 - **C 指标计数**:C2 会话值 = 该会话最大重试链长(`retry_chain_max`);C1 = `tool_result_failed` 信号计数;C3 = `explicit_lesson ∪ user_correction` 计数(均为既有类型)。`SessionStat` 追加可选键(取回的标记 ≤ 4 个、`retry_chain_max`、`injection_excluded`)由 W4 落地,旧文件缺键照常通过。
 - **V1 的 `background_fp`** = SyncLedger 最近一次同步的包 payload 的 `payload_sha256` 前 16 位;无记录取全零常量。
 - `rsi status --json` 的 R21-13.1 键**全部输出**,V2+ 的键给惰性值(`null` / `0` / `not_available`)。
-- **新 schema**(`src/contracts/rsi-personal.ts`,全部 `strictObject`,带标记的合法 / 错误示例见本节末与 `test/contracts/registry.ts`):`PersonalLifecycleRecord`(含 N4-2 `source_proposal`、本节 `cluster_signature`)、`PersonalCommitJournal`、`PersonalHead`、`PersonalTxn`(`{schema_version, txn_id, candidate_id, kind, reason, target_terminal, phase, identity12, at}`)、`RsiRevocationLine`、`RsiCanaryLedgerLine`(`assign` / `stop` 判别联合)、`CanaryDoc`(十一键)、`CanaryAdmission`、`CandidateWorkingCopy`、`RsiAuditLine`、`RsiVetoDoc`、`RsiTombstones`。非法组合(R21-4.3 矩阵)由 `PersonalLifecycleRecord` 的 refine 一律拒绝,错误示例带「状态 / 阻断范围 / 原因码」。
+- **新 schema**(`src/contracts/rsi-personal.ts`,全部 `strictObject`,带标记的合法 / 错误示例见本节末与 `test/contracts/registry.ts`):`PersonalLifecycleRecord`(含 N4-2 `source_proposal`、本节 `cluster_signature`)、`PersonalCommitJournal`、`PersonalHead`、`PersonalTxn`(`{schema_version, txn_id, candidate_id, kind, reason, target_terminal, phase, identity12, at}`)、`RsiRevocationLine`、`RsiCanaryLedgerLine`(`assign` / `stop` 判别联合)、`CanaryDoc`(十一键;W0-18 起十二键)、`CanaryAdmission`、`CandidateWorkingCopy`、`RsiAuditLine`、`RsiVetoDoc`、`RsiTombstones`。非法组合(R21-4.3 矩阵)由 `PersonalLifecycleRecord` 的 refine 一律拒绝,错误示例带「状态 / 阻断范围 / 原因码」。
 - **`RsiStateSchema`** 追加**可选**键 `auto_pause: {reasons[], diverged, owner_changed}`:缺失 = 空(旧 `state.json` 照常通过);出现但非法(类型错、未知原因码、重复)→ **拒绝**,不归零恢复(`state_invalid`)。如实说明:这是单向兼容(新 reader 读旧文件);旧版本 kit 读到含该键的文件过不了 `strictObject`,按 `state_invalid` 安全失败;所有 `state.json` 写入方必须保留该键。
 
 #### W0-8 设计稿 §10.2 V1 行(V1i-5)
@@ -6613,6 +6624,17 @@ W3(候选创建与闸)实现时发现的两处契约未定点,用户 2026-11-11 
 - **来源保留**:前台 `clear` / `veto` / `rollback --to` 发起、由 worker 续做(含 journal 崩溃恢复)的凭据,保留发起时的 `by`;worker 消费 `exec-run` 事件写的凭据记 `by = exec_event`。实现与崩溃续做测试归 W7。
 - 一律拒绝:正常转移码(含 `revocation_reconciled`)、G0–G8 码、`identity_changed`(R21-9.1:身份变化不写凭据,改用旧身份的拒绝标记)。读到不合规的行 → 按读取失败处理(hint 走 R21-6.11 第 4a 行 `permit_unreadable`;worker 对账 fail-closed)。
 - 对账(R21-9.5)把 `proposed` / `shadow` 工作副本推进到终态时,依据只认 `cleared` / `vetoed` / `tainted` / `judge_reject` / `judge_injection`;其余合法原因(回滚原因)出现在 `proposed` / `shadow` 候选上 → 本步「对账未完成」,不做任何增加影响的转移(W3 实现,不扩大到 V1b 的 canary 及以上对账,后者归 W7)。
+
+#### W0-18 W5 实现口径订正(2026-11-11;R21-6.4、R21-6.10、W0-3、W0-4)
+
+W5(shadow 计数、canary.json、hint `--canary`、分组账、准入探针)实现与主代理验收评审发现的契约缺口,用户 2026-11-11 选择框拍板:
+
+- **探针行绑定代号与票号**(取代 W0-3 判定里只按「三张票对应的三行账行」认行的口径;选择框「账行加 generation / ticket 字段」):`assign` 行追加 `probe_generation`(非负整数)与 `probe_ticket`(1..`RSI_PROBE_SESSIONS`)。`reason = admission_probe` ⇔ 两者都非空(schema refine 钉死);treat / control 与其它 excluded 行两者为 `null`。hint 在 W0-3 第 ① 步占到 `<generation>-<i>.used` 后,把同一 `generation` 与 `i` 写进第 ② 步的账行。worker 判定时**只认** `probe_generation` 等于当前代、`probe_ticket` 在 1..`tickets` 内、且同一 `(probe_generation, probe_ticket)` 只出现一行的探针行;重复票号 → 该代 `failed(multi_marker)`(按更少影响方向),旧代或越界行不计入本代。按时间窗归代的做法作废。
+- **`overlaps_preset` 进 `canary.json`**(选择框「canary.json 加这一键」):`CanaryDoc` 追加第十二键 `overlaps_preset: boolean`,由 worker 在写 `canary.json` 时取该候选 G4 的结果(R21-5.1 G4「功能重叠未达近重复阈值 → 记 `overlaps_preset=true`」);hint 把它原样写进 treat / control 账行。探针行与候选无关,`overlaps_preset` 恒为 `false`。
+- **失败后自动重探**(选择框「失败后允许自动重探」):`failed`(任一原因)满 `RSI_PROBE_RETRY_DAYS` = 7 个 UTC 日(W0-16 日期差口径,起点为 `decided_at`)后,worker 在其余 armed 条件仍成立时自动重新 armed 下一代(`generation + 1`、新 `tickets`、新 `armed_at`);`shape_version` 或 `agent_version` 变化时照旧立即重探。前台显式重开(归 W8)不受此限。
+- **「48 小时未取回」的起点**:W0-3「任一标记在静止后 `RSI_PROBE_WAIT_HOURS` 内仍未被任何会话取回」中,标记无人取回时没有可测的会话静止,起点改为**该探针账行的 `at`**。
+- **归属**(选择框「归 W10b 真实环境准入」):hint 现算 `agent_version` 的生产来源、以及 pi 的 canary 钩子变体与 `--canary` 对 pi 的路径(W0-4),在 W10b 实现并经真实会话探针实测。W10b 之前 hint 的 `agent_version` 恒为未知,按 W0-3「现算不符」处理:不消费探针票、不分组(fail-closed),W5 不因此视为未交付。
+- 常量:`RSI_PROBE_RETRY_DAYS`(`src/contracts/rsi.ts`)。
 
 #### W0 订正的合法 / 错误示例
 
@@ -6896,6 +6918,8 @@ W3(候选创建与闸)实现时发现的两处契约未定点,用户 2026-11-11 
   "case_set_sha256": null,
   "overlaps_preset": false,
   "hint_version": 1,
+  "probe_generation": null,
+  "probe_ticket": null,
   "kind": "assign",
   "marker": "rsm_0123456789abcdef",
   "candidate_id": "ra_0123456789ab",
@@ -6919,6 +6943,8 @@ W3(候选创建与闸)实现时发现的两处契约未定点,用户 2026-11-11 
   "case_set_sha256": null,
   "overlaps_preset": false,
   "hint_version": 1,
+  "probe_generation": 1,
+  "probe_ticket": 1,
   "kind": "assign",
   "marker": "rsm_fedcba9876543210",
   "candidate_id": null,
@@ -6956,6 +6982,8 @@ W3(候选创建与闸)实现时发现的两处契约未定点,用户 2026-11-11 
   "case_set_sha256": null,
   "overlaps_preset": false,
   "hint_version": 1,
+  "probe_generation": 1,
+  "probe_ticket": 1,
   "kind": "assign",
   "marker": "rsm_fedcba9876543210",
   "candidate_id": "ra_0123456789ab",
@@ -6965,7 +6993,7 @@ W3(候选创建与闸)实现时发现的两处契约未定点,用户 2026-11-11 
 }
 ```
 
-`CanaryDoc` 合法(十一键):
+`CanaryDoc` 合法(十二键,W0-18 起含 `overlaps_preset`):
 
 <!-- example:valid schema=CanaryDoc -->
 
@@ -6984,7 +7012,8 @@ W3(候选创建与闸)实现时发现的两处契约未定点,用户 2026-11-11 
   "background_fp_ex": "0000000000000000",
   "policy_fp": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   "revocation_gen": 0,
-  "generation": 1
+  "generation": 1,
+  "overlaps_preset": false
 }
 ```
 
@@ -7007,7 +7036,8 @@ W3(候选创建与闸)实现时发现的两处契约未定点,用户 2026-11-11 
   "background_fp_ex": "0000000000000000",
   "policy_fp": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   "revocation_gen": 0,
-  "generation": 1
+  "generation": 1,
+  "overlaps_preset": false
 }
 ```
 

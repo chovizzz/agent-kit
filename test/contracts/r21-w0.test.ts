@@ -478,6 +478,8 @@ describe('R21-6.4 分组账行:探针行是唯一 marker 非空且 candidate_id 
     case_set_sha256: null,
     overlaps_preset: false,
     hint_version: 1,
+    probe_generation: null,
+    probe_ticket: null,
   };
   const assign = (over: Record<string, unknown>) => ({
     ...base,
@@ -509,9 +511,43 @@ describe('R21-6.4 分组账行:探针行是唯一 marker 非空且 candidate_id 
     }
     expect(
       RsiCanaryLedgerLineSchema.safeParse(
-        assign({ arm: 'excluded', reason: 'admission_probe', p: 0, candidate_id: null }),
+        assign({
+          arm: 'excluded',
+          reason: 'admission_probe',
+          p: 0,
+          candidate_id: null,
+          probe_generation: 1,
+          probe_ticket: 1,
+        }),
       ).success,
     ).toBe(true);
+  });
+  it('W0-18 探针行绑定代号与票号:探针行必带、其余行必空、票号 1..RSI_PROBE_SESSIONS', () => {
+    const probe = (over: Record<string, unknown>) =>
+      assign({
+        arm: 'excluded',
+        reason: 'admission_probe',
+        p: 0,
+        candidate_id: null,
+        probe_generation: 2,
+        probe_ticket: 3,
+        ...over,
+      });
+    expect(RsiCanaryLedgerLineSchema.safeParse(probe({})).success).toBe(true);
+    expect(RsiCanaryLedgerLineSchema.safeParse(probe({ probe_generation: null })).success).toBe(
+      false,
+    );
+    expect(RsiCanaryLedgerLineSchema.safeParse(probe({ probe_ticket: null })).success).toBe(false);
+    expect(RsiCanaryLedgerLineSchema.safeParse(probe({ probe_ticket: 0 })).success).toBe(false);
+    expect(RsiCanaryLedgerLineSchema.safeParse(probe({ probe_ticket: 4 })).success).toBe(false);
+    expect(
+      RsiCanaryLedgerLineSchema.safeParse(assign({ probe_generation: 1, probe_ticket: 1 })).success,
+    ).toBe(false);
+    expect(
+      RsiCanaryLedgerLineSchema.safeParse(
+        assign({ arm: 'excluded', reason: 'paused', p: 0, marker: null, probe_ticket: 1 }),
+      ).success,
+    ).toBe(false);
   });
   it('R21-6.4 负向:探针行带 candidate_id / 无 marker;非探针 excluded 带 marker;treat 缺 marker、p=0;excluded p≠0;codex 不参与分组', () => {
     expect(
