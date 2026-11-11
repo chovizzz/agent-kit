@@ -254,13 +254,14 @@ describe('判定 probing:admitted / failed / pending', () => {
       }).changed,
     ).toBe(false);
   });
-  it('本代票没有占满(usedTickets < tickets)→ 不 admitted:账里的行可能是旧代 hint 迟到落的', () => {
-    const p = run({ agents: { claude: { ...FACTS, usedTickets: 2 }, pi: undefined } });
-    expect(p.changed).toBe(false);
+  // W0-18 取代原「usedTickets < tickets 不准入」「行数多于票数不准入」两条时间窗补丁:旧代 hint 迟到落的行带旧代号
+  it('W0-18:本代只有两行、旧代 hint 迟到落的行带旧代号 → 不替本代凑数,不 admitted', () => {
+    const late = probeLine('rsm_0000000000000009', '2026-11-10T05:00:00Z', 'claude', 0, 3);
+    expect(run({ ledger: [...LINES.slice(0, 2), late] }).changed).toBe(false);
   });
-  it('旧代迟到的探针行让行数多于本代票数 → 不 admitted(只会阻止准入)', () => {
-    const extra = probeLine('rsm_0000000000000009', '2026-11-10T04:00:00Z');
-    expect(run({ ledger: [...LINES, extra] }).changed).toBe(false);
+  it('W0-18:旧代迟到行让账里行数多于本代票数 → 既不充数也不阻挡本代 admitted', () => {
+    const late = probeLine('rsm_0000000000000009', '2026-11-10T05:00:00Z', 'claude', 0, 1);
+    expect(run({ ledger: [...LINES, late] }).next.agents.claude?.state).toBe('admitted');
   });
   it('已到期时即使证据齐全也判 probe_expired(到期先于成功)', () => {
     const p = run({ now: new Date('2026-11-17T00:00:00Z') });
