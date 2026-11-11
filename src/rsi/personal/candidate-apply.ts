@@ -96,14 +96,24 @@ export async function applyEvent(
   if (c.status === 'invalid') return { kind: 'halt', halt: 'repo_invalid', why: c.why };
   if (c.status !== 'committed') return { kind: 'halt', halt: 'commit_failed', why: c.status };
 
-  // 权威副本已写成功 → 才更新工作副本(R21-3.8)
-  const after = wcAfter?.(wc);
-  if (after !== undefined) await d.working.put(after);
-  const audits = res.effects.flatMap((e) => (e.type === 'append_audit' ? [e.line] : []));
-  if (audits.length > 0) await d.audit.append(audits);
-  const rest = res.effects.filter(
-    (e) => e.type !== 'append_audit' && e.type !== 'commit_lifecycle',
-  );
-  if (rest.length > 0) await d.effects.apply(rest);
+  // 权威副本已写成功 → 才更新工作副本(R21-3.8);此后的失败是「已提交后的落地失败」,与提交前的失败(抛出)区分
+  try {
+    const after = wcAfter?.(wc);
+    if (after !== undefined) await d.working.put(after);
+    await landEffects(d, res.effects);
+  } catch (e) {
+    return {
+      kind: 'transitioned',
+      next: res.next,
+      effectsFailed: e instanceof Error ? e.message : 'error',
+    };
+  }
   return { kind: 'transitioned', next: res.next };
+}
+
+async function landEffects(d: ApplyDeps, effects: readonly TransitionEffect[]): Promise<void> {
+  const audits = effects.flatMap((e) => (e.type === 'append_audit' ? [e.line] : []));
+  if (audits.length > 0) await d.audit.append(audits);
+  const rest = effects.filter((e) => e.type !== 'append_audit' && e.type !== 'commit_lifecycle');
+  if (rest.length > 0) await d.effects.apply(rest);
 }
