@@ -67,7 +67,7 @@ const drop = (file: string, anchor: string): Edit => ({ file, anchor, replacemen
 export const V1_W5_MUTATIONS: readonly V1W5Mutation[] = [
   // ---- M13-4 全局名额互斥(W5:canary.json 授予在锁内按权威记录现算名额) ----
   {
-    id: 'm13-4-grant-slot-check-removed',
+    id: 'm13-4-grant-no-slot-check',
     clause: 'M13-4:名额检查移到锁外 / 去掉(授予时不再按权威记录核对别的候选是否占用名额)',
     edits: [
       {
@@ -1072,7 +1072,7 @@ export const V1_W5_MUTATIONS: readonly V1W5Mutation[] = [
 /** 实测结果:r21w5-mfinal @ seal,727d5de,74/74 被杀(1 条表外多红已补 expectRed) */
 export const V1_W5_RESULTS: readonly V1W5Result[] = [
   {
-    id: 'm13-4-grant-slot-check-removed',
+    id: 'm13-4-grant-no-slot-check',
     failed: 1,
     skipped: 0,
     killedBy: [
