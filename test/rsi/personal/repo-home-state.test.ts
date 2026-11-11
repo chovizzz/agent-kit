@@ -40,7 +40,7 @@ function rev(n: number): RsiRevocationLine {
     candidate_id: ID1,
     content_sha256: String(n % 10).repeat(64),
     identity12: null,
-    reason: RSI_TRANSITION_REASONS_NORMAL[0],
+    reason: 'harm_c1', // W0-17:凭据原因须是该写入方允许的终止原因
     by: 'worker',
   };
 }
