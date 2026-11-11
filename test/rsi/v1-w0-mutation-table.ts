@@ -597,6 +597,42 @@ export const V1_W0_RESULTS: readonly V1W0Result[] = [
     restored: true,
   },
   {
+    id: 'probe-binding-unchecked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'R21-6.4 分组账行:探针行是唯一 marker 非空且 candidate_id 为 null 的 excluded 行 W0-18 探针行绑定代号与票号:探针行必带、其余行必空、票号 1..RSI_PROBE_SESSIONS',
+    ],
+    restored: true,
+  },
+  {
+    id: 'probe-binding-allowed-on-plain-excluded',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'R21-6.4 分组账行:探针行是唯一 marker 非空且 candidate_id 为 null 的 excluded 行 W0-18 探针行绑定代号与票号:探针行必带、其余行必空、票号 1..RSI_PROBE_SESSIONS',
+    ],
+    restored: true,
+  },
+  {
+    id: 'probe-overlaps-preset-unchecked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'R21-6.4 分组账行:探针行是唯一 marker 非空且 candidate_id 为 null 的 excluded 行 W0-18 探针行绑定代号与票号:探针行必带、其余行必空、票号 1..RSI_PROBE_SESSIONS',
+    ],
+    restored: true,
+  },
+  {
+    id: 'probe-binding-allowed-on-treat',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'R21-6.4 分组账行:探针行是唯一 marker 非空且 candidate_id 为 null 的 excluded 行 W0-18 探针行绑定代号与票号:探针行必带、其余行必空、票号 1..RSI_PROBE_SESSIONS',
+    ],
+    restored: true,
+  },
+  {
     id: 'stop-reconciled-ref-unchecked',
     failed: 1,
     skipped: 0,
