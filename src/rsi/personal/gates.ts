@@ -283,14 +283,32 @@ export function injectBytes(d: CandidateDraft): number {
   return marker + Buffer.byteLength(RSI_AUTO_LABEL, 'utf8') + 1 + 12 + 1 + d.atom.bodyBytes;
 }
 
+/** 自动配额占目标预算的比例:25%;lite 档只用一半(12.5%);V1 里 medium 与 lite 同行为(W0-10) */
+export const AUTO_QUOTA_RATIO = 0.25;
+export const AUTO_QUOTA_SHARE: Readonly<Record<'rule' | 'pitfall' | 'skill', number>> =
+  Object.freeze({
+    rule: 0.5,
+    pitfall: 0.3,
+    skill: 0.2,
+  });
+export function quotaOf(total: number, profile: 'lite' | 'medium' | 'heavy'): number {
+  return total * AUTO_QUOTA_RATIO * (profile === 'heavy' ? 1 : 0.5);
+}
+
 export function g5(f: GateFacts): GateVerdict {
   const d = f.draft;
   const b = need(f.budget, 'budget');
   if (!b.renderLevelOk) return red('g5_budget');
-  const used = b.autoQuotaUsedBytes + d.atom.bodyBytes;
-  if (used > b.autoQuotaBytes) return red('g5_quota');
-  if (used >= GATE_QUOTA_PAIRING_RATIO * b.autoQuotaBytes && !b.pairedRetirement) {
-    return red('g5_quota');
+  if (b.targets.length === 0) throw new GateUnavailableError('budget.targets');
+  const cls = d.category; // 'rule' | 'pitfall'(V1);技能类 V3
+  for (const t of b.targets) {
+    const quota = quotaOf(t.total, b.profile);
+    const usedAll = t.used.rule + t.used.pitfall + t.used.skill;
+    if (usedAll + t.add > quota) return red('g5_quota');
+    if (t.used[cls] + t.add > quota * AUTO_QUOTA_SHARE[cls]) return red('g5_quota');
+    if (usedAll + t.add >= GATE_QUOTA_PAIRING_RATIO * quota && !b.pairedRetirement) {
+      return red('g5_quota');
+    }
   }
   if (d.atom.bodyBytes > RSI_ATOM_MAX_BYTES) return red('g5_atom_bytes');
   if (injectBytes(d) > RSI_CANARY_INJECT_MAX_BYTES) return red('g5_inject_bytes');

@@ -71,6 +71,11 @@ export interface PresetSource {
   presets(): Promise<DedupeTarget[]>;
 }
 
+/** 信号库历史重算某 shadow 候选的首次达标 UTC 日(保留期内能证明达标的最早一天);无法重算返回 null */
+export interface ReadySinceRecovery {
+  recover(rec: PersonalLifecycleRecord): Promise<string | null>;
+}
+
 export interface AuditSink {
   append(lines: readonly RsiAuditLine[]): Promise<void>;
 }
@@ -138,4 +143,5 @@ export type StepHalt =
   | 'repo_invalid'
   | 'revocations_invalid'
   | 'commit_failed'
+  | 'candidate_invalid'
   | 'lock_lost';

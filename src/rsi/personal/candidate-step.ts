@@ -23,6 +23,7 @@ import type {
   FactsProvider,
   MarksStore,
   PresetSource,
+  ReadySinceRecovery,
   SignalLookup,
   StagedSource,
   StepBreaker,
@@ -57,11 +58,28 @@ export interface StepDeps extends ApplyDeps {
   facts: FactsProvider;
   marks: MarksStore;
   fingerprint(canonicalBody: string): string;
+  /** 可选:信号库历史重算首次达标日;缺省 = 一律「无法重算」 */
+  readySince?: ReadySinceRecovery;
   /** 只用 `assertHeld`(提交底座另有自己的断言) */
   locks: { personal: { assertHeld(): Promise<void> } };
 }
 
+/** 撤销凭据的原因 → 对账事件的依据(显式映射;不在表里的原因不对账) */
+const RECONCILE_BASIS: Readonly<
+  Record<string, 'veto' | 'taint' | 'clear' | 'judge_reject' | undefined>
+> = Object.freeze({
+  vetoed: 'veto',
+  tainted: 'taint',
+  cleared: 'clear',
+  judge_reject: 'judge_reject',
+  judge_injection: 'judge_reject',
+});
+
 export interface StepResult {
+  /** 凭据原因无法映射到终态理由的候选(未转移,凭据仍阻止推进) */
+  unmappedRevocations: string[];
+  /** 因事实不可得 / 前置不成立而清零 queued_since 的候选与原因 */
+  queueCleared: { id: string; reason: string }[];
   created: string[];
   skipped: { run_id: string; proposal_id: string; reason: string }[];
   reconciled: string[];
@@ -116,6 +134,8 @@ const patchShadow =
 export async function runPersonalStep(d: StepDeps): Promise<StepResult> {
   const out: StepResult = {
     created: [],
+    unmappedRevocations: [],
+    queueCleared: [],
     skipped: [],
     reconciled: [],
     gated: [],
@@ -233,13 +253,14 @@ export async function runPersonalStep(d: StepDeps): Promise<StepResult> {
     }
     if (rec.lifecycle !== 'proposed' && rec.lifecycle !== 'shadow') continue; // canary 及以上归 V1b / W7
     const evidence = `revocation:${digest(canonicalJson(line)).slice(0, 16)}`;
-    const event: TransitionEvent =
-      line.reason === 'vetoed'
-        ? { kind: 'veto', evidence }
-        : line.reason === 'tainted'
-          ? { kind: 'taint', evidence }
-          : { kind: 'clear', evidence };
-    const r = await run(rec, event);
+    // R21-9.5:对账转移的原因是 revocation_reconciled;终态理由按凭据依据显式映射(未知依据不兜底成 clear:
+    // 记 unmappedRevocations,不转移——撤销凭据本身已让该候选不得被推进,见 ctx.revocation_listed)
+    const basis = RECONCILE_BASIS[line.reason];
+    if (basis === undefined) {
+      out.unmappedRevocations.push(rec.id);
+      continue;
+    }
+    const r = await run(rec, { kind: 'revocation_reconcile', evidence, basis });
     if (r === 'halt') return out;
     if (r === 'transitioned') out.reconciled.push(rec.id);
   }
@@ -250,14 +271,34 @@ export async function runPersonalStep(d: StepDeps): Promise<StepResult> {
   // ③ 缺工作副本者重建
   for (const rec of records) {
     if (isTerminalLifecycle(rec.lifecycle) || working.has(rec.id)) continue;
-    const wc = rebuildWorkingCopy(rec);
+    // W0-13:canary_ready_since 由信号库历史重算(可选端口);无法重算 → 记重建当日并审计 ready_since_rebuilt(只对 shadow)
+    const recovered =
+      rec.lifecycle === 'shadow' && d.readySince !== undefined
+        ? await d.readySince.recover(rec)
+        : null;
+    const readyToday = rec.lifecycle === 'shadow' && recovered === null;
+    const wc = rebuildWorkingCopy(
+      rec,
+      recovered ?? (readyToday ? utcDay(d.now().toISOString()) : null),
+    );
     if (wc === null) continue;
     await d.working.put(wc);
     working.set(rec.id, wc);
+    if (rec.lifecycle === 'shadow') {
+      await d.audit.append([
+        {
+          at: d.now().toISOString(),
+          kind: 'evaluation',
+          id: rec.id,
+          reason: 'ready_since_rebuilt',
+          counts: { recovered: recovered === null ? 0 : 1 },
+        },
+      ]);
+    }
   }
 
   // ④ 创建
-  const known = new Set(records.map((r) => r.id));
+  const known = new Map(records.map((r) => [r.id, r.content_sha256]));
   const presets = await d.presets.presets();
   let head = all.head;
   for (const sp of await d.staged.list()) {
@@ -269,7 +310,12 @@ export async function runPersonalStep(d: StepDeps): Promise<StepResult> {
       continue;
     }
     const draft = dr.draft;
-    if (known.has(draft.id)) continue;
+    const knownSha = known.get(draft.id);
+    if (knownSha !== undefined) {
+      // W0-6:48 位 id 碰撞而内容哈希不同 → candidate_invalid(安全中止);内容相同才是重复
+      if (knownSha !== draft.contentSha256) return halt('candidate_invalid');
+      continue;
+    }
     const now = d.now().toISOString();
     const rec = newRecord(draft, now, overlapsPreset(draft, presets));
     const files = creationFiles(draft, rec);
@@ -291,7 +337,7 @@ export async function runPersonalStep(d: StepDeps): Promise<StepResult> {
       );
     }
     head = c.commit;
-    known.add(draft.id);
+    known.set(draft.id, draft.contentSha256);
     // 已提交:先登记创建事实,再落地工作副本与审计(失败不抹掉 created;丢锁立即结束)
     out.created.push(draft.id);
     const wc = newWorkingCopy(draft, dr.signals);
@@ -362,6 +408,22 @@ export async function runPersonalStep(d: StepDeps): Promise<StepResult> {
   if (rvNow.kind === 'invalid') return halt('revocations_invalid');
   const nowIso = d.now().toISOString();
   const today = utcDay(nowIso);
+  const clearQueue = async (
+    rec: PersonalLifecycleRecord,
+    wc: CandidateWorkingCopy,
+    reason: string,
+  ): Promise<void> => {
+    if (wc.shadow.queued_since === null) return;
+    const next = patchShadow({
+      canary_ready_since: wc.shadow.canary_ready_since,
+      queued_since: null,
+    })(wc);
+    if (next === undefined) return;
+    await d.working.put(next);
+    working.set(rec.id, next);
+    out.queueCleared.push({ id: rec.id, reason });
+    await d.audit.append([{ at: nowIso, kind: 'evaluation', id: rec.id, reason }]);
+  };
   const decisions: {
     rec: PersonalLifecycleRecord;
     wc: CandidateWorkingCopy;
@@ -391,7 +453,11 @@ export async function runPersonalStep(d: StepDeps): Promise<StepResult> {
       continue;
     }
     const pf = await d.facts.promoteFacts(rec, wc);
-    if (pf === null) continue; // 事实不可得:不推进、不动计时
+    if (pf === null) {
+      // W0-13:前置无法确认 = 不成立 → queued_since 清零(保留展示日期),记原因
+      await clearQueue(rec, wc, 'promote_facts_unavailable');
+      continue;
+    }
     const revoked = rvNow.lines.some(
       (l) => l.candidate_id === rec.id && l.content_sha256 === rec.content_sha256,
     );
@@ -445,16 +511,20 @@ export async function runPersonalStep(d: StepDeps): Promise<StepResult> {
   const head2 = pickPromotionHead(
     decisions.map((x) => ({ id: x.rec.id, canary_ready_since: x.ready })),
   );
+  // 非队首:此时只记 canary_ready_since(只排序);G7 排队日期要等队首实际提交成功、并按重读的权威记录确认名额被占后再设
   for (const x of decisions) {
     if (head2 !== null && x.rec.id === head2.id) continue;
-    // 名额将被队首占用:其余具备资格者进入 G7 排队(从今天起算,不追溯)
-    const patch = { canary_ready_since: x.ready, queued_since: x.wc.shadow.queued_since ?? today };
-    const next = patchShadow(patch)(x.wc);
+    if (x.ready === x.wc.shadow.canary_ready_since) continue;
+    const next = patchShadow({
+      canary_ready_since: x.ready,
+      queued_since: x.wc.shadow.queued_since,
+    })(x.wc);
     if (next !== undefined) {
       await d.working.put(next);
       working.set(x.rec.id, next);
     }
   }
+  let headPromoted = false;
   if (head2 !== null) {
     const x = decisions.find((y) => y.rec.id === head2.id);
     if (x !== undefined) {
@@ -468,6 +538,9 @@ export async function runPersonalStep(d: StepDeps): Promise<StepResult> {
       const wc2 = working.get(x.rec.id);
       const pf2 =
         frec === undefined || wc2 === undefined ? null : await d.facts.promoteFacts(frec, wc2);
+      if (frec !== undefined && wc2 !== undefined && pf2 === null) {
+        await clearQueue(frec, wc2, 'promote_facts_unavailable');
+      }
       if (frec !== undefined && wc2 !== undefined && pf2 !== null) {
         const step2 = decideShadowStep({
           record: frec,
@@ -490,7 +563,9 @@ export async function runPersonalStep(d: StepDeps): Promise<StepResult> {
           evidence: `shadow:${today}`,
         });
         if (step2.action === 'promote' && step2.event !== undefined) {
-          await run(frec, step2.event, patchShadow(step2.patch));
+          const pr = await run(frec, step2.event, patchShadow(step2.patch));
+          if (pr === 'halt') return out;
+          headPromoted = pr === 'transitioned';
         } else if (step2.action === 'expire' && step2.event !== undefined) {
           await run(frec, step2.event, patchShadow(step2.patch));
         } else if (step2.action === 'wait') {
@@ -500,6 +575,26 @@ export async function runPersonalStep(d: StepDeps): Promise<StepResult> {
             working.set(frec.id, next);
           }
         }
+      }
+    }
+  }
+  if (headPromoted) {
+    // 队首已实际占用名额:按重读的权威记录,给仍具备资格的其余候选设 G7 排队起算日(从今天起算,不追溯)
+    const after = await reload();
+    if (after === null) return out;
+    for (const x of decisions) {
+      if (head2 !== null && x.rec.id === head2.id) continue;
+      const wc = working.get(x.rec.id);
+      const cur = after.find((r) => r.id === x.rec.id);
+      if (wc === undefined || cur === undefined || cur.lifecycle !== 'shadow') continue;
+      if (!evaluationSlotOccupied(after.filter((o) => o.id !== cur.id))) continue;
+      const next = patchShadow({
+        canary_ready_since: wc.shadow.canary_ready_since,
+        queued_since: wc.shadow.queued_since ?? today,
+      })(wc);
+      if (next !== undefined) {
+        await d.working.put(next);
+        working.set(x.rec.id, next);
       }
     }
   }

@@ -347,7 +347,7 @@ function apply(
 
   const effects: TransitionEffect[] = [{ type: 'commit_lifecycle', id: final.id }];
   for (const e of entries) effects.push({ type: 'append_audit', line: auditOf(e, final.id) });
-  if (event.kind === 'veto') {
+  if (event.kind === 'veto' || (event.kind === 'revocation_reconcile' && event.basis === 'veto')) {
     effects.push({ type: 'blacklist_veto', id: final.id, content_sha256: final.content_sha256 });
   }
   if (!isTerminalLifecycle(record.lifecycle) && isTerminalLifecycle(final.lifecycle)) {

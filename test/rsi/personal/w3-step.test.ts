@@ -248,6 +248,7 @@ describe('撤销凭据对账(R21-9.5 的 V1a 部分)', () => {
     const r = await runPersonalStep(w.d);
     expect(r.reconciled).toEqual([A]);
     expect(w.store.records.get(A)?.terminal_reason).toBe('vetoed');
+    expect(w.store.records.get(A)?.transitions.at(-1)?.reason).toBe('revocation_reconciled');
   });
   it('凭据的内容哈希不是该候选当前内容 → 不对账', async () => {
     const w = world3();
@@ -605,5 +606,118 @@ describe('评审第三轮追加', () => {
     expect(r.halted).toBe('lock_lost');
     expect(r.breaker).toBeNull();
     expect(calls).toBe(1);
+  });
+});
+
+describe('验收评审追加', () => {
+  it('对账依据映射:tainted / judge_injection 各按依据给终态理由;无法映射的凭据原因不兜底成 clear(不转移、记 unmappedRevocations)', async () => {
+    const w = world3();
+    addShadow(w, A);
+    addShadow(w, B);
+    addShadow(w, C);
+    w.revs.value = {
+      kind: 'ok',
+      lines: [REV(A, 'tainted'), REV(B, 'judge_injection'), REV(C, 'harm_c1')],
+    };
+    const r = await runPersonalStep(w.d);
+    expect(w.store.records.get(A)?.terminal_reason).toBe('tainted');
+    expect(w.store.records.get(B)?.terminal_reason).toBe('judge_rejected');
+    expect(life(w, C)).toBe('shadow');
+    expect(r.unmappedRevocations).toEqual([C]);
+  });
+  it('M13-5 推进事实不可得:已有 queued_since 清零(保留 canary_ready_since)并记原因,不保留计时', async () => {
+    const w = world3({ phase: V1B });
+    addShadow(w, A, { shadow: { queued_since: '2026-11-01', canary_ready_since: '2026-10-20' } });
+    w.promoteFacts.fn = async () => null;
+    const r = await runPersonalStep(w.d);
+    expect(r.queueCleared).toEqual([{ id: A, reason: 'promote_facts_unavailable' }]);
+    expect(w.working.get(A)?.shadow).toMatchObject({
+      queued_since: null,
+      canary_ready_since: '2026-10-20',
+    });
+    expect(w.audits.some((a) => a.reason === 'promote_facts_unavailable')).toBe(true);
+  });
+  it('M13-5 队首二次读取事实不可得:队首的 queued_since 同样清零,且其余候选不被写入排队', async () => {
+    const w = world3({ phase: V1B });
+    addShadow(w, A, { shadow: { queued_since: '2026-11-05' } });
+    addShadow(w, B);
+    const seen = new Map<string, number>();
+    w.promoteFacts.fn = async (r) => {
+      const n = (seen.get(r.id) ?? 0) + 1;
+      seen.set(r.id, n);
+      return r.id === A && n >= 2 ? null : promoteBaseFor(r);
+    };
+    const r = await runPersonalStep(w.d);
+    expect(r.queueCleared.map((x) => x.id)).toEqual([A]);
+    expect(w.working.get(A)?.shadow.queued_since).toBeNull();
+    expect(w.working.get(B)?.shadow.queued_since).toBeNull();
+    expect(life(w, A)).toBe('shadow');
+  });
+  it('M13-4 非队首的 queued_since 要等队首提交成功后才设:队首提交失败(二次事实不可得)→ 其余不排队', async () => {
+    const w = world3({ phase: V1B });
+    addShadow(w, A);
+    addShadow(w, B);
+    const seen = new Map<string, number>();
+    w.promoteFacts.fn = async (r) => {
+      const n = (seen.get(r.id) ?? 0) + 1;
+      seen.set(r.id, n);
+      return r.id === A && n >= 2 ? null : promoteBaseFor(r);
+    };
+    await runPersonalStep(w.d);
+    expect(w.working.get(B)?.shadow.queued_since).toBeNull();
+  });
+  it('W0-6 候选 id 碰撞而内容哈希不同 → candidate_invalid 安全中止(不创建、不推进);内容相同才是重复', async () => {
+    const w = world3({ phase: V1B });
+    const id = withNewProposal(w);
+    w.store.put(mkRec('shadow', { id, content_sha256: 'b'.repeat(64) }));
+    addShadow(w, A);
+    eligible(w);
+    const r = await runPersonalStep(w.d);
+    expect(r.halted).toBe('candidate_invalid');
+    expect(w.store.commits.length).toBe(0);
+    expect(life(w, A)).toBe('shadow');
+    const w2 = world3();
+    const id2 = withNewProposal(w2);
+    w2.store.put(mkRec('shadow', { id: id2, content_sha256: draftOf().contentSha256 }));
+    expect((await runPersonalStep(w2.d)).halted).toBeNull();
+  });
+  it('W0-13 缺工作副本的 shadow:无法重算 → canary_ready_since 记重建当日并审计 ready_since_rebuilt;端口给出历史日期则用它', async () => {
+    const w = world3();
+    w.store.put(
+      mkRec('shadow', {
+        id: A,
+        source_proposal: { run_id: 'run-1', proposal_id: '2026-11-05-001' },
+      }),
+    );
+    await runPersonalStep(w.d);
+    expect(w.working.get(A)?.shadow.canary_ready_since).toBe(TODAY);
+    expect(w.audits.find((a) => a.reason === 'ready_since_rebuilt')?.counts).toEqual({
+      recovered: 0,
+    });
+    const w2 = world3();
+    w2.store.put(
+      mkRec('shadow', {
+        id: A,
+        source_proposal: { run_id: 'run-1', proposal_id: '2026-11-05-001' },
+      }),
+    );
+    w2.d.readySince = { recover: async () => '2026-10-01' };
+    await runPersonalStep(w2.d);
+    expect(w2.working.get(A)?.shadow.canary_ready_since).toBe('2026-10-01');
+    expect(w2.audits.find((a) => a.reason === 'ready_since_rebuilt')?.counts).toEqual({
+      recovered: 1,
+    });
+  });
+  it('proposed 候选缺工作副本:重建但不记 canary_ready_since、不写重建审计', async () => {
+    const w = world3();
+    w.store.put(
+      mkRec('proposed', {
+        id: A,
+        source_proposal: { run_id: 'run-1', proposal_id: '2026-11-05-001' },
+      }),
+    );
+    await runPersonalStep(w.d);
+    expect(w.working.get(A)?.shadow.canary_ready_since).toBeNull();
+    expect(w.audits.some((a) => a.reason === 'ready_since_rebuilt')).toBe(false);
   });
 });

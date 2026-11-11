@@ -37,11 +37,14 @@ const GATES = `${P}gates.ts`;
 const SOURCE = `${P}candidate-source.ts`;
 const RECORD = `${P}candidate-record.ts`;
 const REPO = `${P}candidate-repo.ts`;
+const TABLE = `${P}transition-table.ts`;
+const TRANS = `${P}transition.ts`;
 
 const T_STEP = 'rsi/personal/w3-step.test.ts';
 const T_GATES = 'rsi/personal/w3-gates.test.ts';
 const T_SRC = 'rsi/personal/w3-source.test.ts';
 const T_REPO = 'rsi/personal/w3-repo.test.ts';
+const T_RECON = 'rsi/personal/w3-reconcile-event.test.ts';
 
 const off = (file: string, anchor: string): Edit => ({ file, anchor, replacement: 'void 0;' });
 
@@ -144,8 +147,8 @@ export const V1_W3_MUTATIONS: readonly V1W3Mutation[] = [
       },
       {
         file: STEP,
-        anchor: 'if (head2 !== null && x.rec.id === head2.id) continue;',
-        replacement: 'continue;',
+        anchor: 'queued_since: wc.shadow.queued_since ?? today,',
+        replacement: 'queued_since: wc.shadow.queued_since,',
       },
     ],
     tests: [T_STEP],
@@ -428,20 +431,6 @@ export const V1_W3_MUTATIONS: readonly V1W3Mutation[] = [
     mustKill: ['strength 不是 should'],
   },
   {
-    id: 'g5-pairing-unchecked',
-    clause: 'R21-5.3:占用 ≥ 80% 必须配对退役',
-    edits: [
-      {
-        file: GATES,
-        anchor: 'if (used >= GATE_QUOTA_PAIRING_RATIO * b.autoQuotaBytes && !b.pairedRetirement) {',
-        replacement: 'if (false as boolean) {',
-      },
-    ],
-    tests: [T_GATES],
-    expectRed: ['超配额 → g5_quota'],
-    mustKill: ['超配额 → g5_quota'],
-  },
-  {
     id: 'g6-upper-bound-inclusive',
     clause: 'R21-5.1 G6:命中会话数 ≤ 0.5 × 同期会话数(边界恰好通过)',
     edits: [
@@ -504,6 +493,183 @@ export const V1_W3_MUTATIONS: readonly V1W3Mutation[] = [
     tests: [T_STEP],
     expectRed: ['gate_internal 熔断在同一步立即生效'],
     mustKill: ['gate_internal 熔断在同一步立即生效'],
+  },
+  {
+    id: 'm13-5-facts-unavailable-keeps-queue',
+    clause: 'M13-5 / W0-13:推进事实不可得时 queued_since 必须清零',
+    edits: [
+      {
+        file: STEP,
+        anchor: "await clearQueue(rec, wc, 'promote_facts_unavailable');",
+        replacement: 'void 0;',
+      },
+    ],
+    tests: [T_STEP],
+    expectRed: ['M13-5 推进事实不可得'],
+    mustKill: ['M13-5 推进事实不可得'],
+  },
+  {
+    id: 'm13-5-final-facts-unavailable-keeps-queue',
+    clause: 'M13-5 / W0-13:队首二次读取事实不可得时同样清零',
+    edits: [
+      {
+        file: STEP,
+        anchor: "await clearQueue(frec, wc2, 'promote_facts_unavailable');",
+        replacement: 'void 0;',
+      },
+    ],
+    tests: [T_STEP],
+    expectRed: ['M13-5 队首二次读取事实不可得'],
+    mustKill: ['M13-5 队首二次读取事实不可得'],
+  },
+  {
+    id: 'create-id-collision-skipped',
+    clause: 'W0-6:48 位 id 碰撞而内容哈希不同 → candidate_invalid',
+    edits: [
+      {
+        file: STEP,
+        anchor: "if (knownSha !== draft.contentSha256) return halt('candidate_invalid');",
+        replacement: 'void 0;',
+      },
+    ],
+    tests: [T_STEP],
+    expectRed: ['候选 id 碰撞而内容哈希不同'],
+    mustKill: ['候选 id 碰撞而内容哈希不同'],
+  },
+  {
+    id: 'm13-4-queue-before-head-commit',
+    clause: 'M13-4 / W0-13:非队首排队日期要等队首提交成功后按重读的权威记录再设',
+    edits: [
+      {
+        file: STEP,
+        anchor: 'if (!evaluationSlotOccupied(after.filter((o) => o.id !== cur.id))) continue;',
+        replacement: 'void 0;',
+      },
+      { file: STEP, anchor: 'let headPromoted = false;', replacement: 'let headPromoted = true;' },
+    ],
+    tests: [T_STEP],
+    expectRed: ['M13-4 非队首的 queued_since 要等队首提交成功后才设'],
+    mustKill: ['M13-4 非队首的 queued_since 要等队首提交成功后才设'],
+  },
+  {
+    id: 'rebuild-ready-since-null',
+    clause: 'W0-13:重建无法重算 → 当日 + ready_since_rebuilt 审计',
+    edits: [
+      {
+        file: STEP,
+        anchor: "const readyToday = rec.lifecycle === 'shadow' && recovered === null;",
+        replacement: 'const readyToday = false;',
+      },
+    ],
+    tests: [T_STEP],
+    expectRed: ['缺工作副本的 shadow:无法重算'],
+    mustKill: ['缺工作副本的 shadow:无法重算'],
+  },
+  {
+    id: 'g5-category-share-unchecked',
+    clause: 'R21-5.3:规则 / 踩坑 / 技能分类份额',
+    edits: [
+      {
+        file: GATES,
+        anchor: "if (t.used[cls] + t.add > quota * AUTO_QUOTA_SHARE[cls]) return red('g5_quota');",
+        replacement: 'void 0;',
+      },
+    ],
+    tests: [T_GATES],
+    expectRed: ['分类份额'],
+    mustKill: ['分类份额'],
+  },
+  {
+    id: 'g5-lite-factor-removed',
+    clause: 'W0-10:lite / medium 配额 12.5%',
+    edits: [{ file: GATES, anchor: "(profile === 'heavy' ? 1 : 0.5)", replacement: '1' }],
+    tests: [T_GATES],
+    expectRed: ['claude 按行'],
+    mustKill: ['claude 按行'],
+  },
+  {
+    id: 'g5-only-first-target',
+    clause: 'R21-5.3:每个渲染目标都要判',
+    edits: [
+      {
+        file: GATES,
+        anchor: 'for (const t of b.targets) {',
+        replacement: 'for (const t of b.targets.slice(0, 1)) {',
+      },
+    ],
+    tests: [T_GATES],
+    expectRed: ['任一目标超额即红'],
+    mustKill: ['任一目标超额即红'],
+  },
+  {
+    id: 'g5-pairing-unchecked',
+    clause: 'R21-5.3:占用 ≥ 80% 必须配对退役',
+    edits: [
+      {
+        file: GATES,
+        anchor: 'if (usedAll + t.add >= GATE_QUOTA_PAIRING_RATIO * quota && !b.pairedRetirement) {',
+        replacement: 'if (false as boolean) {',
+      },
+    ],
+    tests: [T_GATES],
+    expectRed: ['占用越过 80% 且无配对退役'],
+    mustKill: ['占用越过 80% 且无配对退役'],
+  },
+  {
+    id: 'reconcile-unmapped-defaults-to-clear',
+    clause: 'R21-9.5:对账不兜底 clear',
+    edits: [
+      {
+        file: STEP,
+        anchor: 'const basis = RECONCILE_BASIS[line.reason];',
+        replacement: "const basis = RECONCILE_BASIS[line.reason] ?? 'clear';",
+      },
+    ],
+    tests: [T_STEP],
+    expectRed: ['无法映射的凭据原因不兜底成 clear'],
+    mustKill: ['无法映射的凭据原因不兜底成 clear'],
+  },
+  {
+    id: 'reconcile-terminal-always-cleared',
+    clause: 'R21-9.5:终态理由按凭据依据映射',
+    edits: [
+      {
+        file: TABLE,
+        anchor: 'terminal: (e) => RECONCILE_TERMINAL[e.basis],',
+        replacement: "terminal: () => 'cleared',",
+      },
+    ],
+    tests: [T_RECON],
+    expectRed: ['依据 %s → rejected'],
+    mustKill: ['依据 %s → rejected'],
+  },
+  {
+    id: 'reconcile-reason-wrong',
+    clause: 'R21-9.5:对账转移原因 revocation_reconciled',
+    edits: [
+      {
+        file: TABLE,
+        anchor: "reason: () => 'revocation_reconciled',",
+        replacement: "reason: () => 'cleared',",
+      },
+    ],
+    tests: [T_RECON],
+    expectRed: ['依据 %s → rejected'],
+    mustKill: ['依据 %s → rejected'],
+  },
+  {
+    id: 'reconcile-veto-no-blacklist',
+    clause: 'R21-11.3:veto 依据仍写黑名单',
+    edits: [
+      {
+        file: TRANS,
+        anchor: "event.kind === 'revocation_reconcile' && event.basis === 'veto'",
+        replacement: 'false',
+      },
+    ],
+    tests: [T_RECON],
+    expectRed: ['veto 依据仍写指纹黑名单效果'],
+    mustKill: ['veto 依据仍写指纹黑名单效果'],
   },
   // ---- W0-6 候选来源 / 创建行 ----
   {

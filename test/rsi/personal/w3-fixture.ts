@@ -167,9 +167,24 @@ export function goodFacts(draft: CandidateDraft = draftOf()): GateFacts {
     cooldownActive: false,
     budget: {
       renderLevelOk: true,
-      autoQuotaBytes: 4096,
-      autoQuotaUsedBytes: 0,
+      profile: 'lite',
       pairedRetirement: false,
+      targets: [
+        {
+          target: 'claude',
+          unit: 'lines',
+          total: 200,
+          used: { rule: 0, pitfall: 0, skill: 0 },
+          add: 3,
+        },
+        {
+          target: 'pi',
+          unit: 'bytes',
+          total: 16384,
+          used: { rule: 0, pitfall: 0, skill: 0 },
+          add: 250,
+        },
+      ],
     },
     replay: { hitSessions: 5, totalSessions: 20 },
     clusterBusy: false,

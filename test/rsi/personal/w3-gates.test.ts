@@ -243,41 +243,61 @@ describe('G4 冲突 / 重复 / 冷却', () => {
   });
 });
 
-describe('G5 预算与配额', () => {
-  const b = (o: object): GateFacts => {
-    const f = goodFacts();
+describe('G5 预算与配额(R21-5.3:每目标、每分类、lite 12.5%)', () => {
+  type T = NonNullable<GateFacts['budget']>['targets'][number];
+  const tgt = (o: Partial<T>): T => ({
+    target: 'claude',
+    unit: 'lines',
+    total: 200,
+    used: { rule: 0, pitfall: 0, skill: 0 },
+    add: 3,
+    ...o,
+  });
+  const b = (o: Partial<NonNullable<GateFacts['budget']>>, d?: CandidateDraft): GateFacts => {
+    const f = goodFacts(d);
     return { ...f, budget: { ...(f.budget as NonNullable<GateFacts['budget']>), ...o } };
   };
   it('绿', () => expect(g5(goodFacts())).toBeNull());
   it('渲染后 level 不是 ok → g5_budget', () =>
     expect(g5(b({ renderLevelOk: false }))).toEqual(red('g5_budget')));
-  it('超配额 → g5_quota;占用越过 80% 且无配对退役 → g5_quota,配对后放行', () => {
-    expect(g5(b({ autoQuotaBytes: 100 }))).toEqual(red('g5_quota'));
-    const bytes = goodFacts().draft.atom.bodyBytes;
-    const quota = Math.ceil(bytes / 0.85);
-    expect(g5(b({ autoQuotaBytes: quota }))).toEqual(red('g5_quota'));
-    expect(g5(b({ autoQuotaBytes: quota, pairedRetirement: true }))).toBeNull();
+  it('claude 按行:lite 档 200 行预算的 12.5% = 25 行;超出 → g5_quota,恰好用满且已配对则放行', () => {
+    expect(g5(b({ targets: [tgt({ add: 26 })], pairedRetirement: true }))).toEqual(red('g5_quota'));
+    // 规则份额 50% = 12.5 行:总量够但规则份额超 → g5_quota
+    expect(g5(b({ targets: [tgt({ add: 13 })], pairedRetirement: true }))).toEqual(red('g5_quota'));
+    expect(g5(b({ targets: [tgt({ add: 12 })], pairedRetirement: true }))).toBeNull();
+  });
+  it('其它目标按字节:16384 的 12.5% = 2048;规则份额 1024', () => {
+    const pi = (add: number): T => tgt({ target: 'pi', unit: 'bytes', total: 16384, add });
+    expect(g5(b({ targets: [pi(1025)], pairedRetirement: true }))).toEqual(red('g5_quota'));
+    expect(g5(b({ targets: [pi(1024)], pairedRetirement: true }))).toBeNull();
+  });
+  it('分类份额:总量未超但踩坑 30% 份额已满 → g5_quota;heavy 档额度翻倍', () => {
+    const pit = draftOf({ kind: 'fact', volatility: 'volatile', trigger: 'pnpm test' });
+    const t = tgt({ used: { rule: 0, pitfall: 7, skill: 0 }, add: 1 }); // 份额 25 × 0.3 = 7.5
+    expect(g5(b({ targets: [t], pairedRetirement: true }, pit))).toEqual(red('g5_quota'));
+    expect(g5(b({ targets: [t], pairedRetirement: true, profile: 'heavy' }, pit))).toBeNull();
+  });
+  it('任一目标超额即红(第二个目标超,第一个没超)', () => {
+    const ok = tgt({ add: 1 });
+    const bad = tgt({ target: 'codex', unit: 'bytes', total: 16384, add: 5000 });
+    expect(g5(b({ targets: [ok, bad], pairedRetirement: true }))).toEqual(red('g5_quota'));
+  });
+  it('占用越过 80% 且无配对退役 → g5_quota;配对后放行', () => {
+    const t = tgt({ used: { rule: 8, pitfall: 6, skill: 4 }, add: 2 }); // 20 / 25 = 80%
+    expect(g5(b({ targets: [t] }))).toEqual(red('g5_quota'));
+    expect(g5(b({ targets: [t], pairedRetirement: true }))).toBeNull();
   });
   it('单条超过 600 字节 → g5_atom_bytes', () => {
     const d = draftOf({ body: { do: '甲'.repeat(300) } });
-    expect(
-      g5(
-        withDraft(d, {
-          budget: {
-            renderLevelOk: true,
-            autoQuotaBytes: 100000,
-            autoQuotaUsedBytes: 0,
-            pairedRetirement: true,
-          },
-        }),
-      ),
-    ).toEqual(red('g5_atom_bytes'));
+    expect(g5(b({ pairedRetirement: true }, d))).toEqual(red('g5_atom_bytes'));
   });
   it('注入追加字节(标记行 + 标签 + 哈希行 + 正文)在 M11 上限内', () => {
     expect(injectBytes(draftOf())).toBeLessThanOrEqual(1536);
   });
-  it('预算探针不可用(null)→ 抛', () =>
-    expect(() => g5({ ...goodFacts(), budget: null })).toThrow());
+  it('预算探针不可用(null)或没有任何目标 → 抛', () => {
+    expect(() => g5({ ...goodFacts(), budget: null })).toThrow();
+    expect(() => g5(b({ targets: [] }))).toThrow();
+  });
 });
 
 describe('G6 回放 / G7 退火', () => {

@@ -100,7 +100,10 @@ export function newWorkingCopy(
 }
 
 /** 缺工作副本时按权威记录重建(R21-3.8:权威副本领先 → 以权威为准续做);证据归属不可得,留空 */
-export function rebuildWorkingCopy(rec: PersonalLifecycleRecord): CandidateWorkingCopy | null {
+export function rebuildWorkingCopy(
+  rec: PersonalLifecycleRecord,
+  readySince: string | null = null,
+): CandidateWorkingCopy | null {
   const sp = rec.source_proposal;
   if (rec.cluster_signature === undefined || sp === null || sp === undefined) return null;
   return CandidateWorkingCopySchema.parse({
@@ -108,7 +111,7 @@ export function rebuildWorkingCopy(rec: PersonalLifecycleRecord): CandidateWorki
     id: rec.id,
     cluster_signature: rec.cluster_signature,
     source: { run_id: sp.run_id, proposal_id: sp.proposal_id },
-    shadow: { sessions: 0, hits: 0, canary_ready_since: null, queued_since: null },
+    shadow: { sessions: 0, hits: 0, canary_ready_since: readySince, queued_since: null },
     evidence: { sessions: [], days: [] },
     stats: { sessions_observed: 0, sessions_treat: 0, sessions_control: 0, bytes_injected: 0 },
     repo_removal_deferred: false,
