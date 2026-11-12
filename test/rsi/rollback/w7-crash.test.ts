@@ -11,7 +11,7 @@ import {
   startRollback,
 } from '../../../src/rsi/personal/rollback.js';
 import { rec } from '../personal/transition-fixture.js';
-import { Crash, ID, SHA, harmReq, recordOf, world7, type World7 } from './w7-fixture.js';
+import { Crash, HARM, ID, SHA, harmReq, recordOf, world7, type World7 } from './w7-fixture.js';
 
 const TXN = rollbackTxnId(ID, SHA);
 
@@ -190,14 +190,26 @@ describe('来源保留(W0-17):崩溃恢复后 by 不变', () => {
     expect(w.revs[0]?.by).toBe('rollback_to');
   });
 
-  it('exec_event 发起的 txn 续做 → by=exec_event(reason 唯一确定来源)', async () => {
+  it('exec_event 原因没有对应的终止事件(terminationReason 不产出 exec_*):新 journal 一律拒绝,不写 journal / 凭据(W0-20:terminal_event 必须与 reason 一致)', async () => {
     const w = world7();
-    w.crashAt('enter:injection_disabled');
-    const req = harmReq({ reason: 'exec_timeout_unclean', by: 'exec_event' });
-    await expect(startRollback(w.d, req)).rejects.toBeInstanceOf(Crash);
-    expect(w.txns.get(TXN)?.reason).toBe('exec_timeout_unclean');
-    await resumeAll(w.d);
-    expect(w.revs[0]).toMatchObject({ by: 'exec_event', reason: 'exec_timeout_unclean' });
+    for (const reason of ['exec_post_check_failed', 'exec_timeout_unclean']) {
+      const withEvent = await startRollback(w.d, harmReq({ reason, by: 'exec_event' }));
+      expect(withEvent, reason).toEqual({
+        status: 'refused',
+        txn: null,
+        why: 'event_reason_mismatch',
+      });
+      const noEvent = harmReq({ reason, by: 'exec_event' });
+      delete noEvent.event;
+      expect(await startRollback(w.d, noEvent), reason).toEqual({
+        status: 'refused',
+        txn: null,
+        why: 'event_required',
+      });
+    }
+    expect(w.txns.size).toBe(0);
+    expect(w.revs).toHaveLength(0);
+    expect(w.calls).toEqual([]);
   });
 });
 
@@ -236,6 +248,10 @@ describe('journal 与记录的进度互不信任', () => {
       phase: 'injection_disabled',
       identity12: null,
       at: '2026-11-10T12:00:00.000Z',
+      // 新格式 journal(带恢复三项);旧格式的还原规则在 w7-journal-boundary 单独覆盖
+      content_sha256: SHA,
+      by: 'worker',
+      terminal_event: HARM,
     });
     const out = await resumeAll(w.d);
     expect(out.map((o) => o.status)).toEqual(['complete']);

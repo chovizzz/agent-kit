@@ -1,17 +1,13 @@
 /**
- * W0-20 journal 自带恢复事实(H1 / M4)与审计行按键落地(M6):
+ * W0-20 journal 自带恢复事实(H1 / M4)与审计行按键落地(M6;键 = 转移条目的 idem_key):
  *  - 首次落盘就带 content_sha256 / by / terminal_event(入口先过转移引擎的事件 schema);
  *  - 续做只从 journal 取这三项(不传 hint、不传 recordedSha、私有仓库读不到也要写出凭据),覆盖全部支持的终止原因 × 三个崩溃点;
- *  - 旧格式 journal(缺三个键)走兜底;字段不合规 → refused txn_invalid 且零动作;
+ *  - 字段不合规 → refused txn_invalid 且零动作(旧格式 journal 的还原规则与新 journal 的写入边界见 w7-journal-boundary.test.ts);
  *  - 审计行经带键端口落地:键集合固定、每键恰好一次;落地失败由收尾 / recoverTerminalEffects 补做。
  */
 import { describe, expect, it } from 'vitest';
 import type { PersonalTxn } from '../../../src/contracts/rsi-personal.js';
-import {
-  auditKeyOf,
-  auditLinesOf,
-  recoverTerminalEffects,
-} from '../../../src/rsi/personal/effects-recover.js';
+import { recoverTerminalEffects } from '../../../src/rsi/personal/effects-recover.js';
 import type { RevocationBy } from '../../../src/rsi/personal/revoke-write.js';
 import {
   resumeAll,
@@ -170,7 +166,7 @@ describe('H1 / M4:journal 首次落盘带齐 content_sha256 / by / terminal_even
     },
   );
 
-  it('reconcile(kind=reconcile,没有终止事件)的 journal:带 content_sha256 / by,没有 terminal_event', async () => {
+  it('reconcile(kind=reconcile)的 journal 同样带齐三项:终止事实由原因重建(vetoed → veto 事件,证据 txn:<id>)', async () => {
     const w = world7({
       record: rec('rolling_back', {
         deploy: { claude: 'removal_pending', pi: 'none', codex: 'none' },
@@ -179,9 +175,12 @@ describe('H1 / M4:journal 首次落盘带齐 content_sha256 / by / terminal_even
     });
     w.crashAt('journal:rollback_requested');
     await expect(resumeAll(w.d)).rejects.toBeInstanceOf(Crash);
-    const t = w.txns.get(TXN);
-    expect(t).toMatchObject({ content_sha256: SHA, by: 'veto', kind: 'reconcile' });
-    expect(t).not.toHaveProperty('terminal_event');
+    expect(w.txns.get(TXN)).toMatchObject({
+      content_sha256: SHA,
+      by: 'veto',
+      kind: 'reconcile',
+      terminal_event: { kind: 'veto', evidence: `txn:${TXN}` },
+    });
   });
 });
 
@@ -241,74 +240,6 @@ describe('H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recor
   );
 });
 
-describe('旧格式 journal(缺 W0-20 三键)走兜底', () => {
-  const legacy = (over: Partial<PersonalTxn>): PersonalTxn => ({
-    schema_version: 1,
-    txn_id: TXN,
-    candidate_id: ID,
-    kind: 'rollback',
-    reason: 'harm_c1',
-    target_terminal: 'rolled_back',
-    phase: 'rollback_requested',
-    identity12: null,
-    at: '2026-11-10T12:00:00.000Z',
-    ...over,
-  });
-
-  it.each([
-    ['vetoed', 'rollback', 'veto', 'vetoed'],
-    ['cleared', 'clear', 'clear', 'cleared'],
-    ['cleared', 'rollback', 'rollback_to', 'cleared'],
-    ['exec_post_check_failed', 'rollback', 'exec_event', null],
-    ['harm_c1', 'rollback', 'worker', 'auto_rollback'],
-    ['tainted', 'rollback', 'worker', 'tainted'],
-    ['judge_reject', 'rollback', 'worker', 'judge_rejected'],
-    ['judge_injection', 'rollback', 'worker', 'judge_rejected'],
-  ] as const)(
-    '旧 journal 原因 %s(kind=%s):来源还原为 %s,事件由原因还原,续做到终态',
-    async (reason, kind, by, terminal) => {
-      const w = world7();
-      await w.d.txns.write(legacy({ reason, kind }));
-      const out = await resumeAll(w.d);
-      expect(w.revs).toHaveLength(1);
-      expect(w.revs[0]).toMatchObject({ by, reason, content_sha256: SHA });
-      if (terminal === null) {
-        // exec 原因没有终止事件可还原(记录推进归 exec 路径):本段未完成,journal 保留
-        expect(out[0]).toMatchObject({ status: 'incomplete', why: 'record_unmapped' });
-        return;
-      }
-      expect(out.map((o) => o.status)).toEqual(['complete']);
-      expect(recordOf(w).terminal_reason).toBe(terminal);
-    },
-  );
-
-  it('旧 journal 的 limit_reached:事件需要分析证据,不重造 → 凭据已写、记录不动、incomplete(record_unmapped),journal 保留', async () => {
-    const w = world7();
-    await w.d.txns.write(legacy({ reason: 'limit_reached', target_terminal: 'expired' }));
-    const out = await resumeAll(w.d);
-    expect(w.revs).toHaveLength(1);
-    expect(out[0]).toMatchObject({ status: 'incomplete', why: 'record_unmapped' });
-    expect(recordOf(w).lifecycle).toBe('canary');
-    expect(w.txns.size).toBe(1);
-  });
-
-  it('旧 journal 的内容哈希:权威记录读不到时用 recordedSha 兜底,且必须与 txn_id 对得上', async () => {
-    const w = world7();
-    await w.d.txns.write(legacy({}));
-    w.store.mode = 'deferred';
-    expect((await resumeAll(w.d))[0]).toMatchObject({
-      status: 'incomplete',
-      why: 'content_unknown',
-    });
-    expect(w.revs).toHaveLength(0);
-    w.d.recordedSha = async () => 'f'.repeat(64); // 对不上 txn_id:不采信
-    expect((await resumeAll(w.d))[0]).toMatchObject({ why: 'content_unknown' });
-    w.d.recordedSha = async () => SHA;
-    await resumeAll(w.d);
-    expect(w.revs).toHaveLength(1);
-  });
-});
-
 describe('journal 字段不合规 → refused txn_invalid,零动作(fail-closed)', () => {
   const base = (over: Partial<PersonalTxn>): PersonalTxn => ({
     schema_version: 1,
@@ -340,6 +271,18 @@ describe('journal 字段不合规 → refused txn_invalid,零动作(fail-closed)
     ],
     ['terminal_event 缺必填字段', { terminal_event: { kind: 'harm', evidence: 'x' } }],
     ['content_sha256 与 txn_id 对不上', { content_sha256: 'c'.repeat(64) }],
+    [
+      'terminal_event 与 reason 不一致(harm_c1 的 journal 带 veto 事件)',
+      { terminal_event: { kind: 'veto', evidence: 'x' } },
+    ],
+    [
+      'terminal_event 与 reason 不一致(harm_c1 的 journal 带 c2 指标的事件)',
+      { terminal_event: harm('c2') },
+    ],
+    [
+      'terminal_event 与 target_terminal 不一致(harm 事件配 expired)',
+      { target_terminal: 'expired' },
+    ],
     ['by 与 (kind, reason) 不相容', { by: 'veto' }],
     ['kind=clear 而 by 不是 clear', { kind: 'clear', reason: 'cleared', by: 'worker' }],
   ] as const)('%s', async (_n, over) => {
@@ -456,15 +399,19 @@ describe('入口校验:事件在写 journal 之前过转移引擎 schema', () =>
 describe('M6:审计行经带键端口落地,同一行只落一次', () => {
   const happy = (): Case => CASES[0] as Case;
 
-  it('正常回滚:审计键集合固定(回滚路径 7 条转移条目 → 7 个键),每键恰好落地一次;键只含候选 id 与行哈希', async () => {
+  it('正常回滚:审计键集合固定(回滚路径 7 条转移条目 → 7 个键 = 条目的 idem_key),每键恰好落地一次', async () => {
     const w = world7();
     await startRollback(w.d, reqOf(happy()));
     const rc = recordOf(w);
-    const expected = auditLinesOf(rc).map(auditKeyOf).sort();
+    // 键 = audit:<候选>:<转移条目的 idem_key>(事件身份,不是行内容哈希);回滚路径从第一条进入 rolling_back 的条目起
+    const from = rc.transitions.findIndex((e) => e.dim === 'lifecycle' && e.to === 'rolling_back');
+    const expected = rc.transitions
+      .slice(from)
+      .map((e) => `audit:${ID}:${e.idem_key}`)
+      .sort();
     expect(expected).toHaveLength(7); // lifecycle×2 + deploy×2 + rollback×3
     expect([...w.auditLog.keys()].sort()).toEqual(expected);
     expect([...w.auditApplied.values()]).toEqual(Array(7).fill(1));
-    for (const k of w.auditLog.keys()) expect(k).toMatch(new RegExp(`^audit:${ID}:[0-9a-f]{16}$`));
     expect([...w.effectApplied.values()]).toEqual([1]); // 终态业务效果的键与审计键分开
   });
 
@@ -507,5 +454,64 @@ describe('M6:审计行经带键端口落地,同一行只落一次', () => {
     w.store.put(rec('rejected', { transitions: [entry(1), entry(2, 'rejected')] }));
     await recoverTerminalEffects({ store: w.store, effects: w.d.keyedEffects });
     expect(w.auditLog.size).toBe(0);
+  });
+});
+
+describe('M6 审计键 = 事件身份:同毫秒、同 from/to/reason、不同 evidence 的两条转移 → 两行审计', () => {
+  it('rolling_back 上先后到达两个 evidence 不同的 harm_c1 事件(自环):两行内容完全相同的审计各落一次,恢复补做不再增加', async () => {
+    const w = world7({
+      record: rec('rolling_back', {
+        deploy: { claude: 'removal_pending', pi: 'none', codex: 'none' },
+        rollback: {
+          phase: 'rollback_requested',
+          reason: 'harm_c1',
+          target_terminal: 'rolled_back',
+        },
+      }),
+    });
+    await w.d.txns.write({
+      schema_version: 1,
+      txn_id: TXN,
+      candidate_id: ID,
+      kind: 'rollback',
+      reason: 'harm_c1',
+      target_terminal: 'rolled_back',
+      phase: 'rollback_requested',
+      identity12: null,
+      at: '2026-11-10T12:00:00.000Z',
+      content_sha256: SHA,
+      by: 'worker',
+      terminal_event: harm('c1'),
+    });
+    const late = (n: number): RollbackRequest => ({
+      candidate_id: ID,
+      content_sha256: SHA,
+      kind: 'rollback',
+      reason: 'harm_c1',
+      by: 'worker',
+      target_terminal: 'rolled_back',
+      event: { ...harm('c1'), evidence: `analysis-v1:c1:look=${n}:t=0.500` },
+    });
+    for (const n of [2, 3]) {
+      w.crashAt('enter:injection_disabled'); // 较晚事件已施加(自环已提交)、撤销事务还没动
+      await expect(startRollback(w.d, late(n))).rejects.toBeInstanceOf(Crash);
+    }
+    const loops = recordOf(w).transitions.filter(
+      (t) => t.dim === 'lifecycle' && t.from === 'rolling_back' && t.to === 'rolling_back',
+    );
+    expect(loops).toHaveLength(2);
+    expect(loops[0]?.at).toBe(loops[1]?.at); // NOW 固定:同毫秒
+    expect(loops[0]?.idem_key).not.toBe(loops[1]?.idem_key);
+    const loopKeys = loops.map((t) => `audit:${ID}:${t.idem_key}`);
+    for (const k of loopKeys) expect(w.auditLog.has(k), k).toBe(true);
+    const [a, b] = loopKeys.map((k) => w.auditLog.get(k));
+    expect(a).toEqual(b); // 两行内容完全相同,但是两个事件
+    expect((await resumeAll(w.d))[0]?.status).toBe('complete');
+    const applied = [...w.auditApplied.entries()];
+    expect(applied.every(([, n]) => n === 1)).toBe(true);
+    const before = w.audits.length;
+    await recoverTerminalEffects({ store: w.store, effects: w.d.keyedEffects });
+    expect(w.audits).toHaveLength(before);
+    for (const k of loopKeys) expect(w.auditApplied.get(k)).toBe(1);
   });
 });

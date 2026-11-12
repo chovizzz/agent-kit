@@ -236,32 +236,38 @@ describe('R21-9.3a 人工分叉下的撤销:凭据先于记录,仓库部分 defe
 });
 
 describe('W0-17 来源保留:by 是撤销来源', () => {
+  const EV = {
+    clear: { kind: 'clear', evidence: 'rsi auto clear' },
+    veto: { kind: 'veto', evidence: 'rsi veto' },
+    harm_c4: { kind: 'harm', evidence: 'analysis-v1:c4', metric: 'c4', worse: true },
+  } as const;
   it.each([
-    ['clear', 'cleared', 'clear'],
-    ['veto', 'vetoed', 'veto'],
-    ['exec_event', 'exec_post_check_failed', 'exec_event'],
-    ['exec_event', 'exec_timeout_unclean', 'exec_event'],
-    ['worker', 'harm_c4', 'worker'],
-    ['rollback_to', 'cleared', 'rollback_to'],
-  ] as const)('by=%s reason=%s → 凭据行 by=%s,其它字段与请求一致', async (by, reason, expectBy) => {
-    const w = world7({ record: rec('shadow') });
-    await startRollback(w.d, {
-      candidate_id: ID,
-      content_sha256: SHA,
-      kind: by === 'clear' ? 'clear' : 'rollback',
-      reason,
-      by,
-      target_terminal: 'rolled_back',
-      event: { kind: 'clear', evidence: 'x' },
-    });
-    expect(w.revs).toHaveLength(1);
-    expect(w.revs[0]).toMatchObject({
-      by: expectBy,
-      reason,
-      candidate_id: ID,
-      content_sha256: SHA,
-    });
-  });
+    ['clear', 'cleared', 'clear', EV.clear],
+    ['veto', 'vetoed', 'veto', EV.veto],
+    ['worker', 'harm_c4', 'worker', EV.harm_c4],
+    ['rollback_to', 'cleared', 'rollback_to', EV.clear],
+  ] as const)(
+    'by=%s reason=%s → 凭据行 by=%s,其它字段与请求一致',
+    async (by, reason, expectBy, event) => {
+      const w = world7({ record: rec('shadow') });
+      await startRollback(w.d, {
+        candidate_id: ID,
+        content_sha256: SHA,
+        kind: by === 'clear' ? 'clear' : 'rollback',
+        reason,
+        by,
+        target_terminal: 'rolled_back',
+        event,
+      });
+      expect(w.revs).toHaveLength(1);
+      expect(w.revs[0]).toMatchObject({
+        by: expectBy,
+        reason,
+        candidate_id: ID,
+        content_sha256: SHA,
+      });
+    },
+  );
 
   it('不相容的 (by, reason) 组合一律拒绝:不写 journal、不写凭据', async () => {
     for (const [by, reason] of [

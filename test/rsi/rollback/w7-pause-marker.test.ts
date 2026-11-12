@@ -22,7 +22,10 @@ import {
 import { makeCanaryWorld } from '../canary/w5-fixture.js';
 import { NOW, V1B } from './w7-fixture.js';
 
-async function rig(prefix: string): Promise<{
+async function rig(
+  prefix: string,
+  ops?: string[],
+): Promise<{
   d: BreakerDeps;
   file: string;
   hint: () => Promise<'present' | 'absent' | 'unreadable'>;
@@ -34,6 +37,8 @@ async function rig(prefix: string): Promise<{
   const state = { value: NO_PAUSE as AutoPauseState };
   const failWrite = { value: false };
   const permit = makePermitPort(w.rsi, w.home);
+  // 可注入的 fs 钩子:safe-fs 的写出口在动手前调 `writeAudit(op, path)`,把它和 state.write 记进同一个数组 = 顺序证据
+  const io = ops === undefined ? w.io : { ...w.io, writeAudit: (op: string) => void ops.push(op) };
   return {
     w,
     state,
@@ -42,11 +47,12 @@ async function rig(prefix: string): Promise<{
     hint: () => permit.pause(),
     d: {
       phase: V1B,
-      marker: makePauseMarkerPort(w.io, w.rsi, () => NOW),
+      marker: makePauseMarkerPort(io, w.rsi, () => NOW),
       state: {
         read: async () => state.value,
         write: async (s) => {
           if (failWrite.value) throw new Error('crash');
+          ops?.push('state.write');
           state.value = s;
         },
       },
@@ -167,5 +173,45 @@ describe('解除只在没有剩余码时删标记(真文件)', () => {
       resume(r.state.value, () => false),
     );
     expect(await r.hint()).toBe('absent');
+  });
+});
+
+describe('H3 持久化(R21-12.2):标记文件与父目录 fsync 之后才写 state', () => {
+  const MARKER_OPS = ['syncFile', 'fsyncDir', 'state.write'];
+  const pick = (ops: string[]): string[] => ops.filter((o) => MARKER_OPS.includes(o));
+
+  it('新建标记:文件 fsync → 父目录 fsync → state.write(顺序)', async () => {
+    const ops: string[] = [];
+    const r = await rig('w7-marker-dur-a-', ops);
+    await tripAndMute(r.d, 'gate_internal');
+    expect(pick(ops)).toEqual(['syncFile', 'fsyncDir', 'state.write']);
+    expect(await r.hint()).toBe('present');
+  });
+
+  it('标记已存在(可能尚未落盘,如上次崩溃时别的进程刚建):不覆盖内容,但补一次文件 fsync 与父目录 fsync,之后才写 state', async () => {
+    const ops: string[] = [];
+    const r = await rig('w7-marker-dur-b-', ops);
+    const body = `${JSON.stringify({ at: '2026-11-09T00:00:00.000Z', by: 'user' })}\n`;
+    await safe.writeFile(r.w.io, r.file, body, { mode: 0o600 });
+    await tripAndMute(r.d, 'gate_internal');
+    expect(pick(ops)).toEqual(['syncFile', 'fsyncDir', 'state.write']);
+    expect(await readText(r.file)).toBe(body);
+  });
+
+  it('enforceMute 补标记(有码缺标记)也走同一条持久路径', async () => {
+    const ops: string[] = [];
+    const r = await rig('w7-marker-dur-c-', ops);
+    r.state.value = { reasons: ['no_observation'], diverged: false, owner_changed: false };
+    await enforceMute(r.d);
+    expect(pick(ops)).toEqual(['syncFile', 'fsyncDir']);
+  });
+
+  it('已存在的标记不是单链接普通文件(硬链接)→ 拒绝、不写 state(fail-closed)', async () => {
+    const r = await rig('w7-marker-dur-d-');
+    const other = path.join(r.w.rsi, 'other-file');
+    await safe.writeFile(r.w.io, other, 'x', { mode: 0o600 });
+    await safe.hardlink(r.w.io, other, r.file);
+    await expect(tripAndMute(r.d, 'gate_internal')).rejects.toThrow();
+    expect(r.state.value.reasons).toEqual([]);
   });
 });
