@@ -1493,11 +1493,9 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       ),
     ],
     tests: [T_PM],
-    expectRed: [
-      '已存在的标记不是单链接普通文件(硬链接)',
-      '已存在的标记是没有写端的 FIFO:在有界时间内拒绝(不阻塞在只读打开上),不写 state',
-    ],
-    mustKill: ['已存在的标记不是单链接普通文件(硬链接)'],
+    // 硬链接在更前面的写入守卫(assertWritable)就被拒,这条核对独有的作用是拦非普通文件(FIFO 等)
+    expectRed: ['已存在的标记是没有写端的 FIFO'],
+    mustKill: ['已存在的标记是没有写端的 FIFO'],
   },
 ];
 

@@ -212,10 +212,6 @@ describe('H3 持久化(R21-12.2):标记文件与父目录 fsync 之后才写 sta
     const other = path.join(r.w.rsi, 'other-file');
     await safe.writeFile(r.w.io, other, 'x', { mode: 0o600 });
     await safe.hardlink(r.w.io, other, r.file);
-    // 类型核对本身拒绝(不靠后面读标记内容时的其它守卫兜住)
-    await expect(safe.createExclusiveDurable(r.w.io, r.file, 'x', 0o600)).rejects.toThrow(
-      /不是单链接的普通文件/,
-    );
     await expect(tripAndMute(r.d, 'gate_internal')).rejects.toThrow();
     expect(r.state.value.reasons).toEqual([]);
   });
