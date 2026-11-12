@@ -6697,7 +6697,7 @@ W7(回滚四段、撤销凭据写入方、缩减入口、熔断)验收评审发�
 - **journal 丢失且原因需要原始证据时停在 `rolling_back`**:权威记录已在 `rolling_back`、journal 不存在、原因属于伤害 / 判定 / 上限类(原因码本身不足以重建 `terminal_event`)时,对账不补建 journal、不写凭据、不伪造事件,该候选停在 `rolling_back` 等人工。此状态下注入已停用(方向安全)。`rsi auto status` / `rsi show` 的可见报错与人工处置说明归 W8 命令面;不得对外宣称所有 `rolling_back` 都能自动恢复。
 - **用户暂停与 worker 熔断各用一个标记文件**(用户 2026-11-12 选择框「用户与 worker 各用一个文件」;扩 R21-6.10、R21-10.1、R21-10.2、R21-12.2):
   - `.state/rsi/AUTO_PAUSE` 只由用户命令写与删:`rsi auto pause` 独占创建 `{at, by: "user"}`(已存在即视为已暂停),`rsi auto resume` 删除。worker 从不创建、不删除它。`user_paused` 的判据 = 该文件存在。
-  - `.state/rsi/AUTO_PAUSE_BREAKER` 只由 worker 写与删:熔断(R21-10.1)在写 `state.json` 之前先独占创建 `{at, by: "breaker", reason}`(`reason` ∈ `RSI_AUTO_PAUSE_REASONS`,取首个触发码;已存在不覆盖),文件与父目录 fsync 之后才写状态;全部熔断码解除后由 worker 删除。用户命令不写它;`rsi auto resume` 清码后若无剩余码,由持锁的 worker 路径删除。
+  - `.state/rsi/AUTO_PAUSE_BREAKER` 只由 worker 写与删:熔断(R21-10.1)在写 `state.json` 之前先独占创建 `{at, by: "breaker", reason}`(`reason` ∈ `RSI_AUTO_PAUSE_REASONS`,取首个触发码;已存在不覆盖),文件与父目录 fsync 之后才写状态;全部熔断码解除后由 worker 删除。标记的职责是保证「注入先停、状态后写」:熔断码的权威记录只在 `state.json.auto_pause.reasons`,标记里的 `reason` 仅用于首个码在「标记已落盘、状态未写」窗口崩溃后的补码。标记已存在时新增的码只写状态;该次状态写入前崩溃等同于尚未触发(与崩溃发生在发现点之前无异,此时注入已因标记停用),由发现点在下次运行时重新判定,不要求标记记录全部码。用户命令不写它;`rsi auto resume` 清码后若无剩余码,由持锁的 worker 路径删除。
   - **hint**:读集合(R21-6.10)追加 `AUTO_PAUSE_BREAKER`;两个文件**任一存在**即按判定表第 4 行处理,任一读取失败按第 4a 行(`permit_unreadable`)。hint 只判存在,不解析内容;内容只供 worker 恢复时补码,读不出时标记仍然生效(fail-closed)。
   - 两个文件互不覆盖、各有唯一写者,因此「worker 先熔断 → 用户暂停 → 熔断条件恢复」之后用户暂停仍然有效(契约用例,归 W7b)。`rsi exec-run` 守卫(R21-16.4 第 2 项)与其它提到「`AUTO_PAUSE` 存在」的条款,一律读作「两个标记任一存在」。
   - **实现状态**:W7(main c037437)的 worker 仍把熔断标记写进 `AUTO_PAUSE`;按本条改实现与 hint 读集合的工作归小块 **W7b**,在 W8 实现 `rsi auto pause` 之前完成。V1 未发版,不需要兼容旧标记。
