@@ -16,7 +16,8 @@
  * 顺序(R21-9.1 / 安全):journal → 撤销凭据(只写 HOME,第二段)→ 记录 / 私有仓库(第三段,允许 `deferred`)。所以私有仓库分叉 / 不可读时凭据照样落盘,hint 照样停止注入。
  * 同一候选的同一份内容只有一个在途 txn(`txn_id` 由 `(候选 id, content_sha256)` 派生,与 `kind` 无关):重复请求复用它。
  * `identity_changed`(E1,`target_terminal=shadow`)是 V6a:本期入口直接拒绝(`identity_not_available_before_v6a`),不写 journal、不部分执行;读到这种旧 journal 同样不动。
- * journal 首次落盘带 `content_sha256` / `by` / `terminal_event`(W0-20),任一子状态续做都从 journal 取,不依赖私有仓库或权威记录可读;缺这些键的旧 journal 走兜底。
+ * journal 首次落盘带 `content_sha256` / `by` / `terminal_event`(W0-20),由唯一的创建函数 `newJournal` 在持久化前强制校验;任一子状态续做都从 journal 取,不依赖私有仓库或权威记录可读。
+ * 缺这些键的旧 journal 由 `readJournal` 在任何事务动作之前按契约还原,还原不了 = `incomplete`(不写凭据)。细则见 rollback-journal.ts。
  * 崩溃注入:`onStep` 在 {@link ROLLBACK_STEPS} 的每个命名点被调用,测试里抛错 = 该点之后进程死亡;**只有 {@link PortNotWired} 与凭据文件不合规被转成 `incomplete`,
  * 其余异常原样抛出**(journal 仍在,下一次 `resumeTxn` / `resumeAll` 续做)。
  */
@@ -25,8 +26,7 @@ import type { PersonalLifecycleRecord, PersonalTxn } from '../../contracts/rsi-p
 import { applyEvent, type ApplyDeps, type ApplyResult } from './candidate-apply.js';
 import { RsiLockError } from '../lock-error.js';
 import type { HeldLock } from '../canary/atomic-write.js';
-import { auditKeyOf, landAuditEffects, landTerminalEffects } from './effects-recover.js';
-import { txnId } from './ids.js';
+import { keyedAuditSink, landAuditEffects, landTerminalEffects } from './effects-recover.js';
 import { PersonalStateError } from './home-state.js';
 import {
   PortNotWired,
@@ -37,12 +37,21 @@ import {
   type RevocationWriter,
   type TxnStore,
 } from './rollback-ports.js';
-import { byFromReason, revocationSourceProblem, type RevocationBy } from './revoke-write.js';
+import type { RevocationBy } from './revoke-write.js';
+import {
+  newJournal,
+  readJournal,
+  rollbackTxnId,
+  uniqueBy,
+  type JournalCtx,
+} from './rollback-journal.js';
 import {
   TransitionEventSchema,
   isTerminalLifecycle,
   type TransitionEvent,
 } from './transition-table.js';
+
+export { rollbackTxnId };
 
 type RollbackPhase = (typeof RSI_ROLLBACK_PHASES)[number];
 const PHASES: readonly RollbackPhase[] = RSI_ROLLBACK_PHASES;
@@ -86,7 +95,7 @@ export interface RollbackRequest {
   target_terminal: PersonalTxn['target_terminal'];
   /** `kind=identity_change` 必填(旧身份的前 12 位);其余必须为 null */
   identity12?: string | null;
-  /** 对权威记录施加的终止事件(首次运行;携带调用方的证据串)。缺省 = 按 `reason` 推出(见 {@link eventForReason}) */
+  /** 对权威记录施加的终止事件(携带调用方的证据串)。新 journal 必带终止事件:缺省时只对 clear / veto / taint 由原因重建,其余 `event_required`(见 rollback-journal.ts) */
   event?: TransitionEvent;
 }
 
@@ -144,135 +153,22 @@ export type RollbackOutcome =
     }
   | { status: 'refused'; txn: string | null; why: string };
 
-/** 同一候选的同一份内容 → 同一个 txn(与 `kind` 无关) */
-export const rollbackTxnId = (candidateId: string, contentSha256: string): string =>
-  txnId('rollback', [candidateId], null, contentSha256);
-
 const step = async (d: RollbackDeps, name: string): Promise<void> => {
   await d.onStep?.(name);
 };
 
-/**
- * **旧 journal**(W0-20 之前写的,没有 `terminal_event`)的兜底:只有 reason,能还原成终止事件的才还原(`limit_reached` 需要分析证据,不重造)。
- * 新 journal 首次落盘时就带 `terminal_event`,续做从 journal 取,**不走这里**;新请求遇到无法还原事件的需要记录转移的原因,入口直接拒绝(`event_required`)。
- */
-export function eventForReason(
-  t: Pick<PersonalTxn, 'txn_id' | 'reason'>,
-): TransitionEvent | undefined {
-  const evidence = `txn:${t.txn_id}`;
-  switch (t.reason) {
-    case 'cleared':
-      return { kind: 'clear', evidence };
-    case 'vetoed':
-      return { kind: 'veto', evidence };
-    case 'tainted':
-      return { kind: 'taint', evidence };
-    case 'judge_reject':
-      return {
-        kind: 'judge_reject',
-        evidence,
-        validated: true,
-        verdict_reject: true,
-        injection_suspected: false,
-      };
-    case 'judge_injection':
-      return {
-        kind: 'judge_reject',
-        evidence,
-        validated: true,
-        verdict_reject: false,
-        injection_suspected: true,
-      };
-    case 'harm_c1':
-    case 'harm_c2':
-    case 'harm_c3':
-    case 'harm_c4':
-    case 'harm_c6':
-      return { kind: 'harm', evidence, metric: t.reason.slice(5) as 'c1', worse: true };
-    default:
-      return undefined;
-  }
-}
-
-/**
- * journal → 撤销来源(W0-17「journal 恢复遵循同样规则」)。新 journal 自带 `by`(W0-20),直接用;**旧 journal**(缺 `by`)靠 (kind, reason) 唯一还原:
- * `kind=clear` → clear;`kind=rollback ∧ reason=cleared` → rollback_to(入口闸 `startRollback` 保证只有 rollback_to 会产生这个组合:clear 必配 kind=clear,
- * worker 拿不到 `cleared`,veto / exec_event 各有自己的原因);其余按原因({@link byFromReason})。
- */
-const sourceOf = (t: PersonalTxn): RevocationBy => {
-  if (t.kind === 'clear') return 'clear';
-  if (t.kind === 'rollback' && t.reason === 'cleared') return 'rollback_to';
-  return byFromReason(t.reason);
-};
-
-/** 来源 / kind / 原因的相容性(首次请求与读 journal 共用);`null` = 相容 */
-function sourceProblem(by: RevocationBy, kind: TxnKind, reason: string): string | null {
-  if (reason !== 'identity_changed') {
-    const p = revocationSourceProblem(by, reason);
-    if (p !== null) return p;
-  }
-  // rollback_to ⇔ (kind=rollback ∧ reason=cleared):让来源能从旧 journal 唯一还原(见 sourceOf)
-  if ((by === 'rollback_to') !== (kind === 'rollback' && reason === 'cleared')) {
-    return 'rollback_to_kind_mismatch';
-  }
-  if (kind === 'clear' && (by !== 'clear' || reason !== 'cleared'))
-    return 'clear_requires_by_clear';
-  return null;
-}
-
-/** 需要对权威记录施加终止事件的原因(其余:exec / 同步超时 / 撤回 / 无命中由各自的路径推进记录,不经本入口) */
-const EVENT_REQUIRED: ReadonlySet<string> = new Set([
-  'harm_c1',
-  'harm_c2',
-  'harm_c3',
-  'harm_c4',
-  'harm_c6',
-  'limit_reached',
-  'vetoed',
-  'tainted',
-  'cleared',
-  'judge_reject',
-  'judge_injection',
-]);
-
-/**
- * 读 journal(含复用在途 txn)得到执行上下文;不合规 → 原因码(fail-closed,不做任何动作)。
- * 新 journal 的 `content_sha256` 必须与 `txn_id` 对得上、`by` 必须与 (kind, reason) 相容、`terminal_event` 必须通过转移引擎的事件 schema(W0-20)。
- */
-function journalCtx(
-  t: PersonalTxn,
-  x: { hint?: TransitionEvent | undefined; sha?: string | undefined },
-): RunCtx | string {
-  // E1 授权身份变化是 V6a:本期没有交付第二段的缓存 / 拒绝标记判据,旧 journal 里若有这种类型也一律不动
-  if (t.kind === 'identity_change') return 'identity_not_available_before_v6a';
-  if (
-    t.content_sha256 !== undefined &&
-    rollbackTxnId(t.candidate_id, t.content_sha256) !== t.txn_id
-  ) {
-    return 'txn_invalid';
-  }
-  let by = sourceOf(t);
-  if (t.by !== undefined) {
-    if (sourceProblem(t.by, t.kind, t.reason) !== null) return 'txn_invalid';
-    by = t.by;
-  }
-  let event: TransitionEvent | undefined;
-  if (t.terminal_event !== undefined) {
-    const p = TransitionEventSchema.safeParse(t.terminal_event);
-    if (!p.success) return 'txn_invalid';
-    event = p.data;
-  }
-  return { by, event, hint: x.hint, sha: t.content_sha256 ?? x.sha };
-}
-
+/** 读 journal 得到执行上下文并执行;不合规 = refused,必需项缺失(旧格式)= incomplete,都先于任何事务动作(见 rollback-journal.ts) */
 async function drive(
   d: RollbackDeps,
   t: PersonalTxn,
-  x: { hint?: TransitionEvent | undefined; sha?: string | undefined },
+  x: { hint?: TransitionEvent | undefined },
 ): Promise<RollbackOutcome> {
-  const c = journalCtx(t, x);
-  if (typeof c === 'string') return { status: 'refused', txn: t.txn_id, why: c };
-  return runGuarded(d, t, c);
+  const r = await readJournal(d, t);
+  if (r.kind === 'invalid') return { status: 'refused', txn: t.txn_id, why: r.why };
+  if (r.kind === 'incomplete') {
+    return { status: 'incomplete', txn: t.txn_id, phase: t.phase, why: r.why };
+  }
+  return runGuarded(d, t, { ...r.ctx, hint: x.hint });
 }
 
 // ---------------------------------------------------------------------------
@@ -293,14 +189,12 @@ export async function startRollback(
   }
   // E1(V6a)本期没有交付:不写 journal、不动任何东西(不部分执行)
   if (identity) return { status: 'refused', txn: null, why: 'identity_not_available_before_v6a' };
-  const sp = sourceProblem(req.by, req.kind, req.reason);
-  if (sp !== null) return { status: 'refused', txn: null, why: sp };
-  // 事件在写 journal 之前校验:journal 只存通过引擎 schema 的事件(W0-20),续做不再依赖调用方
-  let event: TransitionEvent | undefined;
+  // 较晚事件(复用在途 txn 时)在写任何东西之前过转移引擎的事件 schema
+  let late: TransitionEvent | undefined;
   if (req.event !== undefined) {
     const p = TransitionEventSchema.safeParse(req.event);
     if (!p.success) return { status: 'refused', txn: null, why: 'event_invalid' };
-    event = p.data;
+    late = p.data;
   }
   await d.locks.personal.assertHeld();
   const id = rollbackTxnId(req.candidate_id, req.content_sha256);
@@ -308,41 +202,31 @@ export async function startRollback(
   if (cur.kind === 'invalid') return { status: 'refused', txn: id, why: `txn_${cur.why}` };
   if (cur.kind === 'ok') {
     // 已有在途 txn:复用,不新开;来源 / 内容 / 事件一律取 journal 的(请求的 `by` 可能与 journal 的 `reason` 不相容)
-    // journal 的语义校验先于任何副作用(较晚事件的施加会提交记录):不合规 = refused,零动作
-    const ctx = journalCtx(cur.value, { hint: event, sha: req.content_sha256 });
-    if (typeof ctx === 'string') return { status: 'refused', txn: id, why: ctx };
-    const lateWhy = await lateEventStatus(d, event, req.candidate_id);
-    const out = await runGuarded(d, cur.value, ctx);
+    // journal 的语义校验先于任何副作用(较晚事件的施加会提交记录):不合规 = refused、缺项 = incomplete,零动作
+    const jr = await readJournal(d, cur.value);
+    if (jr.kind === 'invalid') return { status: 'refused', txn: id, why: jr.why };
+    if (jr.kind === 'incomplete') {
+      return { status: 'incomplete', txn: id, phase: cur.value.phase, why: jr.why };
+    }
+    const lateWhy = await lateEventStatus(d, late, req.candidate_id);
+    const out = await runGuarded(d, cur.value, { ...jr.ctx, hint: late });
     // `pending_drive`:记录还没进入回滚时由第三段施加;txn 走完了就说明已施加
     if (lateWhy === null || (lateWhy === 'pending_drive' && out.status === 'complete')) return out;
     if (out.status === 'refused') return out;
     return { ...out, lateEventNotApplied: lateWhy };
   }
-  if (event === undefined && req.kind !== 'reconcile') {
-    event = eventForReason({ txn_id: id, reason: req.reason });
-    if (event === undefined && EVENT_REQUIRED.has(req.reason)) {
-      return { status: 'refused', txn: null, why: 'event_required' };
-    }
-  }
-  const t: PersonalTxn = {
-    schema_version: 1,
-    txn_id: id,
-    candidate_id: req.candidate_id,
-    kind: req.kind,
-    reason: req.reason,
-    target_terminal: req.target_terminal,
-    phase: 'rollback_requested',
-    identity12: null,
-    at: d.now().toISOString(),
-    // W0-20:恢复要用的事实与 journal 一起首次落盘,之后任一子状态都从这里取(不依赖仓库 / 权威记录可读)
-    content_sha256: req.content_sha256,
-    by: req.by,
-    ...(event !== undefined ? { terminal_event: event } : {}),
-  };
+  // 新 journal 只经唯一的创建函数:三项恢复字段齐备、事件与 reason / target 一致,否则零副作用地拒绝(W0-20)
+  const nj = newJournal(req, d.now().toISOString());
+  if (!nj.ok) return { status: 'refused', txn: null, why: nj.why };
   await step(d, 'before:journal_requested');
-  await d.txns.write(t);
+  await d.txns.write(nj.txn);
   await step(d, 'journal:rollback_requested');
-  return drive(d, t, { hint: event, sha: req.content_sha256 });
+  return runGuarded(d, nj.txn, {
+    by: req.by,
+    event: nj.event,
+    sha: req.content_sha256,
+    hint: nj.event,
+  });
 }
 
 /** 续做一个在途 journal */
@@ -365,13 +249,19 @@ export async function resumeAll(d: RollbackDeps): Promise<RollbackOutcome[]> {
     if (rec.lifecycle !== 'rolling_back' || rec.rollback === null) continue;
     const id = rollbackTxnId(rec.id, rec.content_sha256);
     if (ids.includes(id)) continue;
+    // 来源只在 (kind, reason) 唯一对应时才有;终止事实只重建无证据要求的(clear / veto / taint)。拿不到 = 不创建 journal(见 newJournal)
+    const by = uniqueBy('reconcile', rec.rollback.reason);
+    if (by === undefined) {
+      out.push({ status: 'refused', txn: null, why: 'by_ambiguous' });
+      continue;
+    }
     out.push(
       await startRollback(d, {
         candidate_id: rec.id,
         content_sha256: rec.content_sha256,
         kind: 'reconcile',
         reason: rec.rollback.reason,
-        by: byFromReason(rec.rollback.reason),
+        by,
         target_terminal: rec.rollback.target_terminal,
       }),
     );
@@ -382,14 +272,9 @@ export async function resumeAll(d: RollbackDeps): Promise<RollbackOutcome[]> {
 // ---------------------------------------------------------------------------
 // 逐段执行
 // ---------------------------------------------------------------------------
-interface RunCtx {
-  by: RevocationBy;
-  /** journal 自带的终止事件(W0-20):记录还在 proposed / shadow / canary 时用它推进;**不**触发 rolling_back 下的自环(那是 `hint` 的事) */
-  event?: TransitionEvent | undefined;
-  /** 本次调用方带来的终止事件(首次运行 / 复用在途 txn 的较晚事件):记录在 rolling_back 时作为自环(R21-4.4a ①)施加 */
+interface RunCtx extends JournalCtx {
+  /** 本次调用方带来的终止事件(首次运行 / 复用在途 txn 的较晚事件):记录在 rolling_back 时作为自环(R21-4.4a ①)施加;journal 自带的 `event` **不**触发自环 */
   hint?: TransitionEvent | undefined;
-  /** 内容哈希:journal 的 `content_sha256`;旧 journal 缺它时回退 {@link contentShaOf} 的其它来源 */
-  sha?: string | undefined;
 }
 
 async function runGuarded(d: RollbackDeps, t: PersonalTxn, c: RunCtx): Promise<RollbackOutcome> {
@@ -449,33 +334,9 @@ async function doPhase(
   }
 }
 
-/** 候选的 `content_sha256`:journal 自带的(新)→ 权威记录 → 撤销凭据 → `recordedSha` 兜底(旧 journal);每个来源都必须与 `txn_id` 对得上才采信(txn_id 绑定了内容) */
-async function contentShaOf(d: RollbackDeps, t: PersonalTxn, c: RunCtx): Promise<string | null> {
-  const bound = (sha: string | null | undefined): string | null =>
-    sha !== null && sha !== undefined && rollbackTxnId(t.candidate_id, sha) === t.txn_id
-      ? sha
-      : null;
-  const given = bound(c.sha);
-  if (given !== null) return given;
-  const rd = await d.store.read(t.candidate_id);
-  if (rd.kind === 'ok') {
-    const s = bound(rd.record.content_sha256);
-    if (s !== null) return s;
-  }
-  const rv = await d.revocations.read();
-  if (rv.kind === 'ok') {
-    for (const l of rv.lines) {
-      const s = l.candidate_id === t.candidate_id ? bound(l.content_sha256) : null;
-      if (s !== null) return s;
-    }
-  }
-  return bound(d.recordedSha === undefined ? null : await d.recordedSha(t.candidate_id));
-}
-
 // --- 第二段:撤销凭据 + 授予缓存清理 ---
 async function injectionDisabled(d: RollbackDeps, t: PersonalTxn, c: RunCtx): Promise<PhaseResult> {
-  const sha = await contentShaOf(d, t, c);
-  if (sha === null) return { ok: false, why: 'content_unknown' };
+  const sha = c.sha;
   await d.locks.personal.assertHeld();
   await d.revoker.write({
     at: d.now().toISOString(),
@@ -502,14 +363,8 @@ const applyDeps = (d: RollbackDeps): ApplyDeps => ({
   store: d.store,
   working: d.working,
   revocations: d.revocations,
-  // 审计行经带键端口落地(键 = 转移条目的稳定事件键,见 `auditKeyOf`):提交后崩溃、落地失败都由收尾按记录补做,同一行不会重复
-  audit: {
-    append: async (lines) => {
-      for (const l of lines) {
-        await d.keyedEffects.applyOnce(auditKeyOf(l), [{ type: 'append_audit', line: l }]);
-      }
-    },
-  },
+  // 审计行经带键端口落地(键 = 转移条目的 idem_key,见 `keyedAuditSink`):提交后崩溃、落地失败都由收尾按记录补做,同一事件不会重复
+  audit: keyedAuditSink(d.keyedEffects),
   // 终态效果只经带键的落地(`landTerminalEffects`),这里不重复落(否则同一终态会被无键 + 有键各落一次)
   effects: { apply: async () => undefined },
   env: d.env,
@@ -578,8 +433,7 @@ async function driveRecord(d: RollbackDeps, t: PersonalTxn, c: RunCtx): Promise<
     rec.lifecycle === 'canary' ||
     inFlight
   ) {
-    const event = c.hint ?? c.event ?? eventForReason(t);
-    if (event === undefined) return { repo: 'ok', rec, note: 'record_unmapped' };
+    const event = c.hint ?? c.event;
     const r = await applyOne(d, rec, event);
     if (r.kind === 'transitioned') rec = r.next;
     else if (r.kind === 'halt') {

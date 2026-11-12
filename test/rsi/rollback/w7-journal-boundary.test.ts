@@ -344,3 +344,21 @@ describe('B. 旧格式 journal(缺三键):先收齐三项事实,拿不到 → in
     expect(w.revs).toHaveLength(0);
   });
 });
+
+describe('A. 复用在途 txn 时较晚事件不合规', () => {
+  it('较晚事件不合规(过不了转移引擎的事件 schema)→ refused event_invalid,journal 与记录都不动、零动作', async () => {
+    const w = world7();
+    w.crashAt('enter:injection_disabled');
+    await expect(startRollback(w.d, harmReq())).rejects.toThrow('injected crash');
+    const before = JSON.stringify(recordOf(w));
+    w.calls.length = 0;
+    const r = await startRollback(w.d, {
+      ...harmReq(),
+      event: { kind: 'limit', evidence: 'x' } as unknown as TransitionEvent,
+    });
+    expect(r).toEqual({ status: 'refused', txn: null, why: 'event_invalid' });
+    expect(noActions(w)).toEqual([]);
+    expect(JSON.stringify(recordOf(w))).toBe(before);
+    expect(w.txns.size).toBe(1);
+  });
+});

@@ -36,6 +36,8 @@ export interface V1W7Result {
 
 const P = 'src/rsi/personal/';
 const RB = `${P}rollback.ts`;
+const RJ = `${P}rollback-journal.ts`;
+const SF = 'src/io/safe-fs.ts';
 const RW = `${P}revoke-write.ts`;
 const BR = `${P}breaker.ts`;
 const CL = `${P}clear.ts`;
@@ -58,6 +60,8 @@ const T_HC = 'rsi/rollback/w7-harm-chain.test.ts';
 const T_LK = 'rsi/rollback/w7-lock-order.test.ts';
 const T_JN = 'rsi/rollback/w7-journal.test.ts';
 const T_PM = 'rsi/rollback/w7-pause-marker.test.ts';
+const T_JB = 'rsi/rollback/w7-journal-boundary.test.ts';
+const T_AK = 'rsi/rollback/w7-audit-key.test.ts';
 
 const swap = (file: string, anchor: string, replacement: string): Edit => ({
   file,
@@ -183,7 +187,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     edits: [
       swap(
         RB,
-        'const lateWhy = await lateEventStatus(d, event, req.candidate_id);',
+        'const lateWhy = await lateEventStatus(d, late, req.candidate_id);',
         'const lateWhy = null;',
       ),
     ],
@@ -256,26 +260,31 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
   // ---- W0-17 来源保留 ----
   {
     id: 'source_fallthrough_worker',
-    clause: 'W0-17 journal 恢复保留来源(veto / exec_event 由原因还原)',
-    edits: [swap(RB, '  return byFromReason(t.reason);', "  return 'worker';")],
-    // 新 journal 自带 `by`,续做不走兜底;兜底只由旧格式 journal 的用例覆盖
-    tests: [T_JN],
-    expectRed: ['旧 journal 原因'],
-    mustKill: ['旧 journal 原因'],
+    clause:
+      'W0-20 旧格式 journal:来源由 (kind, reason) 在 W0-17 表里唯一对应的来源还原(veto / exec_event / worker),不是一律 worker',
+    edits: [swap(RJ, 'return owners.length === 1 ? owners[0] : undefined;', "return 'worker';")],
+    tests: [T_JB],
+    expectRed: ['可还原:原因'],
+    mustKill: ['可还原:原因'],
   },
   {
     id: 'source_clear_kind_lost',
-    clause: 'W0-17 journal 恢复保留来源(kind=clear → by=clear)',
+    clause: 'W0-20 旧格式 journal:kind=clear → by=clear',
     edits: [
-      swap(
-        RB,
-        "if (t.kind === 'clear') return 'clear';",
-        "if (t.kind === 'clear') return 'worker';",
-      ),
+      swap(RJ, "if (kind === 'clear') return 'clear';", "if (kind === 'clear') return 'worker';"),
     ],
-    tests: [T_JN],
-    expectRed: ['旧 journal 原因'],
-    mustKill: ['旧 journal 原因'],
+    tests: [T_JB],
+    expectRed: ['可还原:原因'],
+    mustKill: ['可还原:原因'],
+  },
+  {
+    id: 'by_ambiguous_guessed',
+    clause:
+      'W0-20 旧格式 journal:cleared 配 kind=rollback / reconcile 来源有歧义(rollback_to 或 clear),不推出 → incomplete,不写凭据',
+    edits: [swap(RJ, 'return owners.length === 1 ? owners[0] : undefined;', 'return owners[0];')],
+    tests: [T_JB],
+    expectRed: ['来源有歧义(rollback_to 或 clear)', 'cleared 的 rolling_back 记录没有 journal'],
+    mustKill: ['来源有歧义(rollback_to 或 clear)', 'cleared 的 rolling_back 记录没有 journal'],
   },
   {
     id: 'reuse_by_request',
@@ -283,8 +292,8 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     edits: [
       swap(
         RB,
-        'const ctx = journalCtx(cur.value, { hint: event, sha: req.content_sha256 });',
-        'const ctx = journalCtx({ ...cur.value, by: req.by, kind: req.kind, reason: req.reason }, { hint: event, sha: req.content_sha256 });',
+        'const jr = await readJournal(d, cur.value);',
+        'const jr = await readJournal(d, { ...cur.value, by: req.by, kind: req.kind, reason: req.reason });',
       ),
     ],
     tests: [T_RB, T_CR],
@@ -292,22 +301,12 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     mustKill: ['崩溃后再次发起同一请求', 'rollback_to 的 txn 在途时 clear 再来'],
   },
   {
-    id: 'rollback_to_source_lost',
-    clause: 'W0-17 journal 恢复保留 rollback_to 来源(kind=rollback ∧ reason=cleared)',
-    edits: [
-      swap(RB, "if (t.kind === 'rollback' && t.reason === 'cleared') return 'rollback_to';", ''),
-    ],
-    tests: [T_JN],
-    expectRed: ['旧 journal 原因'],
-    mustKill: ['旧 journal 原因'],
-  },
-  {
     id: 'rollback_to_gate_off',
     clause:
-      'W0-17 入口闸:rollback_to ⇔ (kind=rollback ∧ reason=cleared),来源才能从 journal 唯一还原',
+      'W0-17 入口闸:rollback_to ⇔ (kind=rollback ∧ reason=cleared),新 journal 的来源与 kind / 原因相容',
     edits: [
       swap(
-        RB,
+        RJ,
         "if ((by === 'rollback_to') !== (kind === 'rollback' && reason === 'cleared')) {",
         'if (false) {',
       ),
@@ -321,7 +320,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     clause: 'R21-9.1 / W0-17 txn_id 绑定内容:换内容 = 新 txn、新凭据',
     edits: [
       swap(
-        RB,
+        RJ,
         "txnId('rollback', [candidateId], null, contentSha256)",
         "txnId('rollback', [candidateId], null, '')",
       ),
@@ -370,8 +369,8 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     id: 'by_veto_lost',
     clause: 'W0-17 来源还原:vetoed → veto',
     edits: [swap(RW, "    case 'vetoed':\n      return 'veto';\n", '')],
-    tests: [T_RW, T_JN],
-    expectRed: ['byFromReason', '旧 journal 原因'],
+    tests: [T_RW],
+    expectRed: ['byFromReason'],
     mustKill: ['byFromReason'],
   },
   // ---- R21-9.5 缩减入口 ----
@@ -689,7 +688,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     id: 'journal_no_sha',
     clause: 'W0-20 journal 首次落盘带 content_sha256(续做不依赖仓库 / 权威记录可读)',
     edits: [
-      swap(RB, '    content_sha256: req.content_sha256,\n    by: req.by,', '    by: req.by,'),
+      swap(RJ, '    content_sha256: req.content_sha256,\n    by: req.by,', '    by: req.by,'),
     ],
     tests: [T_JN],
     expectRed: ['盘上 journal 带齐三项', '崩于凭据落盘前'],
@@ -698,9 +697,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
   {
     id: 'journal_no_by',
     clause: 'W0-20 journal 首次落盘带 by(来源保留)',
-    edits: [
-      swap(RB, '    by: req.by,\n    ...(event !== undefined', '    ...(event !== undefined'),
-    ],
+    edits: [swap(RJ, '    by: req.by,\n    terminal_event: event,', '    terminal_event: event,')],
     tests: [T_JN],
     expectRed: ['盘上 journal 带齐三项'],
     mustKill: ['盘上 journal 带齐三项'],
@@ -708,14 +705,22 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
   {
     id: 'journal_no_event',
     clause: 'W0-20 journal 首次落盘带 terminal_event(limit_reached 等无法由原因还原的事件)',
-    edits: [swap(RB, '    ...(event !== undefined ? { terminal_event: event } : {}),', '')],
+    edits: [swap(RJ, '    terminal_event: event,\n  });', '  });')],
     tests: [T_JN],
     expectRed: ['盘上 journal 带齐三项', '崩于凭据落盘后'],
     mustKill: ['盘上 journal 带齐三项', '崩于凭据落盘后'],
   },
   {
     id: 'event_schema_skipped',
-    clause: 'W0-20 入口:事件在写 journal 之前过转移引擎的事件 schema',
+    clause: 'W0-20 新 journal 的创建函数:事件在持久化之前过转移引擎的事件 schema',
+    edits: [swap(RJ, "if (!p.success) return { ok: false, why: 'event_invalid' };", '')],
+    tests: [T_JN],
+    expectRed: ['事件不合规 → refused event_invalid'],
+    mustKill: ['事件不合规 → refused event_invalid'],
+  },
+  {
+    id: 'late_event_schema_skipped',
+    clause: 'W0-20 复用在途 txn 时较晚事件也先过事件 schema(不合规 = refused,零动作)',
     edits: [
       swap(
         RB,
@@ -723,22 +728,90 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
         '',
       ),
     ],
-    tests: [T_JN],
-    expectRed: ['事件不合规 → refused event_invalid'],
-    mustKill: ['事件不合规 → refused event_invalid'],
+    tests: [T_JB],
+    expectRed: ['较晚事件不合规'],
+    mustKill: ['较晚事件不合规'],
   },
   {
     id: 'event_required_off',
-    clause: 'W0-20 入口:需要记录转移而无法还原事件的原因必须带事件',
-    edits: [swap(RB, "return { status: 'refused', txn: null, why: 'event_required' };", '')],
-    tests: [T_JN],
-    expectRed: ['需要记录转移而又无法由原因还原事件'],
-    mustKill: ['需要记录转移而又无法由原因还原事件'],
+    clause: 'W0-20 新 journal:拿不到终止事件(不能无证据重建)就不创建',
+    edits: [swap(RJ, "if (event === undefined) return { ok: false, why: 'event_required' };", '')],
+    tests: [T_JB],
+    expectRed: ['没有事件而原因不能无证据重建'],
+    mustKill: ['没有事件而原因不能无证据重建'],
+  },
+  {
+    id: 'event_reason_unchecked',
+    clause:
+      'W0-20 terminal_event 与 reason 一致:terminationReason(event) === reason(新建与读取共用)',
+    edits: [
+      swap(RJ, "if (terminationReason(event) !== reason) return 'event_reason_mismatch';", ''),
+    ],
+    tests: [T_JB, T_JN],
+    expectRed: [
+      'cleared 携带 veto 事件',
+      'terminal_event 与 reason 不一致(harm_c1 的 journal 带 veto 事件)',
+    ],
+    mustKill: [
+      'cleared 携带 veto 事件',
+      'terminal_event 与 reason 不一致(harm_c1 的 journal 带 veto 事件)',
+    ],
+  },
+  {
+    id: 'event_target_unchecked',
+    clause:
+      'W0-20 terminal_event 与 target_terminal 相容:terminationTarget(event) === target_terminal',
+    edits: [
+      swap(RJ, "if (terminationTarget(event) !== target) return 'event_target_mismatch';", ''),
+    ],
+    tests: [T_JB, T_JN],
+    expectRed: [
+      'limit_reached 配 target_terminal=rolled_back',
+      'terminal_event 与 target_terminal 不一致',
+    ],
+    mustKill: [
+      'limit_reached 配 target_terminal=rolled_back',
+      'terminal_event 与 target_terminal 不一致',
+    ],
+  },
+  {
+    id: 'new_event_check_skipped',
+    clause: 'W0-20 新 journal 创建函数在持久化前校验事件与 reason / target 一致(零副作用拒绝)',
+    edits: [
+      swap(
+        RJ,
+        '  const ep = eventProblem(event, req.reason, req.target_terminal);\n  if (ep !== null) return { ok: false, why: ep };\n',
+        '',
+      ),
+    ],
+    tests: [T_JB],
+    expectRed: ['cleared 携带 veto 事件', 'harm_c1 配 target_terminal=expired'],
+    mustKill: ['cleared 携带 veto 事件', 'harm_c1 配 target_terminal=expired'],
+  },
+  {
+    id: 'read_event_check_skipped',
+    clause:
+      'W0-20 读已有 journal:terminal_event 与 reason / target 不一致 = txn_invalid(零后续写入)',
+    edits: [
+      swap(
+        RJ,
+        'if (event !== undefined && eventProblem(event, t.reason, t.target_terminal) !== null) return bad;',
+        '',
+      ),
+    ],
+    tests: [T_JB, T_JN],
+    expectRed: [
+      '带 HARM 事件但与 reason 不一致的新格式 journal',
+      'terminal_event 与 reason 不一致(harm_c1 的 journal 带 veto 事件)',
+    ],
+    mustKill: ['带 HARM 事件但与 reason 不一致的新格式 journal'],
   },
   {
     id: 'journal_event_unchecked',
     clause: 'W0-20 续做:terminal_event 过不了事件 schema = txn_invalid(fail-closed)',
-    edits: [swap(RB, "if (!p.success) return 'txn_invalid';", '')],
+    edits: [
+      swap(RJ, '    if (!p.success) return bad;\n    event = p.data;', '    event = p.data;'),
+    ],
     tests: [T_JN],
     expectRed: ['terminal_event 过不了转移引擎的事件 schema'],
     mustKill: ['terminal_event 过不了转移引擎的事件 schema'],
@@ -746,7 +819,9 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
   {
     id: 'journal_sha_unchecked',
     clause: 'W0-20 续做:content_sha256 必须与 txn_id 对得上',
-    edits: [swap(RB, 'rollbackTxnId(t.candidate_id, t.content_sha256) !== t.txn_id', 'false')],
+    edits: [
+      swap(RJ, 'if (rollbackTxnId(t.candidate_id, t.content_sha256) !== t.txn_id) return bad;', ''),
+    ],
     tests: [T_JN],
     expectRed: ['content_sha256 与 txn_id 对不上'],
     mustKill: ['content_sha256 与 txn_id 对不上'],
@@ -754,12 +829,52 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
   {
     id: 'journal_by_unchecked',
     clause: 'W0-20 续做:by 必须与 (kind, reason) 相容',
-    edits: [
-      swap(RB, "if (sourceProblem(t.by, t.kind, t.reason) !== null) return 'txn_invalid';", ''),
-    ],
+    edits: [swap(RJ, 'if (sourceProblem(t.by, t.kind, t.reason) !== null) return bad;', '')],
     tests: [T_JN],
     expectRed: ['by 与 (kind, reason) 不相容'],
     mustKill: ['by 与 (kind, reason) 不相容'],
+  },
+  {
+    id: 'event_fabricated',
+    clause: 'W0-20 终止事件只对无证据要求的原因重建(harm / judge / limit 不伪造证据)',
+    edits: [
+      swap(
+        RJ,
+        "      return { kind: 'taint', evidence };\n    default:\n      return undefined;",
+        "      return { kind: 'taint', evidence };\n    default:\n      return { kind: 'harm', evidence, metric: 'c1', worse: true };",
+      ),
+    ],
+    tests: [T_JB],
+    expectRed: ['终止事件需要原始证据', '没有事件而原因不能无证据重建'],
+    mustKill: ['终止事件需要原始证据', '没有事件而原因不能无证据重建'],
+  },
+  {
+    id: 'legacy_sha_unbound',
+    clause: 'W0-20 旧 journal 的内容哈希来源必须与 txn_id 对得上',
+    edits: [
+      swap(
+        RJ,
+        's !== null && s !== undefined && rollbackTxnId(t.candidate_id, s) === t.txn_id',
+        's !== null && s !== undefined',
+      ),
+    ],
+    tests: [T_JB],
+    expectRed: ['recordedSha 对不上 txn_id 不采信'],
+    mustKill: ['recordedSha 对不上 txn_id 不采信'],
+  },
+  {
+    id: 'legacy_incomplete_ignored',
+    clause: 'W0-20 旧 journal 三项事实没收齐 = incomplete,先于任何事务动作(不写凭据)',
+    edits: [
+      swap(
+        RJ,
+        'if (missing.length > 0 || by === undefined || event === undefined || sha === undefined) {',
+        'if (false) {',
+      ),
+    ],
+    tests: [T_JB],
+    expectRed: ['终止事件需要原始证据', '来源有歧义(rollback_to 或 clear)'],
+    mustKill: ['终止事件需要原始证据', '来源有歧义(rollback_to 或 clear)'],
   },
   // ---- M5 identity_changed(V6a)本期拒绝 ----
   {
@@ -780,7 +895,11 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     id: 'identity_journal_runs',
     clause: 'M5 读到旧的 identity_change journal 不动',
     edits: [
-      swap(RB, "if (t.kind === 'identity_change') return 'identity_not_available_before_v6a';", ''),
+      swap(
+        RJ,
+        "if (t.kind === 'identity_change') {\n    return { kind: 'invalid', why: 'identity_not_available_before_v6a' };\n  }",
+        '',
+      ),
     ],
     tests: [T_RB],
     expectRed: ['读到旧的 identity_change journal'],
@@ -885,12 +1004,12 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     edits: [
       swap(
         PM,
-        'import { createExclusive, remove } from',
-        'import { createExclusive, remove, writeFile } from',
+        'import { createExclusiveDurable, remove } from',
+        'import { createExclusiveDurable, remove, writeFile } from',
       ),
       swap(
         PM,
-        'createExclusive(io, file, body, RSI_FILE_MODE)',
+        'createExclusiveDurable(io, file, body, RSI_FILE_MODE)',
         'writeFile(io, file, body, { mode: RSI_FILE_MODE })',
       ),
     ],
@@ -955,7 +1074,11 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     id: 'reuse_check_skipped',
     clause: 'W0-20 复用在途 txn:journal 校验先于较晚事件的施加(不合规 = 零副作用)',
     edits: [
-      swap(RB, "if (typeof ctx === 'string') return { status: 'refused', txn: id, why: ctx };", ''),
+      swap(
+        RB,
+        "if (jr.kind === 'invalid') return { status: 'refused', txn: id, why: jr.why };",
+        '',
+      ),
     ],
     tests: [T_JN],
     expectRed: ['较晚事件不施加(记录 / 审计 / 效果 / 凭据 / payload 零写入)'],
@@ -996,13 +1119,13 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     edits: [
       swap(
         RB,
-        "await d.keyedEffects.applyOnce(auditKeyOf(l), [{ type: 'append_audit', line: l }]);",
-        'await d.audit.append([l]);',
+        'audit: keyedAuditSink(d.keyedEffects),',
+        'audit: { append: async () => undefined },',
       ),
     ],
     tests: [T_JN],
-    expectRed: ['审计键集合固定'],
-    mustKill: ['审计键集合固定'],
+    expectRed: ['rolling_back 上先后到达两个 evidence 不同的 harm_c1 事件'],
+    mustKill: ['rolling_back 上先后到达两个 evidence 不同的 harm_c1 事件'],
   },
   {
     id: 'audit_no_finish',
@@ -1035,12 +1158,76 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     mustKill: ['非执行器终态理由'],
   },
   {
-    id: 'audit_key_no_hash',
-    clause: 'M6 审计键含行哈希(不同条目不同键)',
-    edits: [swap(ER, ".digest('hex').slice(0, 16)}`", ".digest('hex').slice(0, 0)}`")],
-    tests: [T_JN],
-    expectRed: ['审计键集合固定'],
-    mustKill: ['审计键集合固定'],
+    id: 'audit_key_no_idem',
+    clause: 'M6 审计键 = 转移条目的 idem_key(事件身份):不同条目不同键,即使行内容相同',
+    edits: [
+      swap(
+        ER,
+        '`audit:${candidateId}:${idemKey}`',
+        '`audit:${candidateId}:${idemKey.slice(0, 0)}`',
+      ),
+    ],
+    tests: [T_JN, T_AK],
+    expectRed: ['审计键集合固定', 'auditKeyOf = audit:<候选>:<idem_key>'],
+    mustKill: ['审计键集合固定', 'auditKeyOf = audit:<候选>:<idem_key>'],
+  },
+  {
+    id: 'audit_key_missing_ignored',
+    clause: 'M6 缺事件身份的审计行 fail-closed(不回落到行内容哈希)',
+    edits: [swap(ER, "if (it.idem_key === undefined) throw new Error('audit_key_missing');", '')],
+    tests: [T_AK],
+    expectRed: ['缺事件身份(没有转移条目的审计)'],
+    mustKill: ['缺事件身份(没有转移条目的审计)'],
+  },
+  // ---- H3 标记持久化 ----
+  {
+    id: 'marker_create_no_sync',
+    clause: 'H3 新建标记:文件 fsync 之后才返回(调用方此后才写 state)',
+    edits: [
+      swap(
+        SF,
+        '        await handle.writeFile(data);\n        await syncHandle(ctx, handle, abs);',
+        '        await handle.writeFile(data);',
+      ),
+    ],
+    tests: [T_PM],
+    expectRed: ['新建标记:文件 fsync → 父目录 fsync → state.write(顺序)'],
+    mustKill: ['新建标记:文件 fsync → 父目录 fsync → state.write(顺序)'],
+  },
+  {
+    id: 'marker_exists_no_sync',
+    clause: 'H3 标记已存在也补一次文件 fsync(可能尚未落盘)',
+    edits: [swap(SF, '      await syncHandle(ctx, handle, abs);\n    } else {', '    } else {')],
+    tests: [T_PM],
+    expectRed: ['标记已存在(可能尚未落盘'],
+    mustKill: ['标记已存在(可能尚未落盘'],
+  },
+  {
+    id: 'marker_no_dir_sync',
+    clause: 'H3 标记的父目录 fsync(目录项落盘)先于 state 写入',
+    edits: [
+      swap(SF, '  await fsyncDir(ctx, path.dirname(abs));\n  return outcome;', '  return outcome;'),
+    ],
+    tests: [T_PM],
+    expectRed: [
+      '新建标记:文件 fsync → 父目录 fsync → state.write(顺序)',
+      'enforceMute 补标记(有码缺标记)也走同一条持久路径',
+    ],
+    mustKill: ['新建标记:文件 fsync → 父目录 fsync → state.write(顺序)'],
+  },
+  {
+    id: 'marker_exists_unchecked',
+    clause: 'H3 已存在的标记必须是单链接普通文件,否则拒绝(不写 state)',
+    edits: [
+      swap(
+        SF,
+        '      if (!st.isFile() || st.nlink > 1) {\n        throw new WriteDeniedError(`写入被拒绝:已有标记不是单链接的普通文件:${abs}`);\n      }\n',
+        '',
+      ),
+    ],
+    tests: [T_PM],
+    expectRed: ['已存在的标记不是单链接普通文件(硬链接)'],
+    mustKill: ['已存在的标记不是单链接普通文件(硬链接)'],
   },
 ];
 

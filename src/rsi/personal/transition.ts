@@ -73,7 +73,8 @@ export interface Refusal {
 export type TransitionEffect =
   /** R21-3.8:每次转移经一次 `commitPersonal` 写入权威副本,成功后才更新工作副本 */
   | { type: 'commit_lifecycle'; id: string }
-  | { type: 'append_audit'; line: RsiAuditLine }
+  /** `idem_key` = 产生这一行的转移条目的事件身份(R21-4);带键的落地端据此「同一事件只落一次」。终态空操作的审计没有条目,也就没有键 */
+  | { type: 'append_audit'; line: RsiAuditLine; idem_key?: string }
   /** R21-11.3:指纹永久黑名单(任何状态收到 veto 都发;终态只发这一个) */
   | { type: 'blacklist_veto'; id: string; content_sha256: string }
   /** R21-11.4:终态 id 进墓碑 */
@@ -346,7 +347,9 @@ function apply(
   const final = out.data;
 
   const effects: TransitionEffect[] = [{ type: 'commit_lifecycle', id: final.id }];
-  for (const e of entries) effects.push({ type: 'append_audit', line: auditOf(e, final.id) });
+  for (const e of entries) {
+    effects.push({ type: 'append_audit', line: auditOf(e, final.id), idem_key: e.idem_key });
+  }
   if (event.kind === 'veto' || (event.kind === 'revocation_reconcile' && event.basis === 'veto')) {
     effects.push({ type: 'blacklist_veto', id: final.id, content_sha256: final.content_sha256 });
   }

@@ -1,5 +1,5 @@
 /**
- * `AUTO_PAUSE` 标记的文件实现(docs/contracts.md R21-12.2、R21-6.10:`.state/rsi/AUTO_PAUSE`,独占创建,**不拿锁**;hint 只判存在)。
+ * `AUTO_PAUSE` 标记的文件实现(docs/contracts.md R21-12.2、R21-6.10:`.state/rsi/AUTO_PAUSE`,独占创建,**不拿锁**;hint 只判存在)。`ensure` 返回前标记文件与父目录都已 fsync(`createExclusiveDurable`,含已存在的标记)。
  * 熔断(R21-10.1)先写它再写状态 / 置 canary,所以 hint 在任何崩溃窗口里都看得到。内容 `{at, by, reason?}` 只用于恢复:
  * `by=user` 是 `rsi auto pause` 写的(等价 `user_paused`),`by=breaker` 是 worker 熔断写的。已存在的标记一律不覆盖。
  */
@@ -12,7 +12,7 @@ import {
 import { canonicalJson } from '../../io/canonical-json.js';
 import type { IoContext } from '../../io/paths.js';
 import { readText } from '../../io/read-fs.js';
-import { createExclusive, remove } from '../../io/safe-fs.js';
+import { createExclusiveDurable, remove } from '../../io/safe-fs.js';
 import type { PauseMarker, PauseMarkerPort } from '../personal/breaker.js';
 import { CANARY_FILES } from './files.js';
 
@@ -56,13 +56,8 @@ export function makePauseMarkerPort(
     read,
     async ensure(reason) {
       const body = canonicalJson({ at: now().toISOString(), by: 'breaker', reason });
-      try {
-        await createExclusive(io, file, body, RSI_FILE_MODE);
-        return 'created';
-      } catch (e) {
-        if ((e as NodeJS.ErrnoException).code === 'EEXIST') return 'exists';
-        throw e;
-      }
+      // 文件与父目录 fsync 之后才返回(调用方此后才写 state):掉电后也不会出现「状态已熔断、标记没了」;已存在的标记同样补一次 fsync
+      return createExclusiveDurable(io, file, body, RSI_FILE_MODE);
     },
     async remove(scope) {
       const cur = await read();

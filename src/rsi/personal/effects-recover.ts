@@ -5,16 +5,16 @@
  * ({@link effectsForTerminal}),所以「权威副本已提交、效果没落地」的窗口由 {@link recoverTerminalEffects} 补齐:扫全部终态记录,
  * 对每条记录按稳定键 {@link terminalEffectKey} 调 `KeyedEffectSink.applyOnce`(同键只生效一次,至少一次调用 + 按键幂等 = 恰好一次的效果)。
  * 回滚执行器在删 journal 之前同样调它,journal 在效果落地之前一直保留。
- * **审计行同样按键续做**(M6):转移条目(`record.transitions[]`)已是已提交的权威事实,审计行由条目确定性推出({@link auditLinesOf}),
- * 稳定键 = `audit:<候选>:<行 canonical 哈希前 16 位>`({@link auditKeyOf}),经同一个 `KeyedEffectSink` 落地(`append_audit` 效果;生产实现须与记键同一持久化步骤)。
+ * **审计行同样按键续做**(M6):转移条目(`record.transitions[]`)已是已提交的权威事实,审计行由条目确定性推出({@link auditItemsOf}),
+ * 稳定键 = `audit:<候选>:<条目 idem_key>`({@link auditKeyOf};事件身份,不是行内容哈希),经同一个 `KeyedEffectSink` 落地(`append_audit` 效果;生产实现须与记键同一持久化步骤)。
  * 只覆盖**回滚路径产生的**条目(从进入 `rolling_back` / 终态的那一条起):更早的条目是各自转移当时直接追加的,不重放,免得重复。
+ * **版本前提(W0-20 验收第 2 轮裁定,不做迁移)**:W7 从未发版,生产上不存在「旧版本已用无键 `d.audit` 直接追加了回滚审计」的记录;
+ * 首个带回滚的发行版起,回滚审计一律经本带键出口。因此「补做」不会与更早版本的直接追加重复。若将来在此之前发布了无键回滚,须先补迁移 / 去重策略,不能沿用本前提。
  */
-import { createHash } from 'node:crypto';
 import { RSI_COOLDOWN_DAYS } from '../../contracts/rsi.js';
 import type { PersonalLifecycleRecord, RsiAuditLine } from '../../contracts/rsi-personal.js';
-import { canonicalJson } from '../../io/canonical-json.js';
 import { RsiLockError } from '../lock-error.js';
-import type { AuthoritativeStore } from './candidate-ports.js';
+import type { AuditSink, AuthoritativeStore } from './candidate-ports.js';
 import type { KeyedEffectSink, KeyedEffectResult } from './rollback-ports.js';
 import type { TransitionEffect } from './transition.js';
 import { auditOf } from './transition.js';
@@ -57,11 +57,16 @@ export function effectsForTerminal(rec: PersonalLifecycleRecord): TransitionEffe
   return out;
 }
 
-/** 审计行的稳定事件键:同一行(同一条转移条目)只落一次 */
-export const auditKeyOf = (line: RsiAuditLine): string =>
-  `audit:${line.id}:${createHash('sha256').update(canonicalJson(line), 'utf8').digest('hex').slice(0, 16)}`;
+/** 审计行的稳定事件键 = 候选 id + 产生这一行的转移条目的 `idem_key`(事件身份;**不是**行内容哈希:两个 evidence 不同的合法转移可以产生内容完全相同的行) */
+export const auditKeyOf = (candidateId: string, idemKey: string): string =>
+  `audit:${candidateId}:${idemKey}`;
 
-/** 经回滚执行器到终态的终态理由(审计补做的范围) */
+export interface KeyedAuditItem {
+  key: string;
+  line: RsiAuditLine;
+}
+
+/** 经回滚执行器到终态的终止理由(审计补做的范围) */
 const EXECUTOR_TERMINAL_REASONS: ReadonlySet<string> = new Set([
   'auto_rollback',
   'vetoed',
@@ -78,10 +83,27 @@ const TERMINAL_OR_ROLLING = (to: string): boolean =>
   to === 'rolled_back' ||
   to === 'retired';
 
-/** 回滚路径产生的审计行:从第一条进入 `rolling_back` / 终态的 lifecycle 条目起(该条目之后的 deploy / rollback 条目同属一次回滚) */
-export function auditLinesOf(rec: PersonalLifecycleRecord): RsiAuditLine[] {
+/** 回滚路径产生的审计行及其事件键:从第一条进入 `rolling_back` / 终态的 lifecycle 条目起(该条目之后的 deploy / rollback 条目同属一次回滚);即时落地与恢复共用同一个键 */
+export function auditItemsOf(rec: PersonalLifecycleRecord): KeyedAuditItem[] {
   const i = rec.transitions.findIndex((e) => e.dim === 'lifecycle' && TERMINAL_OR_ROLLING(e.to));
-  return i < 0 ? [] : rec.transitions.slice(i).map((e) => auditOf(e, rec.id));
+  return i < 0
+    ? []
+    : rec.transitions
+        .slice(i)
+        .map((e) => ({ key: auditKeyOf(rec.id, e.idem_key), line: auditOf(e, rec.id) }));
+}
+
+/** 执行器的审计出口:每行经带键端口落地。缺事件身份(没有转移条目的审计,如终态空操作)→ 抛错(fail-closed,不回落到行内容哈希) */
+export function keyedAuditSink(sink: KeyedEffectSink): AuditSink {
+  const land = async (items: readonly { line: RsiAuditLine; idem_key?: string }[]) => {
+    for (const it of items) {
+      if (it.idem_key === undefined) throw new Error('audit_key_missing');
+      await sink.applyOnce(auditKeyOf(it.line.id, it.idem_key), [
+        { type: 'append_audit', line: it.line, idem_key: it.idem_key },
+      ]);
+    }
+  };
+  return { append: (lines) => land(lines.map((line) => ({ line }))), appendKeyed: land };
 }
 
 /** 补做回滚路径的审计行(按键幂等);返回本次落地(`applied`)的行数 */
@@ -90,8 +112,8 @@ export async function landAuditEffects(
   rec: PersonalLifecycleRecord,
 ): Promise<number> {
   let applied = 0;
-  for (const line of auditLinesOf(rec)) {
-    const r = await sink.applyOnce(auditKeyOf(line), [{ type: 'append_audit', line }]);
+  for (const { key, line } of auditItemsOf(rec)) {
+    const r = await sink.applyOnce(key, [{ type: 'append_audit', line }]);
     if (r === 'applied') applied += 1;
   }
   return applied;

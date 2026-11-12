@@ -318,6 +318,76 @@ export async function createExclusiveSynced(
   await handle.close();
 }
 
+/** 对已打开的句柄 `fsync`;先发审计钩子(`syncFile`),测试据此核对「落盘发生在后续写之前」的顺序 */
+async function syncHandle(ctx: IoContext, h: fsp.FileHandle, abs: string): Promise<void> {
+  audit(ctx, 'syncFile', abs);
+  await h.sync();
+}
+
+/**
+ * **持久的**独占创建(熔断标记 `AUTO_PAUSE` 用,R21-12.2 / R21-10.1:标记必须先于状态写入「落盘」,掉电后也不能出现「状态已熔断、标记没了」):
+ *  - 不存在 → `O_CREAT|O_EXCL|O_NOFOLLOW` 创建、写入、`fsync` 文件、关闭,再 `fsync` 父目录(目录项落盘),返回 `created`;
+ *  - 已存在(`EEXIST`)→ **不覆盖、不改内容**;对已存在的文件(`O_RDONLY|O_NOFOLLOW`,须是单链接普通文件,否则 {@link WriteDeniedError})补一次 `fsync`,再 `fsync` 父目录,
+ *    返回 `exists`(别人刚创建、尚未落盘的标记也在这里被我们落盘,不把「可能没落盘的既有文件」当作完成)。
+ * 路径守卫同其它写函数;写入 / 同步失败 → 尽力删除刚创建的文件再抛错(同 {@link createExclusive} 的 dev:ino 核对)。
+ */
+export async function createExclusiveDurable(
+  ctx: IoContext,
+  target: string,
+  data: string | Uint8Array,
+  mode: number,
+): Promise<'created' | 'exists'> {
+  audit(ctx, 'createExclusiveDurable', target);
+  const abs = assertWritable(ctx, target);
+  const NOFOLLOW = fs.constants.O_NOFOLLOW ?? 0;
+  if (NOFOLLOW === 0) throw new WriteDeniedError('写入被拒绝:平台不支持 O_NOFOLLOW');
+  let outcome: 'created' | 'exists';
+  let handle: fsp.FileHandle;
+  try {
+    handle = await fsp.open(
+      abs,
+      fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | NOFOLLOW,
+      mode,
+    );
+    outcome = 'created';
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+    handle = await fsp.open(abs, fs.constants.O_RDONLY | NOFOLLOW);
+    outcome = 'exists';
+  }
+  try {
+    if (outcome === 'exists') {
+      const st = await handle.stat();
+      if (!st.isFile() || st.nlink > 1) {
+        throw new WriteDeniedError(`写入被拒绝:已有标记不是单链接的普通文件:${abs}`);
+      }
+      await syncHandle(ctx, handle, abs);
+    } else {
+      try {
+        await handle.chmod(mode);
+        await handle.writeFile(data);
+        await syncHandle(ctx, handle, abs);
+      } catch (e) {
+        const mine = await handle.stat().catch(() => undefined);
+        const now = await fsp.lstat(abs).catch(() => undefined);
+        if (
+          mine !== undefined &&
+          now !== undefined &&
+          now.dev === mine.dev &&
+          now.ino === mine.ino
+        ) {
+          await fsp.rm(abs, { force: true }).catch(() => undefined);
+        }
+        throw e;
+      }
+    }
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
+  await fsyncDir(ctx, path.dirname(abs));
+  return outcome;
+}
+
 /** `fsync` 一个目录(rename / unlink 之后让目录项落盘;R20-16.10 / R20-16.15)。路径守卫同其它写函数(目录须在写入根内)。 */
 export async function fsyncDir(ctx: IoContext, target: string): Promise<void> {
   audit(ctx, 'fsyncDir', target);
