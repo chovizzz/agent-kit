@@ -17,7 +17,7 @@ import { analyzeSegment, DEFAULT_ANALYSIS_CONFIG, type SegmentAnalysis } from '.
 import {
   makeEligibility,
   sessionMeasures,
-  signatureHitCount,
+  signatureHitSignals,
   toLoaded,
   type HitSession,
 } from './measures.js';
@@ -83,18 +83,24 @@ export async function runAnalysis(
     if (throughIso === null) return { kind: 'unavailable', reason: 'collected_through_unknown' };
     const startMs = Date.parse(req.windowStartIso);
     if (!Number.isFinite(startMs)) throw new AnalysisInputError('window_start_unparseable');
+    // 读取下限一律取整到 UTC 日零点(资格按 UTC 日算,下限落在日中会漏掉当天更早的行)
+    const floorMs = Math.floor(startMs / DAY_MS) * DAY_MS;
     // 资格要看会话开始前 30 个 UTC 日;开始得比窗口早的会话(resume)也要读到,否则同标记的副本会顶替它成为主会话(L3)
-    const sinceIso = new Date(startMs - READ_LOOKBACK_DAYS * DAY_MS).toISOString();
+    const sinceIso = new Date(floorMs - READ_LOOKBACK_DAYS * DAY_MS).toISOString();
     // 最早读进来的会话可在 sinceIso 当天,它的资格还要看再往前 30 个 UTC 日的命中 → 信号多读一个资格窗口(主代理验收复评 M-①)
     const signalsSinceIso = new Date(
-      startMs - (READ_LOOKBACK_DAYS + ELIGIBILITY_DAYS) * DAY_MS,
+      floorMs - (READ_LOOKBACK_DAYS + ELIGIBILITY_DAYS) * DAY_MS,
     ).toISOString();
     const ledger = await source.ledger();
     const stats = await source.stats(sinceIso);
     const signals = await source.signals(signalsSinceIso);
 
+    // 命中直接从信号生成,不经会话计数行(计数行只读 61 日,信号窗口更长)
     const collecting = new Set<string>();
-    for (const pk of new Set(stats.map((s) => s.stat.project_key))) {
+    for (const pk of new Set([
+      ...stats.map((s) => s.stat.project_key),
+      ...signals.map((s) => s.project_key),
+    ])) {
       if ((await source.classify(pk)) === 'P') collecting.add(pk);
     }
     const bySession = new Map<string, Signal[]>();
@@ -104,16 +110,12 @@ export async function runAnalysis(
       else l.push(s);
     }
     const hits: HitSession[] = [];
-    const seen = new Set<string>();
-    for (const it of stats) {
-      if (seen.has(it.stat.session_ref)) continue;
-      seen.add(it.stat.session_ref);
-      if (!collecting.has(it.stat.project_key)) continue;
-      const loaded = (bySession.get(it.stat.session_ref) ?? [])
-        .map(toLoaded)
-        .filter((s): s is LoadedSignal => s !== null);
-      if (signatureHitCount(req.signature, loaded) > 0) {
-        hits.push({ project_key: it.stat.project_key, tsMs: Date.parse(it.stat.ts) });
+    for (const list of bySession.values()) {
+      const loaded = list.map(toLoaded).filter((s): s is LoadedSignal => s !== null);
+      for (const h of signatureHitSignals(req.signature, loaded)) {
+        if (!collecting.has(h.project_key)) continue;
+        const tsMs = Date.parse(h.ts);
+        if (Number.isFinite(tsMs)) hits.push({ project_key: h.project_key, tsMs });
       }
     }
     const assembled = assemble({

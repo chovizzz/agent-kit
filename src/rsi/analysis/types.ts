@@ -19,7 +19,7 @@ export const ALPHA_PER_METRIC = RSI_ALPHA_WORSE_TOTAL / HARM_P_METRICS.length;
 /** C2 只在有工具名的 agent 之间可比(claude / pi;codex / kimi 无 `retry_chain_max`,W0-14) */
 export const C2_COMPARABLE_AGENTS: readonly AnalysisAgent[] = ['claude', 'pi'];
 
-/** 资格窗口(R21-6.7「30 个 UTC 日」):命中日 ≥ 会话开始日 − 30 天,且命中会话开始于本会话之前(契约未给边界,见「问题」) */
+/** 资格窗口(R21-6.7「30 个 UTC 日」):命中信号的 UTC 日 ≥ 会话开始日 − 30 天,且命中信号的 ts 严格早于本会话开始(契约未给边界,见「问题」) */
 export const ELIGIBILITY_DAYS = 30;
 /**
  * 计数行 / 信号的读取下限 = 窗口起点 − 此天数:30 个 UTC 日资格窗口 + 1 日余量 + 30 日给「开始得更早的会话」(长会话在窗口内被 resume 后才带上标记,
