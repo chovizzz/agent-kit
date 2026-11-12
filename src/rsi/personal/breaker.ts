@@ -8,8 +8,11 @@
  *    `gate_internal`、`apply_failed`、`personal_repo_invalid`、`budget_high_legacy` 四项。
  *  - `personal_repo_diverged` / `personal_owner_changed` 不是熔断码(R21-10.3):单独的 `diverged` / `owner_changed` 标志,`resume` 不动它们(用 `rebase-baseline` 或回到记录提交解除),但同样只阻挡增加影响。
  *  - 「30 个 UTC 日内」「7 个 UTC 日内」按 W0-16 的日期差口径:`今天 − 事件日 < N`(含今天,今天往前 N−1 天)。
- * 写入 `state.json` 的 `auto_pause` 与 `canary.json` 置为不注入是两步:**先写状态、后置 canary**,崩溃后每次 worker 步骤调 {@link enforceMute} 补做(幂等),
- * 所以「状态已写、canary 未置」的窗口不会留下无熔断保护的注入。`state.json` 的真实写入方(保留其它键、持 `rsi/lock`)在装配处注入 `PauseStatePort`(本块没有该写入方,见汇报「遗留」)。
+ * 落地三步,顺序固定:**① `AUTO_PAUSE` 标记 → ② `state.json.auto_pause` → ③ `canary.json` 置为不注入**。hint 与 `exec-run` 只读 `AUTO_PAUSE`(R21-6.10 / 6.11 第 4 行 / R21-16.2b),
+ * 不读 `state.json`,所以标记必须最先落盘:此后任一时刻崩溃,worker 还没重启时下一次 hint 即停注入(`excluded` / `paused`)。崩溃后每次 worker 步骤调 {@link enforceMute}
+ * 补做(幂等):有码缺标记 → 补标记;有标记(含用户的)缺码 → 补码(`user_paused` 或标记里记的原因),**不删标记**(fail-closed);处于熔断 → 置 canary。
+ * 解除侧对称:{@link applyAutoRelease} / {@link applyResume} 先写状态、后删标记(只在没有剩余码时删;自动解除只删 worker 写的,人工 `resume` 删任何)。
+ * `state.json` 的真实写入方(保留其它键、持 `rsi/lock`)在装配处注入 `PauseStatePort`(本块没有该写入方,见汇报「遗留」);标记的文件实现见 `canary/pause-marker.ts`。
  */
 import {
   RSI_AUTO_PAUSE_REASON_PHASE,
@@ -160,12 +163,21 @@ export function evaluateTriggers(f: TriggerFacts): RsiAutoPauseReason[] {
 export function autoRelease(
   s: AutoPauseState,
   stillHolds: (r: RsiAutoPauseReason) => boolean,
-): { state: AutoPauseState; released: RsiAutoPauseReason[] } {
+): ReleaseResult {
   const released = s.reasons.filter((r) => RSI_AUTO_RELEASE_REASONS.has(r) && !stillHolds(r));
+  const reasons = s.reasons.filter((r) => !released.includes(r));
   return {
-    state: { ...s, reasons: s.reasons.filter((r) => !released.includes(r)) },
+    state: { ...s, reasons },
     released,
+    clearMarker: released.length > 0 && reasons.length === 0,
   };
+}
+
+export interface ReleaseResult {
+  state: AutoPauseState;
+  released: RsiAutoPauseReason[];
+  /** 没有任何剩余码且本次确有码被清:删 worker 写的 `AUTO_PAUSE` 标记 */
+  clearMarker: boolean;
 }
 
 export interface ResumeResult {
@@ -173,7 +185,7 @@ export interface ResumeResult {
   cleared: RsiAutoPauseReason[];
   /** 条件仍成立而保留的码(命令层:退出 1 `RSI_AUTO_RESUME_BLOCKED reason=<码>`);`reason` = 仍成立的那个码 */
   blocked: { code: RsiAutoPauseReason; reason: RsiAutoPauseReason }[];
-  /** `user_paused` 被清:命令层同时删除 `AUTO_PAUSE` 标记 */
+  /** 没有任何剩余码且本次确有码被清(含 `user_paused`):命令层同时删除 `AUTO_PAUSE` 标记(仍有剩余码时标记保留,hint 继续停注入) */
   clearMarker: boolean;
 }
 
@@ -190,11 +202,12 @@ export function resume(
     if (holding !== undefined) blocked.push({ code, reason: holding });
     else cleared.push(code);
   }
+  const reasons = s.reasons.filter((r) => !cleared.includes(r));
   return {
-    state: { ...s, reasons: s.reasons.filter((r) => !cleared.includes(r)) },
+    state: { ...s, reasons },
     cleared,
     blocked,
-    clearMarker: cleared.includes('user_paused'),
+    clearMarker: cleared.length > 0 && reasons.length === 0,
   };
 }
 
@@ -208,25 +221,79 @@ export interface CanaryMutePort {
   /** `muteCanary`(持 `rsi/lock`):写了返回 true;无事可做 false(幂等) */
   mute(): Promise<boolean>;
 }
+
+/** `AUTO_PAUSE` 标记的内容(只用于恢复,hint 只判存在):`by` = 谁写的;`reason` = 熔断码(用户的没有) */
+export interface PauseMarker {
+  by: 'user' | 'breaker' | 'unknown';
+  reason: RsiAutoPauseReason | null;
+}
+/**
+ * hint / exec 实际读取的持久拒绝标记 `.state/rsi/AUTO_PAUSE`(R21-12.2:独占创建,**不拿锁**)。
+ * 与 `PauseStatePort` / `CanaryMutePort` 同一份契约:读失败 = 抛错(不返回「没有」冒充成功),写失败 = 抛错。
+ */
+export interface PauseMarkerPort {
+  /** 独占创建;已存在(含用户的)= `exists`,**不覆盖** */
+  ensure(reason: RsiAutoPauseReason): Promise<'created' | 'exists'>;
+  /** 不存在 = null;存在但内容读不出 = `{by:'unknown'}`(仍算存在) */
+  read(): Promise<PauseMarker | null>;
+  /** `own` = 只删熔断写的;`any` = 人工 `resume`,删任何标记。返回是否删了 */
+  remove(scope: 'own' | 'any'): Promise<boolean>;
+}
 export interface BreakerDeps {
   state: PauseStatePort;
   canary: CanaryMutePort;
+  marker: PauseMarkerPort;
   phase: number;
 }
 
-/** 触发:先写状态、后置 canary。已处于该码 → 只补做 canary 的置位(幂等) */
+/** 触发:**先写 `AUTO_PAUSE` 标记**、再写状态、后置 canary。已处于该码 → 仍补标记与 canary(幂等) */
 export async function tripAndMute(d: BreakerDeps, reason: RsiAutoPauseReason): Promise<TripResult> {
   const cur = await d.state.read();
   const r = tripBreaker(cur, reason, d.phase);
   if (r.kind === 'phase_not_available') return r;
+  await d.marker.ensure(reason);
   if (r.kind === 'tripped') await d.state.write(r.state);
   await d.canary.mute();
   return r;
 }
 
-/** worker 每次拿锁后调:处于熔断就确保 canary 不注入(补做崩溃留下的窗口) */
-export async function enforceMute(d: BreakerDeps, autoPauseMarker = false): Promise<boolean> {
-  const cur = await d.state.read();
-  if (!isAutoPaused(cur, autoPauseMarker)) return false;
+/**
+ * worker 每次拿锁后调(补做崩溃留下的窗口):
+ *  - 有码而无标记 → 补标记(hint 才看得到);
+ *  - 有标记而无码(标记已落盘、状态未写) → 补码(`user_paused` 或标记里的原因),**不删标记**;
+ *  - 处于熔断(含标记、分叉 / 属主变化标志)→ 确保 canary 不注入。
+ * `autoPauseMarker` 缺省由端口读出;调用方已读过时可直接传入。
+ */
+export async function enforceMute(d: BreakerDeps, autoPauseMarker?: boolean): Promise<boolean> {
+  const marker = await d.marker.read();
+  const present = marker !== null || autoPauseMarker === true;
+  let cur = await d.state.read();
+  if (marker !== null && marker.by !== 'unknown') {
+    const code: RsiAutoPauseReason | null = marker.by === 'user' ? 'user_paused' : marker.reason;
+    if (code !== null && !cur.reasons.includes(code)) {
+      const r = tripBreaker(cur, code, d.phase);
+      if (r.kind === 'tripped') {
+        await d.state.write(r.state);
+        cur = r.state;
+      }
+    }
+  }
+  const first = cur.reasons[0];
+  if (marker === null && first !== undefined) await d.marker.ensure(first);
+  if (!isAutoPaused(cur, present)) return false;
   return d.canary.mute();
+}
+
+/** 自动解除落地:先写状态、后删标记(没有剩余码时,只删 worker 写的) */
+export async function applyAutoRelease(d: BreakerDeps, r: ReleaseResult): Promise<void> {
+  if (r.released.length === 0) return;
+  await d.state.write(r.state);
+  if (r.clearMarker) await d.marker.remove('own');
+}
+
+/** 人工 `resume` 落地:先写状态、后删标记(没有剩余码时,删任何标记) */
+export async function applyResume(d: BreakerDeps, r: ResumeResult): Promise<void> {
+  if (r.cleared.length === 0) return;
+  await d.state.write(r.state);
+  if (r.clearMarker) await d.marker.remove('any');
 }

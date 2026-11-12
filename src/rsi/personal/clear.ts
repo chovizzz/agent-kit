@@ -53,6 +53,11 @@ export interface ClearReport {
    * worker 下次拿锁后首件事按凭据对账(R21-9.5)。
    */
   pendingReconcile: string[];
+  /**
+   * 撤销已完成、但记录推进 / 私有仓库移除被 R21-9.3a 推迟的候选(outcome = `revocation_complete`):journal 保留,是 HOME 侧「待补记」任务,
+   * 分叉解除后 worker 首个持锁写入方(`resumeAll`)补做。缩减入口不能访问工作副本,所以**不**写 `repo_removal_deferred=true`(`workingMarked=false`)。
+   */
+  repoRemovalPending: string[];
   /** 非 null = 候选枚举不可用 / 相位不允许(原因码):没有处理任何新候选;此前续做的在途 journal 的结果在 `outcomes` 里 */
   unavailable: string | null;
 }
@@ -72,6 +77,7 @@ export async function rsiAutoClear(d: ClearDeps, opts: { write: boolean }): Prom
     inFlight: [],
     outcomes: [],
     pendingReconcile: [],
+    repoRemovalPending: [],
     unavailable: null,
   };
   if (!capabilityAvailable('cmd_auto_clear', d.phase)) {
@@ -149,5 +155,10 @@ export async function rsiAutoClear(d: ClearDeps, opts: { write: boolean }): Prom
       report.pendingReconcile.push(rec.id);
     }
   });
+  report.repoRemovalPending = [
+    ...new Set(
+      report.outcomes.flatMap((o) => (o.status === 'revocation_complete' ? [o.candidate_id] : [])),
+    ),
+  ];
   return report;
 }
