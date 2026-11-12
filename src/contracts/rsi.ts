@@ -1390,7 +1390,7 @@ export const RSI_REVOCATION_BY = Object.freeze([
 ] as const);
 /**
  * W0-17:撤销凭据 `reason` 按写入方 `by` 约束(只取终止 / 异常原因码;正常转移码、G 码一律拒绝;
- * `identity_changed` 不写凭据,R21-9.1)。`rollback_to` 的专属原因码契约未定(归 W7),暂允许全部回滚原因。
+ * `identity_changed` 不写凭据,R21-9.1)。`rollback_to` 由 W0-20 收窄为只用 `cleared`。
  */
 const RSI_ROLLBACK_REVOCATION_REASONS = RSI_TRANSITION_REASONS_TERMINATING.filter(
   (r) => r !== 'identity_changed',
@@ -1406,7 +1406,8 @@ export const RSI_REVOCATION_REASONS_BY: Readonly<
       (r) => !['cleared', 'vetoed', 'exec_post_check_failed', 'exec_timeout_unclean'].includes(r),
     ),
   ),
-  rollback_to: Object.freeze([...RSI_ROLLBACK_REVOCATION_REASONS]),
+  // W0-20:`rsi rollback --to` 是用户主动缩减影响,只用 cleared(不借 vetoed,避免触发指纹永久黑名单)
+  rollback_to: Object.freeze(['cleared']),
 });
 
 // --- 分组账 / 准入(R21-6.4 / W0-3) ---

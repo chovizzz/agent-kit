@@ -5879,6 +5879,8 @@ agent-kit judge --confirm-reflector --run <run_id> [--proposal <id>]… --write 
 - R20-1.3 `off` 行的允许写集合随之追加这一项(§21.18 第 42 条;§21.22 Q-C)。验收:①`off` 下 clear 后,把原仓库恢复为可达并重新启用配置,下一次 hint 对被清候选为 `excluded`、`exec-run` 零调用,worker 首次运行完成对账;②clear 过程中原仓库不可达,clear 仍以退出 0 完成且未创建任何仓库 `.state` 文件;③旧仓库 worker 持 `rsi/lock` 时并发 clear,两者经 `personal/lock` 串行,结果中被清候选没有任何授予写入;④工作副本已是终态但 `canary.json` / `exec-enabled.json` 仍残留该候选:下一次对账后两处都不含该候选,分组账只多一条 stop 行。
 - R21-9.6 `[V1]` 回滚每个子状态都可注入崩溃并续做;续做再崩溃同样可续。
 
+> **冻结后订正 W0-20(2026-11-12,用户选择框「journal 加字段」)**:为使任一子状态都能不依赖仓库可读地续做,`PersonalTxn` 追加 `content_sha256`、`by`、`terminal_event`,首次写 journal 时一起落盘。正文见 §21.24 W0-20。
+
 ### 21.10 熔断 `auto_paused`
 
 - R21-10.1 `[V1]` 任一触发即进入 `auto_paused`:按 R21-2.2 的事件分类,「增加影响」的转移全部禁止,其余照常;**撤销路径不受阻挡**。当前评估中候选的注入停止——hint 直接看 `AUTO_PAUSE` 标记(用户暂停,不等 worker),worker 写熔断码时同时把 `canary.json` 置为不注入(`generation + 1`);`lifecycle` 不变,解除后恢复注入,暂停期间的会话 `arm=excluded`、不计入任何一组。与 R20-6.5 的 `safety` 熔断并列:后者停采集,前者只停增加影响。
@@ -6350,6 +6352,8 @@ v3.1 已把用户决定列全;以下是落契约时新发现的契约细节取�
 
 **冻结后订正 W0-19(2026-11-12,W6 实现口径澄清与订正)**:判变差零假设(C1 / C3 率比 = 1、C2 = 0、C6 = 0);资格窗口边界(命中按信号时刻);C6 分母剔除已关联且资格不成立的行、保留资格不可知的行;读取下限;采集水位截断与残余风险登记;最坏情况敏感性只做 C6。**取代关系**:①R21-7.1「伤害 = 下界严格大于 1(或 C6 差值下界严格大于 5 个百分点)」在 canary / adopted 判变差中由 R21-7.4 置换检验的零假设取代(R21-8.4① 不变);②R21-6.7 最坏情况敏感性的范围收窄为只做 C6,并登记主分析结局未覆盖的限制(用户 2026-11-12 选择框「照现在的做法写入」,R21-6.7 / R21-7.1 / R21-7.4 原位已标注);其余只补原文未定的口径。**未改**:R21-7.1 常量数值、R21-7.3 / 7.5(V2)、R21-6.6、R21-8.4。
 
+**冻结后订正 W0-20(2026-11-12,W7 回滚 journal 与口径)**:`PersonalTxn` 加 `content_sha256` / `by` / `terminal_event`(W7 起写入必带);`rollback_to` 只用 `cleared`;缩减入口用 head.json 的 owner_repo_fp。**取代关系**:W0-17 表 `rollback_to` 行由「暂允许全部回滚原因」收窄为 `cleared`(用户 2026-11-12 选择框,原位已标注);其余为新增可选字段与口径补充。**未改**:R21-9.1 各段动作与判据、R21-9.5 其余条款、`PersonalTxn` 既有字段。
+
 ### 21.24 V1 拆期与 W0 订正(冻结后订正 W0-1 … W0-12;2026-11-09,依据用户 2026-11-04 选择框 Q1–Q5、V1i-2、V1i-4…10 按规划稿处理,2026-11-09 选「现在开工 W0 + V1a」)
 
 按节首规则:原位加标注、本节写正文、§21.23 记录。本节**不改**任何已冻结条款的 `[V1]` 标签;被取代的原文在原位以删除线或标注指回本节。W0 只落契约、schema、枚举与 lint 骨架,`RSI_AUTO_PHASE` 仍为 0(R21-0.1)。
@@ -6635,7 +6639,7 @@ W3(候选创建与闸)实现时发现的两处契约未定点,用户 2026-11-11 
 | `veto`        | `vetoed`                                                                                                                                                                                                                                                                                       | `rsi veto`                                                                                    |
 | `exec_event`  | `exec_post_check_failed`、`exec_timeout_unclean`                                                                                                                                                                                                                                               | `exec-run` 事后检测 / 超时清理(R21-16.2c);凭据由 worker 消费事件后写入,仍记 `by = exec_event` |
 | `worker`      | 终止 / 异常原因码中除 `cleared`、`vetoed`、`exec_post_check_failed`、`exec_timeout_unclean`、`identity_changed` 外的全部:`harm_c1`、`harm_c2`、`harm_c3`、`harm_c4`、`harm_c6`、`limit_reached`、`tainted`、`static_sync_timeout`、`withdraw_120`、`no_hit`、`judge_reject`、`judge_injection` | worker 的回滚第二段、taint、judge 终止                                                        |
-| `rollback_to` | 终止 / 异常原因码中除 `identity_changed` 外的全部                                                                                                                                                                                                                                              | `rsi rollback --to`;其专属原因码契约未定,归 W7 订正后收窄                                     |
+| `rollback_to` | `cleared`(W0-20 收窄)                                                                                                                                                                                                                                                                          | `rsi rollback --to`:用户主动缩减影响,不借 `vetoed`(避免触发指纹永久黑名单)                    |
 
 - **来源保留**:前台 `clear` / `veto` / `rollback --to` 发起、由 worker 续做(含 journal 崩溃恢复)的凭据,保留发起时的 `by`;worker 消费 `exec-run` 事件写的凭据记 `by = exec_event`。实现与崩溃续做测试归 W7。
 - 一律拒绝:正常转移码(含 `revocation_reconciled`)、G0–G8 码、`identity_changed`(R21-9.1:身份变化不写凭据,改用旧身份的拒绝标记)。读到不合规的行 → 按读取失败处理(hint 走 R21-6.11 第 4a 行 `permit_unreadable`;worker 对账 fail-closed)。
@@ -6662,6 +6666,17 @@ W6(变差检验,`src/rsi/analysis/`)实现时契约未定的点,用户 2026-11-1
 - **读取下限**:会话计数行从分析窗口起点的 UTC 日零点往前读 `2 × 30 + 1` 个 UTC 日(覆盖开始得比窗口早的 resume 会话);资格命中**直接从信号生成**,信号从同一 UTC 日零点再往前多读一个资格窗口(30 个 UTC 日),因此最早读进来的会话,其资格窗口内的命中信号都在读取范围内(W6b 修复)。
 - **采集水位截断**:只统计开始时刻 ≤ 采集覆盖时刻(collectedThrough)的会话;账行时刻 > 覆盖时刻的不进 C6(不把「还没读到」当关联失败);覆盖时刻不可得 → 整体 `unavailable`。**残余风险(登记,不消除)**:开始早于覆盖时刻、读取时仍在进行的会话,其当前累计计数可能偏低;组间统计量的偏差方向不确定(少计落在 control 时会放大表观伤害,落在 treat 时会掩盖伤害)。后续治理需要 L0 能标识「会话已结束且已完整采集」,并规定只纳入这类会话;单加一个时间字段不足以消除。
 - **最坏情况敏感性的范围(收窄 R21-6.7 原文)**:R21-6.7「关联失败的按最坏情况做敏感性分析」在 V1 只对 C6 做——在最后一次查看的时点,把关联失败的 treat 账行记不完整、control 账行记完整,重算一次 C6 置换检验,只出报告(`c6_worst_case`)、不改判定、不消耗 α。C1 / C3 / C2 不做:关联失败的会话没有项目,进不了分层,计数结局也没有可插补的上界。**登记限制**:主分析结局(C1 / C2 / C3)对关联失败的缺失敏感性未覆盖;C6 的完整率插补不等价于覆盖它。
+
+#### W0-20 回滚 journal 的恢复字段与 W7 口径(2026-11-12;R21-9.1、R21-9.5、R21-9.6、W0-17)
+
+W7(回滚四段、撤销凭据写入方、缩减入口、熔断)验收评审发现的契约缺口,用户 2026-11-12 选择框「journal 加字段」:
+
+- **`PersonalTxn` 追加三个可选键**(`src/contracts/rsi-personal.ts`):`content_sha256`(被撤销内容的哈希)、`by`(撤销来源,W0-17)、`terminal_event`(触发回滚的终止事件,含证据)。
+  - **新格式**(W7 起写入):首次写 journal 时三个键必须一起落盘,且 `terminal_event` 在落盘前已通过转移引擎的事件 schema 并与 `reason` / `target_terminal` 一致;写入边界由机器强制(专用的新 journal 写入 schema 或唯一创建函数在持久化前校验,配负向测试)。之后任一子状态续做都从 journal 取这三项,不依赖私有仓库或权威记录可读。
+  - **旧格式**(缺这三个键):只在来源能唯一证明时还原——`by` 只在 `(kind, reason)` 唯一对应一个来源时推出(例如 `kind=rollback, reason=cleared` 可能来自 `rollback_to` 或 worker,有歧义 → 不推出);`content_sha256` 只能从撤销凭据,或经 `head.json` 记录的提交读取权威记录取回(后者要求私有仓库可读,head.json 本身不存哈希);`terminal_event` 只对原因码本身足以构成完整事件的情形重建(无证据要求的终止事件),`limit_reached` 等需要原始证据的情形不重建。任一项还原不了 → 该段 `incomplete`(不写凭据、不伪造,等人工或后续对账)。
+  - **两种失败分开**:必需项缺失且不可恢复 = `incomplete`;字段存在但不合规(如 `terminal_event` 过不了引擎 schema 或与 `reason` 不一致)= `txn_invalid`(fail-closed,不做后续写入)。
+- **`rollback_to` 的原因码**(取代 W0-17 表中「暂允许全部回滚原因」):只用 `cleared`。`rsi rollback --to` 是用户主动缩减影响,不借 `vetoed`(会触发指纹永久黑名单),也不借伤害类原因(不是判定结论)。
+- **缩减入口的仓库指纹**:`[rsi]` 配置不可用或原仓库不存在时(R21-9.5 缩减入口),`rsi auto clear` 用 `head.json` 里记录的 `owner_repo_fp`,因此**该缩减分支**不判 `personal_owner_changed`;R21-3.5 情形②(分叉)照常判,分叉时按 R21-9.3a `deferred`。配置可用时照常用当前 `[rsi] repo` 现算。
 
 #### W0 订正的合法 / 错误示例
 
@@ -6865,6 +6880,52 @@ W6(变差检验,`src/rsi/analysis/`)实现时契约未定的点,用户 2026-11-1
   "phase": "injection_disabled",
   "identity12": null,
   "at": "2026-11-09T08:00:00.000Z"
+}
+```
+
+`PersonalTxn` 合法(W0-20,带恢复字段):
+
+<!-- example:valid schema=PersonalTxn -->
+
+```json
+{
+  "schema_version": 1,
+  "txn_id": "0123456789abcdef",
+  "candidate_id": "ra_0123456789ab",
+  "kind": "rollback",
+  "reason": "limit_reached",
+  "target_terminal": "expired",
+  "phase": "rollback_requested",
+  "identity12": null,
+  "at": "2026-11-09T08:00:00.000Z",
+  "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "by": "worker",
+  "terminal_event": {
+    "kind": "canary_limit",
+    "evidence": "canary-limit:days=90",
+    "max_arm_sessions": 0
+  }
+}
+```
+
+说明(W0-20):`terminal_event` 为对象但过不了转移引擎的事件 schema(例如 `{"kind": "limit"}`)时,`PersonalTxn` 外层仍合法,续做入口在推进前校验失败 → `txn_invalid`,不做任何后续写入(测试归 W7)。
+
+`PersonalTxn` 错误(W0-20):`terminal_event` 不是 JSON 对象。状态 = txn 不合规,阻断范围同下,原因码 `RSI_FAIL_CLOSED reason=txn_invalid`:
+
+<!-- example:invalid schema=PersonalTxn -->
+
+```json
+{
+  "schema_version": 1,
+  "txn_id": "0123456789abcdef",
+  "candidate_id": "ra_0123456789ab",
+  "kind": "rollback",
+  "reason": "harm_c1",
+  "target_terminal": "rolled_back",
+  "phase": "injection_disabled",
+  "identity12": null,
+  "at": "2026-11-09T08:00:00.000Z",
+  "terminal_event": "harm"
 }
 ```
 

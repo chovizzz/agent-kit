@@ -283,6 +283,15 @@ export const PersonalTxnSchema = z.strictObject({
   phase: z.enum(RSI_ROLLBACK_PHASES),
   identity12: Hex(12).nullable(),
   at: IsoTimestampSchema,
+  /**
+   * W0-20:首次写 journal 时一起落盘的恢复事实(旧 journal 缺失时按 W7 的兜底还原;W7 起写入方必须带)。
+   * - `content_sha256`:该候选被撤销的内容哈希(写撤销凭据要用,不依赖仓库可读)
+   * - `by`:撤销来源(W0-17 来源保留)
+   * - `terminal_event`:触发回滚的终止事件(含证据)。契约层只校验是 JSON 对象;续做时由转移引擎的事件 schema 校验,不合规 = txn 不合规(fail-closed)
+   */
+  content_sha256: Sha256Schema.optional(),
+  by: z.enum(RSI_REVOCATION_BY).optional(),
+  terminal_event: z.record(z.string(), z.unknown()).optional(),
 });
 export type PersonalTxn = z.infer<typeof PersonalTxnSchema>;
 
