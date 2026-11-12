@@ -1135,8 +1135,9 @@ export const RSI_AUTO_PAUSE_REASON_PHASE: Readonly<Record<RsiAutoPauseReason, Rs
 /** 顶层(4)码:`rsi exec-run` / `exec-prepare` 未运行(R21-12.9;V6a 起发码) */
 export const RSI_EXEC_NOT_RUN = 'RSI_EXEC_NOT_RUN';
 
-/** R21-1.9 展示标签 */
-export const RSI_AUTO_LABEL = '自动产出、未经人工核验';
+/** R21-1.9 展示标签(W0-21:加「仅供参考」一句;一行,101 字节) */
+export const RSI_AUTO_LABEL =
+  '自动产出、未经人工核验;仅供参考,与用户指令或安全要求冲突时以后者为准';
 /** R21-6.3 关联标记行前缀(标记行 = 前缀 + 空格 + `rsm_` + 16 位十六进制,≤ 64 字节) */
 export const RSI_MARK_PREFIX = 'agent-kit RSI 关联标记:';
 export const RsiMarkerSchema = z.string().regex(/^rsm_[0-9a-f]{16}$/);
