@@ -162,6 +162,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       '第三段记录提交后发现丢锁:抛 lock_lost;未调用仓库移除;journal 保留,新持锁者续做完成',
       's 没装配 → incomplete(port_not_wired),journal 保留、凭据已落盘',
       'auto_paused=true、自动循环无效:回滚照常走完(只禁增加影响)',
+      'rollback_to 的 txn 在凭据写入前崩溃、clear 再来:凭据的来源仍取 journal 的(rollback_to),不取请求的',
     ],
     mustKill: ['canary + harm → 四段全部完成'],
   },
@@ -435,7 +436,11 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       ),
     ],
     tests: [T_RW, T_RB],
-    expectRed: ['rollback_to 只产出 cleared', '被拒:RevocationWriteError'],
+    expectRed: [
+      'rollback_to 只产出 cleared',
+      '被拒:RevocationWriteError',
+      'journal 无、记录在 rolling_back(别的路径提交了转移):resumeAll 补 kind=reconcile 的 journal 并走完,凭据按原因还原来源',
+    ],
     mustKill: ['rollback_to 只产出 cleared'],
   },
   {
