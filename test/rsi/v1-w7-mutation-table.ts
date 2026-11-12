@@ -96,7 +96,15 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       ),
     ],
     tests: [T_CR, T_RB],
-    expectRed: ['journal 领先于记录'],
+    expectRed: [
+      'journal 领先于记录',
+      '第二段判据:凭据从盘上重读;凭据写入返回成功但读不到 → 本段未完成、不推进 journal',
+      'R21-9.3:撤销路径遇到用户改过的块(drift)→ 停在第四段之前:记录停在 static_removal_pending,journal 保留,未到终态',
+      '私有仓库 deferred:凭据照样落盘;第三段判据改为 payload 已不含该候选;不提交;撤销已完成(revocation_complete,仓库部分推迟),journal 保留作待补记任务',
+      'deferred 下第三段先经撤销路径清 payload(动作含「重渲染本机 payload」),再验证缺席:不死锁',
+      '权威记录读不到(deferred):撤销事务照常运行(HOME 清理不受阻),结果带 lateEventNotApplied;仓库恢复后调用方重试 → 施加并完成(vetoed)',
+      'journal 停在第一段、仓库 deferred 时收到较晚事件:凭据与 HOME 撤销照常执行(不被事件持久化失败挡住),事件如实报未施加',
+    ],
     // 「记录领先于 journal」那条在一次运行内走完(内存里的 phase 照常前进),看不出 journal 没落盘,不列入
     mustKill: ['journal 领先于记录'],
   },
@@ -133,7 +141,28 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       ),
     ],
     tests: [T_RB, T_CR],
-    expectRed: ['canary + harm → 四段全部完成', '→ resumeAll 续做到终态'],
+    expectRed: [
+      'canary + harm → 四段全部完成',
+      '→ resumeAll 续做到终态',
+      ' → 第三次续做仍到终态',
+      '同一候选在 rollback_to 的 txn 在途时 clear 再来:复用该 txn,来源取 journal 的(rollback_to),不新开、凭据一行',
+      'journal 领先于记录(journal 已到 rollback_complete,记录还在 canary):续做按盘上判据补齐,不回退 journal',
+      '顺序(安全):journal 先于凭据,凭据先于记录提交与私有仓库移除,仓库移除先于 HOME 清理,效果最后、journal 最后才删',
+      'R21-9.3:撤销路径遇到用户改过的块(drift)→ 停在第四段之前:记录停在 static_removal_pending,journal 保留,未到终态',
+      '私有仓库 deferred:凭据照样落盘;第三段判据改为 payload 已不含该候选;不提交;撤销已完成(revocation_complete,仓库部分推迟),journal 保留作待补记任务',
+      '记录可读但仓库提交 deferred(第三段「成功」):收尾重新检查并补做仓库移除,没删之前不删 journal、不假装完成',
+      '私有仓库 invalid:第三段中止(不当成已完成),凭据已落盘;修好后续做',
+      '崩溃后再次发起同一请求:复用同一 journal、凭据不重复;不同 kind / 原因的请求也复用',
+      '终态之后重来:凭据 already_present、记录不动、效果按键 already,不产生重复',
+      'harm 回滚走到第四段后用户 veto:复用同一 txn,终态理由取优先级最高者(vetoed),否决黑名单落地',
+      '权威记录读不到(deferred):撤销事务照常运行(HOME 清理不受阻),结果带 lateEventNotApplied;仓库恢复后调用方重试 → 施加并完成(vetoed)',
+      '提交失败(commit_failed):不以旧理由进终态、不删 journal、不返回 complete;重试成功后保留 veto 优先级与黑名单',
+      '记录还在 canary(journal 在第二段中断):事件留给第三段施加;第二段失败时 journal 保留,重试走完就是已施加(无标记)',
+      '记录已终态:不再施加(终态上的 veto 黑名单归前台命令),如实标记 record_terminal',
+      '第三段记录提交后发现丢锁:抛 lock_lost;未调用仓库移除;journal 保留,新持锁者续做完成',
+      's 没装配 → incomplete(port_not_wired),journal 保留、凭据已落盘',
+      'auto_paused=true、自动循环无效:回滚照常走完(只禁增加影响)',
+    ],
     mustKill: ['canary + harm → 四段全部完成'],
   },
   {
@@ -157,7 +186,17 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       swap(RB, 'effects = await landTerminalEffects(d.keyedEffects, rec);', "effects = 'none';"),
     ],
     tests: [T_RB, T_EF],
-    expectRed: ['canary + harm → 四段全部完成', '回滚执行器:效果落地失败'],
+    expectRed: [
+      'canary + harm → 四段全部完成',
+      '回滚执行器:效果落地失败',
+      '顺序(安全):journal 先于凭据,凭据先于记录提交与私有仓库移除,仓库移除先于 HOME 清理,效果最后、journal 最后才删',
+      'R21-9.3:撤销路径遇到用户改过的块(drift)→ 停在第四段之前:记录停在 static_removal_pending,journal 保留,未到终态',
+      '私有仓库 deferred:凭据照样落盘;第三段判据改为 payload 已不含该候选;不提交;撤销已完成(revocation_complete,仓库部分推迟),journal 保留作待补记任务',
+      '终态之后重来:凭据 already_present、记录不动、效果按键 already,不产生重复',
+      'harm 回滚走到第四段后用户 veto:复用同一 txn,终态理由取优先级最高者(vetoed),否决黑名单落地',
+      '提交失败(commit_failed):不以旧理由进终态、不删 journal、不返回 complete;重试成功后保留 veto 优先级与黑名单',
+      'journal 无、记录在 rolling_back(别的路径提交了转移):resumeAll 补 kind=reconcile 的 journal 并走完,凭据按原因还原来源',
+    ],
     mustKill: ['canary + harm → 四段全部完成', '回滚执行器:效果落地失败'],
   },
   {
@@ -193,7 +232,13 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       ),
     ],
     tests: [T_RB],
-    expectRed: ['权威记录读不到(deferred):撤销事务照常运行'],
+    expectRed: [
+      '权威记录读不到(deferred):撤销事务照常运行',
+      'harm 回滚走到第四段后用户 veto:复用同一 txn,终态理由取优先级最高者(vetoed),否决黑名单落地',
+      'journal 停在第一段、仓库 deferred 时收到较晚事件:凭据与 HOME 撤销照常执行(不被事件持久化失败挡住),事件如实报未施加',
+      '提交失败(commit_failed):不以旧理由进终态、不删 journal、不返回 complete;重试成功后保留 veto 优先级与黑名单',
+      '记录已终态:不再施加(终态上的 veto 黑名单归前台命令),如实标记 record_terminal',
+    ],
     mustKill: ['权威记录读不到(deferred):撤销事务照常运行'],
   },
   {
@@ -211,7 +256,12 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     clause: '较晚终止事件没施加时结果带 lateEventNotApplied(调用方据此重试)',
     edits: [swap(RB, 'return { ...out, lateEventNotApplied: lateWhy };', 'return out;')],
     tests: [T_RB],
-    expectRed: ['journal 停在第一段、仓库 deferred 时收到较晚事件', '记录已终态:不再施加'],
+    expectRed: [
+      'journal 停在第一段、仓库 deferred 时收到较晚事件',
+      '记录已终态:不再施加',
+      '权威记录读不到(deferred):撤销事务照常运行(HOME 清理不受阻),结果带 lateEventNotApplied;仓库恢复后调用方重试 → 施加并完成(vetoed)',
+      '提交失败(commit_failed):不以旧理由进终态、不删 journal、不返回 complete;重试成功后保留 veto 优先级与黑名单',
+    ],
     mustKill: ['journal 停在第一段、仓库 deferred 时收到较晚事件'],
   },
   {
@@ -247,7 +297,10 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       ),
     ],
     tests: [T_RB],
-    expectRed: ['deferred 下第三段先经撤销路径清 payload'],
+    expectRed: [
+      'deferred 下第三段先经撤销路径清 payload',
+      'deferred 下撤销路径遇到用户改过的块(drift)→ 第三段未完成',
+    ],
     mustKill: ['deferred 下第三段先经撤销路径清 payload'],
   },
   {
@@ -265,7 +318,15 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       'W0-20 旧格式 journal:来源由 (kind, reason) 在 W0-17 表里唯一对应的来源还原(veto / exec_event / worker),不是一律 worker',
     edits: [swap(RJ, 'return owners.length === 1 ? owners[0] : undefined;', "return 'worker';")],
     tests: [T_JB],
-    expectRed: ['可还原:原因'],
+    expectRed: [
+      '可还原:原因',
+      'cleared 的 rolling_back 记录没有 journal:来源有歧义(rollback_to / clear)→ refused by_ambiguous,零动作',
+      '):不伪造 → incomplete(terminal_event),不写凭据、记录不动、journal 保留',
+      'cleared 配 kind=rollback / reconcile 来源有歧义(rollback_to 或 clear):不推出 → incomplete(by),不写凭据',
+      '内容哈希:不信权威副本的当前值(记录里有、但没有凭据也没有 recordedSha)→ incomplete(content_sha256),不写凭据',
+      '内容哈希:recordedSha 对不上 txn_id 不采信;复用入口时请求带来的内容哈希也不是允许的来源',
+      '多项缺失一并报告(by + content_sha256;cleared 的事件可重建,不在其列)',
+    ],
     mustKill: ['可还原:原因'],
   },
   {
@@ -284,7 +345,11 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       'W0-20 旧格式 journal:cleared 配 kind=rollback / reconcile 来源有歧义(rollback_to 或 clear),不推出 → incomplete,不写凭据',
     edits: [swap(RJ, 'return owners.length === 1 ? owners[0] : undefined;', 'return owners[0];')],
     tests: [T_JB],
-    expectRed: ['来源有歧义(rollback_to 或 clear)', 'cleared 的 rolling_back 记录没有 journal'],
+    expectRed: [
+      '来源有歧义(rollback_to 或 clear)',
+      'cleared 的 rolling_back 记录没有 journal',
+      '多项缺失一并报告(by + content_sha256;cleared 的事件可重建,不在其列)',
+    ],
     mustKill: ['来源有歧义(rollback_to 或 clear)', 'cleared 的 rolling_back 记录没有 journal'],
   },
   {
@@ -298,7 +363,16 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       ),
     ],
     tests: [T_RB, T_CR],
-    expectRed: ['崩溃后再次发起同一请求', 'rollback_to 的 txn 在凭据写入前崩溃、clear 再来'],
+    expectRed: [
+      '崩溃后再次发起同一请求',
+      'rollback_to 的 txn 在凭据写入前崩溃、clear 再来',
+      'harm 回滚走到第四段后用户 veto:复用同一 txn,终态理由取优先级最高者(vetoed),否决黑名单落地',
+      '权威记录读不到(deferred):撤销事务照常运行(HOME 清理不受阻),结果带 lateEventNotApplied;仓库恢复后调用方重试 → 施加并完成(vetoed)',
+      'journal 停在第一段、仓库 deferred 时收到较晚事件:凭据与 HOME 撤销照常执行(不被事件持久化失败挡住),事件如实报未施加',
+      '提交失败(commit_failed):不以旧理由进终态、不删 journal、不返回 complete;重试成功后保留 veto 优先级与黑名单',
+      '记录还在 canary(journal 在第二段中断):事件留给第三段施加;第二段失败时 journal 保留,重试走完就是已施加(无标记)',
+      '记录已终态:不再施加(终态上的 veto 黑名单归前台命令),如实标记 record_terminal',
+    ],
     mustKill: ['崩溃后再次发起同一请求', 'rollback_to 的 txn 在凭据写入前崩溃、clear 再来'],
   },
   {
@@ -369,7 +443,10 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     clause: 'R21-9.1 identity_changed 永不写凭据',
     edits: [swap(RW, "if (reason === 'identity_changed') return 'identity_changed';", '')],
     tests: [T_RW],
-    expectRed: ['identity_changed 永远不写凭据'],
+    expectRed: [
+      'identity_changed 永远不写凭据',
+      'rollback_to 只产出 cleared(收窄);契约允许的其余终止原因在本写入方被拒',
+    ],
     mustKill: ['identity_changed 永远不写凭据'],
   },
   {
@@ -392,7 +469,15 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       ),
     ],
     tests: [T_CL],
-    expectRed: ['shadow 候选:凭据 by=clear'],
+    expectRed: [
+      'shadow 候选:凭据 by=clear',
+      'canary 候选(V1b):走四段,记录 rolled_back / cleared、deploy 清空;终态效果记待对账(不访问 .state)',
+      '工作树被用户改动(diverged):凭据照样落盘;私有仓库不提交、不动引用 / 索引 / 工作树(不 reset 用户改动);journal 保留;分叉解除后续做完成',
+      '[rsi] repo 换了(指纹不同):普通读取是 deferred(personal_owner_changed),缩减入口用 head.json 记录的指纹照常完成',
+      '持锁方在时 clear 拿不到 personal/lock(locked),不写;释放后 clear 完成,之后 grantCanary 被凭据拒绝(revoked)',
+      '①clear 不碰 .state:canary.json 原样残留;hint 对被清候选为 excluded(revoked);worker 首次运行补 stop 行并删缓存,屏障放行;④再对账一次分组账只多一条 stop',
+      'journal 在、记录已终态:再跑一次 clear 先续做在途 journal(不依赖 worker)→ 完成,journal 删除,凭据一行;干跑能看到在途 journal',
+    ],
     mustKill: ['shadow 候选:凭据 by=clear'],
   },
   {
@@ -408,7 +493,10 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     clause: 'R21-12.1 干跑零写入',
     edits: [swap(CL, '  if (!opts.write) {', '  if (false) {')],
     tests: [T_CL],
-    expectRed: ['干跑(无 --write)'],
+    expectRed: [
+      '干跑(无 --write)',
+      'journal 在、记录已终态:再跑一次 clear 先续做在途 journal(不依赖 worker)→ 完成,journal 删除,凭据一行;干跑能看到在途 journal',
+    ],
     mustKill: ['干跑(无 --write)'],
   },
   {
@@ -422,7 +510,15 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       ),
     ],
     tests: [T_CL],
-    expectRed: ['canary 候选(V1b):走四段'],
+    expectRed: [
+      'canary 候选(V1b):走四段',
+      'shadow 候选:凭据 by=clear,私有仓库提交终态 cleared 并删原子文件;没有创建任何仓库 .state / rsi 目录,[rsi] repo 目录仍为空',
+      '工作树被用户改动(diverged):凭据照样落盘;私有仓库不提交、不动引用 / 索引 / 工作树(不 reset 用户改动);journal 保留;分叉解除后续做完成',
+      '[rsi] repo 换了(指纹不同):普通读取是 deferred(personal_owner_changed),缩减入口用 head.json 记录的指纹照常完成',
+      '持锁方在时 clear 拿不到 personal/lock(locked),不写;释放后 clear 完成,之后 grantCanary 被凭据拒绝(revoked)',
+      '①clear 不碰 .state:canary.json 原样残留;hint 对被清候选为 excluded(revoked);worker 首次运行补 stop 行并删缓存,屏障放行;④再对账一次分组账只多一条 stop',
+      'journal 在、记录已终态:再跑一次 clear 先续做在途 journal(不依赖 worker)→ 完成,journal 删除,凭据一行;干跑能看到在途 journal',
+    ],
     mustKill: ['canary 候选(V1b):走四段'],
   },
   {
@@ -466,6 +562,8 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     expectRed: [
       '引擎效果(去掉 commit / 审计)== 由终态记录推出的效果',
       'journal 无、记录在 rolling_back',
+      'harm 回滚走到第四段后用户 veto:复用同一 txn,终态理由取优先级最高者(vetoed),否决黑名单落地',
+      '提交失败(commit_failed):不以旧理由进终态、不删 journal、不返回 complete;重试成功后保留 veto 优先级与黑名单',
     ],
     mustKill: ['引擎效果(去掉 commit / 审计)== 由终态记录推出的效果'],
   },
@@ -474,7 +572,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     clause: 'R21-11.1 冷却只对 auto_rollback / expired',
     edits: [swap(ER, "} else if (rec.lifecycle === 'expired') {", '} else if (true) {')],
     tests: [T_EF],
-    expectRed: ['人工终态没有冷却'],
+    expectRed: ['人工终态没有冷却', ':引擎效果(去掉 commit / 审计)== 由终态记录推出的效果'],
     mustKill: ['人工终态没有冷却'],
   },
   {
@@ -563,7 +661,11 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       swap(BR, 'if (!phaseAtLeast(RSI_AUTO_PAUSE_REASON_PHASE[reason], phase)) {', 'if (false) {'),
     ],
     tests: [T_BR],
-    expectRed: ['本期不发的码:apply_failed(V2)'],
+    expectRed: [
+      '本期不发的码:apply_failed(V2)',
+      'rollback_storm 属 V1b:V1a 相位不发(W0-1 订正)',
+      '本期不发的码:不写标记、不写状态、不 mute',
+    ],
     mustKill: ['本期不发的码:apply_failed(V2)'],
   },
   {
@@ -593,7 +695,11 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     clause: 'R21-10.4 resume 只清人工码',
     edits: [swap(BR, 'if (RSI_AUTO_RELEASE_REASONS.has(code)) continue;', '')],
     tests: [T_BR],
-    expectRed: ['resume 只清人工码'],
+    expectRed: [
+      'resume 只清人工码',
+      '人工 resume:没有剩余码时删任何标记;仍有码时标记保留(hint 继续停注入)',
+      '内容读不出的标记(创建后写内容前被杀)而状态没有码:人工 resume 可清除;仍有码时不清',
+    ],
     mustKill: ['resume 只清人工码'],
   },
   {
@@ -607,7 +713,11 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       ),
     ],
     tests: [T_BR],
-    expectRed: ['resume:rollback_storm / gate_internal 重查四项'],
+    expectRed: [
+      'resume:rollback_storm / gate_internal 重查四项',
+      'resume:apply_failed / personal_repo_invalid 重查自己;其余人工码无条件可清',
+      'resume 清掉 user_paused → 通知命令层删 AUTO_PAUSE 标记;没清则不',
+    ],
     mustKill: ['resume:rollback_storm / gate_internal 重查四项'],
   },
   {
@@ -615,7 +725,12 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     clause: 'R21-10.1 触发 = 写熔断码,先写状态再置 canary',
     edits: [swap(BR, "if (r.kind === 'tripped') await d.state.write(r.state);", '')],
     tests: [T_BR],
-    expectRed: ['触发:marker.ensure 先于 state.write 先于 canary.mute'],
+    expectRed: [
+      '触发:marker.ensure 先于 state.write 先于 canary.mute',
+      '状态写入崩溃:标记已在盘上(hint 看得到),状态没写;下一次 enforceMute 补码、不删标记、补 mute',
+      '状态已写、mute 崩溃:下一次 enforceMute 补做(熔断仍在 → mute),无熔断则不 mute',
+      '已处于该码:不重写状态,但仍补标记与 mute(幂等)',
+    ],
     mustKill: ['触发:marker.ensure 先于 state.write 先于 canary.mute'],
   },
   {
@@ -623,7 +738,14 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     clause: 'R21-10.1 崩溃后每次 worker 步骤补做 canary 置位',
     edits: [swap(BR, 'return d.canary.mute();', 'return false;')],
     tests: [T_BR],
-    expectRed: ['状态已写、mute 崩溃'],
+    expectRed: [
+      '状态已写、mute 崩溃',
+      '状态写入崩溃:标记已在盘上(hint 看得到),状态没写;下一次 enforceMute 补码、不删标记、补 mute',
+      '用户标记(by=user)存在而状态没码:补 user_paused,标记不动',
+      '有码而没有标记(状态已写、标记缺):enforceMute 补标记',
+      '部分解除后标记仍在:enforceMute 不复活已被清掉的码(标记只记首个原因;状态里已有别的码时不补)',
+      '残余窗口(如实钉住):resume 写了状态、删标记前崩溃 → 下一次 enforceMute 由标记补回码(安全方向:不会少停注入)',
+    ],
     mustKill: ['状态已写、mute 崩溃'],
   },
   // ---- 锁序 ----
@@ -654,7 +776,11 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     clause: 'R21-3.3 释放后注销登记(守卫不残留)',
     edits: [swap(PL, '            unmarkPersonalLockHeld(file);\n', '')],
     tests: [T_LK],
-    expectRed: ['正向顺序 rsi → personal 允许'],
+    expectRed: [
+      '正向顺序 rsi → personal 允许',
+      '先 personal 后 rsi → internal(反向取锁);rsi 锁文件没有被创建',
+      'personal 锁获取失败(已被占)不会残留登记:登记只在拿到锁之后',
+    ],
     mustKill: ['正向顺序 rsi → personal 允许'],
   },
   // ---- harm 串接 ----
@@ -687,7 +813,12 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     clause: 'W0-17 worker 自身伤害判定用 by=worker',
     edits: [swap(HC, "by: 'worker',", "by: 'clear',")],
     tests: [T_HC],
-    expectRed: ['harm 结论 → 候选走完四段'],
+    expectRed: [
+      'harm 结论 → 候选走完四段',
+      'C4 越限也是 harm(reason=harm_c4)',
+      '生产缺端口(payload 没装配):执行器 incomplete,凭据已落盘(hint 已停),journal 保留 —— 不假装完成',
+      '仓库 deferred(人工分叉)时 harm:凭据照样落盘 —— hint 停止注入不依赖私有仓库',
+    ],
     mustKill: ['harm 结论 → 候选走完四段'],
   },
   // ---- W0-20 journal 自带恢复事实(H1 / M4)与入口校验 ----
@@ -698,7 +829,17 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       swap(RJ, '    content_sha256: req.content_sha256,\n    by: req.by,', '    by: req.by,'),
     ],
     tests: [T_JN],
-    expectRed: ['盘上 journal 带齐三项', '崩于凭据落盘前'],
+    expectRed: [
+      '盘上 journal 带齐三项',
+      '崩于凭据落盘前',
+      'reconcile(kind=reconcile)的 journal 同样带齐三项:终止事实由原因重建(vetoed → veto 事件,证据 txn:<id>)',
+      ':崩于凭据落盘后(after:revocation),续做再崩于记录提交前(enter:static_removal_pending)',
+      ':崩于记录提交前(enter:static_removal_pending),续做在仓库 deferred 下再崩,最后恢复续做到终态',
+      '正常回滚:审计键集合固定(回滚路径 7 条转移条目 → 7 个键 = 条目的 idem_key),每键恰好落地一次',
+      '提交后崩溃(after:record_terminal)续做:每个审计键仍只落地一次',
+      '审计落地失败(提交之后):收尾抛错、journal 保留;修好后续做补齐全部审计键,各一次',
+      'recoverTerminalEffects 对执行器终态补审计(按键幂等,再跑不重复)',
+    ],
     mustKill: ['盘上 journal 带齐三项', '崩于凭据落盘前'],
   },
   {
@@ -706,7 +847,17 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     clause: 'W0-20 journal 首次落盘带 by(来源保留)',
     edits: [swap(RJ, '    by: req.by,\n    terminal_event: event,', '    terminal_event: event,')],
     tests: [T_JN],
-    expectRed: ['盘上 journal 带齐三项'],
+    expectRed: [
+      '盘上 journal 带齐三项',
+      'reconcile(kind=reconcile)的 journal 同样带齐三项:终止事实由原因重建(vetoed → veto 事件,证据 txn:<id>)',
+      ':崩于凭据落盘前(journal:rollback_requested),仓库 deferred 下续做写出凭据,再崩于凭据后',
+      ':崩于凭据落盘后(after:revocation),续做再崩于记录提交前(enter:static_removal_pending)',
+      ':崩于记录提交前(enter:static_removal_pending),续做在仓库 deferred 下再崩,最后恢复续做到终态',
+      '正常回滚:审计键集合固定(回滚路径 7 条转移条目 → 7 个键 = 条目的 idem_key),每键恰好落地一次',
+      '提交后崩溃(after:record_terminal)续做:每个审计键仍只落地一次',
+      '审计落地失败(提交之后):收尾抛错、journal 保留;修好后续做补齐全部审计键,各一次',
+      'recoverTerminalEffects 对执行器终态补审计(按键幂等,再跑不重复)',
+    ],
     mustKill: ['盘上 journal 带齐三项'],
   },
   {
@@ -714,7 +865,17 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     clause: 'W0-20 journal 首次落盘带 terminal_event(limit_reached 等无法由原因还原的事件)',
     edits: [swap(RJ, '    terminal_event: event,\n  });', '  });')],
     tests: [T_JN],
-    expectRed: ['盘上 journal 带齐三项', '崩于凭据落盘后'],
+    expectRed: [
+      '盘上 journal 带齐三项',
+      '崩于凭据落盘后',
+      'reconcile(kind=reconcile)的 journal 同样带齐三项:终止事实由原因重建(vetoed → veto 事件,证据 txn:<id>)',
+      ':崩于凭据落盘前(journal:rollback_requested),仓库 deferred 下续做写出凭据,再崩于凭据后',
+      ':崩于记录提交前(enter:static_removal_pending),续做在仓库 deferred 下再崩,最后恢复续做到终态',
+      '正常回滚:审计键集合固定(回滚路径 7 条转移条目 → 7 个键 = 条目的 idem_key),每键恰好落地一次',
+      '提交后崩溃(after:record_terminal)续做:每个审计键仍只落地一次',
+      '审计落地失败(提交之后):收尾抛错、journal 保留;修好后续做补齐全部审计键,各一次',
+      'recoverTerminalEffects 对执行器终态补审计(按键幂等,再跑不重复)',
+    ],
     mustKill: ['盘上 journal 带齐三项', '崩于凭据落盘后'],
   },
   {
@@ -744,7 +905,10 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     clause: 'W0-20 新 journal:拿不到终止事件(不能无证据重建)就不创建',
     edits: [swap(RJ, "if (event === undefined) return { ok: false, why: 'event_required' };", '')],
     tests: [T_JB],
-    expectRed: ['没有事件而原因不能无证据重建'],
+    expectRed: [
+      '没有事件而原因不能无证据重建',
+      'harm_c1 的 rolling_back 记录没有 journal:refused event_required,不写 journal / 凭据',
+    ],
     mustKill: ['没有事件而原因不能无证据重建'],
   },
   {
@@ -758,6 +922,12 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     expectRed: [
       'cleared 携带 veto 事件',
       'terminal_event 与 reason 不一致(harm_c1 的 journal 带 veto 事件)',
+      'vetoed 携带 clear 事件',
+      'harm_c1 携带 c2 指标事件',
+      'harm_c1 携带 judge 事件',
+      'limit_reached 携带 harm 事件',
+      '带 HARM 事件但与 reason 不一致的新格式 journal 不被当作旧格式:txn_invalid',
+      'terminal_event 与 reason 不一致(harm_c1 的 journal 带 c2 指标的事件)',
     ],
     mustKill: [
       'cleared 携带 veto 事件',
@@ -775,6 +945,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     expectRed: [
       'limit_reached 配 target_terminal=rolled_back',
       'terminal_event 与 target_terminal 不一致',
+      'harm_c1 配 target_terminal=expired(事件的目标是 rolled_back)',
     ],
     mustKill: [
       'limit_reached 配 target_terminal=rolled_back',
@@ -792,7 +963,15 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       ),
     ],
     tests: [T_JB],
-    expectRed: ['cleared 携带 veto 事件', 'harm_c1 配 target_terminal=expired'],
+    expectRed: [
+      'cleared 携带 veto 事件',
+      'harm_c1 配 target_terminal=expired',
+      'vetoed 携带 clear 事件',
+      'harm_c1 携带 c2 指标事件',
+      'harm_c1 携带 judge 事件',
+      'limit_reached 携带 harm 事件',
+      'limit_reached 配 target_terminal=rolled_back(事件的目标是 expired)',
+    ],
     mustKill: ['cleared 携带 veto 事件', 'harm_c1 配 target_terminal=expired'],
   },
   {
@@ -810,6 +989,8 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     expectRed: [
       '带 HARM 事件但与 reason 不一致的新格式 journal',
       'terminal_event 与 reason 不一致(harm_c1 的 journal 带 veto 事件)',
+      'terminal_event 与 reason 不一致(harm_c1 的 journal 带 c2 指标的事件)',
+      'terminal_event 与 target_terminal 不一致(harm 事件配 expired)',
     ],
     mustKill: ['带 HARM 事件但与 reason 不一致的新格式 journal'],
   },
@@ -820,7 +1001,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       swap(RJ, '    if (!p.success) return bad;\n    event = p.data;', '    event = p.data;'),
     ],
     tests: [T_JN],
-    expectRed: ['terminal_event 过不了转移引擎的事件 schema'],
+    expectRed: ['terminal_event 过不了转移引擎的事件 schema', 'terminal_event 缺必填字段'],
     mustKill: ['terminal_event 过不了转移引擎的事件 schema'],
   },
   {
@@ -838,7 +1019,10 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     clause: 'W0-20 续做:by 必须与 (kind, reason) 相容',
     edits: [swap(RJ, 'if (sourceProblem(t.by, t.kind, t.reason) !== null) return bad;', '')],
     tests: [T_JN],
-    expectRed: ['by 与 (kind, reason) 不相容'],
+    expectRed: [
+      'by 与 (kind, reason) 不相容',
+      '复用在途 txn 的入口读到不合规 journal 同样 refused,且不施加请求带来的较晚事件',
+    ],
     mustKill: ['by 与 (kind, reason) 不相容'],
   },
   {
@@ -852,7 +1036,13 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       ),
     ],
     tests: [T_JB],
-    expectRed: ['终止事件需要原始证据', '没有事件而原因不能无证据重建'],
+    expectRed: [
+      '终止事件需要原始证据',
+      '没有事件而原因不能无证据重建',
+      'harm_c1 的 rolling_back 记录没有 journal:refused event_required,不写 journal / 凭据',
+      '凭据已写(旧 journal 在第三段)而终止事件拿不到:仍 incomplete,记录与仓库都不再动',
+      '只带部分恢复键(sha + by,没有 terminal_event;0e9b1f7 写过这种 reconcile)按键逐个处理:harm_c1 拿不到事件 → incomplete(terminal_event)',
+    ],
     mustKill: ['终止事件需要原始证据', '没有事件而原因不能无证据重建'],
   },
   {
@@ -880,7 +1070,15 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       ),
     ],
     tests: [T_JB],
-    expectRed: ['终止事件需要原始证据', '来源有歧义(rollback_to 或 clear)'],
+    expectRed: [
+      '终止事件需要原始证据',
+      '来源有歧义(rollback_to 或 clear)',
+      '内容哈希:不信权威副本的当前值(记录里有、但没有凭据也没有 recordedSha)→ incomplete(content_sha256),不写凭据',
+      '内容哈希:recordedSha 对不上 txn_id 不采信;复用入口时请求带来的内容哈希也不是允许的来源',
+      '多项缺失一并报告(by + content_sha256;cleared 的事件可重建,不在其列)',
+      '凭据已写(旧 journal 在第三段)而终止事件拿不到:仍 incomplete,记录与仓库都不再动',
+      '只带部分恢复键(sha + by,没有 terminal_event;0e9b1f7 写过这种 reconcile)按键逐个处理:harm_c1 拿不到事件 → incomplete(terminal_event)',
+    ],
     mustKill: ['终止事件需要原始证据', '来源有歧义(rollback_to 或 clear)'],
   },
   // ---- M5 identity_changed(V6a)本期拒绝 ----
@@ -925,7 +1123,13 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       ),
     ],
     tests: [T_RB, T_CU],
-    expectRed: ['私有仓库 deferred:凭据照样落盘', 'clear 遇人工分叉'],
+    expectRed: [
+      '私有仓库 deferred:凭据照样落盘',
+      'clear 遇人工分叉',
+      'worker 路径(装配 deferralMark):写 repo_removal_deferred 标记 → workingMarked=true;分叉解除后 resumeAll(仍带 deferralMark)→ complete、journal 删、记录到终态',
+      'deferralMark 落地失败:异常向上(journal 保留,凭据已落盘),不返回 workingMarked=true',
+      '权威记录读不到(deferred):撤销事务照常运行(HOME 清理不受阻),结果带 lateEventNotApplied;仓库恢复后调用方重试 → 施加并完成(vetoed)',
+    ],
     mustKill: ['私有仓库 deferred:凭据照样落盘', 'clear 遇人工分叉'],
   },
   {
@@ -947,7 +1151,10 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     clause: 'H2 worker 路径写 repo_removal_deferred 标记(deferralMark)',
     edits: [swap(RB, 'await d.deferralMark.mark(t.candidate_id);', '')],
     tests: [T_CU],
-    expectRed: ['worker 路径(装配 deferralMark)'],
+    expectRed: [
+      'worker 路径(装配 deferralMark)',
+      'deferralMark 落地失败:异常向上(journal 保留,凭据已落盘),不返回 workingMarked=true',
+    ],
     mustKill: ['worker 路径(装配 deferralMark)'],
   },
   {
@@ -982,6 +1189,12 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     expectRed: [
       '触发:marker.ensure 先于 state.write 先于 canary.mute',
       'state.write 崩溃:hint 的许可端口读到',
+      '状态写入崩溃:标记已在盘上(hint 看得到),状态没写;下一次 enforceMute 补码、不删标记、补 mute',
+      '崩溃后下一次 enforceMute:由标记补码、标记保留',
+      '新建标记:文件 fsync → 父目录 fsync → state.write(顺序)',
+      '标记已存在(可能尚未落盘,如上次崩溃时别的进程刚建):不覆盖内容,但补一次文件 fsync 与父目录 fsync,之后才写 state',
+      '已存在的标记不是单链接普通文件(硬链接)→ 拒绝、不写 state(fail-closed)',
+      '已存在的标记是没有写端的 FIFO:在有界时间内拒绝(不阻塞在只读打开上),不写 state',
     ],
     mustKill: [
       '触发:marker.ensure 先于 state.write 先于 canary.mute',
@@ -995,7 +1208,11 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       swap(BR, 'if (marker === null && first !== undefined) await d.marker.ensure(first);', ''),
     ],
     tests: [T_BR, T_PM],
-    expectRed: ['有码而没有标记', '有码缺标记:enforceMute 补标记'],
+    expectRed: [
+      '有码而没有标记',
+      '有码缺标记:enforceMute 补标记',
+      'enforceMute 补标记(有码缺标记)也走同一条持久路径',
+    ],
     mustKill: ['有码而没有标记'],
   },
   {
@@ -1003,7 +1220,12 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     clause: 'H3 有标记缺码:enforceMute 由标记补码(不删标记)',
     edits: [swap(BR, 'if (code !== null && cur.reasons.length === 0) {', 'if (false) {')],
     tests: [T_BR, T_PM],
-    expectRed: ['状态写入崩溃:标记已在盘上', '崩溃后下一次 enforceMute:由标记补码'],
+    expectRed: [
+      '状态写入崩溃:标记已在盘上',
+      '崩溃后下一次 enforceMute:由标记补码',
+      '用户标记(by=user)存在而状态没码:补 user_paused,标记不动',
+      '残余窗口(如实钉住):resume 写了状态、删标记前崩溃 → 下一次 enforceMute 由标记补回码(安全方向:不会少停注入)',
+    ],
     mustKill: ['状态写入崩溃:标记已在盘上'],
   },
   {
@@ -1022,7 +1244,14 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       ),
     ],
     tests: [T_PM],
-    expectRed: ['ensure 遇到用户写的标记'],
+    expectRed: [
+      'ensure 遇到用户写的标记',
+      '新建标记:文件 fsync → 父目录 fsync → state.write(顺序)',
+      '标记已存在(可能尚未落盘,如上次崩溃时别的进程刚建):不覆盖内容,但补一次文件 fsync 与父目录 fsync,之后才写 state',
+      'enforceMute 补标记(有码缺标记)也走同一条持久路径',
+      '创建后写入失败:抛错(调用方不写 state)且**不删除**刚创建的标记(无锁并发下别的 ensure 可能已对它返回 exists)',
+      '已存在的标记是没有写端的 FIFO:在有界时间内拒绝(不阻塞在只读打开上),不写 state',
+    ],
     mustKill: ['ensure 遇到用户写的标记'],
   },
   {
@@ -1089,7 +1318,10 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       ),
     ],
     tests: [T_JN],
-    expectRed: ['较晚事件不施加(记录 / 审计 / 效果 / 凭据 / payload 零写入)'],
+    expectRed: [
+      '较晚事件不施加(记录 / 审计 / 效果 / 凭据 / payload 零写入)',
+      '复用在途 txn 的入口读到不合规 journal 同样 refused,且不施加请求带来的较晚事件',
+    ],
     mustKill: ['较晚事件不施加(记录 / 审计 / 效果 / 凭据 / payload 零写入)'],
   },
   {
@@ -1140,7 +1372,10 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     clause: 'M6 收尾按记录补做审计行(落地失败 / 提交后崩溃不丢)',
     edits: [swap(RB, 'await landAuditEffects(d.keyedEffects, rec);', '')],
     tests: [T_JN],
-    expectRed: ['审计落地失败(提交之后)'],
+    expectRed: [
+      '审计落地失败(提交之后)',
+      'recoverTerminalEffects 对执行器终态补审计(按键幂等,再跑不重复)',
+    ],
     mustKill: ['审计落地失败(提交之后)'],
   },
   {
@@ -1176,7 +1411,16 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       ),
     ],
     tests: [T_JN, T_AK],
-    expectRed: ['审计键集合固定', 'auditKeyOf = audit:<候选>:<idem_key>'],
+    expectRed: [
+      '审计键集合固定',
+      'auditKeyOf = audit:<候选>:<idem_key>',
+      'auditItemsOf:键取自条目的 idem_key,不同条目键不同(即使审计行内容相同)',
+      'keyedAuditSink:带键的行经 applyOnce(键 = 事件身份),同一行内容、两个事件身份 → 两次 applyOnce',
+      '提交后崩溃(after:record_terminal)续做:每个审计键仍只落地一次',
+      '审计落地失败(提交之后):收尾抛错、journal 保留;修好后续做补齐全部审计键,各一次',
+      'recoverTerminalEffects 对执行器终态补审计(按键幂等,再跑不重复)',
+      'rolling_back 上先后到达两个 evidence 不同的 harm_c1 事件(自环):两行内容完全相同的审计各落一次,恢复补做不再增加',
+    ],
     mustKill: ['审计键集合固定', 'auditKeyOf = audit:<候选>:<idem_key>'],
   },
   {
@@ -1198,6 +1442,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     expectRed: [
       '新建标记:文件 fsync → 父目录 fsync → state.write(顺序)',
       '标记已存在(可能尚未落盘',
+      'enforceMute 补标记(有码缺标记)也走同一条持久路径',
     ],
     mustKill: ['新建标记:文件 fsync → 父目录 fsync → state.write(顺序)', '标记已存在(可能尚未落盘'],
   },
@@ -1233,6 +1478,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     expectRed: [
       '新建标记:文件 fsync → 父目录 fsync → state.write(顺序)',
       'enforceMute 补标记(有码缺标记)也走同一条持久路径',
+      '标记已存在(可能尚未落盘,如上次崩溃时别的进程刚建):不覆盖内容,但补一次文件 fsync 与父目录 fsync,之后才写 state',
     ],
     mustKill: ['新建标记:文件 fsync → 父目录 fsync → state.write(顺序)'],
   },
@@ -1247,7 +1493,10 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       ),
     ],
     tests: [T_PM],
-    expectRed: ['已存在的标记不是单链接普通文件(硬链接)'],
+    expectRed: [
+      '已存在的标记不是单链接普通文件(硬链接)',
+      '已存在的标记是没有写端的 FIFO:在有界时间内拒绝(不阻塞在只读打开上),不写 state',
+    ],
     mustKill: ['已存在的标记不是单链接普通文件(硬链接)'],
   },
 ];
