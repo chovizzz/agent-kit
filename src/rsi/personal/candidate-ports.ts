@@ -78,6 +78,11 @@ export interface ReadySinceRecovery {
 
 export interface AuditSink {
   append(lines: readonly RsiAuditLine[]): Promise<void>;
+  /**
+   * 带事件身份的落地(可选;装配了它的落地端优先用它):`idem_key` = 转移条目的稳定键,同一事件只落一次,不靠行内容去重
+   * (两个 evidence 不同的合法转移可以产生内容完全相同的行)。没有条目的审计(终态空操作)没有键。
+   */
+  appendKeyed?(items: readonly { line: RsiAuditLine; idem_key?: string }[]): Promise<void>;
 }
 
 /** 转移引擎产出的外部效果(黑名单 / 墓碑 / 冷却)。持久化的 outbox 归 W7;失败抛错,步骤把它记为 `effects_failed` */

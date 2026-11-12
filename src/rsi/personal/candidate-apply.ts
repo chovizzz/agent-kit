@@ -120,8 +120,15 @@ export async function applyEvent(
 }
 
 async function landEffects(d: ApplyDeps, effects: readonly TransitionEffect[]): Promise<void> {
-  const audits = effects.flatMap((e) => (e.type === 'append_audit' ? [e.line] : []));
-  if (audits.length > 0) await d.audit.append(audits);
+  const audits = effects.flatMap((e) =>
+    e.type === 'append_audit'
+      ? [{ line: e.line, ...(e.idem_key !== undefined ? { idem_key: e.idem_key } : {}) }]
+      : [],
+  );
+  if (audits.length > 0) {
+    if (d.audit.appendKeyed !== undefined) await d.audit.appendKeyed(audits);
+    else await d.audit.append(audits.map((a) => a.line));
+  }
   const rest = effects.filter((e) => e.type !== 'append_audit' && e.type !== 'commit_lifecycle');
   if (rest.length > 0) await d.effects.apply(rest);
 }

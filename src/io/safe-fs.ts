@@ -318,6 +318,67 @@ export async function createExclusiveSynced(
   await handle.close();
 }
 
+/** 对已打开的句柄 `fsync`;先发审计钩子(`syncFile`),测试据此核对「落盘发生在后续写之前」的顺序 */
+async function syncHandle(ctx: IoContext, h: fsp.FileHandle, abs: string): Promise<void> {
+  audit(ctx, 'syncFile', abs);
+  await h.sync();
+}
+
+/**
+ * **持久的**独占创建(熔断标记 `AUTO_PAUSE` 用,R21-12.2 / R21-10.1:标记必须先于状态写入「落盘」,掉电后也不能出现「状态已熔断、标记没了」):
+ *  - 不存在 → `O_CREAT|O_EXCL|O_NOFOLLOW` 创建、写入、`fsync` 文件、关闭,再 `fsync` 父目录(目录项落盘),返回 `created`;
+ *  - 已存在(`EEXIST`)→ **不覆盖、不改内容**;对已存在的文件(`O_RDONLY|O_NOFOLLOW`,须是单链接普通文件,否则 {@link WriteDeniedError})补一次 `fsync`,再 `fsync` 父目录,
+ *    返回 `exists`(别人刚创建、尚未落盘的标记也在这里被我们落盘,不把「可能没落盘的既有文件」当作完成)。
+ * 路径守卫同其它写函数;写入 / 同步 / 关闭 / 目录同步任一步失败 → 抛错,调用方不得继续(熔断:不写 state)。**与 {@link createExclusive} 不同,失败不删除刚创建的文件**
+ * (无锁并发下别的创建者可能已对它返回 `exists`;留下不完整的标记方向安全,见下方注释)。
+ */
+export async function createExclusiveDurable(
+  ctx: IoContext,
+  target: string,
+  data: string | Uint8Array,
+  mode: number,
+): Promise<'created' | 'exists'> {
+  audit(ctx, 'createExclusiveDurable', target);
+  const abs = assertWritable(ctx, target);
+  const NOFOLLOW = fs.constants.O_NOFOLLOW ?? 0;
+  if (NOFOLLOW === 0) throw new WriteDeniedError('写入被拒绝:平台不支持 O_NOFOLLOW');
+  let outcome: 'created' | 'exists';
+  let handle: fsp.FileHandle;
+  try {
+    handle = await fsp.open(
+      abs,
+      fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | NOFOLLOW,
+      mode,
+    );
+    outcome = 'created';
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+    // O_NONBLOCK:已有目标若是没有写端的 FIFO,阻塞式只读打开会永远等下去,到不了下面的类型核对
+    handle = await fsp.open(abs, fs.constants.O_RDONLY | NOFOLLOW | (fs.constants.O_NONBLOCK ?? 0));
+    outcome = 'exists';
+  }
+  try {
+    if (outcome === 'exists') {
+      const st = await handle.stat();
+      if (!st.isFile() || st.nlink > 1) {
+        throw new WriteDeniedError(`写入被拒绝:已有标记不是单链接的普通文件:${abs}`);
+      }
+    } else {
+      await handle.chmod(mode);
+      await handle.writeFile(data);
+    }
+    await syncHandle(ctx, handle, abs);
+  } catch (e) {
+    // 失败只关句柄并抛错,**不删除**刚创建的标记:无锁并发下别的 `ensure` 可能已对同一文件返回 `exists`(并随后写了 state),
+    // 删掉它会撤掉对方已确认的标记;留一个内容不全的标记方向安全(hint 只判存在),调用方因抛错不会继续写 state
+    await handle.close().catch(() => undefined);
+    throw e;
+  }
+  await handle.close(); // 正常路径的 close 错误要传播(不能把失败降格为成功)
+  await fsyncDir(ctx, path.dirname(abs));
+  return outcome;
+}
+
 /** `fsync` 一个目录(rename / unlink 之后让目录项落盘;R20-16.10 / R20-16.15)。路径守卫同其它写函数(目录须在写入根内)。 */
 export async function fsyncDir(ctx: IoContext, target: string): Promise<void> {
   audit(ctx, 'fsyncDir', target);

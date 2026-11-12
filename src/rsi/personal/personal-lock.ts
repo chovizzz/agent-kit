@@ -28,6 +28,7 @@ import {
 } from '../../io/home-fs.js';
 import { statDirSafe } from '../../io/read-fs.js';
 import { RsiLockError } from '../lock-error.js';
+import { markPersonalLockHeld, unmarkPersonalLockHeld } from '../lock-order.js';
 import {
   defaultAlive,
   readLock,
@@ -119,6 +120,7 @@ export async function acquirePersonalLock(
       if (mine.state === 'unsafe') throw new RsiLockError('state_dir_unsafe');
       if (mine.state !== 'ok' || mine.doc.nonce !== doc.nonce) throw new RsiLockError('locked');
       heldInProcess.add(file);
+      markPersonalLockHeld(file);
       let released = false;
       return {
         path: file,
@@ -139,6 +141,7 @@ export async function acquirePersonalLock(
             }
           } finally {
             heldInProcess.delete(file);
+            unmarkPersonalLockHeld(file);
           }
         },
       };
