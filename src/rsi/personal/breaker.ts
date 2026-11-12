@@ -270,7 +270,9 @@ export async function enforceMute(d: BreakerDeps, autoPauseMarker?: boolean): Pr
   let cur = await d.state.read();
   if (marker !== null && marker.by !== 'unknown') {
     const code: RsiAutoPauseReason | null = marker.by === 'user' ? 'user_paused' : marker.reason;
-    if (code !== null && !cur.reasons.includes(code)) {
+    // 只在状态里一个码都没有时补(标记已落盘、状态没写的崩溃窗口)。状态里已有别的码时不补:
+    // 标记只记首个原因,部分解除后那个原因可能已被合法清掉,不能因为标记还在就复活它
+    if (code !== null && cur.reasons.length === 0) {
       const r = tripBreaker(cur, code, d.phase);
       if (r.kind === 'tripped') {
         await d.state.write(r.state);
@@ -293,7 +295,13 @@ export async function applyAutoRelease(d: BreakerDeps, r: ReleaseResult): Promis
 
 /** 人工 `resume` 落地:先写状态、后删标记(没有剩余码时,删任何标记) */
 export async function applyResume(d: BreakerDeps, r: ResumeResult): Promise<void> {
-  if (r.cleared.length === 0) return;
-  await d.state.write(r.state);
-  if (r.clearMarker) await d.marker.remove('any');
+  if (r.cleared.length > 0) await d.state.write(r.state);
+  if (r.clearMarker) {
+    await d.marker.remove('any');
+    return;
+  }
+  // 内容读不出的标记(创建后、写内容前进程被杀)而状态里没有码:没有任何码可清,但这是人工 resume 唯一的解除路径
+  if (r.state.reasons.length === 0 && (await d.marker.read())?.by === 'unknown') {
+    await d.marker.remove('any');
+  }
 }

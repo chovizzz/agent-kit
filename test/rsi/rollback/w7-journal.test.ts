@@ -371,6 +371,59 @@ describe('journal 字段不合规 → refused txn_invalid,零动作(fail-closed)
   });
 });
 
+describe('复用在途 txn:journal 语义校验先于任何副作用(较晚事件的施加会提交记录)', () => {
+  const rollingBack = () =>
+    rec('rolling_back', {
+      deploy: { claude: 'removal_pending', pi: 'none', codex: 'none' },
+      rollback: { phase: 'injection_disabled', reason: 'harm_c1', target_terminal: 'rolled_back' },
+    });
+  const lateVeto: RollbackRequest = {
+    candidate_id: ID,
+    content_sha256: SHA,
+    kind: 'rollback',
+    reason: 'vetoed',
+    by: 'veto',
+    target_terminal: 'rolled_back',
+    event: { kind: 'veto', evidence: 'rsi veto' },
+  };
+  const journal = (over: Partial<PersonalTxn>): PersonalTxn => ({
+    schema_version: 1,
+    txn_id: TXN,
+    candidate_id: ID,
+    kind: 'rollback',
+    reason: 'harm_c1',
+    target_terminal: 'rolled_back',
+    phase: 'injection_disabled',
+    identity12: null,
+    at: '2026-11-10T12:00:00.000Z',
+    content_sha256: SHA,
+    by: 'worker',
+    terminal_event: harm('c1'),
+    ...over,
+  });
+
+  it.each([
+    ['content_sha256 与 txn_id 对不上的 journal', { content_sha256: 'c'.repeat(64) }],
+    [
+      '旧的 identity_change journal',
+      { kind: 'identity_change', reason: 'identity_changed', identity12: 'abcdef012345' },
+    ],
+  ] as const)('%s:较晚事件不施加(记录 / 审计 / 效果 / 凭据 / payload 零写入)', async (_n, over) => {
+    const w = world7({ record: rollingBack() });
+    await w.d.txns.write(journal(over as Partial<PersonalTxn>));
+    w.calls.length = 0;
+    const before = JSON.stringify(recordOf(w));
+    const r = await startRollback(w.d, lateVeto);
+    expect(r).toMatchObject({ status: 'refused', txn: TXN });
+    expect(w.store.commits).toHaveLength(0);
+    expect(JSON.stringify(recordOf(w))).toBe(before);
+    expect(w.auditLog.size).toBe(0);
+    expect(w.effectLog.size).toBe(0);
+    expect(w.revs).toHaveLength(0);
+    expect(w.calls.filter((c) => !c.startsWith('step:'))).toEqual([]);
+  });
+});
+
 describe('入口校验:事件在写 journal 之前过转移引擎 schema', () => {
   it('事件不合规 → refused event_invalid,不写 journal、不写凭据', async () => {
     const w = world7();

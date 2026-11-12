@@ -308,8 +308,11 @@ export async function startRollback(
   if (cur.kind === 'invalid') return { status: 'refused', txn: id, why: `txn_${cur.why}` };
   if (cur.kind === 'ok') {
     // 已有在途 txn:复用,不新开;来源 / 内容 / 事件一律取 journal 的(请求的 `by` 可能与 journal 的 `reason` 不相容)
+    // journal 的语义校验先于任何副作用(较晚事件的施加会提交记录):不合规 = refused,零动作
+    const ctx = journalCtx(cur.value, { hint: event, sha: req.content_sha256 });
+    if (typeof ctx === 'string') return { status: 'refused', txn: id, why: ctx };
     const lateWhy = await lateEventStatus(d, event, req.candidate_id);
-    const out = await drive(d, cur.value, { hint: event, sha: req.content_sha256 });
+    const out = await runGuarded(d, cur.value, ctx);
     // `pending_drive`:记录还没进入回滚时由第三段施加;txn 走完了就说明已施加
     if (lateWhy === null || (lateWhy === 'pending_drive' && out.status === 'complete')) return out;
     if (out.status === 'refused') return out;

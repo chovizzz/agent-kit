@@ -384,6 +384,39 @@ describe('落地:先写 AUTO_PAUSE 标记、再写状态、后置 canary 不注�
     expect(r.calls).toEqual(['state.write', 'marker.remove:any']);
     expect(r.marker.value).toBeNull();
   });
+  it('部分解除后标记仍在:enforceMute 不复活已被清掉的码(标记只记首个原因;状态里已有别的码时不补)', async () => {
+    const r = rig();
+    r.marker.value = { by: 'breaker', reason: 'user_vetoes' };
+    r.state.value = S(['no_observation']); // user_vetoes 已被人工 resume 清掉,标记因仍有剩余码而保留
+    expect(await enforceMute(r.d)).toBe(true);
+    expect(r.state.value.reasons).toEqual(['no_observation']);
+    expect(r.marker.value).not.toBeNull();
+  });
+  it('内容读不出的标记(创建后写内容前被杀)而状态没有码:人工 resume 可清除;仍有码时不清', async () => {
+    const r = rig();
+    r.marker.value = { by: 'unknown', reason: null };
+    await applyResume(
+      r.d,
+      resume(r.state.value, () => false),
+    );
+    expect(r.marker.value).toBeNull();
+    const r2 = rig();
+    r2.marker.value = { by: 'unknown', reason: null };
+    r2.state.value = S(['budget_high_legacy']);
+    await applyResume(
+      r2.d,
+      resume(r2.state.value, () => false),
+    );
+    expect(r2.marker.value).not.toBeNull();
+    // 自动解除不碰 unknown 标记
+    const r3 = rig();
+    r3.marker.value = { by: 'unknown', reason: null };
+    await applyAutoRelease(
+      r3.d,
+      autoRelease(r3.state.value, () => false),
+    );
+    expect(r3.marker.value).not.toBeNull();
+  });
   it('残余窗口(如实钉住):resume 写了状态、删标记前崩溃 → 下一次 enforceMute 由标记补回码(安全方向:不会少停注入)', async () => {
     const r = rig();
     r.state.value = S(['gate_internal']);

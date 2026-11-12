@@ -283,8 +283,8 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     edits: [
       swap(
         RB,
-        'const out = await drive(d, cur.value, { hint: event, sha: req.content_sha256 });',
-        'const out = await drive(d, { ...cur.value, by: req.by, kind: req.kind, reason: req.reason }, { hint: event, sha: req.content_sha256 });',
+        'const ctx = journalCtx(cur.value, { hint: event, sha: req.content_sha256 });',
+        'const ctx = journalCtx({ ...cur.value, by: req.by, kind: req.kind, reason: req.reason }, { hint: event, sha: req.content_sha256 });',
       ),
     ],
     tests: [T_RB, T_CR],
@@ -874,7 +874,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
   {
     id: 'enforce_code_restore_skipped',
     clause: 'H3 有标记缺码:enforceMute 由标记补码(不删标记)',
-    edits: [swap(BR, 'if (code !== null && !cur.reasons.includes(code)) {', 'if (false) {')],
+    edits: [swap(BR, 'if (code !== null && cur.reasons.length === 0) {', 'if (false) {')],
     tests: [T_BR, T_PM],
     expectRed: ['状态写入崩溃:标记已在盘上', '崩溃后下一次 enforceMute:由标记补码'],
     mustKill: ['状态写入崩溃:标记已在盘上'],
@@ -950,6 +950,44 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     tests: [T_BR],
     expectRed: ['人工 resume:没有剩余码时删任何标记'],
     mustKill: ['人工 resume:没有剩余码时删任何标记'],
+  },
+  {
+    id: 'reuse_check_skipped',
+    clause: 'W0-20 复用在途 txn:journal 校验先于较晚事件的施加(不合规 = 零副作用)',
+    edits: [
+      swap(RB, "if (typeof ctx === 'string') return { status: 'refused', txn: id, why: ctx };", ''),
+    ],
+    tests: [T_JN],
+    expectRed: ['较晚事件不施加(记录 / 审计 / 效果 / 凭据 / payload 零写入)'],
+    mustKill: ['较晚事件不施加(记录 / 审计 / 效果 / 凭据 / payload 零写入)'],
+  },
+  {
+    id: 'enforce_resurrects_partial',
+    clause: 'H3 enforceMute 只在状态一个码都没有时由标记补码(部分解除后不复活已清的码)',
+    edits: [
+      swap(
+        BR,
+        'if (code !== null && cur.reasons.length === 0) {',
+        'if (code !== null && !cur.reasons.includes(code)) {',
+      ),
+    ],
+    tests: [T_BR],
+    expectRed: ['部分解除后标记仍在:enforceMute 不复活已被清掉的码'],
+    mustKill: ['部分解除后标记仍在:enforceMute 不复活已被清掉的码'],
+  },
+  {
+    id: 'resume_unknown_marker',
+    clause: 'H3 内容读不出的标记(创建后写内容前被杀)可由人工 resume 清除',
+    edits: [
+      swap(
+        BR,
+        "if (r.state.reasons.length === 0 && (await d.marker.read())?.by === 'unknown') {",
+        'if (false) {',
+      ),
+    ],
+    tests: [T_BR],
+    expectRed: ['内容读不出的标记(创建后写内容前被杀)而状态没有码'],
+    mustKill: ['内容读不出的标记(创建后写内容前被杀)而状态没有码'],
   },
   // ---- M6 审计行按键落地 ----
   {
