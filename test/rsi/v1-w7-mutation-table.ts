@@ -49,6 +49,7 @@ const PL = `${P}personal-lock.ts`;
 const T_RB = 'rsi/rollback/w7-rollback.test.ts';
 const T_CR = 'rsi/rollback/w7-crash.test.ts';
 const T_CL = 'rsi/rollback/w7-clear.test.ts';
+const T_CU = 'rsi/rollback/w7-clear-unit.test.ts';
 const T_BR = 'rsi/rollback/w7-breaker.test.ts';
 const T_EF = 'rsi/rollback/w7-effects.test.ts';
 const T_RW = 'rsi/rollback/w7-revoke-write.test.ts';
@@ -169,13 +170,45 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
   },
   {
     id: 'late_event_dropped',
-    clause: 'R21-4.4a ① 复用在途 txn 时较晚到达的终止事件在收尾施加(终态理由取优先级最高者)',
+    clause: 'R21-4.4a ① 复用在途 txn 时较晚到达的终止事件先于任何动作施加到权威记录',
     edits: [
-      swap(RB, "if (rec.lifecycle === 'rolling_back' && c.hint !== undefined) {", 'if (false) {'),
+      swap(RB, 'const late = await applyLateEvent(d, cur.value, req.event);', 'const late = null;'),
     ],
     tests: [T_RB],
     expectRed: ['harm 回滚走到第四段后用户 veto'],
     mustKill: ['harm 回滚走到第四段后用户 veto'],
+  },
+  {
+    id: 'late_event_failure_ignored',
+    clause: '较晚终止事件施加失败(halt / stale / refused)→ 不运行 txn、不以旧理由完成',
+    edits: [
+      swap(RB, "if (r.kind === 'transitioned' || r.kind === 'noop') return null;", 'return null;'),
+    ],
+    tests: [T_RB],
+    expectRed: ['提交失败(commit_failed):不返回 complete'],
+    mustKill: ['提交失败(commit_failed):不返回 complete'],
+  },
+  {
+    id: 'late_event_deferred_ignored',
+    clause: '较晚终止事件遇权威记录读不到 → 返回 late_event_not_applied,不静默丢',
+    edits: [
+      swap(
+        RB,
+        "if (rd.kind === 'deferred' || rd.kind === 'invalid') return hold(`repo_${rd.kind}`);",
+        '',
+      ),
+    ],
+    tests: [T_RB],
+    expectRed: ['权威记录读不到(deferred):不运行 txn'],
+    mustKill: ['权威记录读不到(deferred):不运行 txn'],
+  },
+  {
+    id: 'clear_report_unavailable_only',
+    clause: 'R21-9.5 缩减入口先续做在途 journal,报告同时给出续做结果与枚举不可用',
+    edits: [swap(CL, 'report.outcomes.push(...(await resumeAll(rd)));', '')],
+    tests: [T_CU],
+    expectRed: ['有在途 journal 而候选全集读不到'],
+    mustKill: ['有在途 journal 而候选全集读不到'],
   },
   {
     id: 'lock_lost_ignored',

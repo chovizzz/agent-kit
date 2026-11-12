@@ -442,6 +442,49 @@ describe('复用在途 txn 时较晚到达的终止事件(R21-4.4a ① 自环)',
   });
 });
 
+describe('较晚终止事件不静默丢失(记录是唯一持久化依据,先于任何可能 incomplete 的动作施加)', () => {
+  const lateVeto = (): Parameters<typeof startRollback>[1] => ({
+    ...harmReq(),
+    reason: 'vetoed',
+    by: 'veto',
+    event: { kind: 'veto', evidence: 'rsi veto' },
+  });
+
+  it('权威记录读不到(deferred):不运行 txn、返回 late_event_not_applied;在途 txn 不变,仓库恢复后调用方重试 → 施加并完成(vetoed)', async () => {
+    const w = world7();
+    w.crashAt('after:payload');
+    await expect(startRollback(w.d, harmReq())).rejects.toBeInstanceOf(Crash);
+    const revoked = w.payload.revoked.length;
+    w.store.mode = 'deferred';
+    const r = await startRollback(w.d, lateVeto());
+    expect(r).toMatchObject({ status: 'incomplete', why: 'late_event_not_applied:repo_deferred' });
+    expect(w.txns.get(TXN)?.phase).toBe('rollback_complete');
+    expect(w.payload.revoked.length).toBe(revoked); // 没有运行
+    w.store.mode = 'ok';
+    expect((await startRollback(w.d, lateVeto())).status).toBe('complete');
+    expect(recordOf(w).terminal_reason).toBe('vetoed');
+  });
+
+  it('提交失败(commit_failed):不返回 complete、不以旧理由进终态、不删 journal;重试成功后保留 veto 优先级与黑名单', async () => {
+    const w = world7();
+    w.crashAt('after:payload');
+    await expect(startRollback(w.d, harmReq())).rejects.toBeInstanceOf(Crash);
+    w.store.failCommit = { status: 'cas_failed', expected: 'x', actual: null };
+    const r = await startRollback(w.d, lateVeto());
+    expect(r).toMatchObject({ status: 'incomplete', why: 'late_event_not_applied:commit_failed' });
+    expect(recordOf(w).lifecycle).toBe('rolling_back');
+    expect(w.txns.size).toBe(1);
+    expect(w.effectLog.size).toBe(0);
+    w.store.failCommit = null;
+    expect((await startRollback(w.d, lateVeto())).status).toBe('complete');
+    expect(recordOf(w).terminal_reason).toBe('vetoed');
+    expect([...w.effectLog.values()][0]?.map((e) => e.type)).toEqual([
+      'blacklist_veto',
+      'write_tombstone',
+    ]);
+  });
+});
+
 describe('丢锁(applyEvent 提交后返回 lockLost)→ 立即停止,不再继续任何写出口', () => {
   it('第三段记录提交后发现丢锁:抛 lock_lost;未调用仓库移除;journal 保留,新持锁者续做完成', async () => {
     const w = world7();

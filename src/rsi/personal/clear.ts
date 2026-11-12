@@ -8,8 +8,9 @@
  *
  * 每个非终态候选走一遍回滚四段(txn `kind=clear`,凭据 `by=clear` / `reason=cleared`):第二段凭据落盘 → 第三段私有仓库(干净则提交,否则 `deferred`,R21-9.3a)→
  * 第四段经撤销路径清理 HOME。权威记录由转移引擎的 `clear` 事件推进(proposed / shadow → 终态 `cleared`,canary → `rolling_back` 再走四段)。
- * 候选枚举:私有仓库 `deferred`(人工分叉 / 属主变化)时凭据照样要写(R21-9.3a),候选改从 `head.json` 记录的提交里只读取(`recordedRecords` 端口);两处都读不到 → `unavailable`
- * (fail-closed,不写任何东西,并给出原因),不会假装已清空。
+ * 写模式先续做在途 journal(上次中断留下的;缩减入口自己可重试),再枚举新候选。候选枚举:私有仓库 `deferred`(人工分叉 / 属主变化)时凭据照样要写(R21-9.3a),
+ * 候选改从 `head.json` 记录的提交里只读取(`recordedRecords` 端口);两处都读不到 → `unavailable`(fail-closed:**没有处理任何新候选**,并给出原因),不会假装已清空。
+ * `unavailable` 只说明「枚举不可用」:此前续做的在途 journal 可能已经做了写入,结果在 `outcomes` 里。
  * 完整命令面(帮助、退出码表、TTY / 干跑文案)归 W8:本文件只交付能被测试调用的函数入口与结构化结果。
  */
 import { capabilityAvailable } from '../../contracts/rsi.js';
@@ -52,7 +53,7 @@ export interface ClearReport {
    * worker 下次拿锁后首件事按凭据对账(R21-9.5)。
    */
   pendingReconcile: string[];
-  /** 非 null = 没有做任何写入(原因码) */
+  /** 非 null = 候选枚举不可用 / 相位不允许(原因码):没有处理任何新候选;此前续做的在途 journal 的结果在 `outcomes` 里 */
   unavailable: string | null;
 }
 

@@ -203,6 +203,10 @@ export async function startRollback(
   if (cur.kind === 'invalid') return { status: 'refused', txn: id, why: `txn_${cur.why}` };
   if (cur.kind === 'ok') {
     // 已有在途 txn:复用,不新开;来源一律取 journal 的(请求的 `by` 可能与 journal 的 `reason` 不相容)
+    // 较晚到达的终止事件(R21-4.4a ① 自环:终态理由取优先级最高者):**先于任何可能返回 incomplete 的动作**直接施加到权威记录(记录是唯一的持久化依据,
+    // journal 不存它);记录读不到 / 施加失败 → 返回 incomplete(`late_event_not_applied`),不运行 txn,调用方稍后重试(在途 txn 仍由 worker 的 `resumeAll` 照旧续做)
+    const late = await applyLateEvent(d, cur.value, req.event);
+    if (late !== null) return late;
     return runGuarded(d, cur.value, {
       by: sourceOf(cur.value),
       hint: req.event,
@@ -412,6 +416,34 @@ async function applyOne(
   return r;
 }
 
+async function applyLateEvent(
+  d: RollbackDeps,
+  t: PersonalTxn,
+  event: TransitionEvent | undefined,
+): Promise<RollbackOutcome | null> {
+  if (event === undefined) return null;
+  const hold = (why: string): RollbackOutcome => ({
+    status: 'incomplete',
+    txn: t.txn_id,
+    phase: t.phase,
+    why: `late_event_not_applied:${why}`,
+  });
+  const rd = await d.store.read(t.candidate_id);
+  if (rd.kind === 'absent' || rd.kind === 'missing') return null;
+  if (rd.kind === 'deferred' || rd.kind === 'invalid') return hold(`repo_${rd.kind}`);
+  // 记录还不在 rolling_back(canary 等):由第三段的 driveRecord 施加(它有自己的失败处理)
+  if (rd.record.lifecycle !== 'rolling_back') return null;
+  const r = await applyOne(d, rd.record, event);
+  if (r.kind === 'transitioned' || r.kind === 'noop') return null;
+  return hold(
+    r.kind === 'halt'
+      ? r.halt
+      : r.kind === 'refused'
+        ? (r.refusal.guard ?? r.refusal.refused)
+        : r.kind,
+  );
+}
+
 /** 撤销路径的目标:凭据全集 + 本候选(identity_changed 不写凭据,只靠本候选);凭据读不到 → null */
 async function revokeTargets(d: RollbackDeps, t: PersonalTxn): Promise<string[] | null> {
   const rv = await d.revocations.read();
@@ -573,11 +605,6 @@ async function finish(d: RollbackDeps, t: PersonalTxn, c: RunCtx): Promise<Rollb
     );
     if (rem.status === 'invalid') return inc(`repo_invalid:${rem.why}`);
     if (rem.status === 'deferred') return inc(`repo_deferred:${rem.why}`);
-    // 复用在途 txn 时较晚到达的终止事件(R21-4.4a ① 自环:终态理由取优先级最高者):在这里施加,journal 不另存它
-    if (rec.lifecycle === 'rolling_back' && c.hint !== undefined) {
-      const r = await applyOne(d, rec, c.hint);
-      if (r.kind === 'transitioned') rec = r.next;
-    }
     if (rec.lifecycle === 'rolling_back') {
       rec = await advanceRecordTo(d, t, rec, 'rollback_complete');
       if (rec.lifecycle === 'rolling_back' && rec.rollback?.phase !== 'rollback_complete') {

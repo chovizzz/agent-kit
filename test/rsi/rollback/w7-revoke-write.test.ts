@@ -5,8 +5,8 @@ import { describe, expect, it } from 'vitest';
 import type { RsiRevocationLine } from '../../../src/contracts/rsi-personal.js';
 import { RSI_REVOCATION_BY } from '../../../src/contracts/rsi.js';
 import { exists, readText } from '../../../src/io/read-fs.js';
-import { writeFile } from '../../../src/io/home-fs.js';
-import { homeFsFor, readRevocations, statePath } from '../../../src/rsi/personal/home-state.js';
+import * as safe from '../../../src/io/safe-fs.js';
+import { readRevocations, statePath } from '../../../src/rsi/personal/home-state.js';
 import {
   ROLLBACK_TO_REASONS,
   RevocationWriteError,
@@ -83,15 +83,8 @@ describe('writeRevocation', () => {
 
   it('现有凭据文件不合规 → 抛错、不写、不改原文件(R21-6.11 第 4a 行按读取失败处理)', async () => {
     const w = await makeWorld('w7-rev5-');
-    await writeFile(
-      homeFsFor(w.h, ['revocations.jsonl']),
-      '.local/state/agent-kit/rsi-personal/revocations.jsonl',
-      'not json\n',
-      {
-        mode: 0o600,
-        dirMode: 0o700,
-      },
-    );
+    await safe.mkdirp(w.io, w.h.stateDir, 0o700);
+    await safe.writeFile(w.io, statePath(w.h, 'revocations.jsonl'), 'not json\n', { mode: 0o600 });
     await expect(writeRevocation(w.h, held, line())).rejects.toMatchObject({
       kind: 'revocations_invalid',
     });
