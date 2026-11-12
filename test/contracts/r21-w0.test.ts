@@ -642,7 +642,10 @@ describe('W0-17 撤销凭据:reason 按写入方 by 约束', () => {
     ]) {
       expect(line('worker', r), r).toBe(true);
     }
-    expect(line('rollback_to', 'harm_c2')).toBe(true);
+    // W0-20:rollback_to 只用 cleared(取代 W0-17 的暂放宽)
+    expect(line('rollback_to', 'cleared')).toBe(true);
+    expect(line('rollback_to', 'harm_c2')).toBe(false);
+    expect(line('rollback_to', 'vetoed')).toBe(false);
   });
   it('写入方与原因不符 → 拒绝', () => {
     expect(line('clear', 'harm_c1')).toBe(false);
