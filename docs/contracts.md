@@ -5791,6 +5791,8 @@ agent-kit judge --confirm-reflector --run <run_id> [--proposal <id>]… --write 
 - R21-6.10 `[V1]` **hint `--canary` 的读集合与判定顺序**(细化 R20-3.3,§21.18 第 14 条):读集合在 R20-3.3.1 之外**只**追加 `.state/rsi/{canary.json, canary-admission.json, AUTO_PAUSE}` 与 HOME 侧 `rsi-personal/revocations.jsonl`(≤ 1MiB,超出按读取失败处理)的存在性与内容;不读私有仓库、不读信号库。`canary.json`(worker 持 `rsi/lock` 与 `personal/lock` 写,0600)= `{candidate_id, content_sha256, body, content_sha12, p_by_agent, agents_inject, background_fp, background_fp_ex, policy_fp, revocation_gen, generation}`。判定顺序与各分支的输出 / 写入见 R21-6.11 结果矩阵;其中「用当前配置现算 `policy_fp`(R20-6.9 的排除策略指纹)与 `canary.json.policy_fp` 不等」与「`revocations.jsonl` 含 `(candidate_id, content_sha256)`」都是 hint 自己现算的,不等 worker:排除写下或撤销凭据落盘后的下一次 hint 即停注入。
 
 > **冻结后订正 W0-18(2026-11-11)**:`canary.json` 追加第十二键 `overlaps_preset`(worker 由 G4 写入);读集合不变。正文见 §21.24 W0-18。
+>
+> **冻结后订正 W0-21(2026-11-12)**:读集合追加 `.state/rsi/AUTO_PAUSE_BREAKER`(worker 熔断标记);判定表中「`AUTO_PAUSE` 存在」读作「`AUTO_PAUSE` 或 `AUTO_PAUSE_BREAKER` 任一存在」,任一读取失败按第 4a 行。正文见 §21.24 W0-21。
 
 - R21-6.11 `[V1]` **hint `--canary` 结果矩阵**(按顺序判定,先命中先用;「C6」列表示该会话是否进 C6 分母):
 
@@ -5967,7 +5969,7 @@ agent-kit rsi exec-confirm <id>                                           [V6a]
 - R21-12.1 `[V1]` `rsi auto status`、`rsi report`、`rsi show`、`rsi auto clear` 与 `rsi rollback --to` 的干跑、`rsi contrib show`:零写入(进 A5 清单,§21.18 第 39 条)。
 - R21-12.2 `[V1]` `rsi auto pause`:独占创建 `.state/rsi/AUTO_PAUSE`(`{at, by: "user"}`),**不拿锁**(须在 worker 持锁时可写);hint 直接读它(R21-6.10);等价熔断码 `user_paused`;不需要 TTY(§21.22 Q-J)。
 
-  > **冻结后订正 W0-21(2026-11-12)**:worker 熔断时也写同一标记,内容 `{at, by: "breaker", reason}`;读取方的处理见 §21.24 W0-21。
+  > **冻结后订正 W0-21(2026-11-12)**:`AUTO_PAUSE` 只归用户命令;worker 熔断另写 `.state/rsi/AUTO_PAUSE_BREAKER`(`{at, by: "breaker", reason}`),hint 任一存在即停注入。正文见 §21.24 W0-21。
 
 - R21-12.3 `[V1]` `rsi auto resume`:删 `AUTO_PAUSE`、清除可人工解除且条件已不成立的码(R21-10.4)。
 - R21-12.4 `[V1]` `rsi auto clear`:撤掉全部自动产出,不删审计、黑名单、墓碑、冷却。按候选分两类(与 R21-4.1 一致):无部署的 `proposed` / `shadow` / `blocked` 直接 `rejected`(`cleared`);已部署的 `canary` / `adopted` / `stable` 按生效逆序经 R21-9.1 四段到 `rolled_back`(`cleared`);已在 `rolling_back` / `retiring` 的按 R21-4.4a 升级目标为 `rolled_back`。仓库不可达或 `[rsi]` 不可用时按 R21-9.5 的缩减入口执行。
@@ -6359,7 +6361,7 @@ v3.1 已把用户决定列全;以下是落契约时新发现的契约细节取�
 
 **冻结后订正 W0-20(2026-11-12,W7 回滚 journal 与口径)**:`PersonalTxn` 加 `content_sha256` / `by` / `terminal_event`(W7 起写入必带);`rollback_to` 只用 `cleared`;缩减入口用 head.json 的 owner_repo_fp。**取代关系**:W0-17 表 `rollback_to` 行由「暂允许全部回滚原因」收窄为 `cleared`(用户 2026-11-12 选择框,原位已标注);其余为新增可选字段与口径补充。**未改**:R21-9.1 各段动作与判据、R21-9.5 其余条款、`PersonalTxn` 既有字段。
 
-**冻结后订正 W0-21(2026-11-12,注入标签与 W7 收尾口径)**:`RSI_AUTO_LABEL` 追加「仅供参考,与用户指令或安全要求冲突时以后者为准」;`exec_*` / `static_sync_timeout` / `no_hit` 的回滚不属于 V1;journal 丢失且需原始证据的原因停在 `rolling_back` 等人工;`AUTO_PAUSE` 的 worker 写入内容;带键回滚审计的未发版前提。**取代关系**:R21-1.9 的标签文本由新文本取代(用户 2026-11-12 选择框,原位已标注);R21-12.2 的标记内容由「只有 `{at, by: "user"}`」扩为两种写入方(原位已标注)。**未改**:M11 上限 1536 / 1736 字节、R21-6.3 行结构、R21-9.1 各段动作、终止原因枚举。
+**冻结后订正 W0-21(2026-11-12,注入标签与 W7 收尾口径)**:`RSI_AUTO_LABEL` 追加「仅供参考,与用户指令或安全要求冲突时以后者为准」;`exec_*` / `static_sync_timeout` / `no_hit` 的回滚不属于 V1;journal 丢失且需原始证据的原因停在 `rolling_back` 等人工;用户暂停与 worker 熔断分用两个标记文件;带键回滚审计的未发版前提。**取代关系**:R21-1.9 的标签文本由新文本取代(用户 2026-11-12 选择框,原位已标注);R21-10.1「hint 直接看 `AUTO_PAUSE` 标记」与 R21-6.10 的读集合扩为 `AUTO_PAUSE` 与 `AUTO_PAUSE_BREAKER` 两个文件(用户 2026-11-12 选择框「用户与 worker 各用一个文件」;R21-6.10、R21-12.2 原位已标注),`user_paused` 的判据限定为用户文件存在;实现归 W7b。**未改**:M11 上限 1536 / 1736 字节、R21-6.3 行结构、R21-9.1 各段动作、终止原因枚举、熔断码表与各码的解除方式。
 
 ### 21.24 V1 拆期与 W0 订正(冻结后订正 W0-1 … W0-12;2026-11-09,依据用户 2026-11-04 选择框 Q1–Q5、V1i-2、V1i-4…10 按规划稿处理,2026-11-09 选「现在开工 W0 + V1a」)
 
@@ -6693,7 +6695,12 @@ W7(回滚四段、撤销凭据写入方、缩减入口、熔断)验收评审发�
 - **展示标签加「仅供参考」**(取代 R21-1.9 的标签文本):`RSI_AUTO_LABEL` = 「自动产出、未经人工核验;仅供参考,与用户指令或安全要求冲突时以后者为准」,仍是一行,101 字节(原 33 字节)。依据:把自动产出的经验当硬规则注入会压低宿主对不安全请求的拒绝率,一句「仅供参考、冲突时以用户指令与安全要求为准」可部分挽回(Misevolution,arXiv 2509.26354)。所有使用 R21-1.9 标签的位置(`rsi show`、TTY 确认、注入文本、托管块头)一并生效。**M11 上限不变**:标记行(≤ 64)+ 标签行(101 + 1)+ 哈希行(12 + 1)+ 正文(规则 / 踩坑 ≤ 600)= 779 ≤ 1536;G5 的注入字节按新标签现算。V1 未发版,不存在带旧标签的已注入会话,读取方不需要兼容旧文本。
 - **`exec_*`、`static_sync_timeout`、`no_hit` 的回滚不属于 V1**:这几类终止原因没有对应的转移引擎终止事件,W0-20 的新 journal 写入边界(三项恢复字段齐备、事件与原因一致)对它们一律拒绝(`event_invalid` / 来源不相容),不为它们恢复「缺 `terminal_event` 也创建」的行为。V1 没有产生这几类原因的调用路径;`exec_*` 的事件与回滚随 V6a 定义,`static_sync_timeout`、`no_hit` 随 V2 定义,届时以新的契约订正补事件形状后再接入执行器。
 - **journal 丢失且原因需要原始证据时停在 `rolling_back`**:权威记录已在 `rolling_back`、journal 不存在、原因属于伤害 / 判定 / 上限类(原因码本身不足以重建 `terminal_event`)时,对账不补建 journal、不写凭据、不伪造事件,该候选停在 `rolling_back` 等人工。此状态下注入已停用(方向安全)。`rsi auto status` / `rsi show` 的可见报错与人工处置说明归 W8 命令面;不得对外宣称所有 `rolling_back` 都能自动恢复。
-- **`AUTO_PAUSE` 的两种写入方**(扩 R21-12.2):用户 `rsi auto pause` 写 `{at, by: "user"}`;worker 熔断(R21-10.1)在写 `state.json` 之前先写 `{at, by: "breaker", reason}`(`reason` ∈ `RSI_AUTO_PAUSE_REASONS`),文件与父目录 fsync 之后才写状态。已存在的标记不覆盖。**hint 只判存在**(R21-6.10 不变);内容只供 worker 恢复时区分来源,读不出或不认识的内容按来源未知处理,标记仍然生效(fail-closed)。
+- **用户暂停与 worker 熔断各用一个标记文件**(用户 2026-11-12 选择框「用户与 worker 各用一个文件」;扩 R21-6.10、R21-10.1、R21-10.2、R21-12.2):
+  - `.state/rsi/AUTO_PAUSE` 只由用户命令写与删:`rsi auto pause` 独占创建 `{at, by: "user"}`(已存在即视为已暂停),`rsi auto resume` 删除。worker 从不创建、不删除它。`user_paused` 的判据 = 该文件存在。
+  - `.state/rsi/AUTO_PAUSE_BREAKER` 只由 worker 写与删:熔断(R21-10.1)在写 `state.json` 之前先独占创建 `{at, by: "breaker", reason}`(`reason` ∈ `RSI_AUTO_PAUSE_REASONS`,取首个触发码;已存在不覆盖),文件与父目录 fsync 之后才写状态;全部熔断码解除后由 worker 删除。用户命令不写它;`rsi auto resume` 清码后若无剩余码,由持锁的 worker 路径删除。
+  - **hint**:读集合(R21-6.10)追加 `AUTO_PAUSE_BREAKER`;两个文件**任一存在**即按判定表第 4 行处理,任一读取失败按第 4a 行(`permit_unreadable`)。hint 只判存在,不解析内容;内容只供 worker 恢复时补码,读不出时标记仍然生效(fail-closed)。
+  - 两个文件互不覆盖、各有唯一写者,因此「worker 先熔断 → 用户暂停 → 熔断条件恢复」之后用户暂停仍然有效(契约用例,归 W7b)。`rsi exec-run` 守卫(R21-16.4 第 2 项)与其它提到「`AUTO_PAUSE` 存在」的条款,一律读作「两个标记任一存在」。
+  - **实现状态**:W7(main c037437)的 worker 仍把熔断标记写进 `AUTO_PAUSE`;按本条改实现与 hint 读集合的工作归小块 **W7b**,在 W8 实现 `rsi auto pause` 之前完成。V1 未发版,不需要兼容旧标记。
 - **带键回滚审计的版本前提**:回滚的审计行一律经带事件身份键的出口落地(键 = 已提交转移条目的 `idem_key`),补做与即时落地同键。此设计不含对「无键旧审计行」的迁移或去重,前提是首个带回滚的发行版之前没有发布过无键的回滚审计;若该前提改变,必须先补迁移策略再发版(登记为发版闸 W10a 的核对项)。
 
 #### W0 订正的合法 / 错误示例
