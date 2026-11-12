@@ -15,6 +15,7 @@ import {
   startRollback,
   type RollbackRequest,
 } from '../../../src/rsi/personal/rollback.js';
+import { newJournal } from '../../../src/rsi/personal/rollback-journal.js';
 import {
   isTerminationKind,
   type TransitionEvent,
@@ -375,6 +376,13 @@ describe('入口校验:事件在写 journal 之前过转移引擎 schema', () =>
       event: { kind: 'limit', evidence: 'x' } as unknown as TransitionEvent,
     });
     expect(r).toEqual({ status: 'refused', txn: null, why: 'event_invalid' });
+    // 创建函数自己也拒绝(不靠入口的同名检查兜住)
+    expect(
+      newJournal(
+        { ...reqOf(CASES[0] as Case), event: { kind: 'limit', evidence: 'x' } },
+        '2026-11-10T12:00:00.000Z',
+      ),
+    ).toEqual({ ok: false, why: 'event_invalid' });
     expect(w.txns.size).toBe(0);
     expect(w.revs).toHaveLength(0);
     expect(w.calls).toEqual([]);

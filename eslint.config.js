@@ -352,6 +352,8 @@ const SUBPROCESS_TESTS = [
   'test/rsi/hook-forward-dist.test.ts',
   // 回放用例 check.sh 的正负对照(bash 子进程,写入只落在 makeTempDir 的临时目录)
   'test/cases/replay-checks.test.ts',
+  // R21 W7 H3:熔断标记遇到已存在的 FIFO 的拒绝路径;Node 没有建 FIFO 的 API,只能起 mkfifo(只落在 makeTempDir 的临时目录)
+  'test/rsi/rollback/w7-pause-marker.test.ts',
 ];
 
 export default tseslint.config(

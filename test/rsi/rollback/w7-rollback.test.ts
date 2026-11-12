@@ -360,6 +360,19 @@ describe('identity_changed(E1,V6a):本期入口一律拒绝(M5),不部分执行'
     expect(JSON.stringify(recordOf(w))).toBe(before);
   });
 
+  it('已有在途回滚 txn 时 identity 请求同样被入口拒绝:不复用、不推进该 txn', async () => {
+    const w = world7();
+    w.crashAt('enter:injection_disabled');
+    await expect(startRollback(w.d, harmReq())).rejects.toBeInstanceOf(Crash);
+    expect(w.txns.size).toBe(1);
+    w.calls.length = 0;
+    const r = await startRollback(w.d, identityReq);
+    expect(r).toEqual({ status: 'refused', txn: null, why: 'identity_not_available_before_v6a' });
+    expect(w.revs).toHaveLength(0);
+    expect(w.txns.size).toBe(1);
+    expect(w.calls).toEqual([]);
+  });
+
   it('读到旧的 identity_change journal:不动(refused,凭据 / 记录 / 端口都不碰),journal 保留', async () => {
     const w = world7();
     await w.d.txns.write({

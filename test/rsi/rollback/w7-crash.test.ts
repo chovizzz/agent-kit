@@ -190,6 +190,29 @@ describe('来源保留(W0-17):崩溃恢复后 by 不变', () => {
     expect(w.revs[0]?.by).toBe('rollback_to');
   });
 
+  it('rollback_to 的 txn 在凭据写入前崩溃、clear 再来:凭据的来源仍取 journal 的(rollback_to),不取请求的', async () => {
+    const w = world7();
+    w.crashAt('enter:injection_disabled');
+    const rt = harmReq({
+      reason: 'cleared',
+      by: 'rollback_to',
+      event: { kind: 'clear', evidence: 'x' },
+    });
+    await expect(startRollback(w.d, rt)).rejects.toBeInstanceOf(Crash);
+    expect(w.revs).toHaveLength(0);
+    const r = await startRollback(w.d, {
+      candidate_id: ID,
+      content_sha256: SHA,
+      kind: 'clear',
+      reason: 'cleared',
+      by: 'clear',
+      target_terminal: 'rolled_back',
+    });
+    expect(r.status).toBe('complete');
+    expect(w.revs).toHaveLength(1);
+    expect(w.revs[0]).toMatchObject({ by: 'rollback_to', reason: 'cleared' });
+  });
+
   it('exec_event 原因没有对应的终止事件(terminationReason 不产出 exec_*):新 journal 一律拒绝,不写 journal / 凭据(W0-20:terminal_event 必须与 reason 一致)', async () => {
     const w = world7();
     for (const reason of ['exec_post_check_failed', 'exec_timeout_unclean']) {

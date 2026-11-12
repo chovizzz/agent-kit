@@ -96,8 +96,9 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       ),
     ],
     tests: [T_CR, T_RB],
-    expectRed: ['journal 领先于记录', '记录领先于 journal'],
-    mustKill: ['journal 领先于记录', '记录领先于 journal'],
+    expectRed: ['journal 领先于记录'],
+    // 「记录领先于 journal」那条在一次运行内走完(内存里的 phase 照常前进),看不出 journal 没落盘,不列入
+    mustKill: ['journal 领先于记录'],
   },
   {
     id: 'deferred_ignored',
@@ -297,8 +298,8 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       ),
     ],
     tests: [T_RB, T_CR],
-    expectRed: ['崩溃后再次发起同一请求', 'rollback_to 的 txn 在途时 clear 再来'],
-    mustKill: ['崩溃后再次发起同一请求', 'rollback_to 的 txn 在途时 clear 再来'],
+    expectRed: ['崩溃后再次发起同一请求', 'rollback_to 的 txn 在凭据写入前崩溃、clear 再来'],
+    mustKill: ['崩溃后再次发起同一请求', 'rollback_to 的 txn 在凭据写入前崩溃、clear 再来'],
   },
   {
     id: 'rollback_to_gate_off',
@@ -345,12 +346,18 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
   },
   {
     id: 'rollback_to_unrestricted',
-    clause: 'W0-17 rollback_to 本块只产出 cleared(收窄)',
+    // 两层守卫(契约的按来源原因表 + 写入方的收窄)一起拿掉才放开;只拿掉一层时另一层照拦(等价),所以这里两处同改
+    clause: 'W0-17 / W0-20 rollback_to 只产出 cleared(契约表与写入方两层)',
     edits: [
       swap(
         RW,
         "if (by === 'rollback_to' && !ROLLBACK_TO_REASONS.includes(reason)) return 'reason_not_allowed';",
         '',
+      ),
+      swap(
+        'src/contracts/rsi.ts',
+        "rollback_to: Object.freeze(['cleared']),",
+        'rollback_to: Object.freeze([...RSI_ROLLBACK_REVOCATION_REASONS]),',
       ),
     ],
     tests: [T_RW, T_RB],
@@ -888,8 +895,9 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       ),
     ],
     tests: [T_RB],
-    expectRed: ['入口 refused identity_not_available_before_v6a'],
-    mustKill: ['入口 refused identity_not_available_before_v6a'],
+    // 没有在途 txn 时创建函数也会拒绝(同一结果);入口这条独有的作用是不让 identity 请求复用在途的回滚 txn
+    expectRed: ['已有在途回滚 txn 时 identity 请求同样被入口拒绝'],
+    mustKill: ['已有在途回滚 txn 时 identity 请求同样被入口拒绝'],
   },
   {
     id: 'identity_journal_runs',
