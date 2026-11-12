@@ -170,37 +170,35 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
   },
   {
     id: 'late_event_dropped',
-    clause: 'R21-4.4a ① 复用在途 txn 时较晚到达的终止事件先于任何动作施加到权威记录',
+    clause: 'R21-4.4a ① 复用在途 txn 时较晚到达的终止事件先于动作施加到权威记录',
     edits: [
-      swap(RB, 'const late = await applyLateEvent(d, cur.value, req.event);', 'const late = null;'),
+      swap(
+        RB,
+        'const lateWhy = await lateEventStatus(d, req.event, req.candidate_id);',
+        'const lateWhy = null;',
+      ),
     ],
     tests: [T_RB],
-    expectRed: ['harm 回滚走到第四段后用户 veto'],
-    mustKill: ['harm 回滚走到第四段后用户 veto'],
+    expectRed: ['权威记录读不到(deferred):撤销事务照常运行'],
+    mustKill: ['权威记录读不到(deferred):撤销事务照常运行'],
   },
   {
     id: 'late_event_failure_ignored',
-    clause: '较晚终止事件施加失败(halt / stale / refused)→ 不运行 txn、不以旧理由完成',
+    clause: '较晚终止事件施加失败(halt / stale / refused)→ 如实标记、不以旧理由静默完成',
     edits: [
       swap(RB, "if (r.kind === 'transitioned' || r.kind === 'noop') return null;", 'return null;'),
     ],
     tests: [T_RB],
-    expectRed: ['提交失败(commit_failed):不返回 complete'],
-    mustKill: ['提交失败(commit_failed):不返回 complete'],
+    expectRed: ['提交失败(commit_failed):不以旧理由进终态'],
+    mustKill: ['提交失败(commit_failed):不以旧理由进终态'],
   },
   {
-    id: 'late_event_deferred_ignored',
-    clause: '较晚终止事件遇权威记录读不到 → 返回 late_event_not_applied,不静默丢',
-    edits: [
-      swap(
-        RB,
-        "if (rd.kind === 'deferred' || rd.kind === 'invalid') return hold(`repo_${rd.kind}`);",
-        '',
-      ),
-    ],
+    id: 'late_event_flag_dropped',
+    clause: '较晚终止事件没施加时结果带 lateEventNotApplied(调用方据此重试)',
+    edits: [swap(RB, 'return { ...out, lateEventNotApplied: lateWhy };', 'return out;')],
     tests: [T_RB],
-    expectRed: ['权威记录读不到(deferred):不运行 txn'],
-    mustKill: ['权威记录读不到(deferred):不运行 txn'],
+    expectRed: ['journal 停在第一段、仓库 deferred 时收到较晚事件', '记录已终态:不再施加'],
+    mustKill: ['journal 停在第一段、仓库 deferred 时收到较晚事件'],
   },
   {
     id: 'clear_report_unavailable_only',

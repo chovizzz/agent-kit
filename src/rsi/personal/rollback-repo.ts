@@ -14,10 +14,12 @@ import {
   commitPersonal,
   KIT_MANAGED_TOP_DIRS,
   readPersonalFiles,
+  readRecordedPersonalFiles,
   TreeSpecError,
   type PersonalLocks,
   type PersonalRepoDeps,
 } from './commit.js';
+import { PersonalLifecycleRecordSchema } from '../../contracts/rsi-personal.js';
 import { readHead, type PersonalHome } from './home-state.js';
 import { txnId } from './ids.js';
 import type { RepoRemoval, RepoRemovalResult } from './rollback-ports.js';
@@ -67,5 +69,27 @@ export function personalRepoRemoval(deps: PersonalRepoDeps, locks: PersonalLocks
           throw new Error('personal repo commit: cas_failed');
       }
     },
+  };
+}
+
+/**
+ * `RollbackDeps.recordedSha` 的真实实现:从 `head.json` 记录的提交里只读取该候选的 `content_sha256`(journal 没有这个字段,见 `rollback.ts`)。
+ * 私有仓库分叉 / 属主变化时仍可用(不碰引用、索引、工作树);读不到 / 记录不合规 → null(执行器当 `content_unknown`,本段未完成)。
+ */
+export function recordedShaReader(
+  deps: PersonalRepoDeps,
+  locks: PersonalLocks,
+): (candidateId: string) => Promise<string | null> {
+  return async (candidateId) => {
+    const r = await readRecordedPersonalFiles(deps, locks, ['lifecycle']);
+    if (r.status !== 'ok') return null;
+    const f = r.files.find((x) => x.path === `lifecycle/${candidateId}.json`);
+    if (f === undefined) return null;
+    try {
+      const p = PersonalLifecycleRecordSchema.safeParse(JSON.parse(f.content));
+      return p.success && p.data.id === candidateId ? p.data.content_sha256 : null;
+    } catch {
+      return null;
+    }
   };
 }

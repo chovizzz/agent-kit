@@ -442,7 +442,7 @@ describe('复用在途 txn 时较晚到达的终止事件(R21-4.4a ① 自环)',
   });
 });
 
-describe('较晚终止事件不静默丢失(记录是唯一持久化依据,先于任何可能 incomplete 的动作施加)', () => {
+describe('较晚终止事件不静默丢失,也不阻断撤销(记录是唯一持久化依据;事件与撤销进度互不依赖)', () => {
   const lateVeto = (): Parameters<typeof startRollback>[1] => ({
     ...harmReq(),
     reason: 'vetoed',
@@ -450,28 +450,40 @@ describe('较晚终止事件不静默丢失(记录是唯一持久化依据,先�
     event: { kind: 'veto', evidence: 'rsi veto' },
   });
 
-  it('权威记录读不到(deferred):不运行 txn、返回 late_event_not_applied;在途 txn 不变,仓库恢复后调用方重试 → 施加并完成(vetoed)', async () => {
+  it('权威记录读不到(deferred):撤销事务照常运行(HOME 清理不受阻),结果带 lateEventNotApplied;仓库恢复后调用方重试 → 施加并完成(vetoed)', async () => {
     const w = world7();
     w.crashAt('after:payload');
     await expect(startRollback(w.d, harmReq())).rejects.toBeInstanceOf(Crash);
     const revoked = w.payload.revoked.length;
     w.store.mode = 'deferred';
     const r = await startRollback(w.d, lateVeto());
-    expect(r).toMatchObject({ status: 'incomplete', why: 'late_event_not_applied:repo_deferred' });
-    expect(w.txns.get(TXN)?.phase).toBe('rollback_complete');
-    expect(w.payload.revoked.length).toBe(revoked); // 没有运行
+    expect(r).toMatchObject({ status: 'incomplete', lateEventNotApplied: 'repo_deferred' });
+    expect(w.payload.revoked.length).toBe(revoked + 1); // 撤销路径照常运行了
     w.store.mode = 'ok';
-    expect((await startRollback(w.d, lateVeto())).status).toBe('complete');
+    const again = await startRollback(w.d, lateVeto());
+    expect(again).toMatchObject({ status: 'complete' });
+    expect(again).not.toHaveProperty('lateEventNotApplied');
     expect(recordOf(w).terminal_reason).toBe('vetoed');
   });
 
-  it('提交失败(commit_failed):不返回 complete、不以旧理由进终态、不删 journal;重试成功后保留 veto 优先级与黑名单', async () => {
+  it('journal 停在第一段、仓库 deferred 时收到较晚事件:凭据与 HOME 撤销照常执行(不被事件持久化失败挡住),事件如实报未施加', async () => {
+    const w = world7();
+    w.crashAt('journal:rollback_requested');
+    await expect(startRollback(w.d, harmReq())).rejects.toBeInstanceOf(Crash);
+    w.store.mode = 'deferred';
+    const r = await startRollback(w.d, lateVeto());
+    expect(w.revs).toHaveLength(1); // 第二段:凭据落盘
+    expect(r).toMatchObject({ lateEventNotApplied: 'repo_deferred' });
+    expect(w.txns.get(TXN)?.phase).toBe('rollback_complete'); // 第三、四段(payload 清理)也走过了
+  });
+
+  it('提交失败(commit_failed):不以旧理由进终态、不删 journal、不返回 complete;重试成功后保留 veto 优先级与黑名单', async () => {
     const w = world7();
     w.crashAt('after:payload');
     await expect(startRollback(w.d, harmReq())).rejects.toBeInstanceOf(Crash);
     w.store.failCommit = { status: 'cas_failed', expected: 'x', actual: null };
     const r = await startRollback(w.d, lateVeto());
-    expect(r).toMatchObject({ status: 'incomplete', why: 'late_event_not_applied:commit_failed' });
+    expect(r).toMatchObject({ status: 'incomplete', lateEventNotApplied: 'commit_failed' });
     expect(recordOf(w).lifecycle).toBe('rolling_back');
     expect(w.txns.size).toBe(1);
     expect(w.effectLog.size).toBe(0);
@@ -482,6 +494,28 @@ describe('较晚终止事件不静默丢失(记录是唯一持久化依据,先�
       'blacklist_veto',
       'write_tombstone',
     ]);
+  });
+
+  it('记录还在 canary(journal 在第二段中断):事件留给第三段施加;第二段失败时 journal 保留,重试走完就是已施加(无标记)', async () => {
+    const w = world7();
+    w.crashAt('enter:injection_disabled');
+    await expect(startRollback(w.d, harmReq())).rejects.toBeInstanceOf(Crash);
+    w.cache.failOnce = true;
+    await expect(startRollback(w.d, lateVeto())).rejects.toThrow('cache down'); // 第二段失败:异常向上(journal 保留)
+    const ok = await startRollback(w.d, lateVeto());
+    expect(ok).toMatchObject({ status: 'complete' });
+    expect(ok).not.toHaveProperty('lateEventNotApplied');
+    expect(recordOf(w).terminal_reason).toBe('vetoed');
+  });
+
+  it('记录已终态:不再施加(终态上的 veto 黑名单归前台命令),如实标记 record_terminal', async () => {
+    const w = world7();
+    w.crashAt('before:journal_remove');
+    await expect(startRollback(w.d, harmReq())).rejects.toBeInstanceOf(Crash);
+    expect(recordOf(w).lifecycle).toBe('rolled_back');
+    const r = await startRollback(w.d, lateVeto());
+    expect(r).toMatchObject({ status: 'complete', lateEventNotApplied: 'record_terminal' });
+    expect(recordOf(w).terminal_reason).toBe('auto_rollback');
   });
 });
 

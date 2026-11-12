@@ -38,7 +38,11 @@ import {
   homeTxnStore,
   v1PayloadSync,
 } from '../../../src/rsi/personal/rollback-ports.js';
-import { personalRepoRemoval, recordedOwnerFp } from '../../../src/rsi/personal/rollback-repo.js';
+import {
+  personalRepoRemoval,
+  recordedOwnerFp,
+  recordedShaReader,
+} from '../../../src/rsi/personal/rollback-repo.js';
 import { readRevocations } from '../../../src/rsi/personal/home-state.js';
 import { RsiLockError } from '../../../src/rsi/lock-error.js';
 import { MemStore } from '../personal/w3-fixture.js';
@@ -119,6 +123,7 @@ async function runClear(
       ...(o.onStep !== undefined ? { onStep: o.onStep } : {}),
       ...(o.recorded === true
         ? {
+            recordedSha: recordedShaReader(deps, locks),
             recordedRecords: async (): Promise<RepoRead<PersonalLifecycleRecord[]>> => {
               const r = await readRecordedPersonalFiles(deps, locks, ['lifecycle']);
               if (r.status !== 'ok') return { kind: 'invalid', why: r.status };
@@ -439,5 +444,19 @@ describe('第三段删除范围(W0-15):只删 target_paths,且只限 kit 管理�
     });
     expect(res).toEqual({ a: { status: 'committed' }, b: { status: 'already' }, same: true });
     expect(headFiles(w)).toContain('rules/base.md');
+  });
+});
+
+describe('recordedShaReader(journal 没有 content_sha256 的兜底)', () => {
+  it('分叉(工作树被改)时仍读到 head.json 记录的提交里的 content_sha256;不存在的候选 → null;不碰工作树', async () => {
+    const w = await makeWorld('w7-clear-sha-');
+    await setup(w, shadowRec());
+    await writeUserFile(w, 'rules/base.md', 'user edit\n');
+    const got = await withLock(w, async (locks) => {
+      const read = recordedShaReader(repoDeps(w), locks);
+      return { sha: await read(ID), none: await read('ra_ffffffffffff') };
+    });
+    expect(got).toEqual({ sha: SHA, none: null });
+    expect(await readText(path.join(w.h.repoDir, 'rules/base.md'))).toBe('user edit\n');
   });
 });

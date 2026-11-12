@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import { rsiAutoClear, type ClearDeps } from '../../../src/rsi/personal/clear.js';
 import { startRollback } from '../../../src/rsi/personal/rollback.js';
-import { Crash, V1B, harmReq, world7, type World7 } from './w7-fixture.js';
+import { Crash, SHA, V1B, harmReq, world7, type World7 } from './w7-fixture.js';
 
 const clearDeps = (w: World7): ClearDeps => ({
   store: w.d.store,
@@ -17,6 +17,8 @@ const clearDeps = (w: World7): ClearDeps => ({
   now: w.d.now,
   phase: V1B,
   syncLock: { withLock: (fn) => fn() },
+  // 仓库读不到时 content_sha256 的兜底(生产 = head.json 记录的提交,`recordedShaReader`)
+  recordedSha: async () => SHA,
 });
 
 describe('rsiAutoClear 报告模型', () => {

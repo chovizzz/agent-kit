@@ -107,9 +107,21 @@ export interface RollbackDeps extends ApplyDeps {
 }
 
 export type RollbackOutcome =
-  | { status: 'complete'; txn: string; effects: 'applied' | 'already' | 'deferred' | 'none' }
+  | {
+      status: 'complete';
+      txn: string;
+      effects: 'applied' | 'already' | 'deferred' | 'none';
+      lateEventNotApplied?: string;
+    }
   /** 本段 / 收尾没有完成:journal 保留,下一次 `resumeTxn` / `resumeAll` 续做 */
-  | { status: 'incomplete'; txn: string; phase: RollbackPhase; why: string }
+  | {
+      status: 'incomplete';
+      txn: string;
+      phase: RollbackPhase;
+      why: string;
+      /** 复用在途 txn 时带来的较晚终止事件没有(或尚未)持久化的原因;调用方据此重试(见 {@link lateEventStatus}) */
+      lateEventNotApplied?: string;
+    }
   | { status: 'refused'; txn: string | null; why: string };
 
 /** 同一候选的同一份内容 → 同一个 txn(与 `kind` 无关) */
@@ -203,15 +215,15 @@ export async function startRollback(
   if (cur.kind === 'invalid') return { status: 'refused', txn: id, why: `txn_${cur.why}` };
   if (cur.kind === 'ok') {
     // 已有在途 txn:复用,不新开;来源一律取 journal 的(请求的 `by` 可能与 journal 的 `reason` 不相容)
-    // 较晚到达的终止事件(R21-4.4a ① 自环:终态理由取优先级最高者):**先于任何可能返回 incomplete 的动作**直接施加到权威记录(记录是唯一的持久化依据,
-    // journal 不存它);记录读不到 / 施加失败 → 返回 incomplete(`late_event_not_applied`),不运行 txn,调用方稍后重试(在途 txn 仍由 worker 的 `resumeAll` 照旧续做)
-    const late = await applyLateEvent(d, cur.value, req.event);
-    if (late !== null) return late;
-    return runGuarded(d, cur.value, {
+    const lateWhy = await lateEventStatus(d, req.event, req.candidate_id);
+    const out = await runGuarded(d, cur.value, {
       by: sourceOf(cur.value),
       hint: req.event,
       sha: req.content_sha256,
     });
+    // `pending_drive`:记录还没进入回滚时由第三段施加;txn 走完了就说明已施加
+    if (lateWhy === null || (lateWhy === 'pending_drive' && out.status === 'complete')) return out;
+    return { ...out, lateEventNotApplied: lateWhy };
   }
   const t: PersonalTxn = {
     schema_version: 1,
@@ -416,32 +428,30 @@ async function applyOne(
   return r;
 }
 
-async function applyLateEvent(
+/**
+ * 复用在途 txn 时较晚到达的终止事件(R21-4.4a ① 自环:终态理由取优先级最高者)。事件**只有施加到权威记录才算持久化**(journal 不存它),所以:
+ * 记录在 `rolling_back` → 先于任何动作直接施加;记录读不到 / 施加失败 / 记录已终态 / 记录还没进入回滚(留给第三段的 `driveRecord`)→ 返回原因码,
+ * 由调用方经 `lateEventNotApplied` 得知并稍后重试。**不阻断撤销事务**:凭据与 HOME 清理(降低影响)照常继续,事件是否已持久化与撤销进度互不依赖。
+ * `null` = 已施加,或没有记录可施加(记录不存在)。
+ */
+async function lateEventStatus(
   d: RollbackDeps,
-  t: PersonalTxn,
   event: TransitionEvent | undefined,
-): Promise<RollbackOutcome | null> {
+  candidateId: string,
+): Promise<string | null> {
   if (event === undefined) return null;
-  const hold = (why: string): RollbackOutcome => ({
-    status: 'incomplete',
-    txn: t.txn_id,
-    phase: t.phase,
-    why: `late_event_not_applied:${why}`,
-  });
-  const rd = await d.store.read(t.candidate_id);
+  const rd = await d.store.read(candidateId);
   if (rd.kind === 'absent' || rd.kind === 'missing') return null;
-  if (rd.kind === 'deferred' || rd.kind === 'invalid') return hold(`repo_${rd.kind}`);
-  // 记录还不在 rolling_back(canary 等):由第三段的 driveRecord 施加(它有自己的失败处理)
-  if (rd.record.lifecycle !== 'rolling_back') return null;
+  if (rd.kind === 'deferred' || rd.kind === 'invalid') return `repo_${rd.kind}`;
+  if (isTerminalLifecycle(rd.record.lifecycle)) return 'record_terminal';
+  if (rd.record.lifecycle !== 'rolling_back') return 'pending_drive';
   const r = await applyOne(d, rd.record, event);
   if (r.kind === 'transitioned' || r.kind === 'noop') return null;
-  return hold(
-    r.kind === 'halt'
-      ? r.halt
-      : r.kind === 'refused'
-        ? (r.refusal.guard ?? r.refusal.refused)
-        : r.kind,
-  );
+  return r.kind === 'halt'
+    ? r.halt
+    : r.kind === 'refused'
+      ? (r.refusal.guard ?? r.refusal.refused)
+      : r.kind;
 }
 
 /** 撤销路径的目标:凭据全集 + 本候选(identity_changed 不写凭据,只靠本候选);凭据读不到 → null */
