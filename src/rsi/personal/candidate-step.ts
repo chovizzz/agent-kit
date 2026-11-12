@@ -40,6 +40,7 @@ import {
 } from './candidate-record.js';
 import { buildDraft, selectable } from './candidate-source.js';
 import { overlapsPreset, runGates } from './gates.js';
+import type { ShadowCountPort } from './shadow-count.js';
 import { txnId } from './ids.js';
 import { decideShadowStep, pickPromotionHead } from './transition.js';
 import {
@@ -60,6 +61,8 @@ export interface StepDeps extends ApplyDeps {
   fingerprint(canonicalBody: string): string;
   /** 可选:信号库历史重算首次达标日;缺省 = 一律「无法重算」 */
   readySince?: ReadySinceRecovery;
+  /** 可选(W5):重建工作副本后由真实计数重算 shadow 的 `sessions` / `hits`;缺省 = 清零(旧行为)。读失败 / 事实不可得按缺省处理 */
+  shadowCounts?: ShadowCountPort;
   /** 只用 `assertHeld`(提交底座另有自己的断言) */
   locks: { personal: { assertHeld(): Promise<void> } };
 }
@@ -281,11 +284,23 @@ export async function runPersonalStep(d: StepDeps): Promise<StepResult> {
         ? await d.readySince.recover(rec)
         : null;
     const readyToday = rec.lifecycle === 'shadow' && recovered === null;
-    const wc = rebuildWorkingCopy(
+    let wc = rebuildWorkingCopy(
       rec,
       recovered ?? (readyToday ? utcDay(d.now().toISOString()) : null),
     );
     if (wc === null) continue;
+    if (rec.lifecycle === 'shadow' && d.shadowCounts !== undefined) {
+      // W5:重建后的 sessions / hits 由计数重算(R21-3.8);读失败 = 事实不可得,保持 0,下一步经 promoteFacts 现算,不影响推进判定
+      let counted: Awaited<ReturnType<ShadowCountPort['count']>> = null;
+      try {
+        counted = await d.shadowCounts.count(rec);
+      } catch (e) {
+        if (e instanceof RsiLockError && e.kind === 'lock_lost') return halt('lock_lost');
+      }
+      if (counted !== null) {
+        wc = { ...wc, shadow: { ...wc.shadow, sessions: counted.sessions, hits: counted.hits } };
+      }
+    }
     await d.working.put(wc);
     working.set(rec.id, wc);
     if (rec.lifecycle === 'shadow') {

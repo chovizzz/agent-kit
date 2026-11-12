@@ -211,6 +211,46 @@ export async function appendFile(
 }
 
 /**
+ * 单行追加并 `fsync`(R21-6.4 分组账 / R21-6.11「未落账不注入」:调用方只在本函数成功返回之后才输出):
+ * `O_WRONLY|O_APPEND|O_CREAT|O_NOFOLLOW`,不拿锁;打开后对**句柄**核对为普通文件且 `nlink == 1`(不是则拒绝、不写),
+ * 用**一次** `write` 写入并核对写出字节数等于数据长度(短写 = 抛错,不重试续写,免得与别的追加者交错),然后 `sync()`,成功才返回。
+ * `mode` 必填(新建文件的权限,不改已有文件权限)。路径守卫同其它写函数。
+ * **保证的边界(如实)**:`O_APPEND` 让每次底层 `write` 的定位与写入原子地落在文件尾;本函数据此让小于一个文件系统块的单行落成一次底层写。
+ * 这不是「任意文件系统、任意故障下都不交错」的保证(`PIPE_BUF` 只对管道 / FIFO 成立):短写发生时本函数抛错,但已写出的前缀留在文件里,
+ * worker / 分析读账时(逐行 schema 校验)会把这样的账判为不合规并 fail-closed;这**不**意味着后续 hint 会停止注入(hint 不读账)。调用方把「抛错」当作未落账、不输出。
+ */
+export async function appendFileSynced(
+  ctx: IoContext,
+  target: string,
+  data: string | Uint8Array,
+  mode: number,
+): Promise<void> {
+  audit(ctx, 'appendFileSynced', target);
+  const abs = assertWritable(ctx, target);
+  const NOFOLLOW = fs.constants.O_NOFOLLOW ?? 0;
+  if (NOFOLLOW === 0) throw new WriteDeniedError('写入被拒绝:平台不支持 O_NOFOLLOW');
+  const h = await fsp.open(
+    abs,
+    fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_CREAT | NOFOLLOW,
+    mode,
+  );
+  try {
+    const st = await h.stat();
+    if (!st.isFile() || st.nlink > 1) {
+      throw new WriteDeniedError(`写入被拒绝:追加目标不是单链接的普通文件:${abs}`);
+    }
+    const buf = typeof data === 'string' ? Buffer.from(data, 'utf8') : data;
+    const { bytesWritten } = await h.write(buf, 0, buf.length);
+    if (bytesWritten !== buf.length) {
+      throw new WriteDeniedError(`写入被拒绝:追加发生短写(${bytesWritten}/${buf.length}):${abs}`);
+    }
+    await h.sync();
+  } finally {
+    await h.close();
+  }
+}
+
+/**
  * 独占创建并写入(R20-A0,contracts §5 safe-fs 导出表 / §20.9 第 4 条):`O_CREAT|O_EXCL|O_NOFOLLOW`,目标已存在则失败、**不覆盖、不改动**
  * 已有文件。错误分两类,调用方须分开处理:
  *  - 路径守卫拒绝(`WriteDeniedError`):根外、`..` 逃逸、悬空符号链接、指向根外的链接、硬链接(nlink>1)—— fail-closed,不是「被占用」;
