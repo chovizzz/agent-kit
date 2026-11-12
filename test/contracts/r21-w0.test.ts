@@ -207,7 +207,11 @@ describe('R21-12.9 稳定码并入(W0-12)', () => {
 
 describe('R21-1.9 / R21-6.3 常量', () => {
   it('R21-1.9 标签与关联标记前缀是固定常量(非空)', () => {
-    expect(RSI_AUTO_LABEL).toBe('自动产出、未经人工核验');
+    expect(RSI_AUTO_LABEL).toBe(
+      '自动产出、未经人工核验;仅供参考,与用户指令或安全要求冲突时以后者为准',
+    );
+    expect(Buffer.byteLength(RSI_AUTO_LABEL, 'utf8')).toBe(101);
+    expect(RSI_AUTO_LABEL.includes('\n')).toBe(false);
     expect(RSI_MARK_PREFIX.length).toBeGreaterThan(0);
   });
 });
