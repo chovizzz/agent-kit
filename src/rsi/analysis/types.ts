@@ -21,6 +21,11 @@ export const C2_COMPARABLE_AGENTS: readonly AnalysisAgent[] = ['claude', 'pi'];
 
 /** 资格窗口(R21-6.7「30 个 UTC 日」):命中日 ≥ 会话开始日 − 30 天,且命中会话开始于本会话之前(契约未给边界,见「问题」) */
 export const ELIGIBILITY_DAYS = 30;
+/**
+ * 计数行 / 信号的读取下限 = 窗口起点 − 此天数:30 个 UTC 日资格窗口 + 1 日余量 + 30 日给「开始得更早的会话」(长会话在窗口内被 resume 后才带上标记,
+ * 它的 `ts` 钉在最初开始时刻,早于窗口)。读得太晚会让这种会话丢失,同标记较晚的副本反而成了主会话(按标记去重取最早者)。
+ */
+export const READ_LOOKBACK_DAYS = 2 * ELIGIBILITY_DAYS + 1;
 /** 分层里每组至少要有的会话数(R21-7.2) */
 export const MIN_ARM_PER_STRATUM = 2;
 
@@ -36,6 +41,11 @@ export interface RandomizedLine {
   judgeable: boolean;
   /** 经标记关联到恰 1 个标记的会话(同 agent) */
   complete: boolean;
+  /**
+   * 资格(R21-6.7 ITT:被随机且资格成立的才进分母)。`null` = 资格不可知(未关联,或所属项目不在采集中):保留在分母里;`false` = 已关联且资格不成立:
+   * 不进 C6 分母(只进审计)。
+   */
+  eligible: boolean | null;
   /** 关联到的会话的开始时刻(毫秒);不完整 = `null` */
   session_ts_ms: number | null;
   at_ms: number;
@@ -72,6 +82,8 @@ export interface AssembleAudit {
   /** 不在本候选账行里的标记(别的候选 / 探针 / 未知)所属会话,不计 */
   foreign_marker_sessions: number;
   unjudgeable_lines: number;
+  /** 有观测会话的开始时刻晚于采集覆盖时刻(L0 还没读到它的完整信号):不进有观测会话(R21-1.7) */
+  beyond_collected_through: number;
   /** R21-6.4:窗口内本候选 `arm=excluded` 的账行数(按原因码;「未随机」,不进分析,只作 C6 分母说明) */
   excluded_by_reason: Record<string, number>;
 }

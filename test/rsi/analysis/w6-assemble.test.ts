@@ -166,6 +166,54 @@ describe('R21-6.4 账行的取舍', () => {
   });
 });
 
+describe('M2 有观测会话须在采集覆盖时刻之前开始(计数行首次采集即落盘,不等于信号读全)', () => {
+  const through = T_BASE + 10 * MIN;
+  it('M2 开始时刻晚于采集覆盖时刻 → 不是有观测会话(审计计数),但账行仍关联完整', () => {
+    const r = run({
+      ledger: [assign(1, 'treat'), assign(2, 'control')],
+      stats: [stat(1, { tsMs: through - MIN }), stat(2, { tsMs: through + MIN })],
+      collectedThroughIso: iso(through),
+    });
+    expect(r.observed.map((s) => s.marker)).toEqual([marker(1)]);
+    expect(r.audit.beyond_collected_through).toBe(1);
+    expect(r.lines.map((l) => [l.marker, l.complete])).toEqual([
+      [marker(1), true],
+      [marker(2), true],
+    ]);
+  });
+  it('M2 边界:开始时刻恰等于采集覆盖时刻 → 仍算(≤)', () => {
+    const r = run({
+      ledger: [assign(1, 'treat')],
+      stats: [stat(1, { tsMs: through })],
+      collectedThroughIso: iso(through),
+    });
+    expect(r.observed.length).toBe(1);
+    expect(r.audit.beyond_collected_through).toBe(0);
+  });
+});
+
+describe('L2 C6 分母按 ITT:资格不成立的已关联账行不进分母', () => {
+  it('已关联且资格不成立 → eligible=false;未关联 → null(资格不可知,保留);项目不在采集中 → null', () => {
+    const r = run({
+      ledger: [assign(1, 'treat'), assign(2, 'control'), assign(3, 'treat'), assign(4, 'control')],
+      stats: [
+        stat(1),
+        stat(2, { markers: [] }),
+        stat(3, { project: 'not_collected' }),
+        stat(4, { project: 'elig_proj' }),
+      ],
+      collecting: (k) => k !== 'not_collected',
+      eligible: (k) => k === 'elig_proj',
+    });
+    expect(r.lines.map((l) => [l.marker, l.complete, l.eligible])).toEqual([
+      [marker(1), true, false],
+      [marker(2), false, null],
+      [marker(3), true, null],
+      [marker(4), true, true],
+    ]);
+  });
+});
+
 describe('R21-1.7 有观测会话与 C6 的可判范围', () => {
   it('账行 at 晚于采集覆盖时刻 → 尚不可判(不当作关联失败),审计计数', () => {
     const r = run({

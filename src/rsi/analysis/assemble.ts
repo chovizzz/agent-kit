@@ -9,6 +9,10 @@
  *  - 缺 `rsi_markers`(未采集)的会话不携带任何标记:它既不关联、也不算 0 个标记。
  *  - 账行「完整」(C6)= 其标记被主会话以**唯一**标记取回,且计数行所在 agent 与账行 agent 一致;其余(无会话、多标记、agent 不符)为不完整。
  *  - 有观测会话 = 完整 ∧ 采集中项目;`eligible`(R21-6.7)由调用方的端口现算,不在这里过滤(信息时间 t 按有观测会话计,统计量只用有观测 ∩ 资格成立)。
+ *  - 有观测会话还要求开始时刻 ≤ 采集覆盖时刻(M2)。依据:`session-stats.ts` 的计数行是**首次采集即落盘**、之后随会话增长就地替换(`ts` 首写钉死为会话开始时刻),
+ *    信号库另行追加;全仓没有「会话已结束」的标志,所以「有计数行」不能证明该会话的信号已读全。过滤只能挡住「根本还没读到」的会话;
+ *    读取时仍在进行中的会话可能少计(只增不减),这是残余风险,汇报「问题」里登记。
+ *  - C6 的分母按 ITT(R21-6.7):已关联且资格不成立的账行 `eligible=false`,不进 C6;未关联 / 项目不在采集中的资格不可知,保留。
  *  - `judgeable`:账行 `at ≤ collectedThrough`(采集尚未覆盖的账行不进 C6,避免把「还没读到」当「关联失败」)。
  */
 import type { RsiCanaryLedgerLine } from '../../contracts/rsi-personal.js';
@@ -69,6 +73,7 @@ export function assemble(input: AssembleInput): Assembled {
     not_eligible: 0,
     foreign_marker_sessions: 0,
     unjudgeable_lines: 0,
+    beyond_collected_through: 0,
     excluded_by_reason: {},
   };
 
@@ -112,6 +117,7 @@ export function assemble(input: AssembleInput): Assembled {
   }
 
   const complete = new Map<string, number>();
+  const eligibleOf = new Map<string, boolean | null>();
   const observed: ObservedSession[] = [];
   for (const it of items) {
     const markers = it.stat.rsi_markers ?? [];
@@ -136,11 +142,19 @@ export function assemble(input: AssembleInput): Assembled {
     const tsMs = startOf(it);
     complete.set(m, tsMs);
     if (!input.collecting(it.stat.project_key)) {
+      // 项目不在采集中:资格不可知(命中只在采集中项目里统计),C6 分母保留
+      eligibleOf.set(m, null);
       audit.not_collecting_project += 1;
       continue;
     }
     const eligible = input.eligible(it.stat.project_key, tsMs);
+    eligibleOf.set(m, eligible);
     if (!eligible) audit.not_eligible += 1;
+    // M2:计数行落盘 ≠ 会话信号完整(见文件头注)。会话开始晚于采集覆盖时刻的,L0 还没读到,不当作有观测会话
+    if (tsMs > throughMs) {
+      audit.beyond_collected_through += 1;
+      continue;
+    }
     const me = input.measures(it.stat.session_ref);
     observed.push({
       session_ref: it.stat.session_ref,
@@ -173,6 +187,7 @@ export function assemble(input: AssembleInput): Assembled {
       overlaps_preset: l.overlaps_preset,
       judgeable,
       complete: complete.has(marker),
+      eligible: eligibleOf.get(marker) ?? null,
       session_ts_ms: complete.get(marker) ?? null,
       at_ms: atMs,
     });

@@ -65,6 +65,10 @@ const HARM_TESTS = [
   'C6:treat 的完整率明显更低',
 ] as const;
 
+/** 新增:C6 分母(ITT)与最坏情况敏感性两条分析用例的名字片段 */
+const T_ITT = 'L2 C6 分母按 ITT:已关联且资格不成立的账行不进分母';
+const T_WORST = 'M1 R21-6.7 关联失败按最坏情况做敏感性';
+
 const swap = (file: string, anchor: string, replacement: string): Edit => ({
   file,
   anchor,
@@ -155,7 +159,7 @@ export const V1_W6_MUTATIONS: readonly V1W6Mutation[] = [
       ),
     ],
     tests: [T_AN],
-    expectRed: ['9 个会话没有查看', '部分层稀疏', '并层:稀疏项目并入'],
+    expectRed: ['9 个会话没有查看', '部分层稀疏', '并层:稀疏项目并入', T_WORST],
     mustKill: ['9 个会话没有查看'],
   },
   {
@@ -195,7 +199,12 @@ export const V1_W6_MUTATIONS: readonly V1W6Mutation[] = [
     clause: 'R21-7.2:单侧方向 = 统计量越大越差;翻转后变好被当成变差',
     edits: [swap(PERM, 'if (v >= floor) atLeast += 1;', 'if (v <= floor) atLeast += 1;')],
     tests: [T_STATS, T_AN],
-    expectRed: ['单层 treat [5,5,5] vs control [0,0,0]', '方向相反(treat 更好)', ...HARM_TESTS],
+    expectRed: [
+      '单层 treat [5,5,5] vs control [0,0,0]',
+      '方向相反(treat 更好)',
+      ...HARM_TESTS,
+      T_WORST,
+    ],
     mustKill: ['单层 treat [5,5,5] vs control [0,0,0]'],
   },
   {
@@ -236,7 +245,7 @@ export const V1_W6_MUTATIONS: readonly V1W6Mutation[] = [
     clause: 'R21-7.2:C6 完整率差 = control − treat(treat 更不完整才是变差)',
     edits: [swap(STATS, "return kind === 'mean_diff' ? d : -d;", 'return d;')],
     tests: [T_STATS, T_AN],
-    expectRed: ['C6 完整率差', 'C6:treat 的完整率明显更低'],
+    expectRed: ['C6 完整率差', 'C6:treat 的完整率明显更低', T_ITT, T_WORST],
     mustKill: ['C6 完整率差'],
   },
   // ---- R21-7.2 / 7.4a 分层 ----
@@ -355,13 +364,13 @@ export const V1_W6_MUTATIONS: readonly V1W6Mutation[] = [
     clause: 'R21-6.6:关联失败 / 多标记的账行计入 C6 的不完整',
     edits: [swap(AN, 'v: l.complete ? 1 : 0', 'v: 1')],
     tests: [T_AN],
-    expectRed: ['C6:treat 的完整率明显更低'],
+    expectRed: ['C6:treat 的完整率明显更低', T_ITT],
     mustKill: ['C6:treat 的完整率明显更低'],
   },
   {
     id: 'c6_unjudgeable_counted',
     clause: 'R21-1.7:采集尚未覆盖的账行不进 C6(不把「还没读到」当关联失败)',
-    edits: [swap(AN, 'l.judgeable && (l.complete ?', '(l.complete ?')],
+    edits: [swap(AN, 'l.judgeable && l.eligible !== false', 'l.eligible !== false')],
     tests: [T_AN],
     expectRed: ['C6 负例:采集尚未覆盖'],
     mustKill: ['C6 负例:采集尚未覆盖'],
@@ -546,7 +555,7 @@ export const V1_W6_MUTATIONS: readonly V1W6Mutation[] = [
     clause: 'R21-1.7 ②:不属采集中的项目不是有观测会话',
     edits: [swap(ASM, 'if (!input.collecting(it.stat.project_key)) {', 'if (false) {')],
     tests: [T_ASM],
-    expectRed: ['不属采集中的项目'],
+    expectRed: ['不属采集中的项目', '已关联且资格不成立 → eligible=false'],
     mustKill: ['不属采集中的项目'],
   },
   // ---- 信号度量与资格 ----
@@ -666,7 +675,7 @@ export const V1_W6_MUTATIONS: readonly V1W6Mutation[] = [
       ),
     ],
     tests: [T_RUN],
-    expectRed: ['抛错 → unavailable', '采集覆盖时刻不可得', '注入的随机源越界'],
+    expectRed: ['抛错 → unavailable', '采集覆盖时刻不可得', '注入的随机源越界', 'L1 编程错误'],
     mustKill: ['抛错 → unavailable'],
   },
   // ---- 读取层 ----
@@ -689,7 +698,7 @@ export const V1_W6_MUTATIONS: readonly V1W6Mutation[] = [
       ),
     ],
     tests: [T_READ],
-    expectRed: ['任一行不合 schema → 整体失败'],
+    expectRed: ['任一行不合 schema → 整体失败', 'H1 坏行出现在被读取的月份里'],
     mustKill: ['任一行不合 schema → 整体失败'],
   },
   {
@@ -703,7 +712,7 @@ export const V1_W6_MUTATIONS: readonly V1W6Mutation[] = [
       ),
     ],
     tests: [T_READ],
-    expectRed: ['任一行不合 schema → 整体失败'],
+    expectRed: ['任一行不合 schema → 整体失败', 'H1 坏行出现在被读取的月份里'],
     mustKill: ['任一行不合 schema → 整体失败'],
   },
   {
@@ -717,7 +726,7 @@ export const V1_W6_MUTATIONS: readonly V1W6Mutation[] = [
       ),
     ],
     tests: [T_READ],
-    expectRed: ['只取 ts ≥ since 的行'],
+    expectRed: ['只取 ts ≥ since 的行', 'H1 跨月'],
     mustKill: ['只取 ts ≥ since 的行'],
   },
   {
@@ -733,6 +742,156 @@ export const V1_W6_MUTATIONS: readonly V1W6Mutation[] = [
     tests: [T_READ],
     expectRed: ['C4 字节数口径'],
     mustKill: ['C4 字节数口径'],
+  },
+  // ---- 验收退回项:H1 / M1 / M2 / L1–L4 ----
+  {
+    id: 'itt_ineligible_in_c6',
+    clause: 'R21-6.7 ITT / L2:已关联且资格不成立的账行不进 C6 分母',
+    edits: [swap(AN, 'l.judgeable && l.eligible !== false', 'l.judgeable')],
+    tests: [T_AN],
+    expectRed: [T_ITT],
+    mustKill: [T_ITT],
+  },
+  {
+    id: 'elig_null_dropped',
+    clause: 'L2:项目不在采集中的已关联账行资格不可知(null),不能记成不成立',
+    edits: [swap(ASM, 'eligibleOf.set(m, null);', 'eligibleOf.set(m, false);')],
+    tests: [T_ASM],
+    expectRed: ['已关联且资格不成立 → eligible=false'],
+    mustKill: ['已关联且资格不成立 → eligible=false'],
+  },
+  {
+    id: 'elig_unlinked_false',
+    clause: 'L2:未关联账行的资格不可知(null),保留在分母里',
+    edits: [
+      swap(
+        ASM,
+        'eligible: eligibleOf.get(marker) ?? null,',
+        'eligible: eligibleOf.get(marker) ?? false,',
+      ),
+    ],
+    tests: [T_ASM],
+    expectRed: ['已关联且资格不成立 → eligible=false'],
+    mustKill: ['已关联且资格不成立 → eligible=false'],
+  },
+  {
+    id: 'worst_no_impute',
+    clause: 'M1 R21-6.7:最坏情况敏感性要把 control 的关联失败记为完整',
+    edits: [swap(AN, "v: l.complete ? 1 : l.arm === 'control' ? 1 : 0,", 'v: l.complete ? 1 : 0,')],
+    tests: [T_AN],
+    expectRed: [T_WORST],
+    mustKill: [T_WORST],
+  },
+  {
+    id: 'worst_treat_good',
+    clause: 'M1 R21-6.7:最坏情况敏感性里 treat 的关联失败记为不完整(不能记完整)',
+    edits: [swap(AN, "l.arm === 'control' ? 1 : 0,", '1,')],
+    tests: [T_AN],
+    expectRed: [T_WORST],
+    mustKill: [T_WORST],
+  },
+  {
+    id: 'beyond_through_kept',
+    clause: 'M2 R21-1.7:开始时刻晚于采集覆盖时刻的会话不是有观测会话',
+    edits: [swap(ASM, 'if (tsMs > throughMs) {', 'if (false) {')],
+    tests: [T_ASM],
+    expectRed: ['M2 开始时刻晚于采集覆盖时刻'],
+    mustKill: ['M2 开始时刻晚于采集覆盖时刻'],
+  },
+  {
+    id: 'beyond_through_ge',
+    clause: 'M2:边界恰等于采集覆盖时刻仍算(≤)',
+    edits: [swap(ASM, 'if (tsMs > throughMs) {', 'if (tsMs >= throughMs) {')],
+    tests: [T_ASM],
+    expectRed: ['M2 边界'],
+    mustKill: ['M2 边界'],
+  },
+  {
+    id: 'prog_error_swallowed',
+    clause: 'L1:编程错误不能吞成 unavailable',
+    edits: [
+      drop(
+        RUN,
+        'if (e instanceof TypeError || e instanceof RangeError || e instanceof ReferenceError) throw e;',
+      ),
+    ],
+    tests: [T_RUN],
+    expectRed: ['L1 编程错误'],
+    mustKill: ['L1 编程错误'],
+  },
+  {
+    id: 'config_honored',
+    clause: 'L4 R21-7.1:契约常量不可配置,runAnalysis 不接受 config',
+    edits: [
+      swap(
+        RUN,
+        'config: DEFAULT_ANALYSIS_CONFIG,',
+        'config: (req as unknown as { config?: typeof DEFAULT_ANALYSIS_CONFIG }).config ?? DEFAULT_ANALYSIS_CONFIG,',
+      ),
+    ],
+    tests: [T_RUN],
+    expectRed: ['L4 传入削弱的 config'],
+    mustKill: ['L4 传入削弱的 config'],
+  },
+  {
+    id: 'lookback_short',
+    clause: 'L3:读取下限要覆盖开始得比窗口早的会话(≥ 60 天)',
+    edits: [swap(RUN, 'READ_LOOKBACK_DAYS * DAY_MS', '31 * DAY_MS')],
+    tests: [T_RUN],
+    expectRed: ['L3 resume'],
+    mustKill: ['L3 resume'],
+  },
+  {
+    id: 'lookback_const_short',
+    clause: 'L3:读取下限常量 = 2 × 30 + 1 天',
+    edits: [swap(TYPES, '2 * ELIGIBILITY_DAYS + 1', 'ELIGIBILITY_DAYS + 1')],
+    tests: [T_RUN],
+    expectRed: ['L3 resume'],
+    mustKill: ['L3 resume'],
+  },
+  {
+    id: 'event_c4_metric',
+    clause: 'H1:c4 的 harm 事件带 metric:c4(过转移引擎 schema)',
+    edits: [swap(EVT, 'metric: h.metric, worse: true', "metric: 'c1', worse: true")],
+    tests: [T_RUN],
+    expectRed: ['C4 越限 → harm_c4'],
+    mustKill: ['C4 越限 → harm_c4'],
+  },
+  {
+    id: 'month_cutoff_stats',
+    clause: 'H1:计数行按月份文件裁剪(只读 since 所在月及之后)',
+    edits: [
+      swap(
+        READ,
+        'if (monthOf(file) < sinceMonth) continue;\n        const agent = agentOf(file);',
+        'if (monthOf(file) > sinceMonth) continue;\n        const agent = agentOf(file);',
+      ),
+    ],
+    tests: [T_READ],
+    expectRed: ['H1 跨月'],
+    mustKill: ['H1 跨月'],
+  },
+  {
+    id: 'month_cutoff_signals',
+    clause: 'H1:信号按月份文件裁剪',
+    edits: [
+      swap(
+        READ,
+        'if (monthOf(file) < sinceMonth) continue;\n        agentOf(file);',
+        'if (monthOf(file) > sinceMonth) continue;\n        agentOf(file);',
+      ),
+    ],
+    tests: [T_READ],
+    expectRed: ['H1 跨月'],
+    mustKill: ['H1 跨月'],
+  },
+  {
+    id: 'month_prune_off',
+    clause: 'H1:月份键与文件名同形(yyyymm,无连字符),更早月份的文件不读',
+    edits: [swap(READ, '`${iso.slice(0, 4)}${iso.slice(5, 7)}`', '`${iso.slice(0, 7)}`')],
+    tests: [T_READ],
+    expectRed: ['H1 跨月'],
+    mustKill: ['H1 跨月'],
   },
 ];
 

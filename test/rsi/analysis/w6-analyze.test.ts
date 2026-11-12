@@ -175,6 +175,55 @@ describe('R21-7.4 判变差:越过 OBF 边界 → harm_<指标>', () => {
     expect(a.harm).toBeNull();
     expect(a.incomplete).toEqual({ treat: 0, control: 0 });
   });
+  it('L2 C6 分母按 ITT:已关联且资格不成立的账行不进分母(按组计入 c6_ineligible_excluded);未关联的保留', () => {
+    // treat 会话资格全不成立 → 它们的账行出分母;60 个 treat 账行没取回标记(资格不可知,保留);control 60 个完整
+    const sessions = alternating(120, (_i, arm) => ({ eligible: arm !== 'treat' }));
+    const extra = Array.from({ length: 60 }, (_v, i) =>
+      lineOf(obsSession(1000 + i, 'treat'), {
+        marker: `rsm_${(5000 + i).toString(16).padStart(16, '0')}`,
+        complete: false,
+        eligible: null,
+        session_ts_ms: null,
+        at_ms: T_BASE + i * MIN + 30_000,
+      }),
+    );
+    const a = run(sessions, { extra, cfg: FAST });
+    expect(a.c6_ineligible_excluded).toEqual({ treat: 60, control: 0 });
+    expect(a.randomized).toEqual({ treat: 60, control: 60 });
+    // treat 完整率 0、control 1 → 100 个百分点(若把资格不成立的 60 个 treat 完整行放进分母,只有 50)
+    const c6 = a.looks[a.looks.length - 1]?.metrics.find((m) => m.metric === 'c6');
+    expect(c6?.estimate).toBeCloseTo(100, 6);
+  });
+  it('M1 R21-6.7 关联失败按最坏情况做敏感性:treat 记不完整、control 记完整;只出报告,不改主判定', () => {
+    const unlinked = (arm: 'treat' | 'control', i: number): RandomizedLine =>
+      lineOf(obsSession(1000 + i, arm), {
+        marker: `rsm_${(arm === 'treat' ? 5000 + i : 7000 + i).toString(16).padStart(16, '0')}`,
+        complete: false,
+        eligible: null,
+        session_ts_ms: null,
+        at_ms: T_BASE + i * MIN + 30_000,
+      });
+    const extra = [
+      ...Array.from({ length: 60 }, (_v, i) => unlinked('treat', i)),
+      ...Array.from({ length: 60 }, (_v, i) => unlinked('control', i)),
+    ];
+    const a = run(alternating(120), { extra });
+    // 主分析:两组各 60 完整 + 60 不完整 → 完整率差 0 → 不是变差
+    const last = a.looks[a.looks.length - 1];
+    expect(last?.metrics.find((m) => m.metric === 'c6')?.estimate).toBeCloseTo(0, 6);
+    expect(a.harm).toBeNull();
+    expect(a.kind).not.toBe('harm');
+    // 最坏情况:control 的 60 个关联失败记完整 → control 120/120、treat 60/120 → 50 个百分点
+    const w = a.c6_worst_case;
+    expect(w?.k).toBe(last?.k);
+    expect(w?.unlinked).toEqual({ treat: 60, control: 60 });
+    expect(w?.look.status).toBe('tested');
+    expect(w?.look.estimate).toBeCloseTo(50, 6);
+    expect(w?.look.p as number).toBeLessThan(0.05);
+  });
+  it('M1 负例:没有任何查看 → 没有最坏情况结果(null)', () => {
+    expect(run(alternating(5), { cfg: FAST }).c6_worst_case).toBeNull();
+  });
   it('两组均零事件 → 该项证据不足(不检验、不消耗 α)', () => {
     const a = run(alternating(40), { cfg: FAST });
     for (const l of a.looks) {

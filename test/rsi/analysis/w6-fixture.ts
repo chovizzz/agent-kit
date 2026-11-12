@@ -109,6 +109,7 @@ export function lineOf(s: ObservedSession, o: Partial<RandomizedLine> = {}): Ran
     overlaps_preset: false,
     judgeable: true,
     complete: true,
+    eligible: s.eligible,
     session_ts_ms: s.tsMs,
     at_ms: s.tsMs,
     ...o,
@@ -124,6 +125,7 @@ export const ZERO_AUDIT = {
   not_eligible: 0,
   foreign_marker_sessions: 0,
   unjudgeable_lines: 0,
+  beyond_collected_through: 0,
   excluded_by_reason: {},
 };
 

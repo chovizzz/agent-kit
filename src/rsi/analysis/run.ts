@@ -13,12 +13,7 @@ import type { Signal } from '../../contracts/signal.js';
 import type { StatItem } from '../canary/marker-view.js';
 import type { ClusterSignature } from '../personal/gate-types.js';
 import { assemble, type SessionMeasures } from './assemble.js';
-import {
-  analyzeSegment,
-  DEFAULT_ANALYSIS_CONFIG,
-  type AnalysisConfig,
-  type SegmentAnalysis,
-} from './analyze.js';
+import { analyzeSegment, DEFAULT_ANALYSIS_CONFIG, type SegmentAnalysis } from './analyze.js';
 import {
   makeEligibility,
   sessionMeasures,
@@ -27,7 +22,7 @@ import {
   type HitSession,
 } from './measures.js';
 import { defaultSeed, seededRandom, type AnalysisRandom } from './rng.js';
-import { AnalysisInputError, ELIGIBILITY_DAYS, type AssembleAudit } from './types.js';
+import { AnalysisInputError, READ_LOOKBACK_DAYS, type AssembleAudit } from './types.js';
 import type { LoadedSignal } from '../../reflect/types.js';
 
 export interface AnalysisSource {
@@ -54,7 +49,7 @@ export interface AnalysisRequest {
   windowStartIso: string;
   /** 缺省:由候选与当前背景段确定性派生的种子 */
   random?: AnalysisRandom;
-  config?: AnalysisConfig;
+  // 契约常量(置换次数 / 查看节奏 / 上限 / α / C4 上限)不可配置(R21-7.1):这里没有 config,恒用 DEFAULT_ANALYSIS_CONFIG
 }
 
 export type AnalysisOutcome =
@@ -83,8 +78,8 @@ export async function runAnalysis(
     if (throughIso === null) return { kind: 'unavailable', reason: 'collected_through_unknown' };
     const startMs = Date.parse(req.windowStartIso);
     if (!Number.isFinite(startMs)) throw new AnalysisInputError('window_start_unparseable');
-    // 资格要看会话开始前 30 个 UTC 日(多取一天作余量)
-    const sinceIso = new Date(startMs - (ELIGIBILITY_DAYS + 1) * DAY_MS).toISOString();
+    // 资格要看会话开始前 30 个 UTC 日;开始得比窗口早的会话(resume)也要读到,否则同标记的副本会顶替它成为主会话(L3)
+    const sinceIso = new Date(startMs - READ_LOOKBACK_DAYS * DAY_MS).toISOString();
     const ledger = await source.ledger();
     const stats = await source.stats(sinceIso);
     const signals = await source.signals(sinceIso);
@@ -129,10 +124,12 @@ export async function runAnalysis(
       assembled,
       random,
       c4Bytes: await source.c4Bytes(),
-      config: req.config ?? DEFAULT_ANALYSIS_CONFIG,
+      config: DEFAULT_ANALYSIS_CONFIG,
     });
     return { kind: analysis.kind, analysis, audit: assembled.audit };
   } catch (e) {
+    // 编程错误(类型 / 范围 / 引用)不是「读不了」:往外抛,不吞成 unavailable
+    if (e instanceof TypeError || e instanceof RangeError || e instanceof ReferenceError) throw e;
     return { kind: 'unavailable', reason: reasonOf(e) };
   }
 }

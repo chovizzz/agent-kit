@@ -83,6 +83,80 @@ describe('读取层:会话计数行与信号', () => {
   });
 });
 
+/** 多个月份文件(`<yyyymm>.jsonl`,无连字符);各月的行原样写入 */
+async function setupMonths(
+  prefix: string,
+  sessions: Record<string, string[]>,
+  signals: Record<string, string[]>,
+) {
+  const w = await makeCanaryWorld(prefix);
+  for (const [dir, months] of [
+    ['sessions', sessions],
+    ['signals', signals],
+  ] as const) {
+    await safe.mkdirp(w.io, path.join(w.io.stateDir, dir, 'claude'), 0o700);
+    for (const [month, lines] of Object.entries(months)) {
+      await safe.writeFile(
+        w.io,
+        path.join(w.io.stateDir, dir, 'claude', `${month}.jsonl`),
+        `${lines.join('\n')}\n`,
+        { mode: 0o600 },
+      );
+    }
+  }
+  return makeAnalysisSource({
+    io: w.io,
+    rsiDir: w.rsi,
+    classify: async () => 'P',
+    payloadDrift: async () => 'clean',
+    collectedThrough: async () => null,
+    c4Bytes: async () => null,
+  });
+}
+
+describe('H1 读取层:跨月过滤边界与坏行', () => {
+  const ref = (n: number) => sessRef(n);
+  it('H1 跨月:since 落在 10 月底 → 读 10、11 月文件并按 ts 精确过滤;更早月份的文件不读(其中的坏行不影响)', async () => {
+    const src = await setupMonths(
+      'w6-read-months-',
+      {
+        '202609': ['{"session_ref":"corrupt"}'],
+        '202610': [sessionLine(1, '2026-10-31T22:59:59Z'), sessionLine(2, '2026-10-31T23:00:00Z')],
+        '202611': [sessionLine(3, '2026-11-01T00:00:00Z')],
+      },
+      {
+        '202609': ['{"sig_id":"corrupt"}'],
+        '202610': [signalLine(1, '2026-10-31T22:59:59Z'), signalLine(2, '2026-10-31T23:00:00Z')],
+        '202611': [signalLine(3, '2026-11-01T00:00:00Z')],
+      },
+    );
+    const since = '2026-10-31T23:00:00Z';
+    expect((await src.stats(since)).map((s) => s.stat.session_ref)).toEqual([ref(2), ref(3)]);
+    expect((await src.signals(since)).map((s) => s.session_ref)).toEqual([ref(2), ref(3)]);
+  });
+  it('H1 坏行出现在被读取的月份里 → 整体抛错,即使它前后都有好行(不跳行、不少计)', async () => {
+    const src = await setupMonths(
+      'w6-read-badmid-',
+      {
+        '202611': [
+          sessionLine(1, '2026-11-02T00:00:00Z'),
+          'not json',
+          sessionLine(2, '2026-11-03T00:00:00Z'),
+        ],
+      },
+      {
+        '202611': [
+          signalLine(1, '2026-11-02T00:00:00Z'),
+          '{"sig_id":"bad"}',
+          signalLine(2, '2026-11-03T00:00:00Z'),
+        ],
+      },
+    );
+    await expect(src.stats('2026-11-01T00:00:00Z')).rejects.toThrow();
+    await expect(src.signals('2026-11-01T00:00:00Z')).rejects.toThrow();
+  });
+});
+
 describe('读取层:分组账', () => {
   it('账不存在 = [];追加的行读回;坏账 → 抛错(不退化成空账)', async () => {
     const { w, src } = await setup('w6-read-ledger-', [], []);

@@ -52,6 +52,12 @@ describe('R21-7.4 OBF 型累计消耗 α*(t)(W0-10:累计,不是增量)', () => 
     expect(obfCumulativeAlpha(0.025, 0.25)).toBeGreaterThan(5e-6);
     expect(obfCumulativeAlpha(0.025, 0.25)).toBeLessThan(1.1e-5);
   });
+  it('L5 带容差的夹具:Φ⁻¹(0.975) = 1.959964;α*(0.5) ≈ 0.001524(独立算出,容差 ±5e-6)', () => {
+    expect(Math.abs(normalQuantile(0.975) - 1.959964)).toBeLessThan(2e-6);
+    expect(Math.abs(obfCumulativeAlpha(0.025, 0.5) - 0.001524)).toBeLessThan(5e-6);
+    // 0.05 总量时:2·Q(1.959964/√0.5) = 2·Q(2.771881) ≈ 0.005571
+    expect(Math.abs(obfCumulativeAlpha(0.05, 0.5) - 0.005571)).toBeLessThan(2e-5);
+  });
   it('随 t 严格递增、不超过 α;t ≤ 0 为 0(不判);t > 1 按 1', () => {
     let prev = 0;
     for (const t of [0.05, 0.1, 0.25, 0.5, 0.75, 1]) {

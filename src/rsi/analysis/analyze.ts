@@ -9,6 +9,10 @@
  * 「每 10 个新有观测会话」按两组合计;C6 检验「差值 = 0」(偏向回滚);C6 只能按 agent 分层(关联失败的会话没有项目);C6 的账行按查看时刻截断
  * (完整行看其会话是否在前缀时间内,不完整行看账行 `at`)。
  *
+ * C6 的分母按 ITT(R21-6.7):被随机且**资格成立**的账行;已关联且资格不成立的(`eligible === false`)不进,未关联的资格不可知、保留(审计 `c6_ineligible_excluded`)。
+ * R21-6.7「关联失败的按最坏情况做敏感性分析」:`c6_worst_case` 在最后一次查看的时点上,把关联失败的账行按最不利方向插补(treat 记「不完整」、control 记「完整」),
+ * 再做一次 C6 置换检验;**只出报告,不参与判定**。C1 / C3 是计数结局,关联失败的会话没有项目(进不了分层)也没有可插补的上界,不做。
+ *
  * 背景分段(R21-7.7):段 = 账里**连续**同一 `background_fp` 的一段(A → B → A 是三段,回到旧指纹也从 t = 0 重新计);只分析**当前段**(账里最后一段)的账行与会话,
  * 别的段只出点估计(敏感性),不查看、不产事件。
  * 正向方向恒 `not_decidable`(R21-7.13):本模块没有任何产生「变好」结论的路径,与 `RSI_DECIDE_BETTER_ENABLED` 无关。
@@ -36,6 +40,9 @@ import {
   type Unit,
 } from './types.js';
 
+/**
+ * 契约常量的集合(R21-7.1:不可配置)。**仅为计算核心的测试接缝**(用小的置换次数 / 上限跑夹具):生产入口 `runAnalysis` 不接受它,恒用 {@link DEFAULT_ANALYSIS_CONFIG}。
+ */
 export interface AnalysisConfig {
   permutations: number;
   lookEvery: number;
@@ -77,6 +84,15 @@ export interface LookResult {
   /** 至少有一项真正做了检验(R21-7.4a:无层可用 = 本次不判定、不消耗 α) */
   valid: boolean;
   metrics: readonly MetricLook[];
+}
+
+export interface C6WorstCase {
+  /** 对应的查看序号(最后一次查看) */
+  k: number;
+  /** 该时点上关联失败(不完整)的可判账行数(按组) */
+  unlinked: { treat: number; control: number };
+  /** 插补后的 C6 检验结果(treat 的关联失败记「不完整」、control 的记「完整」) */
+  look: MetricLook;
 }
 
 export interface HarmFinding {
@@ -130,9 +146,13 @@ export interface SegmentAnalysis {
   /** R21-7.8:本段账行的 `overlaps_preset`(取最后一行;各行不一致时 `mixed` = true) */
   overlaps_preset: boolean | null;
   overlaps_preset_mixed: boolean;
-  /** C6 说明:本段被随机的账行数 / 不完整数(按组) */
+  /** C6 说明:本段被随机的账行数 / 不完整数(按组;已剔除资格不成立的行) */
   randomized: { treat: number; control: number };
   incomplete: { treat: number; control: number };
+  /** C6 分母里剔除的「已关联且资格不成立」账行数(按组;ITT,R21-6.7) */
+  c6_ineligible_excluded: { treat: number; control: number };
+  /** R21-6.7 最坏情况敏感性(只出报告);没有任何查看 = `null` */
+  c6_worst_case: C6WorstCase | null;
   sensitivity: readonly SensitivitySegment[];
 }
 
@@ -166,12 +186,24 @@ function sessionUnits(metric: 'c1' | 'c2' | 'c3', s: readonly ObservedSession[])
 const lineUnits = (lines: readonly RandomizedLine[]): Unit[] =>
   lines.map((l) => ({ agent: l.agent, project: '*', arm: l.arm, v: l.complete ? 1 : 0 }));
 
+/** C6 分母(ITT):可判、资格没有被判不成立 */
+const inC6 = (l: RandomizedLine): boolean => l.judgeable && l.eligible !== false;
+
 function linesAt(lines: readonly RandomizedLine[], horizonMs: number): RandomizedLine[] {
   return lines.filter(
     (l) =>
-      l.judgeable && (l.complete ? (l.session_ts_ms as number) <= horizonMs : l.at_ms <= horizonMs),
+      inC6(l) && (l.complete ? (l.session_ts_ms as number) <= horizonMs : l.at_ms <= horizonMs),
   );
 }
+
+/** 最坏情况插补:关联失败的账行,treat 记「不完整」(0)、control 记「完整」(1);已关联的照旧 */
+const worstCaseUnits = (lines: readonly RandomizedLine[]): Unit[] =>
+  lines.map((l) => ({
+    agent: l.agent,
+    project: '*',
+    arm: l.arm,
+    v: l.complete ? 1 : l.arm === 'control' ? 1 : 0,
+  }));
 
 function estimateOf(metric: 'c1' | 'c3' | 'c6', units: readonly Unit[]): number | null {
   const r = buildStrata(units);
@@ -191,6 +223,7 @@ function evalMetric(
   random: AnalysisRandom,
   k: number,
   cfg: AnalysisConfig,
+  label: string = metric,
 ): MetricLook {
   const built = buildStrata(units);
   const base = {
@@ -213,7 +246,7 @@ function evalMetric(
     built.strata,
     KIND[metric],
     cfg.permutations,
-    random.stream(`${metric}:${k}`),
+    random.stream(`${label}:${k}`),
   );
   const estimate =
     metric === 'c2' ? Math.exp(r.observed) : metric === 'c6' ? r.observed * 100 : r.observed;
@@ -267,7 +300,7 @@ function sensitivityOf(
     observed: observed.length,
     c1_rr: estimateOf('c1', sessionUnits('c1', elig)),
     c3_rr: estimateOf('c3', sessionUnits('c3', elig)),
-    c6_diff_pp: estimateOf('c6', lineUnits(lines.filter((l) => l.judgeable))),
+    c6_diff_pp: estimateOf('c6', lineUnits(lines.filter(inC6))),
   };
 }
 
@@ -344,14 +377,42 @@ export function analyzeSegment(input: AnalyzeInput): SegmentAnalysis {
   const controlObs = segObs.length - treatObs;
   const randomized = { treat: 0, control: 0 };
   const incomplete = { treat: 0, control: 0 };
+  const ineligibleExcluded = { treat: 0, control: 0 };
   for (const l of segLines) {
     if (!l.judgeable) continue;
+    if (!inC6(l)) {
+      ineligibleExcluded[l.arm] += 1;
+      continue;
+    }
     randomized[l.arm] += 1;
     if (!l.complete) incomplete[l.arm] += 1;
   }
   const overlaps = segLines.map((l) => l.overlaps_preset);
   const lastOverlap = overlaps[overlaps.length - 1];
   const anyValid = looks.some((l) => l.valid);
+  let worst: C6WorstCase | null = null;
+  const lastLook = looks[looks.length - 1];
+  if (lastLook !== undefined) {
+    const prefix = segObs.slice(0, lastLook.k * cfg.lookEvery);
+    const horizon = (prefix[prefix.length - 1] as ObservedSession).tsMs;
+    const atLook = linesAt(segLines, horizon);
+    worst = {
+      k: lastLook.k,
+      unlinked: {
+        treat: atLook.filter((l) => !l.complete && l.arm === 'treat').length,
+        control: atLook.filter((l) => !l.complete && l.arm === 'control').length,
+      },
+      look: evalMetric(
+        'c6',
+        worstCaseUnits(atLook),
+        obfCumulativeAlpha(cfg.alphaPerMetric, lastLook.t),
+        input.random,
+        lastLook.k,
+        cfg,
+        'c6_worst',
+      ),
+    };
+  }
   return {
     kind: harm !== null ? 'harm' : anyValid ? 'no_harm' : 'no_decision',
     plan_version: RSI_ANALYSIS_PLAN_VERSION,
@@ -370,6 +431,8 @@ export function analyzeSegment(input: AnalyzeInput): SegmentAnalysis {
     overlaps_preset_mixed: new Set(overlaps).size > 1,
     randomized,
     incomplete,
+    c6_ineligible_excluded: ineligibleExcluded,
+    c6_worst_case: worst,
     sensitivity,
   };
 }
