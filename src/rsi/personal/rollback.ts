@@ -223,6 +223,7 @@ export async function startRollback(
     });
     // `pending_drive`:记录还没进入回滚时由第三段施加;txn 走完了就说明已施加
     if (lateWhy === null || (lateWhy === 'pending_drive' && out.status === 'complete')) return out;
+    if (out.status === 'refused') return out;
     return { ...out, lateEventNotApplied: lateWhy };
   }
   const t: PersonalTxn = {
