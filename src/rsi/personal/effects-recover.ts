@@ -5,19 +5,14 @@
  * ({@link effectsForTerminal}),所以「权威副本已提交、效果没落地」的窗口由 {@link recoverTerminalEffects} 补齐:扫全部终态记录,
  * 对每条记录按稳定键 {@link terminalEffectKey} 调 `KeyedEffectSink.applyOnce`(同键只生效一次,至少一次调用 + 按键幂等 = 恰好一次的效果)。
  * 回滚执行器在删 journal 之前同样调它,journal 在效果落地之前一直保留。
- * **审计行同样按键续做**(M6):转移条目(`record.transitions[]`)已是已提交的权威事实,审计行由条目确定性推出({@link auditLinesOf}),
- * 稳定键 = `audit:<候选>:<行 canonical 哈希前 16 位>`({@link auditKeyOf}),经同一个 `KeyedEffectSink` 落地(`append_audit` 效果;生产实现须与记键同一持久化步骤)。
- * 只覆盖**回滚路径产生的**条目(从进入 `rolling_back` / 终态的那一条起):更早的条目是各自转移当时直接追加的,不重放,免得重复。
+ * **不覆盖审计行**(`append_audit`):`AuditSink` 没有按键幂等,重放会重复行;审计缺失不影响任何安全判定,登记在汇报「遗留」。
  */
-import { createHash } from 'node:crypto';
 import { RSI_COOLDOWN_DAYS } from '../../contracts/rsi.js';
-import type { PersonalLifecycleRecord, RsiAuditLine } from '../../contracts/rsi-personal.js';
-import { canonicalJson } from '../../io/canonical-json.js';
+import type { PersonalLifecycleRecord } from '../../contracts/rsi-personal.js';
 import { RsiLockError } from '../lock-error.js';
 import type { AuthoritativeStore } from './candidate-ports.js';
 import type { KeyedEffectSink, KeyedEffectResult } from './rollback-ports.js';
 import type { TransitionEffect } from './transition.js';
-import { auditOf } from './transition.js';
 import { isTerminalLifecycle } from './transition-table.js';
 
 /** 同一候选的同一份内容只有一次终态效果 */
@@ -55,46 +50,6 @@ export function effectsForTerminal(rec: PersonalLifecycleRecord): TransitionEffe
     });
   }
   return out;
-}
-
-/** 审计行的稳定事件键:同一行(同一条转移条目)只落一次 */
-export const auditKeyOf = (line: RsiAuditLine): string =>
-  `audit:${line.id}:${createHash('sha256').update(canonicalJson(line), 'utf8').digest('hex').slice(0, 16)}`;
-
-/** 经回滚执行器到终态的终态理由(审计补做的范围) */
-const EXECUTOR_TERMINAL_REASONS: ReadonlySet<string> = new Set([
-  'auto_rollback',
-  'vetoed',
-  'tainted',
-  'cleared',
-  'judge_rejected',
-  'auto_expired',
-]);
-
-const TERMINAL_OR_ROLLING = (to: string): boolean =>
-  to === 'rolling_back' ||
-  to === 'rejected' ||
-  to === 'expired' ||
-  to === 'rolled_back' ||
-  to === 'retired';
-
-/** 回滚路径产生的审计行:从第一条进入 `rolling_back` / 终态的 lifecycle 条目起(该条目之后的 deploy / rollback 条目同属一次回滚) */
-export function auditLinesOf(rec: PersonalLifecycleRecord): RsiAuditLine[] {
-  const i = rec.transitions.findIndex((e) => e.dim === 'lifecycle' && TERMINAL_OR_ROLLING(e.to));
-  return i < 0 ? [] : rec.transitions.slice(i).map((e) => auditOf(e, rec.id));
-}
-
-/** 补做回滚路径的审计行(按键幂等);返回本次落地(`applied`)的行数 */
-export async function landAuditEffects(
-  sink: KeyedEffectSink,
-  rec: PersonalLifecycleRecord,
-): Promise<number> {
-  let applied = 0;
-  for (const line of auditLinesOf(rec)) {
-    const r = await sink.applyOnce(auditKeyOf(line), [{ type: 'append_audit', line }]);
-    if (r === 'applied') applied += 1;
-  }
-  return applied;
 }
 
 export async function landTerminalEffects(
@@ -136,10 +91,6 @@ export async function recoverTerminalEffects(d: {
   for (const rec of all.value) {
     try {
       const r = await landTerminalEffects(d.effects, rec);
-      // 只补回滚执行器产生的终态(其余终态的审计行是转移当时直接追加的)
-      if (rec.terminal_reason !== null && EXECUTOR_TERMINAL_REASONS.has(rec.terminal_reason)) {
-        await landAuditEffects(d.effects, rec);
-      }
       if (r === 'applied') out.applied.push(rec.id);
       else if (r === 'already') out.already.push(rec.id);
       else if (r === 'deferred') out.deferred.push(rec.id);
