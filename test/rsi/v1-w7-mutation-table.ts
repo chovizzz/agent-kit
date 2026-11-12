@@ -1181,26 +1181,39 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
   },
   // ---- H3 标记持久化 ----
   {
-    id: 'marker_create_no_sync',
-    clause: 'H3 新建标记:文件 fsync 之后才返回(调用方此后才写 state)',
+    id: 'marker_no_file_sync',
+    clause: 'H3 标记文件 fsync 之后才返回(新建与已存在都要;调用方此后才写 state)',
+    edits: [
+      swap(SF, '    await syncHandle(ctx, handle, abs);\n  } catch (e) {', '  } catch (e) {'),
+    ],
+    tests: [T_PM],
+    expectRed: [
+      '新建标记:文件 fsync → 父目录 fsync → state.write(顺序)',
+      '标记已存在(可能尚未落盘',
+    ],
+    mustKill: ['新建标记:文件 fsync → 父目录 fsync → state.write(顺序)', '标记已存在(可能尚未落盘'],
+  },
+  {
+    id: 'marker_failure_unlinks',
+    clause: 'H3 创建后失败不删除标记(无锁并发下别的 ensure 可能已确认它)',
     edits: [
       swap(
         SF,
-        '        await handle.writeFile(data);\n        await syncHandle(ctx, handle, abs);',
-        '        await handle.writeFile(data);',
+        '    await handle.close().catch(() => undefined);\n    throw e;',
+        '    await handle.close().catch(() => undefined);\n    await fsp.rm(abs, { force: true }).catch(() => undefined);\n    throw e;',
       ),
     ],
     tests: [T_PM],
-    expectRed: ['新建标记:文件 fsync → 父目录 fsync → state.write(顺序)'],
-    mustKill: ['新建标记:文件 fsync → 父目录 fsync → state.write(顺序)'],
+    expectRed: ['创建后写入失败:抛错'],
+    mustKill: ['创建后写入失败:抛错'],
   },
   {
-    id: 'marker_exists_no_sync',
-    clause: 'H3 标记已存在也补一次文件 fsync(可能尚未落盘)',
-    edits: [swap(SF, '      await syncHandle(ctx, handle, abs);\n    } else {', '    } else {')],
+    id: 'marker_fifo_blocks',
+    clause: 'H3 已存在的目标是 FIFO:非阻塞打开后类型核对拒绝,不挂起熔断流程',
+    edits: [swap(SF, ' | (fs.constants.O_NONBLOCK ?? 0)', '')],
     tests: [T_PM],
-    expectRed: ['标记已存在(可能尚未落盘'],
-    mustKill: ['标记已存在(可能尚未落盘'],
+    expectRed: ['已存在的标记是没有写端的 FIFO'],
+    mustKill: ['已存在的标记是没有写端的 FIFO'],
   },
   {
     id: 'marker_no_dir_sync',

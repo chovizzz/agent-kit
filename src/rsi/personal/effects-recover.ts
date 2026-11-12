@@ -64,6 +64,7 @@ export const auditKeyOf = (candidateId: string, idemKey: string): string =>
 export interface KeyedAuditItem {
   key: string;
   line: RsiAuditLine;
+  idem_key: string;
 }
 
 /** 经回滚执行器到终态的终止理由(审计补做的范围) */
@@ -88,9 +89,11 @@ export function auditItemsOf(rec: PersonalLifecycleRecord): KeyedAuditItem[] {
   const i = rec.transitions.findIndex((e) => e.dim === 'lifecycle' && TERMINAL_OR_ROLLING(e.to));
   return i < 0
     ? []
-    : rec.transitions
-        .slice(i)
-        .map((e) => ({ key: auditKeyOf(rec.id, e.idem_key), line: auditOf(e, rec.id) }));
+    : rec.transitions.slice(i).map((e) => ({
+        key: auditKeyOf(rec.id, e.idem_key),
+        line: auditOf(e, rec.id),
+        idem_key: e.idem_key,
+      }));
 }
 
 /** 执行器的审计出口:每行经带键端口落地。缺事件身份(没有转移条目的审计,如终态空操作)→ 抛错(fail-closed,不回落到行内容哈希) */
@@ -112,8 +115,9 @@ export async function landAuditEffects(
   rec: PersonalLifecycleRecord,
 ): Promise<number> {
   let applied = 0;
-  for (const { key, line } of auditItemsOf(rec)) {
-    const r = await sink.applyOnce(key, [{ type: 'append_audit', line }]);
+  for (const { key, line, idem_key } of auditItemsOf(rec)) {
+    // 与即时路径同形(effect 带 idem_key),下游按 effect 字段校验时两条路径一致
+    const r = await sink.applyOnce(key, [{ type: 'append_audit', line, idem_key }]);
     if (r === 'applied') applied += 1;
   }
   return applied;

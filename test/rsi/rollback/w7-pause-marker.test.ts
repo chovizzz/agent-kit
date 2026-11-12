@@ -2,6 +2,7 @@
  * H3:熔断先写 hint / exec 实际读的持久拒绝标记 `.state/rsi/AUTO_PAUSE`(R21-6.10 / 6.11 第 4 行、R21-12.2),再写 state.json 与 mute。
  * 真文件实现 `makePauseMarkerPort` + 真 hint 读取端口 `makePermitPort(...).pause()`(只 lstat 判存在)。
  */
+import { execFileSync } from 'node:child_process';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { readText } from '../../../src/io/read-fs.js';
@@ -214,4 +215,24 @@ describe('H3 持久化(R21-12.2):标记文件与父目录 fsync 之后才写 sta
     await expect(tripAndMute(r.d, 'gate_internal')).rejects.toThrow();
     expect(r.state.value.reasons).toEqual([]);
   });
+
+  it('创建后写入失败:抛错(调用方不写 state)且**不删除**刚创建的标记(无锁并发下别的 ensure 可能已对它返回 exists)', async () => {
+    const r = await rig('w7-marker-dur-e-');
+    await expect(
+      safe.createExclusiveDurable(r.w.io, r.file, {} as unknown as string, 0o600),
+    ).rejects.toThrow();
+    expect(await r.hint()).toBe('present'); // 内容不全的标记留着:方向安全(hint 只判存在)
+    expect(await r.d.marker.ensure('gate_internal')).toBe('exists');
+  });
+
+  it(
+    '已存在的标记是没有写端的 FIFO:在有界时间内拒绝(不阻塞在只读打开上),不写 state',
+    { timeout: 10_000 },
+    async () => {
+      const r = await rig('w7-marker-dur-f-');
+      execFileSync('mkfifo', [r.file]);
+      await expect(tripAndMute(r.d, 'gate_internal')).rejects.toThrow();
+      expect(r.state.value.reasons).toEqual([]);
+    },
+  );
 });
