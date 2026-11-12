@@ -842,6 +842,20 @@ export const V1_W6_MUTATIONS: readonly V1W6Mutation[] = [
     mustKill: ['L3 resume'],
   },
   {
+    id: 'signals_share_session_floor',
+    clause: 'L3 / 复评 M-①:信号下限比会话下限再早一个资格窗口(变异:信号与会话共用下限)',
+    edits: [
+      swap(
+        RUN,
+        'const signals = await source.signals(signalsSinceIso);',
+        'const signals = await source.signals(sinceIso);',
+      ),
+    ],
+    tests: [T_RUN],
+    expectRed: ['L3 信号下限再多一个资格窗口'],
+    mustKill: ['L3 信号下限再多一个资格窗口'],
+  },
+  {
     id: 'lookback_const_short',
     clause: 'L3:读取下限常量 = 2 × 30 + 1 天',
     edits: [swap(TYPES, '2 * ELIGIBILITY_DAYS + 1', 'ELIGIBILITY_DAYS + 1')],

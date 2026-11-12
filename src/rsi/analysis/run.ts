@@ -22,7 +22,12 @@ import {
   type HitSession,
 } from './measures.js';
 import { defaultSeed, seededRandom, type AnalysisRandom } from './rng.js';
-import { AnalysisInputError, READ_LOOKBACK_DAYS, type AssembleAudit } from './types.js';
+import {
+  AnalysisInputError,
+  ELIGIBILITY_DAYS,
+  READ_LOOKBACK_DAYS,
+  type AssembleAudit,
+} from './types.js';
 import type { LoadedSignal } from '../../reflect/types.js';
 
 export interface AnalysisSource {
@@ -80,9 +85,13 @@ export async function runAnalysis(
     if (!Number.isFinite(startMs)) throw new AnalysisInputError('window_start_unparseable');
     // 资格要看会话开始前 30 个 UTC 日;开始得比窗口早的会话(resume)也要读到,否则同标记的副本会顶替它成为主会话(L3)
     const sinceIso = new Date(startMs - READ_LOOKBACK_DAYS * DAY_MS).toISOString();
+    // 最早读进来的会话可在 sinceIso 当天,它的资格还要看再往前 30 个 UTC 日的命中 → 信号多读一个资格窗口(主代理验收复评 M-①)
+    const signalsSinceIso = new Date(
+      startMs - (READ_LOOKBACK_DAYS + ELIGIBILITY_DAYS) * DAY_MS,
+    ).toISOString();
     const ledger = await source.ledger();
     const stats = await source.stats(sinceIso);
-    const signals = await source.signals(sinceIso);
+    const signals = await source.signals(signalsSinceIso);
 
     const collecting = new Set<string>();
     for (const pk of new Set(stats.map((s) => s.stat.project_key))) {

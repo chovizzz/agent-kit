@@ -158,6 +158,25 @@ describe('L3 读取下限:开始得比窗口早的会话也要读到', () => {
     if (o.kind === 'unavailable' || o.kind === 'paused') throw new Error(o.kind);
     expect(o.audit.duplicate_marker_sessions_dropped).toBe(1);
   });
+  it('L3 信号下限再多一个资格窗口:最早读进来的会话要查它开始前 30 天的命中(信号下限 ≤ 会话下限 − 30 天)', async () => {
+    const seen: { stats?: string; signals?: string } = {};
+    await runAnalysis(
+      source({
+        stats: async (since) => {
+          seen.stats = since;
+          return world().stats;
+        },
+        signals: async (since) => {
+          seen.signals = since;
+          return world().signals;
+        },
+      }),
+      REQ,
+    );
+    const st = Date.parse(seen.stats as string);
+    const sg = Date.parse(seen.signals as string);
+    expect(sg).toBeLessThanOrEqual(st - 30 * DAY);
+  });
 });
 
 describe('R21-7.7 漂移暂停与 fail-closed(读失败从不落成「无伤害」)', () => {
