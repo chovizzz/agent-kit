@@ -69,18 +69,26 @@ export function assemble(input: AssembleInput): Assembled {
     not_eligible: 0,
     foreign_marker_sessions: 0,
     unjudgeable_lines: 0,
+    excluded_by_reason: {},
   };
 
   // 账:全账内标记唯一;本候选窗口内的 treat / control 行
   const seenMarkers = new Set<string>();
   const mine = new Map<string, AssignLine>();
   for (const l of input.ledger) {
-    if (l.kind !== 'assign' || l.marker === null) continue;
-    if (seenMarkers.has(l.marker)) throw new AnalysisInputError('duplicate_marker_in_ledger');
-    seenMarkers.add(l.marker);
-    if (l.candidate_id !== input.candidateId || l.arm === 'excluded') continue;
+    if (l.kind !== 'assign') continue;
+    if (l.marker !== null) {
+      if (seenMarkers.has(l.marker)) throw new AnalysisInputError('duplicate_marker_in_ledger');
+      seenMarkers.add(l.marker);
+    }
+    if (l.candidate_id !== input.candidateId) continue;
     if (parseMs(l.at, 'ledger_at') < startMs) continue;
-    mine.set(l.marker, l);
+    if (l.arm === 'excluded') {
+      const r = l.reason ?? 'unknown';
+      audit.excluded_by_reason[r] = (audit.excluded_by_reason[r] ?? 0) + 1;
+      continue;
+    }
+    if (l.marker !== null) mine.set(l.marker, l);
   }
   audit.ledger_assign_lines = mine.size;
 

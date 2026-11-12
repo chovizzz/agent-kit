@@ -401,8 +401,8 @@ export const V1_W6_MUTATIONS: readonly V1W6Mutation[] = [
   // ---- R21-7.7 背景分段 ----
   {
     id: 'segment_first',
-    clause: 'R21-7.7:主分析只用当前段(账里最后一行的 background_fp)',
-    edits: [swap(AN, 'const last = lines[lines.length - 1];', 'const last = lines[0];')],
+    clause: 'R21-7.7:主分析只用当前段(账里最后一段)',
+    edits: [swap(AN, 'const lastRun = runFp.length - 1;', 'const lastRun = 0;')],
     tests: [T_AN],
     expectRed: ['当前段 = 账里最后一行'],
     mustKill: ['当前段 = 账里最后一行'],
@@ -410,7 +410,9 @@ export const V1_W6_MUTATIONS: readonly V1W6Mutation[] = [
   {
     id: 'segment_merged',
     clause: 'R21-7.7:跨段不合并;新段从 t = 0 重新计',
-    edits: [swap(AN, 's.background_fp === fp)', 'true)')],
+    edits: [
+      swap(AN, 'observed.filter((s) => runOf.get(s.marker) === lastRun)', 'observed.slice()'),
+    ],
     tests: [T_AN],
     expectRed: ['当前段 = 账里最后一行'],
     mustKill: ['当前段 = 账里最后一行'],
@@ -439,6 +441,20 @@ export const V1_W6_MUTATIONS: readonly V1W6Mutation[] = [
     tests: [T_AN],
     expectRed: ['max_arm_sessions'],
     mustKill: ['max_arm_sessions'],
+  },
+  {
+    id: 'segment_by_fp_only',
+    clause: 'R21-7.7:背景指纹换段后新段从 t = 0 重新计;回到旧指纹(A → B → A)也是新段',
+    edits: [
+      swap(
+        AN,
+        'if (runFp[runFp.length - 1] !== l.background_fp) runFp.push(l.background_fp);',
+        'if (!runFp.includes(l.background_fp)) runFp.push(l.background_fp);',
+      ),
+    ],
+    tests: [T_AN],
+    expectRed: ['回到旧指纹(A → B → A)也是新段'],
+    mustKill: ['回到旧指纹(A → B → A)也是新段'],
   },
   // ---- R21-6.6 / W0-14 会话归并 ----
   {
@@ -494,10 +510,20 @@ export const V1_W6_MUTATIONS: readonly V1W6Mutation[] = [
   {
     id: 'other_candidate_lines',
     clause: '分析对象只含本候选的 treat / control 账行',
-    edits: [swap(ASM, 'l.candidate_id !== input.candidateId || ', '')],
+    edits: [swap(ASM, 'if (l.candidate_id !== input.candidateId) continue;', 'void 0;')],
     tests: [T_ASM],
     expectRed: ['excluded 行(含探针行)、别的候选的行'],
     mustKill: ['excluded 行(含探针行)、别的候选的行'],
+  },
+  {
+    id: 'excluded_not_counted',
+    clause: 'R21-6.4:arm=excluded 的账行按原因码计入审计(C6 分母说明)',
+    edits: [
+      swap(ASM, 'audit.excluded_by_reason[r] = (audit.excluded_by_reason[r] ?? 0) + 1;', 'void 0;'),
+    ],
+    tests: [T_ASM],
+    expectRed: ['arm=excluded 的账行不进分析'],
+    mustKill: ['arm=excluded 的账行不进分析'],
   },
   {
     id: 'window_start_ignored',

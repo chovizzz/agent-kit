@@ -72,6 +72,8 @@ export interface AssembleAudit {
   /** 不在本候选账行里的标记(别的候选 / 探针 / 未知)所属会话,不计 */
   foreign_marker_sessions: number;
   unjudgeable_lines: number;
+  /** R21-6.4:窗口内本候选 `arm=excluded` 的账行数(按原因码;「未随机」,不进分析,只作 C6 分母说明) */
+  excluded_by_reason: Record<string, number>;
 }
 
 /** 一个 unit(统计的最小观测):分层键 + 组别 + 值 */

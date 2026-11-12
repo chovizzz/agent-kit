@@ -88,7 +88,7 @@ describe('R21-7.2 分层:agent × 项目;任一组 < 2 的层并入该 agent 的
 const cell = (n1: number, s1: number, n0: number, s0: number): Cell => ({ n1, s1, n0, s0 });
 
 describe('R21-7.2 统计量(手算夹具)', () => {
-  it('Mantel–Haenszel 率比:Σ s1·n0/N ÷ Σ s0·n1/N', () => {
+  it('R21-7.2 Mantel–Haenszel 率比:Σ s1·n0/N ÷ Σ s0·n1/N', () => {
     // 层 A:treat 4 会话 6 事件,control 4 会话 3 事件;层 B:treat 3 / 2,control 5 / 4
     // 分子 = 6·4/8 + 2·5/8 = 4.25;分母 = 3·4/8 + 4·3/8 = 3;RR = 17/12
     expect(statistic('mh_rr', [cell(4, 6, 4, 3), cell(3, 2, 5, 4)])).toBeCloseTo(17 / 12, 10);

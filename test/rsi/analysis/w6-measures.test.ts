@@ -101,7 +101,7 @@ const at = (s: string): number => Date.parse(s);
 
 describe('R21-6.7 资格:会话开始前 30 个 UTC 日内项目出现过目标签名', () => {
   const hit = { project_key: 'p1', tsMs: at('2026-10-10T23:00:00Z') };
-  it('窗口内 → 成立;命中日早于「会话开始日 − 30 天」→ 不成立', () => {
+  it('R21-6.7 窗口内 → 成立;命中日早于「会话开始日 − 30 天」→ 不成立', () => {
     const ok = makeEligibility([hit]);
     expect(ok('p1', at('2026-11-09T09:00:00Z'))).toBe(true); // 起点 = 10-10 00:00
     expect(ok('p1', at('2026-11-10T09:00:00Z'))).toBe(false); // 起点 = 10-11 00:00

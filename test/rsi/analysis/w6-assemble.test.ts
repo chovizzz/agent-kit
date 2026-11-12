@@ -41,7 +41,7 @@ describe('R21-6.6 会话归并', () => {
     ]);
     expect(r.lines.map((l) => [l.marker, l.complete])).toEqual([[marker(1), true]]);
   });
-  it('0 个标记 → 关联失败:账行不完整、不进有观测会话', () => {
+  it('R21-6.6 0 个标记 → 关联失败:账行不完整、不进有观测会话', () => {
     const r = run({ ledger: [assign(1, 'control')], stats: [stat(1, { markers: [] })] });
     expect(r.observed).toEqual([]);
     expect(r.lines[0]?.complete).toBe(false);
@@ -125,6 +125,22 @@ describe('R21-6.4 账行的取舍', () => {
     expect(r.observed.map((s) => s.marker)).toEqual([marker(4)]);
     // 别的候选 / 探针 / 窗口之前的账行所属会话:标记不在本候选账行里
     expect(r.audit.foreign_marker_sessions).toBe(3);
+  });
+  it('R21-6.4 arm=excluded 的账行不进分析,只按原因码计入审计(C6 分母说明);别的候选 / 窗口之前的不计', () => {
+    const r = run({
+      ledger: [
+        assign(1, 'excluded'),
+        assign(2, 'excluded', { reason: 'rng_error' }),
+        assign(3, 'excluded'),
+        assign(4, 'excluded', { candidate_id: OTHER_CID }),
+        assign(5, 'excluded', { atMs: T_BASE - 60 * MIN }),
+        assign(6, 'treat'),
+      ],
+      stats: [stat(6)],
+    });
+    expect(r.audit.excluded_by_reason).toEqual({ paused: 2, rng_error: 1 });
+    expect(r.lines.length).toBe(1);
+    expect(r.observed.length).toBe(1);
   });
   it('账里同一标记出现在两行 assign → 输入非法(抛错,不「尽量」)', () => {
     expect(() =>

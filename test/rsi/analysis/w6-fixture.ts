@@ -124,6 +124,7 @@ export const ZERO_AUDIT = {
   not_eligible: 0,
   foreign_marker_sessions: 0,
   unjudgeable_lines: 0,
+  excluded_by_reason: {},
 };
 
 /** 由会话观测造 `Assembled`:每个会话一个完整账行(按会话顺序),`extra` 为额外账行(例如不完整行) */

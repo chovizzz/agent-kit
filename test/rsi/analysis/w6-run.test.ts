@@ -100,7 +100,7 @@ describe('R21-7.4 编排:harm 事件', () => {
       evidence: 'analysis-v1:c4:bytes=1537:limit=1536',
     });
   });
-  it('没有越界 → 不产出事件;正向方向没有任何路径(判定开关为假时变差判定照常触发)', async () => {
+  it('R21-7.9 没有越界 → 不产出事件;正向方向没有任何路径(判定开关为假时变差判定照常触发)', async () => {
     const w = world();
     const calm = { ...w, signals: w.signals.filter((s) => s.session_ref === sessRef(900)) };
     const o = await runAnalysis(source({}, calm), REQ);
@@ -113,7 +113,7 @@ describe('R21-7.4 编排:harm 事件', () => {
 });
 
 describe('R21-7.7 漂移暂停与 fail-closed(读失败从不落成「无伤害」)', () => {
-  it('本机 payload 漂移 → paused,不读任何数据、不产出事件', async () => {
+  it('R21-7.7 本机 payload 漂移 → paused,不读任何数据、不产出事件', async () => {
     let reads = 0;
     const o = await runAnalysis(
       source({

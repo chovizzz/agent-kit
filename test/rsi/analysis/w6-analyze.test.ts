@@ -68,7 +68,7 @@ describe('R21-7.4 常量与 α 分配', () => {
 });
 
 describe('R21-7.4 判变差:越过 OBF 边界 → harm_<指标>', () => {
-  it('C1:treat 每会话 3 次失败、control 多为 0:信息时间够了才越界(k 在 10–12,t ≥ 0.4),之前的查看都没越', () => {
+  it('R21-7.4 C1:treat 每会话 3 次失败、control 多为 0:信息时间够了才越界(k 在 10–12,t ≥ 0.4),之前的查看都没越', () => {
     const a = run(harmC1());
     expect(a.kind).toBe('harm');
     expect(a.harm?.metric).toBe('c1');
@@ -104,7 +104,7 @@ describe('R21-7.4 判变差:越过 OBF 边界 → harm_<指标>', () => {
     expect(a.kind).toBe('no_harm');
     expect(a.looks.every((l) => l.metrics.every((m) => !m.crossed))).toBe(true);
   });
-  it('方向相反(treat 更好)→ 不判变差,也不产生任何「变好」结论(R21-7.13:positive 恒 not_decidable)', () => {
+  it('R21-7.13 方向相反(treat 更好)→ 不判变差,也不产生任何「变好」结论(R21-7.13:positive 恒 not_decidable)', () => {
     const a = run(alternating(120, (_i, arm) => ({ c1: arm === 'treat' ? 0 : 2 })));
     expect(a.kind).toBe('no_harm');
     expect(a.harm).toBeNull();
@@ -198,7 +198,7 @@ describe('R21-7.4 判变差:越过 OBF 边界 → harm_<指标>', () => {
 });
 
 describe('R21-7.4 C4 绝对上限:越限即回滚(不看 p 值、不等查看)', () => {
-  it('c4Check:≤ 1536 通过,1537 越限;没有 treat / 字节不可得分别标出', () => {
+  it('R21-7.1 c4Check:≤ 1536 通过,1537 越限;没有 treat / 字节不可得分别标出', () => {
     expect(c4Check(1536, true).status).toBe('ok');
     expect(c4Check(1537, true).status).toBe('exceeded');
     expect(c4Check(null, true).status).toBe('unavailable');
@@ -246,7 +246,7 @@ describe('R21-7.4 查看节奏:每 RSI_LOOK_EVERY 个新有观测会话查看一
 });
 
 describe('R21-7.4a 稀疏分层:剔除、无层可用 → 不判定、不消耗 α、信息时间照常推进', () => {
-  it('19 个 treat + 1 个 control:并层后仍稀疏 → 全部剔除;look 无效、kind=no_decision、从未有效查看', () => {
+  it('R21-7.4a 19 个 treat + 1 个 control:并层后仍稀疏 → 全部剔除;look 无效、kind=no_decision、从未有效查看', () => {
     const s = [
       ...alternating(1, () => ({})), // 1 个 control(序号 0)
       ...Array.from({ length: 19 }, (_v, i) => obsSession(i + 1, 'treat', { c1: 5 })),
@@ -265,7 +265,7 @@ describe('R21-7.4a 稀疏分层:剔除、无层可用 → 不判定、不消耗 
   });
   it('部分层稀疏:稀疏层被剔除、剩余层照常检验,剔除的会话数写进审计', () => {
     const s = [
-      ...alternating(40, (_i, arm) => ({ project_key: 'big', c1: arm === 'treat' ? 1 : 0 })),
+      ...alternating(40, () => ({ project_key: 'big', c1: 1 })),
       // 另一个项目:treat 10 个、control 1 个 → 并入「其它」后仍稀疏
       ...Array.from({ length: 10 }, (_v, i) =>
         obsSession(101 + i, 'treat', { project_key: 'tiny', c1: 1 }),
@@ -282,7 +282,7 @@ describe('R21-7.4a 稀疏分层:剔除、无层可用 → 不判定、不消耗 
   });
   it('并层:稀疏项目并入该 agent 的「其它」层后可用,会话数写进审计', () => {
     const s = [
-      ...alternating(20, (_i, arm) => ({ project_key: 'big', c1: arm === 'treat' ? 1 : 0 })),
+      ...alternating(20, () => ({ project_key: 'big', c1: 1 })),
       ...Array.from({ length: 10 }, (_v, i) =>
         obsSession(100 + i, i % 2 === 0 ? 'control' : 'treat', {
           project_key: `small${i}`,
@@ -304,7 +304,7 @@ describe('R21-7.7 背景分段:只分析当前段,跨段不合并,新段从 t = 
     (_i, arm) => ({ c1: arm === 'treat' ? 1 : 1, background_fp: FP2 }),
     100,
   );
-  it('当前段 = 账里最后一行的 background_fp;更早的段只出敏感性点估计,不判、不产事件', () => {
+  it('R21-7.7 当前段 = 账里最后一行的 background_fp;更早的段只出敏感性点估计,不判、不产事件', () => {
     const a = run([...old, ...cur], { cfg: FAST });
     expect(a.background_fp).toBe(FP2);
     expect(a.kind).toBe('no_harm');
@@ -316,6 +316,20 @@ describe('R21-7.7 背景分段:只分析当前段,跨段不合并,新段从 t = 
     expect(a.sensitivity[0]?.c1_rr).toBe(Infinity);
     expect(a.treat_observed + a.control_observed).toBe(40);
   });
+  it('回到旧指纹(A → B → A)也是新段:t 从 0 重新计,旧的 A 段不并入当前 A 段', () => {
+    const a1 = alternating(20, (_i, arm) => ({ c1: arm === 'treat' ? 3 : 0, background_fp: FP1 }));
+    const b = alternating(20, () => ({ background_fp: FP2 }), 100);
+    const a2 = alternating(30, () => ({ c1: 1, background_fp: FP1 }), 200);
+    const a = run([...a1, ...b, ...a2], { cfg: FAST });
+    expect(a.background_fp).toBe(FP1);
+    expect(a.treat_observed + a.control_observed).toBe(30);
+    expect(a.looks[0]).toMatchObject({ observed: 10, control_observed: 5 });
+    expect(a.sensitivity.map((s) => [s.run, s.background_fp, s.observed])).toEqual([
+      [0, FP1, 20],
+      [1, FP2, 20],
+    ]);
+    expect(a.harm).toBeNull();
+  });
   it('负例:不分段(同一背景)时旧会话会被合并进同一次分析', () => {
     const same = [...old, ...cur.map((s) => ({ ...s, background_fp: FP1 }))];
     const a = run(same, { cfg: FAST });
@@ -326,7 +340,7 @@ describe('R21-7.7 背景分段:只分析当前段,跨段不合并,新段从 t = 
 });
 
 describe('R21-7.6 / 7.8 报告', () => {
-  it('overlaps_preset 取本段最后一行并标出不一致;完整与不完整的账行数按组统计', () => {
+  it('R21-7.8 overlaps_preset 取本段最后一行并标出不一致;完整与不完整的账行数按组统计', () => {
     const s = alternating(20);
     const extra = [
       lineOf(s[0] as ObservedSession, { overlaps_preset: true, at_ms: T_BASE + 99 * MIN }),
@@ -339,7 +353,7 @@ describe('R21-7.6 / 7.8 报告', () => {
     expect(b.overlaps_preset_mixed).toBe(false);
     expect(run([], { cfg: FAST }).overlaps_preset).toBeNull();
   });
-  it('主判据:只出 MH 率比与事件数(资格成立的会话);两组零事件 → 证据不足、rr 为 null', () => {
+  it('R21-7.6 主判据:只出 MH 率比与事件数(资格成立的会话);两组零事件 → 证据不足、rr 为 null', () => {
     const a = run(
       alternating(40, (_i, arm) => ({ primary: arm === 'treat' ? 1 : 2 })),
       { cfg: FAST },

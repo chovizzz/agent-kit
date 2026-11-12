@@ -9,7 +9,8 @@
  * 「每 10 个新有观测会话」按两组合计;C6 检验「差值 = 0」(偏向回滚);C6 只能按 agent 分层(关联失败的会话没有项目);C6 的账行按查看时刻截断
  * (完整行看其会话是否在前缀时间内,不完整行看账行 `at`)。
  *
- * 背景分段(R21-7.7):只分析**当前段**(账里最后一行 treat / control 的 `background_fp`)的账行与会话;别的段只出点估计(敏感性),不查看、不产事件。
+ * 背景分段(R21-7.7):段 = 账里**连续**同一 `background_fp` 的一段(A → B → A 是三段,回到旧指纹也从 t = 0 重新计);只分析**当前段**(账里最后一段)的账行与会话,
+ * 别的段只出点估计(敏感性),不查看、不产事件。
  * 正向方向恒 `not_decidable`(R21-7.13):本模块没有任何产生「变好」结论的路径,与 `RSI_DECIDE_BETTER_ENABLED` 无关。
  */
 import {
@@ -101,6 +102,8 @@ export interface PrimaryReport {
 }
 
 export interface SensitivitySegment {
+  /** 段序号(账里连续同一指纹的一段,从 0 起) */
+  run: number;
   background_fp: string;
   observed: number;
   c1_rr: number | null;
@@ -252,12 +255,14 @@ function primaryReport(sessions: readonly ObservedSession[]): PrimaryReport {
 }
 
 function sensitivityOf(
+  run: number,
   fp: string,
   lines: readonly RandomizedLine[],
   observed: readonly ObservedSession[],
 ): SensitivitySegment {
   const elig = eligibleOf(observed);
   return {
+    run,
     background_fp: fp,
     observed: observed.length,
     c1_rr: estimateOf('c1', sessionUnits('c1', elig)),
@@ -277,18 +282,27 @@ export interface AnalyzeInput {
 export function analyzeSegment(input: AnalyzeInput): SegmentAnalysis {
   const cfg = input.config ?? DEFAULT_ANALYSIS_CONFIG;
   const { lines, observed } = input.assembled;
-  const last = lines[lines.length - 1];
-  const fp = last === undefined ? null : last.background_fp;
-  const segLines = lines.filter((l) => l.background_fp === fp);
-  const segObs = observed.filter((s) => s.background_fp === fp).sort(bySession);
+  // 分段 = 账里**连续**同一 `background_fp` 的一段(A → B → A 是三段;回到旧指纹也是新段,t 重新计)
+  const lineRun: number[] = [];
+  const runOf = new Map<string, number>();
+  const runFp: string[] = [];
+  for (const l of lines) {
+    if (runFp[runFp.length - 1] !== l.background_fp) runFp.push(l.background_fp);
+    lineRun.push(runFp.length - 1);
+    runOf.set(l.marker, runFp.length - 1);
+  }
+  const lastRun = runFp.length - 1;
+  const fp = lastRun < 0 ? null : (runFp[lastRun] as string);
+  const segLines = lines.filter((_l, i) => lineRun[i] === lastRun);
+  const segObs = observed.filter((s) => runOf.get(s.marker) === lastRun).sort(bySession);
 
-  // 其它(更早的)段:只做敏感性点估计
-  const others = [...new Set(lines.map((l) => l.background_fp))].filter((f) => f !== fp);
-  const sensitivity = others.map((f) =>
+  // 更早的段:只做敏感性点估计
+  const sensitivity = runFp.slice(0, lastRun).map((f, r) =>
     sensitivityOf(
+      r,
       f,
-      lines.filter((l) => l.background_fp === f),
-      observed.filter((s) => s.background_fp === f),
+      lines.filter((_l, i) => lineRun[i] === r),
+      observed.filter((s) => runOf.get(s.marker) === r),
     ),
   );
 
