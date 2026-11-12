@@ -453,3 +453,55 @@ export async function readPersonalFiles(
     throw e;
   }
 }
+
+/**
+ * 只读:读 `head.json` 记录的那个提交的树里某些顶层目录下的文件(R21-9.3a / R21-9.5:人工分叉 / 属主变化下,缩减入口仍要能列出候选并写撤销凭据)。
+ * 与 `readPersonalFiles` 的区别:**不做** R21-3.5 判定(也不更新 `head.json`、不恢复 journal),只做结构校验(R21-3.4)与记录提交存在性检查,
+ * 之后只 `ls-tree` / `cat-file` 那个提交的对象:不碰引用、索引、工作树。调用方必须持 `personal/lock`。
+ * 记录缺失 / 不可读 / 提交不存在 → `invalid`(不当成「没有文件」);仓库与记录都从未建过 → `absent`。
+ */
+export async function readRecordedPersonalFiles(
+  deps: PersonalRepoDeps,
+  locks: PersonalLocks,
+  dirs: readonly string[],
+): Promise<ReadFilesResult> {
+  if (locks.personal === undefined)
+    throw new Error('readRecordedPersonalFiles: 必须持 personal/lock');
+  const c = await makeCtx(deps, locks);
+  await assertLocks(c);
+  const hd = await readHead(deps.h);
+  if (hd.kind === 'absent') {
+    return (await probeFirstTime(deps.h)) === 'first'
+      ? { status: 'absent' }
+      : { status: 'invalid', why: 'record_missing', breaker: PERSONAL_REPO_INVALID };
+  }
+  if (hd.kind === 'invalid') {
+    return { status: 'invalid', why: `head_${hd.why}`, breaker: PERSONAL_REPO_INVALID };
+  }
+  const s = await checkRepoStructure(
+    deps.h,
+    c.git,
+    deps.uid === undefined ? {} : { uid: deps.uid },
+  );
+  if (!s.ok) return { status: 'invalid', why: s.why, breaker: PERSONAL_REPO_INVALID };
+  const recorded = hd.value.head;
+  try {
+    if (revParse(c.git, `${recorded}^{commit}`) === null) {
+      return { status: 'invalid', why: 'record_missing', breaker: PERSONAL_REPO_INVALID };
+    }
+    const files: { path: string; content: string }[] = [];
+    for (const b of readBaseTree(c.git, recorded)) {
+      if (!dirs.some((d) => b.path.startsWith(`${d}/`))) continue;
+      files.push({
+        path: b.path,
+        content: gitMust(c.git, 'cat-file', ['cat-file', 'blob', b.sha], { readOnly: true }),
+      });
+    }
+    return { status: 'ok', head: recorded, files };
+  } catch (e) {
+    if (e instanceof PersonalGitError || (e instanceof Error && !('code' in e))) {
+      return { status: 'invalid', why: 'git_read_failed', breaker: PERSONAL_REPO_INVALID };
+    }
+    throw e;
+  }
+}

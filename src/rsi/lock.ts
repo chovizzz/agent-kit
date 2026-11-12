@@ -30,6 +30,7 @@ import type { IoContext } from '../io/paths.js';
 import { createExclusive, remove, WriteDeniedError } from '../io/safe-fs.js';
 import { RsiLockError } from './lock-error.js';
 import { readLock, type LockRead, type RsiLockDeps, defaultAlive } from './lock-read.js';
+import { personalLockHeldInProcess } from './lock-order.js';
 import { digestsDir, rsiDir } from './rsi-dir.js';
 
 // 拆分(R20-A2 B3a):错误类型 / 只读部分 / 写侧目录准备各在独立文件,这里 re-export,既有 import 路径不变
@@ -94,6 +95,8 @@ export async function acquireRsiLock(
   if (target.sub === undefined && [...heldInProcess].some((f) => f.endsWith(DIGESTS_LOCK_SUFFIX))) {
     throw new RsiLockError('internal');
   }
+  // 锁序 `rsi/lock` → `personal/lock`(R21-3.3,W0-15 交给 W7):本进程持有 `personal/lock` 时再取 `rsi/lock` = 编程错误
+  if (target.sub === undefined && personalLockHeldInProcess()) throw new RsiLockError('internal');
   const doc: RsiLockDoc = {
     pid: deps.pid ?? process.pid,
     started_at: now().toISOString(),
