@@ -130,7 +130,7 @@ function dimState(
   }
 }
 
-function auditOf(entry: TransitionEntry, id: string): RsiAuditLine {
+export function auditOf(entry: TransitionEntry, id: string): RsiAuditLine {
   return {
     at: entry.at,
     kind: 'transition',
