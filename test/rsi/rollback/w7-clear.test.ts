@@ -32,7 +32,6 @@ import {
   readRecordedPersonalFiles,
 } from '../../../src/rsi/personal/commit.js';
 import { acquirePersonalLock } from '../../../src/rsi/personal/personal-lock.js';
-import { resumeAll } from '../../../src/rsi/personal/rollback.js';
 import {
   homeRevocationReader,
   homeRevocationWriter,
@@ -379,8 +378,8 @@ describe('R21-3.3 锁序:clear 在 personal/lock 之内再取 sync 锁,从不取
   });
 });
 
-describe('崩溃续做(真 git):clear 在第三段提交后崩溃', () => {
-  it('journal 在、记录已终态:resumeAll 续做 → 效果记待对账,journal 删除,凭据一行', async () => {
+describe('崩溃续做(真 git):clear 在第三段中途崩溃,缩减入口自己可重试', () => {
+  it('journal 在、记录已终态:再跑一次 clear 先续做在途 journal(不依赖 worker)→ 完成,journal 删除,凭据一行;干跑能看到在途 journal', async () => {
     const w = await makeWorld('w7-clear-crash-');
     await setup(w, shadowRec());
     class Boom extends Error {}
@@ -389,42 +388,21 @@ describe('崩溃续做(真 git):clear 在第三段提交后崩溃', () => {
         phase: V1A,
         write: true,
         onStep: (s) => {
-          if (s === 'after:repo_removal') throw new Boom('crash');
+          if (s === 'after:record_event') throw new Boom('crash');
         },
       }),
     ).rejects.toBeInstanceOf(Boom);
     expect(await readDir(path.join(w.h.stateDir, 'txn'))).toHaveLength(1);
+    // 记录已是终态(第三段的记录提交在崩溃点之前),文件还没删
+    expect(headRecord(w).lifecycle).toBe('rejected');
+    expect(headFiles(w)).toContain(RULE);
+    const dry = await runClear(w, { phase: V1A, write: false });
+    expect(dry.report.inFlight).toHaveLength(1);
+    expect(dry.report.candidates).toEqual([]);
     const again = await runClear(w, { phase: V1A, write: true });
-    // 记录已是终态 → 非终态候选清单为空(下一次 clear 无事可做);在途 journal 由 resumeAll 续做
-    expect(again.report.candidates).toEqual([]);
-    const out = await withLock(w, async (locks, handle) => {
-      const deps = repoDeps(w, { ownerRepoFp: (await recordedOwnerFp(w.h)) ?? w.ownerFp });
-      return resumeAll({
-        store: personalRepoStore(deps, locks),
-        working: { list: async () => [], put: async () => undefined },
-        revocations: homeRevocationReader(w.h),
-        audit: { append: async () => undefined },
-        effects: { apply: async () => undefined },
-        env: {
-          read: async () => ({
-            phase: V1A,
-            autoLoopEffective: false,
-            autoPaused: false,
-            marks: { enabled: false, paused: false, policyFp: '', resetGen: 0 },
-          }),
-        },
-        now: () => NOW,
-        locks,
-        txns: homeTxnStore(w.h),
-        revoker: homeRevocationWriter(w.h, () => handle.assertHeld()),
-        cache: { clean: async () => 'pending' },
-        repo: personalRepoRemoval(deps, locks),
-        payload: v1PayloadSync(V1A),
-        keyedEffects: { applyOnce: async () => 'deferred' },
-      });
-    });
-    expect(out.map((o) => o.status)).toEqual(['complete']);
+    expect(again.report.outcomes.map((o) => o.status)).toEqual(['complete']);
     expect(await readDir(path.join(w.h.stateDir, 'txn'))).toHaveLength(0);
+    expect(headFiles(w)).not.toContain(RULE);
     expect((await readRevocations(w.h)) as { value: unknown[] }).toMatchObject({
       value: [expect.anything()],
     });

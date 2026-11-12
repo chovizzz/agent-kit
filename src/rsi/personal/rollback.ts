@@ -22,7 +22,8 @@
  */
 import { RSI_ROLLBACK_PHASES } from '../../contracts/rsi.js';
 import type { PersonalLifecycleRecord, PersonalTxn } from '../../contracts/rsi-personal.js';
-import { applyEvent, type ApplyDeps } from './candidate-apply.js';
+import { applyEvent, type ApplyDeps, type ApplyResult } from './candidate-apply.js';
+import { RsiLockError } from '../lock-error.js';
 import type { HeldLock } from '../canary/atomic-write.js';
 import { landTerminalEffects } from './effects-recover.js';
 import { txnId } from './ids.js';
@@ -385,6 +386,24 @@ const applyDeps = (d: RollbackDeps): ApplyDeps => ({
   now: d.now,
 });
 
+/** 经 W3 的 `applyEvent` 施加一个事件;提交后发现丢锁(`lockLost`)→ 立即抛 `lock_lost`,不再继续任何写出口(journal 留给新的持锁者续做) */
+async function applyOne(
+  d: RollbackDeps,
+  rec: PersonalLifecycleRecord,
+  event: TransitionEvent,
+): Promise<ApplyResult> {
+  const r = await applyEvent(applyDeps(d), rec, event);
+  if (r.kind === 'transitioned' && r.lockLost === true) throw new RsiLockError('lock_lost');
+  return r;
+}
+
+/** 撤销路径的目标:凭据全集 + 本候选(identity_changed 不写凭据,只靠本候选);凭据读不到 → null */
+async function revokeTargets(d: RollbackDeps, t: PersonalTxn): Promise<string[] | null> {
+  const rv = await d.revocations.read();
+  if (rv.kind !== 'ok') return null;
+  return [...new Set([...rv.lines.map((l) => l.candidate_id), t.candidate_id])].sort();
+}
+
 type RecordPart =
   | { repo: 'ok'; rec: PersonalLifecycleRecord; note?: string }
   | { repo: 'none' | 'deferred' | 'invalid'; why?: string };
@@ -405,7 +424,7 @@ async function driveRecord(d: RollbackDeps, t: PersonalTxn, c: RunCtx): Promise<
   ) {
     const event = c.hint ?? eventForReason(t);
     if (event === undefined) return { repo: 'ok', rec, note: 'record_unmapped' };
-    const r = await applyEvent(applyDeps(d), rec, event);
+    const r = await applyOne(d, rec, event);
     if (r.kind === 'transitioned') rec = r.next;
     else if (r.kind === 'halt') {
       if (r.halt === 'repo_deferred') return { repo: 'deferred', why: r.why ?? 'deferred' };
@@ -430,7 +449,7 @@ async function advanceRecordTo(
   if (cur.lifecycle !== 'rolling_back' || cur.rollback === null) return cur;
   const from = phaseIdx(cur.rollback.phase);
   for (const p of PHASES.slice(from + 1, phaseIdx(to) + 1)) {
-    const r = await applyEvent(applyDeps(d), cur, {
+    const r = await applyOne(d, cur, {
       kind: 'rollback_advance',
       evidence: `txn:${t.txn_id}:${p}`,
       to: p,
@@ -476,19 +495,26 @@ async function staticRemoval(d: RollbackDeps, t: PersonalTxn, c: RunCtx): Promis
   } else {
     await step(d, 'after:repo_removal');
   }
-  // 判据:仓库部分已提交 / 本就没有(`committed` / `already` / `absent`);deferred 时改为「本机 payload 已不含该候选」(R21-9.3a)
-  if (deferred && !(await d.payload.absent(t.candidate_id))) {
-    return { ok: false, why: 'deferred_payload_still_has_candidate' };
+  // 判据:仓库部分已提交 / 本就没有(`committed` / `already` / `absent`);deferred 时改为「本机 payload 已不含该候选」(R21-9.3a)。
+  // deferred 下第三段的动作包含「以上次已同步版本减去凭据所列候选为目标重渲染本机 payload」,所以先经撤销路径清,再验证缺席(不能把后一步的结果当前置条件 → 死锁)
+  if (deferred) {
+    const ids = await revokeTargets(d, t);
+    if (ids === null) return { ok: false, why: 'revocations_invalid' };
+    const r = await d.payload.revoke(ids);
+    if (r.status === 'drift') return { ok: false, why: `drift:${r.why}` };
+    if (r.status === 'unavailable') return { ok: false, why: `payload_unavailable:${r.why}` };
+    if (!(await d.payload.absent(t.candidate_id))) {
+      return { ok: false, why: 'deferred_payload_still_has_candidate' };
+    }
   }
   return { ok: true };
 }
 
 // --- 第四段:经撤销路径同步 HOME ---
 async function rollbackComplete(d: RollbackDeps, t: PersonalTxn): Promise<PhaseResult> {
-  // 目标 = 「上次已同步版本减去撤销凭据所列候选」:凭据全集 + 本候选(identity_changed 不写凭据,只靠本候选)
-  const rv = await d.revocations.read();
-  if (rv.kind !== 'ok') return { ok: false, why: 'revocations_invalid' };
-  const ids = [...new Set([...rv.lines.map((l) => l.candidate_id), t.candidate_id])].sort();
+  // 目标 = 「上次已同步版本减去撤销凭据所列候选」
+  const ids = await revokeTargets(d, t);
+  if (ids === null) return { ok: false, why: 'revocations_invalid' };
   const r = await d.payload.revoke(ids);
   await step(d, 'after:payload');
   if (r.status === 'drift') return { ok: false, why: `drift:${r.why}` };
@@ -525,6 +551,18 @@ async function finish(d: RollbackDeps, t: PersonalTxn, c: RunCtx): Promise<Rollb
   if (rd.kind === 'invalid') return inc(`repo_invalid:${rd.why}`);
   if (rd.kind === 'ok') {
     let rec = rd.record;
+    // 第三段允许 deferred:分叉解除后在这里补做仓库移除(重新从盘上判据检查,`already` = 已删;不能用 journal 的 phase 推断它做过)
+    const rem = await d.repo.remove(
+      { id: rec.id, content_sha256: rec.content_sha256, target_paths: rec.target_paths },
+      t.kind === 'clear' ? 'clear' : 'rollback',
+    );
+    if (rem.status === 'invalid') return inc(`repo_invalid:${rem.why}`);
+    if (rem.status === 'deferred') return inc(`repo_deferred:${rem.why}`);
+    // 复用在途 txn 时较晚到达的终止事件(R21-4.4a ① 自环:终态理由取优先级最高者):在这里施加,journal 不另存它
+    if (rec.lifecycle === 'rolling_back' && c.hint !== undefined) {
+      const r = await applyOne(d, rec, c.hint);
+      if (r.kind === 'transitioned') rec = r.next;
+    }
     if (rec.lifecycle === 'rolling_back') {
       rec = await advanceRecordTo(d, t, rec, 'rollback_complete');
       if (rec.lifecycle === 'rolling_back' && rec.rollback?.phase !== 'rollback_complete') {
@@ -533,7 +571,7 @@ async function finish(d: RollbackDeps, t: PersonalTxn, c: RunCtx): Promise<Rollb
       if (rec.lifecycle === 'rolling_back') {
         for (const agent of ['claude', 'pi', 'codex'] as const) {
           if (rec.deploy[agent] !== 'removal_pending') continue;
-          const r = await applyEvent(applyDeps(d), rec, {
+          const r = await applyOne(d, rec, {
             kind: 'removal_done',
             evidence: `txn:${t.txn_id}:${agent}`,
             agent,
@@ -541,7 +579,7 @@ async function finish(d: RollbackDeps, t: PersonalTxn, c: RunCtx): Promise<Rollb
           });
           if (r.kind === 'transitioned') rec = r.next;
         }
-        const r = await applyEvent(applyDeps(d), rec, {
+        const r = await applyOne(d, rec, {
           kind: 'compensation_done',
           evidence: `txn:${t.txn_id}`,
           completion_met: true,

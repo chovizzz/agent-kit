@@ -15,7 +15,7 @@
 import { capabilityAvailable } from '../../contracts/rsi.js';
 import type { PersonalLifecycleRecord } from '../../contracts/rsi-personal.js';
 import type { RepoRead, StepEnv } from './candidate-ports.js';
-import { startRollback, type RollbackDeps, type RollbackOutcome } from './rollback.js';
+import { resumeAll, startRollback, type RollbackDeps, type RollbackOutcome } from './rollback.js';
 import { deferredKeyedEffects, pendingCacheCleanup } from './rollback-ports.js';
 import { isTerminalLifecycle } from './transition-table.js';
 
@@ -44,6 +44,8 @@ export interface ClearReport {
   write: boolean;
   /** 待清候选(非终态) */
   candidates: { id: string; lifecycle: string }[];
+  /** 开始时在途的 journal(上次中断留下;写模式下先续做) */
+  inFlight: string[];
   outcomes: RollbackOutcome[];
   /**
    * 仓库 `.state` 下待对账的候选(canary.json / 分组账 / `exec-enabled.json` / 工作副本 / 终态效果):**不访问**,不把访问不到的文件当作已改写。
@@ -66,6 +68,7 @@ export async function rsiAutoClear(d: ClearDeps, opts: { write: boolean }): Prom
   const report: ClearReport = {
     write: opts.write,
     candidates: [],
+    inFlight: [],
     outcomes: [],
     pendingReconcile: [],
     unavailable: null,
@@ -75,26 +78,36 @@ export async function rsiAutoClear(d: ClearDeps, opts: { write: boolean }): Prom
     return report;
   }
   await d.locks.personal.assertHeld();
-  let all: RepoRead<PersonalLifecycleRecord[]> = await d.store.readAll();
-  if (all.kind === 'deferred') {
-    all =
-      d.recordedRecords === undefined
-        ? { kind: 'invalid', why: 'recorded_read_not_wired' }
-        : await d.recordedRecords();
-  }
-  if (all.kind === 'invalid') {
-    report.unavailable = `repo_unreadable:${all.why}`;
+
+  /** 非终态候选;读不到 → null(并在 `unavailable` 里写原因) */
+  const enumerate = async (): Promise<PersonalLifecycleRecord[] | null> => {
+    let all: RepoRead<PersonalLifecycleRecord[]> = await d.store.readAll();
+    if (all.kind === 'deferred') {
+      all =
+        d.recordedRecords === undefined
+          ? { kind: 'invalid', why: 'recorded_read_not_wired' }
+          : await d.recordedRecords();
+    }
+    if (all.kind === 'invalid') {
+      report.unavailable = `repo_unreadable:${all.why}`;
+      return null;
+    }
+    if (all.kind === 'deferred') {
+      report.unavailable = 'repo_unreadable:recorded_read_deferred';
+      return null;
+    }
+    const records = (all.kind === 'ok' ? all.value : []).filter(
+      (r) => !isTerminalLifecycle(r.lifecycle),
+    );
+    report.candidates = records.map((r) => ({ id: r.id, lifecycle: r.lifecycle }));
+    return records;
+  };
+
+  report.inFlight = await d.txns.list();
+  if (!opts.write) {
+    await enumerate();
     return report;
   }
-  if (all.kind === 'deferred') {
-    report.unavailable = 'repo_unreadable:recorded_read_deferred';
-    return report;
-  }
-  const records = all.kind === 'ok' ? all.value : [];
-  report.candidates = records
-    .filter((r) => !isTerminalLifecycle(r.lifecycle))
-    .map((r) => ({ id: r.id, lifecycle: r.lifecycle }));
-  if (!opts.write) return report;
 
   // 只拿 personal/lock(调用方已持)→ sync 锁;不取 rsi/lock
   const rd: RollbackDeps = {
@@ -116,8 +129,11 @@ export async function rsiAutoClear(d: ClearDeps, opts: { write: boolean }): Prom
     ...(d.onStep !== undefined ? { onStep: d.onStep } : {}),
   };
   await d.syncLock.withLock(async () => {
+    // 先续做在途 journal(上次 clear 崩溃留下的;缩减入口自己可重试,不依赖 worker 将来修复),再枚举新候选
+    report.outcomes.push(...(await resumeAll(rd)));
+    const records = await enumerate();
+    if (records === null) return;
     for (const rec of records) {
-      if (isTerminalLifecycle(rec.lifecycle)) continue;
       report.outcomes.push(
         await startRollback(rd, {
           candidate_id: rec.id,

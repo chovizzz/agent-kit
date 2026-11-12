@@ -25,6 +25,7 @@ import {
   world7,
 } from './w7-fixture.js';
 import { rec } from '../personal/transition-fixture.js';
+import { RsiLockError } from '../../../src/rsi/lock-error.js';
 
 const TXN = rollbackTxnId(ID, SHA);
 const idx = (w: { calls: string[] }, c: string): number => w.calls.indexOf(c);
@@ -161,16 +162,54 @@ describe('R21-9.3a 人工分叉下的撤销:凭据先于记录,仓库部分 defe
     expect(w.revs).toHaveLength(1); // 凭据不重复
   });
 
-  it('deferred 且 payload 仍含该候选:第三段判据不成立 → 停在 static_removal_pending', async () => {
+  it('deferred 下第三段先经撤销路径清 payload(动作含「重渲染本机 payload」),再验证缺席:不死锁', async () => {
     const w = world7();
     w.store.mode = 'deferred';
     w.payload.has.add(ID);
+    const r = await startRollback(w.d, harmReq());
+    expect(w.payload.revoked.length).toBeGreaterThan(0);
+    expect(w.payload.has.has(ID)).toBe(false);
+    expect(w.txns.get(TXN)?.phase).toBe('rollback_complete'); // 第三段通过了
+    expect((r as { why: string }).why).toMatch(/^repo_deferred/); // 只剩被推迟的记录 / 仓库部分
+  });
+
+  it('deferred 且撤销路径之后 payload 仍含该候选:第三段判据不成立 → 停在 static_removal_pending', async () => {
+    const w = world7();
+    w.store.mode = 'deferred';
+    w.payload.has.add(ID);
+    w.payload.stuck.add(ID);
     const r = await startRollback(w.d, harmReq());
     expect(r).toMatchObject({
       status: 'incomplete',
       phase: 'static_removal_pending',
       why: 'deferred_payload_still_has_candidate',
     });
+  });
+
+  it('deferred 下撤销路径遇到用户改过的块(drift)→ 第三段未完成', async () => {
+    const w = world7();
+    w.store.mode = 'deferred';
+    w.payload.mode = 'drift';
+    expect(await startRollback(w.d, harmReq())).toMatchObject({
+      status: 'incomplete',
+      phase: 'static_removal_pending',
+      why: 'drift:user_edited',
+    });
+  });
+
+  it('记录可读但仓库提交 deferred(第三段「成功」):收尾重新检查并补做仓库移除,没删之前不删 journal、不假装完成', async () => {
+    const w = world7();
+    w.repoMode.value = 'deferred';
+    const r = await startRollback(w.d, harmReq());
+    expect(r).toMatchObject({ status: 'incomplete', phase: 'rollback_complete' });
+    expect((r as { why: string }).why).toMatch(/^repo_deferred/);
+    expect(w.repoFiles.size).toBe(1); // 文件还在
+    expect(w.txns.size).toBe(1);
+    expect(recordOf(w).lifecycle).toBe('rolling_back');
+    w.repoMode.value = 'ok';
+    expect((await resumeAll(w.d))[0]?.status).toBe('complete');
+    expect(w.repoFiles.size).toBe(0);
+    expect(recordOf(w).lifecycle).toBe('rolled_back');
   });
 
   it('私有仓库 invalid:第三段中止(不当成已完成),凭据已落盘;修好后续做', async () => {
@@ -360,6 +399,42 @@ describe('同一候选只有一个在途 txn(复用)', () => {
     expect(JSON.stringify(recordOf(w))).toBe(before);
     expect(w.revs).toHaveLength(1);
     expect([...w.effectApplied.values()]).toEqual([1]);
+  });
+});
+
+describe('复用在途 txn 时较晚到达的终止事件(R21-4.4a ① 自环)', () => {
+  it('harm 回滚走到第四段后用户 veto:复用同一 txn,终态理由取优先级最高者(vetoed),否决黑名单落地', async () => {
+    const w = world7();
+    w.crashAt('after:payload');
+    await expect(startRollback(w.d, harmReq())).rejects.toBeInstanceOf(Crash);
+    const r = await startRollback(w.d, {
+      ...harmReq(),
+      reason: 'vetoed',
+      by: 'veto',
+      event: { kind: 'veto', evidence: 'rsi veto' },
+    });
+    expect(r.status).toBe('complete');
+    expect(recordOf(w).terminal_reason).toBe('vetoed');
+    expect([...w.effectLog.values()][0]?.map((e) => e.type)).toEqual([
+      'blacklist_veto',
+      'write_tombstone',
+    ]);
+    expect(w.revs).toHaveLength(1); // 来源保持 journal 的 worker
+  });
+});
+
+describe('丢锁(applyEvent 提交后返回 lockLost)→ 立即停止,不再继续任何写出口', () => {
+  it('第三段记录提交后发现丢锁:抛 lock_lost;未调用仓库移除;journal 保留,新持锁者续做完成', async () => {
+    const w = world7();
+    const okAppend = w.d.audit.append;
+    w.d.audit.append = async () => {
+      throw new RsiLockError('lock_lost');
+    };
+    await expect(startRollback(w.d, harmReq())).rejects.toMatchObject({ kind: 'lock_lost' });
+    expect(w.calls).not.toContain('repo.remove');
+    expect(w.txns.size).toBe(1);
+    w.d.audit.append = okAppend;
+    expect((await resumeAll(w.d))[0]?.status).toBe('complete');
   });
 });
 

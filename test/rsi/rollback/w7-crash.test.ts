@@ -5,6 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { ROLLBACK_STEPS, resumeAll, startRollback } from '../../../src/rsi/personal/rollback.js';
+import { rec } from '../personal/transition-fixture.js';
 import { Crash, ID, SHA, harmReq, recordOf, world7, type World7 } from './w7-fixture.js';
 import { rollbackTxnId } from '../../../src/rsi/personal/rollback.js';
 
@@ -186,12 +187,37 @@ describe('journal 与记录的进度互不信任', () => {
     expectFinal(w, 'journal ahead');
   });
 
-  it('记录领先于 journal(记录已推进到 static_removal_pending,journal 还在 injection_disabled):记录不回退,journal 追上', async () => {
-    const w = world7();
-    w.crashAt('journal:static_removal_pending'); // 第二段完成、journal 还没写下一段
-    await expect(startRollback(w.d, harmReq())).rejects.toBeInstanceOf(Crash);
-    expect(w.txns.get(TXN)?.phase).toBe('injection_disabled');
-    await resumeAll(w.d);
-    expectFinal(w, 'record ahead');
+  it('记录领先于 journal(记录已在 static_removal_pending,journal 还在 injection_disabled):记录不回退,journal 追上', async () => {
+    const w = world7({
+      record: rec('rolling_back', {
+        content_sha256: SHA,
+        deploy: { claude: 'removal_pending', pi: 'none', codex: 'none' },
+        rollback: {
+          phase: 'static_removal_pending',
+          reason: 'harm_c1',
+          target_terminal: 'rolled_back',
+        },
+      }),
+    });
+    await w.d.txns.write({
+      schema_version: 1,
+      txn_id: TXN,
+      candidate_id: ID,
+      kind: 'rollback',
+      reason: 'harm_c1',
+      target_terminal: 'rolled_back',
+      phase: 'injection_disabled',
+      identity12: null,
+      at: '2026-11-10T12:00:00.000Z',
+    });
+    const out = await resumeAll(w.d);
+    expect(out.map((o) => o.status)).toEqual(['complete']);
+    const rc = recordOf(w);
+    expect(rc.lifecycle).toBe('rolled_back');
+    // 记录不回退:只补了最后一段(static_removal_pending → rollback_complete)
+    expect(rc.transitions.filter((t) => t.dim === 'rollback').map((t) => t.to)).toEqual([
+      'rollback_complete',
+    ]);
+    expect(w.revs).toHaveLength(1);
   });
 });

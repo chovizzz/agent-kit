@@ -70,7 +70,13 @@ export interface World7 {
   effectLog: Map<string, TransitionEffect[]>;
   repoFiles: Set<string>;
   repoMode: { value: 'ok' | 'deferred' | 'invalid' | 'absent' };
-  payload: { has: Set<string>; mode: 'done' | 'drift' | 'unavailable'; revoked: string[][] };
+  payload: {
+    has: Set<string>;
+    /** 撤销路径也清不掉的残留(模拟 syncRevoke 没能删净) */
+    stuck: Set<string>;
+    mode: 'done' | 'drift' | 'unavailable';
+    revoked: string[][];
+  };
   cache: { mode: 'cleaned' | 'pending'; failOnce: boolean };
   keyedMode: { value: KeyedEffectResult | 'throw' };
   env: StepEnv;
@@ -92,7 +98,12 @@ export function world7(
   const effectLog = new Map<string, TransitionEffect[]>();
   const repoFiles = new Set<string>(['rules/ra_0123456789ab.md']);
   const repoMode: World7['repoMode'] = { value: 'ok' };
-  const payload: World7['payload'] = { has: new Set(), mode: 'done', revoked: [] };
+  const payload: World7['payload'] = {
+    has: new Set(),
+    stuck: new Set(),
+    mode: 'done',
+    revoked: [],
+  };
   const cache: World7['cache'] = { mode: 'cleaned', failOnce: false };
   const keyedMode: World7['keyedMode'] = { value: 'applied' };
   const crash: World7['crash'] = { step: null };
@@ -191,7 +202,7 @@ export function world7(
         payload.revoked.push([...ids]);
         if (payload.mode === 'drift') return { status: 'drift', why: 'user_edited' };
         if (payload.mode === 'unavailable') return { status: 'unavailable', why: 'x' };
-        for (const i of ids) payload.has.delete(i);
+        for (const i of ids) if (!payload.stuck.has(i)) payload.has.delete(i);
         return { status: 'done' };
       },
       async absent(id) {

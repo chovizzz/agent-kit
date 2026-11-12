@@ -88,18 +88,16 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       ),
     ],
     tests: [T_CR, T_RB],
-    expectRed: ['journal 领先于记录', '记录领先于 journal', 'deferred 且 payload 仍含该候选'],
+    expectRed: ['journal 领先于记录', '记录领先于 journal'],
     mustKill: ['journal 领先于记录', '记录领先于 journal'],
   },
   {
     id: 'deferred_ignored',
     clause: 'R21-9.3a deferred 下第三段判据改为「本机 payload 已不含该候选」',
-    edits: [
-      swap(RB, 'if (deferred && !(await d.payload.absent(t.candidate_id))) {', 'if (false) {'),
-    ],
+    edits: [swap(RB, '    if (!(await d.payload.absent(t.candidate_id))) {', '    if (false) {')],
     tests: [T_RB],
-    expectRed: ['deferred 且 payload 仍含该候选'],
-    mustKill: ['deferred 且 payload 仍含该候选'],
+    expectRed: ['deferred 且撤销路径之后 payload 仍含该候选'],
+    mustKill: ['deferred 且撤销路径之后 payload 仍含该候选'],
   },
   {
     id: 'record_note_ignored',
@@ -135,8 +133,8 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     edits: [
       swap(
         RB,
-        'const ids = [...new Set([...rv.lines.map((l) => l.candidate_id), t.candidate_id])].sort();',
-        'const ids = [t.candidate_id];',
+        'return [...new Set([...rv.lines.map((l) => l.candidate_id), t.candidate_id])].sort();',
+        'return [t.candidate_id];',
       ),
     ],
     tests: [T_RB],
@@ -160,6 +158,60 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     tests: [T_CR],
     expectRed: ['步骤点表覆盖四个子状态与收尾'],
     mustKill: ['步骤点表覆盖四个子状态与收尾'],
+  },
+  {
+    id: 'finish_no_removal_check',
+    clause: 'R21-9.3a 分叉期间被推迟的仓库移除在收尾重新检查并补做',
+    edits: [swap(RB, "if (rem.status === 'deferred') return inc(`repo_deferred:${rem.why}`);", '')],
+    tests: [T_RB],
+    expectRed: ['记录可读但仓库提交 deferred'],
+    mustKill: ['记录可读但仓库提交 deferred'],
+  },
+  {
+    id: 'late_event_dropped',
+    clause: 'R21-4.4a ① 复用在途 txn 时较晚到达的终止事件在收尾施加(终态理由取优先级最高者)',
+    edits: [
+      swap(RB, "if (rec.lifecycle === 'rolling_back' && c.hint !== undefined) {", 'if (false) {'),
+    ],
+    tests: [T_RB],
+    expectRed: ['harm 回滚走到第四段后用户 veto'],
+    mustKill: ['harm 回滚走到第四段后用户 veto'],
+  },
+  {
+    id: 'lock_lost_ignored',
+    clause: '丢锁(applyEvent 返回 lockLost)后立即停止,不继续任何写出口',
+    edits: [
+      swap(
+        RB,
+        "if (r.kind === 'transitioned' && r.lockLost === true) throw new RsiLockError('lock_lost');",
+        '',
+      ),
+    ],
+    tests: [T_RB],
+    expectRed: ['第三段记录提交后发现丢锁'],
+    mustKill: ['第三段记录提交后发现丢锁'],
+  },
+  {
+    id: 'deferred_no_revoke',
+    clause: 'R21-9.3a deferred 下第三段动作含「重渲染本机 payload」(先清再验缺席,不死锁)',
+    edits: [
+      swap(
+        RB,
+        '    const r = await d.payload.revoke(ids);',
+        "    const r = { status: 'done' } as const;",
+      ),
+    ],
+    tests: [T_RB],
+    expectRed: ['deferred 下第三段先经撤销路径清 payload'],
+    mustKill: ['deferred 下第三段先经撤销路径清 payload'],
+  },
+  {
+    id: 'clear_no_resume',
+    clause: 'R21-9.5 / 9.6 缩减入口先续做在途 journal(自己可重试)',
+    edits: [swap(CL, 'report.outcomes.push(...(await resumeAll(rd)));', '')],
+    tests: [T_CL],
+    expectRed: ['再跑一次 clear 先续做在途 journal'],
+    mustKill: ['再跑一次 clear 先续做在途 journal'],
   },
   // ---- W0-17 来源保留 ----
   {
@@ -268,7 +320,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
   {
     id: 'clear_dry_run_writes',
     clause: 'R21-12.1 干跑零写入',
-    edits: [swap(CL, 'if (!opts.write) return report;', '')],
+    edits: [swap(CL, '  if (!opts.write) {', '  if (false) {')],
     tests: [T_CL],
     expectRed: ['干跑(无 --write)'],
     mustKill: ['干跑(无 --write)'],
