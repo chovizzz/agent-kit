@@ -174,6 +174,13 @@ describe('R21-7.4 判变差:越过 OBF 边界 → harm_<指标>', () => {
     const a = run(alternating(120), { extra, cfg: FAST });
     expect(a.harm).toBeNull();
     expect(a.incomplete).toEqual({ treat: 0, control: 0 });
+    // 主代理验收:这些账行必须连 C6 的检验输入都不进 —— 每次查看的 p 与 C6 估计和没有这些行时逐字相同
+    const base = run(alternating(120), { cfg: FAST });
+    expect(a.looks).toEqual(base.looks);
+    expect(a.sensitivity.map((s) => s.c6_diff_pp)).toEqual(
+      base.sensitivity.map((s) => s.c6_diff_pp),
+    );
+    expect(a.c6_worst_case).toEqual(base.c6_worst_case);
   });
   it('L2 C6 分母按 ITT:已关联且资格不成立的账行不进分母(按组计入 c6_ineligible_excluded);未关联的保留', () => {
     // treat 会话资格全不成立 → 它们的账行出分母;60 个 treat 账行没取回标记(资格不可知,保留);control 60 个完整

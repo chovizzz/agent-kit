@@ -98,7 +98,14 @@ export const V1_W6_MUTATIONS: readonly V1W6Mutation[] = [
       ),
     ],
     tests: [T_AN],
-    expectRed: ['第 k 次查看的边界', ...HARM_TESTS],
+    expectRed: [
+      '第 k 次查看的边界',
+      ...HARM_TESTS,
+      'R21-7.4 C1:treat 每会话 3 次失败、control 多为 0:信息时间够了才越界(k 在 10–12,t ≥ 0.4),之前的查看都没越',
+      'C2:retry_chain_max 越大越差(log(1+x) 的分层均值差);缺键的会话不进 C2、更不当 0',
+      'C3:显式教训 / 纠正多的一组更差',
+      'C6:treat 的完整率明显更低(关联失败的账行没有项目,按 agent 分层)',
+    ],
     mustKill: ['第 k 次查看的边界'],
   },
   {
@@ -112,6 +119,8 @@ export const V1_W6_MUTATIONS: readonly V1W6Mutation[] = [
       '第 k 次查看的边界',
       ...HARM_TESTS,
       '同样的效应出现得太早',
+      'R21-7.4 C1:treat 每会话 3 次失败、control 多为 0:信息时间够了才越界(k 在 10–12,t ≥ 0.4),之前的查看都没越',
+      'L5 带容差的夹具:Φ⁻¹(0.975) = 1.959964;α*(0.5) ≈ 0.001524(独立算出,容差 ±5e-6)',
     ],
     mustKill: ['α*(1) = α'],
   },
@@ -120,7 +129,13 @@ export const V1_W6_MUTATIONS: readonly V1W6Mutation[] = [
     clause: 'W0-10:Φ⁻¹ 用固定有理逼近;去掉牛顿修正后精度只剩 4.5e-4,夹具容差 5e-5 要红',
     edits: [swap(MATH, 'for (let i = 0; i < 2; i++) z +=', 'for (let i = 0; i < 0; i++) z +=')],
     tests: [T_MATH],
-    expectRed: ['Φ⁻¹:表值', 'Φ⁻¹ 与 Φ 互为反函数'],
+    expectRed: [
+      'Φ⁻¹:表值',
+      'Φ⁻¹ 与 Φ 互为反函数',
+      'α*(1) = α;α*(0.5)、α*(0.25) 取独立算出的表值',
+      'L5 带容差的夹具:Φ⁻¹(0.975) = 1.959964;α*(0.5) ≈ 0.001524(独立算出,容差 ±5e-6)',
+      '随 t 严格递增、不超过 α;t ≤ 0 为 0(不判);t > 1 按 1',
+    ],
     mustKill: ['Φ⁻¹:表值'],
   },
   {
@@ -144,7 +159,16 @@ export const V1_W6_MUTATIONS: readonly V1W6Mutation[] = [
       ),
     ],
     tests: [T_AN],
-    expectRed: ['第 k 次查看的边界', ...HARM_TESTS, '同样的效应出现得太早'],
+    expectRed: [
+      '第 k 次查看的边界',
+      ...HARM_TESTS,
+      '同样的效应出现得太早',
+      'R21-7.4 C1:treat 每会话 3 次失败、control 多为 0:信息时间够了才越界(k 在 10–12,t ≥ 0.4),之前的查看都没越',
+      '资格不成立的会话不进统计量,但仍计入信息时间与查看节奏',
+      'R21-7.4a 19 个 treat + 1 个 control:并层后仍稀疏 → 全部剔除;look 无效、kind=no_decision、从未有效查看',
+      'R21-7.7 当前段 = 账里最后一行的 background_fp;更早的段只出敏感性点估计,不判、不产事件',
+      '回到旧指纹(A → B → A)也是新段:t 从 0 重新计,旧的 A 段不并入当前 A 段',
+    ],
     mustKill: ['第 k 次查看的边界'],
   },
   // ---- R21-7.4 查看节奏与判变差 ----
@@ -159,7 +183,13 @@ export const V1_W6_MUTATIONS: readonly V1W6Mutation[] = [
       ),
     ],
     tests: [T_AN],
-    expectRed: ['9 个会话没有查看', '部分层稀疏', '并层:稀疏项目并入', T_WORST],
+    expectRed: [
+      '9 个会话没有查看',
+      '部分层稀疏',
+      '并层:稀疏项目并入',
+      T_WORST,
+      'M1 负例:没有任何查看 → 没有最坏情况结果(null)',
+    ],
     mustKill: ['9 个会话没有查看'],
   },
   {
@@ -175,7 +205,15 @@ export const V1_W6_MUTATIONS: readonly V1W6Mutation[] = [
     clause: 'R21-7.4:p ≤ α*(t_k) → 越界;永不越界 = 变差不会触发回滚',
     edits: [swap(AN, 'crossed: r.p <= boundary', 'crossed: false')],
     tests: [T_AN, T_RUN],
-    expectRed: [...HARM_TESTS, 'C1 变差 → harm', '没有越界 → 不产出事件'],
+    expectRed: [
+      ...HARM_TESTS,
+      'C1 变差 → harm',
+      '没有越界 → 不产出事件',
+      'R21-7.4 C1:treat 每会话 3 次失败、control 多为 0:信息时间够了才越界(k 在 10–12,t ≥ 0.4),之前的查看都没越',
+      'C2:retry_chain_max 越大越差(log(1+x) 的分层均值差);缺键的会话不进 C2、更不当 0',
+      'C3:显式教训 / 纠正多的一组更差',
+      'C6:treat 的完整率明显更低(关联失败的账行没有项目,按 agent 分层)',
+    ],
     mustKill: ['C1:treat 每会话 3 次失败'],
   },
   {
@@ -183,7 +221,11 @@ export const V1_W6_MUTATIONS: readonly V1W6Mutation[] = [
     clause: 'R21-7.4:边界是 OBF 的 α*(t_k),不是固定阈值;早期查看用宽阈值 = 误回滚',
     edits: [swap(AN, 'crossed: r.p <= boundary', 'crossed: r.p <= 0.01')],
     tests: [T_AN],
-    expectRed: ['同样的效应出现得太早', '没有效应(两组同分布)'],
+    expectRed: [
+      '同样的效应出现得太早',
+      '没有效应(两组同分布)',
+      'R21-7.4 C1:treat 每会话 3 次失败、control 多为 0:信息时间够了才越界(k 在 10–12,t ≥ 0.4),之前的查看都没越',
+    ],
     mustKill: ['同样的效应出现得太早'],
   },
   {
@@ -191,7 +233,11 @@ export const V1_W6_MUTATIONS: readonly V1W6Mutation[] = [
     clause: 'R21-7.2:置换 p = (1 + #{≥ 观测}) / (1 + B),不是 #/B(p 可以为 0)',
     edits: [swap(PERM, 'p: (1 + atLeast) / (1 + permutations)', 'p: atLeast / permutations')],
     tests: [T_AN, T_STATS],
-    expectRed: ['同样的效应出现得太早', ...HARM_TESTS],
+    expectRed: [
+      '同样的效应出现得太早',
+      ...HARM_TESTS,
+      'R21-7.4 C1:treat 每会话 3 次失败、control 多为 0:信息时间够了才越界(k 在 10–12,t ≥ 0.4),之前的查看都没越',
+    ],
     mustKill: ['同样的效应出现得太早'],
   },
   {
@@ -204,6 +250,12 @@ export const V1_W6_MUTATIONS: readonly V1W6Mutation[] = [
       '方向相反(treat 更好)',
       ...HARM_TESTS,
       T_WORST,
+      'R21-7.4 C1:treat 每会话 3 次失败、control 多为 0:信息时间够了才越界(k 在 10–12,t ≥ 0.4),之前的查看都没越',
+      '同样的效应出现得太早(40 会话,t ≈ 0.17):OBF 边界极小,不越界',
+      'C2:retry_chain_max 越大越差(log(1+x) 的分层均值差);缺键的会话不进 C2、更不当 0',
+      'C3:显式教训 / 纠正多的一组更差',
+      'C6:treat 的完整率明显更低(关联失败的账行没有项目,按 agent 分层)',
+      '两层各 3+3 的均值差:精确 p 与置换 p 接近',
     ],
     mustKill: ['单层 treat [5,5,5] vs control [0,0,0]'],
   },
@@ -237,7 +289,7 @@ export const V1_W6_MUTATIONS: readonly V1W6Mutation[] = [
     clause: 'R21-7.2:C2 分层均值差的权重 n1·n0/(n1+n0)',
     edits: [swap(STATS, 'w += (c.n1 * c.n0) / n;', 'w += 1;')],
     tests: [T_STATS],
-    expectRed: ['C2 分层均值差'],
+    expectRed: ['C2 分层均值差', 'C6 完整率差 = control − treat = 均值差的相反数'],
     mustKill: ['C2 分层均值差'],
   },
   {
@@ -283,7 +335,13 @@ export const V1_W6_MUTATIONS: readonly V1W6Mutation[] = [
     clause: 'R21-7.4a:并层后仍稀疏的层剔除出置换检验',
     edits: [swap(STRATA, 'if (usable(other)) {', 'if (true) {')],
     tests: [T_STATS, T_AN],
-    expectRed: ['并层后「其它」层仍有一组 < 2', '19 个 treat + 1 个 control', '部分层稀疏'],
+    expectRed: [
+      '并层后「其它」层仍有一组 < 2',
+      '19 个 treat + 1 个 control',
+      '部分层稀疏',
+      'C2:retry_chain_max 越大越差(log(1+x) 的分层均值差);缺键的会话不进 C2、更不当 0',
+      '资格不成立的会话不进统计量,但仍计入信息时间与查看节奏',
+    ],
     mustKill: ['并层后「其它」层仍有一组 < 2'],
   },
   {
@@ -413,7 +471,10 @@ export const V1_W6_MUTATIONS: readonly V1W6Mutation[] = [
     clause: 'R21-7.7:主分析只用当前段(账里最后一段)',
     edits: [swap(AN, 'const lastRun = runFp.length - 1;', 'const lastRun = 0;')],
     tests: [T_AN],
-    expectRed: ['当前段 = 账里最后一行'],
+    expectRed: [
+      '当前段 = 账里最后一行',
+      '回到旧指纹(A → B → A)也是新段:t 从 0 重新计,旧的 A 段不并入当前 A 段',
+    ],
     mustKill: ['当前段 = 账里最后一行'],
   },
   {
@@ -423,7 +484,10 @@ export const V1_W6_MUTATIONS: readonly V1W6Mutation[] = [
       swap(AN, 'observed.filter((s) => runOf.get(s.marker) === lastRun)', 'observed.slice()'),
     ],
     tests: [T_AN],
-    expectRed: ['当前段 = 账里最后一行'],
+    expectRed: [
+      '当前段 = 账里最后一行',
+      '回到旧指纹(A → B → A)也是新段:t 从 0 重新计,旧的 A 段不并入当前 A 段',
+    ],
     mustKill: ['当前段 = 账里最后一行'],
   },
   // ---- R21-7.6 / 7.8 报告 ----
@@ -471,7 +535,12 @@ export const V1_W6_MUTATIONS: readonly V1W6Mutation[] = [
     clause: 'W0-14:同一标记出现在多个会话文件,按标记去重,取最早的',
     edits: [swap(ASM, 'startOf(a) - startOf(b) ||', 'startOf(b) - startOf(a) ||')],
     tests: [T_ASM],
-    expectRed: ['取 (ts, session_ref) 最早的会话', '最早的携带者本身是多标记'],
+    expectRed: [
+      '取 (ts, session_ref) 最早的会话',
+      '最早的携带者本身是多标记',
+      '信号度量与 retry_chain_max 原样带入;retry_chain_max 缺键 = null(不是 0)',
+      '账行保持账的先后顺序;background_fp 取自账行',
+    ],
     mustKill: ['取 (ts, session_ref) 最早的会话'],
   },
   {
@@ -521,7 +590,10 @@ export const V1_W6_MUTATIONS: readonly V1W6Mutation[] = [
     clause: '分析对象只含本候选的 treat / control 账行',
     edits: [swap(ASM, 'if (l.candidate_id !== input.candidateId) continue;', 'void 0;')],
     tests: [T_ASM],
-    expectRed: ['excluded 行(含探针行)、别的候选的行'],
+    expectRed: [
+      'excluded 行(含探针行)、别的候选的行',
+      'R21-6.4 arm=excluded 的账行不进分析,只按原因码计入审计(C6 分母说明);别的候选 / 窗口之前的不计',
+    ],
     mustKill: ['excluded 行(含探针行)、别的候选的行'],
   },
   {
@@ -539,7 +611,11 @@ export const V1_W6_MUTATIONS: readonly V1W6Mutation[] = [
     clause: 'R21-7.4:canary 与 adopted 信息不累计:窗口之前的账行不属于本次',
     edits: [drop(ASM, "if (parseMs(l.at, 'ledger_at') < startMs) continue;")],
     tests: [T_ASM, T_RUN],
-    expectRed: ['excluded 行(含探针行)、别的候选的行', '窗口之前的账行不属于本次'],
+    expectRed: [
+      'excluded 行(含探针行)、别的候选的行',
+      '窗口之前的账行不属于本次',
+      'R21-6.4 arm=excluded 的账行不进分析,只按原因码计入审计(C6 分母说明);别的候选 / 窗口之前的不计',
+    ],
     mustKill: ['excluded 行(含探针行)、别的候选的行'],
   },
   {
@@ -632,7 +708,7 @@ export const V1_W6_MUTATIONS: readonly V1W6Mutation[] = [
     clause: 'R21-7.4:harm 事件的 worse 恒为 true',
     edits: [swap(EVT, 'metric: h.metric, worse: true', 'metric: h.metric, worse: false')],
     tests: [T_RUN],
-    expectRed: ['C1 变差 → harm'],
+    expectRed: ['C1 变差 → harm', 'C4 越限 → harm_c4(evidence 只含字节数与上限)'],
     mustKill: ['C1 变差 → harm'],
   },
   {
@@ -648,7 +724,7 @@ export const V1_W6_MUTATIONS: readonly V1W6Mutation[] = [
     clause: 'R21-7.7:本机 payload 漂移期间分析暂停',
     edits: [swap(RUN, "if ((await source.payloadDrift()) === 'drifted') {", 'if (false) {')],
     tests: [T_RUN],
-    expectRed: ['本机 payload 漂移 → paused'],
+    expectRed: ['本机 payload 漂移 → paused', ' 抛错 → unavailable(不是 no_harm)'],
     mustKill: ['本机 payload 漂移 → paused'],
   },
   {
