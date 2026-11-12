@@ -6649,9 +6649,12 @@ W5(shadow 计数、canary.json、hint `--canary`、分组账、准入探针)实�
 
 W7(回滚四段、撤销凭据写入方、缩减入口、熔断)验收评审发现的契约缺口,用户 2026-11-12 选择框「journal 加字段」:
 
-- **`PersonalTxn` 追加三个可选键**(`src/contracts/rsi-personal.ts`):`content_sha256`(被撤销内容的哈希)、`by`(撤销来源,W0-17)、`terminal_event`(触发回滚的终止事件,含证据)。**W7 起写入方在首次写 journal 时必须一起落盘**,之后任一子状态续做都从 journal 取,不依赖私有仓库或权威记录可读;读到缺这三个键的旧 journal 时,按写入前的兜底还原(`by` 由 `(kind, reason)` 推出,`content_sha256` 从权威记录 / 撤销凭据 / head.json 取回),仍取不到 → 该段 `incomplete`(不写凭据、不伪造)。`terminal_event` 在契约层只校验为 JSON 对象;续做时由转移引擎的事件 schema 校验,不合规 = `txn_invalid`(fail-closed)。
+- **`PersonalTxn` 追加三个可选键**(`src/contracts/rsi-personal.ts`):`content_sha256`(被撤销内容的哈希)、`by`(撤销来源,W0-17)、`terminal_event`(触发回滚的终止事件,含证据)。
+  - **新格式**(W7 起写入):首次写 journal 时三个键必须一起落盘,且 `terminal_event` 在落盘前已通过转移引擎的事件 schema 并与 `reason` / `target_terminal` 一致;写入边界由机器强制(专用的新 journal 写入 schema 或唯一创建函数在持久化前校验,配负向测试)。之后任一子状态续做都从 journal 取这三项,不依赖私有仓库或权威记录可读。
+  - **旧格式**(缺这三个键):只在来源能唯一证明时还原——`by` 只在 `(kind, reason)` 唯一对应一个来源时推出(例如 `kind=rollback, reason=cleared` 可能来自 `rollback_to` 或 worker,有歧义 → 不推出);`content_sha256` 只能从撤销凭据,或经 `head.json` 记录的提交读取权威记录取回(后者要求私有仓库可读,head.json 本身不存哈希);`terminal_event` 只对原因码本身足以构成完整事件的情形重建(无证据要求的终止事件),`limit_reached` 等需要原始证据的情形不重建。任一项还原不了 → 该段 `incomplete`(不写凭据、不伪造,等人工或后续对账)。
+  - **两种失败分开**:必需项缺失且不可恢复 = `incomplete`;字段存在但不合规(如 `terminal_event` 过不了引擎 schema 或与 `reason` 不一致)= `txn_invalid`(fail-closed,不做后续写入)。
 - **`rollback_to` 的原因码**(取代 W0-17 表中「暂允许全部回滚原因」):只用 `cleared`。`rsi rollback --to` 是用户主动缩减影响,不借 `vetoed`(会触发指纹永久黑名单),也不借伤害类原因(不是判定结论)。
-- **缩减入口的仓库指纹**:`[rsi]` 配置不可用或原仓库不存在时(R21-9.5 缩减入口),`rsi auto clear` 用 `head.json` 里记录的 `owner_repo_fp`,因此 clear 下不判 `personal_owner_changed`;R21-3.5 情形②(分叉)照常判,分叉时按 R21-9.3a `deferred`。配置可用时照常用当前 `[rsi] repo` 现算。
+- **缩减入口的仓库指纹**:`[rsi]` 配置不可用或原仓库不存在时(R21-9.5 缩减入口),`rsi auto clear` 用 `head.json` 里记录的 `owner_repo_fp`,因此**该缩减分支**不判 `personal_owner_changed`;R21-3.5 情形②(分叉)照常判,分叉时按 R21-9.3a `deferred`。配置可用时照常用当前 `[rsi] repo` 现算。
 
 #### W0 订正的合法 / 错误示例
 
@@ -6875,9 +6878,15 @@ W7(回滚四段、撤销凭据写入方、缩减入口、熔断)验收评审发�
   "at": "2026-11-09T08:00:00.000Z",
   "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "by": "worker",
-  "terminal_event": { "kind": "limit", "evidence": "canary_days=90" }
+  "terminal_event": {
+    "kind": "canary_limit",
+    "evidence": "canary-limit:days=90",
+    "max_arm_sessions": 0
+  }
 }
 ```
+
+说明(W0-20):`terminal_event` 为对象但过不了转移引擎的事件 schema(例如 `{"kind": "limit"}`)时,`PersonalTxn` 外层仍合法,续做入口在推进前校验失败 → `txn_invalid`,不做任何后续写入(测试归 W7)。
 
 `PersonalTxn` 错误(W0-20):`terminal_event` 不是 JSON 对象。状态 = txn 不合规,阻断范围同下,原因码 `RSI_FAIL_CLOSED reason=txn_invalid`:
 
