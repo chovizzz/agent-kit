@@ -286,6 +286,25 @@ describe('W0-17 来源保留:by 是撤销来源', () => {
     expect(w.revs).toHaveLength(0);
   });
 
+  it('rollback_to ⇔ (kind=rollback ∧ reason=cleared):组合不符一律拒绝(来源才能从 journal 唯一还原)', async () => {
+    for (const over of [
+      { by: 'rollback_to', kind: 'clear', reason: 'cleared' },
+      { by: 'clear', kind: 'rollback', reason: 'cleared' },
+      { by: 'veto', kind: 'rollback', reason: 'cleared' },
+      { by: 'rollback_to', kind: 'reconcile', reason: 'cleared' },
+    ] as const) {
+      const w = world7();
+      const r = await startRollback(w.d, harmReq(over));
+      expect(r, JSON.stringify(over)).toMatchObject({ status: 'refused' });
+      expect(w.txns.size).toBe(0);
+      expect(w.revs).toHaveLength(0);
+    }
+    const w = world7();
+    expect(
+      await startRollback(w.d, harmReq({ by: 'rollback_to', kind: 'clear', reason: 'cleared' })),
+    ).toMatchObject({ why: 'rollback_to_kind_mismatch' });
+  });
+
   it('kind=clear 只接受 by=clear / reason=cleared', async () => {
     const w = world7();
     const r = await startRollback(w.d, harmReq({ kind: 'clear' }));

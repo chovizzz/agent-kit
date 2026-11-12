@@ -32,8 +32,8 @@ export class RevocationWriteError extends Error {
 }
 
 /**
- * journal 恢复时只有 `reason`(`PersonalTxn` 没有 `by` 字段,契约未定,见汇报「问题」):能唯一确定来源的原因还原来源,
- * 其余一律还原为 `worker`——`rollback_to` 与 `worker` 在恢复后无法区分(`rollback_to` 的原因恒为 `cleared`,所以它的恢复走 `kind=clear` 的 txn 或显式传入 `by`)。
+ * journal 恢复时只有 `reason`(`PersonalTxn` 没有 `by` 字段,契约未定,见汇报「问题」):能唯一确定来源的原因还原来源,其余一律还原为 `worker`。
+ * `cleared` 在这里还原为 `clear`;`rollback_to` 同样用 `cleared`,由执行器的 `sourceOf` 靠 `kind=rollback ∧ reason=cleared` 区分(入口闸保证组合唯一)。
  */
 export function byFromReason(reason: string): RevocationBy {
   switch (reason) {

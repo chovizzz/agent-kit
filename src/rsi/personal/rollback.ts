@@ -159,8 +159,16 @@ export function eventForReason(
   }
 }
 
-const sourceOf = (t: PersonalTxn): RevocationBy =>
-  t.kind === 'clear' ? 'clear' : byFromReason(t.reason);
+/**
+ * journal → 撤销来源(W0-17「journal 恢复遵循同样规则」):`PersonalTxn` 没有 `by` 字段,来源靠 (kind, reason) 唯一还原:
+ * `kind=clear` → clear;`kind=rollback ∧ reason=cleared` → rollback_to(入口闸 `startRollback` 保证只有 rollback_to 会产生这个组合:clear 必配 kind=clear,
+ * worker 拿不到 `cleared`,veto / exec_event 各有自己的原因);其余按原因({@link byFromReason})。
+ */
+const sourceOf = (t: PersonalTxn): RevocationBy => {
+  if (t.kind === 'clear') return 'clear';
+  if (t.kind === 'rollback' && t.reason === 'cleared') return 'rollback_to';
+  return byFromReason(t.reason);
+};
 
 // ---------------------------------------------------------------------------
 // 入口
@@ -182,6 +190,10 @@ export async function startRollback(
     const p = revocationSourceProblem(req.by, req.reason);
     if (p !== null) return { status: 'refused', txn: null, why: p };
   }
+  // rollback_to ⇔ (kind=rollback ∧ reason=cleared):让来源能从 journal 唯一还原(见 sourceOf)
+  if ((req.by === 'rollback_to') !== (req.kind === 'rollback' && req.reason === 'cleared')) {
+    return { status: 'refused', txn: null, why: 'rollback_to_kind_mismatch' };
+  }
   if (req.kind === 'clear' && (req.by !== 'clear' || req.reason !== 'cleared')) {
     return { status: 'refused', txn: null, why: 'clear_requires_by_clear' };
   }
@@ -190,9 +202,12 @@ export async function startRollback(
   const cur = await d.txns.read(id);
   if (cur.kind === 'invalid') return { status: 'refused', txn: id, why: `txn_${cur.why}` };
   if (cur.kind === 'ok') {
-    // 已有在途 txn:复用,不新开;来源以 journal 的原因为准(请求的原因与 journal 不同时,请求的 `by` 可能与 journal 的 `reason` 不相容)
-    const by = cur.value.reason === req.reason ? req.by : sourceOf(cur.value);
-    return runGuarded(d, cur.value, { by, hint: req.event, sha: req.content_sha256 });
+    // 已有在途 txn:复用,不新开;来源一律取 journal 的(请求的 `by` 可能与 journal 的 `reason` 不相容)
+    return runGuarded(d, cur.value, {
+      by: sourceOf(cur.value),
+      hint: req.event,
+      sha: req.content_sha256,
+    });
   }
   const t: PersonalTxn = {
     schema_version: 1,

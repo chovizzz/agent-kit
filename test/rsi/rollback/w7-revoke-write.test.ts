@@ -114,7 +114,7 @@ describe('writeRevocation', () => {
 });
 
 describe('来源与原因的对应', () => {
-  it('byFromReason:cleared→clear、vetoed→veto、exec_*→exec_event、其余→worker(rollback_to 与 worker 恢复后不可区分:已知限制)', () => {
+  it('byFromReason:cleared→clear、vetoed→veto、exec_*→exec_event、其余→worker(rollback_to 由执行器靠 kind + reason 区分)', () => {
     expect(byFromReason('cleared')).toBe('clear');
     expect(byFromReason('vetoed')).toBe('veto');
     expect(byFromReason('exec_post_check_failed')).toBe('exec_event');

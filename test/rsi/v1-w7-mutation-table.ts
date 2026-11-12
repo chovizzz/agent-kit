@@ -215,26 +215,59 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
   },
   // ---- W0-17 来源保留 ----
   {
-    id: 'source_from_kind_only',
+    id: 'source_fallthrough_worker',
+    clause: 'W0-17 journal 恢复保留来源(veto / exec_event 由原因还原)',
+    edits: [swap(RB, '  return byFromReason(t.reason);', "  return 'worker';")],
+    tests: [T_CR],
+    expectRed: ['前台 veto 发起、凭据写入前崩溃', 'exec_event 发起的 txn 续做'],
+    mustKill: ['前台 veto 发起、凭据写入前崩溃', 'exec_event 发起的 txn 续做'],
+  },
+  {
+    id: 'source_clear_kind_lost',
     clause: 'W0-17 journal 恢复保留来源(kind=clear → by=clear)',
-    edits: [swap(RB, "t.kind === 'clear' ? 'clear' : byFromReason(t.reason)", "'worker'")],
+    edits: [
+      swap(
+        RB,
+        "if (t.kind === 'clear') return 'clear';",
+        "if (t.kind === 'clear') return 'worker';",
+      ),
+    ],
     tests: [T_CR],
     expectRed: ['clear 发起的 txn(kind=clear)续做'],
     mustKill: ['clear 发起的 txn(kind=clear)续做'],
   },
   {
     id: 'reuse_by_request',
-    clause: 'W0-17 复用在途 txn 时来源以 journal 的原因为准',
+    clause: 'W0-17 复用在途 txn 时来源一律取 journal 的',
+    edits: [swap(RB, 'by: sourceOf(cur.value),', 'by: req.by,')],
+    tests: [T_RB, T_CR],
+    expectRed: ['崩溃后再次发起同一请求', 'rollback_to 的 txn 在途时 clear 再来'],
+    mustKill: ['崩溃后再次发起同一请求', 'rollback_to 的 txn 在途时 clear 再来'],
+  },
+  {
+    id: 'rollback_to_source_lost',
+    clause: 'W0-17 journal 恢复保留 rollback_to 来源(kind=rollback ∧ reason=cleared)',
+    edits: [
+      swap(RB, "if (t.kind === 'rollback' && t.reason === 'cleared') return 'rollback_to';", ''),
+    ],
+    tests: [T_CR],
+    expectRed: ['rollback_to 发起(kind=rollback ∧ reason=cleared)、凭据写入前崩溃'],
+    mustKill: ['rollback_to 发起(kind=rollback ∧ reason=cleared)、凭据写入前崩溃'],
+  },
+  {
+    id: 'rollback_to_gate_off',
+    clause:
+      'W0-17 入口闸:rollback_to ⇔ (kind=rollback ∧ reason=cleared),来源才能从 journal 唯一还原',
     edits: [
       swap(
         RB,
-        'const by = cur.value.reason === req.reason ? req.by : sourceOf(cur.value);',
-        'const by = req.by;',
+        "if ((req.by === 'rollback_to') !== (req.kind === 'rollback' && req.reason === 'cleared')) {",
+        'if (false) {',
       ),
     ],
     tests: [T_RB],
-    expectRed: ['崩溃后再次发起同一请求'],
-    mustKill: ['崩溃后再次发起同一请求'],
+    expectRed: ['rollback_to ⇔ (kind=rollback ∧ reason=cleared)'],
+    mustKill: ['rollback_to ⇔ (kind=rollback ∧ reason=cleared)'],
   },
   {
     id: 'txn_id_ignores_content',

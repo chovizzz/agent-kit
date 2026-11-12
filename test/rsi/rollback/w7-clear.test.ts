@@ -22,7 +22,6 @@ import { CANARY_FILES } from '../../../src/rsi/canary/files.js';
 import { readLedger } from '../../../src/rsi/canary/ledger.js';
 import { makePermitPort } from '../../../src/rsi/canary/permit-read.js';
 import { rsiDir } from '../../../src/rsi/rsi-dir.js';
-import { TreeSpecError } from '../../../src/rsi/personal/commit.js';
 import { personalRepoStore } from '../../../src/rsi/personal/candidate-repo.js';
 import type { RepoRead } from '../../../src/rsi/personal/candidate-ports.js';
 import { rsiAutoClear, type ClearDeps } from '../../../src/rsi/personal/clear.js';
@@ -30,6 +29,7 @@ import {
   commitPersonal,
   openPersonalRepo,
   readRecordedPersonalFiles,
+  TreeSpecError,
 } from '../../../src/rsi/personal/commit.js';
 import { acquirePersonalLock } from '../../../src/rsi/personal/personal-lock.js';
 import {

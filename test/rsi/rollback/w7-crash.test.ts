@@ -4,10 +4,14 @@
  * 终态断言(每个用例):凭据恰好一行、journal 已删、记录到终态且转移条目不重复、终态效果按键只生效一次、`canary → rolling_back` 只出现一次。
  */
 import { describe, expect, it } from 'vitest';
-import { ROLLBACK_STEPS, resumeAll, startRollback } from '../../../src/rsi/personal/rollback.js';
+import {
+  ROLLBACK_STEPS,
+  resumeAll,
+  rollbackTxnId,
+  startRollback,
+} from '../../../src/rsi/personal/rollback.js';
 import { rec } from '../personal/transition-fixture.js';
 import { Crash, ID, SHA, harmReq, recordOf, world7, type World7 } from './w7-fixture.js';
-import { rollbackTxnId } from '../../../src/rsi/personal/rollback.js';
 
 const TXN = rollbackTxnId(ID, SHA);
 
@@ -150,7 +154,7 @@ describe('来源保留(W0-17):崩溃恢复后 by 不变', () => {
     expect(w.revs[0]).toMatchObject({ by: 'clear', reason: 'cleared' });
   });
 
-  it('已知限制(钉住现状,见汇报「问题」):rollback_to 发起、journal 写完凭据前崩溃 → 恢复后无法与 worker 区分;reason=cleared 还原为 clear', async () => {
+  it('rollback_to 发起(kind=rollback ∧ reason=cleared)、凭据写入前崩溃、续做 → 凭据仍是 by=rollback_to', async () => {
     const w = world7();
     w.crashAt('enter:injection_disabled');
     const req = harmReq({
@@ -159,8 +163,31 @@ describe('来源保留(W0-17):崩溃恢复后 by 不变', () => {
       event: { kind: 'clear', evidence: 'x' },
     });
     await expect(startRollback(w.d, req)).rejects.toBeInstanceOf(Crash);
+    expect(w.revs).toHaveLength(0);
     await resumeAll(w.d);
-    expect(w.revs[0]?.by).toBe('clear');
+    expect(w.revs[0]).toMatchObject({ by: 'rollback_to', reason: 'cleared' });
+  });
+
+  it('同一候选在 rollback_to 的 txn 在途时 clear 再来:复用该 txn,来源取 journal 的(rollback_to),不新开、凭据一行', async () => {
+    const w = world7();
+    w.crashAt('after:cache');
+    const rt = harmReq({
+      reason: 'cleared',
+      by: 'rollback_to',
+      event: { kind: 'clear', evidence: 'x' },
+    });
+    await expect(startRollback(w.d, rt)).rejects.toBeInstanceOf(Crash);
+    const r = await startRollback(w.d, {
+      candidate_id: ID,
+      content_sha256: SHA,
+      kind: 'clear',
+      reason: 'cleared',
+      by: 'clear',
+      target_terminal: 'rolled_back',
+    });
+    expect(r.status).toBe('complete');
+    expect(w.revs).toHaveLength(1);
+    expect(w.revs[0]?.by).toBe('rollback_to');
   });
 
   it('exec_event 发起的 txn 续做 → by=exec_event(reason 唯一确定来源)', async () => {
