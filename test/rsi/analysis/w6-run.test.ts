@@ -179,6 +179,103 @@ describe('L3 读取下限:开始得比窗口早的会话也要读到', () => {
   });
 });
 
+/** 一个会话里「调用 → 失败 → 重试」三条信号,重试调用的时刻为 retryMs(前两条略早) */
+function retryAt(session: number, retryMs: number, project = 'p1'): Signal[] {
+  const mk = (kind: 'tool_call' | 'tool_result_failed', idx: number, ms: number): Signal =>
+    ({
+      ...fail(session),
+      project_key: project,
+      ts: iso(ms),
+      event_kind: kind,
+      event_index: idx,
+      ...(kind === 'tool_call' ? { tool_name: 'Bash' } : {}),
+    }) as Signal;
+  return [
+    mk('tool_call', 0, retryMs - 2 * MIN),
+    mk('tool_result_failed', 1, retryMs - MIN),
+    mk('tool_call', 2, retryMs),
+  ];
+}
+const HOUR = 60 * MIN;
+/** 端口契约:只返回 ts ≥ since 的行 */
+function floored(w: { stats: StatItem[]; signals: Signal[] }): Partial<AnalysisSource> {
+  return {
+    stats: async (since) => w.stats.filter((s) => Date.parse(s.stat.ts) >= Date.parse(since)),
+    signals: async (since) => w.signals.filter((s) => Date.parse(s.ts) >= Date.parse(since)),
+  };
+}
+
+describe('W6b R21-6.7 资格按命中信号自己的时刻、读取下限取整到 UTC 日零点', () => {
+  it('W6b A 09:00 开始、11:00 才首次命中;B 10:00 开始 → B 资格不成立(命中记在命中信号的时刻,不是 A 的开始时刻)', async () => {
+    const A = 1;
+    const B = 2;
+    const C = 3;
+    const w = {
+      ledger: [
+        assign(A, 'control', { atMs: T_BASE + 9 * HOUR }),
+        assign(B, 'treat', { atMs: T_BASE + 10 * HOUR }),
+        assign(C, 'control', { atMs: T_BASE + 12 * HOUR }),
+      ],
+      stats: [
+        stat(A, { tsMs: T_BASE + 9 * HOUR }),
+        stat(B, { tsMs: T_BASE + 10 * HOUR }),
+        stat(C, { tsMs: T_BASE + 12 * HOUR }),
+      ],
+      signals: retryAt(A, T_BASE + 11 * HOUR),
+    };
+    const o = await runAnalysis(source(floored(w), w), REQ);
+    if (o.kind === 'unavailable' || o.kind === 'paused') throw new Error(o.kind);
+    // A(自己开始前没有命中)、B 不成立;C(12:00,命中 11:00 在前)成立
+    expect(o.audit.not_eligible).toBe(2);
+  });
+  it('W6b 命中信号在资格窗口内、但所在会话的计数行早于会话读取下限 → 仍判资格成立(命中不依赖计数行窗口)', async () => {
+    const w = {
+      ledger: [assign(1, 'control')],
+      stats: [stat(1), stat(800, { markers: [], tsMs: T_BASE - 70 * DAY })],
+      signals: retryAt(800, T_BASE - 2 * DAY),
+    };
+    const o = await runAnalysis(source(floored(w), w), REQ);
+    if (o.kind === 'unavailable' || o.kind === 'paused') throw new Error(o.kind);
+    expect(o.audit.not_eligible).toBe(0);
+  });
+  it('W6b 命中信号早于「待判会话 UTC 日 − 30」→ 不成立;恰在边界日 → 成立', async () => {
+    const mk = (hitMs: number) => ({
+      ledger: [assign(1, 'control')],
+      stats: [stat(1)],
+      signals: retryAt(800, hitMs),
+    });
+    const day0 = Date.parse('2026-11-01T00:00:00Z');
+    const late = mk(day0 - 30 * DAY + 1000); // 10-02 00:00:01,在 D−30 日内
+    const early = mk(day0 - 30 * DAY - 1000); // 10-01 23:59:59,D−31 日
+    for (const [w, want] of [
+      [late, 0],
+      [early, 1],
+    ] as const) {
+      const o = await runAnalysis(source(floored(w), w), REQ);
+      if (o.kind === 'unavailable' || o.kind === 'paused') throw new Error(o.kind);
+      expect(o.audit.not_eligible).toBe(want);
+    }
+  });
+  it('W6b 会话 / 信号读取下限取整到 UTC 日零点:窗口起点在日中,下限 = 该日零点 − 61 天(信号再 − 30 天)', async () => {
+    const seen: { stats?: string; signals?: string } = {};
+    await runAnalysis(
+      source({
+        stats: async (since) => {
+          seen.stats = since;
+          return [];
+        },
+        signals: async (since) => {
+          seen.signals = since;
+          return [];
+        },
+      }),
+      { ...REQ, windowStartIso: iso(T_BASE + 9 * HOUR + 37 * MIN) },
+    );
+    expect(seen.stats).toBe(iso(T_BASE - 61 * DAY));
+    expect(seen.signals).toBe(iso(T_BASE - 91 * DAY));
+  });
+});
+
 describe('R21-7.7 漂移暂停与 fail-closed(读失败从不落成「无伤害」)', () => {
   it('R21-7.7 本机 payload 漂移 → paused,不读任何数据、不产出事件', async () => {
     let reads = 0;

@@ -8,6 +8,7 @@ import {
   makeEligibility,
   sessionMeasures,
   signatureHitCount,
+  signatureHitSignals,
   toLoaded,
 } from '../../../src/rsi/analysis/measures.js';
 import { sessionHitsSignature } from '../../../src/rsi/personal/shadow-count.js';
@@ -93,6 +94,17 @@ describe('R21-7.2 / W0-7 会话度量', () => {
       sig('user_message', 1, { text: '今天天气不错' }),
     ];
     expect(signatureHitCount(LESSON, loaded(s))).toBe(1);
+  });
+});
+
+describe('W6b 命中信号:按命中信号自己的 ts 归时', () => {
+  it('W6b tool 签名的命中信号 = 失败后的重试调用(不是失败、不是前面的调用);lesson 签名 = 教训信号', () => {
+    const s = retry(10);
+    const hit = signatureHitSignals(TOOL, loaded(s));
+    expect(hit.map((x) => x.event_index)).toEqual([12]);
+    const m = sig('user_message', 3, { text: LESSON_TEXT });
+    expect(signatureHitSignals(LESSON, loaded([m])).map((x) => x.sig_id)).toEqual([m.sig_id]);
+    expect(signatureHitSignals(TOOL, loaded([sig('tool_result_failed', 0)]))).toEqual([]);
   });
 });
 
