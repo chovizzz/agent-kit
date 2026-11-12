@@ -676,8 +676,12 @@ export const V1_W6_MUTATIONS: readonly V1W6Mutation[] = [
     edits: [
       swap(TYPES, 'export const ELIGIBILITY_DAYS = 30;', 'export const ELIGIBILITY_DAYS = 300;'),
     ],
-    tests: [T_MEAS],
-    expectRed: ['窗口内 → 成立'],
+    tests: [T_MEAS, T_RUN],
+    expectRed: [
+      '窗口内 → 成立',
+      'W6b 命中信号早于「待判会话 UTC 日 − 30」',
+      'W6b 会话 / 信号读取下限取整到 UTC 日零点',
+    ],
     mustKill: ['窗口内 → 成立'],
   },
   {
@@ -690,9 +694,9 @@ export const V1_W6_MUTATIONS: readonly V1W6Mutation[] = [
         '.some((h) => utcDayStart(h) >= from)',
       ),
     ],
-    tests: [T_MEAS],
-    expectRed: ['只用会话开始之前的数据'],
-    mustKill: ['只用会话开始之前的数据'],
+    tests: [T_MEAS, T_RUN],
+    expectRed: ['只用会话开始之前的数据', 'W6b A 09:00 开始'],
+    mustKill: ['只用会话开始之前的数据', 'W6b A 09:00 开始'],
   },
   {
     id: 'eligible_any_project',
@@ -914,7 +918,7 @@ export const V1_W6_MUTATIONS: readonly V1W6Mutation[] = [
     clause: 'L3:读取下限要覆盖开始得比窗口早的会话(≥ 60 天)',
     edits: [swap(RUN, 'READ_LOOKBACK_DAYS * DAY_MS', '31 * DAY_MS')],
     tests: [T_RUN],
-    expectRed: ['L3 resume'],
+    expectRed: ['L3 resume', 'W6b 会话 / 信号读取下限取整到 UTC 日零点'],
     mustKill: ['L3 resume'],
   },
   {
@@ -928,7 +932,7 @@ export const V1_W6_MUTATIONS: readonly V1W6Mutation[] = [
       ),
     ],
     tests: [T_RUN],
-    expectRed: ['L3 信号下限再多一个资格窗口'],
+    expectRed: ['L3 信号下限再多一个资格窗口', 'W6b 会话 / 信号读取下限取整到 UTC 日零点'],
     mustKill: ['L3 信号下限再多一个资格窗口'],
   },
   {
@@ -936,8 +940,56 @@ export const V1_W6_MUTATIONS: readonly V1W6Mutation[] = [
     clause: 'L3:读取下限常量 = 2 × 30 + 1 天',
     edits: [swap(TYPES, '2 * ELIGIBILITY_DAYS + 1', 'ELIGIBILITY_DAYS + 1')],
     tests: [T_RUN],
-    expectRed: ['L3 resume'],
+    expectRed: ['L3 resume', 'W6b 会话 / 信号读取下限取整到 UTC 日零点'],
     mustKill: ['L3 resume'],
+  },
+  {
+    id: 'hit_ts_window_start',
+    clause: 'W6b R21-6.7:命中按命中信号自己的 ts 归时(变异:命中记在窗口起点)',
+    edits: [swap(RUN, 'const tsMs = Date.parse(h.ts);', 'const tsMs = startMs;')],
+    tests: [T_RUN],
+    expectRed: [
+      'W6b A 09:00 开始',
+      'W6b 命中信号早于「待判会话 UTC 日 − 30」',
+      'W6b 命中信号在资格窗口内',
+    ],
+    mustKill: ['W6b A 09:00 开始'],
+  },
+  {
+    id: 'hits_need_stat_row',
+    clause: 'W6b R21-6.7:命中直接从信号生成,不依赖会话计数行的读取窗口(变异:只认有计数行的会话)',
+    edits: [
+      swap(
+        RUN,
+        'for (const list of bySession.values()) {',
+        'for (const list of [...bySession.values()].filter((l) => stats.some((x) => x.stat.session_ref === l[0]?.session_ref))) {',
+      ),
+    ],
+    tests: [T_RUN],
+    expectRed: ['W6b 命中信号在资格窗口内', 'W6b 命中信号早于「待判会话 UTC 日 − 30」'],
+    mustKill: ['W6b 命中信号在资格窗口内'],
+  },
+  {
+    id: 'floor_not_rounded',
+    clause: 'W6b R21-6.7:读取下限取整到 UTC 日零点(变异:不取整)',
+    edits: [
+      swap(
+        RUN,
+        'const floorMs = Math.floor(startMs / DAY_MS) * DAY_MS;',
+        'const floorMs = startMs;',
+      ),
+    ],
+    tests: [T_RUN],
+    expectRed: ['W6b 会话 / 信号读取下限取整到 UTC 日零点'],
+    mustKill: ['W6b 会话 / 信号读取下限取整到 UTC 日零点'],
+  },
+  {
+    id: 'hit_signal_is_failure',
+    clause: 'W6b R21-6.7:tool 签名的命中信号是重试调用(变异:取失败信号)',
+    edits: [swap(MEAS, '.map((p) => p.retry);', '.map((p) => p.failure);')],
+    tests: [T_MEAS],
+    expectRed: ['W6b tool 签名的命中信号'],
+    mustKill: ['W6b tool 签名的命中信号'],
   },
   {
     id: 'event_c4_metric',
@@ -985,8 +1037,12 @@ export const V1_W6_MUTATIONS: readonly V1W6Mutation[] = [
   },
 ];
 
-/** 执行后由主代理回填(W6 实装块不执行变异):每条变异恰有一条结果,按表序 */
-/** 实测结果:r21w6-mut3 @ seal,2c06761,80/80 被杀,problems=0 */
+/**
+ * 执行后由主代理回填:每条变异恰有一条结果,按表序。
+ * W6b 修复改了资格命中的构造与读取下限,并新增 4 条变异、增补 5 条既有变异的杀手 / expectRed,旧结果(r21w6-mut3 @ seal,2c06761,80/80,基于 W6 原实现)作废,
+ * 整张表须在 W6b 最终提交上重跑后回填(未回填前保持空,自检在空时放行)。
+ */
+/** 实测结果:r21w6b-mut @ husky,32e1e7e,84/84 被杀,problems=0 */
 export const V1_W6_RESULTS: readonly V1W6Result[] = [
   {
     id: 'alpha_div5',
@@ -1515,19 +1571,22 @@ export const V1_W6_RESULTS: readonly V1W6Result[] = [
   },
   {
     id: 'eligible_days_long',
-    failed: 1,
+    failed: 3,
     skipped: 0,
     killedBy: [
       'R21-6.7 资格:会话开始前 30 个 UTC 日内项目出现过目标签名 R21-6.7 窗口内 → 成立;命中日早于「会话开始日 − 30 天」→ 不成立',
+      'W6b R21-6.7 资格按命中信号自己的时刻、读取下限取整到 UTC 日零点 W6b 命中信号早于「待判会话 UTC 日 − 30」→ 不成立;恰在边界日 → 成立',
+      'W6b R21-6.7 资格按命中信号自己的时刻、读取下限取整到 UTC 日零点 W6b 会话 / 信号读取下限取整到 UTC 日零点:窗口起点在日中,下限 = 该日零点 − 61 天(信号再 − 30 天)',
     ],
     restored: true,
   },
   {
     id: 'eligible_future_hit',
-    failed: 1,
+    failed: 2,
     skipped: 0,
     killedBy: [
       'R21-6.7 资格:会话开始前 30 个 UTC 日内项目出现过目标签名 只用会话开始之前的数据:同时刻 / 之后的命中不算;别的项目的命中不算',
+      'W6b R21-6.7 资格按命中信号自己的时刻、读取下限取整到 UTC 日零点 W6b A 09:00 开始、11:00 才首次命中;B 10:00 开始 → B 资格不成立(命中记在命中信号的时刻,不是 A 的开始时刻)',
     ],
     restored: true,
   },
@@ -1729,28 +1788,69 @@ export const V1_W6_RESULTS: readonly V1W6Result[] = [
   },
   {
     id: 'lookback_short',
-    failed: 1,
+    failed: 2,
     skipped: 0,
     killedBy: [
       'L3 读取下限:开始得比窗口早的会话也要读到 L3 resume:会话 ts 比窗口早 45 天、其副本在窗口内 → 取最早者为主会话,副本被丢弃(下限 ≥ 60 天)',
+      'W6b R21-6.7 资格按命中信号自己的时刻、读取下限取整到 UTC 日零点 W6b 会话 / 信号读取下限取整到 UTC 日零点:窗口起点在日中,下限 = 该日零点 − 61 天(信号再 − 30 天)',
     ],
     restored: true,
   },
   {
     id: 'signals_share_session_floor',
-    failed: 1,
+    failed: 2,
     skipped: 0,
     killedBy: [
       'L3 读取下限:开始得比窗口早的会话也要读到 L3 信号下限再多一个资格窗口:最早读进来的会话要查它开始前 30 天的命中(信号下限 ≤ 会话下限 − 30 天)',
+      'W6b R21-6.7 资格按命中信号自己的时刻、读取下限取整到 UTC 日零点 W6b 会话 / 信号读取下限取整到 UTC 日零点:窗口起点在日中,下限 = 该日零点 − 61 天(信号再 − 30 天)',
     ],
     restored: true,
   },
   {
     id: 'lookback_const_short',
-    failed: 1,
+    failed: 2,
     skipped: 0,
     killedBy: [
       'L3 读取下限:开始得比窗口早的会话也要读到 L3 resume:会话 ts 比窗口早 45 天、其副本在窗口内 → 取最早者为主会话,副本被丢弃(下限 ≥ 60 天)',
+      'W6b R21-6.7 资格按命中信号自己的时刻、读取下限取整到 UTC 日零点 W6b 会话 / 信号读取下限取整到 UTC 日零点:窗口起点在日中,下限 = 该日零点 − 61 天(信号再 − 30 天)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'hit_ts_window_start',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'W6b R21-6.7 资格按命中信号自己的时刻、读取下限取整到 UTC 日零点 W6b A 09:00 开始、11:00 才首次命中;B 10:00 开始 → B 资格不成立(命中记在命中信号的时刻,不是 A 的开始时刻)',
+      'W6b R21-6.7 资格按命中信号自己的时刻、读取下限取整到 UTC 日零点 W6b 命中信号早于「待判会话 UTC 日 − 30」→ 不成立;恰在边界日 → 成立',
+    ],
+    restored: true,
+  },
+  {
+    id: 'hits_need_stat_row',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'W6b R21-6.7 资格按命中信号自己的时刻、读取下限取整到 UTC 日零点 W6b 命中信号在资格窗口内、但所在会话的计数行早于会话读取下限 → 仍判资格成立(命中不依赖计数行窗口)',
+      'W6b R21-6.7 资格按命中信号自己的时刻、读取下限取整到 UTC 日零点 W6b 命中信号早于「待判会话 UTC 日 − 30」→ 不成立;恰在边界日 → 成立',
+    ],
+    restored: true,
+  },
+  {
+    id: 'floor_not_rounded',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W6b R21-6.7 资格按命中信号自己的时刻、读取下限取整到 UTC 日零点 W6b 会话 / 信号读取下限取整到 UTC 日零点:窗口起点在日中,下限 = 该日零点 − 61 天(信号再 − 30 天)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'hit_signal_is_failure',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W6b 命中信号:按命中信号自己的 ts 归时 W6b tool 签名的命中信号 = 失败后的重试调用(不是失败、不是前面的调用);lesson 签名 = 教训信号',
     ],
     restored: true,
   },
