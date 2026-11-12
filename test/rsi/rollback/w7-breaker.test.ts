@@ -7,6 +7,8 @@ import {
   NO_PAUSE,
   RSI_AUTO_RELEASE_REASONS,
   RSI_RESUME_RECHECK,
+  applyAutoRelease,
+  applyResume,
   autoRelease,
   enforceMute,
   evaluateTriggers,
@@ -16,6 +18,8 @@ import {
   tripBreaker,
   type AutoPauseState,
   type BreakerDeps,
+  type PauseMarker,
+  type PauseMarkerPort,
   type TriggerFacts,
 } from '../../../src/rsi/personal/breaker.js';
 import { transition, isRefusal } from '../../../src/rsi/personal/transition.js';
@@ -204,26 +208,63 @@ describe('R21-10.4 自动解除与 resume 的区分', () => {
   });
 });
 
-describe('落地:先写状态、后置 canary 不注入;崩溃后每次 worker 步骤补做', () => {
+/** 内存 `AUTO_PAUSE` 标记端口(与 `makePauseMarkerPort` 同一份契约:独占创建不覆盖、读不到 = null、remove 返回是否删了;真文件实现见 w7-pause-marker.test.ts) */
+function memMarker(calls: string[]): {
+  port: PauseMarkerPort;
+  cell: { value: PauseMarker | null };
+} {
+  const cell: { value: PauseMarker | null } = { value: null };
+  return {
+    cell,
+    port: {
+      async ensure(reason) {
+        calls.push('marker.ensure');
+        if (cell.value !== null) return 'exists';
+        cell.value = { by: 'breaker', reason };
+        return 'created';
+      },
+      async read() {
+        return cell.value;
+      },
+      async remove(scope) {
+        calls.push(`marker.remove:${scope}`);
+        if (cell.value === null) return false;
+        if (scope === 'own' && cell.value.by !== 'breaker') return false;
+        cell.value = null;
+        return true;
+      },
+    },
+  };
+}
+
+describe('落地:先写 AUTO_PAUSE 标记、再写状态、后置 canary 不注入;崩溃后每次 worker 步骤补做', () => {
   function rig(): {
     d: BreakerDeps;
     calls: string[];
     state: { value: AutoPauseState };
+    marker: { value: PauseMarker | null };
     failMute: { value: boolean };
+    failWrite: { value: boolean };
   } {
     const calls: string[] = [];
     const state = { value: NO_PAUSE as AutoPauseState };
     const failMute = { value: false };
+    const failWrite = { value: false };
+    const m = memMarker(calls);
     return {
       calls,
       state,
+      marker: m.cell,
       failMute,
+      failWrite,
       d: {
         phase: V1B,
+        marker: m.port,
         state: {
           read: async () => state.value,
           write: async (s) => {
             calls.push('state.write');
+            if (failWrite.value) throw new Error('crash');
             state.value = s;
           },
         },
@@ -237,10 +278,38 @@ describe('落地:先写状态、后置 canary 不注入;崩溃后每次 worker �
       },
     };
   }
-  it('触发:state.write 先于 canary.mute', async () => {
+  it('触发:marker.ensure 先于 state.write 先于 canary.mute', async () => {
     const r = rig();
     await tripAndMute(r.d, 'user_vetoes');
+    expect(r.calls).toEqual(['marker.ensure', 'state.write', 'canary.mute']);
+    expect(r.marker.value).toEqual({ by: 'breaker', reason: 'user_vetoes' });
+  });
+  it('状态写入崩溃:标记已在盘上(hint 看得到),状态没写;下一次 enforceMute 补码、不删标记、补 mute', async () => {
+    const r = rig();
+    r.failWrite.value = true;
+    await expect(tripAndMute(r.d, 'gate_internal')).rejects.toThrow('crash');
+    expect(r.marker.value).toEqual({ by: 'breaker', reason: 'gate_internal' });
+    expect(r.state.value.reasons).toEqual([]);
+    r.failWrite.value = false;
+    r.calls.length = 0;
+    expect(await enforceMute(r.d)).toBe(true);
+    expect(r.state.value.reasons).toEqual(['gate_internal']); // 标记里的原因补回状态
+    expect(r.marker.value).not.toBeNull(); // 不删标记
     expect(r.calls).toEqual(['state.write', 'canary.mute']);
+  });
+  it('用户标记(by=user)存在而状态没码:补 user_paused,标记不动', async () => {
+    const r = rig();
+    r.marker.value = { by: 'user', reason: null };
+    expect(await enforceMute(r.d)).toBe(true);
+    expect(r.state.value.reasons).toEqual(['user_paused']);
+    expect(r.marker.value).toEqual({ by: 'user', reason: null });
+  });
+  it('有码而没有标记(状态已写、标记缺):enforceMute 补标记', async () => {
+    const r = rig();
+    r.state.value = S(['gate_internal']);
+    expect(await enforceMute(r.d)).toBe(true);
+    expect(r.marker.value).toEqual({ by: 'breaker', reason: 'gate_internal' });
+    expect(r.calls).toEqual(['marker.ensure', 'canary.mute']);
   });
   it('状态已写、mute 崩溃:下一次 enforceMute 补做(熔断仍在 → mute),无熔断则不 mute', async () => {
     const r = rig();
@@ -256,16 +325,74 @@ describe('落地:先写状态、后置 canary 不注入;崩溃后每次 worker �
     expect(r2.calls).toEqual([]);
     expect(await enforceMute(r2.d, true)).toBe(true); // AUTO_PAUSE 标记存在
   });
-  it('本期不发的码:不写状态、不 mute', async () => {
+  it('本期不发的码:不写标记、不写状态、不 mute', async () => {
     const r = rig();
     expect((await tripAndMute(r.d, 'apply_failed')).kind).toBe('phase_not_available');
     expect(r.calls).toEqual([]);
+    expect(r.marker.value).toBeNull();
   });
-  it('已处于该码:不重写状态,但仍补 mute(幂等)', async () => {
+  it('已处于该码:不重写状态,但仍补标记与 mute(幂等)', async () => {
     const r = rig();
     await tripAndMute(r.d, 'gate_internal');
     r.calls.length = 0;
     expect((await tripAndMute(r.d, 'gate_internal')).kind).toBe('already');
-    expect(r.calls).toEqual(['canary.mute']);
+    expect(r.calls).toEqual(['marker.ensure', 'canary.mute']);
+  });
+  it('用户标记已存在时 ensure 不覆盖(内容仍是 user)', async () => {
+    const r = rig();
+    r.marker.value = { by: 'user', reason: null };
+    await tripAndMute(r.d, 'gate_internal');
+    expect(r.marker.value).toEqual({ by: 'user', reason: null });
+  });
+  it('自动解除:先写状态、后删 worker 写的标记;只在没有剩余码且确有码被清时删;用户标记不删', async () => {
+    const r = rig();
+    r.state.value = S(['no_observation', 'budget_high_legacy']);
+    r.marker.value = { by: 'breaker', reason: 'no_observation' };
+    const part = autoRelease(r.state.value, (c) => c === 'budget_high_legacy');
+    expect(part.clearMarker).toBe(false); // 还剩 budget_high_legacy
+    await applyAutoRelease(r.d, part);
+    expect(r.marker.value).not.toBeNull();
+    r.calls.length = 0;
+    const rest = autoRelease(r.state.value, () => false);
+    expect(rest.clearMarker).toBe(true);
+    await applyAutoRelease(r.d, rest);
+    expect(r.calls).toEqual(['state.write', 'marker.remove:own']);
+    expect(r.marker.value).toBeNull();
+    // 用户标记:own 不删
+    r.state.value = S(['no_observation']);
+    r.marker.value = { by: 'user', reason: null };
+    await applyAutoRelease(
+      r.d,
+      autoRelease(r.state.value, () => false),
+    );
+    expect(r.marker.value).toEqual({ by: 'user', reason: null });
+  });
+  it('人工 resume:没有剩余码时删任何标记;仍有码时标记保留(hint 继续停注入)', async () => {
+    const r = rig();
+    r.state.value = S(['user_paused', 'budget_high_legacy']);
+    r.marker.value = { by: 'user', reason: null };
+    const keep = resume(r.state.value, () => false);
+    expect(keep.clearMarker).toBe(false);
+    await applyResume(r.d, keep);
+    expect(r.marker.value).not.toBeNull();
+    r.state.value = S(['user_paused']);
+    r.calls.length = 0;
+    await applyResume(
+      r.d,
+      resume(r.state.value, () => false),
+    );
+    expect(r.calls).toEqual(['state.write', 'marker.remove:any']);
+    expect(r.marker.value).toBeNull();
+  });
+  it('残余窗口(如实钉住):resume 写了状态、删标记前崩溃 → 下一次 enforceMute 由标记补回码(安全方向:不会少停注入)', async () => {
+    const r = rig();
+    r.state.value = S(['gate_internal']);
+    r.marker.value = { by: 'breaker', reason: 'gate_internal' };
+    const res = resume(r.state.value, () => false);
+    expect(res.clearMarker).toBe(true);
+    await r.d.state.write(res.state); // 状态已清、标记还在(崩溃)
+    expect(r.state.value.reasons).toEqual([]);
+    expect(await enforceMute(r.d)).toBe(true);
+    expect(r.state.value.reasons).toEqual(['gate_internal']);
   });
 });

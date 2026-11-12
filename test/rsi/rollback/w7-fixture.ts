@@ -20,6 +20,7 @@ import type {
 } from '../../../src/rsi/personal/rollback-ports.js';
 import type { TransitionEffect } from '../../../src/rsi/personal/transition.js';
 import type { TransitionEvent } from '../../../src/rsi/personal/transition-table.js';
+import { RsiLockError } from '../../../src/rsi/lock-error.js';
 import { MemStore } from '../personal/w3-fixture.js';
 import { ID, SHA, rec } from '../personal/transition-fixture.js';
 
@@ -68,6 +69,14 @@ export interface World7 {
   /** 每个键真正生效的次数(`applyOnce` 返回 `applied` 的次数) */
   effectApplied: Map<string, number>;
   effectLog: Map<string, TransitionEffect[]>;
+  /** 审计行(键 `audit:*`)单独记账,不混进 `effectLog` / `effectApplied`(那两个只含终态业务效果的键) */
+  auditApplied: Map<string, number>;
+  auditLog: Map<string, RsiAuditLine[]>;
+  /** 审计落地的模式(与 `keyedMode` 分开,`keyedMode` 只管终态效果):`lock_lost` = 抛丢锁错误 */
+  auditMode: { value: 'applied' | 'throw' | 'lock_lost' };
+  /** `deferralMark` 端口的调用记录(测试按需把 `d.deferralMark` 指向 `markDeferral`) */
+  deferralMarks: string[];
+  markDeferral: { mark(candidateId: string): Promise<void> };
   repoFiles: Set<string>;
   repoMode: { value: 'ok' | 'deferred' | 'invalid' | 'absent' };
   payload: {
@@ -96,6 +105,10 @@ export function world7(
   const audits: RsiAuditLine[] = [];
   const effectApplied = new Map<string, number>();
   const effectLog = new Map<string, TransitionEffect[]>();
+  const auditApplied = new Map<string, number>();
+  const auditLog = new Map<string, RsiAuditLine[]>();
+  const auditMode: World7['auditMode'] = { value: 'applied' };
+  const deferralMarks: string[] = [];
   const repoFiles = new Set<string>(['rules/ra_0123456789ab.md']);
   const repoMode: World7['repoMode'] = { value: 'ok' };
   const payload: World7['payload'] = {
@@ -140,6 +153,11 @@ export function world7(
     audits,
     effectApplied,
     effectLog,
+    auditApplied,
+    auditLog,
+    auditMode,
+    deferralMarks,
+    markDeferral: { mark: async (id) => void deferralMarks.push(id) },
     repoFiles,
     repoMode,
     payload,
@@ -211,6 +229,17 @@ export function world7(
     },
     keyedEffects: {
       async applyOnce(key, effects): Promise<KeyedEffectResult> {
+        if (key.startsWith('audit:')) {
+          calls.push('audit.applyOnce');
+          if (auditMode.value === 'throw') throw new Error('audit down');
+          if (auditMode.value === 'lock_lost') throw new RsiLockError('lock_lost');
+          if (auditLog.has(key)) return 'already';
+          const lines = effects.flatMap((e) => (e.type === 'append_audit' ? [e.line] : []));
+          auditLog.set(key, lines);
+          audits.push(...lines);
+          auditApplied.set(key, (auditApplied.get(key) ?? 0) + 1);
+          return 'applied';
+        }
         calls.push('effects.applyOnce');
         if (keyedMode.value === 'throw') throw new Error('effects down');
         if (keyedMode.value === 'deferred') return 'deferred';

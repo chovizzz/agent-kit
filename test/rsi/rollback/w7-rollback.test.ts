@@ -6,7 +6,6 @@ import { describe, expect, it } from 'vitest';
 import { resumeAll, rollbackTxnId, startRollback } from '../../../src/rsi/personal/rollback.js';
 import {
   unwiredCacheCleanup,
-  unwiredIdentityDeny,
   unwiredKeyedEffects,
   unwiredPayloadSync,
   unwiredRepoRemoval,
@@ -25,7 +24,6 @@ import {
   world7,
 } from './w7-fixture.js';
 import { rec } from '../personal/transition-fixture.js';
-import { RsiLockError } from '../../../src/rsi/lock-error.js';
 
 const TXN = rollbackTxnId(ID, SHA);
 const idx = (w: { calls: string[] }, c: string): number => w.calls.indexOf(c);
@@ -142,16 +140,21 @@ describe('R21-9.1 四段补偿:正常路径', () => {
 });
 
 describe('R21-9.3a 人工分叉下的撤销:凭据先于记录,仓库部分 deferred', () => {
-  it('私有仓库 deferred:凭据照样落盘;第三段判据改为 payload 已不含该候选;不提交;收尾因记录推迟而 incomplete,journal 保留', async () => {
+  it('私有仓库 deferred:凭据照样落盘;第三段判据改为 payload 已不含该候选;不提交;撤销已完成(revocation_complete,仓库部分推迟),journal 保留作待补记任务', async () => {
     const w = world7();
     w.store.mode = 'deferred';
     const r = await startRollback(w.d, harmReq());
     expect(w.revs).toHaveLength(1);
     expect(w.revs[0]?.by).toBe('worker');
     expect(w.calls).not.toContain('repo.remove'); // 记录读不到 → 没有 target_paths → 不动仓库
-    expect(r).toMatchObject({ status: 'incomplete', phase: 'rollback_complete' });
+    expect(r).toMatchObject({
+      status: 'revocation_complete',
+      candidate_id: ID,
+      repoRemoval: 'deferred',
+      workingMarked: false, // 没装配 deferralMark:不宣称已写工作副本
+    });
     expect((r as { why: string }).why).toMatch(/^repo_deferred/);
-    expect(w.txns.get(TXN)?.phase).toBe('rollback_complete');
+    expect(w.txns.get(TXN)?.phase).toBe('rollback_complete'); // journal 保留 = HOME 侧待补记任务
     expect(w.store.commits).toHaveLength(0);
     // 分叉解除 → 续做完成(第一个持锁写入方先补做被推迟的提交)
     w.store.mode = 'ok';
@@ -201,7 +204,7 @@ describe('R21-9.3a 人工分叉下的撤销:凭据先于记录,仓库部分 defe
     const w = world7();
     w.repoMode.value = 'deferred';
     const r = await startRollback(w.d, harmReq());
-    expect(r).toMatchObject({ status: 'incomplete', phase: 'rollback_complete' });
+    expect(r).toMatchObject({ status: 'revocation_complete', repoRemoval: 'deferred' });
     expect((r as { why: string }).why).toMatch(/^repo_deferred/);
     expect(w.repoFiles.size).toBe(1); // 文件还在
     expect(w.txns.size).toBe(1);
@@ -329,52 +332,49 @@ describe('W0-17 来源保留:by 是撤销来源', () => {
   });
 });
 
-describe('identity_changed 例外(R21-9.1 第二段)', () => {
-  it('不写撤销凭据;以旧身份拒绝标记为第二段依据;target=shadow 本期引擎恒拒 → 收尾 incomplete(V6a 才有)', async () => {
+describe('identity_changed(E1,V6a):本期入口一律拒绝(M5),不部分执行', () => {
+  const identityReq = {
+    candidate_id: ID,
+    content_sha256: SHA,
+    kind: 'identity_change',
+    reason: 'identity_changed',
+    by: 'worker',
+    target_terminal: 'shadow',
+    identity12: 'abcdef012345',
+  } as const;
+
+  it('入口 refused identity_not_available_before_v6a:不写 journal、不写凭据、不动记录、不调用任何端口', async () => {
     const w = world7();
-    const denied = new Set<string>();
-    w.d.identity = {
-      deny: async (id, i12) => void denied.add(`${id}-${i12}`),
-      denied: async (id, i12) => denied.has(`${id}-${i12}`),
-    };
-    const r = await startRollback(w.d, {
-      candidate_id: ID,
-      content_sha256: SHA,
-      kind: 'identity_change',
-      reason: 'identity_changed',
-      by: 'worker',
-      target_terminal: 'shadow',
-      identity12: 'abcdef012345',
-      event: HARM,
-    });
+    const before = JSON.stringify(recordOf(w));
+    const r = await startRollback(w.d, { ...identityReq, event: HARM });
+    expect(r).toEqual({ status: 'refused', txn: null, why: 'identity_not_available_before_v6a' });
     expect(w.revs).toHaveLength(0);
-    expect(denied.has(`${ID}-abcdef012345`)).toBe(true);
-    expect(w.txns.get(TXN)).toMatchObject({ kind: 'identity_change', identity12: 'abcdef012345' });
-    expect(r).toMatchObject({
-      status: 'incomplete',
-      why: 'identity_record_not_available_before_v6a',
-    });
+    expect(w.txns.size).toBe(0);
+    expect(w.calls).toEqual([]);
+    expect(JSON.stringify(recordOf(w))).toBe(before);
   });
 
-  it('拒绝标记没落盘 → 第二段未完成;身份端口没装配 → fail-closed(port_not_wired)', async () => {
+  it('读到旧的 identity_change journal:不动(refused,凭据 / 记录 / 端口都不碰),journal 保留', async () => {
     const w = world7();
-    w.d.identity = { deny: async () => undefined, denied: async () => false };
-    const base = {
+    await w.d.txns.write({
+      schema_version: 1,
+      txn_id: TXN,
       candidate_id: ID,
-      content_sha256: SHA,
       kind: 'identity_change',
       reason: 'identity_changed',
-      by: 'worker',
       target_terminal: 'shadow',
+      phase: 'injection_disabled',
       identity12: 'abcdef012345',
-    } as const;
-    expect(await startRollback(w.d, base)).toMatchObject({ why: 'identity_deny_missing' });
-    const w2 = world7();
-    w2.d.identity = unwiredIdentityDeny;
-    expect(await startRollback(w2.d, base)).toMatchObject({
-      status: 'incomplete',
-      why: 'port_not_wired:identity_deny',
+      at: '2026-11-10T12:00:00.000Z',
     });
+    w.calls.length = 0;
+    const out = await resumeAll(w.d);
+    expect(out).toEqual([
+      { status: 'refused', txn: TXN, why: 'identity_not_available_before_v6a' },
+    ]);
+    expect(w.revs).toHaveLength(0);
+    expect(w.txns.size).toBe(1);
+    expect(w.calls).toEqual([]);
   });
 });
 
@@ -457,7 +457,11 @@ describe('较晚终止事件不静默丢失,也不阻断撤销(记录是唯一�
     const revoked = w.payload.revoked.length;
     w.store.mode = 'deferred';
     const r = await startRollback(w.d, lateVeto());
-    expect(r).toMatchObject({ status: 'incomplete', lateEventNotApplied: 'repo_deferred' });
+    expect(r).toMatchObject({
+      status: 'revocation_complete',
+      repoRemoval: 'deferred',
+      lateEventNotApplied: 'repo_deferred',
+    });
     expect(w.payload.revoked.length).toBe(revoked + 1); // 撤销路径照常运行了
     w.store.mode = 'ok';
     const again = await startRollback(w.d, lateVeto());
@@ -522,14 +526,11 @@ describe('较晚终止事件不静默丢失,也不阻断撤销(记录是唯一�
 describe('丢锁(applyEvent 提交后返回 lockLost)→ 立即停止,不再继续任何写出口', () => {
   it('第三段记录提交后发现丢锁:抛 lock_lost;未调用仓库移除;journal 保留,新持锁者续做完成', async () => {
     const w = world7();
-    const okAppend = w.d.audit.append;
-    w.d.audit.append = async () => {
-      throw new RsiLockError('lock_lost');
-    };
+    w.auditMode.value = 'lock_lost'; // 审计行经带键端口落地(M6):丢锁错误从那里抛出
     await expect(startRollback(w.d, harmReq())).rejects.toMatchObject({ kind: 'lock_lost' });
     expect(w.calls).not.toContain('repo.remove');
     expect(w.txns.size).toBe(1);
-    w.d.audit.append = okAppend;
+    w.auditMode.value = 'applied';
     expect((await resumeAll(w.d))[0]?.status).toBe('complete');
   });
 });

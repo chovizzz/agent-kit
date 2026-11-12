@@ -218,7 +218,18 @@ describe('R21-9.3a 人工分叉 / 属主变化下的撤销', () => {
     await writeUserFile(w, 'rules/base.md', 'user edit\n');
     const first = await runClear(w, { phase: V1A, write: true, recorded: true });
     expect(first.report.unavailable).toBeNull();
-    expect(first.report.outcomes[0]).toMatchObject({ status: 'incomplete' });
+    // H2:撤销四段已完成(凭据、缓存待对账、HOME 清理);只剩被推迟的记录 / 仓库部分 → revocation_complete,不是 incomplete
+    expect(first.report.outcomes).toEqual([
+      {
+        status: 'revocation_complete',
+        txn: expect.any(String),
+        candidate_id: ID,
+        repoRemoval: 'deferred',
+        why: expect.stringMatching(/^repo_deferred/),
+        workingMarked: false, // 缩减入口不访问工作副本:不宣称已写 repo_removal_deferred
+      },
+    ]);
+    expect(first.report.repoRemovalPending).toEqual([ID]);
     expect(await readRevocations(w.h)).toMatchObject({ kind: 'ok', value: [{ by: 'clear' }] });
     expect(git(w, ['rev-parse', 'HEAD'])).toBe(head);
     expect(await readText(path.join(w.h.repoDir, 'rules/base.md'))).toBe('user edit\n');

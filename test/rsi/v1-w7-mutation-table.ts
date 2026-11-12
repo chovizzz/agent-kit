@@ -45,6 +45,7 @@ const ER = `${P}effects-recover.ts`;
 const HC = `${P}harm-chain.ts`;
 const LK = 'src/rsi/lock.ts';
 const PL = `${P}personal-lock.ts`;
+const PM = 'src/rsi/canary/pause-marker.ts';
 
 const T_RB = 'rsi/rollback/w7-rollback.test.ts';
 const T_CR = 'rsi/rollback/w7-crash.test.ts';
@@ -55,6 +56,8 @@ const T_EF = 'rsi/rollback/w7-effects.test.ts';
 const T_RW = 'rsi/rollback/w7-revoke-write.test.ts';
 const T_HC = 'rsi/rollback/w7-harm-chain.test.ts';
 const T_LK = 'rsi/rollback/w7-lock-order.test.ts';
+const T_JN = 'rsi/rollback/w7-journal.test.ts';
+const T_PM = 'rsi/rollback/w7-pause-marker.test.ts';
 
 const swap = (file: string, anchor: string, replacement: string): Edit => ({
   file,
@@ -163,7 +166,13 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
   {
     id: 'finish_no_removal_check',
     clause: 'R21-9.3a 分叉期间被推迟的仓库移除在收尾重新检查并补做',
-    edits: [swap(RB, "if (rem.status === 'deferred') return inc(`repo_deferred:${rem.why}`);", '')],
+    edits: [
+      swap(
+        RB,
+        "if (rem.status === 'deferred') return deferredDone(`repo_deferred:${rem.why}`);",
+        '',
+      ),
+    ],
     tests: [T_RB],
     expectRed: ['记录可读但仓库提交 deferred'],
     mustKill: ['记录可读但仓库提交 deferred'],
@@ -174,7 +183,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     edits: [
       swap(
         RB,
-        'const lateWhy = await lateEventStatus(d, req.event, req.candidate_id);',
+        'const lateWhy = await lateEventStatus(d, event, req.candidate_id);',
         'const lateWhy = null;',
       ),
     ],
@@ -249,9 +258,10 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     id: 'source_fallthrough_worker',
     clause: 'W0-17 journal 恢复保留来源(veto / exec_event 由原因还原)',
     edits: [swap(RB, '  return byFromReason(t.reason);', "  return 'worker';")],
-    tests: [T_CR],
-    expectRed: ['前台 veto 发起、凭据写入前崩溃', 'exec_event 发起的 txn 续做'],
-    mustKill: ['前台 veto 发起、凭据写入前崩溃', 'exec_event 发起的 txn 续做'],
+    // 新 journal 自带 `by`,续做不走兜底;兜底只由旧格式 journal 的用例覆盖
+    tests: [T_JN],
+    expectRed: ['旧 journal 原因'],
+    mustKill: ['旧 journal 原因'],
   },
   {
     id: 'source_clear_kind_lost',
@@ -263,14 +273,20 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
         "if (t.kind === 'clear') return 'worker';",
       ),
     ],
-    tests: [T_CR],
-    expectRed: ['clear 发起的 txn(kind=clear)续做'],
-    mustKill: ['clear 发起的 txn(kind=clear)续做'],
+    tests: [T_JN],
+    expectRed: ['旧 journal 原因'],
+    mustKill: ['旧 journal 原因'],
   },
   {
     id: 'reuse_by_request',
     clause: 'W0-17 复用在途 txn 时来源一律取 journal 的',
-    edits: [swap(RB, 'by: sourceOf(cur.value),', 'by: req.by,')],
+    edits: [
+      swap(
+        RB,
+        'const out = await drive(d, cur.value, { hint: event, sha: req.content_sha256 });',
+        'const out = await drive(d, { ...cur.value, by: req.by, kind: req.kind, reason: req.reason }, { hint: event, sha: req.content_sha256 });',
+      ),
+    ],
     tests: [T_RB, T_CR],
     expectRed: ['崩溃后再次发起同一请求', 'rollback_to 的 txn 在途时 clear 再来'],
     mustKill: ['崩溃后再次发起同一请求', 'rollback_to 的 txn 在途时 clear 再来'],
@@ -281,9 +297,9 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     edits: [
       swap(RB, "if (t.kind === 'rollback' && t.reason === 'cleared') return 'rollback_to';", ''),
     ],
-    tests: [T_CR],
-    expectRed: ['rollback_to 发起(kind=rollback ∧ reason=cleared)、凭据写入前崩溃'],
-    mustKill: ['rollback_to 发起(kind=rollback ∧ reason=cleared)、凭据写入前崩溃'],
+    tests: [T_JN],
+    expectRed: ['旧 journal 原因'],
+    mustKill: ['旧 journal 原因'],
   },
   {
     id: 'rollback_to_gate_off',
@@ -292,7 +308,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     edits: [
       swap(
         RB,
-        "if ((req.by === 'rollback_to') !== (req.kind === 'rollback' && req.reason === 'cleared')) {",
+        "if ((by === 'rollback_to') !== (kind === 'rollback' && reason === 'cleared')) {",
         'if (false) {',
       ),
     ],
@@ -354,8 +370,8 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     id: 'by_veto_lost',
     clause: 'W0-17 来源还原:vetoed → veto',
     edits: [swap(RW, "    case 'vetoed':\n      return 'veto';\n", '')],
-    tests: [T_RW, T_CR],
-    expectRed: ['byFromReason', '前台 veto 发起、凭据写入前崩溃'],
+    tests: [T_RW, T_JN],
+    expectRed: ['byFromReason', '旧 journal 原因'],
     mustKill: ['byFromReason'],
   },
   // ---- R21-9.5 缩减入口 ----
@@ -593,8 +609,8 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     clause: 'R21-10.1 触发 = 写熔断码,先写状态再置 canary',
     edits: [swap(BR, "if (r.kind === 'tripped') await d.state.write(r.state);", '')],
     tests: [T_BR],
-    expectRed: ['触发:state.write 先于 canary.mute'],
-    mustKill: ['触发:state.write 先于 canary.mute'],
+    expectRed: ['触发:marker.ensure 先于 state.write 先于 canary.mute'],
+    mustKill: ['触发:marker.ensure 先于 state.write 先于 canary.mute'],
   },
   {
     id: 'enforce_no_mute',
@@ -667,6 +683,326 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     tests: [T_HC],
     expectRed: ['harm 结论 → 候选走完四段'],
     mustKill: ['harm 结论 → 候选走完四段'],
+  },
+  // ---- W0-20 journal 自带恢复事实(H1 / M4)与入口校验 ----
+  {
+    id: 'journal_no_sha',
+    clause: 'W0-20 journal 首次落盘带 content_sha256(续做不依赖仓库 / 权威记录可读)',
+    edits: [
+      swap(RB, '    content_sha256: req.content_sha256,\n    by: req.by,', '    by: req.by,'),
+    ],
+    tests: [T_JN],
+    expectRed: ['盘上 journal 带齐三项', '崩于凭据落盘前'],
+    mustKill: ['盘上 journal 带齐三项', '崩于凭据落盘前'],
+  },
+  {
+    id: 'journal_no_by',
+    clause: 'W0-20 journal 首次落盘带 by(来源保留)',
+    edits: [
+      swap(RB, '    by: req.by,\n    ...(event !== undefined', '    ...(event !== undefined'),
+    ],
+    tests: [T_JN],
+    expectRed: ['盘上 journal 带齐三项'],
+    mustKill: ['盘上 journal 带齐三项'],
+  },
+  {
+    id: 'journal_no_event',
+    clause: 'W0-20 journal 首次落盘带 terminal_event(limit_reached 等无法由原因还原的事件)',
+    edits: [swap(RB, '    ...(event !== undefined ? { terminal_event: event } : {}),', '')],
+    tests: [T_JN],
+    expectRed: ['盘上 journal 带齐三项', '崩于凭据落盘后'],
+    mustKill: ['盘上 journal 带齐三项', '崩于凭据落盘后'],
+  },
+  {
+    id: 'event_schema_skipped',
+    clause: 'W0-20 入口:事件在写 journal 之前过转移引擎的事件 schema',
+    edits: [
+      swap(
+        RB,
+        "if (!p.success) return { status: 'refused', txn: null, why: 'event_invalid' };",
+        '',
+      ),
+    ],
+    tests: [T_JN],
+    expectRed: ['事件不合规 → refused event_invalid'],
+    mustKill: ['事件不合规 → refused event_invalid'],
+  },
+  {
+    id: 'event_required_off',
+    clause: 'W0-20 入口:需要记录转移而无法还原事件的原因必须带事件',
+    edits: [swap(RB, "return { status: 'refused', txn: null, why: 'event_required' };", '')],
+    tests: [T_JN],
+    expectRed: ['需要记录转移而又无法由原因还原事件'],
+    mustKill: ['需要记录转移而又无法由原因还原事件'],
+  },
+  {
+    id: 'journal_event_unchecked',
+    clause: 'W0-20 续做:terminal_event 过不了事件 schema = txn_invalid(fail-closed)',
+    edits: [swap(RB, "if (!p.success) return 'txn_invalid';", '')],
+    tests: [T_JN],
+    expectRed: ['terminal_event 过不了转移引擎的事件 schema'],
+    mustKill: ['terminal_event 过不了转移引擎的事件 schema'],
+  },
+  {
+    id: 'journal_sha_unchecked',
+    clause: 'W0-20 续做:content_sha256 必须与 txn_id 对得上',
+    edits: [swap(RB, 'rollbackTxnId(t.candidate_id, t.content_sha256) !== t.txn_id', 'false')],
+    tests: [T_JN],
+    expectRed: ['content_sha256 与 txn_id 对不上'],
+    mustKill: ['content_sha256 与 txn_id 对不上'],
+  },
+  {
+    id: 'journal_by_unchecked',
+    clause: 'W0-20 续做:by 必须与 (kind, reason) 相容',
+    edits: [
+      swap(RB, "if (sourceProblem(t.by, t.kind, t.reason) !== null) return 'txn_invalid';", ''),
+    ],
+    tests: [T_JN],
+    expectRed: ['by 与 (kind, reason) 不相容'],
+    mustKill: ['by 与 (kind, reason) 不相容'],
+  },
+  // ---- M5 identity_changed(V6a)本期拒绝 ----
+  {
+    id: 'identity_runs',
+    clause: 'M5 identity_changed 入口拒绝(不写 journal、不部分执行)',
+    edits: [
+      swap(
+        RB,
+        "if (identity) return { status: 'refused', txn: null, why: 'identity_not_available_before_v6a' };",
+        '',
+      ),
+    ],
+    tests: [T_RB],
+    expectRed: ['入口 refused identity_not_available_before_v6a'],
+    mustKill: ['入口 refused identity_not_available_before_v6a'],
+  },
+  {
+    id: 'identity_journal_runs',
+    clause: 'M5 读到旧的 identity_change journal 不动',
+    edits: [
+      swap(RB, "if (t.kind === 'identity_change') return 'identity_not_available_before_v6a';", ''),
+    ],
+    tests: [T_RB],
+    expectRed: ['读到旧的 identity_change journal'],
+    mustKill: ['读到旧的 identity_change journal'],
+  },
+  // ---- H2 分叉下撤销完成 ----
+  {
+    id: 'deferred_incomplete',
+    clause: 'H2 记录读不到(分叉)时撤销四段完成即 revocation_complete',
+    edits: [
+      swap(
+        RB,
+        'return deferredDone(`repo_deferred:${rd.why}`);',
+        'return inc(`repo_deferred:${rd.why}`);',
+      ),
+    ],
+    tests: [T_RB, T_CU],
+    expectRed: ['私有仓库 deferred:凭据照样落盘', 'clear 遇人工分叉'],
+    mustKill: ['私有仓库 deferred:凭据照样落盘', 'clear 遇人工分叉'],
+  },
+  {
+    id: 'deferred_rem_incomplete',
+    clause: 'H2 仓库提交 deferred 时撤销四段完成即 revocation_complete',
+    edits: [
+      swap(
+        RB,
+        'return deferredDone(`repo_deferred:${rem.why}`);',
+        'return inc(`repo_deferred:${rem.why}`);',
+      ),
+    ],
+    tests: [T_RB],
+    expectRed: ['记录可读但仓库提交 deferred'],
+    mustKill: ['记录可读但仓库提交 deferred'],
+  },
+  {
+    id: 'deferral_mark_skipped',
+    clause: 'H2 worker 路径写 repo_removal_deferred 标记(deferralMark)',
+    edits: [swap(RB, 'await d.deferralMark.mark(t.candidate_id);', '')],
+    tests: [T_CU],
+    expectRed: ['worker 路径(装配 deferralMark)'],
+    mustKill: ['worker 路径(装配 deferralMark)'],
+  },
+  {
+    id: 'marked_always',
+    clause: 'H2 没有 deferralMark 端口时不宣称已写工作副本(workingMarked=false)',
+    edits: [swap(RB, 'let marked = false;', 'let marked = true;')],
+    tests: [T_CU, T_RB],
+    expectRed: ['clear 遇人工分叉', '私有仓库 deferred:凭据照样落盘'],
+    mustKill: ['clear 遇人工分叉'],
+  },
+  {
+    id: 'clear_pending_lost',
+    clause: 'H2 clear 报告列出 repoRemovalPending',
+    edits: [swap(CL, "(o.status === 'revocation_complete' ? [o.candidate_id] : [])", '[]')],
+    tests: [T_CU],
+    expectRed: ['clear 遇人工分叉'],
+    mustKill: ['clear 遇人工分叉'],
+  },
+  // ---- H3 AUTO_PAUSE 标记先于状态 ----
+  {
+    id: 'marker_after_state',
+    clause: 'H3 熔断先写 AUTO_PAUSE 标记,再写状态,后 mute',
+    edits: [
+      swap(BR, '  await d.marker.ensure(reason);\n', ''),
+      swap(
+        BR,
+        '  await d.canary.mute();\n  return r;',
+        '  await d.marker.ensure(reason);\n  await d.canary.mute();\n  return r;',
+      ),
+    ],
+    tests: [T_BR, T_PM],
+    expectRed: [
+      '触发:marker.ensure 先于 state.write 先于 canary.mute',
+      'state.write 崩溃:hint 的许可端口读到',
+    ],
+    mustKill: [
+      '触发:marker.ensure 先于 state.write 先于 canary.mute',
+      'state.write 崩溃:hint 的许可端口读到',
+    ],
+  },
+  {
+    id: 'enforce_marker_missing',
+    clause: 'H3 有码缺标记:enforceMute 补标记',
+    edits: [
+      swap(BR, 'if (marker === null && first !== undefined) await d.marker.ensure(first);', ''),
+    ],
+    tests: [T_BR, T_PM],
+    expectRed: ['有码而没有标记', '有码缺标记:enforceMute 补标记'],
+    mustKill: ['有码而没有标记'],
+  },
+  {
+    id: 'enforce_code_restore_skipped',
+    clause: 'H3 有标记缺码:enforceMute 由标记补码(不删标记)',
+    edits: [swap(BR, 'if (code !== null && !cur.reasons.includes(code)) {', 'if (false) {')],
+    tests: [T_BR, T_PM],
+    expectRed: ['状态写入崩溃:标记已在盘上', '崩溃后下一次 enforceMute:由标记补码'],
+    mustKill: ['状态写入崩溃:标记已在盘上'],
+  },
+  {
+    id: 'marker_overwrite',
+    clause: 'H3 标记独占创建、不覆盖用户写的标记',
+    edits: [
+      swap(
+        PM,
+        'import { createExclusive, remove } from',
+        'import { createExclusive, remove, writeFile } from',
+      ),
+      swap(
+        PM,
+        'createExclusive(io, file, body, RSI_FILE_MODE)',
+        'writeFile(io, file, body, { mode: RSI_FILE_MODE })',
+      ),
+    ],
+    tests: [T_PM],
+    expectRed: ['ensure 遇到用户写的标记'],
+    mustKill: ['ensure 遇到用户写的标记'],
+  },
+  {
+    id: 'release_keeps_marker',
+    clause: 'H3 自动解除:无剩余码时删 worker 写的标记',
+    edits: [swap(BR, "if (r.clearMarker) await d.marker.remove('own');", '')],
+    tests: [T_BR, T_PM],
+    expectRed: [
+      '自动解除:先写状态、后删 worker 写的标记',
+      '自动解除:仍有码 → 标记保留;清空 → 删 worker 写的标记',
+    ],
+    mustKill: ['自动解除:先写状态、后删 worker 写的标记'],
+  },
+  {
+    id: 'release_removes_any',
+    clause: 'H3 自动解除只删 worker 写的标记,不删用户标记',
+    edits: [
+      swap(
+        BR,
+        "if (r.clearMarker) await d.marker.remove('own');",
+        "if (r.clearMarker) await d.marker.remove('any');",
+      ),
+    ],
+    tests: [T_BR, T_PM],
+    expectRed: ['自动解除:先写状态、后删 worker 写的标记', '自动解除不删用户标记'],
+    mustKill: ['自动解除:先写状态、后删 worker 写的标记'],
+  },
+  {
+    id: 'release_marker_early',
+    clause: 'H3 自动解除:仍有剩余码时标记保留',
+    edits: [
+      swap(
+        BR,
+        'clearMarker: released.length > 0 && reasons.length === 0,',
+        'clearMarker: released.length > 0,',
+      ),
+    ],
+    tests: [T_BR],
+    expectRed: ['自动解除:先写状态、后删 worker 写的标记'],
+    mustKill: ['自动解除:先写状态、后删 worker 写的标记'],
+  },
+  {
+    id: 'resume_marker_early',
+    clause: 'H3 人工 resume:仍有剩余码时标记保留(hint 继续停注入)',
+    edits: [
+      swap(
+        BR,
+        'clearMarker: cleared.length > 0 && reasons.length === 0,',
+        'clearMarker: cleared.length > 0,',
+      ),
+    ],
+    tests: [T_BR],
+    expectRed: ['人工 resume:没有剩余码时删任何标记'],
+    mustKill: ['人工 resume:没有剩余码时删任何标记'],
+  },
+  // ---- M6 审计行按键落地 ----
+  {
+    id: 'audit_not_keyed',
+    clause: 'M6 审计行经带键端口落地(同一行只落一次)',
+    edits: [
+      swap(
+        RB,
+        "await d.keyedEffects.applyOnce(auditKeyOf(l), [{ type: 'append_audit', line: l }]);",
+        'await d.audit.append([l]);',
+      ),
+    ],
+    tests: [T_JN],
+    expectRed: ['审计键集合固定'],
+    mustKill: ['审计键集合固定'],
+  },
+  {
+    id: 'audit_no_finish',
+    clause: 'M6 收尾按记录补做审计行(落地失败 / 提交后崩溃不丢)',
+    edits: [swap(RB, 'await landAuditEffects(d.keyedEffects, rec);', '')],
+    tests: [T_JN],
+    expectRed: ['审计落地失败(提交之后)'],
+    mustKill: ['审计落地失败(提交之后)'],
+  },
+  {
+    id: 'audit_no_recover',
+    clause: 'M6 recoverTerminalEffects 对执行器终态补审计',
+    edits: [swap(ER, 'await landAuditEffects(d.effects, rec);', '')],
+    tests: [T_JN],
+    expectRed: ['recoverTerminalEffects 对执行器终态补审计'],
+    mustKill: ['recoverTerminalEffects 对执行器终态补审计'],
+  },
+  {
+    id: 'audit_recover_all',
+    clause: 'M6 只补执行器终态理由的审计(其余的审计行是转移当时直接追加的)',
+    edits: [
+      swap(
+        ER,
+        'if (rec.terminal_reason !== null && EXECUTOR_TERMINAL_REASONS.has(rec.terminal_reason)) {',
+        'if (true) {',
+      ),
+    ],
+    tests: [T_JN],
+    expectRed: ['非执行器终态理由'],
+    mustKill: ['非执行器终态理由'],
+  },
+  {
+    id: 'audit_key_no_hash',
+    clause: 'M6 审计键含行哈希(不同条目不同键)',
+    edits: [swap(ER, ".digest('hex').slice(0, 16)}`", ".digest('hex').slice(0, 0)}`")],
+    tests: [T_JN],
+    expectRed: ['审计键集合固定'],
+    mustKill: ['审计键集合固定'],
   },
 ];
 

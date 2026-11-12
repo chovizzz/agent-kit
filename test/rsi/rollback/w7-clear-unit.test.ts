@@ -4,7 +4,18 @@
 import { describe, expect, it } from 'vitest';
 import { rsiAutoClear, type ClearDeps } from '../../../src/rsi/personal/clear.js';
 import { startRollback } from '../../../src/rsi/personal/rollback.js';
-import { Crash, SHA, V1B, harmReq, world7, type World7 } from './w7-fixture.js';
+import { resumeAll } from '../../../src/rsi/personal/rollback.js';
+import {
+  Crash,
+  ID,
+  SHA,
+  V1B,
+  canaryRec,
+  harmReq,
+  recordOf,
+  world7,
+  type World7,
+} from './w7-fixture.js';
 
 const clearDeps = (w: World7): ClearDeps => ({
   store: w.d.store,
@@ -43,5 +54,76 @@ describe('rsiAutoClear 报告模型', () => {
     expect(report.inFlight).toHaveLength(1);
     expect(report.outcomes).toEqual([]);
     expect(w.revs).toHaveLength(0);
+  });
+});
+
+describe('H2:分叉下撤销四段完成即算完成(revocation_complete),仓库 / 记录部分推迟并留下待补记任务', () => {
+  const TXN_COUNT = (w: World7): number => w.txns.size;
+
+  it('clear 遇人工分叉(记录读不到,候选改从 head.json 的只读读取):凭据落盘、HOME 清理完成 → revocation_complete,journal 保留,workingMarked=false,报告列出 repoRemovalPending', async () => {
+    const w = world7();
+    w.store.mode = 'deferred';
+    const d: ClearDeps = {
+      ...clearDeps(w),
+      recordedRecords: async () => ({ kind: 'ok', head: 'h', value: [canaryRec()] }),
+    };
+    const report = await rsiAutoClear(d, { write: true });
+    expect(report.unavailable).toBeNull();
+    expect(report.outcomes).toEqual([
+      {
+        status: 'revocation_complete',
+        txn: expect.any(String),
+        candidate_id: ID,
+        repoRemoval: 'deferred',
+        why: expect.stringMatching(/^repo_deferred/),
+        workingMarked: false,
+      },
+    ]);
+    expect(report.repoRemovalPending).toEqual([ID]);
+    expect(w.revs).toHaveLength(1);
+    expect(w.revs[0]).toMatchObject({ by: 'clear', reason: 'cleared' });
+    expect(w.payload.revoked.length).toBeGreaterThan(0); // 第四段 HOME 清理做了
+    expect(TXN_COUNT(w)).toBe(1); // 待补记任务
+    expect(recordOf(w).lifecycle).toBe('canary'); // 记录推进被推迟,没有宣称已处理
+  });
+
+  it('没有分叉的 clear:repoRemovalPending 为空', async () => {
+    const w = world7();
+    const report = await rsiAutoClear(clearDeps(w), { write: true });
+    expect(report.outcomes.map((o) => o.status)).toEqual(['complete']);
+    expect(report.repoRemovalPending).toEqual([]);
+  });
+
+  it('worker 路径(装配 deferralMark):写 repo_removal_deferred 标记 → workingMarked=true;分叉解除后 resumeAll(仍带 deferralMark)→ complete、journal 删、记录到终态', async () => {
+    const w = world7();
+    w.d.deferralMark = w.markDeferral;
+    w.store.mode = 'deferred';
+    const r = await startRollback(w.d, harmReq());
+    expect(r).toMatchObject({
+      status: 'revocation_complete',
+      repoRemoval: 'deferred',
+      workingMarked: true,
+    });
+    expect(w.deferralMarks).toEqual([ID]);
+    expect(w.txns.size).toBe(1);
+    w.store.mode = 'ok';
+    const out = await resumeAll(w.d);
+    expect(out.map((o) => o.status)).toEqual(['complete']);
+    expect(w.txns.size).toBe(0);
+    expect(recordOf(w).lifecycle).toBe('rolled_back');
+    expect(w.deferralMarks).toEqual([ID]); // 完成后不再标记
+  });
+
+  it('deferralMark 落地失败:异常向上(journal 保留,凭据已落盘),不返回 workingMarked=true', async () => {
+    const w = world7();
+    w.d.deferralMark = {
+      mark: async () => {
+        throw new Error('working copy down');
+      },
+    };
+    w.store.mode = 'deferred';
+    await expect(startRollback(w.d, harmReq())).rejects.toThrow('working copy down');
+    expect(w.txns.size).toBe(1);
+    expect(w.revs).toHaveLength(1);
   });
 });
