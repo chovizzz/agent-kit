@@ -205,7 +205,7 @@ async function present(p: string): Promise<boolean | 'error'> {
 }
 
 /**
- * 预检:显式仓库目录(绝对、realpath 等于自身、目录且非符号链接、属主为当前 uid;本身不可被组 / 他人写,父目录权限不宽于 0700——对契约字面的偏离见 W8a 状态文件)→ `config` 以 O_NOFOLLOW 句柄读(常规文件、属主、≤ 64 KiB、`nlink == 1`)
+ * 预检:显式仓库目录(绝对、realpath 等于自身、目录且非符号链接、属主为当前 uid、权限不宽于 0700;契约字面。注意:`git init` 建出的 `.git` 通常是 0755,接线前须由 W2 的 bootstrap / 契约订正解决,见 W8a 状态文件「问题」)→ `config` 以 O_NOFOLLOW 句柄读(常规文件、属主、≤ 64 KiB、`nlink == 1`)
  * 并按严格子集解析 → 存在性检查(`config.worktree`、`.gitconfig`、`.config/git`、`objects/pack/*.promisor`、alternates / grafts / commondir)。
  * 通过则返回 config 字节摘要(spawn 前取 c1、返回后重取 c2,不等 → 拒收)。拒绝一律不 spawn。
  */
@@ -218,13 +218,7 @@ export async function preflightRepo(gitDir: string, uid?: number): Promise<Prefl
     const st = await lstat(gitDir);
     if (st.isSymbolicLink() || !st.isDirectory()) return unsafe;
     if (want !== undefined && st.uid !== want) return unsafe;
-    // 偏离契约字面「权限不宽于 0700」(见 W8a 状态文件):`git init` 建出的 `.git` 通常是 0755,字面照做会让生产读取必拒。
-    // 这里要求:仓库目录本身不可被组 / 他人写(& 0o022 == 0),且它的父目录(私有仓库根,R21-3.4 结构校验已要求 0700)权限不宽于 0700、属主为当前 uid。
-    if ((st.mode & 0o022) !== 0) return unsafe;
-    const parent = await lstat(path.dirname(gitDir));
-    if (parent.isSymbolicLink() || !parent.isDirectory()) return unsafe;
-    if (want !== undefined && parent.uid !== want) return unsafe;
-    if ((parent.mode & 0o077) !== 0) return unsafe;
+    if ((st.mode & 0o077) !== 0) return unsafe;
     if ((await realpath(gitDir)) !== gitDir) return unsafe;
   } catch {
     return unsafe;

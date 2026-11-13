@@ -88,6 +88,8 @@ export function mapClearExit(i: ClearExitInput): ClearExit {
     // 身份:有 txn → 事务身份(可被同身份的 complete 消除);无 txn → 完整性错误 / 命令级失败(各自独立,永不被消除)
     const key =
       o.status === 'refused' && o.txn === null ? `uniq:${(unique += 1)}` : `txn:${o.txn as string}`;
+    // 同一身份的多次失败:保留最严重(行号最小)的,只有后续 complete 才能消除
+    if ((pending.get(key)?.row ?? 99) < row) continue;
     pending.set(key, {
       row,
       txn: o.txn,

@@ -309,3 +309,15 @@ describe('泄漏闸', () => {
     expect([r.code, r.out, r.err]).toEqual([3, '', 'RSI_FAIL_CLOSED reason=output_leak\n']);
   });
 });
+
+describe('视图截断', () => {
+  it('rolling_back / protection_marks 被截断时文本明说不完整,不构成「没有待处置项」的证据', async () => {
+    const w = makeWorld({
+      view: rawView(viewOf({ rolling_back_truncated: true })),
+    });
+    const t = (await run(w, { json: false })).out;
+    expect(t).toContain('被截断(不完整)');
+    const w2 = makeWorld({ view: rawView(viewOf()) });
+    expect((await run(w2, { json: false })).out).not.toContain('被截断');
+  });
+});

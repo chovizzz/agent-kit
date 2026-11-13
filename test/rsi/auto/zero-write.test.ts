@@ -180,6 +180,12 @@ describe('③ ④ 静态:业务读侧的 import 闭包(运行时依赖与含类�
     const NAMED =
       "import { runGitClosed } from '../../io/exec.js';\nexport const r = runGitClosed;\n";
     expect(await lintAs(NAMED, 'src/rsi/auto/deps.ts')).toEqual([]);
+    // 两个出口的授权互不相通:deps.ts 不得 import runSync;既有三个 git 文件不得 import runGitClosed
+    const SYNC = "import { runSync } from '../../io/exec.js';\nexport const r = runSync;\n";
+    expect((await lintAs(SYNC, 'src/rsi/auto/deps.ts')).length).toBeGreaterThan(0);
+    for (const f of ['commit.ts', 'commit-journal.ts', 'repo-check.ts']) {
+      expect((await lintAs(NAMED, `src/rsi/personal/${f}`)).length, f).toBeGreaterThan(0);
+    }
     for (const bad of [
       'src/rsi/auto/read/status.ts',
       'src/rsi/personal/read/x.ts',

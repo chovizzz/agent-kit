@@ -1052,12 +1052,12 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
     mustKill: ['仓库目录本身不安全'],
   },
   {
-    id: 'git_group_write_ok',
-    clause: 'W0-22 第 6 条 仓库目录权限',
+    id: 'git_wide_mode_ok',
+    clause: 'W0-22 第 6 条 仓库目录权限不宽于 0700',
     edits: [
       swap(
         'src/rsi/personal/read/git-readonly.ts',
-        'if ((st.mode & 0o022) !== 0) return unsafe;',
+        'if ((st.mode & 0o077) !== 0) return unsafe;',
         '',
       ),
     ],

@@ -17,7 +17,8 @@ import {
   RSI_REVOCATION_BY,
   RSI_TRANSITION_REASONS_TERMINATING,
 } from '../../../src/contracts/rsi.js';
-import { mkdirp, writeFile } from '../../../src/io/safe-fs.js';
+import { mkdirp, symlink, writeFile } from '../../../src/io/safe-fs.js';
+import { readRecordedRecords } from '../../../src/rsi/auto/read/recorded-records.js';
 import { sourceCompatible } from '../../../src/rsi/auto/read/journal-check.js';
 import { sourceProblem } from '../../../src/rsi/personal/rollback-journal.js';
 import { makeWorld as makeIoWorld } from '../personal/repo-helpers.js';
@@ -166,5 +167,41 @@ describe('journal 来源相容性:读侧镜像与写侧 sourceProblem 逐组合�
       }
     }
     expect(n).toBeGreaterThan(100);
+  });
+});
+
+describe('HOME 事务目录的静态安全检查', () => {
+  it('txn 是符号链接 / 权限宽于 0700 → txnNames 读失败(unreadable),不是空', async () => {
+    const w = await makeIoWorld('w8a-txn-');
+    const dir = path.join(w.home, ...PERSONAL_STATE_REL_READ.split('/'));
+    await mkdirp(w.io, path.join(w.dir, 'elsewhere'), 0o700);
+    await writeFile(w.io, path.join(w.dir, 'elsewhere', '0123456789abcdef.json'), '{}');
+    await mkdirp(w.io, dir, 0o700);
+    await symlink(w.io, path.join(w.dir, 'elsewhere'), path.join(dir, 'txn'));
+    expect((await makeHomeReadPort(w.home).txnNames()).kind).toBe('unreadable');
+    const w2 = await makeIoWorld('w8a-txn2-');
+    const d2 = path.join(w2.home, ...PERSONAL_STATE_REL_READ.split('/'), 'txn');
+    await mkdirp(w2.io, d2, 0o755);
+    expect((await makeHomeReadPort(w2.home).txnNames()).kind).toBe('unreadable');
+  });
+});
+
+describe('记录提交里 lifecycle 路径的非法形状', () => {
+  it('lifecycle/<id>.json 是符号链接 → invalid(record),不是「没有候选」', async () => {
+    const oid = 'a'.repeat(40);
+    const port = {
+      ...portsOf(makeWorld()).recorded,
+      readCommit: async () => ({ kind: 'ok' as const, value: { oid } }),
+      listTree: async () => ({
+        kind: 'ok' as const,
+        value: [{ path: 'lifecycle/ra_0123456789ab.json', oid, mode: '120000' }],
+      }),
+    };
+    const head = JSON.stringify({
+      schema_version: 1,
+      head: oid,
+      owner_repo_fp: '0123456789abcdef',
+    });
+    expect(await readRecordedRecords(port, head)).toEqual({ kind: 'invalid', why: 'record' });
   });
 });

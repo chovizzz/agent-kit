@@ -226,3 +226,13 @@ describe('按 variant × cause 穷举', () => {
     });
   }
 });
+
+describe('同一身份的多次失败', () => {
+  it('严重失败后接轻微失败(及反向)仍保留最严重的;失败→成功→失败仍未解决', () => {
+    const sev = incomplete('a', 'credentials_invalid');
+    const light = incomplete('a', 'retryable');
+    expect(mapClearExit({ outcomes: [sev, light] }).exit).toBe(3);
+    expect(mapClearExit({ outcomes: [light, sev] }).exit).toBe(3);
+    expect(mapClearExit({ outcomes: [sev, complete('a'), light] }).exit).toBe(1);
+  });
+});

@@ -293,13 +293,11 @@ function restrictions(allow = {}) {
             : [{ group: EXEC_GROUP, importNames: ['runSelf'], message: MESSAGES.runSelf }]),
           // §21 W0-11:`src/rsi/**` 内 runSync 的限域(命名导入 / import * / export-from 都被 importNames 拦下)
           ...(allow.denyRunSync
-            ? [
-                {
-                  group: EXEC_GROUP,
-                  importNames: ['runSync', 'runGitClosed'],
-                  message: MESSAGES.runSync,
-                },
-              ]
+            ? [{ group: EXEC_GROUP, importNames: ['runSync'], message: MESSAGES.runSync }]
+            : []),
+          // §21 W0-24:`runGitClosed` 在 `src/rsi/**` 内只许 deps.ts(与 runSync 的授权互不相通)
+          ...(allow.denyRunGitClosed
+            ? [{ group: EXEC_GROUP, importNames: ['runGitClosed'], message: MESSAGES.runSync }]
             : []),
           ...(allow.allowAgentProbe
             ? []
@@ -377,11 +375,14 @@ export default tseslint.config(
   { files: GUARDED, rules: restrictions() },
   // §21 W0-11:`src/rsi/**` 内 runSync 限域(personal 三个文件放行;hooks 目录保持既有放行)。排在其它 `src/rsi/**` 专属块之前,
   // 它们若要保留该限域须自带 denyRunSync(flat config 后面的同名规则整条替换前面的)。
-  { files: [`src/rsi/**/*.${EXT}`], rules: restrictions({ denyRunSync: true }) },
+  {
+    files: [`src/rsi/**/*.${EXT}`],
+    rules: restrictions({ denyRunSync: true, denyRunGitClosed: true }),
+  },
   // §21 W0-11:个人层目录是 HOME 写出口的授权使用方,但只读侧与判定纯函数后置收回;三个 git 文件另放行 runSync。
   {
     files: [`src/rsi/personal/**/*.${EXT}`],
-    rules: restrictions({ allowHomeFs: true, denyRunSync: true }),
+    rules: restrictions({ allowHomeFs: true, denyRunSync: true, denyRunGitClosed: true }),
   },
   {
     files: [
@@ -389,14 +390,14 @@ export default tseslint.config(
       'src/rsi/personal/commit-journal.ts',
       'src/rsi/personal/repo-check.ts',
     ],
-    rules: restrictions({ allowHomeFs: true }),
+    rules: restrictions({ allowHomeFs: true, denyRunGitClosed: true }),
   },
   {
     files: [`src/rsi/personal/read/**/*.${EXT}`, 'src/rsi/personal/judge-signal.ts'],
-    rules: restrictions({ denyRunSync: true }),
+    rules: restrictions({ denyRunSync: true, denyRunGitClosed: true }),
   },
   // §21 W0-24:受限只读 git 适配器的 spawn 出口 `runGitClosed` 只在部署组装处(deps.ts)引用;适配器本身(personal/read/)拿注入的 spawn。
-  { files: ['src/rsi/auto/deps.ts'], rules: restrictions({}) },
+  { files: ['src/rsi/auto/deps.ts'], rules: restrictions({ denyRunSync: true }) },
   { files: ['src/io/safe-fs.ts', 'src/io/read-fs.ts'], rules: restrictions({ allowFs: true }) },
   { files: ['src/io/paths.ts'], rules: restrictions({ allowEnv: true }) },
   { files: ['src/io/exec.ts'], rules: restrictions({ allowCp: true }) },

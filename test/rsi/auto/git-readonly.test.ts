@@ -178,6 +178,8 @@ describe('真仓库(假 HOME 下的私有仓库,真 git)', () => {
     await setupRepo(w);
     gitDir = path.join(w.h.repoDir, '.git');
     head = git(w, ['rev-parse', 'HEAD']);
+    // W2 的 bootstrap 不保证 `.git` 是 0700(`git init` 通常是 0755);契约字面要求适配器只接受不宽于 0700 的仓库目录,夹具显式收紧
+    await safe.chmod(w.io, gitDir, 0o700);
     originalConfig = await readText(path.join(gitDir, 'config'));
   });
 
@@ -379,7 +381,7 @@ describe('真仓库(假 HOME 下的私有仓库,真 git)', () => {
     });
   }
 
-  it('仓库目录本身不安全 → unreadable 且 spawn = 0:相对路径、符号链接、非本人属主、可被组 / 他人写', async () => {
+  it('仓库目录本身不安全 → unreadable 且 spawn = 0:相对路径、符号链接、非本人属主、权限宽于 0700(含 git init 默认的 0755)', async () => {
     await restore();
     const s = spy();
     expect(
@@ -396,11 +398,17 @@ describe('真仓库(假 HOME 下的私有仓库,真 git)', () => {
     const otherUid = (process.getuid?.() ?? 1000) + 1;
     expect((await port(s, { uid: otherUid }).readCommit(head)).kind).toBe('unreadable');
     const mode = (await lstat(gitDir)).mode & 0o777;
-    await safe.chmod(w.io, gitDir, 0o777);
-    try {
-      expect(await preflightRepo(gitDir)).toEqual({ ok: false, why: 'repo_unsafe' });
-    } finally {
-      await safe.chmod(w.io, gitDir, mode);
+    // 权限宽于 0700 一律拒绝;0755 是 `git init` 的默认值,同样被拒(契约字面「不宽于 0700」)
+    for (const wide of [0o755, 0o750, 0o770, 0o777]) {
+      await safe.chmod(w.io, gitDir, wide);
+      try {
+        expect(await preflightRepo(gitDir), wide.toString(8)).toEqual({
+          ok: false,
+          why: 'repo_unsafe',
+        });
+      } finally {
+        await safe.chmod(w.io, gitDir, mode);
+      }
     }
     expect(s.calls).toHaveLength(0);
     expect((await preflightRepo(gitDir)).ok).toBe(true);

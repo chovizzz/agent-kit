@@ -5,7 +5,7 @@
  */
 import * as path from 'node:path';
 import { RSI_REVOCATIONS_MAX_BYTES } from '../../../contracts/rsi.js';
-import { readDir, readFileSafe } from '../../../io/read-fs.js';
+import { lstat, readDir, readFileSafe } from '../../../io/read-fs.js';
 import type { HomeReadPort, RawRead } from '../../auto/read/ports.js';
 
 /** HOME 相对:个人层状态目录(与 `home-state.ts` 的 `PERSONAL_STATE_REL` 相同) */
@@ -32,6 +32,17 @@ export function makeHomeReadPort(home: string): HomeReadPort {
     revocations: () => readRaw(path.join(dir, 'revocations.jsonl'), RSI_REVOCATIONS_MAX_BYTES),
     async txnNames() {
       try {
+        // 静态目录检查:事务目录是符号链接 / 不是目录 / 属主不符 / 权限宽于 0700 → 读失败(readDir 会跟随链接)
+        const st = await lstat(path.join(dir, 'txn'));
+        const uid = typeof process.getuid === 'function' ? process.getuid() : undefined;
+        if (
+          st.isSymbolicLink() ||
+          !st.isDirectory() ||
+          (uid !== undefined && st.uid !== uid) ||
+          (st.mode & 0o077) !== 0
+        ) {
+          return { kind: 'unreadable' };
+        }
         const entries = await readDir(path.join(dir, 'txn'));
         const names = entries
           .map((e) => TXN_FILE_RE.exec(path.basename(e.name))?.[1])

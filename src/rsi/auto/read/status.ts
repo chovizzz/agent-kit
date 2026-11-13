@@ -44,7 +44,8 @@ export interface AutoStatusDoc {
   last_rollback: AutoView['last_rollback'];
 }
 
-export type AutoStatusResult = { kind: 'ok'; doc: AutoStatusDoc } | { kind: 'state_invalid' };
+export type AutoStatusResult =
+  { kind: 'ok'; doc: AutoStatusDoc; truncated: boolean } | { kind: 'state_invalid' };
 
 export async function computeAutoStatus(
   p: AutoReadPorts,
@@ -78,6 +79,7 @@ export async function computeAutoStatus(
   const profile = cfg.profile;
   return {
     kind: 'ok',
+    truncated: v !== null && (v.rolling_back_truncated || v.protection_marks_truncated),
     doc: {
       auto: {
         enabled: cfg.rsiOn && cfg.enabled,
@@ -107,7 +109,7 @@ export async function computeAutoStatus(
 const b = (x: boolean): string => (x ? 'true' : 'false');
 
 /** 文本渲染:一行一项,只含枚举 / 计数 / id / 时间(不含路径) */
-export function renderStatusText(d: AutoStatusDoc): OutLine[] {
+export function renderStatusText(d: AutoStatusDoc, truncated = false): OutLine[] {
   const a = d.auto;
   const lines: string[] = [
     `auto: enabled=${b(a.enabled)} phase=${a.phase} paused=${b(a.paused)} diverged=${b(a.diverged)} profile=${a.profile} profile_effective=${a.profile_effective}`,
@@ -140,6 +142,11 @@ export function renderStatusText(d: AutoStatusDoc): OutLine[] {
       d.last_rollback === null
         ? 'last_rollback: none'
         : `last_rollback: id=${d.last_rollback.id} at=${d.last_rollback.at} reason=${d.last_rollback.reason}`,
+    );
+  }
+  if (truncated) {
+    lines.push(
+      '视图的 rolling_back / protection_marks 清单被截断(不完整):下列列表不构成「没有待处置项」的证据',
     );
   }
   const stalled = a.rollback_stalled;
@@ -176,6 +183,6 @@ export async function runAutoStatus(
     sink.stderr('RSI_FAIL_CLOSED reason=state_invalid\n');
     return ExitCode.FAIL_CLOSED;
   }
-  const lines = o.json ? jsonLines(canonicalJson(r.doc)) : renderStatusText(r.doc);
+  const lines = o.json ? jsonLines(canonicalJson(r.doc)) : renderStatusText(r.doc, r.truncated);
   return emitLines(sink, lines, o.forbidden);
 }

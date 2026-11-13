@@ -50,7 +50,9 @@ export async function readRecordedRecords(
   for (const e of tree.value) {
     if (e.mode !== '120000') paths.set(e.path, e.oid);
     const m = RECORD_PATH_RE.exec(e.path);
-    if (m === null || e.mode === '120000') continue;
+    if (m === null) continue;
+    // 候选记录命名空间里的非普通 blob(符号链接 / 子模块等)= 非法记录形状,不是「缺失」
+    if (e.mode !== '100644') return { kind: 'invalid', why: 'record' };
     const b = await port.readBlob(e.oid);
     if (b.kind === 'missing') return { kind: 'retry' };
     if (b.kind === 'unreadable') return b;
