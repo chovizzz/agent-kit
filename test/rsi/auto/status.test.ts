@@ -276,6 +276,8 @@ describe('停住候选三态(视图 fresh)', () => {
 describe('status 不跑 git、不解析 journal 内容(弱协议)', () => {
   it('完整运行后:受限只读 git 端口与 journal 内容读取的调用次数都是 0', async () => {
     const w = makeWorld({ view: rawView(viewOf({ rolling_back: [rb()] })) });
+    w.names = ['aaaaaaaaaaaaaaaa'];
+    w.journals['aaaaaaaaaaaaaaaa'] = { kind: 'ok', text: '{}' };
     await run(w);
     await run(w, { json: false });
     expect([w.calls.commit, w.calls.tree, w.calls.blob, w.calls.journal, w.calls.head]).toEqual([

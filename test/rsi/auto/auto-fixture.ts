@@ -93,10 +93,13 @@ export function makeWorld(over: Partial<World> = {}): World {
 }
 
 export function portsOf(w: World): AutoReadPorts {
-  const tick = (op: keyof World['calls']): void => {
+  /** 先取得本次调用的结果,再计数并触发钩子:钩子改动世界只影响**之后**的调用(「两次读取之间」) */
+  const done = <T>(op: keyof World['calls'], v: T): T => {
     w.calls[op] += 1;
     w.hooks.after?.(op, w.calls[op]);
+    return v;
   };
+  const tick = (op: keyof World['calls']): void => void done(op, undefined);
   const blobs = (): Map<string, string> => {
     const m = new Map<string, string>();
     for (const files of Object.values(w.commits)) {
@@ -107,38 +110,34 @@ export function portsOf(w: World): AutoReadPorts {
   return {
     now: () => w.now,
     async config() {
-      tick('config');
-      return w.cfg;
+      return done('config', w.cfg);
     },
     async state() {
-      tick('state');
-      return w.state;
+      return done('state', w.state);
     },
     view: async () => w.view,
     async markers() {
-      tick('markers');
-      return w.markers;
+      return done('markers', w.markers);
     },
     audit: async () => w.audit,
     priorActivity: async () => w.prior,
     home: {
       async head() {
-        tick('head');
-        return w.head;
+        return done('head', w.head);
       },
       async revocations() {
-        tick('rev');
-        return w.rev;
+        return done('rev', w.rev);
       },
       async txnNames() {
-        tick('names');
-        return w.namesUnreadable
-          ? { kind: 'unreadable' }
-          : { kind: 'ok', names: [...w.names].sort() };
+        return done(
+          'names',
+          w.namesUnreadable
+            ? ({ kind: 'unreadable' } as const)
+            : ({ kind: 'ok', names: [...w.names].sort() } as const),
+        );
       },
       async journal(id) {
-        tick('journal');
-        return w.journals[id] ?? { kind: 'absent' };
+        return done('journal', w.journals[id] ?? ({ kind: 'absent' } as const));
       },
     },
     recorded: {

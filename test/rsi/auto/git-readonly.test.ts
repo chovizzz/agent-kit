@@ -104,8 +104,20 @@ describe('封闭 env', () => {
         'GIT_ALLOW_PROTOCOL',
       ].sort(),
     );
-    expect(env['HOME']).toBe(GD);
-    expect(env['GIT_ALLOW_PROTOCOL']).toBe('');
+    expect(env).toEqual({
+      PATH: '/usr/bin:/bin',
+      HOME: GD,
+      LC_ALL: 'C',
+      GIT_CONFIG_GLOBAL: '/dev/null',
+      GIT_CONFIG_SYSTEM: '/dev/null',
+      GIT_CONFIG_NOSYSTEM: '1',
+      GIT_OPTIONAL_LOCKS: '0',
+      GIT_TERMINAL_PROMPT: '0',
+      GIT_NO_REPLACE_OBJECTS: '1',
+      GIT_NO_LAZY_FETCH: '1',
+      GIT_ATTR_NOSYSTEM: '1',
+      GIT_ALLOW_PROTOCOL: '',
+    });
     expect(() => assertClosedEnv(env, GD)).not.toThrow();
     expect(() => assertClosedEnv({ ...env, GIT_DIR: GD }, GD)).toThrow(GitArgvError);
     const { GIT_NO_LAZY_FETCH: _drop, ...less } = env;
@@ -307,6 +319,8 @@ describe('真仓库(假 HOME 下的私有仓库,真 git)', () => {
       'config 是符号链接',
       async () => {
         await safe.remove(w.io, cfgFile());
+        // 链接目标必须是已存在的文件(safe-fs 拒绝写 / 删悬空链接,夹具要能还原)
+        await safe.writeFile(w.io, path.join(w.dir, 'elsewhere'), originalConfig);
         await safe.symlink(w.io, path.join(w.dir, 'elsewhere'), cfgFile());
       },
     ],
