@@ -229,6 +229,20 @@ describe('截断 / 矛盾的记录:保守方向 90 天 + 审计标记(落点 = �
     expect(markers(r)[0]?.line).toMatchObject({ reason: 'protection_unclassified' });
     expect(markers(r)[0]?.idem_key).not.toBe(markers(unknownRec())[0]?.idem_key);
   });
+  it('unclassified × 改前规则(无 / 30 天 expired / 90 天 auto_rollback):都恰好一条 90 天冷却 + 一条 protection_unclassified(不因 legacy 已有冷却而漏标记)', () => {
+    const contradictory = [...BASE, doneEntry('rolled_back')];
+    const cases = [
+      terminal('rolled_back', 'cleared', 'cleared', contradictory),
+      terminal('expired', 'auto_expired', 'limit_reached', [...BASE, doneEntry('expired')]),
+      terminal('rolled_back', 'auto_rollback', 'harm_c1', contradictory),
+    ];
+    for (const r of cases) {
+      expect(cooldowns(r), r.terminal_reason ?? '').toEqual([
+        { type: 'start_cooldown', cluster_id: 'cluster-1', kind: 'auto_rollback', days: 90 },
+      ]);
+      expect(markers(r).map((m) => m.line.reason)).toEqual(['protection_unclassified']);
+    }
+  });
   it('known / not_applicable 永远没有标记', () => {
     expect(
       markers(

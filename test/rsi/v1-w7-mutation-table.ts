@@ -2000,6 +2000,39 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       'W0-21:resume 不据 state 里的 user_paused 清码(判据是 U 存在,命令层处理);清掉熔断码且只剩 user_paused → 仍通知 worker 路径删 B;没清则不',
     ],
   },
+  {
+    id: 'unclassified_legacy_exempt',
+    clause:
+      'W7b R3-H3 矛盾记录无条件发 90 天 + protection_unclassified(不因改前规则已有冷却而豁免)',
+    edits: [
+      swap(
+        TE,
+        "    case 'unclassified':\n      // 自相矛盾的记录(R3-H3):无条件按保守方向贡献 90 天 + 独立标记;最终冷却至多一条由下面的取强保证\n      fromOrigin = cooldown(rec, 'auto_rollback');\n      markReason = PROTECTION_UNCLASSIFIED_REASON;\n",
+        "    case 'unclassified':\n      if (legacy === null) {\n        fromOrigin = cooldown(rec, 'auto_rollback');\n        markReason = PROTECTION_UNCLASSIFIED_REASON;\n      }\n",
+      ),
+    ],
+    tests: [T_PR],
+    expectRed: [
+      'unclassified × 改前规则(无 / 30 天 expired / 90 天 auto_rollback):都恰好一条 90 天冷却 + 一条 protection_unclassified(不因 legacy 已有冷却而漏标记)',
+    ],
+    mustKill: [
+      'unclassified × 改前规则(无 / 30 天 expired / 90 天 auto_rollback):都恰好一条 90 天冷却 + 一条 protection_unclassified(不因 legacy 已有冷却而漏标记)',
+    ],
+  },
+  {
+    id: 'cause_halt_flattened',
+    clause: 'W7b ③ 引擎 halt 逐值映射 cause(仓库类 halt 不得压成 retryable)',
+    edits: [
+      swap(
+        RB,
+        "    case 'repo_absent':\n    case 'repo_deferred':\n    case 'repo_invalid':\n      return 'repo_unreadable';",
+        "    case 'repo_absent':\n    case 'repo_deferred':\n    case 'repo_invalid':\n      return 'retryable';",
+      ),
+    ],
+    tests: [T_CA],
+    expectRed: ['收尾时引擎 halt 为仓库不可读(finish 的 record_halt:repo_invalid)'],
+    mustKill: ['收尾时引擎 halt 为仓库不可读(finish 的 record_halt:repo_invalid)'],
+  },
 ];
 
 /** 变异整表的执行结果(由主代理执行后回填;W7 实装块留空) */

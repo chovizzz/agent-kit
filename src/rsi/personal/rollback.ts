@@ -24,6 +24,7 @@
 import { RSI_ROLLBACK_PHASES } from '../../contracts/rsi.js';
 import type { PersonalLifecycleRecord, PersonalTxn } from '../../contracts/rsi-personal.js';
 import { applyEvent, type ApplyDeps, type ApplyResult } from './candidate-apply.js';
+import type { StepHalt } from './candidate-ports.js';
 import { RsiLockError } from '../lock-error.js';
 import type { HeldLock } from '../canary/atomic-write.js';
 import {
@@ -422,6 +423,23 @@ async function injectionDisabled(d: RollbackDeps, t: PersonalTxn, c: RunCtx): Pr
   return { ok: true };
 }
 
+/** 引擎 halt → cause(逐值映射,无兜底;新增 `StepHalt` 值会让这里编译失败) */
+function haltCause(h: StepHalt): RollbackCause {
+  switch (h) {
+    case 'repo_absent':
+    case 'repo_deferred':
+    case 'repo_invalid':
+      return 'repo_unreadable';
+    case 'revocations_invalid':
+      return 'credentials_invalid';
+    case 'candidate_invalid':
+      return 'candidate_invalid';
+    case 'commit_failed':
+    case 'lock_lost':
+      return 'retryable';
+  }
+}
+
 // --- 记录 / 仓库侧 ---
 const applyDeps = (d: RollbackDeps): ApplyDeps => ({
   store: d.store,
@@ -517,7 +535,7 @@ async function driveRecord(d: RollbackDeps, t: PersonalTxn, c: RunCtx): Promise<
         rec,
         note: {
           why: `record_halt:${r.halt}`,
-          cause: r.halt === 'revocations_invalid' ? 'credentials_invalid' : 'retryable',
+          cause: haltCause(r.halt),
         },
       };
     } else if (r.kind === 'refused') {
@@ -707,10 +725,7 @@ async function finish(d: RollbackDeps, t: PersonalTxn, c: RunCtx): Promise<Rollb
         else if (r.kind === 'refused') {
           return inc(`record_refused:${r.refusal.guard ?? r.refusal.refused}`, 'candidate_invalid');
         } else if (r.kind === 'halt') {
-          return inc(
-            `record_halt:${r.halt}`,
-            r.halt === 'revocations_invalid' ? 'credentials_invalid' : 'retryable',
-          );
+          return inc(`record_halt:${r.halt}`, haltCause(r.halt));
         } else {
           const re = await d.store.read(t.candidate_id);
           if (re.kind === 'ok') rec = re.record;

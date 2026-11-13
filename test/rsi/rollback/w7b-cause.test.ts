@@ -17,6 +17,7 @@ import {
   unwiredCacheCleanup,
   unwiredPayloadSync,
 } from '../../../src/rsi/personal/rollback-ports.js';
+import { PERSONAL_REPO_INVALID } from '../../../src/rsi/personal/commit.js';
 import { rec } from '../personal/transition-fixture.js';
 import { ID, SHA, V1A, harmReq, world7 } from './w7-fixture.js';
 
@@ -167,6 +168,19 @@ const CASES: Record<RollbackFailureStatus, Case[]> = {
         w.store.commit = async (spec) =>
           spec.upserts.some((u) => u.content.includes('"lifecycle":"rolled_back"'))
             ? { status: 'cas_failed', expected: 'x', actual: null }
+            : orig(spec);
+        return startRollback(w.d, harmReq());
+      },
+    },
+    {
+      name: '收尾时引擎 halt 为仓库不可读(finish 的 record_halt:repo_invalid)',
+      cause: 'repo_unreadable',
+      run: () => {
+        const w = world7();
+        const orig = w.store.commit.bind(w.store);
+        w.store.commit = async (spec) =>
+          spec.upserts.some((u) => u.content.includes('"lifecycle":"rolled_back"'))
+            ? { status: 'invalid', why: 'git_read_failed', breaker: PERSONAL_REPO_INVALID }
             : orig(spec);
         return startRollback(w.d, harmReq());
       },

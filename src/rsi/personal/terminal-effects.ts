@@ -7,7 +7,7 @@
  *  1. 改前规则(终态事实):`terminal_reason === 'auto_rollback'` → 90 天 `auto_rollback`;否则 `lifecycle === 'expired'` → 30 天 `expired`;
  *  2. 按进入回滚的起因补(并集)({@link originProtection}):`known`:起因的终态理由为 `auto_rollback`(harm_c1 / c2 / c3 / c4 / c6)→ 90 天;起因目标 `expired`(`limit_reached`)→ 30 天;
  *     判定类(`judge_*`)现行无冷却,不新增;`cleared / vetoed / tainted` 作起因照现行。**至多一条冷却**(改前规则 ∪ origin 规则同时有 90 天与 30 天时只发 90 天;例:`limit_reached` 进入回滚、补偿期间又收到 `harm_c1`);
- *  3. `unknown_rollback_origin`(回滚路径的起因条目因截断丢失)与 `unclassified`(自相矛盾的记录):改前规则没给冷却时按保守方向补 90 天 `auto_rollback`,并各发一条审计标记
+ *  3. `unknown_rollback_origin`(回滚路径的起因条目因截断丢失):改前规则没给冷却时按保守方向补 90 天 `auto_rollback` 并发审计标记;`unclassified`(自相矛盾的记录,R3-H3):无条件贡献 90 天 + 独立标记(最终冷却仍至多一条),各发一条审计标记
  *     (`reason = protection_unknown` / `protection_unclassified`;既有 `kind = reconcile`,不新增 schema 键或枚举;`at` 取终态那条 lifecycle 条目的时间,所以即时与恢复得同一行)。
  *     撤销、墓碑、清理照常完成,不因分类失败而阻塞。
  * 本文件不 import `transition.ts` 的值(只取类型),避免引擎与恢复互相依赖。
@@ -109,15 +109,16 @@ export function terminalEffectsOf(rec: PersonalLifecycleRecord): TransitionEffec
       }
       break;
     case 'unknown_rollback_origin':
-    case 'unclassified':
-      // 改前规则已给冷却则不变(也不发标记);否则保守方向 90 天 + 审计标记
+      // 起因条目因截断丢失:改前规则已给冷却则不变(也不发标记);否则保守方向 90 天 + 标记
       if (legacy === null) {
         fromOrigin = cooldown(rec, 'auto_rollback');
-        markReason =
-          origin.kind === 'unknown_rollback_origin'
-            ? PROTECTION_UNKNOWN_REASON
-            : PROTECTION_UNCLASSIFIED_REASON;
+        markReason = PROTECTION_UNKNOWN_REASON;
       }
+      break;
+    case 'unclassified':
+      // 自相矛盾的记录(R3-H3):无条件按保守方向贡献 90 天 + 独立标记;最终冷却至多一条由下面的取强保证
+      fromOrigin = cooldown(rec, 'auto_rollback');
+      markReason = PROTECTION_UNCLASSIFIED_REASON;
       break;
   }
   // 冷却至多一条:改前规则 ∪ origin 规则,同时有 90 天与 30 天时只留 90 天(保护取强)
