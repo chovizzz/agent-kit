@@ -204,7 +204,7 @@ export interface ResumeResult {
   cleared: RsiAutoPauseReason[];
   /** 条件仍成立而保留的码(命令层:退出 1 `RSI_AUTO_RESUME_BLOCKED reason=<码>`);`reason` = 仍成立的那个码 */
   blocked: { code: RsiAutoPauseReason; reason: RsiAutoPauseReason }[];
-  /** 没有任何剩余码且本次确有码被清:交给 worker 路径删 B(`applyResume`);仍有剩余码时 B 保留,hint 继续停注入。U 的删除不在这里(W8 命令层,带实例令牌) */
+  /** 没有任何剩余码且本次确有码被清:交给 worker 路径删 B(`applyResume`);仍有剩余码时 B 保留,hint 继续停注入。U 的删除不在这里(W8 命令层,带实例指纹) */
   clearMarker: boolean;
 }
 
@@ -269,11 +269,11 @@ export interface BreakerMarkerPort {
 export interface UserMarkerRead {
   exists(): Promise<boolean>;
 }
-/** U 的实例令牌(`none` = 不存在);四项都取 `lstat(path, { bigint: true })`:`(dev, ino, size, mtimeNs)`(W0-22 第 1 条) */
+/** U 的实例指纹;`none` 表示不存在;四项都取 `lstat(path, { bigint: true })`:`(dev, ino, size, mtimeNs)`(W0-22 第 1 条) */
 export type UserMarkerToken = 'none' | { dev: bigint; ino: bigint; size: bigint; mtimeNs: bigint };
 /**
  * U 的完整端口,**只给命令层**(W8 `rsi auto pause` / `resume`;本块不含命令):`ensureUser` 独占创建 `{at, by:"user"}`(已存在 = `exists`);
- * `remove(token)` 只在当前实例与 `snapshot()` 取得的令牌逐项相等时才删(令牌 `none` 永不删)。worker 的 {@link BreakerDeps.marker} 只收 {@link UserMarkerRead}。
+ * `remove(token)` 只在当前实例与 `snapshot()` 取得的指纹逐项相等时才删(指纹 `none` 永不删)。worker 的 {@link BreakerDeps.marker} 只收 {@link UserMarkerRead}。
  */
 export interface UserMarkerPort extends UserMarkerRead {
   ensureUser(): Promise<'created' | 'exists'>;
@@ -366,7 +366,7 @@ export async function applyAutoRelease(d: BreakerDeps, r: ReleaseResult): Promis
 }
 
 /**
- * 人工 `resume` 的 worker 侧落地:先写状态、后删 B(没有剩余码时)。**不碰 U**:U 的删除归 W8 命令层(带实例令牌)。
+ * 人工 `resume` 的 worker 侧落地:先写状态、后删 B(没有剩余码时)。**不碰 U**:U 的删除归 W8 命令层(带实例指纹)。
  * B 内容读不出(创建后、写内容前进程被杀)而状态里没有熔断码:没有码可清,但这是 B 唯一的解除路径,照删。
  */
 export async function applyResume(d: BreakerDeps, r: ResumeResult): Promise<void> {
