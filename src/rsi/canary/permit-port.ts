@@ -11,7 +11,7 @@ import type {
 export type Read3<T> = { kind: 'absent' } | { kind: 'ok'; value: T } | { kind: 'unreadable' };
 export type PauseRead = 'absent' | 'present' | 'unreadable';
 
-/** hint 看到的四个输入,惰性读取(判定顺序决定哪些会被读到) */
+/** hint 看到的四个输入,惰性读取(判定顺序决定哪些会被读到);`pause()` = `AUTO_PAUSE`(用户)与 `AUTO_PAUSE_BREAKER`(worker 熔断)两个标记的合并:任一在 → present,否则任一读失败 → unreadable */
 export interface PermitPort {
   pause(): Promise<PauseRead>;
   admission(): Promise<Read3<CanaryAdmission>>;

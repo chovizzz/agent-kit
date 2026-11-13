@@ -160,6 +160,9 @@ export type KeyedEffectResult = 'applied' | 'already' | 'deferred';
 /**
  * 黑名单 / 墓碑 / 冷却的**按键幂等**落地:同一 `key` 只生效一次(`already` = 之前已落地)。落地与记键必须同一持久化步骤(崩溃后要么都有要么都没有)。
  * `deferred` = 本入口不能访问效果的存放处(缩减入口不访问仓库 `.state`),记为待对账,由 worker 的 `recoverTerminalEffects` 续做。
+ * **批次是原子单位**:`terminal:<id>:<sha>` 批次(E2)里的所有 effect 同属一次 `applyOnce`,要么整批落地(`applied`)、要么都没有(`already` / `deferred`)。
+ * `protection_mark` effect(W0-22 第 14 条;W0-23 订正为独立 kind)由 sink 在**同一持久化步骤**内把 `line` 追加为一行审计(沿用 `RsiAuditLine` schema;不经 `AuditSink` 出口、不另起键);
+ * W8 的端口契约测试(假件与真实适配器同跑)必须覆盖:批次 `deferred` 时该行未落;`applied` 时恰好一行;同键重复为 `already` 且不重复落行。
  */
 export interface KeyedEffectSink {
   applyOnce(key: string, effects: readonly TransitionEffect[]): Promise<KeyedEffectResult>;

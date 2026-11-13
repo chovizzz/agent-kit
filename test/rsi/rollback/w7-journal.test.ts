@@ -107,7 +107,20 @@ function expectFinal(w: World7, c: Case, label: string): void {
   expect(w.txns.size, label).toBe(0);
   expect(w.revs, label).toHaveLength(1);
   expect(w.revs[0], label).toMatchObject({ by: c.by, reason: c.reason, content_sha256: SHA });
-  expect([...w.effectApplied.values()], label).toEqual([1]);
+  // W0-22 第 9 条:vetoed 的回滚另有 E1(键 `veto:<id>:<sha>`)与 E2(键 `terminal:<id>:<sha>`)各落一次;其余原因只有 E2 一键
+  const terminalKey = `terminal:${ID}:${SHA}`;
+  const expectedKeys =
+    c.terminal === 'vetoed' ? [`veto:${ID}:${SHA}`, terminalKey].sort() : [terminalKey];
+  expect([...w.effectApplied.keys()].sort(), label).toEqual(expectedKeys);
+  expect([...w.effectApplied.values()], label).toEqual(expectedKeys.map(() => 1));
+  // 黑名单成员按 (id, sha) 只有一个(两批都含 blacklist_veto,集合插入语义)
+  const vetoMembers = new Set(
+    [...w.effectLog.values()]
+      .flat()
+      .filter((e) => e.type === 'blacklist_veto')
+      .map((e) => JSON.stringify([e.id, e.content_sha256])),
+  );
+  expect(vetoMembers.size, label).toBe(c.terminal === 'vetoed' ? 1 : 0);
   expect(
     rc.transitions.filter(
       (t) => t.dim === 'lifecycle' && t.from === 'canary' && t.to === 'rolling_back',
@@ -291,7 +304,10 @@ describe('journal 字段不合规 → refused txn_invalid,零动作(fail-closed)
     await w.d.txns.write(base(over as Partial<PersonalTxn>));
     w.calls.length = 0;
     const out = await resumeAll(w.d);
-    expect(out).toEqual([{ status: 'refused', txn: TXN, why: 'txn_invalid' }]);
+    // 完整性错误:不带事务身份(同 (id, sha) 的 complete 消除不了它)
+    expect(out).toEqual([
+      { status: 'refused', txn: null, journal: TXN, why: 'txn_invalid', cause: 'txn_invalid' },
+    ]);
     expect(w.calls.filter((c) => ACTIONS.includes(c))).toEqual([]);
     expect(w.revs).toHaveLength(0);
     expect(recordOf(w).lifecycle).toBe('canary');
@@ -310,7 +326,13 @@ describe('journal 字段不合规 → refused txn_invalid,零动作(fail-closed)
       target_terminal: 'rolled_back',
       event: { kind: 'veto', evidence: 'rsi veto' },
     });
-    expect(r).toEqual({ status: 'refused', txn: TXN, why: 'txn_invalid' });
+    expect(r).toEqual({
+      status: 'refused',
+      txn: null,
+      journal: TXN,
+      why: 'txn_invalid',
+      cause: 'txn_invalid',
+    });
     expect(w.revs).toHaveLength(0);
   });
 });
@@ -358,7 +380,12 @@ describe('复用在途 txn:journal 语义校验先于任何副作用(较晚事�
     w.calls.length = 0;
     const before = JSON.stringify(recordOf(w));
     const r = await startRollback(w.d, lateVeto);
-    expect(r).toMatchObject({ status: 'refused', txn: TXN });
+    // sha 对不上 = 完整性错误(无事务身份);旧 identity_change journal = 合法但本期不支持(带 txn)
+    expect(r).toMatchObject(
+      'kind' in over
+        ? { status: 'refused', txn: TXN, cause: 'candidate_invalid' }
+        : { status: 'refused', txn: null, journal: TXN, cause: 'txn_invalid' },
+    );
     expect(w.store.commits).toHaveLength(0);
     expect(JSON.stringify(recordOf(w))).toBe(before);
     expect(w.auditLog.size).toBe(0);
@@ -375,14 +402,19 @@ describe('入口校验:事件在写 journal 之前过转移引擎 schema', () =>
       ...reqOf(CASES[0] as Case),
       event: { kind: 'limit', evidence: 'x' } as unknown as TransitionEvent,
     });
-    expect(r).toEqual({ status: 'refused', txn: null, why: 'event_invalid' });
+    expect(r).toEqual({
+      status: 'refused',
+      txn: null,
+      why: 'event_invalid',
+      cause: 'candidate_invalid',
+    });
     // 创建函数自己也拒绝(不靠入口的同名检查兜住)
     expect(
       newJournal(
         { ...reqOf(CASES[0] as Case), event: { kind: 'limit', evidence: 'x' } },
         '2026-11-10T12:00:00.000Z',
       ),
-    ).toEqual({ ok: false, why: 'event_invalid' });
+    ).toEqual({ ok: false, why: 'event_invalid', cause: 'candidate_invalid' });
     expect(w.txns.size).toBe(0);
     expect(w.revs).toHaveLength(0);
     expect(w.calls).toEqual([]);
@@ -398,7 +430,12 @@ describe('入口校验:事件在写 journal 之前过转移引擎 schema', () =>
       by: 'worker',
       target_terminal: 'expired',
     });
-    expect(r).toEqual({ status: 'refused', txn: null, why: 'event_required' });
+    expect(r).toEqual({
+      status: 'refused',
+      txn: null,
+      why: 'event_required',
+      cause: 'manual_event_required',
+    });
     expect(w.txns.size).toBe(0);
     expect(w.revs).toHaveLength(0);
   });

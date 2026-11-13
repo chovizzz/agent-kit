@@ -5898,6 +5898,8 @@ agent-kit judge --confirm-reflector --run <run_id> [--proposal <id>]… --write 
 
 > **冻结后订正 W0-22(2026-11-12)**:hint 读 `AUTO_PAUSE` 与 `AUTO_PAUSE_BREAKER` 两个文件(见 W0-21);`user_paused` 判据 = 用户文件存在;resume 对用户文件的删除按实例令牌、不碰熔断文件。正文见 §21.24 W0-22 第 1 条。
 
+> **冻结后订正 W0-23(2026-11-12)**:熔断标记 `AUTO_PAUSE_BREAKER` 在「状态已无熔断码」时是否补码,由 `state.json.auto_pause.released_marker_id`(解除证据)判定:标记的实例标识 `id` 与证据相等 = 已解除的残留,删标记、不补码;不等 / 任一缺失 = 触发窗口,补码(`at` 只作展示,不参与判定)。正文见 §21.24 W0-23 第 1 条。
+
 - R21-10.2 `[V1]` **码表**(`RSI_AUTO_PAUSE_REASONS`,写进 `state.json.auto_pause.reasons`,可同时存在多个):
 
 | 码                      | 条件                                                                           | 解除                                                                                                       | 期  |
@@ -5919,6 +5921,8 @@ agent-kit judge --confirm-reflector --run <run_id> [--proposal <id>]… --write 
 - R21-10.4 `[V1]` 「自动解除」由 worker 在持锁时重查条件;「`rsi auto resume`」只清除可人工解除的码,条件仍成立的码保留(resume 对它退出 1 `RSI_AUTO_RESUME_BLOCKED reason=<码>`)。
 
 > **冻结后订正 W0-22(2026-11-12)**:`rsi auto resume` 的结果追加:仍有 `personal_repo_diverged` / `personal_owner_changed` / 条件仍成立的自动解除码时退 1;请求完成但熔断标记待 worker 删除时退 0 并输出 `RSI_AUTO_RESUME_PENDING`。正文见 §21.24 W0-22 第 2 条。
+
+> **冻结后订正 W0-23(2026-11-12)**:自动解除与 `rsi auto resume` 把熔断码清到无剩余码的那一次状态写入,必须同时写 `auto_pause.released_marker_id`(被解除的标记的 `id`);否则残留标记会在下次 worker 运行时把已解除的码补回。正文见 §21.24 W0-23 第 1 条。
 
 ### 21.11 防止重复提出
 
@@ -5987,6 +5991,7 @@ agent-kit rsi exec-confirm <id>                                           [V6a]
 - R21-12.2 `[V1]` `rsi auto pause`:独占创建 `.state/rsi/AUTO_PAUSE`(`{at, by: "user"}`),**不拿锁**(须在 worker 持锁时可写);hint 直接读它(R21-6.10);等价熔断码 `user_paused`;不需要 TTY(§21.22 Q-J)。
 
   > **冻结后订正 W0-21(2026-11-12)**:`AUTO_PAUSE` 只归用户命令;worker 熔断另写 `.state/rsi/AUTO_PAUSE_BREAKER`(`{at, by: "breaker", reason}`),hint 任一存在即停注入。正文见 §21.24 W0-21。
+  > **冻结后订正 W0-23(2026-11-13)**:B 的内容追加 `id`(创建时生成的随机 16 位十六进制,解除证据的比较对象;`at` 只作展示),正文见 §21.24 W0-23。
 
 - R21-12.3 `[V1]` `rsi auto resume`:删 `AUTO_PAUSE`、清除可人工解除且条件已不成立的码(R21-10.4)。
 
@@ -6402,6 +6407,8 @@ v3.1 已把用户决定列全;以下是落契约时新发现的契约细节取�
 
 **冻结后订正 W0-22(2026-11-12,W7b / W8 实现前的契约订正)**:用户暂停文件的 resume 删除须按实例令牌且只在封闭写者模型内保证,并给出 resume 结果表(含「请求完成但仍暂停」);`rsi auto clear` 的退出码按事务身份归并,journal 完整性错误先分类、不被其它事务的完成消除;`rsi rollback --to` 的日期边界、日期不可知候选、`[rsi]` 关闭;`rsi show` / 干跑的双读验证协议与 `RSI_SNAPSHOT_BUSY`;受限的只读 git 适配器及其零写入审计模型(含保证边界);`rsi auto status` 的物化视图键与存在性弱协议;`rsi report` 的已观察事件范围;终态「原保护」(origin 四态、E1 / E2 分层);`RollbackOutcome.cause` 封闭枚举;审计 `protection_unknown` / `protection_unclassified`;7 天自动重探的归属改为 W10b。**取代关系**:①W0-21「`rsi auto resume` 删除 `AUTO_PAUSE`」与 R21-12.3「删 `AUTO_PAUSE`」由令牌化的 resume 步骤取代(用户 2026-11-12 选择框「按这三条裁定补完就开工」;R21-10.1、R21-12.3 原位已标注);②W0-18「前台显式重开(归 W8)不受此限」由「归 W10b」取代(用户 2026-11-12 选择框「移出 W8,正式改挂到 W10b」;原位已标注);③R21-4.4a / R21-9.1 的终态效果在「走过回滚」的记录上追加原保护:冷却「原来发什么就发什么」(用户 2026-11-12 选择框「保留原保护」;原位已标注);④W0-21「journal 丢失停在 `rolling_back`」的「可见报错与处置说明归 W8」落到 `rsi auto status` / `rsi show` 与运行手册(原位已标注);⑤§20.8.1 / R21-12.1 零写入四层证据中的「闭包不含 exec」与「`runSync` 计数为 0」两层,对 `rsi show` 与 `rsi auto clear` / `rsi rollback --to` 的干跑由 git 适配器的替代证据取代(用户 2026-11-12 选择框「批准受限的只读 git 适配器」;R21-12.1 原位已标注)。**未改**:R21-4.4a ① 的 `terminal_reason` 优先级与 `target_terminal` 升级规则、终态理由码与转移原因码枚举、熔断码表与各码的解除方式、R21-9.1 各段动作与判据、R21-9.3a、`PersonalTxn` 与 `RsiAuditLine` 的既有字段、`rollback_to` 只用 `cleared`、`rsi status` 既有键集合、R21-3.4 的结构校验。**实现归属**:W7b(`AUTO_PAUSE_BREAKER` 与端口拆分、`originProtection`、E1 / E2、`cause`、审计标记)先于 W8;W8(命令面、适配器、视图读取、协议、退出码归并);常量、`AutoView` schema、码表与枚举的代码落地由对应实现块同批补,本订正不改 `src/`。
 
+**冻结后订正 W0-23(2026-11-12,W7b 评审后的收尾订正)**:熔断标记的解除证据协议(`state.json.auto_pause.released_marker_id`:区分「触发窗口:标记已落盘、状态未写」与「解除窗口:状态已清码、标记未删」,防止已解除的码被残留标记补回);旧格式 journal 缺 `content_sha256` 的失败形状与 `cause`(`incomplete`、保留事务身份、`cause = manual_event_required`);W0-22 第 13、14 条与 R21-11.1「冷却至多一条」的字面核对结果(已有的不重复,只补缺)。**取代关系**:无取代;**扩** W0-21 B 的内容形状(追加实例标识 `id`;2026-11-13 修订:解除证据记 `id` 而非 `at`)、R21-10.1(标记补码的判据)、R21-10.4(解除写入须带证据)、W0-22 第 1 条第 ④ 步(resume 的状态写入须带证据)与第 13 条(旧格式 journal 的形状)。**未改**:`AUTO_PAUSE_BREAKER` 只建不改、已存在不覆盖;worker 任何路径不写、不删 `AUTO_PAUSE`;熔断码表与各码的解除方式;W0-22 第 14 条的保护标记与终态批次的落地方式(实现回到第 14 条字面:标记随 E2 同一批、同一键落地)。**实现归属**:W7b(`breaker.ts`、`pause-marker.ts`、`RsiStateSchema`);W8 的 resume 第 ④ 步照本订正写证据。
+
 ### 21.24 V1 拆期与 W0 订正(冻结后订正 W0-1 … W0-12;2026-11-09,依据用户 2026-11-04 选择框 Q1–Q5、V1i-2、V1i-4…10 按规划稿处理,2026-11-09 选「现在开工 W0 + V1a」)
 
 按节首规则:原位加标注、本节写正文、§21.23 记录。本节**不改**任何已冻结条款的 `[V1]` 标签;被取代的原文在原位以删除线或标注指回本节。W0 只落契约、schema、枚举与 lint 骨架,`RSI_AUTO_PHASE` 仍为 0(R21-0.1)。
@@ -6742,7 +6749,7 @@ W7(回滚四段、撤销凭据写入方、缩减入口、熔断)验收评审发�
 
 - **用户暂停与 worker 熔断各用一个标记文件**(用户 2026-11-12 选择框「用户与 worker 各用一个文件」;扩 R21-6.10、R21-10.1、R21-10.2、R21-12.2):
   - `.state/rsi/AUTO_PAUSE` 只由用户命令写与删:`rsi auto pause` 独占创建 `{at, by: "user"}`(已存在即视为已暂停),`rsi auto resume` 删除。worker 从不创建、不删除它。`user_paused` 的判据 = 该文件存在。
-  - `.state/rsi/AUTO_PAUSE_BREAKER` 只由 worker 写与删:熔断(R21-10.1)在写 `state.json` 之前先独占创建 `{at, by: "breaker", reason}`(`reason` ∈ `RSI_AUTO_PAUSE_REASONS`,取首个触发码;已存在不覆盖),文件与父目录 fsync 之后才写状态;全部熔断码解除后由 worker 删除。标记的职责是保证「注入先停、状态后写」:熔断码的权威记录只在 `state.json.auto_pause.reasons`,标记里的 `reason` 仅用于首个码在「标记已落盘、状态未写」窗口崩溃后的补码。标记已存在时新增的码只写状态;该次状态写入前崩溃等同于尚未触发(与崩溃发生在发现点之前无异,此时注入已因标记停用),由发现点在下次运行时重新判定,不要求标记记录全部码。用户命令不写它;`rsi auto resume` 清码后若无剩余码,由持锁的 worker 路径删除。
+  - `.state/rsi/AUTO_PAUSE_BREAKER` 只由 worker 写与删:熔断(R21-10.1)在写 `state.json` 之前先独占创建 `{at, by: "breaker", reason}`(W0-23:追加 `id`,见该条)(`reason` ∈ `RSI_AUTO_PAUSE_REASONS`,取首个触发码;已存在不覆盖),文件与父目录 fsync 之后才写状态;全部熔断码解除后由 worker 删除。标记的职责是保证「注入先停、状态后写」:熔断码的权威记录只在 `state.json.auto_pause.reasons`,标记里的 `reason` 仅用于首个码在「标记已落盘、状态未写」窗口崩溃后的补码。标记已存在时新增的码只写状态;该次状态写入前崩溃等同于尚未触发(与崩溃发生在发现点之前无异,此时注入已因标记停用),由发现点在下次运行时重新判定,不要求标记记录全部码。用户命令不写它;`rsi auto resume` 清码后若无剩余码,由持锁的 worker 路径删除。
   - **hint**:读集合(R21-6.10)追加 `AUTO_PAUSE_BREAKER`;两个文件**任一存在**即按判定表第 4 行处理,任一读取失败按第 4a 行(`permit_unreadable`)。hint 只判存在,不解析内容;内容只供 worker 恢复时补码,读不出时标记仍然生效(fail-closed)。
   - 两个文件互不覆盖、各有唯一写者,因此「worker 先熔断 → 用户暂停 → 熔断条件恢复」之后用户暂停仍然有效(契约用例,归 W7b)。`rsi exec-run` 守卫(R21-16.4 第 2 项)与其它提到「`AUTO_PAUSE` 存在」的条款,一律读作「两个标记任一存在」。
   - **实现状态**:W7(main c037437)的 worker 仍把熔断标记写进 `AUTO_PAUSE`;按本条改实现与 hint 读集合的工作归小块 **W7b**,在 W8 实现 `rsi auto pause` 之前完成。V1 未发版,不需要兼容旧标记。
@@ -6898,6 +6905,31 @@ W0-18 中「前台显式重开(归 W8)不受此限」取代为「归 W10b」。�
 `RsiAuditLine` 不增键、不扩枚举,用既有 `kind = reconcile`,`reason` 取两个新值之一:`protection_unknown`(起因因转移截断丢失,已补发 90 天保护性冷却)、`protection_unclassified`(回滚记录自相矛盾,已补发 90 天保护性冷却)。行形状 = `{at, kind: reconcile, id, dim: lifecycle, from: rolling_back, to: <终态>, reason, counts: {cooldown_days: 90}}`,`at` 取终态那条 `lifecycle` 条目的时间(确定性,不取当前时刻);经 `append_audit` 效果随 E2 同一批、同一键 `terminal:<id>:<sha>` 发出,`idem_key` 由 `(id, reason, content_sha256)` 导出。即时与恢复调用同一个 `terminalEffectsOf`,键与内容相同,不会重复或漏记。负向:终态已提交后崩溃,recover 仍产出标记;重复 recover 只记一次;不伪造 origin reason。
 
 **未落到契约、留给实现块的项**:第 2、3、7、12、13 条涉及的枚举值、`AutoView` schema、两个常量、`RSI_FAIL_CLOSED reason=` 追加项与信息行常量,需要同批改 `src/contracts/rsi.ts` 与 §20.3 总表(及 `test/contracts/rsi-pending-doc.ts`);本订正只写文字,不加带 `example` 标记的示例。
+
+#### W0-23 W7b 评审后的收尾订正(2026-11-12;R21-10.1、R21-10.4、R21-11.1、R21-12.10、W0-21、W0-22)
+
+主代理对 W7b 实现的独立评审发现的一处崩溃幂等缺口,以及前两位实现者在状态文件「问题」节留下的契约文字。本订正只扩展与补口径;被扩展的原文保留并已原位标注。本订正不新增带 `example` 标记的示例。
+
+**1. 熔断标记的解除证据**(R21-10.1、R21-10.4、W0-21 的标记补码规则、W0-22 第 1 条第 ④ 步;实现归 W7b,W8 的 resume 照此写证据)
+
+- **缺口**:持久事实「`AUTO_PAUSE_BREAKER`(B)存在且合法、`state.json` 无熔断码」有两种来源——**触发窗口**(B 已落盘、状态未写,应按 B 的 `reason` 补码)与**解除窗口**(状态已清码、B 尚未删:自动解除或 `rsi auto resume` 在删 B 前崩溃,或按 W0-22 第 1 条 resume 只清状态、B 留给 worker 下次删除)。两者在盘上完全相同,把后者当前者会把已解除(含人工解除)的码补回来,而该码若只能人工解除就再也不会自动消失。
+- **解除证据**:`state.json.auto_pause` 追加**可选**键 `released_marker_id`(字符串或 `null`;缺键 = `null`;additive,旧状态照常通过;出现但类型不合法按既有规则整份 invalid)。其值 = 被解除的那个 B 文件内容里的实例标识 `id`(见下「B 的实例标识」)。**清空熔断码的那一次状态写入**(自动解除清到无剩余码、`rsi auto resume` 清到无剩余码)在**同一次写入**里把它设为当时 B 的 `id`;B 不存在、内容读不出或无 `id`(旧格式)时设 `null`。仍有剩余码的部分清除不写证据。W8 的 resume 第 ④ 步是这类写入之一:它在持锁快照时读 B 的 `id`,并随清码的写入一并落盘。
+- **`enforceMute` 的判定**(worker 每次拿锁后调用):B 存在、合法(`by = breaker` 且 `reason` 合法)、状态无任何码时——B 的 `id` 与 `released_marker_id` 都是合规字符串(16 位小写十六进制)且相等 → 这是**已解除的残留**:删除 B,**不补码**,不碰 `AUTO_PAUSE`;不等(含 `released_marker_id` 缺键 / 为 `null`、B 无 `id` 或 `id` 格式不对)→ 按触发窗口处理:合法 B 补码;内容读不出的 B 沿用既有 fail-closed 规则(不补码、不删、仍停注入)。`null` 与 `null`、缺键与缺键**不算相等**。自动解除落地在没有任何码被清时不处理残留,统一由 `enforceMute` 收拾。
+- **新触发清回证据**:新的熔断触发成功写入状态时,若 `released_marker_id` 是字符串则清回 `null`。
+- **B 的实例标识**(2026-11-13,W7b 第二次评审修订;W0-23 尚未合并、未发版,直接改名,不留 `released_marker_at` 兼容):B 的内容为 `{at, by: "breaker", reason, id}`,`id` = **创建时**生成的随机 16 位十六进制(每次新建都换新值,删后重建不复用);`parsePauseMarker` 读 `id`,缺失 / 类型错 / 格式不对一律视为无 `id`。**`at` 是墙钟时间(可回拨、可重复),只作展示 / 审计,不参与任何判定**——此前以 `at` 作实例身份时,旧 B(at=T)解除删除后新触发建出的新 B 若 `at` 也是 T,新 B 落盘、状态写入前崩溃,重启会把新 B 当残留删掉,既不补码也不保留停注入(fail-open)。没有 `id` 的旧格式 B 一律按无 `id` 处理,永远不会被当成残留删除(fail-closed)。
+- **已知并接受的边界**:残留 B 尚未删除时又发生新的触发——`ensure` 因 B 已存在不重写(B 只建不改、已存在不覆盖),新码只靠状态写入持久;若该次状态写入前崩溃,等同于尚未触发(与 W0-21 同款说明:由发现点下次运行重新判定),此时 B 仍是残留,下次 `enforceMute` 会把它删掉。
+- **不改**:B 只建不改;任何路径不写、不删 `AUTO_PAUSE`;标记先于状态落盘的顺序;熔断码表与各码的解除方式。
+- **验收与变异(归 W7b)**:人工码清除写盘后、删 B 前崩溃 → 重启后不复活该码、B 被删、`AUTO_PAUSE` 不变;自动解除同款;resume 只清状态留 B(W8 形状)→ 下次 worker 运行删 B、不补码;触发窗口(B 新建、状态未写,证据为 `null` / 缺键 / 旧值)仍补码;B 内容损坏且无码沿用既有规则;变异:去掉 `at` 比较(一律补码、一律删)、解除时不写证据、新触发不清证据、`null` 与 `null` 视为相等,均须被杀。
+
+**2. 旧格式 journal 缺 `content_sha256` 的失败形状**(扩 W0-22 第 13 条;W0-20 的「必需项缺失且不可恢复 = `incomplete`」)
+
+旧格式 journal(无 `content_sha256`,且凭据与记录提交里都无法恢复出与 `txn_id` 绑定的值)的 outcome 是 `incomplete`,**保留事务身份**(`txn` 取 journal 里的 `txn_id`),不写凭据、不动记录、不伪造哈希;`cause = manual_event_required`(缺的是原始事实,等人工补;枚举里没有专用值,不使用 `txn_absent` / `txn_invalid`);仅缺来源的是 `manual_by_ambiguous`。展示文案(`why`)保留 `legacy_unrecoverable:content_sha256`(多项缺失时以逗号连接),不得改写成只需补终止事件的提示。它与「journal 完整性错误」不同:完整性错误(冲突 / 不合规 / 不可解析)仍是 `refused`、`txn: null`、带 journal 句柄、`cause = txn_invalid`,不带事务身份。
+
+**3. 前两位实现者留下的契约文字的逐条核对**
+
+- R21-12.10 的两个标记值:**已在 W0-22 第 14 条**(`protection_unknown`、`protection_unclassified`,含行形状与 `counts.cooldown_days = 90`),不重复。其落地方式以第 14 条字面为准:标记随 E2 同一批、同一键 `terminal:<id>:<sha>` 经带键出口落地,批次返回 `deferred` 时整体 `deferred`(标记也未落)。为承载它,`TransitionEffect` 联合 additive 增加 `protection_mark`(只出现在终态批次 E2 里,由 sink 在同一持久化步骤把审计行落下,不经 `append_audit` 的审计键出口);W8 的端口契约测试须覆盖:批次 `deferred` 时该行未落、`applied` 时恰好一行、同键重复为 `already` 且不重复落行。
+- W0-22 第 13 条的 `cause` 枚举与完整性错误形状:枚举与「完整性错误不带事务身份」**已在第 13 条**;缺的具体形状补在本条第 2 点(完整性错误 = `refused` + `txn: null` + journal 句柄 + `cause = txn_invalid`;旧格式缺哈希 = `incomplete` + 保留身份 + `manual_event_required`)。
+- R21-11.1 冷却至多一条与起因保护:**已在 W0-22 第 9 条**(原来发什么就发什么;并集后只留一条,90 天压 30 天),不重复。
 
 #### W0 订正的合法 / 错误示例
 

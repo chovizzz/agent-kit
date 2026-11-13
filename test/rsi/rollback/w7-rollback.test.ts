@@ -23,7 +23,7 @@ import {
   recordOf,
   world7,
 } from './w7-fixture.js';
-import { rec } from '../personal/transition-fixture.js';
+import { CANARY_AT, entry, rec } from '../personal/transition-fixture.js';
 
 const TXN = rollbackTxnId(ID, SHA);
 const idx = (w: { calls: string[] }, c: string): number => w.calls.indexOf(c);
@@ -353,7 +353,12 @@ describe('identity_changed(E1,V6a):本期入口一律拒绝(M5),不部分执行'
     const w = world7();
     const before = JSON.stringify(recordOf(w));
     const r = await startRollback(w.d, { ...identityReq, event: HARM });
-    expect(r).toEqual({ status: 'refused', txn: null, why: 'identity_not_available_before_v6a' });
+    expect(r).toEqual({
+      status: 'refused',
+      txn: null,
+      why: 'identity_not_available_before_v6a',
+      cause: 'candidate_invalid',
+    });
     expect(w.revs).toHaveLength(0);
     expect(w.txns.size).toBe(0);
     expect(w.calls).toEqual([]);
@@ -367,7 +372,12 @@ describe('identity_changed(E1,V6a):本期入口一律拒绝(M5),不部分执行'
     expect(w.txns.size).toBe(1);
     w.calls.length = 0;
     const r = await startRollback(w.d, identityReq);
-    expect(r).toEqual({ status: 'refused', txn: null, why: 'identity_not_available_before_v6a' });
+    expect(r).toEqual({
+      status: 'refused',
+      txn: null,
+      why: 'identity_not_available_before_v6a',
+      cause: 'candidate_invalid',
+    });
     expect(w.revs).toHaveLength(0);
     expect(w.txns.size).toBe(1);
     expect(w.calls).toEqual([]);
@@ -389,7 +399,12 @@ describe('identity_changed(E1,V6a):本期入口一律拒绝(M5),不部分执行'
     w.calls.length = 0;
     const out = await resumeAll(w.d);
     expect(out).toEqual([
-      { status: 'refused', txn: TXN, why: 'identity_not_available_before_v6a' },
+      {
+        status: 'refused',
+        txn: TXN,
+        why: 'identity_not_available_before_v6a',
+        cause: 'candidate_invalid',
+      },
     ]);
     expect(w.revs).toHaveLength(0);
     expect(w.txns.size).toBe(1);
@@ -453,9 +468,12 @@ describe('复用在途 txn 时较晚到达的终止事件(R21-4.4a ① 自环)',
     });
     expect(r.status).toBe('complete');
     expect(recordOf(w).terminal_reason).toBe('vetoed');
-    expect([...w.effectLog.values()][0]?.map((e) => e.type)).toEqual([
+    // W7b:起因是 harm(进入回滚的条目)→ 终态批次(键 terminal:)按「保留原保护」多一条 90 天冷却;
+    // veto 自环另有 E1(键 veto:),所以不能再取 effectLog 的第一个值
+    expect(w.effectLog.get(`terminal:${ID}:${SHA}`)?.map((e) => e.type)).toEqual([
       'blacklist_veto',
       'write_tombstone',
+      'start_cooldown',
     ]);
     expect(w.revs).toHaveLength(1); // 来源保持 journal 的 worker
   });
@@ -513,9 +531,12 @@ describe('较晚终止事件不静默丢失,也不阻断撤销(记录是唯一�
     w.store.failCommit = null;
     expect((await startRollback(w.d, lateVeto())).status).toBe('complete');
     expect(recordOf(w).terminal_reason).toBe('vetoed');
-    expect([...w.effectLog.values()][0]?.map((e) => e.type)).toEqual([
+    // W7b:起因是 harm(进入回滚的条目)→ 终态批次(键 terminal:)按「保留原保护」多一条 90 天冷却;
+    // veto 自环另有 E1(键 veto:),所以不能再取 effectLog 的第一个值
+    expect(w.effectLog.get(`terminal:${ID}:${SHA}`)?.map((e) => e.type)).toEqual([
       'blacklist_veto',
       'write_tombstone',
+      'start_cooldown',
     ]);
   });
 
@@ -590,6 +611,19 @@ describe('记录与 journal 的组合(续做表)', () => {
       record: rec('rolling_back', {
         deploy: { claude: 'removal_pending', pi: 'none', codex: 'none' },
         rollback: { phase: 'injection_disabled', reason: 'vetoed', target_terminal: 'rolled_back' },
+        // W7b:带进入回滚的起因条目(vetoed)→ 起因已知,终态批次不含保护性冷却;缺这条的矛盾记录见 w7b-protection.test.ts
+        transitions: [
+          entry(1),
+          entry(2, 'canary', CANARY_AT),
+          {
+            dim: 'lifecycle',
+            from: 'canary',
+            to: 'rolling_back',
+            at: '2026-11-02T00:00:00Z',
+            reason: 'vetoed',
+            idem_key: '00000000000000aa',
+          },
+        ],
       }),
     });
     const out = await resumeAll(w.d);
@@ -604,7 +638,7 @@ describe('记录与 journal 的组合(续做表)', () => {
         .map((t) => t.to),
     ).toEqual(['static_removal_pending', 'rollback_complete']);
     // 终态效果:否决黑名单 + 墓碑
-    const eff = [...w.effectLog.values()][0] ?? [];
+    const eff = w.effectLog.get(`terminal:${ID}:${SHA}`) ?? [];
     expect(eff.map((e) => e.type)).toEqual(['blacklist_veto', 'write_tombstone']);
   });
 
@@ -616,7 +650,10 @@ describe('记录与 journal 的组合(续做表)', () => {
       read: async () => ({ kind: 'invalid', why: 'parse' }),
     };
     const out = await resumeAll(w.d);
-    expect(out).toEqual([{ status: 'refused', txn: TXN, why: 'txn_parse' }]);
+    // journal 完整性错误:不带事务身份(txn: null),journal 句柄单独给
+    expect(out).toEqual([
+      { status: 'refused', txn: null, journal: TXN, why: 'txn_parse', cause: 'txn_invalid' },
+    ]);
   });
 });
 

@@ -221,6 +221,7 @@ describe('来源保留(W0-17):崩溃恢复后 by 不变', () => {
         status: 'refused',
         txn: null,
         why: 'event_reason_mismatch',
+        cause: 'candidate_invalid',
       });
       const noEvent = harmReq({ reason, by: 'exec_event' });
       delete noEvent.event;
@@ -228,6 +229,7 @@ describe('来源保留(W0-17):崩溃恢复后 by 不变', () => {
         status: 'refused',
         txn: null,
         why: 'event_required',
+        cause: 'manual_event_required',
       });
     }
     expect(w.txns.size).toBe(0);

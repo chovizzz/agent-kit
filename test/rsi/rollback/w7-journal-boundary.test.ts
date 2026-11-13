@@ -83,7 +83,7 @@ describe('A. 新 journal 写入边界:事件与 reason / target_terminal 不一�
   ] as const)('%s', async (_n, over, why) => {
     const w = world7();
     const r = await startRollback(w.d, harmReq(over as Partial<RollbackRequest>));
-    expect(r).toEqual({ status: 'refused', txn: null, why });
+    expect(r).toEqual({ status: 'refused', txn: null, why, cause: 'candidate_invalid' });
     expect(w.txns.size).toBe(0);
     expect(w.revs).toHaveLength(0);
     expect(w.calls).toEqual([]);
@@ -100,6 +100,7 @@ describe('A. 新 journal 写入边界:事件与 reason / target_terminal 不一�
         status: 'refused',
         txn: null,
         why: 'event_required',
+        cause: 'manual_event_required',
       });
       expect(w.txns.size).toBe(0);
       expect(w.revs).toHaveLength(0);
@@ -139,7 +140,9 @@ describe('A. reconcile 不是例外:拿不到终止事实就不创建 journal', 
   it('harm_c1 的 rolling_back 记录没有 journal:refused event_required,不写 journal / 凭据', async () => {
     const w = rolling('harm_c1');
     const out = await resumeAll(w.d);
-    expect(out).toEqual([{ status: 'refused', txn: null, why: 'event_required' }]);
+    expect(out).toEqual([
+      { status: 'refused', txn: null, why: 'event_required', cause: 'manual_event_required' },
+    ]);
     expect(w.txns.size).toBe(0);
     expect(w.revs).toHaveLength(0);
     expect(noActions(w)).toEqual([]);
@@ -148,7 +151,9 @@ describe('A. reconcile 不是例外:拿不到终止事实就不创建 journal', 
   it('cleared 的 rolling_back 记录没有 journal:来源有歧义(rollback_to / clear)→ refused by_ambiguous,零动作', async () => {
     const w = rolling('cleared');
     const out = await resumeAll(w.d);
-    expect(out).toEqual([{ status: 'refused', txn: null, why: 'by_ambiguous' }]);
+    expect(out).toEqual([
+      { status: 'refused', txn: null, why: 'by_ambiguous', cause: 'manual_by_ambiguous' },
+    ]);
     expect(w.txns.size).toBe(0);
     expect(w.revs).toHaveLength(0);
   });
@@ -226,6 +231,7 @@ describe('B. 旧格式 journal(缺三键):先收齐三项事实,拿不到 → in
           txn: TXN,
           phase: 'rollback_requested',
           why: 'legacy_unrecoverable:terminal_event',
+          cause: 'manual_event_required',
         },
       ]);
       expect(w.revs).toHaveLength(0);
@@ -247,6 +253,7 @@ describe('B. 旧格式 journal(缺三键):先收齐三项事实,拿不到 → in
           txn: TXN,
           phase: 'rollback_requested',
           why: 'legacy_unrecoverable:by',
+          cause: 'manual_by_ambiguous',
         },
       ]);
       expect(w.revs, kind).toHaveLength(0);
@@ -254,7 +261,7 @@ describe('B. 旧格式 journal(缺三键):先收齐三项事实,拿不到 → in
     }
   });
 
-  it('内容哈希:不信权威副本的当前值(记录里有、但没有凭据也没有 recordedSha)→ incomplete(content_sha256),不写凭据', async () => {
+  it('内容哈希:不信权威副本的当前值(记录里有、但没有凭据也没有 recordedSha)→ W0-20:必需项缺失且不可恢复 = incomplete(带事务身份 txn;cause manual_event_required),不写凭据', async () => {
     const w = world7(); // store 里的记录 content_sha256 == SHA,与 txn_id 对得上,但不是契约允许的来源
     await w.d.txns.write(legacy({ reason: 'vetoed' }));
     const out = await resumeAll(w.d);
@@ -264,6 +271,7 @@ describe('B. 旧格式 journal(缺三键):先收齐三项事实,拿不到 → in
         txn: TXN,
         phase: 'rollback_requested',
         why: 'legacy_unrecoverable:content_sha256',
+        cause: 'manual_event_required',
       },
     ]);
     expect(w.revs).toHaveLength(0);
@@ -276,13 +284,20 @@ describe('B. 旧格式 journal(缺三键):先收齐三项事实,拿不到 → in
     await w.d.txns.write(legacy({ reason: 'vetoed' }));
     expect((await resumeAll(w.d))[0]).toMatchObject({
       status: 'incomplete',
+      txn: TXN,
       why: 'legacy_unrecoverable:content_sha256',
+      cause: 'manual_event_required',
     });
     const r = await startRollback(
       w.d,
       harmReq({ reason: 'vetoed', by: 'veto', event: { kind: 'veto', evidence: 'rsi veto' } }),
     );
-    expect(r).toMatchObject({ status: 'incomplete', why: 'legacy_unrecoverable:content_sha256' });
+    expect(r).toMatchObject({
+      status: 'incomplete',
+      txn: TXN,
+      why: 'legacy_unrecoverable:content_sha256',
+      cause: 'manual_event_required',
+    });
     expect(w.revs).toHaveLength(0);
     expect(noActions(w)).toEqual([]);
   });
@@ -291,7 +306,9 @@ describe('B. 旧格式 journal(缺三键):先收齐三项事实,拿不到 → in
     const w = world7();
     await w.d.txns.write(legacy({ reason: 'cleared', kind: 'rollback' }));
     expect((await resumeAll(w.d))[0]).toMatchObject({
+      status: 'incomplete',
       why: 'legacy_unrecoverable:by,content_sha256',
+      cause: 'manual_event_required',
     });
   });
 
@@ -340,7 +357,9 @@ describe('B. 旧格式 journal(缺三键):先收齐三项事实,拿不到 → in
         terminal_event: HARM as unknown as Record<string, unknown>,
       }),
     );
-    expect(await resumeAll(w.d)).toEqual([{ status: 'refused', txn: TXN, why: 'txn_invalid' }]);
+    expect(await resumeAll(w.d)).toEqual([
+      { status: 'refused', txn: null, journal: TXN, why: 'txn_invalid', cause: 'txn_invalid' },
+    ]);
     expect(w.revs).toHaveLength(0);
   });
 });
@@ -356,7 +375,12 @@ describe('A. 复用在途 txn 时较晚事件不合规', () => {
       ...harmReq(),
       event: { kind: 'limit', evidence: 'x' } as unknown as TransitionEvent,
     });
-    expect(r).toEqual({ status: 'refused', txn: null, why: 'event_invalid' });
+    expect(r).toEqual({
+      status: 'refused',
+      txn: null,
+      why: 'event_invalid',
+      cause: 'candidate_invalid',
+    });
     expect(noActions(w)).toEqual([]);
     expect(JSON.stringify(recordOf(w))).toBe(before);
     expect(w.txns.size).toBe(1);

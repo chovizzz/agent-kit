@@ -24,9 +24,16 @@
 import { RSI_ROLLBACK_PHASES } from '../../contracts/rsi.js';
 import type { PersonalLifecycleRecord, PersonalTxn } from '../../contracts/rsi-personal.js';
 import { applyEvent, type ApplyDeps, type ApplyResult } from './candidate-apply.js';
+import type { StepHalt } from './candidate-ports.js';
 import { RsiLockError } from '../lock-error.js';
 import type { HeldLock } from '../canary/atomic-write.js';
-import { keyedAuditSink, landAuditEffects, landTerminalEffects } from './effects-recover.js';
+import {
+  aggregateLanding,
+  keyedAuditSink,
+  landAuditEffects,
+  landTerminalEffects,
+  vetoEffectKey,
+} from './effects-recover.js';
 import { PersonalStateError } from './home-state.js';
 import {
   PortNotWired,
@@ -44,6 +51,7 @@ import {
   rollbackTxnId,
   uniqueBy,
   type JournalCtx,
+  type RollbackCause,
 } from './rollback-journal.js';
 import {
   TransitionEventSchema,
@@ -52,6 +60,7 @@ import {
 } from './transition-table.js';
 
 export { rollbackTxnId };
+export type { RollbackCause };
 
 type RollbackPhase = (typeof RSI_ROLLBACK_PHASES)[number];
 const PHASES: readonly RollbackPhase[] = RSI_ROLLBACK_PHASES;
@@ -142,20 +151,44 @@ export type RollbackOutcome =
       workingMarked: boolean;
       lateEventNotApplied?: string;
     }
-  /** 本段 / 收尾没有完成:journal 保留,下一次 `resumeTxn` / `resumeAll` 续做 */
+  /** 本段 / 收尾没有完成:journal 保留,下一次 `resumeTxn` / `resumeAll` 续做。失败 variant:`cause` 必填(`why` 保留给展示) */
   | {
       status: 'incomplete';
       txn: string;
       phase: RollbackPhase;
       why: string;
+      cause: RollbackCause;
       /** 复用在途 txn 时带来的较晚终止事件没有(或尚未)持久化的原因;调用方据此重试(见 {@link lateEventStatus}) */
       lateEventNotApplied?: string;
     }
-  | { status: 'refused'; txn: string | null; why: string };
+  /**
+   * 失败 variant:`cause` 必填。journal 完整性错误(冲突 / 不合规 / 不可解析;`cause = txn_invalid`)与事务结果分开:它**不带事务身份**
+   * (`txn: null`,journal 文件句柄在 `journal`),所以同 `(id, sha)` 的后续 `complete` 无法消除它。
+   */
+  | { status: 'refused'; txn: string | null; journal?: string; why: string; cause: RollbackCause };
+
+/** 失败 variant 的名字(`cause` 完备性测试按它穷举) */
+export type RollbackFailureStatus = Extract<RollbackOutcome, { cause: RollbackCause }>['status'];
+
+/** journal 完整性错误:不带事务身份(见 {@link RollbackOutcome}) */
+const integrityRefusal = (journal: string, why: string): RollbackOutcome => ({
+  status: 'refused',
+  txn: null,
+  journal,
+  why,
+  cause: 'txn_invalid',
+});
 
 const step = async (d: RollbackDeps, name: string): Promise<void> => {
   await d.onStep?.(name);
 };
+
+/** `readJournal` 的 `invalid`:完整性错误不带身份;本期不支持的合法 journal(identity_change)是带 txn 的 candidate_invalid */
+function invalidJournal(id: string, r: { why: string; cause: RollbackCause }): RollbackOutcome {
+  return r.cause === 'txn_invalid'
+    ? integrityRefusal(id, r.why)
+    : { status: 'refused', txn: id, why: r.why, cause: r.cause };
+}
 
 /** 读 journal 得到执行上下文并执行;不合规 = refused,必需项缺失(旧格式)= incomplete,都先于任何事务动作(见 rollback-journal.ts) */
 async function drive(
@@ -164,9 +197,9 @@ async function drive(
   x: { hint?: TransitionEvent | undefined },
 ): Promise<RollbackOutcome> {
   const r = await readJournal(d, t);
-  if (r.kind === 'invalid') return { status: 'refused', txn: t.txn_id, why: r.why };
+  if (r.kind === 'invalid') return invalidJournal(t.txn_id, r);
   if (r.kind === 'incomplete') {
-    return { status: 'incomplete', txn: t.txn_id, phase: t.phase, why: r.why };
+    return { status: 'incomplete', txn: t.txn_id, phase: t.phase, why: r.why, cause: r.cause };
   }
   return runGuarded(d, t, { ...r.ctx, hint: x.hint });
 }
@@ -182,31 +215,51 @@ export async function startRollback(
 ): Promise<RollbackOutcome> {
   const identity = req.kind === 'identity_change';
   if (identity !== (req.reason === 'identity_changed')) {
-    return { status: 'refused', txn: null, why: 'identity_kind_mismatch' };
+    return {
+      status: 'refused',
+      txn: null,
+      why: 'identity_kind_mismatch',
+      cause: 'candidate_invalid',
+    };
   }
   if (identity !== ((req.identity12 ?? null) !== null)) {
-    return { status: 'refused', txn: null, why: 'identity12_mismatch' };
+    return { status: 'refused', txn: null, why: 'identity12_mismatch', cause: 'candidate_invalid' };
   }
   // E1(V6a)本期没有交付:不写 journal、不动任何东西(不部分执行)
-  if (identity) return { status: 'refused', txn: null, why: 'identity_not_available_before_v6a' };
+  if (identity) {
+    return {
+      status: 'refused',
+      txn: null,
+      why: 'identity_not_available_before_v6a',
+      cause: 'candidate_invalid',
+    };
+  }
   // 较晚事件(复用在途 txn 时)在写任何东西之前过转移引擎的事件 schema
   let late: TransitionEvent | undefined;
   if (req.event !== undefined) {
     const p = TransitionEventSchema.safeParse(req.event);
-    if (!p.success) return { status: 'refused', txn: null, why: 'event_invalid' };
+    if (!p.success) {
+      return { status: 'refused', txn: null, why: 'event_invalid', cause: 'candidate_invalid' };
+    }
     late = p.data;
   }
   await d.locks.personal.assertHeld();
   const id = rollbackTxnId(req.candidate_id, req.content_sha256);
   const cur = await d.txns.read(id);
-  if (cur.kind === 'invalid') return { status: 'refused', txn: id, why: `txn_${cur.why}` };
+  if (cur.kind === 'invalid') return integrityRefusal(id, `txn_${cur.why}`);
   if (cur.kind === 'ok') {
     // 已有在途 txn:复用,不新开;来源 / 内容 / 事件一律取 journal 的(请求的 `by` 可能与 journal 的 `reason` 不相容)
     // journal 的语义校验先于任何副作用(较晚事件的施加会提交记录):不合规 = refused、缺项 = incomplete,零动作
     const jr = await readJournal(d, cur.value);
-    if (jr.kind === 'invalid') return { status: 'refused', txn: id, why: jr.why };
+    if (jr.kind === 'invalid') return invalidJournal(id, jr);
     if (jr.kind === 'incomplete') {
-      return { status: 'incomplete', txn: id, phase: cur.value.phase, why: jr.why };
+      return {
+        status: 'incomplete',
+        txn: id,
+        phase: cur.value.phase,
+        why: jr.why,
+        cause: jr.cause,
+      };
     }
     const lateWhy = await lateEventStatus(d, late, req.candidate_id);
     const out = await runGuarded(d, cur.value, { ...jr.ctx, hint: late });
@@ -217,7 +270,7 @@ export async function startRollback(
   }
   // 新 journal 只经唯一的创建函数:三项恢复字段齐备、事件与 reason / target 一致,否则零副作用地拒绝(W0-20)
   const nj = newJournal(req, d.now().toISOString());
-  if (!nj.ok) return { status: 'refused', txn: null, why: nj.why };
+  if (!nj.ok) return { status: 'refused', txn: null, why: nj.why, cause: nj.cause };
   await step(d, 'before:journal_requested');
   await d.txns.write(nj.txn);
   await step(d, 'journal:rollback_requested');
@@ -233,8 +286,10 @@ export async function startRollback(
 export async function resumeTxn(d: RollbackDeps, id: string): Promise<RollbackOutcome> {
   await d.locks.personal.assertHeld();
   const cur = await d.txns.read(id);
-  if (cur.kind === 'absent') return { status: 'refused', txn: id, why: 'txn_absent' };
-  if (cur.kind === 'invalid') return { status: 'refused', txn: id, why: `txn_${cur.why}` };
+  if (cur.kind === 'absent') {
+    return { status: 'refused', txn: id, why: 'txn_absent', cause: 'txn_absent' };
+  }
+  if (cur.kind === 'invalid') return integrityRefusal(id, `txn_${cur.why}`);
   return drive(d, cur.value, {});
 }
 
@@ -252,7 +307,7 @@ export async function resumeAll(d: RollbackDeps): Promise<RollbackOutcome[]> {
     // 来源只在 (kind, reason) 唯一对应时才有;终止事实只重建无证据要求的(clear / veto / taint)。拿不到 = 不创建 journal(见 newJournal)
     const by = uniqueBy('reconcile', rec.rollback.reason);
     if (by === undefined) {
-      out.push({ status: 'refused', txn: null, why: 'by_ambiguous' });
+      out.push({ status: 'refused', txn: null, why: 'by_ambiguous', cause: 'manual_by_ambiguous' });
       continue;
     }
     out.push(
@@ -287,23 +342,30 @@ async function runGuarded(d: RollbackDeps, t: PersonalTxn, c: RunCtx): Promise<R
         txn: t.txn_id,
         phase: t.phase,
         why: `port_not_wired:${e.port}`,
+        cause: 'not_wired',
       };
     }
     if (e instanceof PersonalStateError && e.kind === 'revocations_invalid') {
-      return { status: 'incomplete', txn: t.txn_id, phase: t.phase, why: 'revocations_invalid' };
+      return {
+        status: 'incomplete',
+        txn: t.txn_id,
+        phase: t.phase,
+        why: 'revocations_invalid',
+        cause: 'credentials_invalid',
+      };
     }
     throw e;
   }
 }
 
-type PhaseResult = { ok: true } | { ok: false; why: string };
+type PhaseResult = { ok: true } | { ok: false; why: string; cause: RollbackCause };
 
 async function run(d: RollbackDeps, t0: PersonalTxn, c: RunCtx): Promise<RollbackOutcome> {
   let t = t0;
   for (const phase of PHASES.slice(phaseIdx(t.phase))) {
     await step(d, `enter:${phase}`);
     const r = await doPhase(d, t, phase, c);
-    if (!r.ok) return { status: 'incomplete', txn: t.txn_id, phase, why: r.why };
+    if (!r.ok) return { status: 'incomplete', txn: t.txn_id, phase, why: r.why, cause: r.cause };
     await step(d, `done:${phase}`);
     const next = PHASES[phaseIdx(phase) + 1];
     if (next !== undefined) {
@@ -349,13 +411,31 @@ async function injectionDisabled(d: RollbackDeps, t: PersonalTxn, c: RunCtx): Pr
   await step(d, 'after:revocation');
   // 判据:凭据**已在盘上**(重读,不信写入返回值)
   const rv = await d.revocations.read();
-  if (rv.kind !== 'ok') return { ok: false, why: 'revocations_invalid' };
+  if (rv.kind !== 'ok')
+    return { ok: false, why: 'revocations_invalid', cause: 'credentials_invalid' };
   if (!rv.lines.some((l) => l.candidate_id === t.candidate_id && l.content_sha256 === sha)) {
-    return { ok: false, why: 'revocation_missing' };
+    return { ok: false, why: 'revocation_missing', cause: 'credentials_invalid' };
   }
   await d.cache.clean({ candidate_id: t.candidate_id, content_sha256: sha });
   await step(d, 'after:cache');
   return { ok: true };
+}
+
+/** 引擎 halt → cause(逐值映射,无兜底;新增 `StepHalt` 值会让这里编译失败) */
+function haltCause(h: StepHalt): RollbackCause {
+  switch (h) {
+    case 'repo_absent':
+    case 'repo_deferred':
+    case 'repo_invalid':
+      return 'repo_unreadable';
+    case 'revocations_invalid':
+      return 'credentials_invalid';
+    case 'candidate_invalid':
+      return 'candidate_invalid';
+    case 'commit_failed':
+    case 'lock_lost':
+      return 'retryable';
+  }
 }
 
 // --- 记录 / 仓库侧 ---
@@ -365,8 +445,19 @@ const applyDeps = (d: RollbackDeps): ApplyDeps => ({
   revocations: d.revocations,
   // 审计行经带键端口落地(键 = 转移条目的 idem_key,见 `keyedAuditSink`):提交后崩溃、落地失败都由收尾按记录补做,同一事件不会重复
   audit: keyedAuditSink(d.keyedEffects),
-  // 终态效果只经带键的落地(`landTerminalEffects`),这里不重复落(否则同一终态会被无键 + 有键各落一次)
-  effects: { apply: async () => undefined },
+  // 终态批次 E2 只经带键的落地(`landTerminalEffects`),这里不重复落(否则同一终态会被无键 + 有键各落一次);
+  // 例外:veto 事件的即时黑名单 E1 按 `vetoEffectKey` 单独落(按 (id, sha) 集合插入的 effect 语义容许它与 E2 含同一黑名单)。
+  // 保护审计标记(`protection_mark`)是 E2 批次的一员,即时路径里这里**不**落它(落了就会脱离冷却 / 墓碑所在的批次),只在收尾随 `terminal:` 键整批落地。
+  // 返回值说明:`EffectSink.apply` / `AuditSink` 端口不返回结果,这里两处 `applyOnce` 的 `deferred` 不能直接上抛;它们的补做不依赖返回值——E1 由
+  // `recoverTerminalEffects` 第二遍(回滚未完成)与 E2 的黑名单(终态)补,审计行由收尾的 `landAuditEffects`(同键)补并把 `deferred` 聚合进整体结果。
+  // 提交后落地失败由 `recoverTerminalEffects` 的第二遍补(回滚未完成时 E2 还不存在)
+  effects: {
+    apply: async (effects) => {
+      for (const e of effects) {
+        if (e.type === 'blacklist_veto') await d.keyedEffects.applyOnce(vetoEffectKey(e), [e]);
+      }
+    },
+  },
   env: d.env,
   now: d.now,
 });
@@ -416,7 +507,7 @@ async function revokeTargets(d: RollbackDeps, t: PersonalTxn): Promise<string[] 
 }
 
 type RecordPart =
-  | { repo: 'ok'; rec: PersonalLifecycleRecord; note?: string }
+  | { repo: 'ok'; rec: PersonalLifecycleRecord; note?: { why: string; cause: RollbackCause } }
   | { repo: 'none' | 'deferred' | 'invalid'; why?: string };
 
 /** 读记录并把非终态、非回滚中的记录用终止事件推进(canary → rolling_back;proposed / shadow → 终态);推进失败不阻断 HOME 侧(凭据已落盘),在 `note` 里报 */
@@ -440,10 +531,26 @@ async function driveRecord(d: RollbackDeps, t: PersonalTxn, c: RunCtx): Promise<
       if (r.halt === 'repo_deferred') return { repo: 'deferred', why: r.why ?? 'deferred' };
       if (r.halt === 'repo_invalid') return { repo: 'invalid', why: r.why ?? 'invalid' };
       if (r.halt === 'repo_absent') return { repo: 'none' };
-      return { repo: 'ok', rec, note: `record_halt:${r.halt}` };
+      return {
+        repo: 'ok',
+        rec,
+        note: {
+          why: `record_halt:${r.halt}`,
+          cause: haltCause(r.halt),
+        },
+      };
     } else if (r.kind === 'refused') {
-      return { repo: 'ok', rec, note: `record_refused:${r.refusal.guard ?? r.refusal.refused}` };
-    } else if (r.kind === 'stale') return { repo: 'ok', rec, note: 'record_stale' };
+      return {
+        repo: 'ok',
+        rec,
+        note: {
+          why: `record_refused:${r.refusal.guard ?? r.refusal.refused}`,
+          cause: 'candidate_invalid',
+        },
+      };
+    } else if (r.kind === 'stale') {
+      return { repo: 'ok', rec, note: { why: 'record_stale', cause: 'retryable' } };
+    }
   }
   return { repo: 'ok', rec };
 }
@@ -487,9 +594,13 @@ async function advanceRecordTo(
 async function staticRemoval(d: RollbackDeps, t: PersonalTxn, c: RunCtx): Promise<PhaseResult> {
   const part = await driveRecord(d, t, c);
   await step(d, 'after:record_event');
-  if (part.repo === 'invalid') return { ok: false, why: `repo_invalid:${part.why ?? ''}` };
+  if (part.repo === 'invalid') {
+    return { ok: false, why: `repo_invalid:${part.why ?? ''}`, cause: 'repo_unreadable' };
+  }
   // 记录没能被推进(事件无法还原 / 引擎拒绝 / 并发变化):不删仓库文件(记录仍在生效状态),本段未完成,journal 保留待续
-  if (part.repo === 'ok' && part.note !== undefined) return { ok: false, why: part.note };
+  if (part.repo === 'ok' && part.note !== undefined) {
+    return { ok: false, why: part.note.why, cause: part.note.cause };
+  }
   let deferred = part.repo === 'deferred';
   if (part.repo === 'ok') {
     const sha = part.rec.content_sha256;
@@ -498,7 +609,9 @@ async function staticRemoval(d: RollbackDeps, t: PersonalTxn, c: RunCtx): Promis
       t.kind === 'clear' ? 'clear' : 'rollback',
     );
     await step(d, 'after:repo_removal');
-    if (rem.status === 'invalid') return { ok: false, why: `repo_invalid:${rem.why}` };
+    if (rem.status === 'invalid') {
+      return { ok: false, why: `repo_invalid:${rem.why}`, cause: 'repo_unreadable' };
+    }
     if (rem.status === 'deferred') deferred = true;
     else await advanceRecordTo(d, t, part.rec, 'static_removal_pending');
   } else {
@@ -508,12 +621,15 @@ async function staticRemoval(d: RollbackDeps, t: PersonalTxn, c: RunCtx): Promis
   // deferred 下第三段的动作包含「以上次已同步版本减去凭据所列候选为目标重渲染本机 payload」,所以先经撤销路径清,再验证缺席(不能把后一步的结果当前置条件 → 死锁)
   if (deferred) {
     const ids = await revokeTargets(d, t);
-    if (ids === null) return { ok: false, why: 'revocations_invalid' };
+    if (ids === null)
+      return { ok: false, why: 'revocations_invalid', cause: 'credentials_invalid' };
     const r = await d.payload.revoke(ids);
-    if (r.status === 'drift') return { ok: false, why: `drift:${r.why}` };
-    if (r.status === 'unavailable') return { ok: false, why: `payload_unavailable:${r.why}` };
+    if (r.status === 'drift') return { ok: false, why: `drift:${r.why}`, cause: 'retryable' };
+    if (r.status === 'unavailable') {
+      return { ok: false, why: `payload_unavailable:${r.why}`, cause: 'repo_unreadable' };
+    }
     if (!(await d.payload.absent(t.candidate_id))) {
-      return { ok: false, why: 'deferred_payload_still_has_candidate' };
+      return { ok: false, why: 'deferred_payload_still_has_candidate', cause: 'retryable' };
     }
   }
   return { ok: true };
@@ -523,23 +639,27 @@ async function staticRemoval(d: RollbackDeps, t: PersonalTxn, c: RunCtx): Promis
 async function rollbackComplete(d: RollbackDeps, t: PersonalTxn): Promise<PhaseResult> {
   // 目标 = 「上次已同步版本减去撤销凭据所列候选」
   const ids = await revokeTargets(d, t);
-  if (ids === null) return { ok: false, why: 'revocations_invalid' };
+  if (ids === null) return { ok: false, why: 'revocations_invalid', cause: 'credentials_invalid' };
   const r = await d.payload.revoke(ids);
   await step(d, 'after:payload');
-  if (r.status === 'drift') return { ok: false, why: `drift:${r.why}` };
-  if (r.status === 'unavailable') return { ok: false, why: `payload_unavailable:${r.why}` };
-  if (!(await d.payload.absent(t.candidate_id)))
-    return { ok: false, why: 'payload_still_has_candidate' };
+  if (r.status === 'drift') return { ok: false, why: `drift:${r.why}`, cause: 'retryable' };
+  if (r.status === 'unavailable') {
+    return { ok: false, why: `payload_unavailable:${r.why}`, cause: 'repo_unreadable' };
+  }
+  if (!(await d.payload.absent(t.candidate_id))) {
+    return { ok: false, why: 'payload_still_has_candidate', cause: 'retryable' };
+  }
   return { ok: true };
 }
 
 // --- 收尾:记录到终态 → 终态效果 → 删 journal ---
 async function finish(d: RollbackDeps, t: PersonalTxn, c: RunCtx): Promise<RollbackOutcome> {
-  const inc = (why: string): RollbackOutcome => ({
+  const inc = (why: string, cause: RollbackCause): RollbackOutcome => ({
     status: 'incomplete',
     txn: t.txn_id,
     phase: 'rollback_complete',
     why,
+    cause,
   });
   await step(d, 'before:finish');
   // 撤销四段已全部完成;以下只剩记录推进 / 仓库移除 / 终态效果。分叉(R21-9.3a)只推迟后者,不推翻前者
@@ -566,12 +686,12 @@ async function finish(d: RollbackDeps, t: PersonalTxn, c: RunCtx): Promise<Rollb
   ) {
     // 记录还没被推进(R21-9.3a:分叉期间被推迟的提交,或续做时第三段已过):先补做被推迟的记录推进与仓库移除(「第一个持锁写入方先补做」)
     const r = await staticRemoval(d, t, c);
-    if (!r.ok) return inc(r.why);
+    if (!r.ok) return inc(r.why, r.cause);
     rd = await d.store.read(t.candidate_id);
   }
   let effects: 'applied' | 'already' | 'deferred' | 'none' = 'none';
   if (rd.kind === 'deferred') return deferredDone(`repo_deferred:${rd.why}`);
-  if (rd.kind === 'invalid') return inc(`repo_invalid:${rd.why}`);
+  if (rd.kind === 'invalid') return inc(`repo_invalid:${rd.why}`, 'repo_unreadable');
   if (rd.kind === 'ok') {
     let rec = rd.record;
     // 第三段允许 deferred:分叉解除后在这里补做仓库移除(重新从盘上判据检查,`already` = 已删;不能用 journal 的 phase 推断它做过)
@@ -579,12 +699,12 @@ async function finish(d: RollbackDeps, t: PersonalTxn, c: RunCtx): Promise<Rollb
       { id: rec.id, content_sha256: rec.content_sha256, target_paths: rec.target_paths },
       t.kind === 'clear' ? 'clear' : 'rollback',
     );
-    if (rem.status === 'invalid') return inc(`repo_invalid:${rem.why}`);
+    if (rem.status === 'invalid') return inc(`repo_invalid:${rem.why}`, 'repo_unreadable');
     if (rem.status === 'deferred') return deferredDone(`repo_deferred:${rem.why}`);
     if (rec.lifecycle === 'rolling_back') {
       rec = await advanceRecordTo(d, t, rec, 'rollback_complete');
       if (rec.lifecycle === 'rolling_back' && rec.rollback?.phase !== 'rollback_complete') {
-        return inc('record_lagging');
+        return inc('record_lagging', 'retryable');
       }
       if (rec.lifecycle === 'rolling_back') {
         for (const agent of ['claude', 'pi', 'codex'] as const) {
@@ -604,18 +724,22 @@ async function finish(d: RollbackDeps, t: PersonalTxn, c: RunCtx): Promise<Rollb
         });
         if (r.kind === 'transitioned') rec = r.next;
         else if (r.kind === 'refused') {
-          return inc(`record_refused:${r.refusal.guard ?? r.refusal.refused}`);
-        } else if (r.kind === 'halt') return inc(`record_halt:${r.halt}`);
-        else {
+          return inc(`record_refused:${r.refusal.guard ?? r.refusal.refused}`, 'candidate_invalid');
+        } else if (r.kind === 'halt') {
+          return inc(`record_halt:${r.halt}`, haltCause(r.halt));
+        } else {
           const re = await d.store.read(t.candidate_id);
           if (re.kind === 'ok') rec = re.record;
         }
       }
     }
     await step(d, 'after:record_terminal');
-    if (!isTerminalLifecycle(rec.lifecycle)) return inc('record_not_terminal');
-    effects = await landTerminalEffects(d.keyedEffects, rec);
-    await landAuditEffects(d.keyedEffects, rec);
+    if (!isTerminalLifecycle(rec.lifecycle)) return inc('record_not_terminal', 'retryable');
+    // 终态批次 E2(含保护标记,同键同批)与回滚审计行都经带键出口;任一 `deferred` → 整体 `deferred`(待对账,由终态记录经 `recoverTerminalEffects` 续做)
+    effects = aggregateLanding(
+      await landTerminalEffects(d.keyedEffects, rec),
+      await landAuditEffects(d.keyedEffects, rec),
+    );
     await step(d, 'after:effects');
   }
   await d.locks.personal.assertHeld();

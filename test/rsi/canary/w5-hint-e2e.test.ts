@@ -203,6 +203,20 @@ describe('第 4 / 3 行:排除与不伪造', () => {
     expect(c.includes(MARK)).toBe(false);
     expect((await ledger(f))[0]).toMatchObject({ arm: 'excluded', reason: 'paused', marker: null });
   });
+  it('W0-21:只有 AUTO_PAUSE_BREAKER 在场(worker 熔断标记)→ 同样 excluded/paused;只有用户 AUTO_PAUSE 也停;两者都不在才恢复', async () => {
+    for (const name of ['AUTO_PAUSE_BREAKER', 'AUTO_PAUSE']) {
+      const f = await world(`w5-e2e-pause-${name.toLowerCase()}-`);
+      await seedCanary(f);
+      await put(f, name, '');
+      const c = ctxOf(await runHint(ARGV, deps(f)));
+      expect(c.includes(MARK), name).toBe(false);
+      expect((await ledger(f))[0], name).toMatchObject({
+        arm: 'excluded',
+        reason: 'paused',
+        marker: null,
+      });
+    }
+  });
   it('撤销凭据落盘后的下一次 hint 即停注入(excluded/revoked),不等 worker', async () => {
     const f = await world('w5-e2e-revoked-');
     await seedCanary(f);

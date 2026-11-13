@@ -5,9 +5,9 @@
  *
  * 顺序固定、先命中先用:
  *  2   自动循环未开启(R21-2.2)、`RSI_AUTO_PHASE < 2`、agent 为 codex → none(无输出、无写入)
- *  2a  探针行:`AUTO_PAUSE` 不存在、该 agent 准入为 `probing` 且未过期、`shape_version` / `agent_version` 现算一致 → probe(**先于候选存在性检查**)
+ *  2a  探针行:`AUTO_PAUSE` 与 `AUTO_PAUSE_BREAKER` 都不存在(W0-21)、该 agent 准入为 `probing` 且未过期、`shape_version` / `agent_version` 现算一致 → probe(**先于候选存在性检查**)
  *  3   `canary.json` 不存在 / 读取失败 / schema 或语义不合法 → none(没有合法 `candidate_id`,不伪造账行)
- *  4   已知候选但 `AUTO_PAUSE` 在、准入未过、`policy_fp` 不符、agent 不在 `agents_inject`、撤销凭据命中 → excluded + 原因码
+ *  4   已知候选但 `AUTO_PAUSE` 或 `AUTO_PAUSE_BREAKER` 任一在(W0-21)、准入未过、`policy_fp` 不符、agent 不在 `agents_inject`、撤销凭据命中 → excluded + 原因码
  *  4a  上面任一输入「读不到 / 解析失败 / 超过 1MiB」且没有更早命中的第 4 行原因 → excluded(`permit_unreadable`)
  *  之后(随机、第 5–8 行)由调用方执行:返回 `randomize`。
  *

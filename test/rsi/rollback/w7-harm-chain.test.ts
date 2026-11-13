@@ -81,7 +81,7 @@ describe('串接', () => {
     const r = await onAnalysisOutcome(w.d, harmOutcome(), canaryRec());
     expect(r).toMatchObject({
       kind: 'rolled',
-      outcome: { status: 'incomplete', why: 'port_not_wired:payload_sync' },
+      outcome: { status: 'incomplete', why: 'port_not_wired:payload_sync', cause: 'not_wired' },
     });
     expect(w.revs).toHaveLength(1);
     expect(w.txns.size).toBe(1);

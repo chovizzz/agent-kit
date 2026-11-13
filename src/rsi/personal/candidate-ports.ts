@@ -85,7 +85,10 @@ export interface AuditSink {
   appendKeyed?(items: readonly { line: RsiAuditLine; idem_key?: string }[]): Promise<void>;
 }
 
-/** 转移引擎产出的外部效果(黑名单 / 墓碑 / 冷却)。持久化的 outbox 归 W7;失败抛错,步骤把它记为 `effects_failed` */
+/**
+ * 转移引擎产出的外部效果(黑名单 / 墓碑 / 冷却)。持久化的 outbox 归 W7;失败抛错,步骤把它记为 `effects_failed`。
+ * 终态批次里的 `protection_mark`(W0-23)**只能**经带键的 `KeyedEffectSink.applyOnce(terminal:…)` 与同批效果一起落地;本无键出口收到它必须忽略(回滚执行器的实现就是只处理黑名单、忽略其余)。
+ */
 export interface EffectSink {
   apply(effects: readonly TransitionEffect[]): Promise<void>;
 }

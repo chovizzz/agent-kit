@@ -1,5 +1,5 @@
 /**
- * hint `--canary` 的**只读**许可读取(docs/contracts.md R21-6.10 的读集合):`.state/rsi/{canary.json, canary-admission.json, AUTO_PAUSE}` 与
+ * hint `--canary` 的**只读**许可读取(docs/contracts.md R21-6.10 的读集合):`.state/rsi/{canary.json, canary-admission.json, AUTO_PAUSE, AUTO_PAUSE_BREAKER}`(W0-21:用户标记 + worker 熔断标记,任一在即暂停)与
  * HOME 侧 `rsi-personal/revocations.jsonl`(≤ 1MiB,超出按读取失败处理)的存在性与内容。**不读私有仓库、不读信号库、不拿锁、不写。**
  *
  * 每个输入三态:`absent`(确认不存在)/ `ok` / `unreadable`(读不到、不安全、超限、解析或 schema 失败)——**不可读不等于不存在**(R21-6.11 第 4a 行):
@@ -48,7 +48,7 @@ async function readJsonDoc<T>(
   return v === undefined ? { kind: 'unreadable' } : { kind: 'ok', value: v };
 }
 
-/** `AUTO_PAUSE`:只判存在(与 STOP 同口径:任何已存在的条目都算在场,确认不了 = `unreadable`) */
+/** 单个标记:只判存在(与 STOP 同口径:任何已存在的条目都算在场,确认不了 = `unreadable`) */
 async function readPause(file: string): Promise<PauseRead> {
   try {
     await lstat(file);
@@ -56,6 +56,25 @@ async function readPause(file: string): Promise<PauseRead> {
   } catch (e) {
     return (e as NodeJS.ErrnoException).code === 'ENOENT' ? 'absent' : 'unreadable';
   }
+}
+
+/**
+ * 两个标记的合并(W0-21;纯函数,3×3 矩阵测试钉住):**任一 present → present**(确证的暂停原因优先于读失败,与 canary-decide 第 2a / 4 / 4a 行一致);
+ * 否则任一 unreadable → unreadable(不可读不等于不存在);都 absent → absent。
+ */
+export function combinePauseReads(user: PauseRead, breaker: PauseRead): PauseRead {
+  if (user === 'present' || breaker === 'present') return 'present';
+  if (user === 'unreadable' || breaker === 'unreadable') return 'unreadable';
+  return 'absent';
+}
+
+/** 读集合 = U(`AUTO_PAUSE`)+ B(`AUTO_PAUSE_BREAKER`),各 `lstat` 一次,不读内容 */
+export async function readPauseAny(rsiDir: string): Promise<PauseRead> {
+  const [u, b] = await Promise.all([
+    readPause(path.join(rsiDir, CANARY_FILES.pause)),
+    readPause(path.join(rsiDir, CANARY_FILES.pauseBreaker)),
+  ]);
+  return combinePauseReads(u, b);
 }
 
 /** 撤销凭据全文解析:逐行 JSON + schema;缺尾换行、空行、任一行不合规 → `unreadable` */
@@ -102,7 +121,7 @@ export const readAdmissionDoc = (rsiDir: string): Promise<Read3<CanaryAdmission>
 /** 生产端口:`rsiDir` 是 `rsiDirReadonly` 已确认安全的 `.state/rsi` 目录,`home` 是 HOME(撤销凭据的位置) */
 export function makePermitPort(rsiDir: string, home: string): PermitPort {
   return {
-    pause: () => readPause(path.join(rsiDir, CANARY_FILES.pause)),
+    pause: () => readPauseAny(rsiDir),
     admission: () => readAdmissionDoc(rsiDir),
     canary: () => readCanaryDoc(rsiDir),
     revocations: () => readRevocations(path.join(home, ...REVOCATIONS_REL.split('/'))),

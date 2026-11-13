@@ -7,7 +7,7 @@
  *   admitted ─(此后经准入的会话被判多标记)→ failed(multi_marker)(撤销准入,走更少影响方向)
  *   admitted / failed ─(shape_version 或 agent_version 变化 且 满足 arm 条件)→ probing(`generation + 1`)
  *   failed ─(满 `RSI_PROBE_RETRY_DAYS` 个 UTC 日,起点 `decided_at`;W0-18)→ probing(`generation + 1`,自动重探)
- * **arm 条件**:自动循环有效(R21-2.2)、`RSI_AUTO_PHASE ≥ 2`、该 agent 的钩子装了 canary 变体、无 `AUTO_PAUSE`、当前 `agent_version` 可知
+ * **arm 条件**:自动循环有效(R21-2.2)、`RSI_AUTO_PHASE ≥ 2`、该 agent 的钩子装了 canary 变体、无 `AUTO_PAUSE` / `AUTO_PAUSE_BREAKER`(W0-21)、当前 `agent_version` 可知
  * (不可知则 hint 永远不会消费票,arm 没有意义)。`failed` 的重探(W0-18 取代 W0-3「版本变化前不自动重探」):`shape_version` / `agent_version` 变化立即重探;
  * 否则满 `RSI_PROBE_RETRY_DAYS` 个 UTC 日(日期差口径 W0-16,起点 `decided_at`)后自动重探;前台显式 `rearm`(W8)不受天数限制。
  *

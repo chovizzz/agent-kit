@@ -206,6 +206,11 @@ describe('许可读取(R21-6.10):读不到 ≠ 不存在', () => {
     expect((await port.revocations()).kind).toBe('absent');
     await safe.writeFile(w.io, path.join(w.rsi, 'AUTO_PAUSE'), '', { mode: 0o600 });
     expect(await port.pause()).toBe('present');
+    await safe.remove(w.io, path.join(w.rsi, 'AUTO_PAUSE'));
+    expect(await port.pause()).toBe('absent');
+    await safe.writeFile(w.io, path.join(w.rsi, 'AUTO_PAUSE_BREAKER'), '', { mode: 0o600 }); // W0-21:B 单独在场也算
+    expect(await port.pause()).toBe('present');
+    await safe.remove(w.io, path.join(w.rsi, 'AUTO_PAUSE_BREAKER'));
     await safe.writeFile(w.io, path.join(w.rsi, 'canary.json'), '{bad', { mode: 0o600 });
     expect((await port.canary()).kind).toBe('unreadable');
     await safe.writeFile(

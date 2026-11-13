@@ -13,7 +13,7 @@
  * 盐指纹只用 `projects.json` 与 `counts.json` 各自的 `salt_fp` 互相核对(`attribution.ts`)。
  *
  * `--canary`(R21-6.2 / R21-6.10 / R21-6.11,V1b):`--agent <id> --format <f> --canary`(必须带 `--format`;纯文本模式不走矩阵)。读集合再追加 `.state/rsi/{canary.json,
- * canary-admission.json,AUTO_PAUSE}` 与 HOME 侧 `rsi-personal/revocations.jsonl`(只读,见 `canary/permit-read.ts`);唯一多出的写入是分组账一行(`O_APPEND` + `fsync`)与探针票占用文件。
+ * canary-admission.json,AUTO_PAUSE,AUTO_PAUSE_BREAKER}` 与 HOME 侧 `rsi-personal/revocations.jsonl`(只读,见 `canary/permit-read.ts`);唯一多出的写入是分组账一行(`O_APPEND` + `fsync`)与探针票占用文件。
  * 计数行与 canary 部分**独立判定**、合并成一个 `additionalContext`(计数行 ≤ 200 + canary 部分 ≤ 1536 = 1736 字节)。
  *
  * 输出:模板之一加 `\n`,经唯一出口 {@link finalizeHint}(> 200 字节 → 空串);计数显示 `min(n, 9999)`,超过写 `9999+`。
