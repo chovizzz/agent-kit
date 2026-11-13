@@ -2068,7 +2068,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
   {
     id: 'marker_user_remove_unguarded',
     clause: 'W7b U 的 remove 必须比对实例令牌(令牌 none 永不删)',
-    edits: [swap(PM, "if (!sameToken(token, cur)) return 'changed';", '')],
+    edits: [swap(PM, "if (!sameStamp(stamp, cur)) return 'changed';", '')],
     tests: [T_PM],
     expectRed: [
       'remove(token):令牌与当前实例一致才删;令牌 none 永不删(resume 期间新建的 U 保留);实例被换 → changed 不删',
