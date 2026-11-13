@@ -100,6 +100,23 @@ describe('select-rollback(纯函数):严格大于 / 日期不可知 / 矛盾记�
     expect(s.candidates.map((c) => c.id)).toEqual([C]);
   });
 
+  it('rolling_back 可由从未进入 canary 的候选进入:完整历史(dropped=0)里没有进入记录 = 不在范围,不是 invalid;历史被截断则仍按日期不可知纳入', () => {
+    const fromShadow = rec('rolling_back', {
+      id: A,
+      transitions: [entry(1)],
+      transitions_dropped: 0,
+    });
+    const truncated = rec('rolling_back', {
+      id: B,
+      transitions: [entry(1)],
+      transitions_dropped: 4,
+    });
+    const s = selectRollbackTo([fromShadow, truncated], '2026-10-01');
+    expect(s.invalid).toEqual([]);
+    expect(s.candidates).toEqual([]);
+    expect(s.dateUnknown.map((c) => c.id)).toEqual([B]);
+  });
+
   it('parseUtcDate:只接受真实日历日的 YYYY-MM-DD', () => {
     expect(parseUtcDate('2026-02-28')).toBe('2026-02-28');
     for (const bad of [

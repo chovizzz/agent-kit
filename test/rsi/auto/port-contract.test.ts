@@ -13,7 +13,13 @@ import {
 } from '../../../src/rsi/personal/read/home-reads.js';
 import { PERSONAL_STATE_REL } from '../../../src/rsi/personal/home-state.js';
 import { unwiredRecordedRead } from '../../../src/rsi/personal/read/recorded-port.js';
+import {
+  RSI_REVOCATION_BY,
+  RSI_TRANSITION_REASONS_TERMINATING,
+} from '../../../src/contracts/rsi.js';
 import { mkdirp, writeFile } from '../../../src/io/safe-fs.js';
+import { sourceCompatible } from '../../../src/rsi/auto/read/journal-check.js';
+import { sourceProblem } from '../../../src/rsi/personal/rollback-journal.js';
 import { makeWorld as makeIoWorld } from '../personal/repo-helpers.js';
 import { makeWorld, portsOf } from './auto-fixture.js';
 
@@ -141,5 +147,24 @@ describe('RecordedReadPort 假件:确认不存在才是 missing', () => {
   it('合法 oid 但对象不存在 → missing', async () => {
     const p = portsOf(makeWorld()).recorded;
     expect(await p.readCommit('a'.repeat(40))).toEqual({ kind: 'missing' });
+  });
+});
+
+describe('journal 来源相容性:读侧镜像与写侧 sourceProblem 逐组合相等(防漂移)', () => {
+  it('全部 (by, kind, reason) 组合:sourceCompatible === (sourceProblem === null)', () => {
+    const kinds = ['rollback', 'clear', 'reconcile', 'identity_change'] as const;
+    const reasons = [...RSI_TRANSITION_REASONS_TERMINATING, 'gates_passed'];
+    let n = 0;
+    for (const by of RSI_REVOCATION_BY) {
+      for (const kind of kinds) {
+        for (const reason of reasons) {
+          expect(sourceCompatible(by, kind, reason), `${by}/${kind}/${reason}`).toBe(
+            sourceProblem(by, kind, reason) === null,
+          );
+          n += 1;
+        }
+      }
+    }
+    expect(n).toBeGreaterThan(100);
   });
 });

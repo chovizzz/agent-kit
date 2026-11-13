@@ -10,18 +10,23 @@ import * as path from 'node:path';
 import { RsiAutoSchema } from '../../contracts/rsi.js';
 import { runGitClosed } from '../../io/exec.js';
 import { getRealHome } from '../../io/paths.js';
-import { lstat } from '../../io/read-fs.js';
+import { lstat, readFileSafe } from '../../io/read-fs.js';
 import { CANARY_FILES } from '../canary/files.js';
 import { loadRsiConfig } from '../config.js';
-import { rsiDirReadonly } from '../lock-read.js';
+import { RSI_FILE_OWNER, rsiDirReadonly } from '../lock-read.js';
 import { makeGitReadonly } from '../personal/read/git-readonly.js';
 import { makeHomeReadPort } from '../personal/read/home-reads.js';
 import { unwiredRecordedRead } from '../personal/read/recorded-port.js';
-import { readRsiFixed } from '../services/attribution.js';
 import { openRsiIo } from '../services/open.js';
 import { parseRsiStateDoc } from '../state.js';
-import type { RsiEarlyContext } from '../types.js';
-import type { AutoReadPorts, MarkerRead, RawRead, StateRead } from './read/ports.js';
+import { RsiFailClosedError, type RsiEarlyContext } from '../types.js';
+import {
+  AutoUsageError,
+  type AutoReadPorts,
+  type MarkerRead,
+  type RawRead,
+  type StateRead,
+} from './read/ports.js';
 import { interpretView } from './read/view-read.js';
 
 /** 私有仓库 git 目录(HOME 相对;与 `home-state.ts` 的 `PERSONAL_REPO_REL` + `.git` 相同) */
@@ -41,22 +46,38 @@ export async function productionAutoPorts(
   const cfg = await loadRsiConfig({ ...(env !== undefined ? { env } : {}) });
   const home = getRealHome(env);
   const open = cfg.status === 'on' ? await openRsiIo(ctx) : null;
+  if (open !== null && open.kind === 'usage') throw new AutoUsageError(open.reason);
   const io = open !== null && open.kind === 'ready' ? open.ctx.io : null;
 
+  /**
+   * `.state/rsi/<name>` 的句柄级安全读取(只读;缺失 = `null`;元数据不合规 → fail-closed `state_dir_unsafe`)。
+   * 自己实现、不经 `services/attribution.ts`:后者的闭包带 `lock.ts`(写侧),读侧入口闭包不得含它。
+   */
+  const readFixed = async (name: string): Promise<Buffer | null> => {
+    if (io === null) return null;
+    const d = await rsiDirReadonly(io);
+    if (d.kind === 'missing') return null;
+    if (d.kind === 'unsafe') throw new RsiFailClosedError('state_dir_unsafe');
+    const r = await readFileSafe(path.join(d.dir, name), {
+      maxBytes: 64 * 1024 * 1024,
+      owner: RSI_FILE_OWNER,
+    });
+    if (r.kind === 'ok') return r.bytes;
+    if (r.kind === 'missing') return null;
+    throw new RsiFailClosedError('state_dir_unsafe');
+  };
+
   const fixed = async (name: string): Promise<RawRead> => {
-    if (io === null) return { kind: 'absent' };
     try {
-      const r = await readRsiFixed(io, name);
-      return r.kind === 'ok' ? { kind: 'ok', text: r.bytes.toString('utf8') } : { kind: 'absent' };
+      const b = await readFixed(name);
+      return b === null ? { kind: 'absent' } : { kind: 'ok', text: b.toString('utf8') };
     } catch {
       return { kind: 'unreadable' };
     }
   };
 
   const state = async (): Promise<StateRead> => {
-    if (io === null) return { kind: 'absent' };
-    const r = await readRsiFixed(io, 'state.json');
-    const doc = parseRsiStateDoc(r.kind === 'ok' ? r.bytes : null);
+    const doc = parseRsiStateDoc(await readFixed('state.json'));
     if (doc.kind === 'absent') return { kind: 'absent' };
     if (doc.kind === 'invalid') return { kind: 'invalid' };
     const ap = doc.state.auto_pause;

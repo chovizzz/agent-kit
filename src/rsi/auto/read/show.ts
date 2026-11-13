@@ -68,17 +68,25 @@ function judgeLines(j: JudgeVerdictRead): OutLine[] {
   ];
 }
 
+/**
+ * 纯参数 / TTY 校验(先于任何读取,也先于生产端口装配):未知参数 → `unknown_arg`;无 TTY → `not_tty`;id 形状不对 → `unknown_id`;合法 → `null`。
+ * 「id 不存在」要读了记录才知道,见 {@link runShow}。
+ */
+export function checkShowArgs(argv: readonly string[], isTty: boolean): string | null {
+  const id = argv[0];
+  if (argv.length !== 1 || id === undefined || id.startsWith('-')) return 'unknown_arg';
+  if (!isTty) return 'not_tty';
+  return ID_RE.test(id) ? null : 'unknown_id';
+}
+
 export async function runShow(
   p: AutoReadPorts,
   argv: readonly string[],
   io: ShowIo,
 ): Promise<number> {
-  const id = argv[0];
-  if (argv.length !== 1 || id === undefined || id.startsWith('-')) {
-    return usage(io.sink, 'unknown_arg');
-  }
-  if (!io.isTty) return usage(io.sink, 'not_tty');
-  if (!ID_RE.test(id)) return usage(io.sink, 'unknown_id');
+  const bad = checkShowArgs(argv, io.isTty);
+  if (bad !== null) return usage(io.sink, bad);
+  const id = argv[0] as string;
 
   const outcome = await confirmContent<ShowWork>(p.home, async (snap) => {
     const rr = await readRecordedRecords(p.recorded, snap.headText);

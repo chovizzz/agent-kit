@@ -465,9 +465,7 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
   {
     id: 'show_no_tty_check',
     clause: 'R21-12.8 show 无 TTY 退 2',
-    edits: [
-      swap('src/rsi/auto/read/show.ts', "if (!io.isTty) return usage(io.sink, 'not_tty');", ''),
-    ],
+    edits: [swap('src/rsi/auto/read/show.ts', "if (!isTty) return 'not_tty';", '')],
     tests: ['rsi/auto/show.test.ts'],
     expectRed: ['无 TTY → 退 2 not_tty'],
     mustKill: ['无 TTY → 退 2 not_tty'],

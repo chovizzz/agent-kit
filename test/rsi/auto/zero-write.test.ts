@@ -128,6 +128,24 @@ describe('③ ④ 静态:业务读侧的 import 闭包(运行时依赖与含类�
     expect(identHits(c, WRITE_IDENTS)).toEqual([]);
   });
 
+  it('生产入口 entry.ts 的传递闭包(运行时与含类型两种口径):除 deps / entry 自己、exec.ts(runGitClosed)与适配器外,不含任何写出口 / 锁 / 回滚写模块', () => {
+    const allowed = new Set([
+      'src/rsi/auto/entry.ts',
+      'src/rsi/auto/deps.ts',
+      'src/io/exec.ts',
+      ADAPTER,
+    ]);
+    for (const includeTypes of [false, true]) {
+      const c = closureOf(['src/rsi/auto/entry.ts'], { includeTypes });
+      expect([...c.files].filter((f) => FORBIDDEN_FILES.includes(f) && !allowed.has(f))).toEqual(
+        [],
+      );
+      expect(c.dynamic).toEqual([]);
+      expect(c.unresolved).toEqual([]);
+      expect(importersOf(c, 'node:child_process')).toEqual(['src/io/exec.ts']);
+    }
+  });
+
   it('对照:deps.ts / entry.ts 的闭包确实含适配器与 exec.ts(审计工具不是空转);exit-map 属写命令一侧,不在读闭包里', () => {
     const c = closureOf(['src/rsi/auto/entry.ts']);
     expect(c.files.has(ADAPTER)).toBe(true);

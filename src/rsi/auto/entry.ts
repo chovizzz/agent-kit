@@ -22,10 +22,10 @@ import { rsiStubExit } from '../stub.js';
 import type { RsiEarlyContext, RsiSubcommand } from '../types.js';
 import { productionAutoPorts } from './deps.js';
 import { runClearDry } from './read/clear-dry.js';
-import type { AutoReadPorts } from './read/ports.js';
+import { AutoUsageError, type AutoReadPorts } from './read/ports.js';
 import { parseReportArgs, runReport } from './read/report.js';
-import { runRollbackDry } from './read/rollback-dry.js';
-import { runShow } from './read/show.js';
+import { parseRollbackToArgs, runRollbackDry } from './read/rollback-dry.js';
+import { checkShowArgs, runShow } from './read/show.js';
 import { runAutoStatus } from './read/status.js';
 import { routeAuto, type AutoCanonical, type AutoFamily } from './route.js';
 
@@ -35,6 +35,8 @@ export type AutoWriteHandler = (ctx: RsiEarlyContext, rest: readonly string[]) =
 export interface AutoEntryDeps {
   /** 相位(缺省 `RSI_AUTO_PHASE`;测试注入) */
   phase?: number;
+  /** 时钟(缺省系统时间;`report` 的区间解析用;测试注入) */
+  now?: () => Date;
   /** 只读端口(缺省 = 生产组装) */
   ports?: (ctx: RsiEarlyContext) => Promise<AutoReadPorts>;
   write?: Partial<Record<AutoCanonical, AutoWriteHandler>>;
@@ -62,35 +64,71 @@ export async function runAutoFamily(
       const h = deps.write?.[route.canonical];
       return h === undefined ? rsiStubExit(ctx, route.canonical) : await h(ctx, route.rest);
     }
+    // 纯参数 / TTY 校验先于端口装配:坏参数、非 TTY 不会先去读配置 / 打开仓库上下文(也就不会因它们失败而退 3)
+    const prepared = prepare(route.canonical, route.rest, {
+      isTty: resolveIsTty(ctx),
+      now: (deps.now ?? ((): Date => new Date()))(),
+      phase,
+    });
+    if ('usage' in prepared) return usage(ctx, prepared.usage);
     const ports = await (deps.ports ?? productionAutoPorts)(ctx);
     const sink = { stdout: (t: string) => ctx.stdout(t), stderr: (t: string) => ctx.stderr(t) };
-    const forbidden = await forbiddenPaths(ctx.env, []);
-    switch (route.canonical) {
-      case 'auto status': {
-        const f = parseFlags(route.rest, ['--json']);
-        if (!f.ok) return usage(ctx, 'unknown_arg');
-        return await runAutoStatus(ports, { json: f.flags.has('--json'), phase, forbidden }, sink);
-      }
-      case 'auto clear': {
-        const f = parseFlags(route.rest, ['--json']);
-        if (!f.ok) return usage(ctx, 'unknown_arg');
-        return await runClearDry(ports, { json: f.flags.has('--json'), forbidden }, sink);
-      }
-      case 'report': {
-        const a = parseReportArgs(route.rest, ports.now());
-        if (!a.ok) return usage(ctx, a.reason);
-        return await runReport(ports, { json: a.json, range: a.range, forbidden }, sink);
-      }
-      case 'show':
-        return await runShow(ports, route.rest, { isTty: resolveIsTty(ctx), sink, forbidden });
-      case 'rollback --to':
-        return await runRollbackDry(ports, route.rest, { forbidden }, sink);
-      default:
-        // 其余规范名恒为写命令(route.write 已在上面分流);走到这里 = 路由表与处理表不一致,fail-closed
-        return rsiStubExit(ctx, route.canonical);
-    }
+    return await prepared.run(ports, sink, await forbiddenPaths(ctx.env, []));
   } catch (e) {
+    if (e instanceof AutoUsageError) return usage(ctx, e.reason);
     return failExit(ctx.stderr, e);
+  }
+}
+
+type Sink = { stdout(t: string): void; stderr(t: string): void };
+type Prepared =
+  | { usage: string }
+  | { run(p: AutoReadPorts, sink: Sink, forbidden: readonly string[]): Promise<number> };
+
+/** 读命令的参数解析(纯函数):合法 → 带处理函数的 `run`;不合法 → 用法错误原因 */
+function prepare(
+  canonical: AutoCanonical,
+  rest: readonly string[],
+  env: { isTty: boolean; now: Date; phase: number },
+): Prepared {
+  switch (canonical) {
+    case 'auto status': {
+      const f = parseFlags(rest, ['--json']);
+      if (!f.ok) return { usage: 'unknown_arg' };
+      const json = f.flags.has('--json');
+      return {
+        run: (p, sink, forbidden) => runAutoStatus(p, { json, phase: env.phase, forbidden }, sink),
+      };
+    }
+    case 'auto clear': {
+      const f = parseFlags(rest, ['--json']);
+      if (!f.ok) return { usage: 'unknown_arg' };
+      const json = f.flags.has('--json');
+      return { run: (p, sink, forbidden) => runClearDry(p, { json, forbidden }, sink) };
+    }
+    case 'report': {
+      const a = parseReportArgs(rest, env.now);
+      if (!a.ok) return { usage: a.reason };
+      return {
+        run: (p, sink, forbidden) =>
+          runReport(p, { json: a.json, range: a.range, forbidden }, sink),
+      };
+    }
+    case 'show': {
+      const bad = checkShowArgs(rest, env.isTty);
+      if (bad !== null) return { usage: bad };
+      return {
+        run: (p, sink, forbidden) => runShow(p, rest, { isTty: env.isTty, sink, forbidden }),
+      };
+    }
+    case 'rollback --to': {
+      const a = parseRollbackToArgs(rest);
+      if (!a.ok) return { usage: a.reason };
+      return { run: (p, sink, forbidden) => runRollbackDry(p, rest, { forbidden }, sink) };
+    }
+    default:
+      // 其余规范名恒为写命令(route.write 已在上面分流);走到这里 = 路由表与处理表不一致,fail-closed
+      return { usage: 'unknown_subcommand' };
   }
 }
 

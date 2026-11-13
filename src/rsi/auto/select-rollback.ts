@@ -3,7 +3,7 @@
  *   - 「该 UTC 日之后」读作**严格大于**:候选「进入 `canary` 的 UTC 日」> D(不含当日);
  *   - 范围 = 进入过 `canary` 的非终态候选(`canary` / `adopted` / `stable` / `retiring` / `rolling_back`;已在 `rolling_back` 的在途候选沿用其 journal 与 R21-4.4a);
  *   - **日期不可知**(`transitions_dropped > 0` 且找不到进入 `canary` 的记录)按保守方向**纳入**并**单列**(`dateUnknown`),不得静默纳入也不得静默排除;
- *   - 找不到进入记录而 `transitions_dropped === 0` = 记录自相矛盾 → `invalid`(调用方按 `candidate_invalid` 退 3,不静默排除);
+ *   - 找不到进入记录而 `transitions_dropped === 0`:`rolling_back` 可能从未进入 canary(proposed / shadow 起因)→ 不在范围;其余状态 = 记录自相矛盾 → `invalid`(调用方按 `candidate_invalid` 退 3,不静默排除);
  *   - 顺序:按生效逆序(进入 `canary` 的时刻晚者在前,同刻按 id);日期不可知的按 id。
  */
 import type { PersonalLifecycleRecord } from '../../contracts/rsi-personal.js';
@@ -41,6 +41,8 @@ export function selectRollbackTo(
     const entry = r.transitions.find((t) => t.dim === 'lifecycle' && t.to === 'canary');
     const base = { id: r.id, lifecycle: r.lifecycle, content_sha256: r.content_sha256 };
     if (entry === undefined) {
+      // `rolling_back` 可以由从未进入过 canary 的 proposed / shadow 候选进入:完整历史里没有进入 canary 的记录 = 不在日期回滚范围(不是矛盾)
+      if (r.lifecycle === 'rolling_back' && r.transitions_dropped === 0) continue;
       if (r.transitions_dropped > 0) {
         out.dateUnknown.push({ ...base, entered_on: null, entered_at: null });
       } else {

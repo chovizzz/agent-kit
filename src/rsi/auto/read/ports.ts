@@ -84,3 +84,11 @@ export interface AutoReadPorts {
   recorded: RecordedReadPort;
   judge: JudgeVerdictPort;
 }
+
+/** 端口装配阶段的用法错误(如 `--root` 与 `[rsi] repo` 不一致):入口映射为退 2 `RSI_USAGE reason=<reason>` */
+export class AutoUsageError extends Error {
+  readonly code = 'RSI_AUTO_USAGE';
+  constructor(readonly reason: 'root_mismatch') {
+    super(`auto usage: ${reason}`);
+  }
+}

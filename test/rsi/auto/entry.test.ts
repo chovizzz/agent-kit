@@ -12,7 +12,7 @@ import {
 } from '../../../src/contracts/rsi.js';
 import { runAutoFamily } from '../../../src/rsi/auto/entry.js';
 import { routeAuto, type AutoCanonical, type AutoFamily } from '../../../src/rsi/auto/route.js';
-import type { AutoReadPorts } from '../../../src/rsi/auto/read/ports.js';
+import { AutoUsageError, type AutoReadPorts } from '../../../src/rsi/auto/read/ports.js';
 import type { RsiEarlyContext } from '../../../src/rsi/types.js';
 import { makeSink, makeWorld, portsOf } from './auto-fixture.js';
 
@@ -183,6 +183,49 @@ describe('能力闸', () => {
     const s = makeSink();
     expect(await runAutoFamily('auto', ctxOf([], s), { phase: 0 })).toBe(2);
     expect(s.text().err).toBe('RSI_USAGE reason=unknown_subcommand\n');
+  });
+
+  it('坏参数 / 非 TTY 先于端口装配:status / clear / report / show / rollback 的参数错误都不构造端口(不会因读配置失败而退 3)', async () => {
+    let built = 0;
+    const deps = {
+      phase: 2,
+      ports: async (): Promise<AutoReadPorts> => {
+        built += 1;
+        return portsOf(makeWorld());
+      },
+    };
+    const cases: [AutoFamily, string[], boolean, string][] = [
+      ['auto', ['status', '--bogus'], true, 'unknown_arg'],
+      ['auto', ['clear', '--bogus'], true, 'unknown_arg'],
+      ['report', ['--since', '2026-02-30'], true, 'bad_date'],
+      ['report', ['--week', '--since', '2026-11-01'], true, 'mode_conflict'],
+      ['show', ['ra_0123456789ab'], false, 'not_tty'],
+      ['show', ['ra_xyz'], true, 'unknown_id'],
+      ['show', [], true, 'unknown_arg'],
+      ['rollback', [], true, 'bad_date'],
+      ['rollback', ['--to', '2026-13-01'], true, 'bad_date'],
+      ['rollback', ['--to', '2026-11-01', '--bogus'], true, 'unknown_arg'],
+    ];
+    for (const [family, argv, tty, reason] of cases) {
+      const s = makeSink();
+      expect(
+        await runAutoFamily(family, ctxOf(argv, s, tty), deps),
+        `${family} ${argv.join(' ')}`,
+      ).toBe(2);
+      expect(s.text().err).toBe(`RSI_USAGE reason=${reason}\n`);
+    }
+    expect(built).toBe(0);
+  });
+
+  it('端口装配阶段的用法错误(root_mismatch)映射为退 2,不回显消息', async () => {
+    const s = makeSink();
+    const code = await runAutoFamily('auto', ctxOf(['status'], s), {
+      phase: 2,
+      ports: async () => {
+        throw new AutoUsageError('root_mismatch');
+      },
+    });
+    expect([code, s.text()]).toEqual([2, { out: '', err: 'RSI_USAGE reason=root_mismatch\n' }]);
   });
 
   it('读命令的参数错误:未知参数 → 2 unknown_arg(相位够时);show 无 TTY → 2 not_tty;report 坏日期 → 2 bad_date;异常 → 3 internal', async () => {
