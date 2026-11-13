@@ -9,7 +9,7 @@
  * W8b 追加(本表后 43 条,id 前缀 pause_ / resume_ / clear_ / out_ / veto_ / rbk_ / rebase_ / 预检 / 生产组装):写命令的处理函数(pause 不拿锁 / 不覆盖 / 只碰 U;resume 的线性化与指纹、结果行、顺序;
  * clear 的锁序与枚举失败、已完成项先输出;veto 的 deferred 不判 unknown_id、终态只写黑名单、持锁后重读;rollback --to 的 by / reason / 逆序 / 三把锁 / 矛盾记录先于写入;rebase 的确认与持锁复判;未接线预检零写入)。
  * W8b 的结果由主代理跑完回填(`V1_W8_RESULTS` 已重置为 `[]`,主代理整表重跑后统一回填 W8a + W8b)。
- * 不在本表的点(如实记录):`lateEventNotApplied` 的重试一次(无法在假件里稳定构造,只有代码审查);端口契约的写侧由 `port-contract.test.ts` 的套件覆盖,不是变异;
+ * 不在本表的点(如实记录):端口契约的写侧由 `port-contract.test.ts` 的套件覆盖,不是变异;
  * 零写入的层 ②(`KIT_WRITE_ROOTS=:` 子进程)与 (c):相位 0 下经 `main()` 的新命令全是桩,子进程辅助脚本不能注入相位(见 `zero-write.test.ts` 头注);
  * journal 完整性错误「不被消除」的身份单列(`uniq:` 键)只由退出码相同的用例间接覆盖,不单列变异。
  */
@@ -1964,6 +1964,20 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
     tests: ['rsi/auto/write-commands.test.ts'],
     expectRed: ['rollback --to 持锁后重读重选'],
     mustKill: ['rollback --to 持锁后重读重选'],
+  },
+  {
+    id: 'veto_no_late_retry',
+    clause: 'W7 约定:较晚事件首次没施加(lateEventNotApplied)时命令重试一次',
+    edits: [
+      swap(
+        'src/rsi/auto/write/veto.ts',
+        '      out = await startRollback(d, req);',
+        '      void req;',
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: ['veto 复用在途 txn 时较晚的 veto 事件首次没施加'],
+    mustKill: ['veto 复用在途 txn 时较晚的 veto 事件首次没施加'],
   },
 ];
 

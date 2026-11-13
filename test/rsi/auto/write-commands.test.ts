@@ -5,9 +5,9 @@
 import { describe, expect, it } from 'vitest';
 import { RSI_AUTO_LABEL } from '../../../src/contracts/rsi.js';
 import { emitOutcomes } from '../../../src/rsi/auto/write/outcome-output.js';
-import type { RollbackOutcome } from '../../../src/rsi/personal/rollback.js';
+import { startRollback, type RollbackOutcome } from '../../../src/rsi/personal/rollback.js';
 import type { RsiEarlyContext } from '../../../src/rsi/types.js';
-import { canaryRec, world7, ID, SHA } from '../rollback/w7-fixture.js';
+import { Crash, canaryRec, harmReq, recordOf, world7, ID, SHA } from '../rollback/w7-fixture.js';
 import { entry, rec } from '../personal/transition-fixture.js';
 import { B_MARKER, makeFx, runWrite } from './write-fixture.js';
 
@@ -428,6 +428,21 @@ describe('rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判', () => 
     expect(r.out).toContain('result=blacklist_only');
     expect([...w7.txns.keys()]).toEqual([]);
     expect(w7.revs).toEqual([]);
+  });
+
+  it('veto 复用在途 txn 时较晚的 veto 事件首次没施加(lateEventNotApplied):重试一次,第二次正常 → 退 0,记录进 vetoed,不报 late_event_not_applied', async () => {
+    const w7 = world7();
+    w7.crashAt('after:payload');
+    await expect(startRollback(w7.d, harmReq())).rejects.toBeInstanceOf(Crash);
+    const fx = makeFx(w7);
+    // 本命令的 `store.read` 顺序:锁外 peek、持锁后重读、引擎的较晚事件状态读(第三次返回 deferred → lateEventNotApplied=repo_deferred);之后全部正常
+    w7.store.readFaults = [null, null, 'deferred'];
+    const r = await runWrite('veto', [ID], fx);
+    expect(w7.store.readFaults).toEqual([]);
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).not.toContain('late_event_not_applied');
+    expect(recordOf(w7).terminal_reason).toBe('vetoed');
+    expect(w7.revs).toHaveLength(1);
   });
 
   it('veto 参数 / 环境:非 TTY 退 2;[rsi] 关闭退 4 off;缺 id 退 2 unknown_arg;零写入', async () => {
