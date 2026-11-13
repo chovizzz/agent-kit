@@ -112,11 +112,17 @@ export const RSI_FAIL_CLOSED_REASONS = Object.freeze([
   'ledger_line_invalid',
   'txn_invalid',
   'probe_error',
+  // §21 W0-22 第 3 条(R21-12.4 / R21-12.9 / R21-13.3):撤销凭据不合规、审计文件缺失或损坏而账显示曾有转移
+  'revocations_invalid',
+  'audit_invalid',
 ] as const);
 /** 顶层(0)信息行(R20-17.23):只在提醒条件下写 stderr,不改退出码 */
 export const RSI_INFO_LINE_CODES = Object.freeze([
   'RSI_PROPOSALS_READY',
   'RSI_COLLECTION_STARTED',
+  // §21 W0-22 第 12 条(R21-12.9):非错误信息行,不计入失败码表;`RSI_AUTO_RESUME_PENDING` / `RSI_AUTO_RESUMED` 随 resume(W8b)登记
+  'RSI_MANUAL',
+  'RSI_CLEAR_DONE',
 ] as const);
 /** 顶层码,退出 1(R20-3.0 总表「顶层(1)」行):只登记,供「契约表 ↔ 枚举」一致性测试逐行比对 */
 export const RSI_EXIT1_CODES = Object.freeze([
@@ -399,6 +405,12 @@ export const RSI_AUTO_PHASE_ORDER = Object.freeze([
 export type RsiAutoPhaseName = (typeof RSI_AUTO_PHASE_ORDER)[number];
 /** 分期闸(R21-0.1):代码常量,由实现块提升,不读配置。W0 落地时为 0(V0);V1a / V1b 各自一个 PR 提升(R21-0.2) */
 export const RSI_AUTO_PHASE = 0;
+/** W0-22 第 7 条:物化视图 `.state/rsi/auto-view.json` 的陈旧阈值(`now - as_of` 大于它 → `view_state=stale`) */
+export const RSI_AUTO_VIEW_STALE_HOURS = 48;
+/** W0-22 第 7 条:`rolling_back` 候选无 journal 时的宽限(分钟;超过且原因属不可重建类 → `stalled`) */
+export const RSI_STALL_GRACE_MINUTES = 60;
+/** `rsi auto status` 读取的物化视图文件名(`.state/rsi/` 下,0600) */
+export const RSI_AUTO_VIEW_FILE = 'auto-view.json';
 
 /** 熔断码(R21-10.2 码表;`state.json.auto_pause.reasons` 的封闭枚举) */
 export const RSI_AUTO_PAUSE_REASONS = Object.freeze([
@@ -816,9 +828,24 @@ export const RSI_SUBCOMMANDS = Object.freeze([
   'hooks',
   /** R20-A6:`rsi dismiss`(R20-17.5) */
   'dismiss',
+  /** §21 W8(R21-12):`rsi auto <status|pause|resume|clear|rebase-baseline>`、`rsi veto`、`rsi rollback --to`、`rsi report`、`rsi show`;相位闸见 {@link RSI_AUTO_SUBCOMMAND_CAPS} */
+  'auto',
+  'veto',
+  'rollback',
+  'report',
+  'show',
 ] as const);
 /** P1 预留子命令(§20.3 末段):注册为命令桩,退出 64;不建入口文件。A6 起 `dismiss` 已是真子命令 */
-export const RSI_P1_RESERVED_SUBCOMMANDS = Object.freeze(['should-continue'] as const);
+export const RSI_P1_RESERVED_SUBCOMMANDS = Object.freeze([
+  'should-continue',
+  // §21 W8(R21-12.1 表):V4–V6 的命令名先注册为桩(退 64),不建入口文件
+  'contrib',
+  'capability',
+  'isolation',
+  'exec-run',
+  'exec-prepare',
+  'exec-confirm',
+] as const);
 
 // ---------------------------------------------------------------------------
 // A4(会话授权、`rsi digest`、`reflect --ingest`;docs/contracts.md §20.16)

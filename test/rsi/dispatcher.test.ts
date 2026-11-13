@@ -64,7 +64,11 @@ const IMPLEMENTED = [
 ];
 /** A3 实装的钩子:经分发器(进程内 main)同样恒退 0、无输出;行为测试在 a3-poke / a3-hint / a3-entry / a3-dist */
 const HOOKS = ['poke', 'hint'];
-const STUBBED = ALL.filter((n) => !IMPLEMENTED.includes(n) && !HOOKS.includes(n));
+/** §21 W8:命令面家族(二级路由 + 能力闸;相位 0 下全部是桩,但桩的规范名与二级路由与一级桩不同,行为测试见下方 describe) */
+const W8_FAMILY = ['auto', 'veto', 'rollback', 'report', 'show'];
+const STUBBED = ALL.filter(
+  (n) => !IMPLEMENTED.includes(n) && !HOOKS.includes(n) && !W8_FAMILY.includes(n),
+);
 
 describe('rsi 分发器', () => {
   it('rsi 已登记进 COMMANDS;P0 子命令表与常量一致,每个子命令有独立入口文件', () => {
@@ -81,6 +85,47 @@ describe('rsi 分发器', () => {
       expect(r.audit).toEqual([]);
     });
   }
+
+  // §21 W8(契约驱动的更新:`auto` / `rollback` 的桩带规范名,`auto` 缺二级命令是用法错误):相位 0 下命令面全部是桩,桩不解析参数,零写审计
+  it('§21 W8 命令面:相位 0 下全部是桩(规范名取 RSI_AUTO_SUBCOMMAND_CAPS 的键),多余 / 非法参数不改变桩行为', async () => {
+    const cases: [string[], string][] = [
+      [['rsi', 'auto', 'status'], 'auto status'],
+      [['rsi', 'auto', 'pause'], 'auto pause'],
+      [['rsi', 'auto', 'resume'], 'auto resume'],
+      [['rsi', 'auto', 'clear'], 'auto clear'],
+      [['rsi', 'auto', 'clear', '--write'], 'auto clear'],
+      [['rsi', 'auto', 'rebase-baseline', '--adopt-owner'], 'auto rebase-baseline'],
+      [['rsi', 'veto', 'ra_aaaaaaaaaaaa'], 'veto'],
+      [['rsi', 'veto'], 'veto'],
+      [['rsi', 'rollback'], 'rollback --to'],
+      [['rsi', 'rollback', '--to', '2026-11-01', '--write'], 'rollback --to'],
+      [['rsi', 'report'], 'report'],
+      [['rsi', 'report', '--since', 'not-a-date', '--bogus'], 'report'],
+      [['rsi', 'show'], 'show'],
+      [['rsi', 'show', 'ra_aaaaaaaaaaaa', '--bogus'], 'show'],
+    ];
+    for (const [argv, name] of cases) {
+      const r = await run(argv);
+      expect(r.code, argv.join(' ')).toBe(64);
+      expect(r.err, argv.join(' ')).toBe(`RSI_NOT_IMPLEMENTED subcommand=${name}\n`);
+      expect(r.out).toBe('');
+      expect(r.audit).toEqual([]);
+    }
+  });
+
+  it('§21 W8:`rsi auto` 缺二级命令 / 二级命令未知 → 2 unknown_subcommand(先于能力闸),不回显输入', async () => {
+    for (const argv of [
+      ['rsi', 'auto'],
+      ['rsi', 'auto', 'nope'],
+      ['rsi', 'auto', 'bad\nstuff'],
+      ['rsi', 'auto', '--json'],
+    ]) {
+      const r = await run(argv);
+      expect(r.code, argv.join(' ')).toBe(2);
+      expect(r.err).toBe('RSI_USAGE reason=unknown_subcommand\n');
+      expect(r.out).toBe('');
+    }
+  });
 
   it('多余参数不改变桩行为(桩不解析参数)', async () => {
     const stub = STUBBED[0] as string;

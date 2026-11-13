@@ -500,6 +500,68 @@ export const RsiAuditLineSchema = z.strictObject({
 });
 export type RsiAuditLine = z.infer<typeof RsiAuditLineSchema>;
 
+// --- §21 W0-22 第 7 条:`rsi auto status` 的物化视图 `.state/rsi/auto-view.json`(0600;写入方 worker 归部署组装块,本期只读) ---
+/** `AutoView.protection_marks[].mark`(W0-22 第 9 / 14 条的两个审计标记值) */
+export const RSI_PROTECTION_MARKS = Object.freeze([
+  'protection_unknown',
+  'protection_unclassified',
+] as const);
+/**
+ * 物化视图,**不是实时权威**(缺失 / 陈旧 / 损坏的语义见 `src/rsi/auto/read/view-read.ts`)。只含计数、枚举、id、哈希、时间。
+ * `pipeline` / `budget` / `cost` / `canary` / `last_rollback` 的口径等同 R21-13.1 原文(W0-24 钉住具体键)。
+ */
+export const AutoViewSchema = z.strictObject({
+  schema_version: z.literal(1),
+  as_of: IsoTimestampSchema,
+  record_oid: GitSha,
+  pipeline: z.strictObject({
+    /** 各 `lifecycle` 状态的候选计数(键 = 状态名) */
+    states: z.record(z.string().max(32), NonNegInt),
+    /** 近 30 个 UTC 日进入四个终态的计数 */
+    last30d: z.strictObject({
+      rejected: NonNegInt,
+      rolled_back: NonNegInt,
+      expired: NonNegInt,
+      retired: NonNegInt,
+    }),
+  }),
+  budget: z.strictObject({ used_pct: z.number().min(0).max(100) }),
+  cost: z.strictObject({ injected_bytes_mean: NonNegInt, s2_count: NonNegInt }),
+  canary: z
+    .strictObject({ id: RsiCandidateIdSchema, treat: NonNegInt, control: NonNegInt })
+    .nullable(),
+  last_rollback: z
+    .strictObject({
+      id: RsiCandidateIdSchema,
+      at: IsoTimestampSchema,
+      reason: z.string().min(1).max(64),
+    })
+    .nullable(),
+  rolling_back: z
+    .array(
+      z.strictObject({
+        id: RsiCandidateIdSchema,
+        content_sha256: Sha256Schema,
+        origin_reason: z.string().min(1).max(64),
+        target_terminal: z.enum(RSI_TARGET_TERMINALS),
+        entered_at: IsoTimestampSchema,
+      }),
+    )
+    .max(64),
+  rolling_back_truncated: z.boolean(),
+  protection_marks: z
+    .array(
+      z.strictObject({
+        id: RsiCandidateIdSchema,
+        mark: z.enum(RSI_PROTECTION_MARKS),
+        at: IsoTimestampSchema,
+      }),
+    )
+    .max(64),
+  protection_marks_truncated: z.boolean(),
+});
+export type AutoView = z.infer<typeof AutoViewSchema>;
+
 // --- R21-11.3 / R21-11.4 ---
 export const RsiVetoDocSchema = z.strictObject({
   schema_version: z.literal(1),

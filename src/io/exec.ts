@@ -98,6 +98,61 @@ export function runSync(
 }
 
 // ---------------------------------------------------------------------------
+// runGitClosed:受限只读 git 适配器专用(contracts §21.24 W0-22 第 6 条、W0-24)
+// ---------------------------------------------------------------------------
+
+/** `runGitClosed` 允许传入的 env 键(封闭清单的上界;值与键集合由适配器逐项核对,这里只拦明显越界) */
+const CLOSED_GIT_ENV_KEY_RE = /^(PATH|HOME|LC_ALL|GIT_[A-Z0-9_]+)$/;
+
+export interface ClosedGitOptions {
+  /** 子进程 cwd(绝对路径) */
+  cwd: string;
+  /** **完整**环境:不合并任何默认值、不继承进程环境 */
+  env: Readonly<Record<string, string>>;
+  timeoutMs: number;
+  maxBufferBytes: number;
+}
+
+/**
+ * 以调用方给的**绝对路径** git 与**完整** env 起一个子进程(`shell: false`,不查 `PATH`,不加任何默认 env)。
+ * 与 {@link runSync} 的区别:不要求 HOME 在 `KIT_TMP` 内(受限只读适配器的 HOME 就是私有仓库的 git 目录),不强制 `PATH`。
+ * 参数与 env 的形状由适配器(`src/rsi/personal/read/git-readonly.ts`)逐项核对;这里只拦:非绝对路径、文件名不是 `git`、env 键越界、cwd 非绝对。
+ * `src/rsi/**` 内只有 `src/rsi/auto/deps.ts` 可引用本函数(eslint 限域)。
+ */
+export function runGitClosed(
+  file: string,
+  args: readonly string[],
+  opts: ClosedGitOptions,
+): ExecResult {
+  if (!path.isAbsolute(file) || path.basename(file) !== 'git') {
+    throw new ExecDeniedError('runGitClosed:git 必须是绝对路径且文件名为 git');
+  }
+  if (!path.isAbsolute(opts.cwd)) throw new ExecDeniedError('runGitClosed:cwd 必须是绝对路径');
+  for (const k of Object.keys(opts.env)) {
+    if (!CLOSED_GIT_ENV_KEY_RE.test(k))
+      throw new ExecDeniedError(`不允许传给子进程的环境变量:${k}`);
+  }
+  const r = spawnSync(file, [...args], {
+    cwd: opts.cwd,
+    env: { ...opts.env },
+    encoding: 'utf8',
+    timeout: opts.timeoutMs,
+    maxBuffer: opts.maxBufferBytes,
+    shell: false,
+    windowsHide: true,
+  });
+  const timedOut = (r.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT';
+  return {
+    status: r.status,
+    signal: r.signal,
+    stdout: r.stdout ?? '',
+    stderr: r.stderr ?? '',
+    timedOut,
+    ...(r.error && !timedOut ? { spawnError: r.error.message } : {}),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // runSelf:启动器专用(S7c-B)
 // ---------------------------------------------------------------------------
 
