@@ -70,14 +70,12 @@ export function mapClearExit(i: ClearExitInput): ClearExit {
   for (const o of i.outcomes) {
     if (o.status === 'complete' || o.status === 'revocation_complete') {
       pending.delete(`txn:${o.txn}`);
-      const id =
-        o.status === 'revocation_complete'
-          ? o.candidate_id
-          : (i.candidateOf?.(o.txn) ?? `txn=${o.txn}`);
+      const cand = o.status === 'revocation_complete' ? o.candidate_id : i.candidateOf?.(o.txn);
+      const who = cand === undefined ? `txn=${o.txn}` : `id=${cand}`;
       info.push(
         o.status === 'revocation_complete'
-          ? `RSI_CLEAR_DONE id=${id} revoked=yes repo_removal=deferred`
-          : `RSI_CLEAR_DONE id=${id} revoked=yes`,
+          ? `RSI_CLEAR_DONE ${who} revoked=yes repo_removal=deferred`
+          : `RSI_CLEAR_DONE ${who} revoked=yes`,
       );
       if (o.status === 'revocation_complete') sawDeferred = true;
       continue;

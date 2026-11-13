@@ -12,7 +12,10 @@ import type { RawRead } from './ports.js';
 
 export type ViewState = 'fresh' | 'stale' | 'missing' | 'corrupt';
 export type ViewResult =
-  { state: 'missing' | 'corrupt' } | { state: 'fresh' | 'stale'; view: AutoView };
+  | { state: 'missing' }
+  | { state: 'corrupt' }
+  | { state: 'fresh'; view: AutoView }
+  | { state: 'stale'; view: AutoView };
 
 /** 容许的时钟偏差(毫秒):`as_of` 晚于 now 超过它就不可信 */
 export const VIEW_CLOCK_SKEW_MS = 5 * 60_000;
@@ -32,5 +35,7 @@ export function interpretView(raw: RawRead, now: Date): ViewResult {
   if (Number.isNaN(asOf)) return { state: 'corrupt' };
   const age = now.getTime() - asOf;
   if (age < -VIEW_CLOCK_SKEW_MS) return { state: 'corrupt' };
-  return { state: age > RSI_AUTO_VIEW_STALE_HOURS * 3_600_000 ? 'stale' : 'fresh', view: r.data };
+  return age > RSI_AUTO_VIEW_STALE_HOURS * 3_600_000
+    ? { state: 'stale', view: r.data }
+    : { state: 'fresh', view: r.data };
 }

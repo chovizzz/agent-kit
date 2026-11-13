@@ -44,12 +44,12 @@ export interface GitSpawnResult {
   timedOut: boolean;
   spawnError?: string | undefined;
 }
-/** 注入的 spawn 端口(生产 = `runGitClosed`) */
+/** 注入的 spawn 端口(生产 = `runGitClosed`,同步;允许返回 Promise 以便测试在 spawn 期间演练「配置被改」) */
 export type GitSpawn = (
   file: string,
   argv: readonly string[],
   opts: GitSpawnOptions,
-) => GitSpawnResult;
+) => GitSpawnResult | Promise<GitSpawnResult>;
 
 // ---------------------------------------------------------------------------
 // argv 与 env 的形状
@@ -294,7 +294,7 @@ export function makeGitReadonly(o: GitReadonlyOptions): RecordedReadPort {
     } catch {
       return { kind: 'unreadable', why: 'bad_oid' };
     }
-    const r = o.spawn(o.gitPath, argv, {
+    const r = await o.spawn(o.gitPath, argv, {
       cwd: o.gitDir,
       env,
       timeoutMs: GIT_CALL_TIMEOUT_MS,
