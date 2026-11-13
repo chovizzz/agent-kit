@@ -178,7 +178,7 @@ export interface ReadDeps {
 
 export type JournalRead =
   | { kind: 'ok'; ctx: JournalCtx }
-  /** `cause=txn_invalid` = journal 完整性错误(含旧格式缺 content_sha256 无法绑定身份;调用方不得把它当作带事务身份的结果);`identity_not_available_before_v6a` = 本期不支持的合法 journal(cause `candidate_invalid`) */
+  /** `cause=txn_invalid` = journal 完整性错误(冲突 / 不合规 / 不可解析;调用方不得把它当作带事务身份的结果;缺必需项的旧格式是 `incomplete` 不是它);`identity_not_available_before_v6a` = 本期不支持的合法 journal(cause `candidate_invalid`) */
   | {
       kind: 'invalid';
       why: string;
@@ -245,13 +245,16 @@ export async function readJournal(d: ReadDeps, t: PersonalTxn): Promise<JournalR
 
   if (missing.length > 0 || by === undefined || event === undefined || sha === undefined) {
     const why = `legacy_unrecoverable:${missing.join(',')}`;
-    // 缺 content_sha256 = journal 无法绑定事务身份:这是完整性错误(R3-H2),不带事务身份,不被同 (id, sha) 的 complete 消除;仍不写凭据、不动记录
-    if (missing.includes('content_sha256')) return { kind: 'invalid', why, cause: 'txn_invalid' };
-    // 缺原始证据 = 等人工补事件;只缺来源 = 来源有歧义
+    // W0-20:必需项缺失且不可恢复 = incomplete(不写凭据、不动记录、不伪造);字段存在但不合规才是 txn_invalid(上面的 `bad`)。
+    // 旧格式缺 content_sha256 仍带事务身份(`txn_id` 在 journal 里),所以是带 txn 的 incomplete,等人工 / 后续对账补事实。
+    // cause(W0-22 第 13 条):缺 terminal_event / content_sha256 = 缺原始证据或事实,等人工补(manual_event_required);只缺来源 = 来源有歧义(manual_by_ambiguous)
     return {
       kind: 'incomplete',
       why,
-      cause: missing.includes('terminal_event') ? 'manual_event_required' : 'manual_by_ambiguous',
+      cause:
+        missing.includes('terminal_event') || missing.includes('content_sha256')
+          ? 'manual_event_required'
+          : 'manual_by_ambiguous',
     };
   }
   return { kind: 'ok', ctx: { by, event, sha } };

@@ -326,7 +326,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       'cleared 的 rolling_back 记录没有 journal:来源有歧义(rollback_to / clear)→ refused by_ambiguous,零动作',
       '):不伪造 → incomplete(terminal_event),不写凭据、记录不动、journal 保留',
       'cleared 配 kind=rollback / reconcile 来源有歧义(rollback_to 或 clear):不推出 → incomplete(by),不写凭据',
-      '内容哈希:不信权威副本的当前值(记录里有、但没有凭据也没有 recordedSha)→ 完整性错误 refused(content_sha256;不带事务身份),不写凭据',
+      '内容哈希:不信权威副本的当前值(记录里有、但没有凭据也没有 recordedSha)→ W0-20:必需项缺失且不可恢复 = incomplete(带事务身份 txn;cause manual_event_required),不写凭据',
       '内容哈希:recordedSha 对不上 txn_id 不采信;复用入口时请求带来的内容哈希也不是允许的来源',
       '多项缺失一并报告(by + content_sha256;cleared 的事件可重建,不在其列)',
     ],
@@ -1092,7 +1092,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     expectRed: [
       '终止事件需要原始证据',
       '来源有歧义(rollback_to 或 clear)',
-      '内容哈希:不信权威副本的当前值(记录里有、但没有凭据也没有 recordedSha)→ 完整性错误 refused(content_sha256;不带事务身份),不写凭据',
+      '内容哈希:不信权威副本的当前值(记录里有、但没有凭据也没有 recordedSha)→ W0-20:必需项缺失且不可恢复 = incomplete(带事务身份 txn;cause manual_event_required),不写凭据',
       '内容哈希:recordedSha 对不上 txn_id 不采信;复用入口时请求带来的内容哈希也不是允许的来源',
       '多项缺失一并报告(by + content_sha256;cleared 的事件可重建,不在其列)',
       '凭据已写(旧 journal 在第三段)而终止事件拿不到:仍 incomplete,记录与仓库都不再动',
@@ -1885,12 +1885,12 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
   {
     id: 'cause_legacy_swapped',
     clause:
-      'W7b ③ 旧格式 journal:缺原始证据 → manual_event_required,只缺来源 → manual_by_ambiguous',
+      'W7b ③ 旧格式 journal:缺原始证据 / 缺内容哈希 → manual_event_required,只缺来源 → manual_by_ambiguous',
     edits: [
       swap(
         RJ,
-        "cause: missing.includes('terminal_event') ? 'manual_event_required' : 'manual_by_ambiguous',",
-        "cause: missing.includes('terminal_event') ? 'manual_by_ambiguous' : 'manual_event_required',",
+        "missing.includes('terminal_event') || missing.includes('content_sha256')\n          ? 'manual_event_required'\n          : 'manual_by_ambiguous',",
+        "missing.includes('terminal_event') || missing.includes('content_sha256')\n          ? 'manual_by_ambiguous'\n          : 'manual_event_required',",
       ),
     ],
     tests: [T_CA],
@@ -2036,21 +2036,21 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
   {
     id: 'legacy_sha_with_identity',
     clause:
-      'W7b R3-H2 旧格式 journal 无法绑定内容哈希 = 完整性错误:refused、不带事务身份(不得是带 txn 的 incomplete)',
+      'W7b W0-20 / W0-22 第 13 条:旧格式 journal 缺内容哈希且取不回 = incomplete(带事务身份、不写凭据),不是完整性错误 refused / txn: null',
     edits: [
       swap(
         RJ,
-        "if (missing.includes('content_sha256')) return { kind: 'invalid', why, cause: 'txn_invalid' };",
-        '',
+        "    const why = `legacy_unrecoverable:${missing.join(',')}`;\n",
+        "    const why = `legacy_unrecoverable:${missing.join(',')}`;\n    if (missing.includes('content_sha256')) return { kind: 'invalid', why, cause: 'txn_invalid' };\n",
       ),
     ],
     tests: [T_JB, T_CA],
     expectRed: [
-      '内容哈希:不信权威副本的当前值(记录里有、但没有凭据也没有 recordedSha)→ 完整性错误 refused(content_sha256;不带事务身份),不写凭据',
-      '不变量:cause=txn_invalid 的 outcome 一律是 refused、txn=null、journal 句柄为字符串(逐 case 校验;失败 variant incomplete 永不带 txn_invalid)',
+      'W0-20:必需项缺失且不可恢复 = incomplete(带事务身份 txn;cause manual_event_required),不写凭据',
+      '旧格式 journal 缺内容哈希且凭据 / head.json 都取不回(legacy_unrecoverable:content_sha256;W0-20:缺失不可恢复 = incomplete,带事务身份)',
     ],
     mustKill: [
-      '内容哈希:不信权威副本的当前值(记录里有、但没有凭据也没有 recordedSha)→ 完整性错误 refused(content_sha256;不带事务身份),不写凭据',
+      'W0-20:必需项缺失且不可恢复 = incomplete(带事务身份 txn;cause manual_event_required),不写凭据',
     ],
   },
 ];

@@ -261,17 +261,17 @@ describe('B. 旧格式 journal(缺三键):先收齐三项事实,拿不到 → in
     }
   });
 
-  it('内容哈希:不信权威副本的当前值(记录里有、但没有凭据也没有 recordedSha)→ 完整性错误 refused(content_sha256;不带事务身份),不写凭据', async () => {
+  it('内容哈希:不信权威副本的当前值(记录里有、但没有凭据也没有 recordedSha)→ W0-20:必需项缺失且不可恢复 = incomplete(带事务身份 txn;cause manual_event_required),不写凭据', async () => {
     const w = world7(); // store 里的记录 content_sha256 == SHA,与 txn_id 对得上,但不是契约允许的来源
     await w.d.txns.write(legacy({ reason: 'vetoed' }));
     const out = await resumeAll(w.d);
     expect(out).toEqual([
       {
-        status: 'refused',
-        txn: null,
-        journal: TXN,
+        status: 'incomplete',
+        txn: TXN,
+        phase: 'rollback_requested',
         why: 'legacy_unrecoverable:content_sha256',
-        cause: 'txn_invalid',
+        cause: 'manual_event_required',
       },
     ]);
     expect(w.revs).toHaveLength(0);
@@ -283,20 +283,20 @@ describe('B. 旧格式 journal(缺三键):先收齐三项事实,拿不到 → in
     w.d.recordedSha = async () => 'f'.repeat(64);
     await w.d.txns.write(legacy({ reason: 'vetoed' }));
     expect((await resumeAll(w.d))[0]).toMatchObject({
-      status: 'refused',
-      txn: null,
-      journal: TXN,
+      status: 'incomplete',
+      txn: TXN,
       why: 'legacy_unrecoverable:content_sha256',
+      cause: 'manual_event_required',
     });
     const r = await startRollback(
       w.d,
       harmReq({ reason: 'vetoed', by: 'veto', event: { kind: 'veto', evidence: 'rsi veto' } }),
     );
     expect(r).toMatchObject({
-      status: 'refused',
-      txn: null,
-      journal: TXN,
+      status: 'incomplete',
+      txn: TXN,
       why: 'legacy_unrecoverable:content_sha256',
+      cause: 'manual_event_required',
     });
     expect(w.revs).toHaveLength(0);
     expect(noActions(w)).toEqual([]);
@@ -306,7 +306,9 @@ describe('B. 旧格式 journal(缺三键):先收齐三项事实,拿不到 → in
     const w = world7();
     await w.d.txns.write(legacy({ reason: 'cleared', kind: 'rollback' }));
     expect((await resumeAll(w.d))[0]).toMatchObject({
+      status: 'incomplete',
       why: 'legacy_unrecoverable:by,content_sha256',
+      cause: 'manual_event_required',
     });
   });
 

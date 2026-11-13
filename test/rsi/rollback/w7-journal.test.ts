@@ -107,7 +107,20 @@ function expectFinal(w: World7, c: Case, label: string): void {
   expect(w.txns.size, label).toBe(0);
   expect(w.revs, label).toHaveLength(1);
   expect(w.revs[0], label).toMatchObject({ by: c.by, reason: c.reason, content_sha256: SHA });
-  expect([...w.effectApplied.values()], label).toEqual([1]);
+  // W0-22 第 9 条:vetoed 的回滚另有 E1(键 `veto:<id>:<sha>`)与 E2(键 `terminal:<id>:<sha>`)各落一次;其余原因只有 E2 一键
+  const terminalKey = `terminal:${ID}:${SHA}`;
+  const expectedKeys =
+    c.terminal === 'vetoed' ? [`veto:${ID}:${SHA}`, terminalKey].sort() : [terminalKey];
+  expect([...w.effectApplied.keys()].sort(), label).toEqual(expectedKeys);
+  expect([...w.effectApplied.values()], label).toEqual(expectedKeys.map(() => 1));
+  // 黑名单成员按 (id, sha) 只有一个(两批都含 blacklist_veto,集合插入语义)
+  const vetoMembers = new Set(
+    [...w.effectLog.values()]
+      .flat()
+      .filter((e) => e.type === 'blacklist_veto')
+      .map((e) => JSON.stringify([e.id, e.content_sha256])),
+  );
+  expect(vetoMembers.size, label).toBe(c.terminal === 'vetoed' ? 1 : 0);
   expect(
     rc.transitions.filter(
       (t) => t.dim === 'lifecycle' && t.from === 'canary' && t.to === 'rolling_back',

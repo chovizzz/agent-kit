@@ -364,7 +364,7 @@ describe('recoverTerminalEffects:E1 第二遍与 E1 / E2 幂等', () => {
       transitions: [...BASE, enter('harm_c1'), loop('vetoed')],
     });
   const store = (recs: PersonalLifecycleRecord[]) => ({
-    readAll: async () => ({ kind: 'ok' as const, value: recs }),
+    readAll: async () => ({ kind: 'ok' as const, head: 'f'.repeat(40), value: recs }),
   });
 
   it('回滚记录已提交、E1 落地前崩溃且回滚未完成:第二遍补出黑名单(veto: 键);再 recover → already', async () => {

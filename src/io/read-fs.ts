@@ -287,6 +287,11 @@ export async function lstat(path: string): Promise<fs.Stats> {
   return fsp.lstat(path);
 }
 
+/** `lstat` 的 bigint 形态(纳秒级 mtime;实例令牌用,不跟随链接) */
+export async function lstatBigint(path: string): Promise<fs.BigIntStats> {
+  return fsp.lstat(path, { bigint: true });
+}
+
 export async function realpath(path: string): Promise<string> {
   return fsp.realpath(path);
 }

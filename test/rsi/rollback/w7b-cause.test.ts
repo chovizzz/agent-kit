@@ -166,7 +166,9 @@ const CASES: Record<RollbackFailureStatus, Case[]> = {
         const w = world7();
         const orig = w.store.commit.bind(w.store);
         w.store.commit = async (spec) =>
-          spec.upserts.some((u) => u.content.includes('"lifecycle":"rolled_back"'))
+          spec.upserts.some(
+            (u) => (JSON.parse(u.content) as { lifecycle?: string }).lifecycle === 'rolled_back',
+          )
             ? { status: 'cas_failed', expected: 'x', actual: null }
             : orig(spec);
         return startRollback(w.d, harmReq());
@@ -179,7 +181,9 @@ const CASES: Record<RollbackFailureStatus, Case[]> = {
         const w = world7();
         const orig = w.store.commit.bind(w.store);
         w.store.commit = async (spec) =>
-          spec.upserts.some((u) => u.content.includes('"lifecycle":"rolled_back"'))
+          spec.upserts.some(
+            (u) => (JSON.parse(u.content) as { lifecycle?: string }).lifecycle === 'rolled_back',
+          )
             ? { status: 'invalid', why: 'git_read_failed', breaker: PERSONAL_REPO_INVALID }
             : orig(spec);
         return startRollback(w.d, harmReq());
@@ -225,6 +229,15 @@ const CASES: Record<RollbackFailureStatus, Case[]> = {
       },
     },
     {
+      name: '旧格式 journal 缺内容哈希且凭据 / head.json 都取不回(legacy_unrecoverable:content_sha256;W0-20:缺失不可恢复 = incomplete,带事务身份)',
+      cause: 'manual_event_required',
+      run: async () => {
+        const w = world7();
+        await w.d.txns.write(legacyJournal());
+        return (await resumeAll(w.d))[0] as RollbackOutcome;
+      },
+    },
+    {
       name: '旧格式 journal 缺内容哈希且凭据读不到',
       cause: 'credentials_invalid',
       run: async () => {
@@ -236,15 +249,6 @@ const CASES: Record<RollbackFailureStatus, Case[]> = {
     },
   ],
   refused: [
-    {
-      name: '旧格式 journal 缺内容哈希、无法绑定事务身份(legacy_unrecoverable:content_sha256)',
-      cause: 'txn_invalid',
-      run: async () => {
-        const w = world7();
-        await w.d.txns.write(legacyJournal());
-        return (await resumeAll(w.d))[0] as RollbackOutcome;
-      },
-    },
     {
       name: 'identity_kind_mismatch',
       cause: 'candidate_invalid',

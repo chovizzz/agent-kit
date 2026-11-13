@@ -248,8 +248,8 @@ export interface BreakerMarkerPort {
 export interface UserMarkerRead {
   exists(): Promise<boolean>;
 }
-/** U 的实例令牌(`none` = 不存在);`mtimeMs` 取 `lstat`(Stats 只有毫秒精度) */
-export type UserMarkerToken = 'none' | { dev: number; ino: number; size: number; mtimeMs: number };
+/** U 的实例令牌(`none` = 不存在);四项都取 `lstat(path, { bigint: true })`:`(dev, ino, size, mtimeNs)`(W0-22 第 1 条) */
+export type UserMarkerToken = 'none' | { dev: bigint; ino: bigint; size: bigint; mtimeNs: bigint };
 /**
  * U 的完整端口,**只给命令层**(W8 `rsi auto pause` / `resume`;本块不含命令):`ensureUser` 独占创建 `{at, by:"user"}`(已存在 = `exists`);
  * `remove(token)` 只在当前实例与 `snapshot()` 取得的令牌逐项相等时才删(令牌 `none` 永不删)。worker 的 {@link BreakerDeps.marker} 只收 {@link UserMarkerRead}。

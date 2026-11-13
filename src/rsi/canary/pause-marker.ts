@@ -12,7 +12,7 @@ import {
 } from '../../contracts/rsi.js';
 import { canonicalJson } from '../../io/canonical-json.js';
 import type { IoContext } from '../../io/paths.js';
-import { lstat, readText } from '../../io/read-fs.js';
+import { lstatBigint, readText } from '../../io/read-fs.js';
 import { createExclusiveDurable, remove } from '../../io/safe-fs.js';
 import type {
   BreakerMarkerPort,
@@ -75,11 +75,11 @@ export function makeBreakerMarkerPort(
 }
 
 const tokenOf = (st: {
-  dev: number;
-  ino: number;
-  size: number;
-  mtimeMs: number;
-}): UserMarkerToken => ({ dev: st.dev, ino: st.ino, size: st.size, mtimeMs: st.mtimeMs });
+  dev: bigint;
+  ino: bigint;
+  size: bigint;
+  mtimeNs: bigint;
+}): UserMarkerToken => ({ dev: st.dev, ino: st.ino, size: st.size, mtimeNs: st.mtimeNs });
 
 const sameToken = (a: UserMarkerToken, b: UserMarkerToken): boolean =>
   a !== 'none' &&
@@ -87,7 +87,7 @@ const sameToken = (a: UserMarkerToken, b: UserMarkerToken): boolean =>
   a.dev === b.dev &&
   a.ino === b.ino &&
   a.size === b.size &&
-  a.mtimeMs === b.mtimeMs;
+  a.mtimeNs === b.mtimeNs;
 
 /**
  * 用户标记 U 的端口。`exists` = worker 唯一能用的读取(只判存在:ENOENT = false,其它读失败抛错,不返回「没有」冒充成功);
@@ -98,7 +98,7 @@ export function makeUserMarkerPort(io: IoContext, rsiDir: string, now: () => Dat
   const file = path.join(rsiDir, CANARY_FILES.pause);
   const snapshot = async (): Promise<UserMarkerToken> => {
     try {
-      return tokenOf(await lstat(file));
+      return tokenOf(await lstatBigint(file));
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === 'ENOENT') return 'none';
       throw e;
