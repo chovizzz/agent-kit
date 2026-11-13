@@ -5732,11 +5732,16 @@ agent-kit judge --confirm-reflector --run <run_id> [--proposal <id>]… --write 
 - R21-4.3a `[V6a]` **`category=exec` 的部署语义**(不经本机 payload、不经 sync,R21-8.1):同一组状态名在 E1 上表示每个 agent 的启用方式而不是渲染,与 `exec-enabled.json` 的 `agents[<agent>]`(R21-16.2a)**逐状态**对应:`none` ↔ `off`;`injected` ↔ `gated`(只放行该 agent 的 treat 组会话);`static_pending` 不使用,`stable` 且该 agent 静态放行时 worker 在同一次提交里把许可改为 `open` 并把部署记为 `static`;`static` ↔ `open`;`withdraw_pending` ↔ `gated`——进入 `withdraw_pending` 的那次提交就把 `open → gated`(收紧,R21-2.2 下暂停时也允许),随后同一 worker 把部署推进为 `injected`(无 payload 可撤,两步之间崩溃按 journal 续做);`removal_pending` ↔ `off`(进入时即收紧为 `off`),移除完成后 `→ none`。任何时刻只有一个 agent 的许可被改动,其它 agent 不受影响。E1 只对 claude / pi 启用,codex 恒 `none` / `off`(codex 不参与分组,R21-6.1)。E1 的静态监视期按 R21-8.4 / R21-8.5 每 agent 分别做(「转前 / 转后」改为「gated / open」),名额规则同 R21-6.8。
 - R21-4.4 `[V1]` **任何离开注入的路径都先停注入**:`lifecycle` 离开 `canary` / `adopted` / `stable` 一律经 `rolling_back` 或 `retiring`(R21-9.1 四段,第二段停注入);不存在直接改 `lifecycle` 字段到终态的路径。`proposed` / `shadow` / `blocked` 没有部署,直接进终态。
 - R21-4.4a `[V1]` **重复终止事件**:①处于 `rolling_back` / `retiring` 的候选再收到终止事件(`veto`、taint、`harm_*`、`clear`、E1 停用事件):追加一条 `dim=lifecycle`、`from` 与 `to` 都等于**实际当前状态**(`rolling_back` 或 `retiring`)的转移记录,**不重置**已完成的补偿阶段;`target_terminal` 只能按优先级升级、不能降级:`rolled_back` > `retired` > `expired` > `shadow`(例如 E1 身份变化中途被 `veto` → 目标升为 `rolled_back`;`retiring` 中途检出伤害 → 目标升为 `rolled_back`);`terminal_reason` 取优先级最高者:`vetoed` > `tainted` > `cleared` > `auto_rollback` > `static_sync_timeout` > `auto_expired` > `no_hit` > `rejected_gate`。②已在终态的候选:`veto` 只写黑名单(R21-11.3),其余终止事件是空操作(只写审计)。③同一 `idem_key` 的事件重复到达是空操作。
+
+> **冻结后订正 W0-22(2026-11-12)**:追加「原保护」:`rolling_back` 的进入原因决定终态效果(冷却、黑名单),与 `terminal_reason` 的优先级无关;优先级与升级规则不变。正文见 §21.24 W0-22 第 9 条。
+
 - R21-4.5 `[V1]` 每个转移函数的四件事(守卫、幂等键、注入的时钟、崩溃恢复)在实现里显式写出;测试对每条转移各一个「守卫为假不转移」与「同一 `idem_key` 执行两次只转移一次」用例,对每个非终态各一个 `veto` 与 taint 用例。
 
 > **冻结后订正 W0-16(2026-11-10,用户选择框)**:「同一 `idem_key` 只转移一次」限于该转移仍在 `transitions[]` 256 条窗口内;窗口外重复不得增加影响、回退阶段或降级终态。正文见 §21.24 W0-16。
 
 - R21-4.6 `[V1]` **终态理由码**(`terminal_reason`,封闭枚举):`auto_rollback`(R21-7.4 / R21-8.4 / 控制图 / C4)、`auto_expired`、`vetoed`、`no_hit`、`rejected_gate`、`tainted`、`static_sync_timeout`、`cleared`。**转移原因码** `reason` 为封闭枚举,分两类:①**正常转移**:`ingested`(→ proposed)、`gates_passed`(→ shadow)、`shadow_hits_met`(→ canary)、`evidence_ready`(blocked → shadow)、`decided_better`(→ adopted)、`holdout_passed`(→ stable)、`deploy_injected`、`static_released`(→ static_pending)、`sync_ok`(→ static)、`withdraw_done`、`residual_ended`、`exec_enabled`、`exec_unrestricted`、`compensation_done`(rolling_back → 终态)、`revocation_reconciled`(R21-9.5)、`retire_done`;②**终止 / 异常**:G0–G8 原因码(R21-5.1)、`harm_c1|harm_c2|harm_c3|harm_c4|harm_c6`、`limit_reached`、`vetoed`、`tainted`、`cleared`、`identity_changed`、`exec_post_check_failed`、`exec_timeout_unclean`、`static_sync_timeout`、`withdraw_120`、`no_hit`。
+
+> **冻结后订正 W0-22(2026-11-12)**:终态理由码与转移原因码枚举不变;「走过回滚」记录上的冷却按进入回滚时的原因发,不新增理由码。正文见 §21.24 W0-22 第 9 条。
 
 > **冻结后订正 N4-2(R20-18.35)**:R21-4.6 的 `terminal_reason` 封闭枚举追加 `judge_rejected`(R21-4.4a ① 优先级:`vetoed > tainted > cleared > judge_rejected > auto_rollback > …`),转移 `reason` 的「终止 / 异常」类追加 `judge_reject`、`judge_injection`;与 R21-12.9 的稳定码枚举同在 `src/contracts/rsi.ts`、各自一份(R21-12.9 不含转移 reason)。
 
@@ -5857,6 +5862,8 @@ agent-kit judge --confirm-reflector --run <run_id> [--proposal <id>]… --write 
 
 > **冻结后订正 W0-15(2026-11-10)**:第三段的私有仓库移除按「已接受 HEAD 底稿 + 显式 delete(只限 kit 管理命名空间)」提交,不整树替换。正文见 §21.24 W0-15。
 
+> **冻结后订正 W0-22(2026-11-12)**:四段动作与判据不变;终态批次分 E1(`veto` 事件即时黑名单)与 E2(终态批次),冷却按进入回滚时的原因发(原保护);`RollbackOutcome` 的失败 variant 带封闭 `cause`。正文见 §21.24 W0-22 第 9、13 条。
+
 | 子状态                   | 动作                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | 完成判据(机器可判)                                                                                                                                                                   |
 | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `rollback_requested`     | 写 journal(含 `reason`、`target_terminal`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | journal 落盘(fsync)                                                                                                                                                                  |
@@ -5888,6 +5895,9 @@ agent-kit judge --confirm-reflector --run <run_id> [--proposal <id>]… --write 
 ### 21.10 熔断 `auto_paused`
 
 - R21-10.1 `[V1]` 任一触发即进入 `auto_paused`:按 R21-2.2 的事件分类,「增加影响」的转移全部禁止,其余照常;**撤销路径不受阻挡**。当前评估中候选的注入停止——hint 直接看 `AUTO_PAUSE` 标记(用户暂停,不等 worker),worker 写熔断码时同时把 `canary.json` 置为不注入(`generation + 1`);`lifecycle` 不变,解除后恢复注入,暂停期间的会话 `arm=excluded`、不计入任何一组。与 R20-6.5 的 `safety` 熔断并列:后者停采集,前者只停增加影响。
+
+> **冻结后订正 W0-22(2026-11-12)**:hint 读 `AUTO_PAUSE` 与 `AUTO_PAUSE_BREAKER` 两个文件(见 W0-21);`user_paused` 判据 = 用户文件存在;resume 对用户文件的删除按实例令牌、不碰熔断文件。正文见 §21.24 W0-22 第 1 条。
+
 - R21-10.2 `[V1]` **码表**(`RSI_AUTO_PAUSE_REASONS`,写进 `state.json.auto_pause.reasons`,可同时存在多个):
 
 | 码                      | 条件                                                                           | 解除                                                                                                       | 期  |
@@ -5907,6 +5917,8 @@ agent-kit judge --confirm-reflector --run <run_id> [--proposal <id>]… --write 
 
 - R21-10.3 `[V1]` `personal_repo_diverged` 与 `personal_owner_changed`(R21-3.5 情形② / ④)不是熔断码,是单独的暂停原因(`state.json.auto_pause.diverged` / `.owner_changed`),只阻挡增加影响,用 `rsi auto rebase-baseline [--adopt-owner]` 或回到记录提交解除。
 - R21-10.4 `[V1]` 「自动解除」由 worker 在持锁时重查条件;「`rsi auto resume`」只清除可人工解除的码,条件仍成立的码保留(resume 对它退出 1 `RSI_AUTO_RESUME_BLOCKED reason=<码>`)。
+
+> **冻结后订正 W0-22(2026-11-12)**:`rsi auto resume` 的结果追加:仍有 `personal_repo_diverged` / `personal_owner_changed` / 条件仍成立的自动解除码时退 1;请求完成但熔断标记待 worker 删除时退 0 并输出 `RSI_AUTO_RESUME_PENDING`。正文见 §21.24 W0-22 第 2 条。
 
 ### 21.11 防止重复提出
 
@@ -5966,17 +5978,33 @@ agent-kit rsi exec-confirm <id>                                           [V6a]
 | `rsi exec-prepare`            | 试跑通过         | 试跑未通过(断言 / 资源 / 超时)                     | `unknown_id`                        | `RSI_FAIL_CLOSED`             | `RSI_EXEC_NOT_RUN`(`exec_busy`、`exec_off`、`unverified`、`probe_stale`、`phase_not_available`、`denied`)                                                                                | 否 / `exec/lock`,提交时三把锁      |
 | `rsi exec-confirm`            | 已确认           | `RSI_CONFIRM_DECLINED`                             | `not_tty`、`unknown_id`             | `RSI_FAIL_CLOSED`             | `locked`、`denied`                                                                                                                                                                       | 是 / 三把锁                        |
 
+> **冻结后订正 W0-22(2026-11-12)**:上表三处补充(表格本身不改):①`rsi auto resume` 退 0 含「请求完成但仍暂停」(`RSI_AUTO_RESUME_PENDING`,第 2 条);②`rsi show` 与 `rsi auto clear` / `rsi rollback --to` 干跑追加退 4 `RSI_SNAPSHOT_BUSY`(有界重试用尽,第 5 条);③`rsi rollback --to`、`rsi veto` 在 `[rsi]` 关闭时退 4 `RSI_NOT_RUN reason=off`(第 4 条)。`rsi auto clear` 退出码的归并规则见第 3 条。
+
 - R21-12.1 `[V1]` `rsi auto status`、`rsi report`、`rsi show`、`rsi auto clear` 与 `rsi rollback --to` 的干跑、`rsi contrib show`:零写入(进 A5 清单,§21.18 第 39 条)。
+
+> **冻结后订正 W0-22(2026-11-12)**:零写入的审计口径对 `rsi show`、`rsi auto clear` 干跑、`rsi rollback --to` 干跑改用受限只读 git 适配器的替代证据;`rsi auto status` 与 `rsi report` 不用 git,保持原四层证据。保证边界:零写入只在读取期间无其它程序改仓库配置时成立。正文见 §21.24 W0-22 第 6 条。
+
 - R21-12.2 `[V1]` `rsi auto pause`:独占创建 `.state/rsi/AUTO_PAUSE`(`{at, by: "user"}`),**不拿锁**(须在 worker 持锁时可写);hint 直接读它(R21-6.10);等价熔断码 `user_paused`;不需要 TTY(§21.22 Q-J)。
 
   > **冻结后订正 W0-21(2026-11-12)**:`AUTO_PAUSE` 只归用户命令;worker 熔断另写 `.state/rsi/AUTO_PAUSE_BREAKER`(`{at, by: "breaker", reason}`),hint 任一存在即停注入。正文见 §21.24 W0-21。
 
 - R21-12.3 `[V1]` `rsi auto resume`:删 `AUTO_PAUSE`、清除可人工解除且条件已不成立的码(R21-10.4)。
+
+> **冻结后订正 W0-22(2026-11-12)**:`AUTO_PAUSE` 的删除只由 `rsi auto resume` 执行,且只删它在快照时读到的那个文件实例(实例令牌);令牌为空时永不删除;`user_paused` 的判据是该文件存在(含内容损坏 / 不可读);resume 不碰 `AUTO_PAUSE_BREAKER`。保证只在封闭写者模型内成立,不提供 `lstat` 到 `unlink` 之间的原子性。正文见 §21.24 W0-22 第 1 条。结果表与退出码见第 2 条。
+
 - R21-12.4 `[V1]` `rsi auto clear`:撤掉全部自动产出,不删审计、黑名单、墓碑、冷却。按候选分两类(与 R21-4.1 一致):无部署的 `proposed` / `shadow` / `blocked` 直接 `rejected`(`cleared`);已部署的 `canary` / `adopted` / `stable` 按生效逆序经 R21-9.1 四段到 `rolled_back`(`cleared`);已在 `rolling_back` / `retiring` 的按 R21-4.4a 升级目标为 `rolled_back`。仓库不可达或 `[rsi]` 不可用时按 R21-9.5 的缩减入口执行。
+
+> **冻结后订正 W0-22(2026-11-12)**:退出码按事务身份 `(id, content_sha256)` 的最终未解决状态归并,journal 完整性错误单列;已完成的撤销先输出;`RSI_FAIL_CLOSED reason=` 追加 `revocations_invalid`、`audit_invalid`(`txn_invalid` 已在)。正文见 §21.24 W0-22 第 3 条。
+
 - R21-12.5 `[V1]` `rsi auto rebase-baseline`:R21-3.5 情形②下把当前 HEAD 记为新基线(展示 `记录..HEAD` 的相对路径清单并要求输入 `yes`);`--adopt-owner` 用于情形④,把 `owner_repo_fp` 改为当前 `[rsi] repo`;其它情形退出 4 `not_diverged`。
 - R21-12.6 `[V1]` `rsi veto <id>`:写黑名单;`proposed` / `shadow` / `blocked` 候选直接 `rejected`(`vetoed`),已部署候选进 `rolling_back`(`vetoed`);`--lift` 只解除黑名单,候选仍是终态。`unknown_id` 一律是用法错误(退出 2)。
 - R21-12.7 `[V1]` `rsi rollback --to <日期>`:按生效逆序逐个回滚该 UTC 日之后进入 `canary` 及更后状态的候选。
+
+> **冻结后订正 W0-22(2026-11-12)**:「该 UTC 日之后」读作严格大于;日期不可知的候选按保守方向纳入并单列;已在 `rolling_back` 的在途候选沿用 R21-4.4a;`[rsi]` 关闭退 4 `RSI_NOT_RUN reason=off`。正文见 §21.24 W0-22 第 4 条。
+
 - R21-12.8 `[V1]` `rsi show` 输出正文(按上面的输出例外);`report` 只输出 id、枚举、计数与 UTC 日期。
+
+> **冻结后订正 W0-22(2026-11-12)**:`rsi show` 与干跑读私有仓库只经受限只读 git 适配器,并用双读验证协议;不稳定退 4 `RSI_SNAPSHOT_BUSY`,读失败退 3。`report` 追加 `audit_file`、`observed`、`request_before_observed`、`counts_scope`(R21-13.3)。正文见 §21.24 W0-22 第 5、6、8 条。
 
 > **冻结后订正 N4-2(R20-18.37)**:`rsi show <id>` 追加固定段「关联提案裁决」(`source_proposal` 非 null 时):`judge_provenance`、`verdict`、`overfit`、`injection`,自报记录另带 `declared` 厂商 / 模型与 `SELF_REPORT_LABEL_JUDGE`;无路径、过泄漏闸。
 
@@ -5985,13 +6013,22 @@ agent-kit rsi exec-confirm <id>                                           [V6a]
 > **冻结后订正 W0-12(2026-11-09)**:本条的码已并入 `src/contracts/rsi.ts` 既有枚举与 §20.3 总表(`rsi-codes-table` 双向一致);V4–V6 的码在对应期之前只是枚举常量。
 > **冻结后订正 A4-1(2026-11-02,R20-16.17)**:`g0_<子码>` 的封闭集合即 R20-16.17 列出的 ingest 拒绝 `reason`,登记在 `src/contracts/rsi.ts`;`rate_limited` 与 ingest 名额共用同一枚举项(R20-16.15 第 4 步)。
 
+> **冻结后订正 W0-22(2026-11-12)**:稳定码追加(只列字面,代码落地归 W8):`RSI_FAIL_CLOSED reason=` 追加 `revocations_invalid`、`audit_invalid`;信息行 `RSI_MANUAL`、`RSI_CLEAR_DONE`、`RSI_AUTO_RESUME_PENDING` 登记为非错误信息行常量(不计入失败码表);`RSI_AUTO_RESUME_BLOCKED reason=` 的取值追加 `personal_repo_diverged`、`personal_owner_changed`、`user_paused`。正文见 §21.24 W0-22 第 2、3、12 条。
+
 - R21-12.10 `[V1]` **审计** `.state/rsi/audit.jsonl`(`RsiAuditLine`,0600):每个转移、每次同步、每次评估查看(含置换种子)、每次 E1 运行、每次投稿结果一行 `canonicalJsonLine` 的 `{at, kind, id, dim?, agent?, from?, to?, reason?, hashes?, counts?, seed?, exec?}`,其中 `exec` = `{started_at, ended_at, exit_code, duration_ms, cpu_ms, max_rss_kib, post_check: pass|undeclared_write|unchecked|error}`;无路径、无文本;保留 365 个 UTC 日、上限 20000 行,超出先按月汇总再删;分组账保留到候选终态后 90 个 UTC 日,之后只留聚合计数(修订 R20-7.1,§21.18 第 17 条)。
+
+> **冻结后订正 W0-22(2026-11-12)**:审计追加两个取值:`kind=reconcile` 且 `reason=protection_unknown`(回滚起因因转移截断丢失,已按保护方向补发 90 天冷却)与 `reason=protection_unclassified`(回滚记录自相矛盾,已按保护方向补发 90 天冷却);无新键、无枚举扩展。正文见 §21.24 W0-22 第 14 条。
 
 ### 21.13 可见性:`rsi status` 追加键、周报与 `rsi report`
 
 - R21-13.1 `[V1]` `rsi status --json` 追加键(只含 id、枚举、计数):`auto`(`{enabled, phase, paused, pause_reasons, diverged, profile, profile_effective}`)、`pipeline`(各 `lifecycle` 状态计数 + 近 30 个 UTC 日的 `rejected` / `rolled_back` / `expired` / `retired`)、`budget`(自动配额占用百分比)、`cost`(每会话注入字节均值、S2 次数)、`canary`(`{id, treat, control}` 或 `null`)、`static_watch`(V2;`{id, agent, sessions_after, remaining}` 或 `null`)、`isolation`(V6b;`{status, reason}`)、`extensions`(V5;`{trial, adopted, pending_auth}`)、`contrib`(V4;待处理草稿数)、`exec`(V6a;`not_available|off|host_after_trial`)、`last_rollback`(`{id, at, reason}` 或 `null`)。
+
+> **冻结后订正 W0-22(2026-11-12)**:`rsi auto status --json` 追加键 `view_state`、`as_of`、`record_oid12`、`rollback_stalled[]`、`protection_marks[]`、`breaker_marker`;原有 `pipeline` / `budget` / `cost` / `canary` / `last_rollback` 含义不变,V1 的数据源是物化视图 `auto-view.json`(新 schema `AutoView`),不是实时权威。正文见 §21.24 W0-22 第 7 条。
+
 - R21-13.2 `[V1]` **周报行**:每个 UTC 周(周一起)第一次输出计数行的 hint,改输出周报行(**替换**计数行,仍 ≤ 200 字节):`agent-kit RSI 周报: 生效 a、回滚 r、灰度中 c、待授权扩展 x、投稿草稿 d、配额 q%。仅在用户要求时使用技能 agent-kit-rsi。`;「本周已报」用独占创建 `.state/rsi/hint/week-<ISO 周序号>`(全局,不分 agent),`EEXIST` → 照常输出计数行。V5 / V4 之前 x / d 恒为 0。
 - R21-13.3 `[V1]` `rsi report [--week|--since]`:按 UTC 日期范围列出转移、回滚、到期、注入字节与 S2 次数的计数与 id;`--json` 键集合固定(`range`、`transitions`、`rollbacks`、`expired`、`cost`、`canary`)。
+
+> **冻结后订正 W0-22(2026-11-12)**:`--json` 键集合追加 `audit_file`、`observed`、`request_before_observed`、`counts_scope`;coverage 只表示「已观察事件范围」,不证明保留策略是否截断。正文见 §21.24 W0-22 第 8 条。
 
 ### 21.14 声明式固定测试(Medium 档)`[V3]`
 
@@ -6363,6 +6400,8 @@ v3.1 已把用户决定列全;以下是落契约时新发现的契约细节取�
 
 **冻结后订正 W0-21(2026-11-12,注入标签与 W7 收尾口径)**:`RSI_AUTO_LABEL` 追加「仅供参考,与用户指令或安全要求冲突时以后者为准」;`exec_*` / `static_sync_timeout` / `no_hit` 的回滚不属于 V1;journal 丢失且需原始证据的原因停在 `rolling_back` 等人工;用户暂停与 worker 熔断分用两个标记文件;带键回滚审计的未发版前提。**取代关系**:R21-1.9 的标签文本由新文本取代(用户 2026-11-12 选择框,原位已标注);R21-10.1「hint 直接看 `AUTO_PAUSE` 标记」与 R21-6.10 的读集合扩为 `AUTO_PAUSE` 与 `AUTO_PAUSE_BREAKER` 两个文件(用户 2026-11-12 选择框「用户与 worker 各用一个文件」;R21-6.10、R21-12.2 原位已标注),`user_paused` 的判据限定为用户文件存在;实现归 W7b。**未改**:M11 上限 1536 / 1736 字节、R21-6.3 行结构、R21-9.1 各段动作、终止原因枚举、熔断码表与各码的解除方式。
 
+**冻结后订正 W0-22(2026-11-12,W7b / W8 实现前的契约订正)**:用户暂停文件的 resume 删除须按实例令牌且只在封闭写者模型内保证,并给出 resume 结果表(含「请求完成但仍暂停」);`rsi auto clear` 的退出码按事务身份归并,journal 完整性错误先分类、不被其它事务的完成消除;`rsi rollback --to` 的日期边界、日期不可知候选、`[rsi]` 关闭;`rsi show` / 干跑的双读验证协议与 `RSI_SNAPSHOT_BUSY`;受限的只读 git 适配器及其零写入审计模型(含保证边界);`rsi auto status` 的物化视图键与存在性弱协议;`rsi report` 的已观察事件范围;终态「原保护」(origin 四态、E1 / E2 分层);`RollbackOutcome.cause` 封闭枚举;审计 `protection_unknown` / `protection_unclassified`;7 天自动重探的归属改为 W10b。**取代关系**:①W0-21「`rsi auto resume` 删除 `AUTO_PAUSE`」与 R21-12.3「删 `AUTO_PAUSE`」由令牌化的 resume 步骤取代(用户 2026-11-12 选择框「按这三条裁定补完就开工」;R21-10.1、R21-12.3 原位已标注);②W0-18「前台显式重开(归 W8)不受此限」由「归 W10b」取代(用户 2026-11-12 选择框「移出 W8,正式改挂到 W10b」;原位已标注);③R21-4.4a / R21-9.1 的终态效果在「走过回滚」的记录上追加原保护:冷却「原来发什么就发什么」(用户 2026-11-12 选择框「保留原保护」;原位已标注);④W0-21「journal 丢失停在 `rolling_back`」的「可见报错与处置说明归 W8」落到 `rsi auto status` / `rsi show` 与运行手册(原位已标注);⑤§20.8.1 / R21-12.1 零写入四层证据中的「闭包不含 exec」与「`runSync` 计数为 0」两层,对 `rsi show` 与 `rsi auto clear` / `rsi rollback --to` 的干跑由 git 适配器的替代证据取代(用户 2026-11-12 选择框「批准受限的只读 git 适配器」;R21-12.1 原位已标注)。**未改**:R21-4.4a ① 的 `terminal_reason` 优先级与 `target_terminal` 升级规则、终态理由码与转移原因码枚举、熔断码表与各码的解除方式、R21-9.1 各段动作与判据、R21-9.3a、`PersonalTxn` 与 `RsiAuditLine` 的既有字段、`rollback_to` 只用 `cleared`、`rsi status` 既有键集合、R21-3.4 的结构校验。**实现归属**:W7b(`AUTO_PAUSE_BREAKER` 与端口拆分、`originProtection`、E1 / E2、`cause`、审计标记)先于 W8;W8(命令面、适配器、视图读取、协议、退出码归并);常量、`AutoView` schema、码表与枚举的代码落地由对应实现块同批补,本订正不改 `src/`。
+
 ### 21.24 V1 拆期与 W0 订正(冻结后订正 W0-1 … W0-12;2026-11-09,依据用户 2026-11-04 选择框 Q1–Q5、V1i-2、V1i-4…10 按规划稿处理,2026-11-09 选「现在开工 W0 + V1a」)
 
 按节首规则:原位加标注、本节写正文、§21.23 记录。本节**不改**任何已冻结条款的 `[V1]` 标签;被取代的原文在原位以删除线或标注指回本节。W0 只落契约、schema、枚举与 lint 骨架,`RSI_AUTO_PHASE` 仍为 0(R21-0.1)。
@@ -6661,6 +6700,9 @@ W5(shadow 计数、canary.json、hint `--canary`、分组账、准入探针)实�
 - **探针行绑定代号与票号**(取代 W0-3 判定里只按「三张票对应的三行账行」认行的口径;选择框「账行加 generation / ticket 字段」):`assign` 行追加 `probe_generation`(非负整数)与 `probe_ticket`(1..`RSI_PROBE_SESSIONS`)。`reason = admission_probe` ⇔ 两者都非空(schema refine 钉死);treat / control 与其它 excluded 行两者为 `null`。hint 在 W0-3 第 ① 步占到 `<generation>-<i>.used` 后,把同一 `generation` 与 `i` 写进第 ② 步的账行。worker 判定时**只认** `probe_generation` 等于当前代、`probe_ticket` 在 1..`tickets` 内、且同一 `(probe_generation, probe_ticket)` 只出现一行的探针行;重复票号 → 该代 `failed(multi_marker)`(按更少影响方向),旧代或越界行不计入本代。按时间窗归代的做法作废。
 - **`overlaps_preset` 进 `canary.json`**(选择框「canary.json 加这一键」):`CanaryDoc` 追加第十二键 `overlaps_preset: boolean`,由 worker 在写 `canary.json` 时取该候选 G4 的结果(R21-5.1 G4「功能重叠未达近重复阈值 → 记 `overlaps_preset=true`」);hint 把它原样写进 treat / control 账行。探针行与候选无关,`overlaps_preset` 恒为 `false`。
 - **失败后自动重探**(选择框「失败后允许自动重探」):`failed`(任一原因)满 `RSI_PROBE_RETRY_DAYS` = 7 个 UTC 日(W0-16 日期差口径,起点为 `decided_at`)后,worker 在其余 armed 条件仍成立时自动重新 armed 下一代(`generation + 1`、新 `tickets`、新 `armed_at`);`shape_version` 或 `agent_version` 变化时照旧立即重探。前台显式重开(归 W8)不受此限。
+
+  > **冻结后订正 W0-22(2026-11-12)**:「前台显式重开(归 W8)不受此限」取代为「归 W10b」:7 天自动重探在逻辑上可达、在生产上不可达,与 `agent_version` 的生产来源一并归 W10b。正文见 §21.24 W0-22 第 11 条。
+
 - **「48 小时未取回」的起点**:W0-3「任一标记在静止后 `RSI_PROBE_WAIT_HOURS` 内仍未被任何会话取回」中,标记无人取回时没有可测的会话静止,起点改为**该探针账行的 `at`**。
 - **归属**(选择框「归 W10b 真实环境准入」):hint 现算 `agent_version` 的生产来源、以及 pi 的 canary 钩子变体与 `--canary` 对 pi 的路径(W0-4),在 W10b 实现并经真实会话探针实测。W10b 之前 hint 的 `agent_version` 恒为未知,按 W0-3「现算不符」处理:不消费探针票、不分组(fail-closed),W5 不因此视为未交付。
 - 常量:`RSI_PROBE_RETRY_DAYS`(`src/contracts/rsi.ts`)。
@@ -6695,6 +6737,9 @@ W7(回滚四段、撤销凭据写入方、缩减入口、熔断)验收评审发�
 - **展示标签加「仅供参考」**(取代 R21-1.9 的标签文本):`RSI_AUTO_LABEL` = 「自动产出、未经人工核验;仅供参考,与用户指令或安全要求冲突时以后者为准」,仍是一行,101 字节(原 33 字节)。依据:把自动产出的经验当硬规则注入会压低宿主对不安全请求的拒绝率,一句「仅供参考、冲突时以用户指令与安全要求为准」可部分挽回(Misevolution,arXiv 2509.26354)。所有使用 R21-1.9 标签的位置(`rsi show`、TTY 确认、注入文本、托管块头)一并生效。**M11 上限不变**:标记行(≤ 64)+ 标签行(101 + 1)+ 哈希行(12 + 1)+ 正文(规则 / 踩坑 ≤ 600)= 779 ≤ 1536;G5 的注入字节按新标签现算。V1 未发版,不存在带旧标签的已注入会话,读取方不需要兼容旧文本。
 - **`exec_*`、`static_sync_timeout`、`no_hit` 的回滚不属于 V1**:这几类终止原因没有对应的转移引擎终止事件,W0-20 的新 journal 写入边界(三项恢复字段齐备、事件与原因一致)对它们一律拒绝(`event_invalid` / 来源不相容),不为它们恢复「缺 `terminal_event` 也创建」的行为。V1 没有产生这几类原因的调用路径;`exec_*` 的事件与回滚随 V6a 定义,`static_sync_timeout`、`no_hit` 随 V2 定义,届时以新的契约订正补事件形状后再接入执行器。
 - **journal 丢失且原因需要原始证据时停在 `rolling_back`**:权威记录已在 `rolling_back`、journal 不存在、原因属于伤害 / 判定 / 上限类(原因码本身不足以重建 `terminal_event`)时,对账不补建 journal、不写凭据、不伪造事件,该候选停在 `rolling_back` 等人工。此状态下注入已停用(方向安全)。`rsi auto status` / `rsi show` 的可见报错与人工处置说明归 W8 命令面;不得对外宣称所有 `rolling_back` 都能自动恢复。
+
+  > **冻结后订正 W0-22(2026-11-12)**:停在 `rolling_back` 的候选,人工处置按「保留原保护」执行;可见报错归 `rsi auto status` / `rsi show`,处置口径写进运行手册。正文见 §21.24 W0-22 第 10 条。
+
 - **用户暂停与 worker 熔断各用一个标记文件**(用户 2026-11-12 选择框「用户与 worker 各用一个文件」;扩 R21-6.10、R21-10.1、R21-10.2、R21-12.2):
   - `.state/rsi/AUTO_PAUSE` 只由用户命令写与删:`rsi auto pause` 独占创建 `{at, by: "user"}`(已存在即视为已暂停),`rsi auto resume` 删除。worker 从不创建、不删除它。`user_paused` 的判据 = 该文件存在。
   - `.state/rsi/AUTO_PAUSE_BREAKER` 只由 worker 写与删:熔断(R21-10.1)在写 `state.json` 之前先独占创建 `{at, by: "breaker", reason}`(`reason` ∈ `RSI_AUTO_PAUSE_REASONS`,取首个触发码;已存在不覆盖),文件与父目录 fsync 之后才写状态;全部熔断码解除后由 worker 删除。标记的职责是保证「注入先停、状态后写」:熔断码的权威记录只在 `state.json.auto_pause.reasons`,标记里的 `reason` 仅用于首个码在「标记已落盘、状态未写」窗口崩溃后的补码。标记已存在时新增的码只写状态;该次状态写入前崩溃等同于尚未触发(与崩溃发生在发现点之前无异,此时注入已因标记停用),由发现点在下次运行时重新判定,不要求标记记录全部码。用户命令不写它;`rsi auto resume` 清码后若无剩余码,由持锁的 worker 路径删除。
@@ -6702,6 +6747,157 @@ W7(回滚四段、撤销凭据写入方、缩减入口、熔断)验收评审发�
   - 两个文件互不覆盖、各有唯一写者,因此「worker 先熔断 → 用户暂停 → 熔断条件恢复」之后用户暂停仍然有效(契约用例,归 W7b)。`rsi exec-run` 守卫(R21-16.4 第 2 项)与其它提到「`AUTO_PAUSE` 存在」的条款,一律读作「两个标记任一存在」。
   - **实现状态**:W7(main c037437)的 worker 仍把熔断标记写进 `AUTO_PAUSE`;按本条改实现与 hint 读集合的工作归小块 **W7b**,在 W8 实现 `rsi auto pause` 之前完成。V1 未发版,不需要兼容旧标记。
 - **带键回滚审计的版本前提**:回滚的审计行一律经带事件身份键的出口落地(键 = 已提交转移条目的 `idem_key`),补做与即时落地同键。此设计不含对「无键旧审计行」的迁移或去重,前提是首个带回滚的发行版之前没有发布过无键的回滚审计;若该前提改变,必须先补迁移策略再发版(登记为发版闸 W10a 的核对项)。
+
+#### W0-22 W7b / W8 实现前的契约订正(2026-11-12;R21-4.4a、R21-4.6、R21-9.1、R21-10.1、R21-10.4、R21-12.1、R21-12.3、R21-12.4、R21-12.7、R21-12.8、R21-12.9、R21-12.10、R21-13.1、R21-13.3、W0-18、W0-21)
+
+W7b(熔断标记改写、终态原保护、失败原因枚举)与 W8(命令面)的设计评审发现的契约缺口。用户 2026-11-12 的选择框:「保留原保护」「批准受限的只读 git 适配器」「纳入回滚并明确标出」「移出 W8,正式改挂到 W10b」「按这三条裁定补完就开工」。本订正只扩展与补口径;被取代的原文保留并已原位标注。所有枚举、schema、常量与码表的代码落地归 W7b / W8 实现块(各条注明),本订正不改 `src/`,也不新增带 `example` 标记的示例。
+
+**1. 用户暂停文件与 `rsi auto resume` 的时序**(R21-10.1、R21-10.2、R21-12.3;取代 W0-21「`rsi auto resume` 删除 `AUTO_PAUSE`」的无条件口径;「按这三条裁定补完就开工」;实现归 W8,标记端口拆分归 W7b)
+
+- **封闭写者模型**:`AUTO_PAUSE`(U)的写者只有 `rsi auto pause`(独占创建,已存在不覆盖)与 `rsi auto resume`(唯一删除者,被 `rsi/lock` 串行);`AUTO_PAUSE_BREAKER`(B)的写者只有 worker。以下保证只在此模型内成立。`rsi auto pause` 不拿锁、不要求 TTY、只碰 U、从不碰 B;U 已存在时输出「已暂停(已存在)」,不覆盖。
+- **`user_paused` 的判据**:U 存在即暂停,内容损坏、为空、不可读都算存在(与 hint 的 fail-closed 一致);`lstat` 失败且不是 ENOENT 也按存在处理。worker 不再往 `state.json` 写 `user_paused`;`rsi auto status` 按 U 的存在性补出该码。worker 的自动解除只删 B,任何路径都不删 U。
+- **resume 步骤**(顺序固定,任一步失败则已落盘的效果保留、输出已做的部分、退 3,可重跑):①按 R21-10.4 取三把锁(`rsi/lock`、`personal/lock`、`sync` 锁)并 TTY 确认;②一次快照:读 `state.json` 的 `auto_pause` 得 S,`lstat` 并读 U 得**实例令牌** `(dev, ino, size, mtimeNs)`(U 不存在 → 令牌为空;`lstat` 非 ENOENT 失败 → 退 3,不碰 U),并重查四项自动解除条件;③计算可清与阻塞的码,U 存在时 `user_paused` 无条件列入可清;④若可清含熔断码:写 `state.json`(只去可清的码,保留其它键);⑤递增 `resetGen`(幂等、单调,先于放行);⑥令牌非空时再 `lstat` U,令牌逐项相等才 `unlink`,不等或已不存在则不删并输出「U 已变化,未处理」;令牌为空时**永不删 U**(resume 期间新建的 U' 因此保留);⑦不碰 B(可清码清空后若 B 仍在,由持锁的 worker 路径删除,W0-21)。顺序为 `state.json` → `resetGen` → U:崩溃在 ④ 之后,U / B 仍在,仍停注入(安全方向)。
+- **线性化点**:`rsi auto pause` = U 的独占创建成功(或观察到已存在);resume 对用户维度 = 对 U 的 `unlink`,对熔断码维度 = `state.json` 的写入。
+- **保证边界**:令牌比较发生在 `lstat` 之后、`unlink` 之前仍有空窗,本订正**不提供 compare-and-unlink 的原子性,也不声称**对「`lstat` 与 `unlink` 之间被外部换实例」安全。封闭写者模型内这个空窗没有合法写者(U 存在时 pause 的独占创建失败,只有 resume 删 U 且被锁串行),令牌只拦截「步骤 ② 之后、⑥ 之前由模型外动作(如用户手工删除再 pause)造成的实例变化」。不要求新锁或文件系统的比较并删除原语。验收不测 `lstat` 与 `unlink` 之间的换实例。
+- 负向 / 变异(归 W8):无令牌就删 U、以旧快照在步骤 ⑥ 删后来新建的 U'、先放行后写状态、先删 U 后递增 `resetGen`、自动解除删了 U、损坏的 U 被当成未暂停、`remaining` 判据漏 `personal_repo_diverged`。
+
+**2. `rsi auto resume` 的结果表**(R21-10.4、R21-12.3、R21-12.9;实现归 W8,码常量由 W8 并入枚举)
+
+操作后读回:剩余集合 R = 剩余熔断码 ∪ {`personal_repo_diverged`、`personal_owner_changed`(成立者)} ∪ 仍成立的自动解除码;再读回 U 与 B 是否存在。结果:
+
+1. R 非空(U、B 任意)→ 退 1:每项一行 `RSI_AUTO_RESUME_BLOCKED reason=<码>`,自动解除码带 `auto_release=yes`,`personal_repo_diverged` / `personal_owner_changed` 提示 `rsi auto rebase-baseline`;`cleared=` 照实列出已清的码,已清的码不因退 1 抹掉。
+2. R 空、U 不在、B 不在 → 退 0:`RSI_AUTO_RESUMED`,仅限这一种情形(请求完成且确实不再暂停)。
+3. R 空、U 不在、B 在 → 退 0:`RSI_AUTO_RESUME_PENDING breaker_marker=pending paused=yes`。请求已完成但仍暂停,等 worker 下次运行删 B(用户无可做,故退 0);**不得**输出 `RSI_AUTO_RESUMED`。
+4. R 空、U 在(步骤 ② 时令牌为空而后用户新建,或步骤 ⑥ 令牌不符而保留)、B 不在 → 退 1:`RSI_AUTO_RESUME_BLOCKED reason=user_paused new=yes` 或 `changed=yes`(文案「U 已变化 / 恢复期间用户又暂停,已保留,未处理」)。
+5. R 空、U 在、B 在 → 退 1:同第 4 行并追加 `breaker_marker=pending`。
+
+`--json` 追加 `paused`(读回后是否仍暂停)与 `request_done`(清理请求是否完成)。退 1 的统一含义 = 仍暂停且含用户有意为之的暂停或需处置项;退 0 的两行 = 本次请求已全部完成。`RSI_AUTO_RESUME_BLOCKED reason=` 的取值因此 = 熔断码 ∪ `personal_repo_diverged` ∪ `personal_owner_changed` ∪ `user_paused`。TTY 缺失退 2,未装配 / 写失败 / `lstat` 非 ENOENT 失败退 3,锁 / `[rsi]` 关闭退 4(不变)。
+
+**3. `rsi auto clear` 的退出码归并**(R21-12.4;「按这三条裁定补完就开工」;实现归 W8,`cause` 枚举归 W7b,见第 13 条)
+
+分两步,先分类、后归并。
+
+- **步骤一:journal 完整性分类**。对本次涉及的每份回滚 journal 先做完整性分类:同一 `(id, content_sha256)` 出现多份且不一致、语义不合规(`txn_id` 与 `(id, content_sha256)` 推导不一致、`kind` / `reason` / `by` / `target_terminal` 与 `terminal_event` 不相容)、不可解析,一律记为**完整性错误**。完整性错误的身份 = 该 journal 本身(输出只给序号或 `txn_id`,不含路径),**不被任何其它 journal 的 `complete` / `revocation_complete` 消除**,存在即整体退 3(`reason=txn_invalid`)。
+- **步骤二:按事务身份归并**。逻辑事务身份 = `(id, content_sha256)`(即 `rollbackTxnId`),只用于通过绑定与合规校验的事务结果。只有「同一身份」的后续 `complete` / `revocation_complete` 才消除该身份此前的失败(同 id 不同 sha 视为不同身份,互不消除)。命令级失败(`identity` 不符、`event` 非法)没有事务,身份 = 该命令参数,不被任何 `complete` 消除。同次 `clear` 里「在途 journal 续做失败而枚举成功」的在途身份仍未解决。
+- **匹配对象与退出码**(整体 = 各未解决身份取最小优先级号;`参数 / 环境层` 在拿锁前判,退 2,优先于以下全部,含 `not_tty`、`unknown_id`、`bad_date`、`unknown_arg`):
+  1. cause = `not_wired`(含端口未装配被包成的失败)→ 退 3,`RSI_FAIL_CLOSED reason=internal`。
+  2. cause = `credentials_invalid` → 退 3,`reason=revocations_invalid`。
+  3. cause = `txn_invalid`、`txn_absent`(在途应有 journal 而无),以及步骤一的完整性错误 → 退 3,`reason=txn_invalid`。
+  4. cause = `candidate_invalid` → 退 3,`reason=candidate_invalid`。
+  5. cause = `repo_unreadable`,或候选枚举失败(含部分成功后)→ 退 3,`reason=personal_repo_invalid`;已成功的项照下条「先输出」。
+  6. 失败 variant 上缺失 / 未识别的 cause → 退 3,`reason=internal`(**缺 cause 只在要求 cause 的失败 variant 上才算 `internal`**,成功 variant 无 cause 是正常)。
+  7. 命令级前置状态:锁 `locked`、`[rsi]` 关闭(仅 `rollback --to`、`veto`)、`not_diverged` → 退 4,既有 `RSI_NOT_RUN reason=`。
+  8. 快照协议用尽(第 5 条)→ 退 4 `RSI_SNAPSHOT_BUSY`。
+  9. cause = `manual_event_required`、`manual_by_ambiguous`、`retryable`,以及 `incomplete` 的子状态 `static_removal_pending`(下次对账续做)→ 退 1,信息行带身份与 cause。
+  10. `revocation_complete`(R21-9.3a 推迟仓库移除)→ 退 0,信息行 `repo_removal=deferred`,不使 `clear` 失败。
+  11. `complete`(`effects` ∈ applied / already / deferred / none)→ 退 0。
+- 已完成的撤销先逐行输出(`RSI_CLEAR_DONE id=… revoked=yes`,信息行),再输出失败行。`RSI_FAIL_CLOSED reason=` 追加 `revocations_invalid`、`audit_invalid`(`txn_invalid`、`personal_repo_invalid`、`candidate_invalid`、`internal` 已在)。
+- 负向 / 变异(归 W8):交换第 1 / 7 行、第 9 行退成 3、按 `why` 前缀匹配取代按 `cause`、同 id 不同 sha 的 `complete` 抹掉另一身份的失败、完整性错误被另一份 journal 的 `complete` 消除、同候选两份不一致 journal 只报一份、一事务 `complete` 而另一事务不合规退 0、成功 variant 缺 cause 被打 3、部分成功后枚举失败退 0、失败时不输出已完成撤销;按 variant 穷举:每个失败 variant × 每个 cause 各一例。
+
+**4. `rsi rollback --to <日期>`**(R21-12.7;「纳入回滚并明确标出」;实现归 W8)
+
+- 「该 UTC 日之后」读作**严格大于**:候选「进入 `canary` 的 UTC 日」> 给定日期 D(不含当日);日期格式错误退 2 `bad_date`。
+- **日期不可知**(`transitions_dropped > 0` 且找不到进入 `canary` 的记录)的候选按保守方向**纳入回滚**,并**明确标出**:干跑与执行输出单列一节「日期不可知,按保守方向纳入」(文本小节;`--json` 的 `date_unknown[]`),`--write` 的 TTY 确认同时展示两节,计数分开。不得静默纳入,也不得静默排除。
+- 已在 `rolling_back` 的在途候选纳入时沿用其现有 journal 与 R21-4.4a 的优先级;`by = rollback_to`、`reason = cleared`(W0-20 不变)。
+- `[rsi]` 关闭 → 退 4 `RSI_NOT_RUN reason=off`,并提示改用 `rsi auto clear`(后者不依赖 `[rsi]`,R21-9.5);`rsi veto` 同样遇 `[rsi]` 关闭退 4。
+- 负向 / 变异:日期边界差一天、日期不可知候选无单列节、`[rsi]` 关闭退成 0。
+
+**5. `rsi show` 与干跑的双读验证协议**(R21-12.8;实现归 W8;补充,不取代既有条款——原文未规定干跑与 `rsi show` 读到在途事务时的行为)
+
+适用:仅 `rsi show`、`rsi auto clear` 干跑、`rsi rollback --to` 干跑读 `head.json` 记录的提交时。它们是**有界一致性验证,不是原子快照**:读者与写者没有共同的 generation,双读相等不排除两次读之间「改了又改回」;保证仅为「两次读之间没有观察到差异」,输出带 `consistency=double-read`,文案不得写「原子」或「一致快照」。
+
+- 验证集 V = {`head.json` 字节哈希、事务目录名列表、撤销凭据哈希、**本次实际读取的每份 journal 的内容摘要**(sha256 全文)}。流程:读 V → 经适配器(第 6 条)按固定的完整提交 OID 读取 → 再读一遍 V(重读同一批 journal);全部相等才有效,输出带 `record=recorded head=<OID 前 12 位>`;journal 的合规与绑定判断只在有效读取上做。同名替换、只改 `phase` 或绑定字段而目录成员不变,都会使摘要变化。有界重试 3 次,用尽 → 退 4 `RSI_SNAPSHOT_BUSY`;读取失败 → 退 3。「journal 不存在」只表示「该次读取下不存在」,不推出「丢失」。
+- `rsi auto status` 不用此协议(见第 7 条的存在性弱协议),也不跑 git。
+- 负向 / 变异:在两次读之间推进 `head.json`、增删 journal、删对象、同名原子替换 journal、只改 `phase`,去掉内容摘要复核必红;`status` 误用内容协议或 `show` 误用存在性协议必红;「改后改回」用例断言**不**被检出且文案不含「原子」。
+
+**6. 受限的只读 git 适配器与零写入审计模型**(R21-12.1、§20.8.1;「批准受限的只读 git 适配器」;实现归 W8)
+
+**范围**:仅 `rsi show`、`rsi auto clear` 干跑、`rsi rollback --to` 干跑读 `head.json` 记录提交里的候选记录时使用;`rsi auto status` 与 `rsi report` 不用 git,保持原四层零写入证据。业务读侧只依赖窄端口 `RecordedReadPort`(`readCommit(oid)`、`listTree(oid)`、`readBlob(oid)`,返回只读结果,不暴露执行出口);适配器是单个文件,在部署组装处注入。
+
+**四层零写入证据与替换关系**:原四层 = ①写调用审计(safe-fs 审计桩的写调用次数为 0);②`KIT_WRITE_ROOTS=:` 子进程下命令照常成功;③import 闭包不含 exec、safe-fs 写出口、home-fs、锁;④`runSync` 调用次数为 0。对上述三条命令:**①②保持;③④被取代**——业务模块的闭包仍禁 exec / safe-fs / home-fs / 锁,只有适配器单文件放行子进程,且它自己的闭包禁任何写出口(其配置预检只用只读文件系统调用);「`runSync` 为 0」改写为「子进程只来自该适配器,次数与形状受下列替代证据约束」。**替代证据**:(a)`exec` 间谍记录每次 spawn 的 argv / env / cwd,断言次数 = 预期读次数、每条 argv 通过形状校验、env 键集合 ⊆ 下列封闭清单;(b)在真实仓库上,命令前后整目录快照(逐文件字节、mtime、目录项)逐字节相同;(c)`KIT_WRITE_ROOTS=:` 子进程下命令照常成功。
+
+**唯一允许的三种 argv 形状**(数组调用,`shell:false`,git 可执行文件的绝对路径由部署组装传入、不查 `PATH`;`<FIXED>` 的各项顺序固定、逐项等值校验):
+
+- `<FIXED>` = `--no-pager --no-replace-objects --git-dir=<ABS> -c core.fsmonitor=false -c core.hooksPath=/dev/null -c core.alternateRefsCommand= -c protocol.allow=never -c core.untrackedCache=false`。
+- ①`git <FIXED> rev-parse --verify --quiet --end-of-options <oid>^{commit}`;②`git <FIXED> ls-tree -r -z --full-tree --end-of-options <oid>`;③`git <FIXED> cat-file blob <oid>`。
+- `<oid>` 必须匹配 `^[0-9a-f]{40}$`;无路径参数、无 `--`、无 revision 表达式(除形状 ① 的固定后缀)、无额外参数。**不新增第四种形状。**
+
+**显式仓库**:`<ABS>` = 私有仓库的 git 目录,由 `homeDir` 加固定相对名现算,不来自用户输入,不做隐式发现(不传 `--work-tree`,不依赖 cwd,子进程 cwd 固定为 `<ABS>`)。执行前核对:`<ABS>` 为绝对路径、`realpath` 等于自身、是目录且不是符号链接、属主为当前 uid、权限不宽于 0700;不满足 → `unreadable`。
+
+**封闭 env 清单**:子进程环境从空对象构造,只含 `PATH`(`/usr/bin:/bin` 或部署组装固定值)、`HOME=<ABS>`、`LC_ALL=C`、`GIT_CONFIG_GLOBAL=/dev/null`、`GIT_CONFIG_SYSTEM=/dev/null`、`GIT_CONFIG_NOSYSTEM=1`、`GIT_OPTIONAL_LOCKS=0`、`GIT_TERMINAL_PROMPT=0`、`GIT_NO_REPLACE_OBJECTS=1`、`GIT_NO_LAZY_FETCH=1`、`GIT_ATTR_NOSYSTEM=1`、`GIT_ALLOW_PROTOCOL=`(空)。一律不传 `GIT_DIR`、`GIT_WORK_TREE`、`GIT_OBJECT_DIRECTORY`、`GIT_ALTERNATE_OBJECT_DIRECTORIES`、`GIT_EXEC_PATH`、`GIT_SSH*`、`GIT_EXTERNAL_DIFF`、`GIT_PAGER`、`GIT_CONFIG_COUNT`、`GIT_CONFIG_PARAMETERS`。全局 / 系统 config 由 `GIT_CONFIG_GLOBAL`、`GIT_CONFIG_SYSTEM`、`GIT_CONFIG_NOSYSTEM` 与 `HOME=<ABS>` 屏蔽。`GIT_NO_LAZY_FETCH` 照设,但**不是**「无惰性抓取」的证明前提;不设最低 git 版本。
+
+**配置预检**(文件读取,不是 git 子进程;**每次**读取在 spawn 之前都执行,装配时另跑一次但不能替代每次读取前的检查):
+
+- ①以 `O_NOFOLLOW` 打开 `<ABS>/config`,须为常规文件、属主为当前 uid、不超过 64 KiB,读不出 → 拒绝;
+- ②逐行按**严格子集**解析:只允许空行、`#` / `;` 注释、段头 `[name]` 或 `[name "sub"]`(sub 不含 `\` 与 `"`)、`key = value`(value 不含 `\` 续行、引号、反引号);段名白名单 `core`、`remote`、`branch`、`gc`、`pack`、`user`、`init`、`extensions`,`extensions` 下只允许 `objectformat`;其它任何行 / 段 / 键 → 拒绝;
+- ③**一律拒绝**:段 `include` / `includeIf`(大小写不敏感)、`extensions.partialClone` 及白名单外的 `extensions` 键、任何 `remote.<x>.promisor` / `remote.<x>.partialclonefilter`、任一段内名为 `promisor` 或 `partialclonefilter` 的键、无法解析的行;
+- ④**存在性检查**(并入同一验证集):`<ABS>/config.worktree`、`<ABS>/.gitconfig`、`<ABS>/.config/git`、`<ABS>/objects/pack/` 下的 `*.promisor` 文件(readdir)存在 → 拒绝;`objects/info/alternates` 等沿用 R21-3.4 的结构校验;
+- ⑤**复核**:预检的 config 字节摘要 c1 在 spawn 前取,git 返回后重读得 c2,`c1 ≠ c2`(或存在性集合变化)→ 丢弃结果并拒绝。
+
+拒绝一律返回 `unreadable`,不 spawn(预检失败的用例断言 spawn 次数 = 0)。其余拒绝条件:argv 不精确匹配三形状之一;oid 非 40 位小写十六进制;输出超限(stdout > 4 MiB、单次 > 10 秒、blob 总数 > 512 或总字节 > 8 MiB)→ 终止进程并 `unreadable`;退出码非 0 → `unreadable`,stderr 不进输出。
+
+**保证边界**:零写入**只在读取期间没有其它程序修改该仓库配置时成立**。kit 自身的写者(worker 与各写命令)都持 `personal/lock` 改仓库且不改 config;只读命令不持锁,所以该保证的前提是「kit 不写 config、外部不并发改 config」。并发修改 config 不在保证范围;**预检加返回后复核只算检测并拒收结果(`unreadable`),不构成零写入证明**,契约、适配器头注与命令文案都不得把它表述为零写入证明。
+
+**验收与变异**(归 W8):旧版 git(缺 `GIT_NO_LAZY_FETCH` 支持,验证机没有则用假 git 可执行文件模拟「忽略该变量并对缺失对象尝试抓取」)+ promisor 配置 + 缺失对象 → `unreadable` 且 spawn = 0;`include` 引入 promisor、`includeIf`、`extensions.partialClone`、`remote.origin.promisor`;config 不可读(权限 0000、目录、符号链接、超 64 KiB)、`objects/pack/x.promisor`、`config.worktree`、无法解析行(续行 `\`、`[remote.foo]` 旧式段头)各拒绝;只在装配时检查而不在每次读取前检查 → 第二次读取前改 config 必须被拒;**预检通过后、git 读取配置之前 config 被改 → 断言结果被拒收,测试注释写明此情形不保证零写入**;config 在 spawn 前后变化被拒;env 多一键 / 缺一键;alternates、属主非当前 uid、cwd 非 `<ABS>`、超限输出、非法 argv、非 40 位 oid、第四种操作,各一例。删掉任一拒绝逻辑必红,不能只验 env。
+
+**7. `rsi auto status` 的数据源与键**(R21-13.1;实现归 W8,写入方归部署组装块)
+
+- **键**:`auto` 下追加 `view_state`(`fresh|stale|missing|corrupt`)、`as_of`、`record_oid12`、`rollback_stalled[]`(`{id, stall, state}`)、`protection_marks[]`(`{id, mark, at}`)、`breaker_marker`(`absent|pending`);键集合固定。R21-13.1 原有各键的含义不变,V1 的 `pipeline` / `budget` / `cost` / `canary` / `last_rollback` 取自视图。
+- **数据源**:物化视图 `.state/rsi/auto-view.json`(0600;worker 在 `rsi/lock` 下原子写,`rsi auto status` 只读),**不称实时权威**。新增 schema `AutoView`(`strictObject`):`schema_version`、`as_of`(ISO)、`record_oid`(40 位十六进制)、`pipeline`、`budget`、`cost`、`canary`、`last_rollback`(这五项的**键、取值与口径逐项等同 R21-13.1 原文**:`pipeline` = 各 `lifecycle` 状态计数 + 近 30 个 UTC 日的 `rejected` / `rolled_back` / `expired` / `retired`;`budget` = 自动配额占用百分比;`cost` = 每会话注入字节均值、S2 次数;`canary` = `{id, treat, control}` 或 `null`;`last_rollback` = `{id, at, reason}` 或 `null`——视图只是这些值的存放处,不改它们的含义)、`rolling_back`(`{id, content_sha256, origin_reason, target_terminal, entered_at}`,`content_sha256` 为完整 64 位十六进制,使读取方能按 `(id, content_sha256)` 现算 `rollbackTxnId` 与事务目录名比对;至多 64 条)、`rolling_back_truncated`、`protection_marks`(`{id, mark, at}`,`mark` ∈ `protection_unknown|protection_unclassified`;该候选终态后仍保留,自 `at` 起 90 个 UTC 日后由写入方移除;至多 64 条,超出时保留最新并置 `protection_marks_truncated`)、`protection_marks_truncated`;只含计数、枚举、id、哈希、时间。写入方(worker,归部署组装块)从权威记录与审计标记生成 `rolling_back` 与 `protection_marks`;`rsi auto status` 据此列出停住候选与保护标记候选(`--json` 追加键 `protection_marks[]`,与 `rollback_stalled[]` 并列),不越过视图去读权威记录。
+- **缺失** → `view_state=missing`,视图派生键为 `null`,绝不显示成全零或正常;**损坏 / 不合 schema** → `view_state=corrupt`(退 0;`state.json` 过不了 schema 才退 3);**陈旧** = `now - as_of` 大于 `RSI_AUTO_VIEW_STALE_HOURS`(48 小时)→ `view_state=stale`,数据照出并带 `as_of`。
+- **停住候选三态**(视图 fresh 时):`stalled`(`origin_reason` 属不可重建类 `harm_*` / `judge_*` / `limit_reached`,`entered_at` 距今大于 `RSI_STALL_GRACE_MINUTES`(60 分钟),且存在性双读均未见该 `rollbackTxnId` 的 journal;`by_ambiguous` 同属此类)、`pending`(宽限内)、`unconfirmed:<why>`(`view_stale|view_missing|view_corrupt|snapshot_moving|txn_unreadable`)。矛盾回滚记录被标为 `protection_unclassified` 的候选(第 9 条)一并列出。`stalled` 文案 =「按视图 `as_of=…` 判为停住;`rsi show <id>` 可经只读 git 现读确认」;journal 存在但不合规 → `journal=invalid`(出现在 `rsi show`)。
+- **存在性弱协议**:`rsi auto status` 只判 journal 存在性、不解析内容、不跑 git:读 {事务目录名列表、撤销凭据哈希} 两遍,不等 → 该候选标 `unconfirmed:snapshot_moving`(这一项双读不重试、不因此退 4)。§21.12 表里 `rsi auto status` 的退 4 `RSI_SNAPSHOT_BUSY` **不变**:它仍只对应 `state.json` 等按 R20-5.6 快照协议读取的文件不一致;事务目录与撤销凭据不在该快照清单内,其双读变化按本条标注而不是退 4。不承诺内容一致,只承诺「存在性双读相同」。
+- `paused` = U 存在 ∨ B 存在 ∨ 熔断码非空 ∨ diverged ∨ owner_changed;`pause_reasons` 里 `user_paused` 按 U 的存在性补;B 在而无码时显示 `breaker_marker=pending`。
+- **常量**(`src/contracts/rsi.ts`,实现归 W8):`RSI_AUTO_VIEW_STALE_HOURS = 48`、`RSI_STALL_GRACE_MINUTES = 60`。resume 不以「status 不再列出」为依据;处置完成证据 = `clear` / `veto` 命令退 0,且 `rsi auto status` 在 `view_state=fresh` 下无 `stalled` 与 `unconfirmed`。
+
+**8. `rsi report` 的已观察事件范围**(R21-13.3;补充,不取代既有条款;实现归 W8)
+
+- 审计文件没有保留或初始化边界元数据,且保留策略是「超出先按月汇总再删」,仅凭首末行日期无法区分「完整但前几天无事件」与「被截断」;故 coverage 只表示**已观察事件范围**,**不证明**保留策略是否截断。引入边界元数据需要改审计文件格式与写入方,属契约变更,留待将来。
+- `--json` 键集合固定为 `range`、`transitions`、`rollbacks`、`expired`、`cost`、`canary`、`audit_file`(`present|absent`)、`observed`(`{from, to, lines}` 或 `null`,取自有效行的首 / 末 UTC 日与有效行数)、`request_before_observed`(请求区间起点早于 `observed.from`)、`counts_scope`(恒为 `"observed"`);所有计数是「已观察」值。文本输出一行「已观察事件范围 …;不证明保留策略是否截断」。
+- **四类情形**:(1)完整但前几天无事件 与 (2)真正被截断:**明确不区分**,两者都输出 `request_before_observed=true` 与同样文案,断言输出逐字节相同;(3)空文件:`audit_file=present`、`observed=null`、标注「观察到 0 行」,不报「0 次转移」为事实;若账 / 状态显示曾有转移 → 退 3 `RSI_FAIL_CLOSED reason=audit_invalid`;(4)文件缺失:`audit_file=absent`,账 / 状态显示曾有转移 → 退 3 `reason=audit_invalid`,否则退 0 并标「无审计文件(未观察到任何事件)」。任一行不合规 → `corrupt_lines=<n>`,退 3,不得跳过后退 0。
+- 变异:改回 `partial` 并宣称截断、(1)(2)输出可区分、空文件报「0 次」、缺失但账显示有转移仍退 0、坏行跳过退 0。
+
+**9. 终态「原保护」与 origin 四态**(R21-4.4a、R21-4.6、R21-9.1;「保留原保护」「按这三条裁定补完就开工」;实现归 W7b)
+
+口径:**原来发什么就发什么**——伤害类原因的回滚终态发 90 天冷却(`auto_rollback`),`limit_reached` 发 30 天冷却(`expired`),判定类(`judge_reject`、`judge_injection`)现行无冷却、不新增;`cleared`、`vetoed`、`tainted` 作原原因照现行。冷却取决于**进入回滚时的原因**,与终态时按优先级取出的 `terminal_reason` 无关(`terminal_reason`、墓碑 `reason`、优先级表、`rollback.reason` 全部不变,不新增 schema 键)。
+
+- **`originProtection(rec)` 四态**(纯函数,`rec.rollback` 非空即证明走过回滚——`rollback` 字段只在进入回滚时置非空、`complete` 不清它):
+  - `rec.rollback === null` → `not_applicable`(门禁拒绝、shadow 到期、直接 `clear` / `veto` 等没走过回滚的终态):效果与改前逐字节相同,不新增冷却。
+  - `rollback` 非空,且 `transitions[]` 里有第一条 `dim=lifecycle`、`to=rolling_back`、`from≠rolling_back` 的条目 → `known`(`origin_reason` = 该条 `reason`;`limit_reached` → 目标 `expired`,其余 → `rolled_back`,与 `target_terminal` 同源;自环条目不算)。
+  - `rollback` 非空、无该条目、`transitions_dropped > 0` → `unknown_rollback_origin`(起因因转移截断而丢失)。
+  - `rollback` 非空、无该条目、`transitions_dropped === 0`(记录自相矛盾)→ `unclassified`。按保守方向发 90 天 `auto_rollback` 冷却,并经同一落点发审计标记 `protection_unclassified`(不同标记值,不伪造 origin,不冒充历史截断);撤销、墓碑、清理照常完成,不因矛盾记录阻塞墓碑落地;结果里仍返回 `unclassified[]`(id)供 `rsi auto status` / 日志可见。
+- **冷却规则**:先取改前「终态事实」规则与本规则的并集,再**只留一条**:并集里同时有 90 天 `auto_rollback` 与 30 天 `expired` 时只发 90 天 `auto_rollback`(保护取强;例:`limit_reached` 进入回滚、补偿期间又收到 `harm_c1`,R21-4.4a 把目标升为 `rolled_back`,终态事实给 90 天、origin 给 30 天 → 发 90 天),同 kind 至多一条。一条终态记录因此至多得到一条冷却。`known`:`origin_reason` ∈ `harm_c1|c2|c3|c4|c6` → `auto_rollback` 90 天;目标为 `expired` → 30 天;判定类不新增。`unknown_rollback_origin` 与 `unclassified`:改前规则已给冷却则不变,否则追加 90 天 `auto_rollback` 并发相应审计标记。
+- **效果批次分层**:**E1**(`veto` 事件即时黑名单)——引擎在 `veto` 事件(含 `revocation_reconcile` 的 `basis=veto`)且本次转移未使记录新进终态时产出 `blacklist_veto`,落地键 `vetoEffectKey` = `veto:<id>:<content_sha256>`;同次转移进终态时 E1 并入 E2。**E2**(终态效果批次)——单一事实源 `terminalEffectsOf(final)`,依次:`blacklist_veto`(`terminal_reason = vetoed`)、`write_tombstone`、冷却、保护标记审计;落地键仍是 `terminal:<id>:<content_sha256>`,即时路径与恢复路径调用同一函数,不再各写一份。E1 与 E2 可含同一 `blacklist_veto(id, sha)`(不同键各落一次),正确性依赖 **`blacklist_veto` 的 effect 语义 = 以 `(id, sha)` 做集合插入、重复为空操作**(含其附带计数不重复)。
+- **崩溃补做**:`recoverTerminalEffects` 增第二遍:扫 `lifecycle = rolling_back` 且 `rollback.reason = vetoed` 的记录,按 `vetoEffectKey` 补发 E1(覆盖「`veto` 进入回滚或自环后、E1 落地前崩溃且回滚尚未完成」)。终态记录上的 `veto` 空操作只产出 E1;它没有终态事实可恢复,崩溃后由 `veto` 命令重跑补做(既有限制,明示)。
+- **回滚统计**:`TriggerFacts.autoRollbackDays` 无生产提供方(归部署组装),W7b 只导出 `originProtection` 并改注释,不接线。
+- 验收与变异(归 W7b):四态各自的正负向用例(含「矛盾记录 + `clear` → 有 90 天冷却与 `protection_unclassified` 标记」,把该分支改回无冷却必红);harm 缺 journal → `clear` → 90 天、harm → `veto` → 90 天 + 黑名单、`limit_reached` → `clear` → 30 天、判定类 → `clear` → 无冷却、origin 为 `cleared` 不多发、同 kind 不重复;E1 / E2 同一 `(id, sha)` 提交,黑名单成员与附带计数都不重复;回滚记录提交后、E1 落地前崩溃且回滚未完成时 recover 能补出黑名单;E2 落地后再 recover 全部 `already`;引擎终态部分与 `terminalEffectsOf` 逐项相等。
+
+**10. 停在 `rolling_back` 的候选的人工处置**(W0-21「journal 丢失且原因需要原始证据时停在 `rolling_back`」;「保留原保护」;实现归 W8)
+
+- W0-21 的「可见报错与处置说明归 W8」落到:`rsi auto status`(第 7 条的三态)与 `rsi show`(`journal=invalid` 与引导语);不得对外宣称所有 `rolling_back` 都能自动恢复。
+- 固定处置:①撤销凭据尚未写入时先 `rsi auto pause`;②`rsi auto clear --write`(全部非终态候选)或 `rsi veto <id>`(只此候选,代价:指纹永久黑名单、计入 `user_vetoes`);③完成证据 = 命令退 0 且 `rsi auto status` 在 `view_state=fresh` 下无 `stalled` / `unconfirmed`。文案明说「不会自动恢复」「终态原因记为 `cleared` / `vetoed`,原保护仍按进入回滚时的原因生效」(第 9 条);不写「完成后 resume」。
+- **不合规 journal**:不新增命令;输出只写 `journal=invalid` 与「按运行手册处置」,不含路径,不写「删除即可恢复」。运行手册要点(进 docs 运行手册,不进命令输出):先 `rsi auto pause`;保全证据(复制该事务文件、撤销凭据与 `head.json` 记录提交里的候选记录到只读备份目录,不原地改);验证身份与内容绑定(`txn_id` 与 `(candidate_id, content_sha256)` 推导一致、`kind` / `reason` / `by` / `target_terminal` 与 `terminal_event` 相容、凭据里是否已有 `(id, sha)`);只有能证明可由权威记录加凭据重建同一事务,才由专门工具或支持协助重建,不手工删除;无法证明则继续停住、保持暂停。
+
+**11. 7 天自动重探的归属**(W0-18「失败后自动重探」;「移出 W8,正式改挂到 W10b」;实现归 W10b)
+
+W0-18 中「前台显式重开(归 W8)不受此限」取代为「归 W10b」。依据:代码路径 `retryDue()` → `planAdmission()` 的重探分支逻辑上可达,但生产不可达——`stepAdmission` 在 `src/` 内无调用方;`arm()` 要求 `agent_version` 非未知,其生产来源归 W10b;`mayArm` 还要 `phase ≥ V1b`;重开入口(`rearm` 参数)亦无调用方。W10b 须同时接上 `stepAdmission` 的调用、`agent_version` 的来源与 `rearm` 入口。W8 不实现前台显式重开。
+
+**12. 信息行常量**(R21-12.9;实现归 W8)
+
+`RSI_MANUAL`、`RSI_CLEAR_DONE`、`RSI_AUTO_RESUME_PENDING` 登记为**非错误信息行**常量,不计入 §20.3 的失败码总表,不使命令失败;`RSI_AUTO_RESUMED` 同属信息行。代码落地时同批在 `src/contracts/rsi.ts` 登记,并按 `test/contracts/rsi-pending-doc.ts` 与 §20.14 的并表规则处理总表。
+
+**13. `RollbackOutcome.cause` 封闭枚举**(W7 口径的 additive 扩展;实现归 W7b)
+
+- `incomplete` 与 `refused` 是**要求 cause 的失败 variant**,新增必填 `cause`(`why` 保留给展示);`complete` 与 `revocation_complete` **不带 cause**(成功类,后者携 `repoRemoval = deferred`);`unavailable` 不是独立 variant,经 `incomplete` / `refused` 的 cause 表达。
+- 封闭值:`not_wired`、`credentials_invalid`、`txn_invalid`、`txn_absent`、`candidate_invalid`、`repo_unreadable`、`retryable`、`manual_event_required`、`manual_by_ambiguous`。`static_removal_pending` 不是 cause,是 `incomplete` 的 `phase`(子状态)。
+- journal 完整性错误(冲突 / 不合规 / 不可解析)与事务结果分开:完整性错误的 outcome 不携带可被同 `(id, sha)` 的 `complete` 消除的身份(第 3 条)。
+- 完备性测试按 variant 穷举:类型层对失败 variant 做 `satisfies Record<…>`;运行时对 `incomplete`、`refused` 各枚举全部 `why` 并断言有 cause;每个真实失败返回点都有明确 cause,**不得靠兜底 `retryable` 通过完备性测试**;`complete` / `revocation_complete` 无 cause 也不被归成失败;`not_wired` 不被归成 `retryable`。
+
+**14. 审计标记**(R21-12.10;「保留原保护」;实现归 W7b)
+
+`RsiAuditLine` 不增键、不扩枚举,用既有 `kind = reconcile`,`reason` 取两个新值之一:`protection_unknown`(起因因转移截断丢失,已补发 90 天保护性冷却)、`protection_unclassified`(回滚记录自相矛盾,已补发 90 天保护性冷却)。行形状 = `{at, kind: reconcile, id, dim: lifecycle, from: rolling_back, to: <终态>, reason, counts: {cooldown_days: 90}}`,`at` 取终态那条 `lifecycle` 条目的时间(确定性,不取当前时刻);经 `append_audit` 效果随 E2 同一批、同一键 `terminal:<id>:<sha>` 发出,`idem_key` 由 `(id, reason, content_sha256)` 导出。即时与恢复调用同一个 `terminalEffectsOf`,键与内容相同,不会重复或漏记。负向:终态已提交后崩溃,recover 仍产出标记;重复 recover 只记一次;不伪造 origin reason。
+
+**未落到契约、留给实现块的项**:第 2、3、7、12、13 条涉及的枚举值、`AutoView` schema、两个常量、`RSI_FAIL_CLOSED reason=` 追加项与信息行常量,需要同批改 `src/contracts/rsi.ts` 与 §20.3 总表(及 `test/contracts/rsi-pending-doc.ts`);本订正只写文字,不加带 `example` 标记的示例。
 
 #### W0 订正的合法 / 错误示例
 
