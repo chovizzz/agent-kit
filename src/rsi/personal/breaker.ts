@@ -270,15 +270,15 @@ export interface UserMarkerRead {
   exists(): Promise<boolean>;
 }
 /** U 的实例指纹;`none` 表示不存在;四项都取 `lstat(path, { bigint: true })`:`(dev, ino, size, mtimeNs)`(W0-22 第 1 条) */
-export type UserMarkerToken = 'none' | { dev: bigint; ino: bigint; size: bigint; mtimeNs: bigint };
+export type UserMarkerStamp = 'none' | { dev: bigint; ino: bigint; size: bigint; mtimeNs: bigint };
 /**
  * U 的完整端口,**只给命令层**(W8 `rsi auto pause` / `resume`;本块不含命令):`ensureUser` 独占创建 `{at, by:"user"}`(已存在 = `exists`);
- * `remove(token)` 只在当前实例与 `snapshot()` 取得的指纹逐项相等时才删(指纹 `none` 永不删)。worker 的 {@link BreakerDeps.marker} 只收 {@link UserMarkerRead}。
+ * `remove(stamp)` 只在当前实例与 `snapshot()` 取得的指纹逐项相等时才删(指纹 `none` 永不删)。worker 的 {@link BreakerDeps.marker} 只收 {@link UserMarkerRead}。
  */
 export interface UserMarkerPort extends UserMarkerRead {
   ensureUser(): Promise<'created' | 'exists'>;
-  snapshot(): Promise<UserMarkerToken>;
-  remove(token: UserMarkerToken): Promise<'removed' | 'changed' | 'absent'>;
+  snapshot(): Promise<UserMarkerStamp>;
+  remove(stamp: UserMarkerStamp): Promise<'removed' | 'changed' | 'absent'>;
 }
 export interface BreakerDeps {
   state: PauseStatePort;

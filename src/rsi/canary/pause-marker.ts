@@ -19,7 +19,7 @@ import type {
   BreakerMarkerPort,
   PauseMarker,
   UserMarkerPort,
-  UserMarkerToken,
+  UserMarkerStamp,
 } from '../personal/breaker.js';
 import { CANARY_FILES } from './files.js';
 
@@ -89,14 +89,14 @@ export function makeBreakerMarkerPort(
   };
 }
 
-const tokenOf = (st: {
+const stampOf = (st: {
   dev: bigint;
   ino: bigint;
   size: bigint;
   mtimeNs: bigint;
-}): UserMarkerToken => ({ dev: st.dev, ino: st.ino, size: st.size, mtimeNs: st.mtimeNs });
+}): UserMarkerStamp => ({ dev: st.dev, ino: st.ino, size: st.size, mtimeNs: st.mtimeNs });
 
-const sameToken = (a: UserMarkerToken, b: UserMarkerToken): boolean =>
+const sameStamp = (a: UserMarkerStamp, b: UserMarkerStamp): boolean =>
   a !== 'none' &&
   b !== 'none' &&
   a.dev === b.dev &&
@@ -106,14 +106,14 @@ const sameToken = (a: UserMarkerToken, b: UserMarkerToken): boolean =>
 
 /**
  * 用户标记 U 的端口。`exists` = worker 唯一能用的读取(只判存在:ENOENT = false,其它读失败抛错,不返回「没有」冒充成功);
- * `ensureUser` / `snapshot` / `remove(token)` 供 W8 的 `rsi auto pause` / `resume`(本块不含命令):`remove` 只在当前实例与快照令牌逐项相等时才删
- * (令牌 `none` 永不删;`lstat` 与 `unlink` 之间仍有空窗,不提供原子 compare-and-unlink,见 verify_r21-w8 §5 的保证边界)。
+ * `ensureUser` / `snapshot` / `remove(stamp)` 供 W8 的 `rsi auto pause` / `resume`(本块不含命令):`remove` 只在当前实例与快照指纹逐项相等时才删
+ * (指纹 `none` 永不删;`lstat` 与 `unlink` 之间仍有空窗,不提供原子 compare-and-unlink,见 verify_r21-w8 §5 的保证边界)。
  */
 export function makeUserMarkerPort(io: IoContext, rsiDir: string, now: () => Date): UserMarkerPort {
   const file = path.join(rsiDir, CANARY_FILES.pause);
-  const snapshot = async (): Promise<UserMarkerToken> => {
+  const snapshot = async (): Promise<UserMarkerStamp> => {
     try {
-      return tokenOf(await lstatBigint(file));
+      return stampOf(await lstatBigint(file));
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === 'ENOENT') return 'none';
       throw e;
@@ -128,10 +128,10 @@ export function makeUserMarkerPort(io: IoContext, rsiDir: string, now: () => Dat
       const body = canonicalJson({ at: now().toISOString(), by: 'user' });
       return createExclusiveDurable(io, file, body, RSI_FILE_MODE);
     },
-    async remove(token) {
+    async remove(stamp) {
       const cur = await snapshot();
       if (cur === 'none') return 'absent';
-      if (!sameToken(token, cur)) return 'changed';
+      if (!sameStamp(stamp, cur)) return 'changed';
       await remove(io, file);
       return 'removed';
     },
