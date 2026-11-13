@@ -345,6 +345,15 @@ const CASES: Record<RollbackFailureStatus, Case[]> = {
       },
     },
     {
+      name: 'journal 的 by 与 (kind, reason) 不相容(字段存在但不合规 = txn_invalid)',
+      cause: 'txn_invalid',
+      run: async () => {
+        const w = world7();
+        await w.d.txns.write({ ...legacyJournal(), content_sha256: SHA, by: 'veto' });
+        return (await resumeAll(w.d))[0] as RollbackOutcome;
+      },
+    },
+    {
       name: '旧 identity_change journal(本期不支持,合法但不动)',
       cause: 'candidate_invalid',
       run: async () => {
