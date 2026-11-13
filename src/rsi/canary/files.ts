@@ -1,6 +1,6 @@
 /**
  * 灰度相关文件的名字、常量与小工具(docs/contracts.md R21-6.4 / R21-6.10、§21.24 W0-3)。
- * 全部位于 `.state/rsi/` 之下:`canary.json`、`canary-admission.json`、`AUTO_PAUSE`、`canary-ledger.jsonl`、`canary-probe/<agent>/<generation>-<i>.used`。
+ * 全部位于 `.state/rsi/` 之下:`canary.json`、`canary-admission.json`、`AUTO_PAUSE`(只归用户命令)、`AUTO_PAUSE_BREAKER`(只归 worker 熔断;W0-21)、`canary-ledger.jsonl`、`canary-probe/<agent>/<generation>-<i>.used`。
  * 纯常量与纯函数,无 I/O(hint 的闭包也会 import 它,保持轻量)。
  */
 import { createHash } from 'node:crypto';
@@ -11,6 +11,7 @@ export const CANARY_FILES = Object.freeze({
   canary: 'canary.json',
   admission: 'canary-admission.json',
   pause: 'AUTO_PAUSE',
+  pauseBreaker: 'AUTO_PAUSE_BREAKER',
   ledger: 'canary-ledger.jsonl',
   probeDir: 'canary-probe',
 } as const);

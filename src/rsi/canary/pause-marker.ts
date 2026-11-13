@@ -1,7 +1,8 @@
 /**
- * `AUTO_PAUSE` 标记的文件实现(docs/contracts.md R21-12.2、R21-6.10:`.state/rsi/AUTO_PAUSE`,独占创建,**不拿锁**;hint 只判存在)。`ensure` 返回前标记文件与父目录都已 fsync(`createExclusiveDurable`,含已存在的标记)。
- * 熔断(R21-10.1)先写它再写状态 / 置 canary,所以 hint 在任何崩溃窗口里都看得到。内容 `{at, by, reason?}` 只用于恢复:
- * `by=user` 是 `rsi auto pause` 写的(等价 `user_paused`),`by=breaker` 是 worker 熔断写的。已存在的标记一律不覆盖。
+ * 两个暂停标记的文件实现(docs/contracts.md R21-12.2、R21-6.10、§21.24 W0-21):各有**唯一写者**,互不覆盖。
+ *  - `.state/rsi/AUTO_PAUSE`(U):只归用户命令(`rsi auto pause` 独占创建 `{at, by:"user"}`,`rsi auto resume` 删除)。worker 对它**只有存在性读取**({@link UserMarkerRead},类型上无写 / 删)。
+ *  - `.state/rsi/AUTO_PAUSE_BREAKER`(B):只归 worker 熔断(`{at, by:"breaker", reason}`),独占创建,**不拿锁**;`ensure` 返回前文件与父目录都已 fsync(`createExclusiveDurable`,含已存在的标记)。
+ * 熔断(R21-10.1)先写 B 再写状态 / 置 canary,所以 hint 在任何崩溃窗口里都看得到。已存在的标记一律不覆盖。`user_paused` 的判据 = U 存在(含内容损坏 / 空 / 不可读)。
  */
 import * as path from 'node:path';
 import {
@@ -11,9 +12,14 @@ import {
 } from '../../contracts/rsi.js';
 import { canonicalJson } from '../../io/canonical-json.js';
 import type { IoContext } from '../../io/paths.js';
-import { readText } from '../../io/read-fs.js';
+import { lstat, readText } from '../../io/read-fs.js';
 import { createExclusiveDurable, remove } from '../../io/safe-fs.js';
-import type { PauseMarker, PauseMarkerPort } from '../personal/breaker.js';
+import type {
+  BreakerMarkerPort,
+  PauseMarker,
+  UserMarkerPort,
+  UserMarkerToken,
+} from '../personal/breaker.js';
 import { CANARY_FILES } from './files.js';
 
 const REASONS: ReadonlySet<string> = new Set(RSI_AUTO_PAUSE_REASONS);
@@ -36,12 +42,12 @@ export function parsePauseMarker(text: string): PauseMarker {
 }
 
 /** `rsiDir` = 已确认安全的 `.state/rsi` 目录(与 `makePermitPort` 同一个) */
-export function makePauseMarkerPort(
+export function makeBreakerMarkerPort(
   io: IoContext,
   rsiDir: string,
   now: () => Date,
-): PauseMarkerPort {
-  const file = path.join(rsiDir, CANARY_FILES.pause);
+): BreakerMarkerPort {
+  const file = path.join(rsiDir, CANARY_FILES.pauseBreaker);
   const read = async (): Promise<PauseMarker | null> => {
     let text: string;
     try {
@@ -59,12 +65,60 @@ export function makePauseMarkerPort(
       // 文件与父目录 fsync 之后才返回(调用方此后才写 state):掉电后也不会出现「状态已熔断、标记没了」;已存在的标记同样补一次 fsync
       return createExclusiveDurable(io, file, body, RSI_FILE_MODE);
     },
-    async remove(scope) {
+    async remove() {
       const cur = await read();
       if (cur === null) return false;
-      if (scope === 'own' && cur.by !== 'breaker') return false;
       await remove(io, file);
       return true;
+    },
+  };
+}
+
+const tokenOf = (st: {
+  dev: number;
+  ino: number;
+  size: number;
+  mtimeMs: number;
+}): UserMarkerToken => ({ dev: st.dev, ino: st.ino, size: st.size, mtimeMs: st.mtimeMs });
+
+const sameToken = (a: UserMarkerToken, b: UserMarkerToken): boolean =>
+  a !== 'none' &&
+  b !== 'none' &&
+  a.dev === b.dev &&
+  a.ino === b.ino &&
+  a.size === b.size &&
+  a.mtimeMs === b.mtimeMs;
+
+/**
+ * 用户标记 U 的端口。`exists` = worker 唯一能用的读取(只判存在:ENOENT = false,其它读失败抛错,不返回「没有」冒充成功);
+ * `ensureUser` / `snapshot` / `remove(token)` 供 W8 的 `rsi auto pause` / `resume`(本块不含命令):`remove` 只在当前实例与快照令牌逐项相等时才删
+ * (令牌 `none` 永不删;`lstat` 与 `unlink` 之间仍有空窗,不提供原子 compare-and-unlink,见 verify_r21-w8 §5 的保证边界)。
+ */
+export function makeUserMarkerPort(io: IoContext, rsiDir: string, now: () => Date): UserMarkerPort {
+  const file = path.join(rsiDir, CANARY_FILES.pause);
+  const snapshot = async (): Promise<UserMarkerToken> => {
+    try {
+      return tokenOf(await lstat(file));
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') return 'none';
+      throw e;
+    }
+  };
+  return {
+    async exists() {
+      return (await snapshot()) !== 'none';
+    },
+    snapshot,
+    async ensureUser() {
+      const body = canonicalJson({ at: now().toISOString(), by: 'user' });
+      return createExclusiveDurable(io, file, body, RSI_FILE_MODE);
+    },
+    async remove(token) {
+      const cur = await snapshot();
+      if (cur === 'none') return 'absent';
+      if (!sameToken(token, cur)) return 'changed';
+      await remove(io, file);
+      return 'removed';
     },
   };
 }
