@@ -20,6 +20,7 @@ import {
   autoRelease,
   enforceMute,
   resume,
+  stampReleaseEvidence,
   tripAndMute,
   type AutoPauseState,
   type BreakerDeps,
@@ -109,7 +110,25 @@ describe('H3 标记先于状态:崩溃窗口里 hint 也看得到', () => {
     expect(parsePauseMarker(await readText(r.file))).toEqual({
       by: 'breaker',
       reason: 'no_observation',
+      at: expect.any(String), // W0-23:at 取自文件内容(解除证据的比较对象)
     });
+  });
+});
+
+describe('W0-23 解除证据(真文件):清码写盘后残留的 B 不复活码,被 enforceMute 删掉;U 不动', () => {
+  it('熔断 → 状态带证据地清空(B 留下)→ enforceMute:B 被删、不补码;U 内容不变', async () => {
+    const r = await rig('w7-marker-ev-');
+    const body = `${JSON.stringify({ at: '2026-11-09T00:00:00.000Z', by: 'user' })}\n`;
+    await safe.writeFile(r.w.io, r.userFile, body, { mode: 0o600 });
+    await tripAndMute(r.d, 'gate_internal');
+    const res = resume(r.state.value, () => false);
+    // W8 形状:只清状态(带证据),B 留给 worker
+    r.state.value = await stampReleaseEvidence(r.d.marker.breaker, res.state);
+    expect(r.state.value.released_marker_at).toBe(JSON.parse(await readText(r.file)).at);
+    expect(await enforceMute(r.d)).toBe(true); // U 仍在 → mute
+    expect(await exists(r.file)).toBe(false);
+    expect(r.state.value.reasons).toEqual([]);
+    expect(await readText(r.userFile)).toBe(body);
   });
 });
 
@@ -147,23 +166,31 @@ describe('标记端口:B 与 U 互不覆盖,各有唯一写者', () => {
   it('内容读不出(空文件)的 B:仍算存在,by=unknown;enforceMute 不据此补码,但仍 mute', async () => {
     const r = await rig('w7-marker-e-');
     await safe.writeFile(r.w.io, r.file, '', { mode: 0o600 });
-    expect(await r.d.marker.breaker.read()).toEqual({ by: 'unknown', reason: null });
+    expect(await r.d.marker.breaker.read()).toEqual({ by: 'unknown', reason: null, at: null });
     expect(await enforceMute(r.d)).toBe(true);
     expect(r.state.value.reasons).toEqual([]);
     expect(await r.hint()).toBe('present');
   });
 
   it('parsePauseMarker:各形态', () => {
-    expect(parsePauseMarker('{"by":"user"}')).toEqual({ by: 'user', reason: null });
+    expect(parsePauseMarker('{"by":"user"}')).toEqual({ by: 'user', reason: null, at: null });
     expect(parsePauseMarker('{"by":"breaker","reason":"user_vetoes"}')).toEqual({
       by: 'breaker',
       reason: 'user_vetoes',
+      at: null, // 没有 at:不能充当解除证据的比较对象
     });
+    expect(
+      parsePauseMarker('{"at":"2026-11-12T01:02:03.000Z","by":"breaker","reason":"user_vetoes"}'),
+    ).toEqual({ by: 'breaker', reason: 'user_vetoes', at: '2026-11-12T01:02:03.000Z' });
+    // at 不是非空字符串 → null
+    expect(parsePauseMarker('{"at":"","by":"breaker","reason":"user_vetoes"}').at).toBeNull();
+    expect(parsePauseMarker('{"at":5,"by":"breaker","reason":"user_vetoes"}').at).toBeNull();
     expect(parsePauseMarker('{"by":"breaker","reason":"nope"}')).toEqual({
       by: 'unknown',
       reason: null,
+      at: null,
     });
-    expect(parsePauseMarker('not json')).toEqual({ by: 'unknown', reason: null });
+    expect(parsePauseMarker('not json')).toEqual({ by: 'unknown', reason: null, at: null });
   });
 });
 

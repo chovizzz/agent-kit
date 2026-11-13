@@ -10,6 +10,7 @@ import {
   applyAutoRelease,
   applyResume,
   autoRelease,
+  stampReleaseEvidence,
   enforceMute,
   evaluateTriggers,
   isAutoPaused,
@@ -32,6 +33,10 @@ const S = (reasons: RsiAutoPauseReason[], over: Partial<AutoPauseState> = {}): A
   owner_changed: false,
   ...over,
 });
+
+/** B 的 `at`:`AT_FIRST` 是内存端口第一次 `ensure` 写入的值(之后每次创建递增 1 秒);`AT0` 是测试手工放入的旧标记 */
+const AT_FIRST = '2026-11-12T00:00:01.000Z';
+const AT0 = '2026-11-11T00:00:00.000Z';
 
 const facts = (over: Partial<TriggerFacts> = {}): TriggerFacts => ({
   today: '2026-11-10',
@@ -217,15 +222,24 @@ describe('R21-10.4 自动解除与 resume 的区分', () => {
 function memMarker(calls: string[]): {
   port: BreakerMarkerPort;
   cell: { value: PauseMarker | null };
+  failRemove: { value: boolean };
 } {
+  const failRemove = { value: false };
   const cell: { value: PauseMarker | null } = { value: null };
+  let n = 0;
   return {
     cell,
+    failRemove,
     port: {
       async ensure(reason) {
         calls.push('marker.ensure');
         if (cell.value !== null) return 'exists';
-        cell.value = { by: 'breaker', reason };
+        n += 1;
+        cell.value = {
+          by: 'breaker',
+          reason,
+          at: `2026-11-12T00:00:${String(n).padStart(2, '0')}.000Z`,
+        };
         return 'created';
       },
       async read() {
@@ -233,6 +247,7 @@ function memMarker(calls: string[]): {
       },
       async remove() {
         calls.push('marker.remove');
+        if (failRemove.value) throw new Error('crash'); // 删 B 前崩溃(状态已写盘)
         if (cell.value === null) return false;
         cell.value = null;
         return true;
@@ -250,6 +265,7 @@ describe('落地:先写 B 标记(AUTO_PAUSE_BREAKER)、再写状态、后置 can
     user: { value: boolean };
     failMute: { value: boolean };
     failWrite: { value: boolean };
+    failRemove: { value: boolean };
   } {
     const calls: string[] = [];
     const state = { value: NO_PAUSE as AutoPauseState };
@@ -264,6 +280,7 @@ describe('落地:先写 B 标记(AUTO_PAUSE_BREAKER)、再写状态、后置 can
       user,
       failMute,
       failWrite,
+      failRemove: m.failRemove,
       d: {
         phase: V1B,
         marker: { breaker: m.port, user: { exists: async () => user.value } },
@@ -289,13 +306,13 @@ describe('落地:先写 B 标记(AUTO_PAUSE_BREAKER)、再写状态、后置 can
     const r = rig();
     await tripAndMute(r.d, 'user_vetoes');
     expect(r.calls).toEqual(['marker.ensure', 'state.write', 'canary.mute']);
-    expect(r.marker.value).toEqual({ by: 'breaker', reason: 'user_vetoes' });
+    expect(r.marker.value).toEqual({ by: 'breaker', reason: 'user_vetoes', at: AT_FIRST });
   });
   it('状态写入崩溃:标记已在盘上(hint 看得到),状态没写;下一次 enforceMute 补码、不删标记、补 mute', async () => {
     const r = rig();
     r.failWrite.value = true;
     await expect(tripAndMute(r.d, 'gate_internal')).rejects.toThrow('crash');
-    expect(r.marker.value).toEqual({ by: 'breaker', reason: 'gate_internal' });
+    expect(r.marker.value).toEqual({ by: 'breaker', reason: 'gate_internal', at: AT_FIRST });
     expect(r.state.value.reasons).toEqual([]);
     r.failWrite.value = false;
     r.calls.length = 0;
@@ -315,7 +332,7 @@ describe('落地:先写 B 标记(AUTO_PAUSE_BREAKER)、再写状态、后置 can
   it('B 的内容不是 by=breaker(by=user / 读不出)时 enforceMute 不据此补码', async () => {
     for (const by of ['user', 'unknown'] as const) {
       const r = rig();
-      r.marker.value = { by, reason: null };
+      r.marker.value = { by, reason: null, at: null };
       expect(await enforceMute(r.d)).toBe(true);
       expect(r.state.value.reasons, by).toEqual([]);
     }
@@ -324,7 +341,7 @@ describe('落地:先写 B 标记(AUTO_PAUSE_BREAKER)、再写状态、后置 can
     const r = rig();
     r.state.value = S(['gate_internal']);
     expect(await enforceMute(r.d)).toBe(true);
-    expect(r.marker.value).toEqual({ by: 'breaker', reason: 'gate_internal' });
+    expect(r.marker.value).toEqual({ by: 'breaker', reason: 'gate_internal', at: AT_FIRST });
     expect(r.calls).toEqual(['marker.ensure', 'canary.mute']);
   });
   it('状态已写、mute 崩溃:下一次 enforceMute 补做(熔断仍在 → mute),无熔断则不 mute', async () => {
@@ -358,13 +375,13 @@ describe('落地:先写 B 标记(AUTO_PAUSE_BREAKER)、再写状态、后置 can
     const r = rig();
     r.user.value = true;
     await tripAndMute(r.d, 'gate_internal');
-    expect(r.marker.value).toEqual({ by: 'breaker', reason: 'gate_internal' });
+    expect(r.marker.value).toEqual({ by: 'breaker', reason: 'gate_internal', at: AT_FIRST });
     expect(r.user.value).toBe(true);
   });
   it('自动解除:先写状态、后删 B;只在没有剩余码且确有码被清时删;U 无论如何不删', async () => {
     const r = rig();
     r.state.value = S(['no_observation', 'budget_high_legacy']);
-    r.marker.value = { by: 'breaker', reason: 'no_observation' };
+    r.marker.value = { by: 'breaker', reason: 'no_observation', at: AT0 };
     const part = autoRelease(r.state.value, (c) => c === 'budget_high_legacy');
     expect(part.clearMarker).toBe(false); // 还剩 budget_high_legacy
     await applyAutoRelease(r.d, part);
@@ -379,7 +396,7 @@ describe('落地:先写 B 标记(AUTO_PAUSE_BREAKER)、再写状态、后置 can
   it('W0-21 契约用例:worker 熔断 → 用户暂停 → 熔断条件恢复(自动解除):B 删了,U 仍在,isAutoPaused 仍为真、状态里没有 user_paused', async () => {
     const r = rig();
     r.state.value = S(['no_observation']);
-    r.marker.value = { by: 'breaker', reason: 'no_observation' };
+    r.marker.value = { by: 'breaker', reason: 'no_observation', at: AT0 };
     r.user.value = true; // 用户随后暂停
     await applyAutoRelease(
       r.d,
@@ -394,7 +411,7 @@ describe('落地:先写 B 标记(AUTO_PAUSE_BREAKER)、再写状态、后置 can
   it('人工 resume(worker 侧):没有剩余熔断码时删 B;仍有码时 B 保留(hint 继续停注入);U 不归这里', async () => {
     const r = rig();
     r.state.value = S(['gate_internal', 'budget_high_legacy']);
-    r.marker.value = { by: 'breaker', reason: 'gate_internal' };
+    r.marker.value = { by: 'breaker', reason: 'gate_internal', at: AT0 };
     r.user.value = true;
     const keep = resume(r.state.value, () => false);
     expect(keep.clearMarker).toBe(false);
@@ -412,7 +429,7 @@ describe('落地:先写 B 标记(AUTO_PAUSE_BREAKER)、再写状态、后置 can
   });
   it('部分解除后标记仍在:enforceMute 不复活已被清掉的码(标记只记首个原因;状态里已有别的码时不补)', async () => {
     const r = rig();
-    r.marker.value = { by: 'breaker', reason: 'user_vetoes' };
+    r.marker.value = { by: 'breaker', reason: 'user_vetoes', at: AT0 };
     r.state.value = S(['no_observation']); // user_vetoes 已被人工 resume 清掉,标记因仍有剩余码而保留
     expect(await enforceMute(r.d)).toBe(true);
     expect(r.state.value.reasons).toEqual(['no_observation']);
@@ -420,14 +437,14 @@ describe('落地:先写 B 标记(AUTO_PAUSE_BREAKER)、再写状态、后置 can
   });
   it('内容读不出的 B(创建后写内容前被杀)而状态没有码:人工 resume 可清除;仍有码时不清;自动解除不碰', async () => {
     const r = rig();
-    r.marker.value = { by: 'unknown', reason: null };
+    r.marker.value = { by: 'unknown', reason: null, at: null };
     await applyResume(
       r.d,
       resume(r.state.value, () => false),
     );
     expect(r.marker.value).toBeNull();
     const r2 = rig();
-    r2.marker.value = { by: 'unknown', reason: null };
+    r2.marker.value = { by: 'unknown', reason: null, at: null };
     r2.state.value = S(['budget_high_legacy']);
     await applyResume(
       r2.d,
@@ -435,22 +452,143 @@ describe('落地:先写 B 标记(AUTO_PAUSE_BREAKER)、再写状态、后置 can
     );
     expect(r2.marker.value).not.toBeNull();
     const r3 = rig();
-    r3.marker.value = { by: 'unknown', reason: null };
+    r3.marker.value = { by: 'unknown', reason: null, at: null };
     await applyAutoRelease(
       r3.d,
       autoRelease(r3.state.value, () => false),
     );
     expect(r3.marker.value).not.toBeNull();
   });
-  it('残余窗口(如实钉住):resume 写了状态、删标记前崩溃 → 下一次 enforceMute 由标记补回码(安全方向:不会少停注入)', async () => {
+  it('W0-23 解除证据:人工解除清到无码时,同一次状态写入记下被解除 B 的 at(部分清除不记);B 不存在时记 null', async () => {
+    const r = rig();
+    r.state.value = S(['gate_internal', 'budget_high_legacy']);
+    r.marker.value = { by: 'breaker', reason: 'gate_internal', at: AT0 };
+    await applyResume(
+      r.d,
+      resume(r.state.value, (c) => c === 'budget_high_legacy'),
+    ); // gate_internal 重查 budget_high_legacy 仍成立 → 被阻塞,没有码被清
+    expect(r.state.value.released_marker_at).toBeUndefined();
+    r.state.value = S(['no_observation', 'budget_high_legacy']);
+    await applyAutoRelease(
+      r.d,
+      autoRelease(r.state.value, (c) => c === 'budget_high_legacy'),
+    ); // 还剩 budget_high_legacy:不是「清空」
+    expect(r.state.value.released_marker_at).toBeUndefined();
+    r.state.value = S(['budget_high_legacy']);
+    await applyAutoRelease(
+      r.d,
+      autoRelease(r.state.value, () => false),
+    );
+    expect(r.state.value.released_marker_at).toBe(AT0);
+    expect(r.marker.value).toBeNull();
+    // B 不存在时记 null
+    const r2 = rig();
+    r2.state.value = S(['gate_internal']);
+    await applyResume(
+      r2.d,
+      resume(r2.state.value, () => false),
+    );
+    expect(r2.state.value.released_marker_at).toBeNull();
+  });
+  it('W0-23 人工码清除写盘后、删 B 前崩溃:重启后 enforceMute 不复活该码,删 B,U 不变', async () => {
     const r = rig();
     r.state.value = S(['gate_internal']);
-    r.marker.value = { by: 'breaker', reason: 'gate_internal' };
-    const res = resume(r.state.value, () => false);
-    expect(res.clearMarker).toBe(true);
-    await r.d.state.write(res.state); // 状态已清、标记还在(崩溃)
+    r.marker.value = { by: 'breaker', reason: 'gate_internal', at: AT0 };
+    r.user.value = true;
+    r.failRemove.value = true;
+    await expect(
+      applyResume(
+        r.d,
+        resume(r.state.value, () => false),
+      ),
+    ).rejects.toThrow('crash');
+    expect(r.state.value.reasons).toEqual([]); // 状态已清
+    expect(r.marker.value).not.toBeNull(); // B 还在
+    r.failRemove.value = false;
+    r.calls.length = 0;
+    expect(await enforceMute(r.d)).toBe(true); // U 仍在 → 仍 mute
+    expect(r.state.value.reasons).toEqual([]); // 没有复活
+    expect(r.marker.value).toBeNull(); // 残留 B 被删
+    expect(r.user.value).toBe(true);
+    expect(r.calls).toEqual(['marker.remove', 'canary.mute']);
+    // 再来一次:无事可做(无 U 时不 mute)
+    r.user.value = false;
+    expect(await enforceMute(r.d)).toBe(false);
+  });
+  it('W0-23 自动解除同款:清码写盘后、删 B 前崩溃 → 重启不复活、删 B', async () => {
+    const r = rig();
+    r.state.value = S(['no_observation']);
+    r.marker.value = { by: 'breaker', reason: 'no_observation', at: AT0 };
+    r.failRemove.value = true;
+    await expect(
+      applyAutoRelease(
+        r.d,
+        autoRelease(r.state.value, () => false),
+      ),
+    ).rejects.toThrow('crash');
+    r.failRemove.value = false;
+    expect(await enforceMute(r.d)).toBe(false);
     expect(r.state.value.reasons).toEqual([]);
+    expect(r.marker.value).toBeNull();
+  });
+  it('W0-23 W8 resume 只清状态、B 留给 worker(带证据的写入,不调 remove):下次 worker 运行删 B、不补码', async () => {
+    const r = rig();
+    r.state.value = S(['gate_internal']);
+    r.marker.value = { by: 'breaker', reason: 'gate_internal', at: AT0 };
+    const res = resume(r.state.value, () => false);
+    await r.d.state.write(await stampReleaseEvidence(r.d.marker.breaker, res.state));
+    expect(r.state.value.released_marker_at).toBe(AT0);
+    expect(r.marker.value).not.toBeNull();
+    expect(await enforceMute(r.d)).toBe(false);
+    expect(r.marker.value).toBeNull();
+    expect(r.state.value.reasons).toEqual([]);
+  });
+  it('W0-23 触发窗口仍补码:B 新建、状态未写,证据为 null / 缺键 / 旧值(另一个 at)→ 补码、不删 B', async () => {
+    for (const ev of [null, undefined, '2026-11-10T00:00:00.000Z']) {
+      const r = rig();
+      r.state.value = S([], ev === undefined ? {} : { released_marker_at: ev });
+      r.marker.value = { by: 'breaker', reason: 'gate_internal', at: AT0 };
+      expect(await enforceMute(r.d), String(ev)).toBe(true);
+      expect(r.state.value.reasons, String(ev)).toEqual(['gate_internal']);
+      expect(r.marker.value, String(ev)).not.toBeNull();
+    }
+  });
+  it('W0-23 B 内容损坏(读不出 / at 缺失)+ 无码:沿用现有规则(不补码、不删 B、仍 mute),即便证据为 null', async () => {
+    const r = rig();
+    r.state.value = S([], { released_marker_at: null });
+    r.marker.value = { by: 'unknown', reason: null, at: null };
     expect(await enforceMute(r.d)).toBe(true);
-    expect(r.state.value.reasons).toEqual(['gate_internal']);
+    expect(r.state.value.reasons).toEqual([]);
+    expect(r.marker.value).not.toBeNull();
+    // 合法 B 但没有 at(null):与证据 null 不能「相等」——按触发窗口补码
+    const r2 = rig();
+    r2.state.value = S([], { released_marker_at: null });
+    r2.marker.value = { by: 'breaker', reason: 'gate_internal', at: null };
+    expect(await enforceMute(r2.d)).toBe(true);
+    expect(r2.state.value.reasons).toEqual(['gate_internal']);
+  });
+  it('W0-23 新触发清回证据:tripBreaker / tripAndMute 写出的状态里 released_marker_at = null;已有的码(already)不动', async () => {
+    const t = tripBreaker(S([], { released_marker_at: AT0 }), 'gate_internal', V1B);
+    expect(t.kind === 'tripped' && t.state.released_marker_at).toBeNull();
+    const r = rig();
+    r.state.value = S([], { released_marker_at: AT0 });
+    await tripAndMute(r.d, 'user_vetoes');
+    expect(r.state.value.released_marker_at).toBeNull();
+    expect(r.state.value.reasons).toEqual(['user_vetoes']);
+    // 无证据的状态,触发后形状不变(不多出键)
+    const t2 = tripBreaker(NO_PAUSE, 'gate_internal', V1B);
+    expect(t2.kind === 'tripped' && 'released_marker_at' in t2.state).toBe(false);
+  });
+  it('W0-23 已知边界:残留 B 未删时又触发新码——ensure 因 B 已存在不重写(新码只靠状态);状态写入前崩溃 = 尚未触发,下次 enforceMute 仍把 B 当残留删掉', async () => {
+    const r = rig();
+    r.state.value = S([], { released_marker_at: AT0 });
+    r.marker.value = { by: 'breaker', reason: 'gate_internal', at: AT0 }; // 残留
+    r.failWrite.value = true;
+    await expect(tripAndMute(r.d, 'user_vetoes')).rejects.toThrow('crash');
+    expect(r.marker.value?.at).toBe(AT0); // 没被改写
+    r.failWrite.value = false;
+    expect(await enforceMute(r.d)).toBe(false);
+    expect(r.marker.value).toBeNull();
+    expect(r.state.value.reasons).toEqual([]);
   });
 });

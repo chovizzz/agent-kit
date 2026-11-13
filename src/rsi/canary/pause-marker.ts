@@ -30,15 +30,18 @@ export function parsePauseMarker(text: string): PauseMarker {
     if (typeof o === 'object' && o !== null) {
       const by = (o as { by?: unknown }).by;
       const reason = (o as { reason?: unknown }).reason;
-      if (by === 'user') return { by: 'user', reason: null };
+      const at = (o as { at?: unknown }).at;
+      if (by === 'user') return { by: 'user', reason: null, at: null };
       if (by === 'breaker' && typeof reason === 'string' && REASONS.has(reason)) {
-        return { by: 'breaker', reason: reason as RsiAutoPauseReason };
+        // `at` 是解除证据的比较对象:只认非空且不超长的字符串,其余视为读不出(null)
+        const okAt = typeof at === 'string' && at !== '' && at.length <= 64;
+        return { by: 'breaker', reason: reason as RsiAutoPauseReason, at: okAt ? at : null };
       }
     }
   } catch {
     // 内容读不出:仍算存在(hint 只判存在)
   }
-  return { by: 'unknown', reason: null };
+  return { by: 'unknown', reason: null, at: null };
 }
 
 /** `rsiDir` = 已确认安全的 `.state/rsi` 目录(与 `makePermitPort` 同一个) */

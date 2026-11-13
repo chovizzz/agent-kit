@@ -751,7 +751,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       'W0-21:U(用户标记)存在而状态没码:worker 不补 user_paused、不写 state,但仍 mute',
       '有码而没有标记(状态已写、标记缺):enforceMute 补 B',
       '部分解除后标记仍在:enforceMute 不复活已被清掉的码(标记只记首个原因;状态里已有别的码时不补)',
-      '残余窗口(如实钉住):resume 写了状态、删标记前崩溃 → 下一次 enforceMute 由标记补回码(安全方向:不会少停注入)',
+      'W0-23 触发窗口仍补码:B 新建、状态未写,证据为 null / 缺键 / 旧值(另一个 at)→ 补码、不删 B',
     ],
     mustKill: ['状态已写、mute 崩溃'],
   },
@@ -1242,7 +1242,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     expectRed: [
       '状态写入崩溃:标记已在盘上',
       '崩溃后下一次 enforceMute:由标记补码',
-      '残余窗口(如实钉住):resume 写了状态、删标记前崩溃 → 下一次 enforceMute 由标记补回码(安全方向:不会少停注入)',
+      'W0-23 触发窗口仍补码:B 新建、状态未写,证据为 null / 缺键 / 旧值(另一个 at)→ 补码、不删 B',
     ],
     mustKill: ['状态写入崩溃:标记已在盘上'],
   },
@@ -2052,6 +2052,100 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     mustKill: [
       'W0-20:必需项缺失且不可恢复 = incomplete(带事务身份 txn;cause manual_event_required),不写凭据',
     ],
+  },
+  // ---- W0-23 解除证据(修复一)----
+  {
+    id: 'evidence_always_restore',
+    clause:
+      'W0-23 B 在、状态无码:at 与解除证据相等 = 解除窗口残留,删 B 不补码(去掉比较 = 一律补码,已解除的码复活)',
+    edits: [swap(BR, 'if (isReleasedResidue(b, cur)) {', 'if (false) {')],
+    tests: [T_BR, T_PM],
+    expectRed: [
+      'W0-23 人工码清除写盘后、删 B 前崩溃:重启后 enforceMute 不复活该码,删 B,U 不变',
+      'W0-23 自动解除同款:清码写盘后、删 B 前崩溃 → 重启不复活、删 B',
+      'W0-23 W8 resume 只清状态、B 留给 worker(带证据的写入,不调 remove):下次 worker 运行删 B、不补码',
+    ],
+    mustKill: ['W0-23 人工码清除写盘后、删 B 前崩溃:重启后 enforceMute 不复活该码,删 B,U 不变'],
+  },
+  {
+    id: 'evidence_always_delete',
+    clause:
+      'W0-23 触发窗口(B 已落盘、状态未写)仍补码:证据不等时不得删 B(去掉比较 = 一律删,破坏触发侧 fail-closed)',
+    edits: [swap(BR, 'if (isReleasedResidue(b, cur)) {', 'if (true) {')],
+    tests: [T_BR, T_PM],
+    expectRed: [
+      'W0-23 触发窗口仍补码:B 新建、状态未写,证据为 null / 缺键 / 旧值(另一个 at)→ 补码、不删 B',
+      '状态写入崩溃:标记已在盘上(hint 看得到),状态没写;下一次 enforceMute 补码、不删标记、补 mute',
+    ],
+    mustKill: [
+      'W0-23 触发窗口仍补码:B 新建、状态未写,证据为 null / 缺键 / 旧值(另一个 at)→ 补码、不删 B',
+    ],
+  },
+  {
+    id: 'evidence_null_matches',
+    clause: 'W0-23 比较两边必须都是非空字符串:null / 缺键 / B 读不出不得「相等」',
+    edits: [
+      swap(
+        BR,
+        "return typeof b.at === 'string' && b.at !== '' && typeof ev === 'string' && b.at === ev;",
+        'return (b.at ?? null) === (ev ?? null);',
+      ),
+    ],
+    tests: [T_BR],
+    expectRed: [
+      'W0-23 触发窗口仍补码:B 新建、状态未写,证据为 null / 缺键 / 旧值(另一个 at)→ 补码、不删 B',
+      'W0-23 B 内容损坏(读不出 / at 缺失)+ 无码:沿用现有规则(不补码、不删 B、仍 mute),即便证据为 null',
+    ],
+    mustKill: [
+      'W0-23 B 内容损坏(读不出 / at 缺失)+ 无码:沿用现有规则(不补码、不删 B、仍 mute),即便证据为 null',
+    ],
+  },
+  {
+    id: 'evidence_not_stamped',
+    clause:
+      'W0-23 清空熔断码的那一次状态写入同时记解除证据(解除时不写证据 = 残留 B 无法与触发窗口区分)',
+    edits: [
+      swap(BR, 'return { ...next, released_marker_at: b?.at ?? null };', 'return { ...next };'),
+    ],
+    tests: [T_BR, T_PM],
+    expectRed: [
+      'W0-23 解除证据:人工解除清到无码时,同一次状态写入记下被解除 B 的 at(部分清除不记);B 不存在时记 null',
+      'W0-23 人工码清除写盘后、删 B 前崩溃:重启后 enforceMute 不复活该码,删 B,U 不变',
+      'W0-23 自动解除同款:清码写盘后、删 B 前崩溃 → 重启不复活、删 B',
+    ],
+    mustKill: [
+      'W0-23 解除证据:人工解除清到无码时,同一次状态写入记下被解除 B 的 at(部分清除不记);B 不存在时记 null',
+    ],
+  },
+  {
+    id: 'evidence_trip_keeps',
+    clause: 'W0-23 新的熔断触发成功写入状态时把解除证据清回 null',
+    edits: [
+      swap(
+        BR,
+        "typeof s.released_marker_at === 'string' ? { released_marker_at: null } : ({} as const);",
+        '({} as const);',
+      ),
+    ],
+    tests: [T_BR],
+    expectRed: [
+      'W0-23 新触发清回证据:tripBreaker / tripAndMute 写出的状态里 released_marker_at = null;已有的码(already)不动',
+    ],
+    mustKill: [
+      'W0-23 新触发清回证据:tripBreaker / tripAndMute 写出的状态里 released_marker_at = null;已有的码(already)不动',
+    ],
+  },
+  {
+    id: 'evidence_at_unparsed',
+    clause:
+      'W0-23 B 内容里的 at 由 parsePauseMarker 解出(比较对象);丢掉 = 证据永远不等,残留 B 永远复活码',
+    edits: [swap(PM, 'at: okAt ? at : null };', 'at: null };')],
+    tests: [T_PM, T_BR],
+    expectRed: [
+      'parsePauseMarker:各形态',
+      'W0-23 解除证据(真文件):清码写盘后残留的 B 不复活码,被 enforceMute 删掉;U 不动',
+    ],
+    mustKill: ['parsePauseMarker:各形态'],
   },
 ];
 
