@@ -2,8 +2,6 @@
  * 命令面入口(W8a):二级路由、`--write` 分流、能力闸(`RSI_AUTO_SUBCOMMAND_CAPS` + `capabilityAvailable`)。
  * 相位当前恒为 0:生产上全部是桩;处理函数只经注入的 `phase` 被调用。能力未到期 = 桩 64,**不解析参数、不构造端口**(未到期的命令不读任何东西)。
  */
-import { mkdir, mkdtemp, realpath, rm, symlink } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
@@ -17,6 +15,9 @@ import { runAutoFamily } from '../../../src/rsi/auto/entry.js';
 import { routeAuto, type AutoCanonical, type AutoFamily } from '../../../src/rsi/auto/route.js';
 import { AutoUsageError, type AutoReadPorts } from '../../../src/rsi/auto/read/ports.js';
 import type { RsiEarlyContext } from '../../../src/rsi/types.js';
+import { realpath } from '../../../src/io/read-fs.js';
+import * as safe from '../../../src/io/safe-fs.js';
+import { makeWorld as makeTmpWorld } from '../personal/repo-helpers.js';
 import { rec } from '../personal/transition-fixture.js';
 import {
   HEAD,
@@ -302,17 +303,13 @@ describe('泄漏闸的禁止值来自端口(生产组装注入;HOME 外的仓库
   });
 
   it('禁止值的 realpath 同样拦:端口给符号链接路径、正文含其真实路径 → 退 3,stdout 零字节', async () => {
-    const root = await realpath(await mkdtemp(path.join(tmpdir(), 'w8a-leak-')));
-    try {
-      const real = path.join(root, 'real-repo');
-      await mkdir(real);
-      const link = path.join(root, 'link-repo');
-      await symlink(real, link);
-      const r = await showWith(`at ${real}/inner`, [link]);
-      expect([r.code, r.out, r.err]).toEqual([3, '', 'RSI_FAIL_CLOSED reason=output_leak\n']);
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
+    const tw = await makeTmpWorld('w8a-leak-');
+    const real = path.join(tw.dir, 'real-repo');
+    await safe.mkdirp(tw.io, real, 0o700);
+    const link = path.join(tw.dir, 'link-repo');
+    await safe.symlink(tw.io, real, link);
+    const r = await showWith(`at ${await realpath(real)}/inner`, [link]);
+    expect([r.code, r.out, r.err]).toEqual([3, '', 'RSI_FAIL_CLOSED reason=output_leak\n']);
   });
 
   it('经 emitLines 的其它命令(status)同用端口的禁止值', async () => {
