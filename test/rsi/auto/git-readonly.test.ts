@@ -163,6 +163,13 @@ describe('配置预检的严格子集解析(纯函数)', () => {
     ['段名含非法字符', '[co re]\n'],
     ['CR 行尾', '[core]\r\n\tbare = false\r\n'],
   ];
+  it('拒绝:include 段与 includeIf 段(单独触发:config 除该段外完全合规,对照组通过)', () => {
+    expect(configAcceptable(ok)).toBe(true);
+    for (const sec of ['[include]', '[includeIf "gitdir:/x"]', '[INCLUDE]', '[includeif "a"]']) {
+      expect(configAcceptable(`${ok}${sec}\n\tpath = /tmp/x\n`), sec).toBe(false);
+      expect(configAcceptable(`${sec}\n${ok}`), sec).toBe(false);
+    }
+  });
   for (const [name, text] of rejected) {
     it(`拒绝:${name}`, () => expect(configAcceptable(text)).toBe(false));
   }
@@ -396,7 +403,13 @@ describe('真仓库(假 HOME 下的私有仓库,真 git)', () => {
       (await makeGitReadonly({ gitPath: GIT, gitDir: link, spawn: s.spawn }).readCommit(head)).kind,
     ).toBe('unreadable');
     const otherUid = (process.getuid?.() ?? 1000) + 1;
-    expect((await port(s, { uid: otherUid }).readCommit(head)).kind).toBe('unreadable');
+    // 属主检查要被单独触发:其余检查(0700、realpath、config 合规)全过,唯一不满足的是「属主 = 当前 uid」;
+    // 断言具体原因 repo_unsafe(去掉目录属主检查后,拒绝会改由 config 句柄读的属主检查给出 config_rejected,原因对不上)
+    expect(await preflightRepo(gitDir, otherUid)).toEqual({ ok: false, why: 'repo_unsafe' });
+    expect(await port(s, { uid: otherUid }).readCommit(head)).toEqual({
+      kind: 'unreadable',
+      why: 'repo_unsafe',
+    });
     const mode = (await lstat(gitDir)).mode & 0o777;
     // 权限宽于 0700 一律拒绝;0755 是 `git init` 的默认值,同样被拒(契约字面「不宽于 0700」)
     for (const wide of [0o755, 0o750, 0o770, 0o777]) {

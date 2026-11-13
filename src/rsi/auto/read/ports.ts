@@ -83,6 +83,11 @@ export interface AutoReadPorts {
   home: HomeReadPort;
   recorded: RecordedReadPort;
   judge: JudgeVerdictPort;
+  /**
+   * 输出泄漏闸的**额外**禁止值(生产组装解析:实际仓库根 / 状态目录 / `[rsi] repo` / 私有仓库目录;realpath 由 `forbiddenPaths` 补)。
+   * HOME 与 `KIT_TMP` 由 `forbiddenPaths` 自己收;处理函数只接收最终集合,不自己读配置。
+   */
+  outputForbidden: readonly string[];
 }
 
 /** 端口装配阶段的用法错误(如 `--root` 与 `[rsi] repo` 不一致):入口映射为退 2 `RSI_USAGE reason=<reason>` */

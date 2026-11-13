@@ -73,7 +73,7 @@ export async function runAutoFamily(
     if ('usage' in prepared) return usage(ctx, prepared.usage);
     const ports = await (deps.ports ?? productionAutoPorts)(ctx);
     const sink = { stdout: (t: string) => ctx.stdout(t), stderr: (t: string) => ctx.stderr(t) };
-    return await prepared.run(ports, sink, await forbiddenPaths(ctx.env, []));
+    return await prepared.run(ports, sink, await forbiddenPaths(ctx.env, ports.outputForbidden));
   } catch (e) {
     if (e instanceof AutoUsageError) return usage(ctx, e.reason);
     return failExit(ctx.stderr, e);

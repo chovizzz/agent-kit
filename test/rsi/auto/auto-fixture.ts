@@ -41,6 +41,8 @@ export interface World {
   missingCommits: Set<string>;
   recordedUnreadable: RecordedWhy | null;
   judge: JudgeVerdictRead | 'throw';
+  /** 端口的额外输出禁止值(生产 = 仓库根 / 状态目录 / 私有仓库目录) */
+  outputForbidden: string[];
   calls: {
     config: number;
     state: number;
@@ -75,6 +77,7 @@ export function makeWorld(over: Partial<World> = {}): World {
     missingCommits: new Set(),
     recordedUnreadable: null,
     judge: { kind: 'absent' },
+    outputForbidden: [],
     calls: {
       config: 0,
       state: 0,
@@ -173,6 +176,7 @@ export function portsOf(w: World): AutoReadPorts {
         return w.judge;
       },
     },
+    outputForbidden: w.outputForbidden,
   };
 }
 

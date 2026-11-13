@@ -78,17 +78,21 @@ describe('键集合与文本 / JSON 形状', () => {
         'record_oid12',
         'rollback_stalled',
         'protection_marks',
+        'rollback_stalled_truncated',
+        'protection_marks_truncated',
         'breaker_marker',
       ].sort(),
     );
     const a = j['auto'] as Record<string, unknown>;
     expect(a['view_state']).toBe('missing');
-    expect([a['as_of'], a['record_oid12'], a['rollback_stalled'], a['protection_marks']]).toEqual([
-      null,
-      null,
-      null,
-      null,
-    ]);
+    expect([
+      a['as_of'],
+      a['record_oid12'],
+      a['rollback_stalled'],
+      a['protection_marks'],
+      a['rollback_stalled_truncated'],
+      a['protection_marks_truncated'],
+    ]).toEqual([null, null, null, null, null, null]);
     expect([j['pipeline'], j['budget'], j['cost'], j['canary'], j['last_rollback']]).toEqual([
       null,
       null,
@@ -319,5 +323,36 @@ describe('视图截断', () => {
     expect(t).toContain('被截断(不完整)');
     const w2 = makeWorld({ view: rawView(viewOf()) });
     expect((await run(w2, { json: false })).out).not.toContain('被截断');
+  });
+});
+
+describe('视图截断(JSON):截断标志不丢,缺失 / 损坏为 null 而不是 false', () => {
+  it('fresh + rolling_back_truncated=true + 可见条目都有 journal → rollback_stalled 为 [],但 rollback_stalled_truncated 为 true(分得清「没有」与「被截断」)', async () => {
+    const w = makeWorld({
+      view: rawView(viewOf({ rolling_back: [rb()], rolling_back_truncated: true })),
+      names: [journalNameOf(ID, SHA)],
+    });
+    const a = JSON.parse((await run(w)).out).auto;
+    expect([a.view_state, a.rollback_stalled]).toEqual(['fresh', []]);
+    expect([a.rollback_stalled_truncated, a.protection_marks_truncated]).toEqual([true, false]);
+  });
+
+  it('protection_marks_truncated 独立于 rolling_back_truncated;未截断的 fresh 视图两个键都是 false', async () => {
+    const w = makeWorld({ view: rawView(viewOf({ protection_marks_truncated: true })) });
+    const a = JSON.parse((await run(w)).out).auto;
+    expect([a.rollback_stalled_truncated, a.protection_marks_truncated]).toEqual([false, true]);
+    const a2 = JSON.parse((await run(makeWorld({ view: rawView(viewOf()) }))).out).auto;
+    expect([a2.rollback_stalled_truncated, a2.protection_marks_truncated]).toEqual([false, false]);
+  });
+
+  it('视图缺失 / 损坏 → 两个截断键都是 null(不是 false);文本不出现截断提示', async () => {
+    for (const view of [{ kind: 'absent' }, { kind: 'ok', text: '{bad' }] as const) {
+      const r = await run(makeWorld({ view }));
+      const a = JSON.parse(r.out).auto;
+      expect([a.rollback_stalled_truncated, a.protection_marks_truncated], view.kind).toEqual([
+        null,
+        null,
+      ]);
+    }
   });
 });

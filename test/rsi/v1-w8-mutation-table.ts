@@ -1093,6 +1093,68 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
     expectRed: ['读失败 → unreadable,绝不是 absent / 空'],
     mustKill: ['读失败 → unreadable,绝不是 absent / 空'],
   },
+  {
+    id: 'git_include_whitelisted',
+    clause:
+      'W0-22 第 6 条 include 拒绝(两层:显式拒绝集合 + 段名白名单;`git_include_allowed` 只去掉前者,被白名单兜住,等价)',
+    edits: [
+      swap(
+        'src/rsi/personal/read/git-readonly.ts',
+        "  'extensions',\n]);\nconst REJECT_SECTIONS = new Set(['include', 'includeif']);",
+        "  'extensions',\n  'include',\n  'includeif',\n]);\nconst REJECT_SECTIONS = new Set<string>([]);",
+      ),
+    ],
+    tests: ['rsi/auto/git-readonly.test.ts'],
+    expectRed: ['拒绝:include 段与 includeIf 段'],
+    mustKill: ['拒绝:include 段与 includeIf 段'],
+  },
+  {
+    id: 'leak_extra_empty',
+    clause: 'R21-12.8 泄漏闸:禁止值含仓库根 / 状态目录(端口注入)',
+    edits: [
+      swap(
+        'src/rsi/auto/entry.ts',
+        'forbiddenPaths(ctx.env, ports.outputForbidden)',
+        'forbiddenPaths(ctx.env, [])',
+      ),
+    ],
+    tests: ['rsi/auto/entry.test.ts'],
+    expectRed: ['泄漏闸的禁止值来自端口'],
+    mustKill: ['泄漏闸的禁止值来自端口'],
+  },
+  {
+    id: 'status_trunc_keys_dropped',
+    clause: 'W0-24 auto status --json 的截断键',
+    edits: [
+      swap(
+        'src/rsi/auto/read/status.ts',
+        '        rollback_stalled_truncated: v === null ? null : v.rolling_back_truncated,\n        protection_marks_truncated: v === null ? null : v.protection_marks_truncated,\n',
+        '',
+      ),
+    ],
+    tests: ['rsi/auto/status.test.ts'],
+    expectRed: ['视图截断(JSON)', '键集合与文本 / JSON 形状'],
+    mustKill: ['视图截断(JSON)'],
+  },
+  {
+    id: 'status_trunc_null_as_false',
+    clause: 'W0-24 截断键 null 不得写成 false',
+    edits: [
+      swap(
+        'src/rsi/auto/read/status.ts',
+        'rollback_stalled_truncated: v === null ? null : v.rolling_back_truncated,',
+        'rollback_stalled_truncated: v === null ? false : v.rolling_back_truncated,',
+      ),
+      swap(
+        'src/rsi/auto/read/status.ts',
+        'protection_marks_truncated: v === null ? null : v.protection_marks_truncated,',
+        'protection_marks_truncated: v === null ? false : v.protection_marks_truncated,',
+      ),
+    ],
+    tests: ['rsi/auto/status.test.ts'],
+    expectRed: ['视图截断(JSON)', '键集合与文本 / JSON 形状', '损坏的视图'],
+    mustKill: ['视图截断(JSON)'],
+  },
 ];
 
 export const V1_W8_RESULTS: readonly V1W8Result[] = [];

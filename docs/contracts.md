@@ -6030,6 +6030,8 @@ agent-kit rsi exec-confirm <id>                                           [V6a]
 
 > **冻结后订正 W0-22(2026-11-12)**:`rsi auto status --json` 追加键 `view_state`、`as_of`、`record_oid12`、`rollback_stalled[]`、`protection_marks[]`、`breaker_marker`;原有 `pipeline` / `budget` / `cost` / `canary` / `last_rollback` 含义不变,V1 的数据源是物化视图 `auto-view.json`(新 schema `AutoView`),不是实时权威。正文见 §21.24 W0-22 第 7 条。
 
+> **冻结后订正 W0-24(2026-11-13)**:`auto` 下再追加 `rollback_stalled_truncated`、`protection_marks_truncated`(布尔或 `null`),让 JSON 消费者能分辨「没有待处置项」与「清单被截断」。正文见 §21.24 W0-24。
+
 - R21-13.2 `[V1]` **周报行**:每个 UTC 周(周一起)第一次输出计数行的 hint,改输出周报行(**替换**计数行,仍 ≤ 200 字节):`agent-kit RSI 周报: 生效 a、回滚 r、灰度中 c、待授权扩展 x、投稿草稿 d、配额 q%。仅在用户要求时使用技能 agent-kit-rsi。`;「本周已报」用独占创建 `.state/rsi/hint/week-<ISO 周序号>`(全局,不分 agent),`EEXIST` → 照常输出计数行。V5 / V4 之前 x / d 恒为 0。
 - R21-13.3 `[V1]` `rsi report [--week|--since]`:按 UTC 日期范围列出转移、回滚、到期、注入字节与 S2 次数的计数与 id;`--json` 键集合固定(`range`、`transitions`、`rollbacks`、`expired`、`cost`、`canary`)。
 
@@ -6942,6 +6944,9 @@ W8a(命令面的路由、桩与只读命令)落地时对 W0-22 留给实现块�
 - **常量**:`RSI_AUTO_VIEW_STALE_HOURS = 48`、`RSI_STALL_GRACE_MINUTES = 60`、视图文件名 `RSI_AUTO_VIEW_FILE`(`src/contracts/rsi.ts`)。
 - **码表**:`RSI_FAIL_CLOSED reason=` 追加 `revocations_invalid`、`audit_invalid`;信息行 `RSI_MANUAL`、`RSI_CLEAR_DONE` 登记进 §20.3 总表「顶层(0)」行(`RSI_AUTO_RESUME_PENDING` / `RSI_AUTO_RESUMED` 随 `rsi auto resume` 的实现登记)。
 - **受限只读 git 适配器的 spawn 出口**:适配器本身不 import 子进程模块,spawn 作为注入端口;生产实现是 `src/io/exec.ts` 的 `runGitClosed`(git 绝对路径、env 完全由调用方给出、不查 `PATH`、不加默认值),`src/rsi/**` 内只有 `src/rsi/auto/deps.ts` 可引用它。
+- **`rsi auto status --json` 的截断键**:`auto` 下追加 `rollback_stalled_truncated`、`protection_marks_truncated`(取自视图的 `rolling_back_truncated` / `protection_marks_truncated`;布尔,视图 `missing` / `corrupt` 时为 `null`,**不得伪装成 `false`**;`stale` 视图照出视图里的值)。**截断的清单不得作为「处置已完成」的证据**:任一为 `true` 或 `null` 时,`rollback_stalled: []` 不等于「没有待处置项」(W0-22 第 7 条的完成证据要求列表完整)。文本输出保持既有的截断提示行。键集合仍固定(追加后的集合见本条)。
+- **输出泄漏闸的禁止值(W8a 评审订正)**:`rsi auto status` / `report` / `show` / `auto clear` 干跑 / `rollback --to` 干跑的泄漏闸禁止值 = HOME、`KIT_TMP`、状态目录、仓库根、`[rsi] repo`、私有仓库目录及各自的 realpath(与 `rsi status` 同一个 `forbiddenPaths`);额外值由生产组装(`deps.ts`)经端口 `outputForbidden` 注入,处理函数不读配置。
+- **`.git` 目录权限与装配前置核对**:受限只读 git 适配器「只接受权限不宽于 0700 的仓库目录」保持不变、不放松。**生产接线(装配块)之前,私有仓库的初始化 / 体检必须把 `.git` 目录收紧为 0700**(git 在 0700 下工作正常);在此之前 `src/rsi/auto/deps.ts` 的 `gitPath` 保持未装配(`recorded` 读为 `unreadable(not_wired)`,命令退 3)。装配块的前置核对项:确认 W2 初始化 / 体检已收紧 `.git`,再给 `gitPath`。
 - **`rsi auto status` 的 `stall` 取值**:视图不含 journal 的 `by`,所以 status 只给 `event_required`(不可重建类原因)与 `recoverable`;`by_ambiguous` 只在 `rsi show` 读到 journal 时可知。
 
 #### W0 订正的合法 / 错误示例

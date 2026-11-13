@@ -8,7 +8,7 @@
  *   - `state.json` 整份过不了 schema → 退 3 `RSI_FAIL_CLOSED reason=state_invalid`;视图损坏 / 缺失 → 退 0;
  *   - 处置完成证据 = `clear` / `veto` 退 0 且 status 在 `view_state=fresh` 下无 `stalled` / `unconfirmed`;resume 不以「status 不再列出」为依据。
  * `--json` 键集合固定(canonical):顶层 `auto` / `pipeline` / `budget` / `cost` / `canary` / `last_rollback`;`auto` 下追加 `view_state` / `as_of` / `record_oid12` /
- * `rollback_stalled[]` / `protection_marks[]` / `breaker_marker`。
+ * `rollback_stalled[]` / `protection_marks[]` / `rollback_stalled_truncated` / `protection_marks_truncated`(W0-24;`null` = 视图缺失 / 损坏)/ `breaker_marker`。
  */
 import { ExitCode } from '../../../contracts/exit-codes.js';
 import { phaseAtLeast } from '../../../contracts/rsi.js';
@@ -35,6 +35,9 @@ export interface AutoStatusDoc {
     record_oid12: string | null;
     rollback_stalled: StalledItem[] | null;
     protection_marks: AutoView['protection_marks'] | null;
+    /** 视图的清单是否被截断;视图缺失 / 损坏 = `null`(不得伪装成 `false`)。截断的清单不得作为「处置已完成」的证据 */
+    rollback_stalled_truncated: boolean | null;
+    protection_marks_truncated: boolean | null;
     breaker_marker: 'absent' | 'pending';
   };
   pipeline: AutoView['pipeline'] | null;
@@ -94,6 +97,8 @@ export async function computeAutoStatus(
         record_oid12: v === null ? null : v.record_oid.slice(0, 12),
         rollback_stalled: stalled,
         protection_marks: v?.protection_marks ?? null,
+        rollback_stalled_truncated: v === null ? null : v.rolling_back_truncated,
+        protection_marks_truncated: v === null ? null : v.protection_marks_truncated,
         breaker_marker:
           markers.breaker === 'present' && (ap?.reasons.length ?? 0) === 0 ? 'pending' : 'absent',
       },

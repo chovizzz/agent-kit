@@ -2,6 +2,9 @@
  * 命令面入口(W8a):二级路由、`--write` 分流、能力闸(`RSI_AUTO_SUBCOMMAND_CAPS` + `capabilityAvailable`)。
  * 相位当前恒为 0:生产上全部是桩;处理函数只经注入的 `phase` 被调用。能力未到期 = 桩 64,**不解析参数、不构造端口**(未到期的命令不读任何东西)。
  */
+import { mkdir, mkdtemp, realpath, rm, symlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   RSI_AUTO_PHASE,
@@ -14,7 +17,19 @@ import { runAutoFamily } from '../../../src/rsi/auto/entry.js';
 import { routeAuto, type AutoCanonical, type AutoFamily } from '../../../src/rsi/auto/route.js';
 import { AutoUsageError, type AutoReadPorts } from '../../../src/rsi/auto/read/ports.js';
 import type { RsiEarlyContext } from '../../../src/rsi/types.js';
-import { makeSink, makeWorld, portsOf } from './auto-fixture.js';
+import { rec } from '../personal/transition-fixture.js';
+import {
+  HEAD,
+  ID,
+  SHA,
+  makeSink,
+  makeWorld,
+  portsOf,
+  rawView,
+  recordFile,
+  setCommit,
+  viewOf,
+} from './auto-fixture.js';
 
 function ctxOf(argv: string[], sink = makeSink(), isTty = true): RsiEarlyContext {
   return {
@@ -258,5 +273,70 @@ describe('能力闸', () => {
       },
     });
     expect([code, boom.text()]).toEqual([3, { out: '', err: 'RSI_FAIL_CLOSED reason=internal\n' }]);
+  });
+});
+
+describe('泄漏闸的禁止值来自端口(生产组装注入;HOME 外的仓库根 / 状态目录 / realpath)', () => {
+  const BODY = 'rules/ra_0123456789ab.md';
+  const showWith = async (body: string, outputForbidden: string[]) => {
+    const w = makeWorld({ outputForbidden });
+    setCommit(w, HEAD, { ...recordFile(rec('canary')), [BODY]: body });
+    const s = makeSink();
+    const code = await runAutoFamily('show', ctxOf([ID], s), {
+      phase: 2,
+      ports: async () => portsOf(w),
+    });
+    return { code, ...s.text() };
+  };
+
+  it('HOME 外的仓库根 / 状态目录出现在正文 → 退 3 output_leak,stdout 零字节;正文不含这些路径 → 正常输出(正向对照)', async () => {
+    const repo = '/srv/private-project-w8a';
+    const state = `${repo}/.state`;
+    for (const body of [`see ${repo}/x`, `see ${state}/rsi/state.json`]) {
+      const r = await showWith(body, [state, repo]);
+      expect([r.code, r.out, r.err], body).toEqual([3, '', 'RSI_FAIL_CLOSED reason=output_leak\n']);
+    }
+    const ok = await showWith('plain body', [state, repo]);
+    expect(ok.code).toBe(0);
+    expect(ok.out).toContain('| plain body');
+  });
+
+  it('禁止值的 realpath 同样拦:端口给符号链接路径、正文含其真实路径 → 退 3,stdout 零字节', async () => {
+    const root = await realpath(await mkdtemp(path.join(tmpdir(), 'w8a-leak-')));
+    try {
+      const real = path.join(root, 'real-repo');
+      await mkdir(real);
+      const link = path.join(root, 'link-repo');
+      await symlink(real, link);
+      const r = await showWith(`at ${real}/inner`, [link]);
+      expect([r.code, r.out, r.err]).toEqual([3, '', 'RSI_FAIL_CLOSED reason=output_leak\n']);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('经 emitLines 的其它命令(status)同用端口的禁止值', async () => {
+    const w = makeWorld({
+      outputForbidden: [ID],
+      view: rawView(
+        viewOf({
+          rolling_back: [
+            {
+              id: ID,
+              content_sha256: SHA,
+              origin_reason: 'harm_c1',
+              target_terminal: 'rolled_back',
+              entered_at: '2026-11-13T07:00:00.000Z',
+            },
+          ],
+        }),
+      ),
+    });
+    const s = makeSink();
+    const code = await runAutoFamily('auto', ctxOf(['status', '--json'], s), {
+      phase: 2,
+      ports: async () => portsOf(w),
+    });
+    expect([code, s.text().out]).toEqual([3, '']);
   });
 });

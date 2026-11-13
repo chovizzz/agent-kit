@@ -145,5 +145,12 @@ export async function productionAutoPorts(
             spawn: (file, argv, o) => runGitClosed(file, argv, o),
           }),
     judge: { verdictFor: async () => ({ kind: 'unavailable' }) },
+    // 与 status / digest / tick 同一来源:状态目录、仓库根、`[rsi] repo`;另加私有仓库目录(HOME 相对,realpath 由 forbiddenPaths 补)
+    outputForbidden: [
+      io?.stateDir,
+      io?.repoRoot,
+      cfg.status === 'on' ? cfg.repo : undefined,
+      gitDir,
+    ].filter((v): v is string => typeof v === 'string' && v !== ''),
   };
 }
