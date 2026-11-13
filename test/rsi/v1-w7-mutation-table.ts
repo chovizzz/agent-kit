@@ -734,7 +734,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     id: 'trip_no_write',
     clause: 'R21-10.1 触发 = 写熔断码,先写状态再置 canary',
     edits: [swap(BR, "if (r.kind === 'tripped') await d.state.write(r.state);", '')],
-    tests: [T_BR],
+    tests: [T_BR, T_PM],
     expectRed: [
       '触发:marker.ensure 先于 state.write 先于 canary.mute',
       '状态写入崩溃:标记已在盘上(hint 看得到),状态没写;下一次 enforceMute 补码、不删标记、补 mute',
@@ -750,7 +750,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     id: 'enforce_no_mute',
     clause: 'R21-10.1 崩溃后每次 worker 步骤补做 canary 置位',
     edits: [swap(BR, 'return d.canary.mute();', 'return false;')],
-    tests: [T_BR],
+    tests: [T_BR, T_PM],
     expectRed: [
       '状态已写、mute 崩溃',
       '状态写入崩溃:标记已在盘上(hint 看得到),状态没写;下一次 enforceMute 补码、不删标记、补 mute',
