@@ -72,7 +72,7 @@ const types = (r: PersonalLifecycleRecord): string[] => terminalEffectsOf(r).map
 const cooldowns = (r: PersonalLifecycleRecord) =>
   terminalEffectsOf(r).filter((x) => x.type === 'start_cooldown');
 const markers = (r: PersonalLifecycleRecord) =>
-  terminalEffectsOf(r).flatMap((x) => (x.type === 'append_audit' ? [x] : []));
+  terminalEffectsOf(r).flatMap((x) => (x.type === 'protection_mark' ? [x] : []));
 
 describe('originProtection 四态', () => {
   it('rollback=null → not_applicable(即便 transitions 里有 rolling_back 条目:以 rollback 字段为准)', () => {
@@ -224,7 +224,7 @@ describe('截断 / 矛盾的记录:保守方向 90 天 + 审计标记(落点 = �
   });
   it('unclassified + clear:90 天 + protection_unclassified(不是 protection_unknown);撤销 / 墓碑照常', () => {
     const r = unclassifiedRec();
-    expect(types(r)).toEqual(['write_tombstone', 'start_cooldown', 'append_audit']);
+    expect(types(r)).toEqual(['write_tombstone', 'start_cooldown', 'protection_mark']);
     expect(cooldowns(r)).toHaveLength(1);
     expect(markers(r)[0]?.line).toMatchObject({ reason: 'protection_unclassified' });
     expect(markers(r)[0]?.idem_key).not.toBe(markers(unknownRec())[0]?.idem_key);
@@ -325,7 +325,12 @@ function setSink(): {
   blacklistInserts: { n: number };
   audits: string[];
   cooldowns: string[];
+  /** `deferred` = 整批(terminal: / veto: 键)返回 deferred、不落任何 effect;`audit:` 键另由 `auditDeferred` 控制 */
+  mode: { value: 'applied' | 'deferred' };
+  auditDeferred: { value: boolean };
 } {
+  const mode = { value: 'applied' as 'applied' | 'deferred' };
+  const auditDeferred = { value: false };
   const keys = new Map<string, number>();
   const blacklist = new Set<string>();
   const blacklistInserts = { n: 0 };
@@ -337,8 +342,12 @@ function setSink(): {
     blacklistInserts,
     audits,
     cooldowns,
+    mode,
+    auditDeferred,
     sink: {
       async applyOnce(key, effects): Promise<KeyedEffectResult> {
+        if (key.startsWith('audit:') ? auditDeferred.value : mode.value === 'deferred')
+          return 'deferred';
         if (keys.has(key)) return 'already';
         keys.set(key, 1);
         for (const f of effects) {
@@ -348,7 +357,8 @@ function setSink(): {
               blacklist.add(m);
               blacklistInserts.n += 1; // 附带计数只在新成员时加
             }
-          } else if (f.type === 'append_audit') audits.push(`${key}|${f.line.reason ?? ''}`);
+          } else if (f.type === 'append_audit' || f.type === 'protection_mark')
+            audits.push(`${key}|${f.line.reason ?? ''}`);
           else if (f.type === 'start_cooldown') cooldowns.push(`${f.kind}:${f.days}`);
         }
         return 'applied';
@@ -408,17 +418,42 @@ describe('recoverTerminalEffects:E1 第二遍与 E1 / E2 幂等', () => {
     expect(again.already).toEqual([ID]);
     expect(s.cooldowns).toEqual(['auto_rollback:90']);
   });
-  it('保护审计标记只落一次:按审计键落地,重复 recover 不重复;终态批次里不含 append_audit', async () => {
+  it('保护审计标记只落一次:随终态批次(terminal: 键)与冷却同一次 applyOnce 落地,重复 recover 不重复;不经 audit: 键', async () => {
     const s = setSink();
     const r = terminal('rolled_back', 'cleared', 'cleared', [doneEntry('rolled_back')], 3);
     await recoverTerminalEffects({ store: store([r]), effects: s.sink });
     await recoverTerminalEffects({ store: store([r]), effects: s.sink });
     const mine = s.audits.filter((x) => x.endsWith('|protection_unknown'));
-    expect(mine).toHaveLength(1);
-    expect(mine[0]).toMatch(new RegExp(`^audit:${ID}:[0-9a-f]{16}\\|protection_unknown$`));
-    const key = auditKeyOf(ID, markers(r)[0]?.idem_key ?? '');
-    expect(s.keys.has(key)).toBe(true);
+    expect(mine).toEqual([`${terminalEffectKey(r)}|protection_unknown`]);
+    expect(s.audits.some((x) => x.startsWith('audit:') && x.includes('protection_'))).toBe(false);
     expect(s.cooldowns).toEqual(['auto_rollback:90']);
+  });
+  it('批次 deferred:标记与冷却都没落(整批),结果记 deferred;之后批次可用 → 一次补齐,标记恰好一行', async () => {
+    const s = setSink();
+    const r = terminal('rolled_back', 'cleared', 'cleared', [doneEntry('rolled_back')], 3);
+    s.mode.value = 'deferred';
+    const d1 = await recoverTerminalEffects({ store: store([r]), effects: s.sink });
+    expect(d1.deferred).toEqual([ID]);
+    expect(d1.applied).toEqual([]);
+    expect(s.audits.filter((x) => x.endsWith('|protection_unknown'))).toEqual([]);
+    expect(s.cooldowns).toEqual([]);
+    s.mode.value = 'applied';
+    const d2 = await recoverTerminalEffects({ store: store([r]), effects: s.sink });
+    expect(d2.applied).toEqual([ID]);
+    expect(s.audits.filter((x) => x.endsWith('|protection_unknown'))).toEqual([
+      `${terminalEffectKey(r)}|protection_unknown`,
+    ]);
+    expect(s.cooldowns).toEqual(['auto_rollback:90']);
+  });
+  it('审计行(回滚路径的转移条目)deferred 并入整体:即使终态批次 already,整体仍记 deferred', async () => {
+    const s = setSink();
+    const r = terminal('rolled_back', 'cleared', 'cleared', [doneEntry('rolled_back')], 3);
+    await recoverTerminalEffects({ store: store([r]), effects: s.sink }); // 批次与审计行都已落
+    s.keys.delete(auditKeyOf(ID, doneEntry('rolled_back').idem_key)); // 审计行的记键丢失,且此刻审计出口不可用
+    s.auditDeferred.value = true;
+    const out = await recoverTerminalEffects({ store: store([r]), effects: s.sink });
+    expect(out.deferred).toEqual([ID]);
+    expect(out.already).toEqual([]);
   });
   it('unclassified[]:矛盾记录的 id 出现在结果里;known / not_applicable 不出现;落地照常完成', async () => {
     const s = setSink();
@@ -459,13 +494,18 @@ describe('回滚执行器:E1 即时落地、E2 同批、保护标记不重复', 
     ]);
     expect([...w.effectApplied.values()]).toEqual([1, 1]);
   });
-  it('矛盾记录(rolling_back 夹具无进入条目)走完:终态批次 = 黑名单 + 墓碑 + 90 天;protection_unclassified 经审计键恰好落一行,终态批次里没有 append_audit', async () => {
-    const w = world7({
-      record: rec('rolling_back', {
-        deploy: { claude: 'removal_pending', pi: 'none', codex: 'none' },
-        rollback: { phase: 'injection_disabled', reason: 'vetoed', target_terminal: 'rolled_back' },
-      }),
+  const contradictory = () =>
+    rec('rolling_back', {
+      deploy: { claude: 'removal_pending', pi: 'none', codex: 'none' },
+      rollback: { phase: 'injection_disabled', reason: 'vetoed', target_terminal: 'rolled_back' },
     });
+  const unclassifiedLines = (w: ReturnType<typeof world7>) =>
+    w.audits.filter((l) => l.reason === 'protection_unclassified');
+  const viaAuditKey = (w: ReturnType<typeof world7>) =>
+    [...w.auditLog.values()].flat().filter((l) => l.reason === 'protection_unclassified');
+
+  it('矛盾记录(rolling_back 夹具无进入条目)走完:终态批次 = 黑名单 + 墓碑 + 90 天 + protection_unclassified(同一批同一键);标记恰好一行,审计出口(audit: 键)没收到它', async () => {
+    const w = world7({ record: contradictory() });
     const out = await resumeAll(w.d);
     expect(out[0]?.status).toBe('complete');
     const final = recordOf(w);
@@ -473,11 +513,54 @@ describe('回滚执行器:E1 即时落地、E2 同批、保护标记不重复', 
       'blacklist_veto',
       'write_tombstone',
       'start_cooldown',
+      'protection_mark',
     ]);
-    const lines = w.audits.filter((l) => l.reason === 'protection_unclassified');
-    expect(lines).toHaveLength(1);
+    expect(unclassifiedLines(w)).toHaveLength(1);
+    expect(viaAuditKey(w)).toEqual([]); // 即时路径不再经 audit: 键落保护标记
     // 再 recover:不新增
     await recoverTerminalEffects({ store: w.store, effects: w.d.keyedEffects });
-    expect(w.audits.filter((l) => l.reason === 'protection_unclassified')).toHaveLength(1);
+    expect(unclassifiedLines(w)).toHaveLength(1);
+    expect(viaAuditKey(w)).toEqual([]);
+  });
+  it('业务批次 deferred:标记未落、整体 deferred;批次可用后 recover 补出含标记的同一批,标记恰好一行', async () => {
+    const w = world7({ record: contradictory() });
+    w.keyedMode.value = 'deferred';
+    const out = await resumeAll(w.d);
+    expect(out[0]).toMatchObject({ status: 'complete', effects: 'deferred' });
+    expect(unclassifiedLines(w)).toEqual([]);
+    expect(w.effectLog.size).toBe(0);
+    w.keyedMode.value = 'applied';
+    const r = await recoverTerminalEffects({ store: w.store, effects: w.d.keyedEffects });
+    expect(r.applied).toEqual([ID]);
+    expect(w.effectLog.get(terminalEffectKey(recordOf(w)))?.map((x) => x.type)).toContain(
+      'protection_mark',
+    );
+    expect(unclassifiedLines(w)).toHaveLength(1);
+  });
+  it('终态已提交后、效果落地前崩溃:recover 补出含标记的同一批;重复 recover 不重复', async () => {
+    const w = world7({ record: contradictory() });
+    w.crashAt('after:record_terminal');
+    await expect(resumeAll(w.d)).rejects.toThrow('injected crash');
+    expect(recordOf(w).lifecycle).toBe('rolled_back'); // 终态已提交
+    expect(unclassifiedLines(w)).toEqual([]);
+    const r1 = await recoverTerminalEffects({ store: w.store, effects: w.d.keyedEffects });
+    expect(r1.applied).toEqual([ID]);
+    expect(w.effectLog.get(terminalEffectKey(recordOf(w)))?.map((x) => x.type)).toEqual([
+      'blacklist_veto',
+      'write_tombstone',
+      'start_cooldown',
+      'protection_mark',
+    ]);
+    expect(unclassifiedLines(w)).toHaveLength(1);
+    const r2 = await recoverTerminalEffects({ store: w.store, effects: w.d.keyedEffects });
+    expect(r2.applied).toEqual([]);
+    expect(unclassifiedLines(w)).toHaveLength(1);
+  });
+  it('审计行落地 deferred(终态批次已落):收尾整体记 deferred,而不是报成功', async () => {
+    const w = world7({ record: contradictory() });
+    w.auditMode.value = 'deferred';
+    const out = await resumeAll(w.d);
+    expect(out[0]).toMatchObject({ status: 'complete', effects: 'deferred' });
+    expect(unclassifiedLines(w)).toHaveLength(1); // 终态批次(标记所在)已落
   });
 });

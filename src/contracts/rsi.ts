@@ -473,10 +473,10 @@ export const RsiStateSchema = z.strictObject({
       reasons: z
         .array(RsiAutoPauseReasonSchema)
         .refine((a) => new Set(a).size === a.length, '不得重复'),
-      diverged: z.boolean(),
-      owner_changed: z.boolean(),
       /** W0-23 解除证据:清空熔断码的那次写入记下被解除的 `AUTO_PAUSE_BREAKER` 内容里的 `at`;可选,缺键 = `null`(additive,旧状态照常通过) */
       released_marker_at: z.string().min(1).max(64).nullable().optional(),
+      diverged: z.boolean(),
+      owner_changed: z.boolean(),
     })
     .optional(),
 });

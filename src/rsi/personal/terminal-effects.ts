@@ -1,7 +1,7 @@
 /**
  * 终态效果的**单一事实源**(owner 2026-11-12 决定 1「保留原保护」;docs/contracts.md R21-11.1 / R21-11.3 / R21-11.4):
  * `terminalEffectsOf(final)` 由已提交的终态记录确定性算出终态效果批次 E2,转移引擎的尾部(非终态 → 终态)与恢复(`effects-recover.ts` 的 `effectsForTerminal`)同调它,不再各写一份。
- * 批次顺序固定:`blacklist_veto`(`terminal_reason === 'vetoed'`)→ `write_tombstone` → 冷却 → 保护审计标记。落地键仍是 `terminalEffectKey`。
+ * 批次顺序固定:`blacklist_veto`(`terminal_reason === 'vetoed'`)→ `write_tombstone` → 冷却 → 保护审计标记(`protection_mark`,W0-23:与其余同一批、同一次 `applyOnce`,不走审计键)。落地键仍是 `terminalEffectKey`。
  *
  * 冷却口径(「原来发什么就发什么」,不加新规则):
  *  1. 改前规则(终态事实):`terminal_reason === 'auto_rollback'` → 90 天 `auto_rollback`;否则 `lifecycle === 'expired'` → 30 天 `expired`;
@@ -51,7 +51,7 @@ function legacyCooldown(rec: PersonalLifecycleRecord): Cooldown | null {
 function protectionAudit(
   rec: PersonalLifecycleRecord,
   reason: string,
-): Extract<TransitionEffect, { type: 'append_audit' }> | null {
+): Extract<TransitionEffect, { type: 'protection_mark' }> | null {
   const terminalEntry = [...rec.transitions]
     .reverse()
     .find((e) => e.dim === 'lifecycle' && e.to === rec.lifecycle);
@@ -68,7 +68,7 @@ function protectionAudit(
     counts: { cooldown_days: RSI_COOLDOWN_DAYS.auto_rollback },
   };
   return {
-    type: 'append_audit',
+    type: 'protection_mark',
     line,
     idem_key: idemKey({
       id: rec.id,

@@ -6,7 +6,7 @@
  * 对每条记录按稳定键 {@link terminalEffectKey} 调 `KeyedEffectSink.applyOnce`(同键只生效一次,至少一次调用 + 按键幂等 = 恰好一次的效果)。
  * **E1 / E2 分层**:veto 事件的即时黑名单(E1,键 {@link vetoEffectKey})与终态批次(E2,键 `terminal:`)分开;E1 在回滚记录已提交、尚未到终态时崩溃的窗口由 `recoverTerminalEffects` 的第二遍补做
  * (扫 `lifecycle=rolling_back ∧ rollback.reason=vetoed`)。E1 与 E2 可含同一 `blacklist_veto(id, sha)`,正确性依赖该 effect 的**集合插入语义**(按 `(id, sha)` 插入,重复为空操作,附带计数不重复)。
- * 保护审计标记(`append_audit`,键 = 审计事件身份 `audit:<id>:<idem_key>`)与引擎即时路径同键落地,见 {@link landTerminalEffects}。
+ * 保护审计标记(`protection_mark`,W0-23)是 E2 批次的一员,与冷却、墓碑同一个 `terminal:` 键、同一次 `applyOnce`,见 {@link landTerminalEffects};它**不**走 `audit:` 键。
  * 回滚执行器在删 journal 之前同样调它,journal 在效果落地之前一直保留。
  * **审计行同样按键续做**(M6):转移条目(`record.transitions[]`)已是已提交的权威事实,审计行由条目确定性推出({@link auditItemsOf}),
  * 稳定键 = `audit:<候选>:<条目 idem_key>`({@link auditKeyOf};事件身份,不是行内容哈希),经同一个 `KeyedEffectSink` 落地(`append_audit` 效果;生产实现须与记键同一持久化步骤)。
@@ -91,24 +91,24 @@ export function keyedAuditSink(sink: KeyedEffectSink): AuditSink {
   return { append: (lines) => land(lines.map((line) => ({ line }))), appendKeyed: land };
 }
 
-/** 补做回滚路径的审计行(按键幂等);返回本次落地(`applied`)的行数 */
+/** 补做回滚路径的审计行(按键幂等);任一行 `deferred` → `deferred`(其余行仍尽力落,不因一行推迟而漏做);否则有行落地 → `applied`;全是 `already` → `already`;没有行 → `none` */
 export async function landAuditEffects(
   sink: KeyedEffectSink,
   rec: PersonalLifecycleRecord,
-): Promise<number> {
-  let applied = 0;
+): Promise<KeyedEffectResult | 'none'> {
+  let out: KeyedEffectResult | 'none' = 'none';
   for (const { key, line, idem_key } of auditItemsOf(rec)) {
     // 与即时路径同形(effect 带 idem_key),下游按 effect 字段校验时两条路径一致
     const r = await sink.applyOnce(key, [{ type: 'append_audit', line, idem_key }]);
-    if (r === 'applied') applied += 1;
+    if (r === 'deferred') out = 'deferred';
+    else if (out !== 'deferred' && (r === 'applied' || out === 'none')) out = r;
   }
-  return applied;
+  return out;
 }
 
 /**
- * 终态批次 E2 的落地:业务效果(黑名单 / 墓碑 / 冷却)一次 `applyOnce(terminal:<id>:<sha>)`;批次里的审计标记(`append_audit`)改走**审计键**
- * `audit:<id>:<idem_key>`——与引擎即时路径(`d.audit` → `keyedAuditSink`)同一个键,同一行只落一次(分到两个键会让同一标记行在即时与补做两条路径各落一次)。
- * 返回值是业务效果批次的结果。
+ * 终态批次 E2 的落地:**整批一次** `applyOnce(terminal:<id>:<sha>)`——黑名单 / 墓碑 / 冷却与保护审计标记(`protection_mark`,W0-22 第 14 条)同键同批,
+ * 即时路径(回滚执行器收尾)与恢复路径(`recoverTerminalEffects`)共用本函数。批次的结果就是整体结果:`deferred` 时标记也没有落,不存在「标记已落而冷却 deferred」或反过来。
  */
 export async function landTerminalEffects(
   sink: KeyedEffectSink,
@@ -116,14 +116,15 @@ export async function landTerminalEffects(
 ): Promise<KeyedEffectResult | 'none'> {
   const effects = terminalEffectsOf(rec);
   if (effects.length === 0) return 'none';
-  const business = effects.filter((e) => e.type !== 'append_audit');
-  const r = await sink.applyOnce(terminalEffectKey(rec), business);
-  for (const e of effects) {
-    if (e.type !== 'append_audit') continue;
-    if (e.idem_key === undefined) throw new Error('audit_key_missing');
-    await sink.applyOnce(auditKeyOf(rec.id, e.idem_key), [e]);
-  }
-  return r;
+  return sink.applyOnce(terminalEffectKey(rec), effects);
+}
+
+/** 终态批次与回滚审计行两路落地结果的聚合:任一 `deferred` → 整体 `deferred`;否则取批次结果(审计行的 `applied` / `already` 不改变批次口径) */
+export function aggregateLanding(
+  batch: KeyedEffectResult | 'none',
+  audit: KeyedEffectResult | 'none',
+): KeyedEffectResult | 'none' {
+  return audit === 'deferred' ? 'deferred' : batch;
 }
 
 export interface RecoverEffectsResult {
@@ -161,13 +162,15 @@ export async function recoverTerminalEffects(d: {
   }
   for (const rec of all.value) {
     try {
-      const r = await landTerminalEffects(d.effects, rec);
-      if (r !== 'none' && originProtection(rec).kind === 'unclassified')
+      const batch = await landTerminalEffects(d.effects, rec);
+      if (batch !== 'none' && originProtection(rec).kind === 'unclassified')
         out.unclassified.push(rec.id);
-      // 只补回滚执行器产生的终态(其余终态的审计行是转移当时直接追加的)
-      if (rec.terminal_reason !== null && EXECUTOR_TERMINAL_REASONS.has(rec.terminal_reason)) {
-        await landAuditEffects(d.effects, rec);
-      }
+      // 只补回滚执行器产生的终态(其余终态的审计行是转移当时直接追加的);审计行的 `deferred` 并入整体结果
+      const audit =
+        rec.terminal_reason !== null && EXECUTOR_TERMINAL_REASONS.has(rec.terminal_reason)
+          ? await landAuditEffects(d.effects, rec)
+          : 'none';
+      const r = aggregateLanding(batch, audit);
       if (r === 'applied') out.applied.push(rec.id);
       else if (r === 'already') out.already.push(rec.id);
       else if (r === 'deferred') out.deferred.push(rec.id);

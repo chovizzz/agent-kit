@@ -185,9 +185,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
   {
     id: 'effects_not_landed',
     clause: 'W0-16 终态效果在删 journal 之前经带键落地',
-    edits: [
-      swap(RB, 'effects = await landTerminalEffects(d.keyedEffects, rec);', "effects = 'none';"),
-    ],
+    edits: [swap(RB, 'await landTerminalEffects(d.keyedEffects, rec),', "'none',")],
     tests: [T_RB, T_EF],
     expectRed: [
       'canary + harm → 四段全部完成',
@@ -1379,7 +1377,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
   {
     id: 'audit_no_finish',
     clause: 'M6 收尾按记录补做审计行(落地失败 / 提交后崩溃不丢)',
-    edits: [swap(RB, 'await landAuditEffects(d.keyedEffects, rec);', '')],
+    edits: [swap(RB, 'await landAuditEffects(d.keyedEffects, rec),', "'none',")],
     tests: [T_JN],
     expectRed: [
       '审计落地失败(提交之后)',
@@ -1390,7 +1388,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
   {
     id: 'audit_no_recover',
     clause: 'M6 recoverTerminalEffects 对执行器终态补审计',
-    edits: [swap(ER, 'await landAuditEffects(d.effects, rec);', '')],
+    edits: [swap(ER, '? await landAuditEffects(d.effects, rec)', "? 'none'")],
     tests: [T_JN],
     expectRed: ['recoverTerminalEffects 对执行器终态补审计'],
     mustKill: ['recoverTerminalEffects 对执行器终态补审计'],
@@ -1401,8 +1399,8 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     edits: [
       swap(
         ER,
-        'if (rec.terminal_reason !== null && EXECUTOR_TERMINAL_REASONS.has(rec.terminal_reason)) {',
-        'if (true) {',
+        'rec.terminal_reason !== null && EXECUTOR_TERMINAL_REASONS.has(rec.terminal_reason)',
+        'true',
       ),
     ],
     tests: [T_JN],
@@ -1515,7 +1513,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     expectRed: [
       'unclassified:rollback 非空、无进入条目、dropped = 0(自相矛盾);只有自环条目也算无进入条目',
       'unclassified + clear:90 天 + protection_unclassified(不是 protection_unknown);撤销 / 墓碑照常',
-      '矛盾记录(rolling_back 夹具无进入条目)走完:终态批次 = 黑名单 + 墓碑 + 90 天;protection_unclassified 经审计键恰好落一行,终态批次里没有 append_audit',
+      '矛盾记录(rolling_back 夹具无进入条目)走完:终态批次 = 黑名单 + 墓碑 + 90 天 + protection_unclassified(同一批同一键);标记恰好一行,审计出口(audit: 键)没收到它',
     ],
     mustKill: [
       'unclassified:rollback 非空、无进入条目、dropped = 0(自相矛盾);只有自环条目也算无进入条目',
@@ -1713,21 +1711,67 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
   {
     id: 'audit_in_terminal_batch',
     clause:
-      'W7b 保护审计标记按审计键落地(与引擎即时路径同键),不放进 terminal: 批次(否则同一行落两次)',
+      'W0-23 保护审计标记不是 append_audit:不走审计出口(audit: 键),只作为终态批次 E2 的 protection_mark 随 terminal: 键整批落地',
+    edits: [swap(TE, "type: 'protection_mark',\n    line,", "type: 'append_audit',\n    line,")],
+    tests: [T_PR],
+    expectRed: [
+      '矛盾记录(rolling_back 夹具无进入条目)走完:终态批次 = 黑名单 + 墓碑 + 90 天 + protection_unclassified(同一批同一键);标记恰好一行,审计出口(audit: 键)没收到它',
+      '保护审计标记只落一次:随终态批次(terminal: 键)与冷却同一次 applyOnce 落地,重复 recover 不重复;不经 audit: 键',
+    ],
+    mustKill: [
+      '矛盾记录(rolling_back 夹具无进入条目)走完:终态批次 = 黑名单 + 墓碑 + 90 天 + protection_unclassified(同一批同一键);标记恰好一行,审计出口(audit: 键)没收到它',
+    ],
+  },
+  {
+    id: 'mark_moved_out_of_batch',
+    clause:
+      'W0-23 把保护标记移出终态批次(单独 applyOnce、忽略其结果)= 标记与冷却可分离:批次 deferred 而标记已落',
     edits: [
       swap(
         ER,
-        "const business = effects.filter((e) => e.type !== 'append_audit');",
-        'const business = effects;',
+        'return sink.applyOnce(terminalEffectKey(rec), effects);',
+        "const r = await sink.applyOnce(terminalEffectKey(rec), effects.filter((e) => e.type !== 'protection_mark'));\n  for (const e of effects) if (e.type === 'protection_mark') await sink.applyOnce(auditKeyOf(rec.id, e.idem_key), [e]);\n  return r;",
       ),
     ],
     tests: [T_PR],
     expectRed: [
-      '矛盾记录(rolling_back 夹具无进入条目)走完:终态批次 = 黑名单 + 墓碑 + 90 天;protection_unclassified 经审计键恰好落一行,终态批次里没有 append_audit',
-      '保护审计标记只落一次:按审计键落地,重复 recover 不重复;终态批次里不含 append_audit',
+      '批次 deferred:标记与冷却都没落(整批),结果记 deferred;之后批次可用 → 一次补齐,标记恰好一行',
+      '矛盾记录(rolling_back 夹具无进入条目)走完:终态批次 = 黑名单 + 墓碑 + 90 天 + protection_unclassified(同一批同一键);标记恰好一行,审计出口(audit: 键)没收到它',
     ],
     mustKill: [
-      '矛盾记录(rolling_back 夹具无进入条目)走完:终态批次 = 黑名单 + 墓碑 + 90 天;protection_unclassified 经审计键恰好落一行,终态批次里没有 append_audit',
+      '批次 deferred:标记与冷却都没落(整批),结果记 deferred;之后批次可用 → 一次补齐,标记恰好一行',
+    ],
+  },
+  {
+    id: 'batch_deferred_ignored',
+    clause: 'W0-23 终态批次返回 deferred 时整体 deferred(忽略批次结果 = 业务未落却报成功)',
+    edits: [
+      swap(
+        ER,
+        'return sink.applyOnce(terminalEffectKey(rec), effects);',
+        "await sink.applyOnce(terminalEffectKey(rec), effects);\n  return 'applied';",
+      ),
+    ],
+    tests: [T_PR],
+    expectRed: [
+      '批次 deferred:标记与冷却都没落(整批),结果记 deferred;之后批次可用 → 一次补齐,标记恰好一行',
+      '业务批次 deferred:标记未落、整体 deferred;批次可用后 recover 补出含标记的同一批,标记恰好一行',
+    ],
+    mustKill: [
+      '业务批次 deferred:标记未落、整体 deferred;批次可用后 recover 补出含标记的同一批,标记恰好一行',
+    ],
+  },
+  {
+    id: 'audit_deferred_ignored',
+    clause: 'W0-23 回滚审计行 deferred 并入整体结果(忽略 = 审计未落却报成功)',
+    edits: [swap(ER, "return audit === 'deferred' ? 'deferred' : batch;", 'return batch;')],
+    tests: [T_PR],
+    expectRed: [
+      '审计行(回滚路径的转移条目)deferred 并入整体:即使终态批次 already,整体仍记 deferred',
+      '审计行落地 deferred(终态批次已落):收尾整体记 deferred,而不是报成功',
+    ],
+    mustKill: [
+      '审计行(回滚路径的转移条目)deferred 并入整体:即使终态批次 already,整体仍记 deferred',
     ],
   },
   {

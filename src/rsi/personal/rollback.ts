@@ -28,6 +28,7 @@ import type { StepHalt } from './candidate-ports.js';
 import { RsiLockError } from '../lock-error.js';
 import type { HeldLock } from '../canary/atomic-write.js';
 import {
+  aggregateLanding,
   keyedAuditSink,
   landAuditEffects,
   landTerminalEffects,
@@ -446,6 +447,9 @@ const applyDeps = (d: RollbackDeps): ApplyDeps => ({
   audit: keyedAuditSink(d.keyedEffects),
   // 终态批次 E2 只经带键的落地(`landTerminalEffects`),这里不重复落(否则同一终态会被无键 + 有键各落一次);
   // 例外:veto 事件的即时黑名单 E1 按 `vetoEffectKey` 单独落(按 (id, sha) 集合插入的 effect 语义容许它与 E2 含同一黑名单)。
+  // 保护审计标记(`protection_mark`)是 E2 批次的一员,即时路径里这里**不**落它(落了就会脱离冷却 / 墓碑所在的批次),只在收尾随 `terminal:` 键整批落地。
+  // 返回值说明:`EffectSink.apply` / `AuditSink` 端口不返回结果,这里两处 `applyOnce` 的 `deferred` 不能直接上抛;它们的补做不依赖返回值——E1 由
+  // `recoverTerminalEffects` 第二遍(回滚未完成)与 E2 的黑名单(终态)补,审计行由收尾的 `landAuditEffects`(同键)补并把 `deferred` 聚合进整体结果。
   // 提交后落地失败由 `recoverTerminalEffects` 的第二遍补(回滚未完成时 E2 还不存在)
   effects: {
     apply: async (effects) => {
@@ -731,8 +735,11 @@ async function finish(d: RollbackDeps, t: PersonalTxn, c: RunCtx): Promise<Rollb
     }
     await step(d, 'after:record_terminal');
     if (!isTerminalLifecycle(rec.lifecycle)) return inc('record_not_terminal', 'retryable');
-    effects = await landTerminalEffects(d.keyedEffects, rec);
-    await landAuditEffects(d.keyedEffects, rec);
+    // 终态批次 E2(含保护标记,同键同批)与回滚审计行都经带键出口;任一 `deferred` → 整体 `deferred`(待对账,由终态记录经 `recoverTerminalEffects` 续做)
+    effects = aggregateLanding(
+      await landTerminalEffects(d.keyedEffects, rec),
+      await landAuditEffects(d.keyedEffects, rec),
+    );
     await step(d, 'after:effects');
   }
   await d.locks.personal.assertHeld();

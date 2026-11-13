@@ -80,7 +80,12 @@ export type TransitionEffect =
   /** R21-11.4:终态 id 进墓碑 */
   | { type: 'write_tombstone'; id: string; terminal: string; reason: string }
   /** R21-11.1:聚类冷却(自动回滚 90 天、`expired` 30 天;连续 rejected 的 7 天需要历史,由调用方判) */
-  | { type: 'start_cooldown'; cluster_id: string; kind: 'auto_rollback' | 'expired'; days: number };
+  | { type: 'start_cooldown'; cluster_id: string; kind: 'auto_rollback' | 'expired'; days: number }
+  /**
+   * 保护审计标记(W0-22 第 14 条;`protection_unknown` / `protection_unclassified`):只出现在终态批次 E2 里,由带键的 `applyOnce(terminal:<id>:<sha>)` 与冷却、墓碑**同一批**落地,
+   * sink 在同一持久化步骤里把 `line` 追加为审计行。**不是** `append_audit`:不走 `AuditSink`(审计键 `audit:`),否则标记可能先于 / 脱离它所陈述的冷却落地。`idem_key` 只作确定性身份(审计行内容的一部分来源)。
+   */
+  | { type: 'protection_mark'; line: RsiAuditLine; idem_key: string };
 
 export interface Transitioned {
   outcome: 'transitioned' | 'noop';

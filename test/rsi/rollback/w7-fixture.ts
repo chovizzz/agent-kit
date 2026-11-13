@@ -73,7 +73,7 @@ export interface World7 {
   auditApplied: Map<string, number>;
   auditLog: Map<string, RsiAuditLine[]>;
   /** 审计落地的模式(与 `keyedMode` 分开,`keyedMode` 只管终态效果):`lock_lost` = 抛丢锁错误 */
-  auditMode: { value: 'applied' | 'throw' | 'lock_lost' };
+  auditMode: { value: 'applied' | 'throw' | 'lock_lost' | 'deferred' };
   /** `deferralMark` 端口的调用记录(测试按需把 `d.deferralMark` 指向 `markDeferral`) */
   deferralMarks: string[];
   markDeferral: { mark(candidateId: string): Promise<void> };
@@ -233,6 +233,7 @@ export function world7(
           calls.push('audit.applyOnce');
           if (auditMode.value === 'throw') throw new Error('audit down');
           if (auditMode.value === 'lock_lost') throw new RsiLockError('lock_lost');
+          if (auditMode.value === 'deferred') return 'deferred';
           if (auditLog.has(key)) return 'already';
           const lines = effects.flatMap((e) => (e.type === 'append_audit' ? [e.line] : []));
           auditLog.set(key, lines);
@@ -245,6 +246,8 @@ export function world7(
         if (keyedMode.value === 'deferred') return 'deferred';
         if (effectLog.has(key)) return 'already';
         effectLog.set(key, [...effects]);
+        // W0-23:保护审计标记是批次的一员,sink 在同一步骤里把它落成审计行(与生产端口同一份契约:批次 deferred 时没有这一行)
+        for (const e of effects) if (e.type === 'protection_mark') audits.push(e.line);
         effectApplied.set(key, (effectApplied.get(key) ?? 0) + 1);
         return 'applied';
       },

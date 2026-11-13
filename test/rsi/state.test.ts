@@ -348,6 +348,28 @@ describe('§21 W0-7 `auto_pause`:可选键(旧 state.json 照常通过),出现�
     expect(parseRsiStateDoc(Buffer.from(JSON.stringify(withPause)))).toMatchObject({ kind: 'ok' });
   });
 
+  it('W0-23 auto_pause.released_marker_at:可选(缺键 = null),字符串或 null 通过;空串 / 非字符串 / 超长一律 invalid', () => {
+    const doc = (extra: Record<string, unknown>): Buffer =>
+      Buffer.from(
+        JSON.stringify({
+          ...stateWith(null),
+          auto_pause: { reasons: [], diverged: false, owner_changed: false, ...extra },
+        }),
+      );
+    for (const v of [
+      {},
+      { released_marker_at: null },
+      { released_marker_at: '2026-11-12T00:00:01.000Z' },
+    ]) {
+      expect(parseRsiStateDoc(doc(v)), JSON.stringify(v)).toMatchObject({ kind: 'ok' });
+    }
+    for (const v of ['', 5, 'x'.repeat(65)]) {
+      expect(parseRsiStateDoc(doc({ released_marker_at: v })), String(v)).toEqual({
+        kind: 'invalid',
+      });
+    }
+  });
+
   it('R21-10.2 非法 auto_pause(未知码 / 重复码 / 类型错 / 未知键)→ 整份 invalid(不被 confirm 特例掩盖、不归零恢复)', () => {
     const bad = (auto_pause: unknown): Buffer =>
       Buffer.from(JSON.stringify({ ...stateWith(null), auto_pause }));
