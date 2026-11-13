@@ -6,7 +6,7 @@
  * 本文件只写表与每条变异期望红的测试名(`expectRed` 是杀手测试名里的字面子串;参数化用例只取模板之外的固定片段);变异由主代理执行,
  * 结果记进 `V1_W8_RESULTS`(W8a 实装块不执行变异,故留空)。变异 id 用短的下划线词。
  *
- * W8b 追加(本表后 43 条,id 前缀 pause_ / resume_ / clear_ / out_ / veto_ / rbk_ / rebase_ / 预检 / 生产组装):写命令的处理函数(pause 不拿锁 / 不覆盖 / 只碰 U;resume 的线性化与指纹、结果行、顺序;
+ * W8b 追加(本表后共 58 条:W8b 首版 43 条,接手后新增 12 条〔读写分文件 / resume 自动解除码 / 缩减入口配置不可信 / rollback --to 的 yes 与 STALE / veto 重试〕,再加 `rsi status` 追加键 3 条;id 前缀 pause_ / resume_ / clear_ / out_ / veto_ / rbk_ / rebase_ / status_ / 预检 / 生产组装):写命令的处理函数(pause 不拿锁 / 不覆盖 / 只碰 U;resume 的线性化与指纹、结果行、顺序;
  * clear 的锁序与枚举失败、已完成项先输出;veto 的 deferred 不判 unknown_id、终态只写黑名单、持锁后重读;rollback --to 的 by / reason / 逆序 / 三把锁 / 矛盾记录先于写入;rebase 的确认与持锁复判;未接线预检零写入)。
  * W8b 的结果由主代理跑完回填(`V1_W8_RESULTS` 已重置为 `[]`,主代理整表重跑后统一回填 W8a + W8b)。
  * 不在本表的点(如实记录):端口契约的写侧由 `port-contract.test.ts` 的套件覆盖,不是变异;
@@ -1979,7 +1979,45 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
     expectRed: ['veto 复用在途 txn 时较晚的 veto 事件首次没施加'],
     mustKill: ['veto 复用在途 txn 时较晚的 veto 事件首次没施加'],
   },
+  {
+    id: 'status_inert_changed',
+    clause: 'R21-13.1 V2+ 的键给惰性值(exec = not_available)',
+    edits: [
+      swap('src/rsi/auto/read/status-keys.ts', "    exec: 'not_available',", "    exec: 'off',"),
+    ],
+    tests: ['rsi/status-auto-keys.test.ts'],
+    expectRed: ['[rsi] 关闭(off):惰性值'],
+    mustKill: ['[rsi] 关闭(off):惰性值'],
+  },
+  {
+    id: 'status_missing_view_zero',
+    clause: 'W0-22 第 7 条 视图缺失时派生键为 null,绝不显示成全零',
+    edits: [
+      swap(
+        'src/rsi/auto/read/status-keys.ts',
+        '    pipeline: v?.pipeline ?? null,',
+        '    pipeline: v?.pipeline ?? { states: {}, last30d: { rejected: 0, rolled_back: 0, expired: 0, retired: 0 } },',
+      ),
+    ],
+    tests: ['rsi/status-auto-keys.test.ts'],
+    expectRed: ['on 而没有视图(missing)', '损坏的视图'],
+    mustKill: ['on 而没有视图(missing)'],
+  },
+  {
+    id: 'status_user_marker_ignored',
+    clause: 'R21-13.1 / W0-22 第 7 条 paused 与 pause_reasons 里 user_paused 按 U 的存在性补',
+    edits: [
+      swap(
+        'src/rsi/auto/read/status-keys.ts',
+        "  if (user) reasons.push('user_paused');",
+        '  void user;',
+      ),
+    ],
+    tests: ['rsi/status-auto-keys.test.ts'],
+    expectRed: ['暂停:U 文件存在'],
+    mustKill: ['暂停:U 文件存在'],
+  },
 ];
 
-/** 实测结果:待主代理整表重跑后回填(W8a 86 条 + W8b 43 条) */
+/** 实测结果:待主代理整表重跑后回填(W8a 86 条 + W8b 58 条) */
 export const V1_W8_RESULTS: readonly V1W8Result[] = [];
