@@ -37,6 +37,7 @@ import {
 } from '../../src/contracts/index.js';
 import {
   CandidateWorkingCopySchema,
+  AutoViewSchema,
   CanaryAdmissionSchema,
   CanaryDocSchema,
   PersonalCommitJournalSchema,
@@ -112,6 +113,7 @@ export const SCHEMAS: Readonly<Record<string, ZodType>> = {
   // §21 W0(contracts §21.24):个人层 schema 与 `[rsi.auto]`
   RsiAuto: RsiAutoSchema,
   PersonalLifecycleRecord: PersonalLifecycleRecordSchema,
+  AutoView: AutoViewSchema,
   PersonalCommitJournal: PersonalCommitJournalSchema,
   PersonalHead: PersonalHeadSchema,
   PersonalTxn: PersonalTxnSchema,
