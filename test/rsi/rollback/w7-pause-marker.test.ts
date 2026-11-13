@@ -137,32 +137,28 @@ describe('W0-23 解除证据(真文件):清码写盘后残留的 B 不复活码,
 describe('W0-23 B 的实例标识(真文件):内容 {at, by, reason, id};每次创建换新 id(固定时钟下 at 相同也不同)', () => {
   it('注入 newId:id 写进文件内容;删后重建换新 id,而 at(固定时钟)完全相同——at 不是身份', async () => {
     const w = await makeCanaryWorld('w7-marker-id-');
-    const ids = ['aaaaaaaaaaaaaaaa', 'bbbbbbbbbbbbbbbb'];
     let i = 0;
-    const port = makeBreakerMarkerPort(
-      w.io,
-      w.rsi,
-      () => NOW,
-      () => ids[i++] as string,
-    );
+    // 每次调用取下一个 id(已存在的 B 上 ensure 也会先生成 id 再被独占创建拒绝,所以不断言调用次数)
+    const newId = (): string => (++i).toString(16).padStart(16, '0');
+    const port = makeBreakerMarkerPort(w.io, w.rsi, () => NOW, newId);
     const file = path.join(w.rsi, 'AUTO_PAUSE_BREAKER');
     expect(await port.ensure('gate_internal')).toBe('created');
     const first = JSON.parse(await readText(file));
     expect(first).toEqual({
       at: NOW.toISOString(),
       by: 'breaker',
-      id: 'aaaaaaaaaaaaaaaa',
+      id: '0000000000000001',
       reason: 'gate_internal',
     });
-    expect(await port.ensure('gate_internal')).toBe('exists'); // 已存在不覆盖、不消耗 id
-    expect(i).toBe(1);
+    expect(await port.ensure('gate_internal')).toBe('exists'); // 已存在不覆盖
+    expect(JSON.parse(await readText(file))).toEqual(first);
     expect(await port.remove()).toBe(true);
     expect(await port.ensure('gate_internal')).toBe('created');
     const second = JSON.parse(await readText(file));
     expect(second.at).toBe(first.at); // 固定时钟:at 相同
-    expect(second.id).toBe('bbbbbbbbbbbbbbbb');
+    expect(second.id).toMatch(/^[0-9a-f]{16}$/);
     expect(second.id).not.toBe(first.id);
-    expect((await port.read())?.id).toBe('bbbbbbbbbbbbbbbb');
+    expect((await port.read())?.id).toBe(second.id);
   });
 
   it('缺省随机源:连续新建两个 B(固定时钟)的 id 都合规且互不相同', async () => {
