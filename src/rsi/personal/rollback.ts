@@ -183,10 +183,7 @@ const step = async (d: RollbackDeps, name: string): Promise<void> => {
 };
 
 /** `readJournal` 的 `invalid`:完整性错误不带身份;本期不支持的合法 journal(identity_change)是带 txn 的 candidate_invalid */
-function invalidJournal(
-  id: string,
-  r: { why: 'txn_invalid' | 'identity_not_available_before_v6a'; cause: RollbackCause },
-): RollbackOutcome {
+function invalidJournal(id: string, r: { why: string; cause: RollbackCause }): RollbackOutcome {
   return r.cause === 'txn_invalid'
     ? integrityRefusal(id, r.why)
     : { status: 'refused', txn: id, why: r.why, cause: r.cause };

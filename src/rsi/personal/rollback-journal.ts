@@ -178,10 +178,10 @@ export interface ReadDeps {
 
 export type JournalRead =
   | { kind: 'ok'; ctx: JournalCtx }
-  /** `txn_invalid` = journal 完整性错误(cause `txn_invalid`,调用方不得把它当作带事务身份的结果);`identity_not_available_before_v6a` = 本期不支持的合法 journal(cause `candidate_invalid`) */
+  /** `cause=txn_invalid` = journal 完整性错误(含旧格式缺 content_sha256 无法绑定身份;调用方不得把它当作带事务身份的结果);`identity_not_available_before_v6a` = 本期不支持的合法 journal(cause `candidate_invalid`) */
   | {
       kind: 'invalid';
-      why: 'txn_invalid' | 'identity_not_available_before_v6a';
+      why: string;
       cause: RollbackCause;
     }
   | { kind: 'incomplete'; why: string; cause: RollbackCause };
@@ -244,13 +244,15 @@ export async function readJournal(d: ReadDeps, t: PersonalTxn): Promise<JournalR
   }
 
   if (missing.length > 0 || by === undefined || event === undefined || sha === undefined) {
-    // 缺 content_sha256 = journal 无法绑定事务身份;缺原始证据 = 等人工补事件;只缺来源 = 来源有歧义
-    const cause: RollbackCause = missing.includes('content_sha256')
-      ? 'txn_invalid'
-      : missing.includes('terminal_event')
-        ? 'manual_event_required'
-        : 'manual_by_ambiguous';
-    return { kind: 'incomplete', why: `legacy_unrecoverable:${missing.join(',')}`, cause };
+    const why = `legacy_unrecoverable:${missing.join(',')}`;
+    // 缺 content_sha256 = journal 无法绑定事务身份:这是完整性错误(R3-H2),不带事务身份,不被同 (id, sha) 的 complete 消除;仍不写凭据、不动记录
+    if (missing.includes('content_sha256')) return { kind: 'invalid', why, cause: 'txn_invalid' };
+    // 缺原始证据 = 等人工补事件;只缺来源 = 来源有歧义
+    return {
+      kind: 'incomplete',
+      why,
+      cause: missing.includes('terminal_event') ? 'manual_event_required' : 'manual_by_ambiguous',
+    };
   }
   return { kind: 'ok', ctx: { by, event, sha } };
 }

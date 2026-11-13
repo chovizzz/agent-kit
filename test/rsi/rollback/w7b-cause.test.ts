@@ -215,15 +215,6 @@ const CASES: Record<RollbackFailureStatus, Case[]> = {
       },
     },
     {
-      name: '旧格式 journal 缺内容哈希(legacy_unrecoverable:content_sha256)',
-      cause: 'txn_invalid',
-      run: async () => {
-        const w = world7();
-        await w.d.txns.write(legacyJournal());
-        return (await resumeAll(w.d))[0] as RollbackOutcome;
-      },
-    },
-    {
       name: '旧格式 journal 缺来源(legacy_unrecoverable:by)',
       cause: 'manual_by_ambiguous',
       run: async () => {
@@ -245,6 +236,15 @@ const CASES: Record<RollbackFailureStatus, Case[]> = {
     },
   ],
   refused: [
+    {
+      name: '旧格式 journal 缺内容哈希、无法绑定事务身份(legacy_unrecoverable:content_sha256)',
+      cause: 'txn_invalid',
+      run: async () => {
+        const w = world7();
+        await w.d.txns.write(legacyJournal());
+        return (await resumeAll(w.d))[0] as RollbackOutcome;
+      },
+    },
     {
       name: 'identity_kind_mismatch',
       cause: 'candidate_invalid',
@@ -411,6 +411,22 @@ describe('RollbackOutcome.cause:每个失败返回点各有明确映射(按 vari
     const rc = await startRollback(w2.d, harmReq());
     expect(rc.status).toBe('revocation_complete');
     expect(rc).not.toHaveProperty('cause');
+  });
+
+  it('不变量:cause=txn_invalid 的 outcome 一律是 refused、txn=null、journal 句柄为字符串(逐 case 校验;失败 variant incomplete 永不带 txn_invalid)', async () => {
+    let seen = 0;
+    for (const status of Object.keys(CASES) as RollbackFailureStatus[]) {
+      for (const c of CASES[status]) {
+        if (c.cause !== 'txn_invalid') continue;
+        const out = (await c.run()) as { status: string; txn: unknown; journal?: unknown };
+        expect(out.status, c.name).toBe('refused');
+        expect(out.txn, c.name).toBeNull();
+        expect(typeof out.journal, c.name).toBe('string');
+        seen += 1;
+      }
+    }
+    expect(seen).toBeGreaterThan(3);
+    expect(CASES.incomplete.some((c) => c.cause === 'txn_invalid')).toBe(false);
   });
 
   it('journal 完整性错误不带事务身份(txn: null,journal 句柄单给):同 (id, sha) 的 complete 消除不了它', async () => {
