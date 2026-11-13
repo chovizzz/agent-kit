@@ -1866,6 +1866,49 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
     expectRed: ['生产入口 entry.ts 的传递闭包'],
     mustKill: ['生产入口 entry.ts 的传递闭包'],
   },
+  {
+    id: 'clear_untrusted_blocked',
+    clause: 'R21-9.5 缩减入口在配置不可信时仍要完成 HOME 侧撤销(不得改回 fail-closed)',
+    edits: [
+      swap(
+        'src/rsi/auto/deps-write.ts',
+        "  const gitDir = path.join(getRealHome(env), ...PERSONAL_GIT_DIR_REL.split('/'));\n  if (cfg.status !== 'on') {",
+        "  const gitDir = path.join(getRealHome(env), ...PERSONAL_GIT_DIR_REL.split('/'));\n  if (cfg.status === 'off' && !LEGIT_OFF.has(cfg.reason)) {\n    throw new RsiFailClosedError(untrustedReason(cfg.reason));\n  }\n  if (cfg.status !== 'on') {",
+      ),
+    ],
+    tests: ['rsi/auto/write-untrusted-config.test.ts'],
+    expectRed: ['配置不可信时 auto clear --write(缩减入口)照常完成 HOME 侧撤销'],
+    mustKill: ['配置不可信时 auto clear --write(缩减入口)照常完成 HOME 侧撤销'],
+  },
+  {
+    id: 'clear_prints_paths',
+    clause:
+      'R21-9.5 缩减入口的输出只含 id / 枚举 / 计数,不含路径(配置不可信时泄漏闸禁止集合不完整,靠这条兜底)',
+    edits: [
+      swap(
+        'src/rsi/auto/write/clear-write.ts',
+        '      outcomeCounts(report.outcomes),',
+        "      outcomeCounts(report.outcomes) + ' ' + (p.outputForbidden ?? []).join(' '),",
+      ),
+    ],
+    tests: ['rsi/auto/write-untrusted-config.test.ts'],
+    expectRed: ['配置不可信时 auto clear --write(缩减入口)照常完成 HOME 侧撤销'],
+    mustKill: ['配置不可信时 auto clear --write(缩减入口)照常完成 HOME 侧撤销'],
+  },
+  {
+    id: 'other_writes_fail_open',
+    clause: '配置不可信时除 clear 外的写命令保持 fail-closed(放宽只对缩减入口)',
+    edits: [
+      swap(
+        'src/rsi/auto/deps-write.ts',
+        "  if (cfg.status === 'off' && !LEGIT_OFF.has(cfg.reason)) {\n    throw new RsiFailClosedError(untrustedReason(cfg.reason));\n  }\n  const open = cfg.status === 'on' ? await openRsiIo(ctx) : null;",
+        "  const open = cfg.status === 'on' ? await openRsiIo(ctx) : null;",
+      ),
+    ],
+    tests: ['rsi/auto/write-untrusted-config.test.ts'],
+    expectRed: ['配置不可信时其余写命令仍 fail-closed'],
+    mustKill: ['配置不可信时其余写命令仍 fail-closed'],
+  },
 ];
 
 /** 实测结果:待主代理整表重跑后回填(W8a 86 条 + W8b 43 条) */

@@ -4,13 +4,16 @@
  * 分发器是静态 import 本文件的;`entry.ts` 不得 import 本文件或 `write/`、`deps-write.ts`(静态 + 无动态 import)。
  */
 import type { RsiSubcommand } from '../types.js';
-import { productionWritePorts } from './deps-write.js';
+import { productionClearWritePorts, productionWritePorts } from './deps-write.js';
 import { runAutoFamily, type AutoEntryDeps } from './entry.js';
 import type { AutoFamily } from './route.js';
 import { makeWriteHandlers } from './write/index.js';
 
 /** 生产的写处理函数表:端口由 `deps-write.ts` 装配(未接线的缺失 → 预检退 3);只在相位够了且命中写路由时才会被调用 */
-const productionWrite = makeWriteHandlers((ctx) => productionWritePorts(ctx));
+const productionWrite = makeWriteHandlers(
+  (ctx) => productionWritePorts(ctx),
+  (ctx) => productionClearWritePorts(ctx),
+);
 
 const make = (name: AutoFamily): RsiSubcommand => ({
   name,
