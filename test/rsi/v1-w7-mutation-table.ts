@@ -570,6 +570,10 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       'journal 无、记录在 rolling_back',
       'harm 回滚走到第四段后用户 veto:复用同一 txn,终态理由取优先级最高者(vetoed),否决黑名单落地',
       '提交失败(commit_failed):不以旧理由进终态、不删 journal、不返回 complete;重试成功后保留 veto 优先级与黑名单',
+      '没走过回滚的终态与改前逐字节相同:闸拒绝无冷却;shadow 到期 30 天;直接 clear / veto 无冷却无标记',
+      'harm 回滚中收到 veto(自环):E1 立即按 veto: 键落地;完成后 E2(终态键)含黑名单 + 墓碑 + 90 天(起因 harm),各键只落一次',
+      '矛盾记录(rolling_back 夹具无进入条目)走完:终态批次 = 黑名单 + 墓碑 + 90 天 + protection_unclassified(同一批同一键);标记恰好一行,审计出口(audit: 键)没收到它',
+      '终态已提交后、效果落地前崩溃:recover 补出含标记的同一批;重复 recover 不重复',
     ],
     mustKill: ['引擎效果(去掉 commit / 审计)== 由终态记录推出的效果'],
   },
@@ -722,6 +726,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     expectRed: [
       'resume:rollback_storm / gate_internal 重查四项',
       'resume:apply_failed / personal_repo_invalid 重查自己;其余人工码无条件可清',
+      'W0-21:resume 不据 state 里的 user_paused 清码(判据是 U 存在,命令层处理);清掉熔断码且只剩 user_paused → 仍通知 worker 路径删 B;没清则不',
     ],
     mustKill: ['resume:rollback_storm / gate_internal 重查四项'],
   },
@@ -735,6 +740,8 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       '状态写入崩溃:标记已在盘上(hint 看得到),状态没写;下一次 enforceMute 补码、不删标记、补 mute',
       '状态已写、mute 崩溃:下一次 enforceMute 补做(熔断仍在 → mute),无熔断则不 mute',
       '已处于该码:不重写状态,但仍补标记与 mute(幂等)',
+      'W0-23 新触发清回证据:tripBreaker / tripAndMute 写出的状态里 released_marker_at = null;已有的码(already)不动',
+      'W0-23 已知边界:残留 B 未删时又触发新码——ensure 因 B 已存在不重写(新码只靠状态);状态写入前崩溃 = 尚未触发,下次 enforceMute 仍把 B 当残留删掉',
     ],
     mustKill: ['触发:marker.ensure 先于 state.write 先于 canary.mute'],
   },
@@ -750,6 +757,10 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       '有码而没有标记(状态已写、标记缺):enforceMute 补 B',
       '部分解除后标记仍在:enforceMute 不复活已被清掉的码(标记只记首个原因;状态里已有别的码时不补)',
       'W0-23 触发窗口仍补码:B 新建、状态未写,证据为 null / 缺键 / 旧值(另一个 at)→ 补码、不删 B',
+      'B 的内容不是 by=breaker(by=user / 读不出)时 enforceMute 不据此补码',
+      'W0-21 契约用例:worker 熔断 → 用户暂停 → 熔断条件恢复(自动解除):B 删了,U 仍在,isAutoPaused 仍为真、状态里没有 user_paused',
+      'W0-23 人工码清除写盘后、删 B 前崩溃:重启后 enforceMute 不复活该码,删 B,U 不变',
+      'W0-23 B 内容损坏(读不出 / at 缺失)+ 无码:沿用现有规则(不补码、不删 B、仍 mute),即便证据为 null',
     ],
     mustKill: ['状态已写、mute 崩溃'],
   },
@@ -1241,6 +1252,12 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       '状态写入崩溃:标记已在盘上',
       '崩溃后下一次 enforceMute:由标记补码',
       'W0-23 触发窗口仍补码:B 新建、状态未写,证据为 null / 缺键 / 旧值(另一个 at)→ 补码、不删 B',
+      'W0-23 人工码清除写盘后、删 B 前崩溃:重启后 enforceMute 不复活该码,删 B,U 不变',
+      'W0-23 自动解除同款:清码写盘后、删 B 前崩溃 → 重启不复活、删 B',
+      'W0-23 W8 resume 只清状态、B 留给 worker(带证据的写入,不调 remove):下次 worker 运行删 B、不补码',
+      'W0-23 B 内容损坏(读不出 / at 缺失)+ 无码:沿用现有规则(不补码、不删 B、仍 mute),即便证据为 null',
+      'W0-23 已知边界:残留 B 未删时又触发新码——ensure 因 B 已存在不重写(新码只靠状态);状态写入前崩溃 = 尚未触发,下次 enforceMute 仍把 B 当残留删掉',
+      '熔断 → 状态带证据地清空(B 留下)→ enforceMute:B 被删、不补码;U 内容不变',
     ],
     mustKill: ['状态写入崩溃:标记已在盘上'],
   },
@@ -1278,6 +1295,10 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     expectRed: [
       '自动解除:先写状态、后删 B;只在没有剩余码且确有码被清时删;U 无论如何不删',
       '自动解除:仍有码 → B 保留;清空 → 删 B',
+      'W0-21 契约用例:worker 熔断 → 用户暂停 → 熔断条件恢复(自动解除):B 删了,U 仍在,isAutoPaused 仍为真、状态里没有 user_paused',
+      'W0-23 解除证据:人工解除清到无码时,同一次状态写入记下被解除 B 的 at(部分清除不记);B 不存在时记 null',
+      'W0-23 自动解除同款:清码写盘后、删 B 前崩溃 → 重启不复活、删 B',
+      '契约用例(W0-21):worker 熔断 → 用户暂停 → 熔断条件恢复:B 被自动解除删掉,U 仍在,hint 仍停注入',
     ],
     mustKill: ['自动解除:先写状态、后删 B;只在没有剩余码且确有码被清时删;U 无论如何不删'],
   },
@@ -1295,6 +1316,15 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     expectRed: [
       'B 只在 B 上:熔断不创建 U 文件',
       '契约用例(W0-21):worker 熔断 → 用户暂停 → 熔断条件恢复:B 被自动解除删掉,U 仍在,hint 仍停注入',
+      'state.write 崩溃:hint 的许可端口读到 B=present(状态没写);标记内容 {at, by:breaker, reason}',
+      '有码缺标记:enforceMute 补标记(独占创建)',
+      '熔断 → 状态带证据地清空(B 留下)→ enforceMute:B 被删、不补码;U 内容不变',
+      '熔断写 B 不写 U;U 已存在(用户先暂停)时 ensure 仍创建 B,U 内容不变',
+      '内容读不出(空文件)的 B:仍算存在,by=unknown;enforceMute 不据此补码,但仍 mute',
+      '人工 resume 的 worker 侧:无剩余码时删 B、不删 U',
+      '已存在的标记不是单链接普通文件(硬链接)→ 拒绝、不写 state(fail-closed)',
+      '创建后写入失败:抛错(调用方不写 state)且**不删除**刚创建的标记(无锁并发下别的 ensure 可能已对它返回 exists)',
+      '已存在的标记是没有写端的 FIFO:在有界时间内拒绝(不阻塞在只读打开上),不写 state',
     ],
     mustKill: ['B 只在 B 上:熔断不创建 U 文件'],
   },
@@ -1309,7 +1339,10 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       ),
     ],
     tests: [T_BR],
-    expectRed: ['自动解除:先写状态、后删 B;只在没有剩余码且确有码被清时删;U 无论如何不删'],
+    expectRed: [
+      '自动解除:先写状态、后删 B;只在没有剩余码且确有码被清时删;U 无论如何不删',
+      'W0-23 解除证据:人工解除清到无码时,同一次状态写入记下被解除 B 的 at(部分清除不记);B 不存在时记 null',
+    ],
     mustKill: ['自动解除:先写状态、后删 B;只在没有剩余码且确有码被清时删;U 无论如何不删'],
   },
   {
@@ -1514,6 +1547,11 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       'unclassified:rollback 非空、无进入条目、dropped = 0(自相矛盾);只有自环条目也算无进入条目',
       'unclassified + clear:90 天 + protection_unclassified(不是 protection_unknown);撤销 / 墓碑照常',
       '矛盾记录(rolling_back 夹具无进入条目)走完:终态批次 = 黑名单 + 墓碑 + 90 天 + protection_unclassified(同一批同一键);标记恰好一行,审计出口(audit: 键)没收到它',
+      'unclassified × 改前规则(无 / 30 天 expired / 90 天 auto_rollback):都恰好一条 90 天冷却 + 一条 protection_unclassified(不因 legacy 已有冷却而漏标记)',
+      'unclassified[]:矛盾记录的 id 出现在结果里;known / not_applicable 不出现;落地照常完成',
+      '业务批次 deferred:标记未落、整体 deferred;批次可用后 recover 补出含标记的同一批,标记恰好一行',
+      '终态已提交后、效果落地前崩溃:recover 补出含标记的同一批;重复 recover 不重复',
+      '审计行落地 deferred(终态批次已落):收尾整体记 deferred,而不是报成功',
     ],
     mustKill: [
       'unclassified:rollback 非空、无进入条目、dropped = 0(自相矛盾);只有自环条目也算无进入条目',
@@ -1534,6 +1572,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     expectRed: [
       'rollback=null → not_applicable(即便 transitions 里有 rolling_back 条目:以 rollback 字段为准)',
       '没走过回滚的终态与改前逐字节相同:闸拒绝无冷却;shadow 到期 30 天;直接 clear / veto 无冷却无标记',
+      'known / not_applicable 永远没有标记',
     ],
     mustKill: [
       'rollback=null → not_applicable(即便 transitions 里有 rolling_back 条目:以 rollback 字段为准)',
@@ -1552,6 +1591,8 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     tests: [T_PR],
     expectRed: [
       'rollback=null → not_applicable(即便 transitions 里有 rolling_back 条目:以 rollback 字段为准)',
+      '没走过回滚的终态与改前逐字节相同:闸拒绝无冷却;shadow 到期 30 天;直接 clear / veto 无冷却无标记',
+      'known / not_applicable 永远没有标记',
     ],
     mustKill: [
       'rollback=null → not_applicable(即便 transitions 里有 rolling_back 条目:以 rollback 字段为准)',
@@ -1589,6 +1630,10 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     expectRed: [
       'known:取第一条进入回滚的条目(不是最后一条);自环条目不算;limit_reached → expired,其余 → rolled_back',
       'unclassified:rollback 非空、无进入条目、dropped = 0(自相矛盾);只有自环条目也算无进入条目',
+      '矛盾记录(rolling_back 夹具无进入条目)走完:终态批次 = 黑名单 + 墓碑 + 90 天 + protection_unclassified(同一批同一键);标记恰好一行,审计出口(audit: 键)没收到它',
+      '业务批次 deferred:标记未落、整体 deferred;批次可用后 recover 补出含标记的同一批,标记恰好一行',
+      '终态已提交后、效果落地前崩溃:recover 补出含标记的同一批;重复 recover 不重复',
+      '审计行落地 deferred(终态批次已落):收尾整体记 deferred,而不是报成功',
     ],
     mustKill: [
       'known:取第一条进入回滚的条目(不是最后一条);自环条目不算;limit_reached → expired,其余 → rolled_back',
@@ -1604,6 +1649,8 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     expectRed: [
       'harm 起因 → clear / veto / taint 终态:仍有 90 天 auto_rollback 冷却(原保护不因终态理由升级而丢)',
       'harm → veto:黑名单 + 墓碑 + 90 天,顺序固定',
+      'E1 之后完成:E2 再含同一黑名单(不同键各落一次),集合成员与计数都只一份;E2 落地后再 recover 全 already',
+      'harm 回滚中收到 veto(自环):E1 立即按 veto: 键落地;完成后 E2(终态键)含黑名单 + 墓碑 + 90 天(起因 harm),各键只落一次',
     ],
     mustKill: [
       'harm 起因 → clear / veto / taint 终态:仍有 90 天 auto_rollback 冷却(原保护不因终态理由升级而丢)',
@@ -1634,6 +1681,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     tests: [T_PR],
     expectRed: [
       '判定类起因(judge_reject / judge_injection)→ clear:不新增冷却;起因为 cleared / vetoed / tainted 也不多发',
+      'limit_reached 起因 → clear:30 天 expired 冷却;limit_reached 终态(auto_expired)照旧 30 天',
     ],
     mustKill: [
       '判定类起因(judge_reject / judge_injection)→ clear:不新增冷却;起因为 cleared / vetoed / tainted 也不多发',
@@ -1646,6 +1694,8 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     tests: [T_PR],
     expectRed: [
       '至多一条冷却(负向):limit_reached 进入回滚、补偿期间又收到 harm_c1(目标升为 rolled_back,终态事实给 90、起因给 30)→ 只发 90 天 auto_rollback',
+      'limit_reached 起因 → clear:30 天 expired 冷却;limit_reached 终态(auto_expired)照旧 30 天',
+      'unclassified × 改前规则(无 / 30 天 expired / 90 天 auto_rollback):都恰好一条 90 天冷却 + 一条 protection_unclassified(不因 legacy 已有冷却而漏标记)',
     ],
     mustKill: [
       '至多一条冷却(负向):limit_reached 进入回滚、补偿期间又收到 harm_c1(目标升为 rolled_back,终态事实给 90、起因给 30)→ 只发 90 天 auto_rollback',
@@ -1677,6 +1727,13 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     expectRed: [
       'unknown_rollback_origin + clear:90 天 + protection_unknown;行可被既有 RsiAuditLineSchema 解析,at = 终态条目时间,不伪造 origin',
       'unclassified + clear:90 天 + protection_unclassified(不是 protection_unknown);撤销 / 墓碑照常',
+      'unclassified × 改前规则(无 / 30 天 expired / 90 天 auto_rollback):都恰好一条 90 天冷却 + 一条 protection_unclassified(不因 legacy 已有冷却而漏标记)',
+      '保护审计标记只落一次:随终态批次(terminal: 键)与冷却同一次 applyOnce 落地,重复 recover 不重复;不经 audit: 键',
+      '批次 deferred:标记与冷却都没落(整批),结果记 deferred;之后批次可用 → 一次补齐,标记恰好一行',
+      '矛盾记录(rolling_back 夹具无进入条目)走完:终态批次 = 黑名单 + 墓碑 + 90 天 + protection_unclassified(同一批同一键);标记恰好一行,审计出口(audit: 键)没收到它',
+      '业务批次 deferred:标记未落、整体 deferred;批次可用后 recover 补出含标记的同一批,标记恰好一行',
+      '终态已提交后、效果落地前崩溃:recover 补出含标记的同一批;重复 recover 不重复',
+      '审计行落地 deferred(终态批次已落):收尾整体记 deferred,而不是报成功',
     ],
     mustKill: [
       'unknown_rollback_origin + clear:90 天 + protection_unknown;行可被既有 RsiAuditLineSchema 解析,at = 终态条目时间,不伪造 origin',
@@ -1717,6 +1774,12 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     expectRed: [
       '矛盾记录(rolling_back 夹具无进入条目)走完:终态批次 = 黑名单 + 墓碑 + 90 天 + protection_unclassified(同一批同一键);标记恰好一行,审计出口(audit: 键)没收到它',
       '保护审计标记只落一次:随终态批次(terminal: 键)与冷却同一次 applyOnce 落地,重复 recover 不重复;不经 audit: 键',
+      'unknown_rollback_origin + clear:90 天 + protection_unknown;行可被既有 RsiAuditLineSchema 解析,at = 终态条目时间,不伪造 origin',
+      'unclassified + clear:90 天 + protection_unclassified(不是 protection_unknown);撤销 / 墓碑照常',
+      'unclassified × 改前规则(无 / 30 天 expired / 90 天 auto_rollback):都恰好一条 90 天冷却 + 一条 protection_unclassified(不因 legacy 已有冷却而漏标记)',
+      '业务批次 deferred:标记未落、整体 deferred;批次可用后 recover 补出含标记的同一批,标记恰好一行',
+      '终态已提交后、效果落地前崩溃:recover 补出含标记的同一批;重复 recover 不重复',
+      '审计行落地 deferred(终态批次已落):收尾整体记 deferred,而不是报成功',
     ],
     mustKill: [
       '矛盾记录(rolling_back 夹具无进入条目)走完:终态批次 = 黑名单 + 墓碑 + 90 天 + protection_unclassified(同一批同一键);标记恰好一行,审计出口(audit: 键)没收到它',
@@ -1737,6 +1800,10 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     expectRed: [
       '批次 deferred:标记与冷却都没落(整批),结果记 deferred;之后批次可用 → 一次补齐,标记恰好一行',
       '矛盾记录(rolling_back 夹具无进入条目)走完:终态批次 = 黑名单 + 墓碑 + 90 天 + protection_unclassified(同一批同一键);标记恰好一行,审计出口(audit: 键)没收到它',
+      '保护审计标记只落一次:随终态批次(terminal: 键)与冷却同一次 applyOnce 落地,重复 recover 不重复;不经 audit: 键',
+      '业务批次 deferred:标记未落、整体 deferred;批次可用后 recover 补出含标记的同一批,标记恰好一行',
+      '终态已提交后、效果落地前崩溃:recover 补出含标记的同一批;重复 recover 不重复',
+      '审计行落地 deferred(终态批次已落):收尾整体记 deferred,而不是报成功',
     ],
     mustKill: [
       '批次 deferred:标记与冷却都没落(整批),结果记 deferred;之后批次可用 → 一次补齐,标记恰好一行',
@@ -1756,6 +1823,8 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     expectRed: [
       '批次 deferred:标记与冷却都没落(整批),结果记 deferred;之后批次可用 → 一次补齐,标记恰好一行',
       '业务批次 deferred:标记未落、整体 deferred;批次可用后 recover 补出含标记的同一批,标记恰好一行',
+      'E1 之后完成:E2 再含同一黑名单(不同键各落一次),集合成员与计数都只一份;E2 落地后再 recover 全 already',
+      '终态已提交后、效果落地前崩溃:recover 补出含标记的同一批;重复 recover 不重复',
     ],
     mustKill: [
       '业务批次 deferred:标记未落、整体 deferred;批次可用后 recover 补出含标记的同一批,标记恰好一行',
@@ -1845,6 +1914,10 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     expectRed: [
       '键:E1 与 E2 的键不同且互不混用',
       'E1 之后完成:E2 再含同一黑名单(不同键各落一次),集合成员与计数都只一份;E2 落地后再 recover 全 already',
+      'harm 回滚中收到 veto(自环):E1 立即按 veto: 键落地;完成后 E2(终态键)含黑名单 + 墓碑 + 90 天(起因 harm),各键只落一次',
+      '矛盾记录(rolling_back 夹具无进入条目)走完:终态批次 = 黑名单 + 墓碑 + 90 天 + protection_unclassified(同一批同一键);标记恰好一行,审计出口(audit: 键)没收到它',
+      '终态已提交后、效果落地前崩溃:recover 补出含标记的同一批;重复 recover 不重复',
+      '审计行落地 deferred(终态批次已落):收尾整体记 deferred,而不是报成功',
     ],
     mustKill: ['键:E1 与 E2 的键不同且互不混用'],
   },
@@ -1891,7 +1964,11 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       ),
     ],
     tests: [T_CA],
-    expectRed: ['端口没装配(runGuarded 包成的 port_not_wired)', 'not_wired 不被归成 retryable'],
+    expectRed: [
+      '端口没装配(runGuarded 包成的 port_not_wired)',
+      'not_wired 不被归成 retryable',
+      'not_wired',
+    ],
     mustKill: ['端口没装配(runGuarded 包成的 port_not_wired)'],
   },
   {
@@ -1907,6 +1984,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     tests: [T_CA],
     expectRed: [
       'journal 完整性错误不带事务身份(txn: null,journal 句柄单给):同 (id, sha) 的 complete 消除不了它',
+      '不变量:cause=txn_invalid 的 outcome 一律是 refused、txn=null、journal 句柄为字符串(逐 case 校验;失败 variant incomplete 永不带 txn_invalid)',
     ],
     mustKill: [
       'journal 完整性错误不带事务身份(txn: null,journal 句柄单给):同 (id, sha) 的 complete 消除不了它',
@@ -1923,7 +2001,10 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       ),
     ],
     tests: [T_CA],
-    expectRed: ['用户改过的块(drift)'],
+    expectRed: [
+      '用户改过的块(drift)',
+      'journal 完整性错误不带事务身份(txn: null,journal 句柄单给):同 (id, sha) 的 complete 消除不了它',
+    ],
     mustKill: ['用户改过的块(drift)'],
   },
   {
@@ -1941,6 +2022,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     expectRed: [
       '旧格式 journal 缺原始证据(legacy_unrecoverable:terminal_event)',
       '旧格式 journal 缺来源(legacy_unrecoverable:by)',
+      'manual_event_required',
     ],
     mustKill: ['旧格式 journal 缺原始证据(legacy_unrecoverable:terminal_event)'],
   },
@@ -1982,6 +2064,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     expectRed: [
       'combinePauseReads:3×3 矩阵',
       '负向:U 读失败而 B 在 → present(不是 unreadable);B 读失败而 U 在 → present;只一个读失败而另一个不在 → unreadable(不是 absent)',
+      '只有 B → present;只有 U → present;都没有 → absent;两个都在 → present',
     ],
     mustKill: ['combinePauseReads:3×3 矩阵'],
   },
@@ -1995,6 +2078,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     expectRed: [
       'combinePauseReads:3×3 矩阵',
       '负向:U 读失败而 B 在 → present(不是 unreadable);B 读失败而 U 在 → present;只一个读失败而另一个不在 → unreadable(不是 absent)',
+      'rsi 目录本身读不了(路径下面是普通文件 → ENOTDIR,非 ENOENT)→ unreadable,不冒充 absent',
     ],
     mustKill: ['combinePauseReads:3×3 矩阵'],
   },
@@ -2029,6 +2113,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     expectRed: [
       'W0-21:U(用户标记)存在而状态没码:worker 不补 user_paused、不写 state,但仍 mute',
       'W0-21 契约用例:worker 熔断 → 用户暂停 → 熔断条件恢复(自动解除):B 删了,U 仍在,isAutoPaused 仍为真、状态里没有 user_paused',
+      'W0-23 人工码清除写盘后、删 B 前崩溃:重启后 enforceMute 不复活该码,删 B,U 不变',
     ],
     mustKill: ['W0-21:U(用户标记)存在而状态没码:worker 不补 user_paused、不写 state,但仍 mute'],
   },
@@ -2092,6 +2177,8 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     expectRed: [
       'W0-20:必需项缺失且不可恢复 = incomplete(带事务身份 txn;cause manual_event_required),不写凭据',
       '旧格式 journal 缺内容哈希且凭据 / head.json 都取不回(legacy_unrecoverable:content_sha256;W0-20:缺失不可恢复 = incomplete,带事务身份)',
+      '内容哈希:recordedSha 对不上 txn_id 不采信;复用入口时请求带来的内容哈希也不是允许的来源',
+      '多项缺失一并报告(by + content_sha256;cleared 的事件可重建,不在其列)',
     ],
     mustKill: [
       'W0-20:必需项缺失且不可恢复 = incomplete(带事务身份 txn;cause manual_event_required),不写凭据',
@@ -2108,6 +2195,8 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       'W0-23 人工码清除写盘后、删 B 前崩溃:重启后 enforceMute 不复活该码,删 B,U 不变',
       'W0-23 自动解除同款:清码写盘后、删 B 前崩溃 → 重启不复活、删 B',
       'W0-23 W8 resume 只清状态、B 留给 worker(带证据的写入,不调 remove):下次 worker 运行删 B、不补码',
+      'W0-23 已知边界:残留 B 未删时又触发新码——ensure 因 B 已存在不重写(新码只靠状态);状态写入前崩溃 = 尚未触发,下次 enforceMute 仍把 B 当残留删掉',
+      '熔断 → 状态带证据地清空(B 留下)→ enforceMute:B 被删、不补码;U 内容不变',
     ],
     mustKill: ['W0-23 人工码清除写盘后、删 B 前崩溃:重启后 enforceMute 不复活该码,删 B,U 不变'],
   },
@@ -2120,6 +2209,8 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     expectRed: [
       'W0-23 触发窗口仍补码:B 新建、状态未写,证据为 null / 缺键 / 旧值(另一个 at)→ 补码、不删 B',
       '状态写入崩溃:标记已在盘上(hint 看得到),状态没写;下一次 enforceMute 补码、不删标记、补 mute',
+      'W0-23 B 内容损坏(读不出 / at 缺失)+ 无码:沿用现有规则(不补码、不删 B、仍 mute),即便证据为 null',
+      '崩溃后下一次 enforceMute:由标记补码、标记保留',
     ],
     mustKill: [
       'W0-23 触发窗口仍补码:B 新建、状态未写,证据为 null / 缺键 / 旧值(另一个 at)→ 补码、不删 B',
@@ -2156,6 +2247,8 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       'W0-23 解除证据:人工解除清到无码时,同一次状态写入记下被解除 B 的 at(部分清除不记);B 不存在时记 null',
       'W0-23 人工码清除写盘后、删 B 前崩溃:重启后 enforceMute 不复活该码,删 B,U 不变',
       'W0-23 自动解除同款:清码写盘后、删 B 前崩溃 → 重启不复活、删 B',
+      'W0-23 W8 resume 只清状态、B 留给 worker(带证据的写入,不调 remove):下次 worker 运行删 B、不补码',
+      '熔断 → 状态带证据地清空(B 留下)→ enforceMute:B 被删、不补码;U 内容不变',
     ],
     mustKill: [
       'W0-23 解除证据:人工解除清到无码时,同一次状态写入记下被解除 B 的 at(部分清除不记);B 不存在时记 null',
@@ -2188,6 +2281,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     expectRed: [
       'parsePauseMarker:各形态',
       'W0-23 解除证据(真文件):清码写盘后残留的 B 不复活码,被 enforceMute 删掉;U 不动',
+      '有码缺标记:enforceMute 补标记(独占创建)',
     ],
     mustKill: ['parsePauseMarker:各形态'],
   },

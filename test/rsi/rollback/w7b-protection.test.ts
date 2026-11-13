@@ -107,6 +107,18 @@ describe('originProtection 四态', () => {
       origin_reason: 'limit_reached',
       origin_target: 'expired',
     });
+    // 取「第一条」而不是「最后一条」:构造两条进入条目(正常流程不会出现,只为钉住取法)
+    const r3 = terminal('rolled_back', 'vetoed', 'vetoed', [
+      ...BASE,
+      enter('harm_c1', 10),
+      enter('limit_reached', 12),
+      doneEntry('rolled_back'),
+    ]);
+    expect(originProtection(r3)).toEqual({
+      kind: 'known',
+      origin_reason: 'harm_c1',
+      origin_target: 'rolled_back',
+    });
   });
   it('unknown_rollback_origin:rollback 非空、无进入条目、transitions_dropped > 0', () => {
     const r = terminal('rolled_back', 'cleared', 'cleared', [doneEntry('rolled_back')], 3);
@@ -216,6 +228,17 @@ describe('截断 / 矛盾的记录:保守方向 90 天 + 审计标记(落点 = �
     expect(m?.idem_key).toMatch(/^[0-9a-f]{16}$/);
     // 确定性:再算一次得同一行同一键
     expect(markers(r)).toEqual(markers(r));
+    // at 取终态那条条目,不是第一条:前面还有更早的(自环)条目时仍是 TERM_AT
+    const r2 = terminal(
+      'rolled_back',
+      'cleared',
+      'cleared',
+      [loop('cleared', 12), doneEntry('rolled_back')],
+      3,
+    );
+    expect(originProtection(r2)).toEqual({ kind: 'unknown_rollback_origin' });
+    expect(r2.transitions[0]?.at).not.toBe(TERM_AT);
+    expect(markers(r2)[0]?.line).toMatchObject({ at: TERM_AT, reason: 'protection_unknown' });
   });
   it('unknown 但改前规则已给冷却(终态 auto_rollback):不变,不加标记', () => {
     const r = unknownRec('auto_rollback');
