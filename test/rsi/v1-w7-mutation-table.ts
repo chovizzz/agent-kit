@@ -48,6 +48,10 @@ const HC = `${P}harm-chain.ts`;
 const LK = 'src/rsi/lock.ts';
 const PL = `${P}personal-lock.ts`;
 const PM = 'src/rsi/canary/pause-marker.ts';
+const PR = 'src/rsi/canary/permit-read.ts';
+const TE = `${P}terminal-effects.ts`;
+const TT = `${P}transition-table.ts`;
+const TR = `${P}transition.ts`;
 
 const T_RB = 'rsi/rollback/w7-rollback.test.ts';
 const T_CR = 'rsi/rollback/w7-crash.test.ts';
@@ -62,6 +66,10 @@ const T_JN = 'rsi/rollback/w7-journal.test.ts';
 const T_PM = 'rsi/rollback/w7-pause-marker.test.ts';
 const T_JB = 'rsi/rollback/w7-journal-boundary.test.ts';
 const T_AK = 'rsi/rollback/w7-audit-key.test.ts';
+const T_PR = 'rsi/rollback/w7b-protection.test.ts';
+const T_CA = 'rsi/rollback/w7b-cause.test.ts';
+const T_PD = 'rsi/canary/w7b-pause-read.test.ts';
+const T_HE = 'rsi/canary/w5-hint-e2e.test.ts';
 
 const swap = (file: string, anchor: string, replacement: string): Edit => ({
   file,
@@ -119,13 +127,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
   {
     id: 'record_note_ignored',
     clause: 'R21-9.1 记录没能推进时不删仓库文件(记录仍在生效状态)',
-    edits: [
-      swap(
-        RB,
-        "if (part.repo === 'ok' && part.note !== undefined) return { ok: false, why: part.note };",
-        '',
-      ),
-    ],
+    edits: [swap(RB, "if (part.repo === 'ok' && part.note !== undefined) {", 'if (false) {')],
     tests: [T_RB],
     expectRed: ['V1a 没有 rollback_four_phase'],
     mustKill: ['V1a 没有 rollback_four_phase'],
@@ -562,10 +564,11 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
   {
     id: 'effects_no_blacklist',
     clause: 'R21-11.3 vetoed 终态带否决黑名单',
-    edits: [swap(ER, "if (tr === 'vetoed') {", 'if (false) {')],
-    tests: [T_EF, T_RB],
+    edits: [swap(TE, "if (tr === 'vetoed') {", 'if (false) {')],
+    tests: [T_EF, T_RB, T_PR],
     expectRed: [
       '引擎效果(去掉 commit / 审计)== 由终态记录推出的效果',
+      'harm → veto:黑名单 + 墓碑 + 90 天,顺序固定',
       'journal 无、记录在 rolling_back',
       'harm 回滚走到第四段后用户 veto:复用同一 txn,终态理由取优先级最高者(vetoed),否决黑名单落地',
       '提交失败(commit_failed):不以旧理由进终态、不删 journal、不返回 complete;重试成功后保留 veto 优先级与黑名单',
@@ -575,7 +578,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
   {
     id: 'effects_cooldown_always',
     clause: 'R21-11.1 冷却只对 auto_rollback / expired',
-    edits: [swap(ER, "} else if (rec.lifecycle === 'expired') {", '} else if (true) {')],
+    edits: [swap(TE, "if (rec.lifecycle === 'expired') return", 'if (true) return')],
     tests: [T_EF],
     expectRed: ['人工终态没有冷却', ':引擎效果(去掉 commit / 审计)== 由终态记录推出的效果'],
     mustKill: ['人工终态没有冷却'],
@@ -583,7 +586,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
   {
     id: 'effects_key_no_sha',
     clause: 'W0-16 效果键 = 候选 id + 内容哈希',
-    edits: [swap(ER, '`terminal:${rec.id}:${rec.content_sha256}`', '`terminal:${rec.id}`')],
+    edits: [swap(TE, '`terminal:${rec.id}:${rec.content_sha256}`', '`terminal:${rec.id}`')],
     tests: [T_EF],
     expectRed: ['键 = 候选 id + 内容哈希'],
     mustKill: ['键 = 候选 id + 内容哈希'],
@@ -679,8 +682,8 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     edits: [
       swap(
         BR,
-        'autoPauseMarker || s.reasons.length > 0 || s.diverged || s.owner_changed',
-        'autoPauseMarker || s.reasons.length > 0',
+        'anyMarkerPresent || s.reasons.length > 0 || s.diverged || s.owner_changed',
+        'anyMarkerPresent || s.reasons.length > 0',
       ),
     ],
     tests: [T_BR],
@@ -702,8 +705,8 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     tests: [T_BR],
     expectRed: [
       'resume 只清人工码',
-      '人工 resume:没有剩余码时删任何标记;仍有码时标记保留(hint 继续停注入)',
-      '内容读不出的标记(创建后写内容前被杀)而状态没有码:人工 resume 可清除;仍有码时不清',
+      '人工 resume(worker 侧):没有剩余熔断码时删 B;仍有码时 B 保留(hint 继续停注入);U 不归这里',
+      '内容读不出的 B(创建后写内容前被杀)而状态没有码:人工 resume 可清除;仍有码时不清;自动解除不碰',
     ],
     mustKill: ['resume 只清人工码'],
   },
@@ -721,7 +724,6 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     expectRed: [
       'resume:rollback_storm / gate_internal 重查四项',
       'resume:apply_failed / personal_repo_invalid 重查自己;其余人工码无条件可清',
-      'resume 清掉 user_paused → 通知命令层删 AUTO_PAUSE 标记;没清则不',
     ],
     mustKill: ['resume:rollback_storm / gate_internal 重查四项'],
   },
@@ -746,8 +748,8 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     expectRed: [
       '状态已写、mute 崩溃',
       '状态写入崩溃:标记已在盘上(hint 看得到),状态没写;下一次 enforceMute 补码、不删标记、补 mute',
-      '用户标记(by=user)存在而状态没码:补 user_paused,标记不动',
-      '有码而没有标记(状态已写、标记缺):enforceMute 补标记',
+      'W0-21:U(用户标记)存在而状态没码:worker 不补 user_paused、不写 state,但仍 mute',
+      '有码而没有标记(状态已写、标记缺):enforceMute 补 B',
       '部分解除后标记仍在:enforceMute 不复活已被清掉的码(标记只记首个原因;状态里已有别的码时不补)',
       '残余窗口(如实钉住):resume 写了状态、删标记前崩溃 → 下一次 enforceMute 由标记补回码(安全方向:不会少停注入)',
     ],
@@ -886,7 +888,13 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
   {
     id: 'event_schema_skipped',
     clause: 'W0-20 新 journal 的创建函数:事件在持久化之前过转移引擎的事件 schema',
-    edits: [swap(RJ, "if (!p.success) return { ok: false, why: 'event_invalid' };", '')],
+    edits: [
+      swap(
+        RJ,
+        "if (!p.success) return { ok: false, why: 'event_invalid', cause: 'candidate_invalid' };",
+        '',
+      ),
+    ],
     tests: [T_JN],
     expectRed: ['事件不合规 → refused event_invalid'],
     mustKill: ['事件不合规 → refused event_invalid'],
@@ -897,7 +905,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     edits: [
       swap(
         RB,
-        "if (!p.success) return { status: 'refused', txn: null, why: 'event_invalid' };",
+        "if (!p.success) {\n      return { status: 'refused', txn: null, why: 'event_invalid', cause: 'candidate_invalid' };\n    }",
         '',
       ),
     ],
@@ -908,7 +916,13 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
   {
     id: 'event_required_off',
     clause: 'W0-20 新 journal:拿不到终止事件(不能无证据重建)就不创建',
-    edits: [swap(RJ, "if (event === undefined) return { ok: false, why: 'event_required' };", '')],
+    edits: [
+      swap(
+        RJ,
+        "if (event === undefined) {\n      return { ok: false, why: 'event_required', cause: 'manual_event_required' };\n    }",
+        '',
+      ),
+    ],
     tests: [T_JB],
     expectRed: [
       '没有事件而原因不能无证据重建',
@@ -963,7 +977,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     edits: [
       swap(
         RJ,
-        '  const ep = eventProblem(event, req.reason, req.target_terminal);\n  if (ep !== null) return { ok: false, why: ep };\n',
+        "  const ep = eventProblem(event, req.reason, req.target_terminal);\n  if (ep !== null) return { ok: false, why: ep, cause: 'candidate_invalid' };\n",
         '',
       ),
     ],
@@ -1093,7 +1107,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     edits: [
       swap(
         RB,
-        "if (identity) return { status: 'refused', txn: null, why: 'identity_not_available_before_v6a' };",
+        "if (identity) {\n    return {\n      status: 'refused',\n      txn: null,\n      why: 'identity_not_available_before_v6a',\n      cause: 'candidate_invalid',\n    };\n  }",
         '',
       ),
     ],
@@ -1108,7 +1122,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     edits: [
       swap(
         RJ,
-        "if (t.kind === 'identity_change') {\n    return { kind: 'invalid', why: 'identity_not_available_before_v6a' };\n  }",
+        "if (t.kind === 'identity_change') {\n    return {\n      kind: 'invalid',\n      why: 'identity_not_available_before_v6a',\n      cause: 'candidate_invalid',\n    };\n  }",
         '',
       ),
     ],
@@ -1181,13 +1195,13 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
   // ---- H3 AUTO_PAUSE 标记先于状态 ----
   {
     id: 'marker_after_state',
-    clause: 'H3 熔断先写 AUTO_PAUSE 标记,再写状态,后 mute',
+    clause: 'H3 / W0-21 熔断先写 B(AUTO_PAUSE_BREAKER)标记,再写状态,后 mute',
     edits: [
-      swap(BR, '  await d.marker.ensure(reason);\n', ''),
+      swap(BR, '  await d.marker.breaker.ensure(reason);\n', ''),
       swap(
         BR,
         '  await d.canary.mute();\n  return r;',
-        '  await d.marker.ensure(reason);\n  await d.canary.mute();\n  return r;',
+        '  await d.marker.breaker.ensure(reason);\n  await d.canary.mute();\n  return r;',
       ),
     ],
     tests: [T_BR, T_PM],
@@ -1197,7 +1211,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       '状态写入崩溃:标记已在盘上(hint 看得到),状态没写;下一次 enforceMute 补码、不删标记、补 mute',
       '崩溃后下一次 enforceMute:由标记补码、标记保留',
       '新建标记:文件 fsync → 父目录 fsync → state.write(顺序)',
-      '标记已存在(可能尚未落盘,如上次崩溃时别的进程刚建):不覆盖内容,但补一次文件 fsync 与父目录 fsync,之后才写 state',
+      'B 已存在(可能尚未落盘,如上次崩溃时别的进程刚建):不覆盖内容,但补一次文件 fsync 与父目录 fsync,之后才写 state',
       '已存在的标记不是单链接普通文件(硬链接)→ 拒绝、不写 state(fail-closed)',
       '已存在的标记是没有写端的 FIFO:在有界时间内拒绝(不阻塞在只读打开上),不写 state',
     ],
@@ -1210,7 +1224,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     id: 'enforce_marker_missing',
     clause: 'H3 有码缺标记:enforceMute 补标记',
     edits: [
-      swap(BR, 'if (marker === null && first !== undefined) await d.marker.ensure(first);', ''),
+      swap(BR, 'if (b === null && first !== undefined) await d.marker.breaker.ensure(first);', ''),
     ],
     tests: [T_BR, T_PM],
     expectRed: [
@@ -1223,19 +1237,18 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
   {
     id: 'enforce_code_restore_skipped',
     clause: 'H3 有标记缺码:enforceMute 由标记补码(不删标记)',
-    edits: [swap(BR, 'if (code !== null && cur.reasons.length === 0) {', 'if (false) {')],
+    edits: [swap(BR, '    if (cur.reasons.length === 0) {', '    if (false) {')],
     tests: [T_BR, T_PM],
     expectRed: [
       '状态写入崩溃:标记已在盘上',
       '崩溃后下一次 enforceMute:由标记补码',
-      '用户标记(by=user)存在而状态没码:补 user_paused,标记不动',
       '残余窗口(如实钉住):resume 写了状态、删标记前崩溃 → 下一次 enforceMute 由标记补回码(安全方向:不会少停注入)',
     ],
     mustKill: ['状态写入崩溃:标记已在盘上'],
   },
   {
     id: 'marker_overwrite',
-    clause: 'H3 标记独占创建、不覆盖用户写的标记',
+    clause: 'H3 / W0-21 B 标记独占创建、已存在不覆盖',
     edits: [
       swap(
         PM,
@@ -1244,45 +1257,48 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       ),
       swap(
         PM,
-        'createExclusiveDurable(io, file, body, RSI_FILE_MODE)',
-        'writeFile(io, file, body, { mode: RSI_FILE_MODE })',
+        'return createExclusiveDurable(io, file, body, RSI_FILE_MODE);\n    },\n    async remove() {',
+        "return writeFile(io, file, body, { mode: RSI_FILE_MODE }).then(() => 'created' as const);\n    },\n    async remove() {",
       ),
     ],
     tests: [T_PM],
     expectRed: [
-      'ensure 遇到用户写的标记',
+      '熔断写 B 不写 U;U 已存在(用户先暂停)时 ensure 仍创建 B,U 内容不变',
       '新建标记:文件 fsync → 父目录 fsync → state.write(顺序)',
-      '标记已存在(可能尚未落盘,如上次崩溃时别的进程刚建):不覆盖内容,但补一次文件 fsync 与父目录 fsync,之后才写 state',
+      'B 已存在(可能尚未落盘,如上次崩溃时别的进程刚建):不覆盖内容,但补一次文件 fsync 与父目录 fsync,之后才写 state',
       'enforceMute 补标记(有码缺标记)也走同一条持久路径',
       '创建后写入失败:抛错(调用方不写 state)且**不删除**刚创建的标记(无锁并发下别的 ensure 可能已对它返回 exists)',
       '已存在的标记是没有写端的 FIFO:在有界时间内拒绝(不阻塞在只读打开上),不写 state',
     ],
-    mustKill: ['ensure 遇到用户写的标记'],
+    mustKill: ['熔断写 B 不写 U;U 已存在(用户先暂停)时 ensure 仍创建 B,U 内容不变'],
   },
   {
     id: 'release_keeps_marker',
     clause: 'H3 自动解除:无剩余码时删 worker 写的标记',
-    edits: [swap(BR, "if (r.clearMarker) await d.marker.remove('own');", '')],
+    edits: [swap(BR, 'if (r.clearMarker) await d.marker.breaker.remove();', '')],
     tests: [T_BR, T_PM],
     expectRed: [
-      '自动解除:先写状态、后删 worker 写的标记',
-      '自动解除:仍有码 → 标记保留;清空 → 删 worker 写的标记',
+      '自动解除:先写状态、后删 B;只在没有剩余码且确有码被清时删;U 无论如何不删',
+      '自动解除:仍有码 → B 保留;清空 → 删 B',
     ],
-    mustKill: ['自动解除:先写状态、后删 worker 写的标记'],
+    mustKill: ['自动解除:先写状态、后删 B;只在没有剩余码且确有码被清时删;U 无论如何不删'],
   },
   {
     id: 'release_removes_any',
-    clause: 'H3 自动解除只删 worker 写的标记,不删用户标记',
+    clause: 'W0-21 B 端口只作用于 B:熔断 / 自动解除不得读写删 U(用户标记)',
     edits: [
       swap(
-        BR,
-        "if (r.clearMarker) await d.marker.remove('own');",
-        "if (r.clearMarker) await d.marker.remove('any');",
+        PM,
+        'const file = path.join(rsiDir, CANARY_FILES.pauseBreaker);',
+        'const file = path.join(rsiDir, CANARY_FILES.pause);',
       ),
     ],
-    tests: [T_BR, T_PM],
-    expectRed: ['自动解除:先写状态、后删 worker 写的标记', '自动解除不删用户标记'],
-    mustKill: ['自动解除:先写状态、后删 worker 写的标记'],
+    tests: [T_PM],
+    expectRed: [
+      'B 只在 B 上:熔断不创建 U 文件',
+      '契约用例(W0-21):worker 熔断 → 用户暂停 → 熔断条件恢复:B 被自动解除删掉,U 仍在,hint 仍停注入',
+    ],
+    mustKill: ['B 只在 B 上:熔断不创建 U 文件'],
   },
   {
     id: 'release_marker_early',
@@ -1295,8 +1311,8 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       ),
     ],
     tests: [T_BR],
-    expectRed: ['自动解除:先写状态、后删 worker 写的标记'],
-    mustKill: ['自动解除:先写状态、后删 worker 写的标记'],
+    expectRed: ['自动解除:先写状态、后删 B;只在没有剩余码且确有码被清时删;U 无论如何不删'],
+    mustKill: ['自动解除:先写状态、后删 B;只在没有剩余码且确有码被清时删;U 无论如何不删'],
   },
   {
     id: 'resume_marker_early',
@@ -1304,24 +1320,22 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     edits: [
       swap(
         BR,
-        'clearMarker: cleared.length > 0 && reasons.length === 0,',
+        "clearMarker: cleared.length > 0 && reasons.every((r) => r === 'user_paused'),",
         'clearMarker: cleared.length > 0,',
       ),
     ],
     tests: [T_BR],
-    expectRed: ['人工 resume:没有剩余码时删任何标记'],
-    mustKill: ['人工 resume:没有剩余码时删任何标记'],
+    expectRed: [
+      '人工 resume(worker 侧):没有剩余熔断码时删 B;仍有码时 B 保留(hint 继续停注入);U 不归这里',
+    ],
+    mustKill: [
+      '人工 resume(worker 侧):没有剩余熔断码时删 B;仍有码时 B 保留(hint 继续停注入);U 不归这里',
+    ],
   },
   {
     id: 'reuse_check_skipped',
     clause: 'W0-20 复用在途 txn:journal 校验先于较晚事件的施加(不合规 = 零副作用)',
-    edits: [
-      swap(
-        RB,
-        "if (jr.kind === 'invalid') return { status: 'refused', txn: id, why: jr.why };",
-        '',
-      ),
-    ],
+    edits: [swap(RB, "if (jr.kind === 'invalid') return invalidJournal(id, jr);", '')],
     tests: [T_JN],
     expectRed: [
       '较晚事件不施加(记录 / 审计 / 效果 / 凭据 / payload 零写入)',
@@ -1333,11 +1347,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     id: 'enforce_resurrects_partial',
     clause: 'H3 enforceMute 只在状态一个码都没有时由标记补码(部分解除后不复活已清的码)',
     edits: [
-      swap(
-        BR,
-        'if (code !== null && cur.reasons.length === 0) {',
-        'if (code !== null && !cur.reasons.includes(code)) {',
-      ),
+      swap(BR, '    if (cur.reasons.length === 0) {', '    if (!cur.reasons.includes(b.reason)) {'),
     ],
     tests: [T_BR],
     expectRed: ['部分解除后标记仍在:enforceMute 不复活已被清掉的码'],
@@ -1346,16 +1356,10 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
   {
     id: 'resume_unknown_marker',
     clause: 'H3 内容读不出的标记(创建后写内容前被杀)可由人工 resume 清除',
-    edits: [
-      swap(
-        BR,
-        "if (r.state.reasons.length === 0 && (await d.marker.read())?.by === 'unknown') {",
-        'if (false) {',
-      ),
-    ],
+    edits: [swap(BR, "if (m !== null && m.by !== 'breaker') await d.marker.breaker.remove();", '')],
     tests: [T_BR],
-    expectRed: ['内容读不出的标记(创建后写内容前被杀)而状态没有码'],
-    mustKill: ['内容读不出的标记(创建后写内容前被杀)而状态没有码'],
+    expectRed: ['内容读不出的 B(创建后写内容前被杀)而状态没有码'],
+    mustKill: ['内容读不出的 B(创建后写内容前被杀)而状态没有码'],
   },
   // ---- M6 审计行按键落地 ----
   {
@@ -1446,10 +1450,10 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     tests: [T_PM],
     expectRed: [
       '新建标记:文件 fsync → 父目录 fsync → state.write(顺序)',
-      '标记已存在(可能尚未落盘',
+      'B 已存在(可能尚未落盘',
       'enforceMute 补标记(有码缺标记)也走同一条持久路径',
     ],
-    mustKill: ['新建标记:文件 fsync → 父目录 fsync → state.write(顺序)', '标记已存在(可能尚未落盘'],
+    mustKill: ['新建标记:文件 fsync → 父目录 fsync → state.write(顺序)', 'B 已存在(可能尚未落盘'],
   },
   {
     id: 'marker_failure_unlinks',
@@ -1483,7 +1487,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     expectRed: [
       '新建标记:文件 fsync → 父目录 fsync → state.write(顺序)',
       'enforceMute 补标记(有码缺标记)也走同一条持久路径',
-      '标记已存在(可能尚未落盘,如上次崩溃时别的进程刚建):不覆盖内容,但补一次文件 fsync 与父目录 fsync,之后才写 state',
+      'B 已存在(可能尚未落盘,如上次崩溃时别的进程刚建):不覆盖内容,但补一次文件 fsync 与父目录 fsync,之后才写 state',
     ],
     mustKill: ['新建标记:文件 fsync → 父目录 fsync → state.write(顺序)'],
   },
@@ -1502,1260 +1506,504 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     expectRed: ['已存在的标记是没有写端的 FIFO'],
     mustKill: ['已存在的标记是没有写端的 FIFO'],
   },
+  {
+    id: 'origin_unclassified_free',
+    clause:
+      'W7b R3-H3 矛盾回滚记录(rollback 非空、无进入条目、dropped=0)按保守方向发 90 天 + 标记,不得无冷却',
+    edits: [swap(TT, "    : { kind: 'unclassified' };", "    : { kind: 'not_applicable' };")],
+    tests: [T_PR],
+    expectRed: [
+      'unclassified:rollback 非空、无进入条目、dropped = 0(自相矛盾);只有自环条目也算无进入条目',
+      'unclassified + clear:90 天 + protection_unclassified(不是 protection_unknown);撤销 / 墓碑照常',
+      '矛盾记录(rolling_back 夹具无进入条目)走完:终态批次 = 黑名单 + 墓碑 + 90 天;protection_unclassified 经审计键恰好落一行,终态批次里没有 append_audit',
+    ],
+    mustKill: [
+      'unclassified:rollback 非空、无进入条目、dropped = 0(自相矛盾);只有自环条目也算无进入条目',
+    ],
+  },
+  {
+    id: 'origin_na_as_unknown',
+    clause:
+      'W7b originProtection:没走过回滚(rollback=null)是 not_applicable,效果与改前相同,不得并入 unknown',
+    edits: [
+      swap(
+        TT,
+        "if (rec.rollback === null) return { kind: 'not_applicable' };",
+        "if (rec.rollback === null) return { kind: 'unknown_rollback_origin' };",
+      ),
+    ],
+    tests: [T_PR],
+    expectRed: [
+      'rollback=null → not_applicable(即便 transitions 里有 rolling_back 条目:以 rollback 字段为准)',
+      '没走过回滚的终态与改前逐字节相同:闸拒绝无冷却;shadow 到期 30 天;直接 clear / veto 无冷却无标记',
+    ],
+    mustKill: [
+      'rollback=null → not_applicable(即便 transitions 里有 rolling_back 条目:以 rollback 字段为准)',
+    ],
+  },
+  {
+    id: 'origin_null_by_transitions',
+    clause: 'W7b originProtection 以 rollback 字段判「走过回滚」,不是以 transitions 里有无条目判',
+    edits: [
+      swap(
+        TT,
+        "if (rec.rollback === null) return { kind: 'not_applicable' };",
+        "if (rec.transitions.length === 0) return { kind: 'not_applicable' };",
+      ),
+    ],
+    tests: [T_PR],
+    expectRed: [
+      'rollback=null → not_applicable(即便 transitions 里有 rolling_back 条目:以 rollback 字段为准)',
+    ],
+    mustKill: [
+      'rollback=null → not_applicable(即便 transitions 里有 rolling_back 条目:以 rollback 字段为准)',
+    ],
+  },
+  {
+    id: 'origin_last_entry',
+    clause: 'W7b 起因取第一条进入回滚的条目,不是最后一条',
+    edits: [
+      swap(
+        TT,
+        'const entering = rec.transitions.find(',
+        'const entering = [...rec.transitions].reverse().find(',
+      ),
+    ],
+    tests: [T_PR],
+    expectRed: [
+      'known:取第一条进入回滚的条目(不是最后一条);自环条目不算;limit_reached → expired,其余 → rolled_back',
+    ],
+    mustKill: [
+      'known:取第一条进入回滚的条目(不是最后一条);自环条目不算;limit_reached → expired,其余 → rolled_back',
+    ],
+  },
+  {
+    id: 'origin_loop_counts',
+    clause: 'W7b 自环条目(from = to = rolling_back)不算进入回滚的条目',
+    edits: [
+      swap(
+        TT,
+        "(e) => e.dim === 'lifecycle' && e.to === 'rolling_back' && e.from !== 'rolling_back',",
+        "(e) => e.dim === 'lifecycle' && e.to === 'rolling_back',",
+      ),
+    ],
+    tests: [T_PR],
+    expectRed: [
+      'known:取第一条进入回滚的条目(不是最后一条);自环条目不算;limit_reached → expired,其余 → rolled_back',
+      'unclassified:rollback 非空、无进入条目、dropped = 0(自相矛盾);只有自环条目也算无进入条目',
+    ],
+    mustKill: [
+      'known:取第一条进入回滚的条目(不是最后一条);自环条目不算;limit_reached → expired,其余 → rolled_back',
+    ],
+  },
+  {
+    id: 'origin_harm_ignored',
+    clause: 'owner 决定 1:harm 起因 → clear / veto / taint 终态仍发 90 天冷却',
+    edits: [
+      swap(TE, "if (terminalReasonOf(origin.origin_reason) === 'auto_rollback') {", 'if (false) {'),
+    ],
+    tests: [T_PR, T_EF],
+    expectRed: [
+      'harm 起因 → clear / veto / taint 终态:仍有 90 天 auto_rollback 冷却(原保护不因终态理由升级而丢)',
+      'harm → veto:黑名单 + 墓碑 + 90 天,顺序固定',
+    ],
+    mustKill: [
+      'harm 起因 → clear / veto / taint 终态:仍有 90 天 auto_rollback 冷却(原保护不因终态理由升级而丢)',
+    ],
+  },
+  {
+    id: 'origin_limit_dropped',
+    clause: 'owner 决定 1:limit_reached 起因 → clear 终态仍发 30 天 expired 冷却',
+    edits: [swap(TE, "} else if (origin.origin_target === 'expired') {", '} else if (false) {')],
+    tests: [T_PR],
+    expectRed: [
+      'limit_reached 起因 → clear:30 天 expired 冷却;limit_reached 终态(auto_expired)照旧 30 天',
+    ],
+    mustKill: [
+      'limit_reached 起因 → clear:30 天 expired 冷却;limit_reached 终态(auto_expired)照旧 30 天',
+    ],
+  },
+  {
+    id: 'origin_judge_cooldown',
+    clause: 'owner 决定 1:判定类起因不新增冷却(原来发什么就发什么)',
+    edits: [
+      swap(
+        TE,
+        "if (terminalReasonOf(origin.origin_reason) === 'auto_rollback') {",
+        "if (terminalReasonOf(origin.origin_reason) !== 'cleared') {",
+      ),
+    ],
+    tests: [T_PR],
+    expectRed: [
+      '判定类起因(judge_reject / judge_injection)→ clear:不新增冷却;起因为 cleared / vetoed / tainted 也不多发',
+    ],
+    mustKill: [
+      '判定类起因(judge_reject / judge_injection)→ clear:不新增冷却;起因为 cleared / vetoed / tainted 也不多发',
+    ],
+  },
+  {
+    id: 'cooldown_two_kinds',
+    clause: 'W7b 终态批次冷却至多一条:起因与终态事实同时给 90 与 30 时只留 90',
+    edits: [swap(TE, 'if (strongest !== undefined) out.push(strongest);', 'out.push(...chosen);')],
+    tests: [T_PR],
+    expectRed: [
+      '至多一条冷却(负向):limit_reached 进入回滚、补偿期间又收到 harm_c1(目标升为 rolled_back,终态事实给 90、起因给 30)→ 只发 90 天 auto_rollback',
+    ],
+    mustKill: [
+      '至多一条冷却(负向):limit_reached 进入回滚、补偿期间又收到 harm_c1(目标升为 rolled_back,终态事实给 90、起因给 30)→ 只发 90 天 auto_rollback',
+    ],
+  },
+  {
+    id: 'cooldown_weak_wins',
+    clause: 'W7b 冷却保护取强:90 天覆盖 30 天',
+    edits: [
+      swap(
+        TE,
+        "chosen.find((c) => c.kind === 'auto_rollback') ?? chosen[0]",
+        'chosen[chosen.length - 1]',
+      ),
+    ],
+    tests: [T_PR],
+    expectRed: [
+      '至多一条冷却(负向):limit_reached 进入回滚、补偿期间又收到 harm_c1(目标升为 rolled_back,终态事实给 90、起因给 30)→ 只发 90 天 auto_rollback',
+    ],
+    mustKill: [
+      '至多一条冷却(负向):limit_reached 进入回滚、补偿期间又收到 harm_c1(目标升为 rolled_back,终态事实给 90、起因给 30)→ 只发 90 天 auto_rollback',
+    ],
+  },
+  {
+    id: 'marker_dropped',
+    clause: 'W7b M3 起因因截断丢失按保守方向补 90 天并发 protection_unknown 审计标记',
+    edits: [swap(TE, 'if (mark !== null) out.push(mark);', '')],
+    tests: [T_PR],
+    expectRed: [
+      'unknown_rollback_origin + clear:90 天 + protection_unknown;行可被既有 RsiAuditLineSchema 解析,at = 终态条目时间,不伪造 origin',
+      'unclassified + clear:90 天 + protection_unclassified(不是 protection_unknown);撤销 / 墓碑照常',
+    ],
+    mustKill: [
+      'unknown_rollback_origin + clear:90 天 + protection_unknown;行可被既有 RsiAuditLineSchema 解析,at = 终态条目时间,不伪造 origin',
+    ],
+  },
+  {
+    id: 'marker_at_first_entry',
+    clause: 'W7b M3 标记行的 at = 终态那条 lifecycle 条目的时间(确定性,即时与恢复同一行)',
+    edits: [
+      swap(
+        TE,
+        'const at = (terminalEntry ?? rec.transitions[rec.transitions.length - 1])?.at;',
+        'const at = rec.transitions[0]?.at;',
+      ),
+    ],
+    tests: [T_PR],
+    expectRed: [
+      'unknown_rollback_origin + clear:90 天 + protection_unknown;行可被既有 RsiAuditLineSchema 解析,at = 终态条目时间,不伪造 origin',
+    ],
+    mustKill: [
+      'unknown_rollback_origin + clear:90 天 + protection_unknown;行可被既有 RsiAuditLineSchema 解析,at = 终态条目时间,不伪造 origin',
+    ],
+  },
+  {
+    id: 'unknown_marker_with_legacy',
+    clause: 'W7b 改前规则已给冷却(终态 auto_rollback)时不加保护标记',
+    edits: [swap(TE, '      if (legacy === null) {', '      if (true) {')],
+    tests: [T_PR],
+    expectRed: ['unknown 但改前规则已给冷却(终态 auto_rollback):不变,不加标记'],
+    mustKill: ['unknown 但改前规则已给冷却(终态 auto_rollback):不变,不加标记'],
+  },
+  {
+    id: 'audit_in_terminal_batch',
+    clause:
+      'W7b 保护审计标记按审计键落地(与引擎即时路径同键),不放进 terminal: 批次(否则同一行落两次)',
+    edits: [
+      swap(
+        ER,
+        "const business = effects.filter((e) => e.type !== 'append_audit');",
+        'const business = effects;',
+      ),
+    ],
+    tests: [T_PR],
+    expectRed: [
+      '矛盾记录(rolling_back 夹具无进入条目)走完:终态批次 = 黑名单 + 墓碑 + 90 天;protection_unclassified 经审计键恰好落一行,终态批次里没有 append_audit',
+      '保护审计标记只落一次:按审计键落地,重复 recover 不重复;终态批次里不含 append_audit',
+    ],
+    mustKill: [
+      '矛盾记录(rolling_back 夹具无进入条目)走完:终态批次 = 黑名单 + 墓碑 + 90 天;protection_unclassified 经审计键恰好落一行,终态批次里没有 append_audit',
+    ],
+  },
+  {
+    id: 'e1_duplicated',
+    clause: 'W7b E1 并入 E2:终态批次已含同一 (id, sha) 黑名单时,引擎不在同一数组里重复推入',
+    edits: [swap(TR, '    if (!covered) {', '    if (true) {')],
+    tests: [T_PR],
+    expectRed: ['E1 并入 E2:黑名单在引擎批次里恰好一份(veto 直接进终态:E2 含它,不再单独推 E1)'],
+    mustKill: ['E1 并入 E2:黑名单在引擎批次里恰好一份(veto 直接进终态:E2 含它,不再单独推 E1)'],
+  },
+  {
+    id: 'e1_only_when_terminal',
+    clause: 'W7b E1:veto 使记录进入回滚(未进终态)时仍产出即时黑名单',
+    edits: [swap(TR, '    if (!covered) {', '    if (!covered && terminalBatch.length > 0) {')],
+    tests: [T_PR],
+    expectRed: [
+      'E1:veto 使记录进入回滚(未进终态)→ 只有 E1,没有墓碑;rolling_back 上 veto 自环同样产出 E1',
+    ],
+    mustKill: [
+      'E1:veto 使记录进入回滚(未进终态)→ 只有 E1,没有墓碑;rolling_back 上 veto 自环同样产出 E1',
+    ],
+  },
+  {
+    id: 'second_pass_removed',
+    clause:
+      'W7b recoverTerminalEffects 第二遍:rolling_back 且 rollback.reason=vetoed 的记录补 E1 黑名单',
+    edits: [
+      swap(
+        ER,
+        "if (rec.lifecycle !== 'rolling_back' || rec.rollback?.reason !== 'vetoed') continue;",
+        'continue;',
+      ),
+    ],
+    tests: [T_PR],
+    expectRed: [
+      '回滚记录已提交、E1 落地前崩溃且回滚未完成:第二遍补出黑名单(veto: 键);再 recover → already',
+    ],
+    mustKill: [
+      '回滚记录已提交、E1 落地前崩溃且回滚未完成:第二遍补出黑名单(veto: 键);再 recover → already',
+    ],
+  },
+  {
+    id: 'second_pass_any_rolling',
+    clause: 'W7b 第二遍只补 vetoed 的 rolling_back,不是任何 rolling_back',
+    edits: [
+      swap(
+        ER,
+        "if (rec.lifecycle !== 'rolling_back' || rec.rollback?.reason !== 'vetoed') continue;",
+        "if (rec.lifecycle !== 'rolling_back') continue;",
+      ),
+    ],
+    tests: [T_PR],
+    expectRed: [
+      '负向:rolling_back 但原因不是 vetoed、或 veto 之外的状态 → 第二遍不补;非终态不走第一遍',
+    ],
+    mustKill: [
+      '负向:rolling_back 但原因不是 vetoed、或 veto 之外的状态 → 第二遍不补;非终态不走第一遍',
+    ],
+  },
+  {
+    id: 'veto_key_is_terminal',
+    clause: 'W7b E1 键(veto:)与 E2 键(terminal:)分开,互不混用',
+    edits: [
+      swap(
+        TE,
+        '`veto:${rec.id}:${rec.content_sha256}`',
+        '`terminal:${rec.id}:${rec.content_sha256}`',
+      ),
+    ],
+    tests: [T_PR],
+    expectRed: [
+      '键:E1 与 E2 的键不同且互不混用',
+      'E1 之后完成:E2 再含同一黑名单(不同键各落一次),集合成员与计数都只一份;E2 落地后再 recover 全 already',
+    ],
+    mustKill: ['键:E1 与 E2 的键不同且互不混用'],
+  },
+  {
+    id: 'executor_drops_e1',
+    clause: 'W7b 执行器里 veto 自环的 E1 立即按 veto: 键落地(applyDeps.effects 不能是空实现)',
+    edits: [
+      swap(
+        RB,
+        "if (e.type === 'blacklist_veto') await d.keyedEffects.applyOnce(vetoEffectKey(e), [e]);",
+        '',
+      ),
+    ],
+    tests: [T_PR],
+    expectRed: [
+      'harm 回滚中收到 veto(自环):E1 立即按 veto: 键落地;完成后 E2(终态键)含黑名单 + 墓碑 + 90 天(起因 harm),各键只落一次',
+    ],
+    mustKill: [
+      'harm 回滚中收到 veto(自环):E1 立即按 veto: 键落地;完成后 E2(终态键)含黑名单 + 墓碑 + 90 天(起因 harm),各键只落一次',
+    ],
+  },
+  {
+    id: 'engine_terminal_forked',
+    clause: 'W7b 引擎尾部与 recover 同调 terminalEffectsOf:引擎不另写一份终态效果',
+    edits: [
+      swap(
+        TR,
+        '      ? terminalEffectsOf(final)\n      : [];',
+        "      ? terminalEffectsOf(final).filter((e) => e.type !== 'start_cooldown')\n      : [];",
+      ),
+    ],
+    tests: [T_PR],
+    expectRed: ['引擎的终态部分 == terminalEffectsOf(next)'],
+    mustKill: ['引擎的终态部分 == terminalEffectsOf(next)'],
+  },
+  {
+    id: 'cause_not_wired_retryable',
+    clause: 'W7b ③ port_not_wired 的 cause 是 not_wired,不归 retryable',
+    edits: [
+      swap(
+        RB,
+        "why: `port_not_wired:${e.port}`,\n        cause: 'not_wired',",
+        "why: `port_not_wired:${e.port}`,\n        cause: 'retryable',",
+      ),
+    ],
+    tests: [T_CA],
+    expectRed: ['端口没装配(runGuarded 包成的 port_not_wired)', 'not_wired 不被归成 retryable'],
+    mustKill: ['端口没装配(runGuarded 包成的 port_not_wired)'],
+  },
+  {
+    id: 'cause_integrity_has_txn',
+    clause: 'W7b ③ R3-H2 journal 完整性错误不带事务身份(txn: null,journal 句柄单给)',
+    edits: [
+      swap(
+        RB,
+        "  txn: null,\n  journal,\n  why,\n  cause: 'txn_invalid',",
+        "  txn: journal,\n  journal,\n  why,\n  cause: 'txn_invalid',",
+      ),
+    ],
+    tests: [T_CA],
+    expectRed: [
+      'journal 完整性错误不带事务身份(txn: null,journal 句柄单给):同 (id, sha) 的 complete 消除不了它',
+    ],
+    mustKill: [
+      'journal 完整性错误不带事务身份(txn: null,journal 句柄单给):同 (id, sha) 的 complete 消除不了它',
+    ],
+  },
+  {
+    id: 'cause_drift_swapped',
+    clause: 'W7b ③ 第四段 drift 的 cause 是 retryable',
+    edits: [
+      swap(
+        RB,
+        "\n  if (r.status === 'drift') return { ok: false, why: `drift:${r.why}`, cause: 'retryable' };",
+        "\n  if (r.status === 'drift') return { ok: false, why: `drift:${r.why}`, cause: 'repo_unreadable' };",
+      ),
+    ],
+    tests: [T_CA],
+    expectRed: ['用户改过的块(drift)'],
+    mustKill: ['用户改过的块(drift)'],
+  },
+  {
+    id: 'cause_legacy_swapped',
+    clause:
+      'W7b ③ 旧格式 journal:缺原始证据 → manual_event_required,只缺来源 → manual_by_ambiguous',
+    edits: [
+      swap(
+        RJ,
+        "? 'manual_event_required'\n        : 'manual_by_ambiguous';",
+        "? 'manual_by_ambiguous'\n        : 'manual_event_required';",
+      ),
+    ],
+    tests: [T_CA],
+    expectRed: [
+      '旧格式 journal 缺原始证据(legacy_unrecoverable:terminal_event)',
+      '旧格式 journal 缺来源(legacy_unrecoverable:by)',
+    ],
+    mustKill: ['旧格式 journal 缺原始证据(legacy_unrecoverable:terminal_event)'],
+  },
+  {
+    id: 'cause_success_carries',
+    clause: 'W7b ③ 成功 variant(complete)不带 cause',
+    edits: [
+      swap(
+        RB,
+        "  return { status: 'complete', txn: t.txn_id, effects };",
+        "  return { status: 'complete', txn: t.txn_id, effects, cause: 'retryable' } as RollbackOutcome;",
+      ),
+    ],
+    tests: [T_CA],
+    expectRed: [
+      '成功 variant 没有 cause:complete / revocation_complete(后者携 repoRemoval=deferred)不被归成失败',
+    ],
+    mustKill: [
+      '成功 variant 没有 cause:complete / revocation_complete(后者携 repoRemoval=deferred)不被归成失败',
+    ],
+  },
+  {
+    id: 'marker_user_remove_unguarded',
+    clause: 'W7b U 的 remove 必须比对实例令牌(令牌 none 永不删)',
+    edits: [swap(PM, "if (!sameToken(token, cur)) return 'changed';", '')],
+    tests: [T_PM],
+    expectRed: [
+      'remove(token):令牌与当前实例一致才删;令牌 none 永不删(resume 期间新建的 U 保留);实例被换 → changed 不删',
+    ],
+    mustKill: [
+      'remove(token):令牌与当前实例一致才删;令牌 none 永不删(resume 期间新建的 U 保留);实例被换 → changed 不删',
+    ],
+  },
+  {
+    id: 'permit_unreadable_wins',
+    clause: 'W0-21 hint 读集合:任一 present → present(确证的暂停原因优先于读失败)',
+    edits: [swap(PR, "if (user === 'present' || breaker === 'present') return 'present';", '')],
+    tests: [T_PD],
+    expectRed: [
+      'combinePauseReads:3×3 矩阵',
+      '负向:U 读失败而 B 在 → present(不是 unreadable);B 读失败而 U 在 → present;只一个读失败而另一个不在 → unreadable(不是 absent)',
+    ],
+    mustKill: ['combinePauseReads:3×3 矩阵'],
+  },
+  {
+    id: 'permit_unreadable_absent',
+    clause: 'W0-21 hint 读集合:否则任一读失败 → unreadable(不可读不等于不存在)',
+    edits: [
+      swap(PR, "if (user === 'unreadable' || breaker === 'unreadable') return 'unreadable';", ''),
+    ],
+    tests: [T_PD],
+    expectRed: [
+      'combinePauseReads:3×3 矩阵',
+      '负向:U 读失败而 B 在 → present(不是 unreadable);B 读失败而 U 在 → present;只一个读失败而另一个不在 → unreadable(不是 absent)',
+    ],
+    mustKill: ['combinePauseReads:3×3 矩阵'],
+  },
+  {
+    id: 'permit_ignores_breaker',
+    clause: 'W0-21 hint 读集合追加 AUTO_PAUSE_BREAKER',
+    edits: [
+      swap(
+        PR,
+        'readPause(path.join(rsiDir, CANARY_FILES.pauseBreaker)),',
+        "Promise.resolve('absent' as PauseRead),",
+      ),
+    ],
+    tests: [T_PD, T_HE],
+    expectRed: [
+      '只有 B → present;只有 U → present;都没有 → absent;两个都在 → present',
+      'W0-21:只有 AUTO_PAUSE_BREAKER 在场(worker 熔断标记)→ 同样 excluded/paused;只有用户 AUTO_PAUSE 也停;两者都不在才恢复',
+    ],
+    mustKill: ['只有 B → present;只有 U → present;都没有 → absent;两个都在 → present'],
+  },
+  {
+    id: 'enforce_ignores_user',
+    clause: 'W0-21 enforceMute 把 U 存在算作暂停(仍 mute),但不补码',
+    edits: [
+      swap(
+        BR,
+        'const present = b !== null || userPresent || anyMarkerPresent === true;',
+        'const present = b !== null || anyMarkerPresent === true;',
+      ),
+    ],
+    tests: [T_BR],
+    expectRed: [
+      'W0-21:U(用户标记)存在而状态没码:worker 不补 user_paused、不写 state,但仍 mute',
+      'W0-21 契约用例:worker 熔断 → 用户暂停 → 熔断条件恢复(自动解除):B 删了,U 仍在,isAutoPaused 仍为真、状态里没有 user_paused',
+    ],
+    mustKill: ['W0-21:U(用户标记)存在而状态没码:worker 不补 user_paused、不写 state,但仍 mute'],
+  },
+  {
+    id: 'resume_clears_user_paused',
+    clause: 'W0-21 user_paused 判据是 U 存在:resume 不据 state 里的该码清码',
+    edits: [swap(BR, "if (code === 'user_paused') continue;", '')],
+    tests: [T_BR],
+    expectRed: [
+      'W0-21:resume 不据 state 里的 user_paused 清码(判据是 U 存在,命令层处理);清掉熔断码且只剩 user_paused → 仍通知 worker 路径删 B;没清则不',
+    ],
+    mustKill: [
+      'W0-21:resume 不据 state 里的 user_paused 清码(判据是 U 存在,命令层处理);清掉熔断码且只剩 user_paused → 仍通知 worker 路径删 B;没清则不',
+    ],
+  },
 ];
 
 /** 变异整表的执行结果(由主代理执行后回填;W7 实装块留空) */
 /** 实测结果:crq r21w7-j-mut @8f38b59(seal,97 条)+ r21w7-k-mut2 @fb4aa07(seal,2 条):99/99 KILLED */
 export const V1_W7_RESULTS: readonly V1W7Result[] = [
-  {
-    id: 'rev_criterion_trusted',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'R21-9.1 四段补偿:正常路径 第二段判据:凭据从盘上重读;凭据写入返回成功但读不到 → 本段未完成、不推进 journal',
-    ],
-    restored: true,
-  },
-  {
-    id: 'journal_not_advanced',
-    failed: 7,
-    skipped: 0,
-    killedBy: [
-      'journal 与记录的进度互不信任 journal 领先于记录(journal 已到 rollback_complete,记录还在 canary):续做按盘上判据补齐,不回退 journal',
-      'R21-9.1 四段补偿:正常路径 第二段判据:凭据从盘上重读;凭据写入返回成功但读不到 → 本段未完成、不推进 journal',
-      'R21-9.1 四段补偿:正常路径 R21-9.3:撤销路径遇到用户改过的块(drift)→ 停在第四段之前:记录停在 static_removal_pending,journal 保留,未到终态',
-      'R21-9.3a 人工分叉下的撤销:凭据先于记录,仓库部分 deferred 私有仓库 deferred:凭据照样落盘;第三段判据改为 payload 已不含该候选;不提交;撤销已完成(revocation_complete,仓库部分推迟),journal 保留作待补记任务',
-      'R21-9.3a 人工分叉下的撤销:凭据先于记录,仓库部分 deferred deferred 下第三段先经撤销路径清 payload(动作含「重渲染本机 payload」),再验证缺席:不死锁',
-      '较晚终止事件不静默丢失,也不阻断撤销(记录是唯一持久化依据;事件与撤销进度互不依赖) 权威记录读不到(deferred):撤销事务照常运行(HOME 清理不受阻),结果带 lateEventNotApplied;仓库恢复后调用方重试 → 施加并完成(vetoed)',
-      '较晚终止事件不静默丢失,也不阻断撤销(记录是唯一持久化依据;事件与撤销进度互不依赖) journal 停在第一段、仓库 deferred 时收到较晚事件:凭据与 HOME 撤销照常执行(不被事件持久化失败挡住),事件如实报未施加',
-    ],
-    restored: true,
-  },
-  {
-    id: 'deferred_ignored',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'R21-9.3a 人工分叉下的撤销:凭据先于记录,仓库部分 deferred deferred 且撤销路径之后 payload 仍含该候选:第三段判据不成立 → 停在 static_removal_pending',
-    ],
-    restored: true,
-  },
-  {
-    id: 'record_note_ignored',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      '相位闸 V1a 没有 rollback_four_phase:引擎拒绝 canary → rolling_back,记录不动(凭据仍落盘:先停注入)',
-    ],
-    restored: true,
-  },
-  {
-    id: 'advance_one_step',
-    failed: 54,
-    skipped: 0,
-    killedBy: [
-      'R21-9.6 崩溃矩阵:每个命名步骤点崩一次 → 续做 崩溃于 before:journal_requested → resumeAll 续做到终态(只出现一次凭据 / 转移 / 效果)',
-      'R21-9.6 崩溃矩阵:每个命名步骤点崩一次 → 续做 崩溃于 journal:rollback_requested → resumeAll 续做到终态(只出现一次凭据 / 转移 / 效果)',
-      'R21-9.6 崩溃矩阵:每个命名步骤点崩一次 → 续做 崩溃于 enter:rollback_requested → resumeAll 续做到终态(只出现一次凭据 / 转移 / 效果)',
-      'R21-9.6 崩溃矩阵:每个命名步骤点崩一次 → 续做 崩溃于 done:rollback_requested → resumeAll 续做到终态(只出现一次凭据 / 转移 / 效果)',
-      'R21-9.6 崩溃矩阵:每个命名步骤点崩一次 → 续做 崩溃于 journal:injection_disabled → resumeAll 续做到终态(只出现一次凭据 / 转移 / 效果)',
-      'R21-9.6 崩溃矩阵:每个命名步骤点崩一次 → 续做 崩溃于 enter:injection_disabled → resumeAll 续做到终态(只出现一次凭据 / 转移 / 效果)',
-      'R21-9.6 崩溃矩阵:每个命名步骤点崩一次 → 续做 崩溃于 after:revocation → resumeAll 续做到终态(只出现一次凭据 / 转移 / 效果)',
-      'R21-9.6 崩溃矩阵:每个命名步骤点崩一次 → 续做 崩溃于 after:cache → resumeAll 续做到终态(只出现一次凭据 / 转移 / 效果)',
-      'R21-9.6 崩溃矩阵:每个命名步骤点崩一次 → 续做 崩溃于 done:injection_disabled → resumeAll 续做到终态(只出现一次凭据 / 转移 / 效果)',
-      'R21-9.6 崩溃矩阵:每个命名步骤点崩一次 → 续做 崩溃于 journal:static_removal_pending → resumeAll 续做到终态(只出现一次凭据 / 转移 / 效果)',
-      'R21-9.6 崩溃矩阵:每个命名步骤点崩一次 → 续做 崩溃于 enter:static_removal_pending → resumeAll 续做到终态(只出现一次凭据 / 转移 / 效果)',
-      'R21-9.6 崩溃矩阵:每个命名步骤点崩一次 → 续做 崩溃于 after:record_event → resumeAll 续做到终态(只出现一次凭据 / 转移 / 效果)',
-      'R21-9.6 崩溃矩阵:每个命名步骤点崩一次 → 续做 崩溃于 after:repo_removal → resumeAll 续做到终态(只出现一次凭据 / 转移 / 效果)',
-      'R21-9.6 崩溃矩阵:每个命名步骤点崩一次 → 续做 崩溃于 journal:rollback_complete → resumeAll 续做到终态(只出现一次凭据 / 转移 / 效果)',
-      'R21-9.6 崩溃矩阵:每个命名步骤点崩一次 → 续做 崩溃于 enter:rollback_complete → resumeAll 续做到终态(只出现一次凭据 / 转移 / 效果)',
-      'R21-9.6 崩溃矩阵:每个命名步骤点崩一次 → 续做 崩溃于 after:payload → resumeAll 续做到终态(只出现一次凭据 / 转移 / 效果)',
-      'R21-9.6 崩溃矩阵:每个命名步骤点崩一次 → 续做 崩溃于 done:rollback_complete → resumeAll 续做到终态(只出现一次凭据 / 转移 / 效果)',
-      'R21-9.6 崩溃矩阵:每个命名步骤点崩一次 → 续做 崩溃于 before:finish → resumeAll 续做到终态(只出现一次凭据 / 转移 / 效果)',
-      'R21-9.6 崩溃矩阵:每个命名步骤点崩一次 → 续做 崩溃于 after:record_terminal → resumeAll 续做到终态(只出现一次凭据 / 转移 / 效果)',
-      'R21-9.6 崩溃矩阵:每个命名步骤点崩一次 → 续做 崩溃于 after:effects → resumeAll 续做到终态(只出现一次凭据 / 转移 / 效果)',
-      'R21-9.6 崩溃矩阵:每个命名步骤点崩一次 → 续做 崩溃于 before:journal_remove → resumeAll 续做到终态(只出现一次凭据 / 转移 / 效果)',
-      'R21-9.6 崩溃矩阵:每个命名步骤点崩一次 → 续做 崩溃于 after:journal_remove → resumeAll 续做到终态(只出现一次凭据 / 转移 / 效果)',
-      'R21-9.6 崩溃矩阵:每个命名步骤点崩一次 → 续做 崩溃于 before:journal_requested,续做时再崩于 enter:injection_disabled → 第三次续做仍到终态',
-      'R21-9.6 崩溃矩阵:每个命名步骤点崩一次 → 续做 崩溃于 journal:rollback_requested,续做时再崩于 after:repo_removal → 第三次续做仍到终态',
-      'R21-9.6 崩溃矩阵:每个命名步骤点崩一次 → 续做 崩溃于 done:rollback_requested,续做时再崩于 done:rollback_requested → 第三次续做仍到终态',
-      'R21-9.6 崩溃矩阵:每个命名步骤点崩一次 → 续做 崩溃于 journal:injection_disabled,续做时再崩于 enter:static_removal_pending → 第三次续做仍到终态',
-      'R21-9.6 崩溃矩阵:每个命名步骤点崩一次 → 续做 崩溃于 enter:injection_disabled,续做时再崩于 done:rollback_complete → 第三次续做仍到终态',
-      'R21-9.6 崩溃矩阵:每个命名步骤点崩一次 → 续做 崩溃于 after:cache,续做时再崩于 done:injection_disabled → 第三次续做仍到终态',
-      'R21-9.6 崩溃矩阵:每个命名步骤点崩一次 → 续做 崩溃于 done:injection_disabled,续做时再崩于 enter:rollback_complete → 第三次续做仍到终态',
-      'R21-9.6 崩溃矩阵:每个命名步骤点崩一次 → 续做 崩溃于 enter:rollback_complete,续做时再崩于 before:finish → 第三次续做仍到终态',
-      'R21-9.6 崩溃矩阵:每个命名步骤点崩一次 → 续做 崩溃于 before:finish,续做时再崩于 after:payload → 第三次续做仍到终态',
-      'R21-9.6 崩溃矩阵:每个命名步骤点崩一次 → 续做 崩溃于 after:record_terminal,续做时再崩于 before:journal_requested → 第三次续做仍到终态',
-      'R21-9.6 崩溃矩阵:每个命名步骤点崩一次 → 续做 崩溃于 after:effects,续做时再崩于 after:cache → 第三次续做仍到终态',
-      'R21-9.6 崩溃矩阵:每个命名步骤点崩一次 → 续做 崩溃于 before:journal_remove,续做时再崩于 journal:rollback_complete → 第三次续做仍到终态',
-      'R21-9.6 崩溃矩阵:每个命名步骤点崩一次 → 续做 崩溃于 after:journal_remove,续做时再崩于 before:journal_remove → 第三次续做仍到终态',
-      '来源保留(W0-17):崩溃恢复后 by 不变 同一候选在 rollback_to 的 txn 在途时 clear 再来:复用该 txn,来源取 journal 的(rollback_to),不新开、凭据一行',
-      '来源保留(W0-17):崩溃恢复后 by 不变 rollback_to 的 txn 在凭据写入前崩溃、clear 再来:凭据的来源仍取 journal 的(rollback_to),不取请求的',
-      'journal 与记录的进度互不信任 journal 领先于记录(journal 已到 rollback_complete,记录还在 canary):续做按盘上判据补齐,不回退 journal',
-      'R21-9.1 四段补偿:正常路径 canary + harm → 四段全部完成:记录 rolled_back / auto_rollback,journal 已删,凭据恰好一行 by=worker reason=harm_c1',
-      'R21-9.1 四段补偿:正常路径 顺序(安全):journal 先于凭据,凭据先于记录提交与私有仓库移除,仓库移除先于 HOME 清理,效果最后、journal 最后才删',
-      'R21-9.1 四段补偿:正常路径 R21-9.3:撤销路径遇到用户改过的块(drift)→ 停在第四段之前:记录停在 static_removal_pending,journal 保留,未到终态',
-      'R21-9.3a 人工分叉下的撤销:凭据先于记录,仓库部分 deferred 私有仓库 deferred:凭据照样落盘;第三段判据改为 payload 已不含该候选;不提交;撤销已完成(revocation_complete,仓库部分推迟),journal 保留作待补记任务',
-      'R21-9.3a 人工分叉下的撤销:凭据先于记录,仓库部分 deferred 记录可读但仓库提交 deferred(第三段「成功」):收尾重新检查并补做仓库移除,没删之前不删 journal、不假装完成',
-      'R21-9.3a 人工分叉下的撤销:凭据先于记录,仓库部分 deferred 私有仓库 invalid:第三段中止(不当成已完成),凭据已落盘;修好后续做',
-      '同一候选只有一个在途 txn(复用) 崩溃后再次发起同一请求:复用同一 journal、凭据不重复;不同 kind / 原因的请求也复用',
-      '同一候选只有一个在途 txn(复用) 终态之后重来:凭据 already_present、记录不动、效果按键 already,不产生重复',
-      '复用在途 txn 时较晚到达的终止事件(R21-4.4a ① 自环) harm 回滚走到第四段后用户 veto:复用同一 txn,终态理由取优先级最高者(vetoed),否决黑名单落地',
-      '较晚终止事件不静默丢失,也不阻断撤销(记录是唯一持久化依据;事件与撤销进度互不依赖) 权威记录读不到(deferred):撤销事务照常运行(HOME 清理不受阻),结果带 lateEventNotApplied;仓库恢复后调用方重试 → 施加并完成(vetoed)',
-      '较晚终止事件不静默丢失,也不阻断撤销(记录是唯一持久化依据;事件与撤销进度互不依赖) 提交失败(commit_failed):不以旧理由进终态、不删 journal、不返回 complete;重试成功后保留 veto 优先级与黑名单',
-      '较晚终止事件不静默丢失,也不阻断撤销(记录是唯一持久化依据;事件与撤销进度互不依赖) 记录还在 canary(journal 在第二段中断):事件留给第三段施加;第二段失败时 journal 保留,重试走完就是已施加(无标记)',
-      '较晚终止事件不静默丢失,也不阻断撤销(记录是唯一持久化依据;事件与撤销进度互不依赖) 记录已终态:不再施加(终态上的 veto 黑名单归前台命令),如实标记 record_terminal',
-      '丢锁(applyEvent 提交后返回 lockLost)→ 立即停止,不再继续任何写出口 第三段记录提交后发现丢锁:抛 lock_lost;未调用仓库移除;journal 保留,新持锁者续做完成',
-      '端口缺失一律 fail-closed(不推进、不假装完成) keyed_effects 没装配 → incomplete(port_not_wired),journal 保留、凭据已落盘',
-      '熔断不阻挡撤销路径(R21-10.1) auto_paused=true、自动循环无效:回滚照常走完(只禁增加影响)',
-    ],
-    restored: true,
-  },
-  {
-    id: 'payload_own_only',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'R21-9.1 四段补偿:正常路径 第四段:撤销路径的目标 = 凭据全集 + 本候选(上次已同步版本减去凭据所列候选)',
-    ],
-    restored: true,
-  },
-  {
-    id: 'effects_not_landed',
-    failed: 9,
-    skipped: 0,
-    killedBy: [
-      'landTerminalEffects / recoverTerminalEffects 回滚执行器:效果落地失败 → journal 保留(不删),修好后续做恰好落地一次',
-      'R21-9.1 四段补偿:正常路径 canary + harm → 四段全部完成:记录 rolled_back / auto_rollback,journal 已删,凭据恰好一行 by=worker reason=harm_c1',
-      'R21-9.1 四段补偿:正常路径 顺序(安全):journal 先于凭据,凭据先于记录提交与私有仓库移除,仓库移除先于 HOME 清理,效果最后、journal 最后才删',
-      'R21-9.1 四段补偿:正常路径 R21-9.3:撤销路径遇到用户改过的块(drift)→ 停在第四段之前:记录停在 static_removal_pending,journal 保留,未到终态',
-      'R21-9.3a 人工分叉下的撤销:凭据先于记录,仓库部分 deferred 私有仓库 deferred:凭据照样落盘;第三段判据改为 payload 已不含该候选;不提交;撤销已完成(revocation_complete,仓库部分推迟),journal 保留作待补记任务',
-      '同一候选只有一个在途 txn(复用) 终态之后重来:凭据 already_present、记录不动、效果按键 already,不产生重复',
-      '复用在途 txn 时较晚到达的终止事件(R21-4.4a ① 自环) harm 回滚走到第四段后用户 veto:复用同一 txn,终态理由取优先级最高者(vetoed),否决黑名单落地',
-      '较晚终止事件不静默丢失,也不阻断撤销(记录是唯一持久化依据;事件与撤销进度互不依赖) 提交失败(commit_failed):不以旧理由进终态、不删 journal、不返回 complete;重试成功后保留 veto 优先级与黑名单',
-      '记录与 journal 的组合(续做表) journal 无、记录在 rolling_back(别的路径提交了转移):resumeAll 补 kind=reconcile 的 journal 并走完,凭据按原因还原来源',
-    ],
-    restored: true,
-  },
-  {
-    id: 'step_table_short',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'R21-9.6 崩溃矩阵:每个命名步骤点崩一次 → 续做 步骤点表覆盖四个子状态与收尾(防止有人删点而测试照绿)',
-    ],
-    restored: true,
-  },
-  {
-    id: 'finish_no_removal_check',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'R21-9.3a 人工分叉下的撤销:凭据先于记录,仓库部分 deferred 记录可读但仓库提交 deferred(第三段「成功」):收尾重新检查并补做仓库移除,没删之前不删 journal、不假装完成',
-    ],
-    restored: true,
-  },
-  {
-    id: 'late_event_dropped',
-    failed: 5,
-    skipped: 0,
-    killedBy: [
-      '复用在途 txn 时较晚到达的终止事件(R21-4.4a ① 自环) harm 回滚走到第四段后用户 veto:复用同一 txn,终态理由取优先级最高者(vetoed),否决黑名单落地',
-      '较晚终止事件不静默丢失,也不阻断撤销(记录是唯一持久化依据;事件与撤销进度互不依赖) 权威记录读不到(deferred):撤销事务照常运行(HOME 清理不受阻),结果带 lateEventNotApplied;仓库恢复后调用方重试 → 施加并完成(vetoed)',
-      '较晚终止事件不静默丢失,也不阻断撤销(记录是唯一持久化依据;事件与撤销进度互不依赖) journal 停在第一段、仓库 deferred 时收到较晚事件:凭据与 HOME 撤销照常执行(不被事件持久化失败挡住),事件如实报未施加',
-      '较晚终止事件不静默丢失,也不阻断撤销(记录是唯一持久化依据;事件与撤销进度互不依赖) 提交失败(commit_failed):不以旧理由进终态、不删 journal、不返回 complete;重试成功后保留 veto 优先级与黑名单',
-      '较晚终止事件不静默丢失,也不阻断撤销(记录是唯一持久化依据;事件与撤销进度互不依赖) 记录已终态:不再施加(终态上的 veto 黑名单归前台命令),如实标记 record_terminal',
-    ],
-    restored: true,
-  },
-  {
-    id: 'late_event_failure_ignored',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      '较晚终止事件不静默丢失,也不阻断撤销(记录是唯一持久化依据;事件与撤销进度互不依赖) 提交失败(commit_failed):不以旧理由进终态、不删 journal、不返回 complete;重试成功后保留 veto 优先级与黑名单',
-    ],
-    restored: true,
-  },
-  {
-    id: 'late_event_flag_dropped',
-    failed: 4,
-    skipped: 0,
-    killedBy: [
-      '较晚终止事件不静默丢失,也不阻断撤销(记录是唯一持久化依据;事件与撤销进度互不依赖) 权威记录读不到(deferred):撤销事务照常运行(HOME 清理不受阻),结果带 lateEventNotApplied;仓库恢复后调用方重试 → 施加并完成(vetoed)',
-      '较晚终止事件不静默丢失,也不阻断撤销(记录是唯一持久化依据;事件与撤销进度互不依赖) journal 停在第一段、仓库 deferred 时收到较晚事件:凭据与 HOME 撤销照常执行(不被事件持久化失败挡住),事件如实报未施加',
-      '较晚终止事件不静默丢失,也不阻断撤销(记录是唯一持久化依据;事件与撤销进度互不依赖) 提交失败(commit_failed):不以旧理由进终态、不删 journal、不返回 complete;重试成功后保留 veto 优先级与黑名单',
-      '较晚终止事件不静默丢失,也不阻断撤销(记录是唯一持久化依据;事件与撤销进度互不依赖) 记录已终态:不再施加(终态上的 veto 黑名单归前台命令),如实标记 record_terminal',
-    ],
-    restored: true,
-  },
-  {
-    id: 'clear_report_unavailable_only',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'rsiAutoClear 报告模型 有在途 journal 而候选全集读不到:先续做(已写凭据),再报 unavailable;两者都在报告里,不承诺「没有写入」',
-    ],
-    restored: true,
-  },
-  {
-    id: 'lock_lost_ignored',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      '丢锁(applyEvent 提交后返回 lockLost)→ 立即停止,不再继续任何写出口 第三段记录提交后发现丢锁:抛 lock_lost;未调用仓库移除;journal 保留,新持锁者续做完成',
-    ],
-    restored: true,
-  },
-  {
-    id: 'deferred_no_revoke',
-    failed: 2,
-    skipped: 0,
-    killedBy: [
-      'R21-9.3a 人工分叉下的撤销:凭据先于记录,仓库部分 deferred deferred 下第三段先经撤销路径清 payload(动作含「重渲染本机 payload」),再验证缺席:不死锁',
-      'R21-9.3a 人工分叉下的撤销:凭据先于记录,仓库部分 deferred deferred 下撤销路径遇到用户改过的块(drift)→ 第三段未完成',
-    ],
-    restored: true,
-  },
-  {
-    id: 'clear_no_resume',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      '崩溃续做(真 git):clear 在第三段中途崩溃,缩减入口自己可重试 journal 在、记录已终态:再跑一次 clear 先续做在途 journal(不依赖 worker)→ 完成,journal 删除,凭据一行;干跑能看到在途 journal',
-    ],
-    restored: true,
-  },
-  {
-    id: 'source_fallthrough_worker',
-    failed: 7,
-    skipped: 0,
-    killedBy: [
-      'A. reconcile 不是例外:拿不到终止事实就不创建 journal cleared 的 rolling_back 记录没有 journal:来源有歧义(rollback_to / clear)→ refused by_ambiguous,零动作',
-      'B. 旧格式 journal(缺三键):先收齐三项事实,拿不到 → incomplete 且不写凭据 可还原:原因 vetoed(kind=rollback)→ 来源 veto、事件由原因重建、内容哈希来自 head.json 记录的提交 → 续做到终态',
-      'B. 旧格式 journal(缺三键):先收齐三项事实,拿不到 → incomplete 且不写凭据 终止事件需要原始证据(exec_post_check_failed):不伪造 → incomplete(terminal_event),不写凭据、记录不动、journal 保留',
-      'B. 旧格式 journal(缺三键):先收齐三项事实,拿不到 → incomplete 且不写凭据 cleared 配 kind=rollback / reconcile 来源有歧义(rollback_to 或 clear):不推出 → incomplete(by),不写凭据',
-      'B. 旧格式 journal(缺三键):先收齐三项事实,拿不到 → incomplete 且不写凭据 内容哈希:不信权威副本的当前值(记录里有、但没有凭据也没有 recordedSha)→ incomplete(content_sha256),不写凭据',
-      'B. 旧格式 journal(缺三键):先收齐三项事实,拿不到 → incomplete 且不写凭据 内容哈希:recordedSha 对不上 txn_id 不采信;复用入口时请求带来的内容哈希也不是允许的来源',
-      'B. 旧格式 journal(缺三键):先收齐三项事实,拿不到 → incomplete 且不写凭据 多项缺失一并报告(by + content_sha256;cleared 的事件可重建,不在其列)',
-    ],
-    restored: true,
-  },
-  {
-    id: 'source_clear_kind_lost',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'B. 旧格式 journal(缺三键):先收齐三项事实,拿不到 → incomplete 且不写凭据 可还原:原因 cleared(kind=clear)→ 来源 clear、事件由原因重建、内容哈希来自 head.json 记录的提交 → 续做到终态',
-    ],
-    restored: true,
-  },
-  {
-    id: 'by_ambiguous_guessed',
-    failed: 3,
-    skipped: 0,
-    killedBy: [
-      'A. reconcile 不是例外:拿不到终止事实就不创建 journal cleared 的 rolling_back 记录没有 journal:来源有歧义(rollback_to / clear)→ refused by_ambiguous,零动作',
-      'B. 旧格式 journal(缺三键):先收齐三项事实,拿不到 → incomplete 且不写凭据 cleared 配 kind=rollback / reconcile 来源有歧义(rollback_to 或 clear):不推出 → incomplete(by),不写凭据',
-      'B. 旧格式 journal(缺三键):先收齐三项事实,拿不到 → incomplete 且不写凭据 多项缺失一并报告(by + content_sha256;cleared 的事件可重建,不在其列)',
-    ],
-    restored: true,
-  },
-  {
-    id: 'reuse_by_request',
-    failed: 8,
-    skipped: 0,
-    killedBy: [
-      '来源保留(W0-17):崩溃恢复后 by 不变 rollback_to 的 txn 在凭据写入前崩溃、clear 再来:凭据的来源仍取 journal 的(rollback_to),不取请求的',
-      '同一候选只有一个在途 txn(复用) 崩溃后再次发起同一请求:复用同一 journal、凭据不重复;不同 kind / 原因的请求也复用',
-      '复用在途 txn 时较晚到达的终止事件(R21-4.4a ① 自环) harm 回滚走到第四段后用户 veto:复用同一 txn,终态理由取优先级最高者(vetoed),否决黑名单落地',
-      '较晚终止事件不静默丢失,也不阻断撤销(记录是唯一持久化依据;事件与撤销进度互不依赖) 权威记录读不到(deferred):撤销事务照常运行(HOME 清理不受阻),结果带 lateEventNotApplied;仓库恢复后调用方重试 → 施加并完成(vetoed)',
-      '较晚终止事件不静默丢失,也不阻断撤销(记录是唯一持久化依据;事件与撤销进度互不依赖) journal 停在第一段、仓库 deferred 时收到较晚事件:凭据与 HOME 撤销照常执行(不被事件持久化失败挡住),事件如实报未施加',
-      '较晚终止事件不静默丢失,也不阻断撤销(记录是唯一持久化依据;事件与撤销进度互不依赖) 提交失败(commit_failed):不以旧理由进终态、不删 journal、不返回 complete;重试成功后保留 veto 优先级与黑名单',
-      '较晚终止事件不静默丢失,也不阻断撤销(记录是唯一持久化依据;事件与撤销进度互不依赖) 记录还在 canary(journal 在第二段中断):事件留给第三段施加;第二段失败时 journal 保留,重试走完就是已施加(无标记)',
-      '较晚终止事件不静默丢失,也不阻断撤销(记录是唯一持久化依据;事件与撤销进度互不依赖) 记录已终态:不再施加(终态上的 veto 黑名单归前台命令),如实标记 record_terminal',
-    ],
-    restored: true,
-  },
-  {
-    id: 'rollback_to_gate_off',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'W0-17 来源保留:by 是撤销来源 rollback_to ⇔ (kind=rollback ∧ reason=cleared):组合不符一律拒绝(来源才能从 journal 唯一还原)',
-    ],
-    restored: true,
-  },
-  {
-    id: 'txn_id_ignores_content',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      '同一候选只有一个在途 txn(复用) txn_id 绑定内容:同一候选换了内容 → 新 txn、新凭据(内容变了必须写新凭据)',
-    ],
-    restored: true,
-  },
-  {
-    id: 'rev_dedupe_ignores_content',
-    failed: 1,
-    skipped: 0,
-    killedBy: ['writeRevocation 内容变了必须写新凭据(幂等键含 content_sha256)'],
-    restored: true,
-  },
-  {
-    id: 'rollback_to_unrestricted',
-    failed: 5,
-    skipped: 0,
-    killedBy: [
-      'writeRevocation (by=rollback_to, reason=harm_c1) 被拒:RevocationWriteError,文件不创建',
-      'writeRevocation (by=rollback_to, reason=vetoed) 被拒:RevocationWriteError,文件不创建',
-      '来源与原因的对应 rollback_to 只产出 cleared(收窄);契约允许的其余终止原因在本写入方被拒',
-      'W0-17 来源保留:by 是撤销来源 rollback_to 只产出 cleared(本块收窄契约的「全部终止原因」):别的终止原因被拒',
-      '记录与 journal 的组合(续做表) journal 无、记录在 rolling_back(别的路径提交了转移):resumeAll 补 kind=reconcile 的 journal 并走完,凭据按原因还原来源',
-    ],
-    restored: true,
-  },
-  {
-    id: 'identity_gets_revocation',
-    failed: 2,
-    skipped: 0,
-    killedBy: [
-      'writeRevocation identity_changed 永远不写凭据(R21-9.1 例外)',
-      '来源与原因的对应 rollback_to 只产出 cleared(收窄);契约允许的其余终止原因在本写入方被拒',
-    ],
-    restored: true,
-  },
-  {
-    id: 'by_veto_lost',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      '来源与原因的对应 byFromReason:cleared→clear、vetoed→veto、exec_*→exec_event、其余→worker(rollback_to 由执行器靠 kind + reason 区分)',
-    ],
-    restored: true,
-  },
-  {
-    id: 'clear_cache_touched',
-    failed: 7,
-    skipped: 0,
-    killedBy: [
-      'R21-9.5 验收②:仓库 `.state` 不访问,clear 仍退出 0 完成 shadow 候选:凭据 by=clear,私有仓库提交终态 cleared 并删原子文件;没有创建任何仓库 .state / rsi 目录,[rsi] repo 目录仍为空',
-      'R21-9.5 验收②:仓库 `.state` 不访问,clear 仍退出 0 完成 canary 候选(V1b):走四段,记录 rolled_back / cleared、deploy 清空;终态效果记待对账(不访问 .state)',
-      'R21-9.3a 人工分叉 / 属主变化下的撤销 工作树被用户改动(diverged):凭据照样落盘;私有仓库不提交、不动引用 / 索引 / 工作树(不 reset 用户改动);journal 保留;分叉解除后续做完成',
-      'R21-9.3a 人工分叉 / 属主变化下的撤销 [rsi] repo 换了(指纹不同):普通读取是 deferred(personal_owner_changed),缩减入口用 head.json 记录的指纹照常完成',
-      'R21-9.5 验收③:并发 clear 与旧 worker 经 personal/lock 串行,被清候选没有任何授予写入 持锁方在时 clear 拿不到 personal/lock(locked),不写;释放后 clear 完成,之后 grantCanary 被凭据拒绝(revoked)',
-      'R21-9.5 验收①④:对账(原仓库恢复、配置重新启用后) ①clear 不碰 .state:canary.json 原样残留;hint 对被清候选为 excluded(revoked);worker 首次运行补 stop 行并删缓存,屏障放行;④再对账一次分组账只多一条 stop',
-      '崩溃续做(真 git):clear 在第三段中途崩溃,缩减入口自己可重试 journal 在、记录已终态:再跑一次 clear 先续做在途 journal(不依赖 worker)→ 完成,journal 删除,凭据一行;干跑能看到在途 journal',
-    ],
-    restored: true,
-  },
-  {
-    id: 'clear_no_phase_gate',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'R21-9.5 验收②:仓库 `.state` 不访问,clear 仍退出 0 完成 能力闸:相位早于 V1a(cmd_auto_clear)→ phase_not_available,不写任何东西',
-    ],
-    restored: true,
-  },
-  {
-    id: 'clear_dry_run_writes',
-    failed: 2,
-    skipped: 0,
-    killedBy: [
-      'R21-9.5 验收②:仓库 `.state` 不访问,clear 仍退出 0 完成 干跑(无 --write):只列清单,零写入(无凭据、无 journal、HEAD 与记录不变)',
-      '崩溃续做(真 git):clear 在第三段中途崩溃,缩减入口自己可重试 journal 在、记录已终态:再跑一次 clear 先续做在途 journal(不依赖 worker)→ 完成,journal 删除,凭据一行;干跑能看到在途 journal',
-    ],
-    restored: true,
-  },
-  {
-    id: 'clear_effects_applied',
-    failed: 7,
-    skipped: 0,
-    killedBy: [
-      'R21-9.5 验收②:仓库 `.state` 不访问,clear 仍退出 0 完成 shadow 候选:凭据 by=clear,私有仓库提交终态 cleared 并删原子文件;没有创建任何仓库 .state / rsi 目录,[rsi] repo 目录仍为空',
-      'R21-9.5 验收②:仓库 `.state` 不访问,clear 仍退出 0 完成 canary 候选(V1b):走四段,记录 rolled_back / cleared、deploy 清空;终态效果记待对账(不访问 .state)',
-      'R21-9.3a 人工分叉 / 属主变化下的撤销 工作树被用户改动(diverged):凭据照样落盘;私有仓库不提交、不动引用 / 索引 / 工作树(不 reset 用户改动);journal 保留;分叉解除后续做完成',
-      'R21-9.3a 人工分叉 / 属主变化下的撤销 [rsi] repo 换了(指纹不同):普通读取是 deferred(personal_owner_changed),缩减入口用 head.json 记录的指纹照常完成',
-      'R21-9.5 验收③:并发 clear 与旧 worker 经 personal/lock 串行,被清候选没有任何授予写入 持锁方在时 clear 拿不到 personal/lock(locked),不写;释放后 clear 完成,之后 grantCanary 被凭据拒绝(revoked)',
-      'R21-9.5 验收①④:对账(原仓库恢复、配置重新启用后) ①clear 不碰 .state:canary.json 原样残留;hint 对被清候选为 excluded(revoked);worker 首次运行补 stop 行并删缓存,屏障放行;④再对账一次分组账只多一条 stop',
-      '崩溃续做(真 git):clear 在第三段中途崩溃,缩减入口自己可重试 journal 在、记录已终态:再跑一次 clear 先续做在途 journal(不依赖 worker)→ 完成,journal 删除,凭据一行;干跑能看到在途 journal',
-    ],
-    restored: true,
-  },
-  {
-    id: 'removal_lifecycle_ok',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      '第三段删除范围(W0-15):只删 target_paths,且只限 kit 管理命名空间、不得删 lifecycle/ target_path 指向 lifecycle/ 或管理命名空间之外 → TreeSpecError,仓库不动',
-    ],
-    restored: true,
-  },
-  {
-    id: 'removal_any_dir',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      '第三段删除范围(W0-15):只删 target_paths,且只限 kit 管理命名空间、不得删 lifecycle/ target_path 指向 lifecycle/ 或管理命名空间之外 → TreeSpecError,仓库不动',
-    ],
-    restored: true,
-  },
-  {
-    id: 'payload_v1_always',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'R21-9.1 四段补偿:正常路径 R21-9.2:V1 的第四段判据恒真(没有静态部署);相位到 local_payload(V2)时恒真实现自己 fail-closed',
-    ],
-    restored: true,
-  },
-  {
-    id: 'effects_no_blacklist',
-    failed: 4,
-    skipped: 0,
-    killedBy: [
-      'effectsForTerminal:与转移引擎在「非终态 → 终态」时产出的效果逐项一致 shadow 上 vetoed:引擎效果(去掉 commit / 审计)== 由终态记录推出的效果',
-      '复用在途 txn 时较晚到达的终止事件(R21-4.4a ① 自环) harm 回滚走到第四段后用户 veto:复用同一 txn,终态理由取优先级最高者(vetoed),否决黑名单落地',
-      '较晚终止事件不静默丢失,也不阻断撤销(记录是唯一持久化依据;事件与撤销进度互不依赖) 提交失败(commit_failed):不以旧理由进终态、不删 journal、不返回 complete;重试成功后保留 veto 优先级与黑名单',
-      '记录与 journal 的组合(续做表) journal 无、记录在 rolling_back(别的路径提交了转移):resumeAll 补 kind=reconcile 的 journal 并走完,凭据按原因还原来源',
-    ],
-    restored: true,
-  },
-  {
-    id: 'effects_cooldown_always',
-    failed: 4,
-    skipped: 0,
-    killedBy: [
-      'effectsForTerminal:与转移引擎在「非终态 → 终态」时产出的效果逐项一致 shadow 上 vetoed:引擎效果(去掉 commit / 审计)== 由终态记录推出的效果',
-      'effectsForTerminal:与转移引擎在「非终态 → 终态」时产出的效果逐项一致 shadow 上 cleared:引擎效果(去掉 commit / 审计)== 由终态记录推出的效果',
-      'effectsForTerminal:与转移引擎在「非终态 → 终态」时产出的效果逐项一致 shadow 上 tainted:引擎效果(去掉 commit / 审计)== 由终态记录推出的效果',
-      'effectsForTerminal:与转移引擎在「非终态 → 终态」时产出的效果逐项一致 auto_rollback 终态带 90 日冷却;expired 带 30 日冷却;人工终态没有冷却;非终态为空',
-    ],
-    restored: true,
-  },
-  {
-    id: 'effects_key_no_sha',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'effectsForTerminal:与转移引擎在「非终态 → 终态」时产出的效果逐项一致 键 = 候选 id + 内容哈希:同一候选的同一份内容只有一次终态效果',
-    ],
-    restored: true,
-  },
-  {
-    id: 'storm_window_31',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'R21-10.2 触发条件(日期差口径:今天 − 事件日 < N) rollback_storm:30 个 UTC 日内自动回滚 ≥ 3 次;第 30 天前(差 29)算、差 30 不算;2 次不触发',
-    ],
-    restored: true,
-  },
-  {
-    id: 'storm_threshold_2',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'R21-10.2 触发条件(日期差口径:今天 − 事件日 < N) rollback_storm:30 个 UTC 日内自动回滚 ≥ 3 次;第 30 天前(差 29)算、差 30 不算;2 次不触发',
-    ],
-    restored: true,
-  },
-  {
-    id: 'veto_window_8',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'R21-10.2 触发条件(日期差口径:今天 − 事件日 < N) user_vetoes:7 个 UTC 日内 veto ≥ 2(差 6 算、差 7 不算)',
-    ],
-    restored: true,
-  },
-  {
-    id: 'noobs_gt',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'R21-10.2 触发条件(日期差口径:今天 − 事件日 < N) no_observation:7 个 UTC 日无观测而 L0 有运行记录(差 7 触发、差 6 不触发;L0 无运行不触发;从未观测且 L0 有运行触发)',
-    ],
-    restored: true,
-  },
-  {
-    id: 'budget_ignores_loop',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'R21-10.2 触发条件(日期差口径:今天 − 事件日 < N) budget_high_legacy:占用 ≥ 90% 且不是本代循环造成(89 不触发、本代造成不触发);cost_high_legacy 按遗留超限',
-    ],
-    restored: true,
-  },
-  {
-    id: 'trip_no_phase_filter',
-    failed: 3,
-    skipped: 0,
-    killedBy: [
-      'tripBreaker:码表、幂等、按期过滤 本期不发的码:apply_failed(V2)与 isolation_unverified(V6b)在 V1b 相位 → phase_not_available,状态不变',
-      'tripBreaker:码表、幂等、按期过滤 rollback_storm 属 V1b:V1a 相位不发(W0-1 订正)',
-      '落地:先写 AUTO_PAUSE 标记、再写状态、后置 canary 不注入;崩溃后每次 worker 步骤补做 本期不发的码:不写标记、不写状态、不 mute',
-    ],
-    restored: true,
-  },
-  {
-    id: 'paused_ignores_flags',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'isAutoPaused:只看「有暂停原因」,diverged / owner_changed 与 AUTO_PAUSE 标记同样算 四种来源各自成立,全无则不暂停',
-    ],
-    restored: true,
-  },
-  {
-    id: 'release_clears_manual',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'R21-10.4 自动解除与 resume 的区分 worker 自动解除:只清条件已不成立的自动码;人工码不动;条件仍成立的自动码保留',
-    ],
-    restored: true,
-  },
-  {
-    id: 'resume_clears_auto',
-    failed: 3,
-    skipped: 0,
-    killedBy: [
-      'R21-10.4 自动解除与 resume 的区分 resume 只清人工码;自动码保留(交给 worker);diverged / owner_changed 不动',
-      '落地:先写 AUTO_PAUSE 标记、再写状态、后置 canary 不注入;崩溃后每次 worker 步骤补做 人工 resume:没有剩余码时删任何标记;仍有码时标记保留(hint 继续停注入)',
-      '落地:先写 AUTO_PAUSE 标记、再写状态、后置 canary 不注入;崩溃后每次 worker 步骤补做 内容读不出的标记(创建后写内容前被杀)而状态没有码:人工 resume 可清除;仍有码时不清',
-    ],
-    restored: true,
-  },
-  {
-    id: 'resume_no_recheck',
-    failed: 3,
-    skipped: 0,
-    killedBy: [
-      'R21-10.4 自动解除与 resume 的区分 resume:rollback_storm / gate_internal 重查四项,任一仍成立 → 保留并报 blocked(reason = 仍成立的码);都不成立 → 清除',
-      'R21-10.4 自动解除与 resume 的区分 resume:apply_failed / personal_repo_invalid 重查自己;其余人工码无条件可清',
-      'R21-10.4 自动解除与 resume 的区分 resume 清掉 user_paused → 通知命令层删 AUTO_PAUSE 标记;没清则不',
-    ],
-    restored: true,
-  },
-  {
-    id: 'trip_no_write',
-    failed: 4,
-    skipped: 0,
-    killedBy: [
-      '落地:先写 AUTO_PAUSE 标记、再写状态、后置 canary 不注入;崩溃后每次 worker 步骤补做 触发:marker.ensure 先于 state.write 先于 canary.mute',
-      '落地:先写 AUTO_PAUSE 标记、再写状态、后置 canary 不注入;崩溃后每次 worker 步骤补做 状态写入崩溃:标记已在盘上(hint 看得到),状态没写;下一次 enforceMute 补码、不删标记、补 mute',
-      '落地:先写 AUTO_PAUSE 标记、再写状态、后置 canary 不注入;崩溃后每次 worker 步骤补做 状态已写、mute 崩溃:下一次 enforceMute 补做(熔断仍在 → mute),无熔断则不 mute',
-      '落地:先写 AUTO_PAUSE 标记、再写状态、后置 canary 不注入;崩溃后每次 worker 步骤补做 已处于该码:不重写状态,但仍补标记与 mute(幂等)',
-    ],
-    restored: true,
-  },
-  {
-    id: 'enforce_no_mute',
-    failed: 6,
-    skipped: 0,
-    killedBy: [
-      '落地:先写 AUTO_PAUSE 标记、再写状态、后置 canary 不注入;崩溃后每次 worker 步骤补做 状态写入崩溃:标记已在盘上(hint 看得到),状态没写;下一次 enforceMute 补码、不删标记、补 mute',
-      '落地:先写 AUTO_PAUSE 标记、再写状态、后置 canary 不注入;崩溃后每次 worker 步骤补做 用户标记(by=user)存在而状态没码:补 user_paused,标记不动',
-      '落地:先写 AUTO_PAUSE 标记、再写状态、后置 canary 不注入;崩溃后每次 worker 步骤补做 有码而没有标记(状态已写、标记缺):enforceMute 补标记',
-      '落地:先写 AUTO_PAUSE 标记、再写状态、后置 canary 不注入;崩溃后每次 worker 步骤补做 状态已写、mute 崩溃:下一次 enforceMute 补做(熔断仍在 → mute),无熔断则不 mute',
-      '落地:先写 AUTO_PAUSE 标记、再写状态、后置 canary 不注入;崩溃后每次 worker 步骤补做 部分解除后标记仍在:enforceMute 不复活已被清掉的码(标记只记首个原因;状态里已有别的码时不补)',
-      '落地:先写 AUTO_PAUSE 标记、再写状态、后置 canary 不注入;崩溃后每次 worker 步骤补做 残余窗口(如实钉住):resume 写了状态、删标记前崩溃 → 下一次 enforceMute 由标记补回码(安全方向:不会少停注入)',
-    ],
-    restored: true,
-  },
-  {
-    id: 'lock_guard_off',
-    failed: 1,
-    skipped: 0,
-    killedBy: ['锁序守卫 先 personal 后 rsi → internal(反向取锁);rsi 锁文件没有被创建'],
-    restored: true,
-  },
-  {
-    id: 'lock_mark_missing',
-    failed: 1,
-    skipped: 0,
-    killedBy: ['锁序守卫 先 personal 后 rsi → internal(反向取锁);rsi 锁文件没有被创建'],
-    restored: true,
-  },
-  {
-    id: 'lock_unmark_missing',
-    failed: 3,
-    skipped: 0,
-    killedBy: [
-      '锁序守卫 先 personal 后 rsi → internal(反向取锁);rsi 锁文件没有被创建',
-      '锁序守卫 正向顺序 rsi → personal 允许;释放 personal 后再取 rsi 允许(守卫随释放解除)',
-      '锁序守卫 personal 锁获取失败(已被占)不会残留登记:登记只在拿到锁之后',
-    ],
-    restored: true,
-  },
-  {
-    id: 'chain_no_phase_gate',
-    failed: 1,
-    skipped: 0,
-    killedBy: ['串接 能力闸:相位未到 V1b(rollback_four_phase)→ 拒绝,不写任何东西'],
-    restored: true,
-  },
-  {
-    id: 'chain_any_state',
-    failed: 1,
-    skipped: 0,
-    killedBy: ['串接 候选不在 canary / rolling_back → 拒绝,不写 journal 与凭据'],
-    restored: true,
-  },
-  {
-    id: 'chain_by_clear',
-    failed: 4,
-    skipped: 0,
-    killedBy: [
-      '串接 harm 结论 → 候选走完四段:凭据 by=worker reason=harm_c1,记录 rolled_back / auto_rollback',
-      '串接 C4 越限也是 harm(reason=harm_c4)',
-      '串接 生产缺端口(payload 没装配):执行器 incomplete,凭据已落盘(hint 已停),journal 保留 —— 不假装完成',
-      '串接 仓库 deferred(人工分叉)时 harm:凭据照样落盘 —— hint 停止注入不依赖私有仓库',
-    ],
-    restored: true,
-  },
-  {
-    id: 'journal_no_sha',
-    failed: 53,
-    skipped: 0,
-    killedBy: [
-      'H1 / M4:journal 首次落盘带齐 content_sha256 / by / terminal_event 原因 harm_c1/worker:journal:rollback_requested 处崩溃,盘上 journal 带齐三项',
-      'H1 / M4:journal 首次落盘带齐 content_sha256 / by / terminal_event 原因 harm_c2/worker:journal:rollback_requested 处崩溃,盘上 journal 带齐三项',
-      'H1 / M4:journal 首次落盘带齐 content_sha256 / by / terminal_event 原因 harm_c3/worker:journal:rollback_requested 处崩溃,盘上 journal 带齐三项',
-      'H1 / M4:journal 首次落盘带齐 content_sha256 / by / terminal_event 原因 harm_c4/worker:journal:rollback_requested 处崩溃,盘上 journal 带齐三项',
-      'H1 / M4:journal 首次落盘带齐 content_sha256 / by / terminal_event 原因 harm_c6/worker:journal:rollback_requested 处崩溃,盘上 journal 带齐三项',
-      'H1 / M4:journal 首次落盘带齐 content_sha256 / by / terminal_event 原因 limit_reached/worker:journal:rollback_requested 处崩溃,盘上 journal 带齐三项',
-      'H1 / M4:journal 首次落盘带齐 content_sha256 / by / terminal_event 原因 vetoed/veto:journal:rollback_requested 处崩溃,盘上 journal 带齐三项',
-      'H1 / M4:journal 首次落盘带齐 content_sha256 / by / terminal_event 原因 tainted/worker:journal:rollback_requested 处崩溃,盘上 journal 带齐三项',
-      'H1 / M4:journal 首次落盘带齐 content_sha256 / by / terminal_event 原因 cleared/clear:journal:rollback_requested 处崩溃,盘上 journal 带齐三项',
-      'H1 / M4:journal 首次落盘带齐 content_sha256 / by / terminal_event 原因 cleared/rollback_to:journal:rollback_requested 处崩溃,盘上 journal 带齐三项',
-      'H1 / M4:journal 首次落盘带齐 content_sha256 / by / terminal_event 原因 judge_reject/worker:journal:rollback_requested 处崩溃,盘上 journal 带齐三项',
-      'H1 / M4:journal 首次落盘带齐 content_sha256 / by / terminal_event 原因 judge_injection/worker:journal:rollback_requested 处崩溃,盘上 journal 带齐三项',
-      'H1 / M4:journal 首次落盘带齐 content_sha256 / by / terminal_event reconcile(kind=reconcile)的 journal 同样带齐三项:终止事实由原因重建(vetoed → veto 事件,证据 txn:<id>)',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 harm_c1/worker:崩于凭据落盘前(journal:rollback_requested),仓库 deferred 下续做写出凭据,再崩于凭据后',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 harm_c2/worker:崩于凭据落盘前(journal:rollback_requested),仓库 deferred 下续做写出凭据,再崩于凭据后',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 harm_c3/worker:崩于凭据落盘前(journal:rollback_requested),仓库 deferred 下续做写出凭据,再崩于凭据后',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 harm_c4/worker:崩于凭据落盘前(journal:rollback_requested),仓库 deferred 下续做写出凭据,再崩于凭据后',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 harm_c6/worker:崩于凭据落盘前(journal:rollback_requested),仓库 deferred 下续做写出凭据,再崩于凭据后',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 limit_reached/worker:崩于凭据落盘前(journal:rollback_requested),仓库 deferred 下续做写出凭据,再崩于凭据后',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 vetoed/veto:崩于凭据落盘前(journal:rollback_requested),仓库 deferred 下续做写出凭据,再崩于凭据后',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 tainted/worker:崩于凭据落盘前(journal:rollback_requested),仓库 deferred 下续做写出凭据,再崩于凭据后',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 cleared/clear:崩于凭据落盘前(journal:rollback_requested),仓库 deferred 下续做写出凭据,再崩于凭据后',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 cleared/rollback_to:崩于凭据落盘前(journal:rollback_requested),仓库 deferred 下续做写出凭据,再崩于凭据后',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 judge_reject/worker:崩于凭据落盘前(journal:rollback_requested),仓库 deferred 下续做写出凭据,再崩于凭据后',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 judge_injection/worker:崩于凭据落盘前(journal:rollback_requested),仓库 deferred 下续做写出凭据,再崩于凭据后',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 harm_c1/worker:崩于凭据落盘后(after:revocation),续做再崩于记录提交前(enter:static_removal_pending)',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 harm_c2/worker:崩于凭据落盘后(after:revocation),续做再崩于记录提交前(enter:static_removal_pending)',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 harm_c3/worker:崩于凭据落盘后(after:revocation),续做再崩于记录提交前(enter:static_removal_pending)',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 harm_c4/worker:崩于凭据落盘后(after:revocation),续做再崩于记录提交前(enter:static_removal_pending)',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 harm_c6/worker:崩于凭据落盘后(after:revocation),续做再崩于记录提交前(enter:static_removal_pending)',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 limit_reached/worker:崩于凭据落盘后(after:revocation),续做再崩于记录提交前(enter:static_removal_pending)',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 vetoed/veto:崩于凭据落盘后(after:revocation),续做再崩于记录提交前(enter:static_removal_pending)',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 tainted/worker:崩于凭据落盘后(after:revocation),续做再崩于记录提交前(enter:static_removal_pending)',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 cleared/clear:崩于凭据落盘后(after:revocation),续做再崩于记录提交前(enter:static_removal_pending)',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 cleared/rollback_to:崩于凭据落盘后(after:revocation),续做再崩于记录提交前(enter:static_removal_pending)',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 judge_reject/worker:崩于凭据落盘后(after:revocation),续做再崩于记录提交前(enter:static_removal_pending)',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 judge_injection/worker:崩于凭据落盘后(after:revocation),续做再崩于记录提交前(enter:static_removal_pending)',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 harm_c1/worker:崩于记录提交前(enter:static_removal_pending),续做在仓库 deferred 下再崩,最后恢复续做到终态',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 harm_c2/worker:崩于记录提交前(enter:static_removal_pending),续做在仓库 deferred 下再崩,最后恢复续做到终态',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 harm_c3/worker:崩于记录提交前(enter:static_removal_pending),续做在仓库 deferred 下再崩,最后恢复续做到终态',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 harm_c4/worker:崩于记录提交前(enter:static_removal_pending),续做在仓库 deferred 下再崩,最后恢复续做到终态',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 harm_c6/worker:崩于记录提交前(enter:static_removal_pending),续做在仓库 deferred 下再崩,最后恢复续做到终态',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 limit_reached/worker:崩于记录提交前(enter:static_removal_pending),续做在仓库 deferred 下再崩,最后恢复续做到终态',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 vetoed/veto:崩于记录提交前(enter:static_removal_pending),续做在仓库 deferred 下再崩,最后恢复续做到终态',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 tainted/worker:崩于记录提交前(enter:static_removal_pending),续做在仓库 deferred 下再崩,最后恢复续做到终态',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 cleared/clear:崩于记录提交前(enter:static_removal_pending),续做在仓库 deferred 下再崩,最后恢复续做到终态',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 cleared/rollback_to:崩于记录提交前(enter:static_removal_pending),续做在仓库 deferred 下再崩,最后恢复续做到终态',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 judge_reject/worker:崩于记录提交前(enter:static_removal_pending),续做在仓库 deferred 下再崩,最后恢复续做到终态',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 judge_injection/worker:崩于记录提交前(enter:static_removal_pending),续做在仓库 deferred 下再崩,最后恢复续做到终态',
-      'M6:审计行经带键端口落地,同一行只落一次 正常回滚:审计键集合固定(回滚路径 7 条转移条目 → 7 个键 = 条目的 idem_key),每键恰好落地一次',
-      'M6:审计行经带键端口落地,同一行只落一次 提交后崩溃(after:record_terminal)续做:每个审计键仍只落地一次',
-      'M6:审计行经带键端口落地,同一行只落一次 审计落地失败(提交之后):收尾抛错、journal 保留;修好后续做补齐全部审计键,各一次',
-      'M6:审计行经带键端口落地,同一行只落一次 recoverTerminalEffects 对执行器终态补审计(按键幂等,再跑不重复)',
-    ],
-    restored: true,
-  },
-  {
-    id: 'journal_no_by',
-    failed: 53,
-    skipped: 0,
-    killedBy: [
-      'H1 / M4:journal 首次落盘带齐 content_sha256 / by / terminal_event 原因 harm_c1/worker:journal:rollback_requested 处崩溃,盘上 journal 带齐三项',
-      'H1 / M4:journal 首次落盘带齐 content_sha256 / by / terminal_event 原因 harm_c2/worker:journal:rollback_requested 处崩溃,盘上 journal 带齐三项',
-      'H1 / M4:journal 首次落盘带齐 content_sha256 / by / terminal_event 原因 harm_c3/worker:journal:rollback_requested 处崩溃,盘上 journal 带齐三项',
-      'H1 / M4:journal 首次落盘带齐 content_sha256 / by / terminal_event 原因 harm_c4/worker:journal:rollback_requested 处崩溃,盘上 journal 带齐三项',
-      'H1 / M4:journal 首次落盘带齐 content_sha256 / by / terminal_event 原因 harm_c6/worker:journal:rollback_requested 处崩溃,盘上 journal 带齐三项',
-      'H1 / M4:journal 首次落盘带齐 content_sha256 / by / terminal_event 原因 limit_reached/worker:journal:rollback_requested 处崩溃,盘上 journal 带齐三项',
-      'H1 / M4:journal 首次落盘带齐 content_sha256 / by / terminal_event 原因 vetoed/veto:journal:rollback_requested 处崩溃,盘上 journal 带齐三项',
-      'H1 / M4:journal 首次落盘带齐 content_sha256 / by / terminal_event 原因 tainted/worker:journal:rollback_requested 处崩溃,盘上 journal 带齐三项',
-      'H1 / M4:journal 首次落盘带齐 content_sha256 / by / terminal_event 原因 cleared/clear:journal:rollback_requested 处崩溃,盘上 journal 带齐三项',
-      'H1 / M4:journal 首次落盘带齐 content_sha256 / by / terminal_event 原因 cleared/rollback_to:journal:rollback_requested 处崩溃,盘上 journal 带齐三项',
-      'H1 / M4:journal 首次落盘带齐 content_sha256 / by / terminal_event 原因 judge_reject/worker:journal:rollback_requested 处崩溃,盘上 journal 带齐三项',
-      'H1 / M4:journal 首次落盘带齐 content_sha256 / by / terminal_event 原因 judge_injection/worker:journal:rollback_requested 处崩溃,盘上 journal 带齐三项',
-      'H1 / M4:journal 首次落盘带齐 content_sha256 / by / terminal_event reconcile(kind=reconcile)的 journal 同样带齐三项:终止事实由原因重建(vetoed → veto 事件,证据 txn:<id>)',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 harm_c1/worker:崩于凭据落盘前(journal:rollback_requested),仓库 deferred 下续做写出凭据,再崩于凭据后',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 harm_c2/worker:崩于凭据落盘前(journal:rollback_requested),仓库 deferred 下续做写出凭据,再崩于凭据后',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 harm_c3/worker:崩于凭据落盘前(journal:rollback_requested),仓库 deferred 下续做写出凭据,再崩于凭据后',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 harm_c4/worker:崩于凭据落盘前(journal:rollback_requested),仓库 deferred 下续做写出凭据,再崩于凭据后',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 harm_c6/worker:崩于凭据落盘前(journal:rollback_requested),仓库 deferred 下续做写出凭据,再崩于凭据后',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 limit_reached/worker:崩于凭据落盘前(journal:rollback_requested),仓库 deferred 下续做写出凭据,再崩于凭据后',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 vetoed/veto:崩于凭据落盘前(journal:rollback_requested),仓库 deferred 下续做写出凭据,再崩于凭据后',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 tainted/worker:崩于凭据落盘前(journal:rollback_requested),仓库 deferred 下续做写出凭据,再崩于凭据后',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 cleared/clear:崩于凭据落盘前(journal:rollback_requested),仓库 deferred 下续做写出凭据,再崩于凭据后',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 cleared/rollback_to:崩于凭据落盘前(journal:rollback_requested),仓库 deferred 下续做写出凭据,再崩于凭据后',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 judge_reject/worker:崩于凭据落盘前(journal:rollback_requested),仓库 deferred 下续做写出凭据,再崩于凭据后',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 judge_injection/worker:崩于凭据落盘前(journal:rollback_requested),仓库 deferred 下续做写出凭据,再崩于凭据后',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 harm_c1/worker:崩于凭据落盘后(after:revocation),续做再崩于记录提交前(enter:static_removal_pending)',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 harm_c2/worker:崩于凭据落盘后(after:revocation),续做再崩于记录提交前(enter:static_removal_pending)',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 harm_c3/worker:崩于凭据落盘后(after:revocation),续做再崩于记录提交前(enter:static_removal_pending)',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 harm_c4/worker:崩于凭据落盘后(after:revocation),续做再崩于记录提交前(enter:static_removal_pending)',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 harm_c6/worker:崩于凭据落盘后(after:revocation),续做再崩于记录提交前(enter:static_removal_pending)',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 limit_reached/worker:崩于凭据落盘后(after:revocation),续做再崩于记录提交前(enter:static_removal_pending)',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 vetoed/veto:崩于凭据落盘后(after:revocation),续做再崩于记录提交前(enter:static_removal_pending)',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 tainted/worker:崩于凭据落盘后(after:revocation),续做再崩于记录提交前(enter:static_removal_pending)',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 cleared/clear:崩于凭据落盘后(after:revocation),续做再崩于记录提交前(enter:static_removal_pending)',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 cleared/rollback_to:崩于凭据落盘后(after:revocation),续做再崩于记录提交前(enter:static_removal_pending)',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 judge_reject/worker:崩于凭据落盘后(after:revocation),续做再崩于记录提交前(enter:static_removal_pending)',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 judge_injection/worker:崩于凭据落盘后(after:revocation),续做再崩于记录提交前(enter:static_removal_pending)',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 harm_c1/worker:崩于记录提交前(enter:static_removal_pending),续做在仓库 deferred 下再崩,最后恢复续做到终态',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 harm_c2/worker:崩于记录提交前(enter:static_removal_pending),续做在仓库 deferred 下再崩,最后恢复续做到终态',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 harm_c3/worker:崩于记录提交前(enter:static_removal_pending),续做在仓库 deferred 下再崩,最后恢复续做到终态',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 harm_c4/worker:崩于记录提交前(enter:static_removal_pending),续做在仓库 deferred 下再崩,最后恢复续做到终态',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 harm_c6/worker:崩于记录提交前(enter:static_removal_pending),续做在仓库 deferred 下再崩,最后恢复续做到终态',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 limit_reached/worker:崩于记录提交前(enter:static_removal_pending),续做在仓库 deferred 下再崩,最后恢复续做到终态',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 vetoed/veto:崩于记录提交前(enter:static_removal_pending),续做在仓库 deferred 下再崩,最后恢复续做到终态',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 tainted/worker:崩于记录提交前(enter:static_removal_pending),续做在仓库 deferred 下再崩,最后恢复续做到终态',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 cleared/clear:崩于记录提交前(enter:static_removal_pending),续做在仓库 deferred 下再崩,最后恢复续做到终态',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 cleared/rollback_to:崩于记录提交前(enter:static_removal_pending),续做在仓库 deferred 下再崩,最后恢复续做到终态',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 judge_reject/worker:崩于记录提交前(enter:static_removal_pending),续做在仓库 deferred 下再崩,最后恢复续做到终态',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 judge_injection/worker:崩于记录提交前(enter:static_removal_pending),续做在仓库 deferred 下再崩,最后恢复续做到终态',
-      'M6:审计行经带键端口落地,同一行只落一次 正常回滚:审计键集合固定(回滚路径 7 条转移条目 → 7 个键 = 条目的 idem_key),每键恰好落地一次',
-      'M6:审计行经带键端口落地,同一行只落一次 提交后崩溃(after:record_terminal)续做:每个审计键仍只落地一次',
-      'M6:审计行经带键端口落地,同一行只落一次 审计落地失败(提交之后):收尾抛错、journal 保留;修好后续做补齐全部审计键,各一次',
-      'M6:审计行经带键端口落地,同一行只落一次 recoverTerminalEffects 对执行器终态补审计(按键幂等,再跑不重复)',
-    ],
-    restored: true,
-  },
-  {
-    id: 'journal_no_event',
-    failed: 53,
-    skipped: 0,
-    killedBy: [
-      'H1 / M4:journal 首次落盘带齐 content_sha256 / by / terminal_event 原因 harm_c1/worker:journal:rollback_requested 处崩溃,盘上 journal 带齐三项',
-      'H1 / M4:journal 首次落盘带齐 content_sha256 / by / terminal_event 原因 harm_c2/worker:journal:rollback_requested 处崩溃,盘上 journal 带齐三项',
-      'H1 / M4:journal 首次落盘带齐 content_sha256 / by / terminal_event 原因 harm_c3/worker:journal:rollback_requested 处崩溃,盘上 journal 带齐三项',
-      'H1 / M4:journal 首次落盘带齐 content_sha256 / by / terminal_event 原因 harm_c4/worker:journal:rollback_requested 处崩溃,盘上 journal 带齐三项',
-      'H1 / M4:journal 首次落盘带齐 content_sha256 / by / terminal_event 原因 harm_c6/worker:journal:rollback_requested 处崩溃,盘上 journal 带齐三项',
-      'H1 / M4:journal 首次落盘带齐 content_sha256 / by / terminal_event 原因 limit_reached/worker:journal:rollback_requested 处崩溃,盘上 journal 带齐三项',
-      'H1 / M4:journal 首次落盘带齐 content_sha256 / by / terminal_event 原因 vetoed/veto:journal:rollback_requested 处崩溃,盘上 journal 带齐三项',
-      'H1 / M4:journal 首次落盘带齐 content_sha256 / by / terminal_event 原因 tainted/worker:journal:rollback_requested 处崩溃,盘上 journal 带齐三项',
-      'H1 / M4:journal 首次落盘带齐 content_sha256 / by / terminal_event 原因 cleared/clear:journal:rollback_requested 处崩溃,盘上 journal 带齐三项',
-      'H1 / M4:journal 首次落盘带齐 content_sha256 / by / terminal_event 原因 cleared/rollback_to:journal:rollback_requested 处崩溃,盘上 journal 带齐三项',
-      'H1 / M4:journal 首次落盘带齐 content_sha256 / by / terminal_event 原因 judge_reject/worker:journal:rollback_requested 处崩溃,盘上 journal 带齐三项',
-      'H1 / M4:journal 首次落盘带齐 content_sha256 / by / terminal_event 原因 judge_injection/worker:journal:rollback_requested 处崩溃,盘上 journal 带齐三项',
-      'H1 / M4:journal 首次落盘带齐 content_sha256 / by / terminal_event reconcile(kind=reconcile)的 journal 同样带齐三项:终止事实由原因重建(vetoed → veto 事件,证据 txn:<id>)',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 harm_c1/worker:崩于凭据落盘前(journal:rollback_requested),仓库 deferred 下续做写出凭据,再崩于凭据后',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 harm_c2/worker:崩于凭据落盘前(journal:rollback_requested),仓库 deferred 下续做写出凭据,再崩于凭据后',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 harm_c3/worker:崩于凭据落盘前(journal:rollback_requested),仓库 deferred 下续做写出凭据,再崩于凭据后',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 harm_c4/worker:崩于凭据落盘前(journal:rollback_requested),仓库 deferred 下续做写出凭据,再崩于凭据后',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 harm_c6/worker:崩于凭据落盘前(journal:rollback_requested),仓库 deferred 下续做写出凭据,再崩于凭据后',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 limit_reached/worker:崩于凭据落盘前(journal:rollback_requested),仓库 deferred 下续做写出凭据,再崩于凭据后',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 vetoed/veto:崩于凭据落盘前(journal:rollback_requested),仓库 deferred 下续做写出凭据,再崩于凭据后',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 tainted/worker:崩于凭据落盘前(journal:rollback_requested),仓库 deferred 下续做写出凭据,再崩于凭据后',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 cleared/clear:崩于凭据落盘前(journal:rollback_requested),仓库 deferred 下续做写出凭据,再崩于凭据后',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 cleared/rollback_to:崩于凭据落盘前(journal:rollback_requested),仓库 deferred 下续做写出凭据,再崩于凭据后',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 judge_reject/worker:崩于凭据落盘前(journal:rollback_requested),仓库 deferred 下续做写出凭据,再崩于凭据后',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 judge_injection/worker:崩于凭据落盘前(journal:rollback_requested),仓库 deferred 下续做写出凭据,再崩于凭据后',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 harm_c1/worker:崩于凭据落盘后(after:revocation),续做再崩于记录提交前(enter:static_removal_pending)',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 harm_c2/worker:崩于凭据落盘后(after:revocation),续做再崩于记录提交前(enter:static_removal_pending)',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 harm_c3/worker:崩于凭据落盘后(after:revocation),续做再崩于记录提交前(enter:static_removal_pending)',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 harm_c4/worker:崩于凭据落盘后(after:revocation),续做再崩于记录提交前(enter:static_removal_pending)',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 harm_c6/worker:崩于凭据落盘后(after:revocation),续做再崩于记录提交前(enter:static_removal_pending)',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 limit_reached/worker:崩于凭据落盘后(after:revocation),续做再崩于记录提交前(enter:static_removal_pending)',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 vetoed/veto:崩于凭据落盘后(after:revocation),续做再崩于记录提交前(enter:static_removal_pending)',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 tainted/worker:崩于凭据落盘后(after:revocation),续做再崩于记录提交前(enter:static_removal_pending)',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 cleared/clear:崩于凭据落盘后(after:revocation),续做再崩于记录提交前(enter:static_removal_pending)',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 cleared/rollback_to:崩于凭据落盘后(after:revocation),续做再崩于记录提交前(enter:static_removal_pending)',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 judge_reject/worker:崩于凭据落盘后(after:revocation),续做再崩于记录提交前(enter:static_removal_pending)',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 judge_injection/worker:崩于凭据落盘后(after:revocation),续做再崩于记录提交前(enter:static_removal_pending)',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 harm_c1/worker:崩于记录提交前(enter:static_removal_pending),续做在仓库 deferred 下再崩,最后恢复续做到终态',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 harm_c2/worker:崩于记录提交前(enter:static_removal_pending),续做在仓库 deferred 下再崩,最后恢复续做到终态',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 harm_c3/worker:崩于记录提交前(enter:static_removal_pending),续做在仓库 deferred 下再崩,最后恢复续做到终态',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 harm_c4/worker:崩于记录提交前(enter:static_removal_pending),续做在仓库 deferred 下再崩,最后恢复续做到终态',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 harm_c6/worker:崩于记录提交前(enter:static_removal_pending),续做在仓库 deferred 下再崩,最后恢复续做到终态',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 limit_reached/worker:崩于记录提交前(enter:static_removal_pending),续做在仓库 deferred 下再崩,最后恢复续做到终态',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 vetoed/veto:崩于记录提交前(enter:static_removal_pending),续做在仓库 deferred 下再崩,最后恢复续做到终态',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 tainted/worker:崩于记录提交前(enter:static_removal_pending),续做在仓库 deferred 下再崩,最后恢复续做到终态',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 cleared/clear:崩于记录提交前(enter:static_removal_pending),续做在仓库 deferred 下再崩,最后恢复续做到终态',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 cleared/rollback_to:崩于记录提交前(enter:static_removal_pending),续做在仓库 deferred 下再崩,最后恢复续做到终态',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 judge_reject/worker:崩于记录提交前(enter:static_removal_pending),续做在仓库 deferred 下再崩,最后恢复续做到终态',
-      'H1 / M4:全部支持原因 × 崩溃点 → 续做(不传 hint / recordedSha;仓库读不到也要写出凭据)→ 再崩 → 再续做 原因 judge_injection/worker:崩于记录提交前(enter:static_removal_pending),续做在仓库 deferred 下再崩,最后恢复续做到终态',
-      'M6:审计行经带键端口落地,同一行只落一次 正常回滚:审计键集合固定(回滚路径 7 条转移条目 → 7 个键 = 条目的 idem_key),每键恰好落地一次',
-      'M6:审计行经带键端口落地,同一行只落一次 提交后崩溃(after:record_terminal)续做:每个审计键仍只落地一次',
-      'M6:审计行经带键端口落地,同一行只落一次 审计落地失败(提交之后):收尾抛错、journal 保留;修好后续做补齐全部审计键,各一次',
-      'M6:审计行经带键端口落地,同一行只落一次 recoverTerminalEffects 对执行器终态补审计(按键幂等,再跑不重复)',
-    ],
-    restored: true,
-  },
-  {
-    id: 'event_schema_skipped',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      '入口校验:事件在写 journal 之前过转移引擎 schema 事件不合规 → refused event_invalid,不写 journal、不写凭据',
-    ],
-    restored: true,
-  },
-  {
-    id: 'late_event_schema_skipped',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'A. 复用在途 txn 时较晚事件不合规 较晚事件不合规(过不了转移引擎的事件 schema)→ refused event_invalid,journal 与记录都不动、零动作',
-    ],
-    restored: true,
-  },
-  {
-    id: 'event_required_off',
-    failed: 2,
-    skipped: 0,
-    killedBy: [
-      'A. 新 journal 写入边界:事件与 reason / target_terminal 不一致 → refused,零副作用 没有事件而原因不能无证据重建(harm / judge / limit)→ event_required,零副作用',
-      'A. reconcile 不是例外:拿不到终止事实就不创建 journal harm_c1 的 rolling_back 记录没有 journal:refused event_required,不写 journal / 凭据',
-    ],
-    restored: true,
-  },
-  {
-    id: 'event_reason_unchecked',
-    failed: 8,
-    skipped: 0,
-    killedBy: [
-      'A. 新 journal 写入边界:事件与 reason / target_terminal 不一致 → refused,零副作用 cleared 携带 veto 事件(会触发永久黑名单)',
-      'A. 新 journal 写入边界:事件与 reason / target_terminal 不一致 → refused,零副作用 vetoed 携带 clear 事件',
-      'A. 新 journal 写入边界:事件与 reason / target_terminal 不一致 → refused,零副作用 harm_c1 携带 c2 指标事件',
-      'A. 新 journal 写入边界:事件与 reason / target_terminal 不一致 → refused,零副作用 harm_c1 携带 judge 事件',
-      'A. 新 journal 写入边界:事件与 reason / target_terminal 不一致 → refused,零副作用 limit_reached 携带 harm 事件',
-      'B. 旧格式 journal(缺三键):先收齐三项事实,拿不到 → incomplete 且不写凭据 带 HARM 事件但与 reason 不一致的新格式 journal 不被当作旧格式:txn_invalid',
-      'journal 字段不合规 → refused txn_invalid,零动作(fail-closed) terminal_event 与 reason 不一致(harm_c1 的 journal 带 veto 事件)',
-      'journal 字段不合规 → refused txn_invalid,零动作(fail-closed) terminal_event 与 reason 不一致(harm_c1 的 journal 带 c2 指标的事件)',
-    ],
-    restored: true,
-  },
-  {
-    id: 'event_target_unchecked',
-    failed: 3,
-    skipped: 0,
-    killedBy: [
-      'A. 新 journal 写入边界:事件与 reason / target_terminal 不一致 → refused,零副作用 limit_reached 配 target_terminal=rolled_back(事件的目标是 expired)',
-      'A. 新 journal 写入边界:事件与 reason / target_terminal 不一致 → refused,零副作用 harm_c1 配 target_terminal=expired(事件的目标是 rolled_back)',
-      'journal 字段不合规 → refused txn_invalid,零动作(fail-closed) terminal_event 与 target_terminal 不一致(harm 事件配 expired)',
-    ],
-    restored: true,
-  },
-  {
-    id: 'new_event_check_skipped',
-    failed: 7,
-    skipped: 0,
-    killedBy: [
-      'A. 新 journal 写入边界:事件与 reason / target_terminal 不一致 → refused,零副作用 cleared 携带 veto 事件(会触发永久黑名单)',
-      'A. 新 journal 写入边界:事件与 reason / target_terminal 不一致 → refused,零副作用 vetoed 携带 clear 事件',
-      'A. 新 journal 写入边界:事件与 reason / target_terminal 不一致 → refused,零副作用 harm_c1 携带 c2 指标事件',
-      'A. 新 journal 写入边界:事件与 reason / target_terminal 不一致 → refused,零副作用 harm_c1 携带 judge 事件',
-      'A. 新 journal 写入边界:事件与 reason / target_terminal 不一致 → refused,零副作用 limit_reached 携带 harm 事件',
-      'A. 新 journal 写入边界:事件与 reason / target_terminal 不一致 → refused,零副作用 limit_reached 配 target_terminal=rolled_back(事件的目标是 expired)',
-      'A. 新 journal 写入边界:事件与 reason / target_terminal 不一致 → refused,零副作用 harm_c1 配 target_terminal=expired(事件的目标是 rolled_back)',
-    ],
-    restored: true,
-  },
-  {
-    id: 'read_event_check_skipped',
-    failed: 4,
-    skipped: 0,
-    killedBy: [
-      'B. 旧格式 journal(缺三键):先收齐三项事实,拿不到 → incomplete 且不写凭据 带 HARM 事件但与 reason 不一致的新格式 journal 不被当作旧格式:txn_invalid',
-      'journal 字段不合规 → refused txn_invalid,零动作(fail-closed) terminal_event 与 reason 不一致(harm_c1 的 journal 带 veto 事件)',
-      'journal 字段不合规 → refused txn_invalid,零动作(fail-closed) terminal_event 与 reason 不一致(harm_c1 的 journal 带 c2 指标的事件)',
-      'journal 字段不合规 → refused txn_invalid,零动作(fail-closed) terminal_event 与 target_terminal 不一致(harm 事件配 expired)',
-    ],
-    restored: true,
-  },
-  {
-    id: 'journal_event_unchecked',
-    failed: 2,
-    skipped: 0,
-    killedBy: [
-      'journal 字段不合规 → refused txn_invalid,零动作(fail-closed) terminal_event 过不了转移引擎的事件 schema',
-      'journal 字段不合规 → refused txn_invalid,零动作(fail-closed) terminal_event 缺必填字段',
-    ],
-    restored: true,
-  },
-  {
-    id: 'journal_sha_unchecked',
-    failed: 2,
-    skipped: 0,
-    killedBy: [
-      'journal 字段不合规 → refused txn_invalid,零动作(fail-closed) content_sha256 与 txn_id 对不上',
-      '复用在途 txn:journal 语义校验先于任何副作用(较晚事件的施加会提交记录) content_sha256 与 txn_id 对不上的 journal:较晚事件不施加(记录 / 审计 / 效果 / 凭据 / payload 零写入)',
-    ],
-    restored: true,
-  },
-  {
-    id: 'journal_by_unchecked',
-    failed: 2,
-    skipped: 0,
-    killedBy: [
-      'journal 字段不合规 → refused txn_invalid,零动作(fail-closed) by 与 (kind, reason) 不相容',
-      'journal 字段不合规 → refused txn_invalid,零动作(fail-closed) 复用在途 txn 的入口读到不合规 journal 同样 refused,且不施加请求带来的较晚事件',
-    ],
-    restored: true,
-  },
-  {
-    id: 'event_fabricated',
-    failed: 10,
-    skipped: 0,
-    killedBy: [
-      'A. 新 journal 写入边界:事件与 reason / target_terminal 不一致 → refused,零副作用 没有事件而原因不能无证据重建(harm / judge / limit)→ event_required,零副作用',
-      'A. reconcile 不是例外:拿不到终止事实就不创建 journal harm_c1 的 rolling_back 记录没有 journal:refused event_required,不写 journal / 凭据',
-      'B. 旧格式 journal(缺三键):先收齐三项事实,拿不到 → incomplete 且不写凭据 终止事件需要原始证据(harm_c1):不伪造 → incomplete(terminal_event),不写凭据、记录不动、journal 保留',
-      'B. 旧格式 journal(缺三键):先收齐三项事实,拿不到 → incomplete 且不写凭据 终止事件需要原始证据(harm_c6):不伪造 → incomplete(terminal_event),不写凭据、记录不动、journal 保留',
-      'B. 旧格式 journal(缺三键):先收齐三项事实,拿不到 → incomplete 且不写凭据 终止事件需要原始证据(judge_reject):不伪造 → incomplete(terminal_event),不写凭据、记录不动、journal 保留',
-      'B. 旧格式 journal(缺三键):先收齐三项事实,拿不到 → incomplete 且不写凭据 终止事件需要原始证据(judge_injection):不伪造 → incomplete(terminal_event),不写凭据、记录不动、journal 保留',
-      'B. 旧格式 journal(缺三键):先收齐三项事实,拿不到 → incomplete 且不写凭据 终止事件需要原始证据(limit_reached):不伪造 → incomplete(terminal_event),不写凭据、记录不动、journal 保留',
-      'B. 旧格式 journal(缺三键):先收齐三项事实,拿不到 → incomplete 且不写凭据 终止事件需要原始证据(exec_post_check_failed):不伪造 → incomplete(terminal_event),不写凭据、记录不动、journal 保留',
-      'B. 旧格式 journal(缺三键):先收齐三项事实,拿不到 → incomplete 且不写凭据 凭据已写(旧 journal 在第三段)而终止事件拿不到:仍 incomplete,记录与仓库都不再动',
-      'B. 旧格式 journal(缺三键):先收齐三项事实,拿不到 → incomplete 且不写凭据 只带部分恢复键(sha + by,没有 terminal_event;0e9b1f7 写过这种 reconcile)按键逐个处理:harm_c1 拿不到事件 → incomplete(terminal_event)',
-    ],
-    restored: true,
-  },
-  {
-    id: 'legacy_sha_unbound',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'B. 旧格式 journal(缺三键):先收齐三项事实,拿不到 → incomplete 且不写凭据 内容哈希:recordedSha 对不上 txn_id 不采信;复用入口时请求带来的内容哈希也不是允许的来源',
-    ],
-    restored: true,
-  },
-  {
-    id: 'legacy_incomplete_ignored',
-    failed: 12,
-    skipped: 0,
-    killedBy: [
-      'B. 旧格式 journal(缺三键):先收齐三项事实,拿不到 → incomplete 且不写凭据 终止事件需要原始证据(harm_c1):不伪造 → incomplete(terminal_event),不写凭据、记录不动、journal 保留',
-      'B. 旧格式 journal(缺三键):先收齐三项事实,拿不到 → incomplete 且不写凭据 终止事件需要原始证据(harm_c6):不伪造 → incomplete(terminal_event),不写凭据、记录不动、journal 保留',
-      'B. 旧格式 journal(缺三键):先收齐三项事实,拿不到 → incomplete 且不写凭据 终止事件需要原始证据(judge_reject):不伪造 → incomplete(terminal_event),不写凭据、记录不动、journal 保留',
-      'B. 旧格式 journal(缺三键):先收齐三项事实,拿不到 → incomplete 且不写凭据 终止事件需要原始证据(judge_injection):不伪造 → incomplete(terminal_event),不写凭据、记录不动、journal 保留',
-      'B. 旧格式 journal(缺三键):先收齐三项事实,拿不到 → incomplete 且不写凭据 终止事件需要原始证据(limit_reached):不伪造 → incomplete(terminal_event),不写凭据、记录不动、journal 保留',
-      'B. 旧格式 journal(缺三键):先收齐三项事实,拿不到 → incomplete 且不写凭据 终止事件需要原始证据(exec_post_check_failed):不伪造 → incomplete(terminal_event),不写凭据、记录不动、journal 保留',
-      'B. 旧格式 journal(缺三键):先收齐三项事实,拿不到 → incomplete 且不写凭据 cleared 配 kind=rollback / reconcile 来源有歧义(rollback_to 或 clear):不推出 → incomplete(by),不写凭据',
-      'B. 旧格式 journal(缺三键):先收齐三项事实,拿不到 → incomplete 且不写凭据 内容哈希:不信权威副本的当前值(记录里有、但没有凭据也没有 recordedSha)→ incomplete(content_sha256),不写凭据',
-      'B. 旧格式 journal(缺三键):先收齐三项事实,拿不到 → incomplete 且不写凭据 内容哈希:recordedSha 对不上 txn_id 不采信;复用入口时请求带来的内容哈希也不是允许的来源',
-      'B. 旧格式 journal(缺三键):先收齐三项事实,拿不到 → incomplete 且不写凭据 多项缺失一并报告(by + content_sha256;cleared 的事件可重建,不在其列)',
-      'B. 旧格式 journal(缺三键):先收齐三项事实,拿不到 → incomplete 且不写凭据 凭据已写(旧 journal 在第三段)而终止事件拿不到:仍 incomplete,记录与仓库都不再动',
-      'B. 旧格式 journal(缺三键):先收齐三项事实,拿不到 → incomplete 且不写凭据 只带部分恢复键(sha + by,没有 terminal_event;0e9b1f7 写过这种 reconcile)按键逐个处理:harm_c1 拿不到事件 → incomplete(terminal_event)',
-    ],
-    restored: true,
-  },
-  {
-    id: 'identity_runs',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'identity_changed(E1,V6a):本期入口一律拒绝(M5),不部分执行 已有在途回滚 txn 时 identity 请求同样被入口拒绝:不复用、不推进该 txn',
-    ],
-    restored: true,
-  },
-  {
-    id: 'identity_journal_runs',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'identity_changed(E1,V6a):本期入口一律拒绝(M5),不部分执行 读到旧的 identity_change journal:不动(refused,凭据 / 记录 / 端口都不碰),journal 保留',
-    ],
-    restored: true,
-  },
-  {
-    id: 'deferred_incomplete',
-    failed: 5,
-    skipped: 0,
-    killedBy: [
-      'H2:分叉下撤销四段完成即算完成(revocation_complete),仓库 / 记录部分推迟并留下待补记任务 clear 遇人工分叉(记录读不到,候选改从 head.json 的只读读取):凭据落盘、HOME 清理完成 → revocation_complete,journal 保留,workingMarked=false,报告列出 repoRemovalPending',
-      'H2:分叉下撤销四段完成即算完成(revocation_complete),仓库 / 记录部分推迟并留下待补记任务 worker 路径(装配 deferralMark):写 repo_removal_deferred 标记 → workingMarked=true;分叉解除后 resumeAll(仍带 deferralMark)→ complete、journal 删、记录到终态',
-      'H2:分叉下撤销四段完成即算完成(revocation_complete),仓库 / 记录部分推迟并留下待补记任务 deferralMark 落地失败:异常向上(journal 保留,凭据已落盘),不返回 workingMarked=true',
-      'R21-9.3a 人工分叉下的撤销:凭据先于记录,仓库部分 deferred 私有仓库 deferred:凭据照样落盘;第三段判据改为 payload 已不含该候选;不提交;撤销已完成(revocation_complete,仓库部分推迟),journal 保留作待补记任务',
-      '较晚终止事件不静默丢失,也不阻断撤销(记录是唯一持久化依据;事件与撤销进度互不依赖) 权威记录读不到(deferred):撤销事务照常运行(HOME 清理不受阻),结果带 lateEventNotApplied;仓库恢复后调用方重试 → 施加并完成(vetoed)',
-    ],
-    restored: true,
-  },
-  {
-    id: 'deferred_rem_incomplete',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'R21-9.3a 人工分叉下的撤销:凭据先于记录,仓库部分 deferred 记录可读但仓库提交 deferred(第三段「成功」):收尾重新检查并补做仓库移除,没删之前不删 journal、不假装完成',
-    ],
-    restored: true,
-  },
-  {
-    id: 'deferral_mark_skipped',
-    failed: 2,
-    skipped: 0,
-    killedBy: [
-      'H2:分叉下撤销四段完成即算完成(revocation_complete),仓库 / 记录部分推迟并留下待补记任务 worker 路径(装配 deferralMark):写 repo_removal_deferred 标记 → workingMarked=true;分叉解除后 resumeAll(仍带 deferralMark)→ complete、journal 删、记录到终态',
-      'H2:分叉下撤销四段完成即算完成(revocation_complete),仓库 / 记录部分推迟并留下待补记任务 deferralMark 落地失败:异常向上(journal 保留,凭据已落盘),不返回 workingMarked=true',
-    ],
-    restored: true,
-  },
-  {
-    id: 'marked_always',
-    failed: 2,
-    skipped: 0,
-    killedBy: [
-      'H2:分叉下撤销四段完成即算完成(revocation_complete),仓库 / 记录部分推迟并留下待补记任务 clear 遇人工分叉(记录读不到,候选改从 head.json 的只读读取):凭据落盘、HOME 清理完成 → revocation_complete,journal 保留,workingMarked=false,报告列出 repoRemovalPending',
-      'R21-9.3a 人工分叉下的撤销:凭据先于记录,仓库部分 deferred 私有仓库 deferred:凭据照样落盘;第三段判据改为 payload 已不含该候选;不提交;撤销已完成(revocation_complete,仓库部分推迟),journal 保留作待补记任务',
-    ],
-    restored: true,
-  },
-  {
-    id: 'clear_pending_lost',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'H2:分叉下撤销四段完成即算完成(revocation_complete),仓库 / 记录部分推迟并留下待补记任务 clear 遇人工分叉(记录读不到,候选改从 head.json 的只读读取):凭据落盘、HOME 清理完成 → revocation_complete,journal 保留,workingMarked=false,报告列出 repoRemovalPending',
-    ],
-    restored: true,
-  },
-  {
-    id: 'marker_after_state',
-    failed: 8,
-    skipped: 0,
-    killedBy: [
-      '落地:先写 AUTO_PAUSE 标记、再写状态、后置 canary 不注入;崩溃后每次 worker 步骤补做 触发:marker.ensure 先于 state.write 先于 canary.mute',
-      '落地:先写 AUTO_PAUSE 标记、再写状态、后置 canary 不注入;崩溃后每次 worker 步骤补做 状态写入崩溃:标记已在盘上(hint 看得到),状态没写;下一次 enforceMute 补码、不删标记、补 mute',
-      'H3 标记先于状态:崩溃窗口里 hint 也看得到 state.write 崩溃:hint 的许可端口读到 AUTO_PAUSE=present(状态没写);标记内容 {at, by:breaker, reason}',
-      'H3 标记先于状态:崩溃窗口里 hint 也看得到 崩溃后下一次 enforceMute:由标记补码、标记保留',
-      'H3 持久化(R21-12.2):标记文件与父目录 fsync 之后才写 state 新建标记:文件 fsync → 父目录 fsync → state.write(顺序)',
-      'H3 持久化(R21-12.2):标记文件与父目录 fsync 之后才写 state 标记已存在(可能尚未落盘,如上次崩溃时别的进程刚建):不覆盖内容,但补一次文件 fsync 与父目录 fsync,之后才写 state',
-      'H3 持久化(R21-12.2):标记文件与父目录 fsync 之后才写 state 已存在的标记不是单链接普通文件(硬链接)→ 拒绝、不写 state(fail-closed)',
-      'H3 持久化(R21-12.2):标记文件与父目录 fsync 之后才写 state 已存在的标记是没有写端的 FIFO:在有界时间内拒绝(不阻塞在只读打开上),不写 state',
-    ],
-    restored: true,
-  },
-  {
-    id: 'enforce_marker_missing',
-    failed: 3,
-    skipped: 0,
-    killedBy: [
-      '落地:先写 AUTO_PAUSE 标记、再写状态、后置 canary 不注入;崩溃后每次 worker 步骤补做 有码而没有标记(状态已写、标记缺):enforceMute 补标记',
-      'H3 标记先于状态:崩溃窗口里 hint 也看得到 有码缺标记:enforceMute 补标记(独占创建)',
-      'H3 持久化(R21-12.2):标记文件与父目录 fsync 之后才写 state enforceMute 补标记(有码缺标记)也走同一条持久路径',
-    ],
-    restored: true,
-  },
-  {
-    id: 'enforce_code_restore_skipped',
-    failed: 4,
-    skipped: 0,
-    killedBy: [
-      '落地:先写 AUTO_PAUSE 标记、再写状态、后置 canary 不注入;崩溃后每次 worker 步骤补做 状态写入崩溃:标记已在盘上(hint 看得到),状态没写;下一次 enforceMute 补码、不删标记、补 mute',
-      '落地:先写 AUTO_PAUSE 标记、再写状态、后置 canary 不注入;崩溃后每次 worker 步骤补做 用户标记(by=user)存在而状态没码:补 user_paused,标记不动',
-      '落地:先写 AUTO_PAUSE 标记、再写状态、后置 canary 不注入;崩溃后每次 worker 步骤补做 残余窗口(如实钉住):resume 写了状态、删标记前崩溃 → 下一次 enforceMute 由标记补回码(安全方向:不会少停注入)',
-      'H3 标记先于状态:崩溃窗口里 hint 也看得到 崩溃后下一次 enforceMute:由标记补码、标记保留',
-    ],
-    restored: true,
-  },
-  {
-    id: 'marker_overwrite',
-    failed: 6,
-    skipped: 0,
-    killedBy: [
-      '标记端口:不覆盖用户标记;own / any 删除范围 ensure 遇到用户写的标记 → exists,内容不变;read 为 user',
-      'H3 持久化(R21-12.2):标记文件与父目录 fsync 之后才写 state 新建标记:文件 fsync → 父目录 fsync → state.write(顺序)',
-      'H3 持久化(R21-12.2):标记文件与父目录 fsync 之后才写 state 标记已存在(可能尚未落盘,如上次崩溃时别的进程刚建):不覆盖内容,但补一次文件 fsync 与父目录 fsync,之后才写 state',
-      'H3 持久化(R21-12.2):标记文件与父目录 fsync 之后才写 state enforceMute 补标记(有码缺标记)也走同一条持久路径',
-      'H3 持久化(R21-12.2):标记文件与父目录 fsync 之后才写 state 创建后写入失败:抛错(调用方不写 state)且**不删除**刚创建的标记(无锁并发下别的 ensure 可能已对它返回 exists)',
-      'H3 持久化(R21-12.2):标记文件与父目录 fsync 之后才写 state 已存在的标记是没有写端的 FIFO:在有界时间内拒绝(不阻塞在只读打开上),不写 state',
-    ],
-    restored: true,
-  },
-  {
-    id: 'release_keeps_marker',
-    failed: 2,
-    skipped: 0,
-    killedBy: [
-      '落地:先写 AUTO_PAUSE 标记、再写状态、后置 canary 不注入;崩溃后每次 worker 步骤补做 自动解除:先写状态、后删 worker 写的标记;只在没有剩余码且确有码被清时删;用户标记不删',
-      '解除只在没有剩余码时删标记(真文件) 自动解除:仍有码 → 标记保留;清空 → 删 worker 写的标记',
-    ],
-    restored: true,
-  },
-  {
-    id: 'release_removes_any',
-    failed: 2,
-    skipped: 0,
-    killedBy: [
-      '落地:先写 AUTO_PAUSE 标记、再写状态、后置 canary 不注入;崩溃后每次 worker 步骤补做 自动解除:先写状态、后删 worker 写的标记;只在没有剩余码且确有码被清时删;用户标记不删',
-      '解除只在没有剩余码时删标记(真文件) 自动解除不删用户标记;人工 resume 在无剩余码时删(含用户标记)',
-    ],
-    restored: true,
-  },
-  {
-    id: 'release_marker_early',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      '落地:先写 AUTO_PAUSE 标记、再写状态、后置 canary 不注入;崩溃后每次 worker 步骤补做 自动解除:先写状态、后删 worker 写的标记;只在没有剩余码且确有码被清时删;用户标记不删',
-    ],
-    restored: true,
-  },
-  {
-    id: 'resume_marker_early',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      '落地:先写 AUTO_PAUSE 标记、再写状态、后置 canary 不注入;崩溃后每次 worker 步骤补做 人工 resume:没有剩余码时删任何标记;仍有码时标记保留(hint 继续停注入)',
-    ],
-    restored: true,
-  },
-  {
-    id: 'reuse_check_skipped',
-    failed: 3,
-    skipped: 0,
-    killedBy: [
-      'journal 字段不合规 → refused txn_invalid,零动作(fail-closed) 复用在途 txn 的入口读到不合规 journal 同样 refused,且不施加请求带来的较晚事件',
-      '复用在途 txn:journal 语义校验先于任何副作用(较晚事件的施加会提交记录) content_sha256 与 txn_id 对不上的 journal:较晚事件不施加(记录 / 审计 / 效果 / 凭据 / payload 零写入)',
-      '复用在途 txn:journal 语义校验先于任何副作用(较晚事件的施加会提交记录) 旧的 identity_change journal:较晚事件不施加(记录 / 审计 / 效果 / 凭据 / payload 零写入)',
-    ],
-    restored: true,
-  },
-  {
-    id: 'enforce_resurrects_partial',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      '落地:先写 AUTO_PAUSE 标记、再写状态、后置 canary 不注入;崩溃后每次 worker 步骤补做 部分解除后标记仍在:enforceMute 不复活已被清掉的码(标记只记首个原因;状态里已有别的码时不补)',
-    ],
-    restored: true,
-  },
-  {
-    id: 'resume_unknown_marker',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      '落地:先写 AUTO_PAUSE 标记、再写状态、后置 canary 不注入;崩溃后每次 worker 步骤补做 内容读不出的标记(创建后写内容前被杀)而状态没有码:人工 resume 可清除;仍有码时不清',
-    ],
-    restored: true,
-  },
-  {
-    id: 'audit_not_keyed',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'M6 审计键 = 事件身份:同毫秒、同 from/to/reason、不同 evidence 的两条转移 → 两行审计 rolling_back 上先后到达两个 evidence 不同的 harm_c1 事件(自环):两行内容完全相同的审计各落一次,恢复补做不再增加',
-    ],
-    restored: true,
-  },
-  {
-    id: 'audit_no_finish',
-    failed: 2,
-    skipped: 0,
-    killedBy: [
-      'M6:审计行经带键端口落地,同一行只落一次 审计落地失败(提交之后):收尾抛错、journal 保留;修好后续做补齐全部审计键,各一次',
-      'M6:审计行经带键端口落地,同一行只落一次 recoverTerminalEffects 对执行器终态补审计(按键幂等,再跑不重复)',
-    ],
-    restored: true,
-  },
-  {
-    id: 'audit_no_recover',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'M6:审计行经带键端口落地,同一行只落一次 recoverTerminalEffects 对执行器终态补审计(按键幂等,再跑不重复)',
-    ],
-    restored: true,
-  },
-  {
-    id: 'audit_recover_all',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'M6:审计行经带键端口落地,同一行只落一次 非执行器终态理由(如 rejected_gate)不补审计:它们的审计行是转移当时直接追加的',
-    ],
-    restored: true,
-  },
-  {
-    id: 'audit_key_no_idem',
-    failed: 8,
-    skipped: 0,
-    killedBy: [
-      'audit key auditKeyOf = audit:<候选>:<idem_key>',
-      'audit key auditItemsOf:键取自条目的 idem_key,不同条目键不同(即使审计行内容相同)',
-      'audit key keyedAuditSink:带键的行经 applyOnce(键 = 事件身份),同一行内容、两个事件身份 → 两次 applyOnce',
-      'M6:审计行经带键端口落地,同一行只落一次 正常回滚:审计键集合固定(回滚路径 7 条转移条目 → 7 个键 = 条目的 idem_key),每键恰好落地一次',
-      'M6:审计行经带键端口落地,同一行只落一次 提交后崩溃(after:record_terminal)续做:每个审计键仍只落地一次',
-      'M6:审计行经带键端口落地,同一行只落一次 审计落地失败(提交之后):收尾抛错、journal 保留;修好后续做补齐全部审计键,各一次',
-      'M6:审计行经带键端口落地,同一行只落一次 recoverTerminalEffects 对执行器终态补审计(按键幂等,再跑不重复)',
-      'M6 审计键 = 事件身份:同毫秒、同 from/to/reason、不同 evidence 的两条转移 → 两行审计 rolling_back 上先后到达两个 evidence 不同的 harm_c1 事件(自环):两行内容完全相同的审计各落一次,恢复补做不再增加',
-    ],
-    restored: true,
-  },
-  {
-    id: 'audit_key_missing_ignored',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'audit key 缺事件身份(没有转移条目的审计)→ 抛错,不调用 applyOnce(fail-closed,不回落到行内容哈希)',
-    ],
-    restored: true,
-  },
-  {
-    id: 'marker_no_file_sync',
-    failed: 3,
-    skipped: 0,
-    killedBy: [
-      'H3 持久化(R21-12.2):标记文件与父目录 fsync 之后才写 state 新建标记:文件 fsync → 父目录 fsync → state.write(顺序)',
-      'H3 持久化(R21-12.2):标记文件与父目录 fsync 之后才写 state 标记已存在(可能尚未落盘,如上次崩溃时别的进程刚建):不覆盖内容,但补一次文件 fsync 与父目录 fsync,之后才写 state',
-      'H3 持久化(R21-12.2):标记文件与父目录 fsync 之后才写 state enforceMute 补标记(有码缺标记)也走同一条持久路径',
-    ],
-    restored: true,
-  },
-  {
-    id: 'marker_failure_unlinks',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'H3 持久化(R21-12.2):标记文件与父目录 fsync 之后才写 state 创建后写入失败:抛错(调用方不写 state)且**不删除**刚创建的标记(无锁并发下别的 ensure 可能已对它返回 exists)',
-    ],
-    restored: true,
-  },
-  {
-    id: 'marker_fifo_blocks',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'H3 持久化(R21-12.2):标记文件与父目录 fsync 之后才写 state 已存在的标记是没有写端的 FIFO:在有界时间内拒绝(不阻塞在只读打开上),不写 state',
-    ],
-    restored: true,
-  },
-  {
-    id: 'marker_no_dir_sync',
-    failed: 3,
-    skipped: 0,
-    killedBy: [
-      'H3 持久化(R21-12.2):标记文件与父目录 fsync 之后才写 state 新建标记:文件 fsync → 父目录 fsync → state.write(顺序)',
-      'H3 持久化(R21-12.2):标记文件与父目录 fsync 之后才写 state 标记已存在(可能尚未落盘,如上次崩溃时别的进程刚建):不覆盖内容,但补一次文件 fsync 与父目录 fsync,之后才写 state',
-      'H3 持久化(R21-12.2):标记文件与父目录 fsync 之后才写 state enforceMute 补标记(有码缺标记)也走同一条持久路径',
-    ],
-    restored: true,
-  },
-  {
-    id: 'marker_exists_unchecked',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'H3 持久化(R21-12.2):标记文件与父目录 fsync 之后才写 state 已存在的标记是没有写端的 FIFO:在有界时间内拒绝(不阻塞在只读打开上),不写 state',
-    ],
-    restored: true,
-  },
+  // W7b 改写 / 新增了变异条目:结果由主代理跑完变异后按变异表同序回填(不自己编结果)
 ];

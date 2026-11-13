@@ -291,7 +291,10 @@ describe('journal 字段不合规 → refused txn_invalid,零动作(fail-closed)
     await w.d.txns.write(base(over as Partial<PersonalTxn>));
     w.calls.length = 0;
     const out = await resumeAll(w.d);
-    expect(out).toEqual([{ status: 'refused', txn: TXN, why: 'txn_invalid' }]);
+    // 完整性错误:不带事务身份(同 (id, sha) 的 complete 消除不了它)
+    expect(out).toEqual([
+      { status: 'refused', txn: null, journal: TXN, why: 'txn_invalid', cause: 'txn_invalid' },
+    ]);
     expect(w.calls.filter((c) => ACTIONS.includes(c))).toEqual([]);
     expect(w.revs).toHaveLength(0);
     expect(recordOf(w).lifecycle).toBe('canary');
@@ -310,7 +313,13 @@ describe('journal 字段不合规 → refused txn_invalid,零动作(fail-closed)
       target_terminal: 'rolled_back',
       event: { kind: 'veto', evidence: 'rsi veto' },
     });
-    expect(r).toEqual({ status: 'refused', txn: TXN, why: 'txn_invalid' });
+    expect(r).toEqual({
+      status: 'refused',
+      txn: null,
+      journal: TXN,
+      why: 'txn_invalid',
+      cause: 'txn_invalid',
+    });
     expect(w.revs).toHaveLength(0);
   });
 });
@@ -358,7 +367,12 @@ describe('复用在途 txn:journal 语义校验先于任何副作用(较晚事�
     w.calls.length = 0;
     const before = JSON.stringify(recordOf(w));
     const r = await startRollback(w.d, lateVeto);
-    expect(r).toMatchObject({ status: 'refused', txn: TXN });
+    // sha 对不上 = 完整性错误(无事务身份);旧 identity_change journal = 合法但本期不支持(带 txn)
+    expect(r).toMatchObject(
+      'kind' in over
+        ? { status: 'refused', txn: TXN, cause: 'candidate_invalid' }
+        : { status: 'refused', txn: null, journal: TXN, cause: 'txn_invalid' },
+    );
     expect(w.store.commits).toHaveLength(0);
     expect(JSON.stringify(recordOf(w))).toBe(before);
     expect(w.auditLog.size).toBe(0);
@@ -375,14 +389,19 @@ describe('入口校验:事件在写 journal 之前过转移引擎 schema', () =>
       ...reqOf(CASES[0] as Case),
       event: { kind: 'limit', evidence: 'x' } as unknown as TransitionEvent,
     });
-    expect(r).toEqual({ status: 'refused', txn: null, why: 'event_invalid' });
+    expect(r).toEqual({
+      status: 'refused',
+      txn: null,
+      why: 'event_invalid',
+      cause: 'candidate_invalid',
+    });
     // 创建函数自己也拒绝(不靠入口的同名检查兜住)
     expect(
       newJournal(
         { ...reqOf(CASES[0] as Case), event: { kind: 'limit', evidence: 'x' } },
         '2026-11-10T12:00:00.000Z',
       ),
-    ).toEqual({ ok: false, why: 'event_invalid' });
+    ).toEqual({ ok: false, why: 'event_invalid', cause: 'candidate_invalid' });
     expect(w.txns.size).toBe(0);
     expect(w.revs).toHaveLength(0);
     expect(w.calls).toEqual([]);
@@ -398,7 +417,12 @@ describe('入口校验:事件在写 journal 之前过转移引擎 schema', () =>
       by: 'worker',
       target_terminal: 'expired',
     });
-    expect(r).toEqual({ status: 'refused', txn: null, why: 'event_required' });
+    expect(r).toEqual({
+      status: 'refused',
+      txn: null,
+      why: 'event_required',
+      cause: 'manual_event_required',
+    });
     expect(w.txns.size).toBe(0);
     expect(w.revs).toHaveLength(0);
   });
