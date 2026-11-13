@@ -7,12 +7,16 @@
  * `[rsi]` 关闭时没有仓库 `.state`:state / view / audit 读为缺失、标记为不存在(`auto status` 照常给出 `enabled=false`)。
  */
 import * as path from 'node:path';
-import { RsiAutoSchema } from '../../contracts/rsi.js';
+import {
+  RSI_FAIL_CLOSED_REASONS,
+  RsiAutoSchema,
+  type RsiFailClosedReason,
+} from '../../contracts/rsi.js';
 import { runGitClosed } from '../../io/exec.js';
 import { getRealHome } from '../../io/paths.js';
 import { lstat, readFileSafe } from '../../io/read-fs.js';
 import { CANARY_FILES } from '../canary/files.js';
-import { loadRsiConfig } from '../config.js';
+import { loadRsiConfig, type RsiOffReason } from '../config.js';
 import { RSI_FILE_OWNER, rsiDirReadonly } from '../lock-read.js';
 import { makeGitReadonly } from '../personal/read/git-readonly.js';
 import { makeHomeReadPort } from '../personal/read/home-reads.js';
@@ -32,6 +36,46 @@ import { interpretView } from './read/view-read.js';
 /** 私有仓库 git 目录(HOME 相对;与 `home-state.ts` 的 `PERSONAL_REPO_REL` + `.git` 相同) */
 export const PERSONAL_GIT_DIR_REL = '.local/share/agent-kit/personal/.git';
 
+/** 合法关闭 / 确实没有配置:没有仓库与状态目录可泄漏(其余 off 原因 = 配置不可信) */
+const LEGIT_OFF: ReadonlySet<RsiOffReason> = new Set<RsiOffReason>([
+  'absent',
+  'no_section',
+  'disabled',
+]);
+
+/** 不可信配置的 off 原因 → 码表里同名的 fail-closed reason(`cfg_*` / `repo_invalid` 都在 `RSI_FAIL_CLOSED_REASONS`);对不上码表则 internal */
+function untrustedReason(r: RsiOffReason): RsiFailClosedReason {
+  return (RSI_FAIL_CLOSED_REASONS as readonly string[]).includes(r)
+    ? (r as RsiFailClosedReason)
+    : 'internal';
+}
+
+/**
+ * 输出泄漏闸的额外禁止值:状态目录、仓库根、`[rsi] repo`、私有仓库目录,以及显式 `--root`(按 `createRsiIoContext` 同样的方式解析;合法关闭时它也是已知路径)。
+ * **不静默丢项**:配置 on 时仓库根 / 状态目录必须取得,缺一项 = 抛错(fail-closed);只有 `explicitRoot` 是可选来源。
+ */
+export function forbiddenExtra(
+  ctx: Pick<RsiEarlyContext, 'explicitRoot' | 'cwd'>,
+  io: { stateDir: string; repoRoot: string } | null,
+  repo: string | null,
+  gitDir: string,
+): string[] {
+  const out: string[] = [gitDir];
+  if (repo !== null) {
+    if (io === null || !io.stateDir || !io.repoRoot || !repo)
+      throw new RsiFailClosedError('internal');
+    out.push(io.stateDir, io.repoRoot, repo);
+  }
+  if (ctx.explicitRoot !== undefined) {
+    out.push(
+      ctx.cwd === undefined
+        ? path.resolve(ctx.explicitRoot)
+        : path.resolve(ctx.cwd, ctx.explicitRoot),
+    );
+  }
+  return out;
+}
+
 export interface ProductionPortsOptions {
   /** git 可执行文件的绝对路径(装配传入;缺省 = 未装配) */
   gitPath?: string;
@@ -44,9 +88,17 @@ export async function productionAutoPorts(
 ): Promise<AutoReadPorts> {
   const env = ctx.env;
   const cfg = await loadRsiConfig({ ...(env !== undefined ? { env } : {}) });
+  // 配置无法可信读取(不是「确实没有配置 / 合法关闭」)→ 在任何读取与输出之前 fail-closed:此时拿不到仓库根 / 状态目录,泄漏闸的禁止集合不完整
+  if (cfg.status === 'off' && !LEGIT_OFF.has(cfg.reason)) {
+    throw new RsiFailClosedError(untrustedReason(cfg.reason));
+  }
   const home = getRealHome(env);
   const open = cfg.status === 'on' ? await openRsiIo(ctx) : null;
   if (open !== null && open.kind === 'usage') throw new AutoUsageError(open.reason);
+  // 配置 on 却没拿到 ready(两次加载之间配置变了):同样 fail-closed,不带着缺项的禁止集合继续
+  if (cfg.status === 'on' && (open === null || open.kind !== 'ready')) {
+    throw new RsiFailClosedError('internal');
+  }
   const io = open !== null && open.kind === 'ready' ? open.ctx.io : null;
 
   /**
@@ -146,11 +198,6 @@ export async function productionAutoPorts(
           }),
     judge: { verdictFor: async () => ({ kind: 'unavailable' }) },
     // 与 status / digest / tick 同一来源:状态目录、仓库根、`[rsi] repo`;另加私有仓库目录(HOME 相对,realpath 由 forbiddenPaths 补)
-    outputForbidden: [
-      io?.stateDir,
-      io?.repoRoot,
-      cfg.status === 'on' ? cfg.repo : undefined,
-      gitDir,
-    ].filter((v): v is string => typeof v === 'string' && v !== ''),
+    outputForbidden: forbiddenExtra(ctx, io, cfg.status === 'on' ? cfg.repo : null, gitDir),
   };
 }

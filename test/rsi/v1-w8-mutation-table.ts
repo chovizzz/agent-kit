@@ -730,7 +730,15 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
       ),
     ],
     tests: ['rsi/auto/exit-map.test.ts'],
-    expectRed: ['9a manual_event_required'],
+    // 其余是同一行(第 9 行)在别的用例里的出现:逐格 it 的标题带 `→ 退 1`、穷举的 it.each 取 `incomplete × ` 固定前缀
+    expectRed: [
+      '9a manual_event_required',
+      '11 行逐格',
+      '第 9 行退 1(不是 3)',
+      '失败时已完成的撤销仍先逐行输出',
+      'incomplete × ',
+      '按 variant × cause 穷举',
+    ],
     mustKill: ['9a manual_event_required'],
   },
   {
@@ -1142,6 +1150,48 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
     tests: ['rsi/auto/status.test.ts'],
     expectRed: ['视图截断(JSON)', '键集合与文本 / JSON 形状', '损坏的视图'],
     mustKill: ['视图截断(JSON)'],
+  },
+  {
+    id: 'untrusted_cfg_as_off',
+    clause: '复审:配置不可信 → fail-closed(不得当作合法关闭继续)',
+    edits: [
+      swap(
+        'src/rsi/auto/deps.ts',
+        "if (cfg.status === 'off' && !LEGIT_OFF.has(cfg.reason)) {",
+        'if (false as boolean) {',
+      ),
+    ],
+    tests: ['rsi/auto/deps.test.ts'],
+    expectRed: ['配置不可信 → 所有读命令在输出之前 fail-closed'],
+    mustKill: ['配置不可信 → 所有读命令在输出之前 fail-closed'],
+  },
+  {
+    id: 'explicit_root_dropped',
+    clause: '复审:显式 --root 进入输出禁止集合',
+    edits: [
+      swap(
+        'src/rsi/auto/deps.ts',
+        'if (ctx.explicitRoot !== undefined) {',
+        'if (false as boolean) {',
+      ),
+    ],
+    tests: ['rsi/auto/deps.test.ts'],
+    expectRed: ['合法关闭(absent / no_section / disabled)', 'forbiddenExtra 不静默丢项'],
+    mustKill: ['合法关闭(absent / no_section / disabled)'],
+  },
+  {
+    id: 'forbidden_extra_silent',
+    clause: '复审:禁止集合不静默丢项',
+    edits: [
+      swap(
+        'src/rsi/auto/deps.ts',
+        "      throw new RsiFailClosedError('internal');",
+        '      void 0;',
+      ),
+    ],
+    tests: ['rsi/auto/deps.test.ts'],
+    expectRed: ['forbiddenExtra 不静默丢项'],
+    mustKill: ['forbiddenExtra 不静默丢项'],
   },
 ];
 
