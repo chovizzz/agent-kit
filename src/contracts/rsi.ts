@@ -1382,6 +1382,21 @@ export const RSI_ROLLBACK_PHASES = Object.freeze([
   'static_removal_pending',
   'rollback_complete',
 ] as const);
+/**
+ * W7b(N5):回滚执行器失败 outcome(`incomplete` / `refused`)的封闭 `cause` 枚举(additive;`complete` / `revocation_complete` 不带 cause)。
+ * `static_removal_pending` 不是 cause,是 `incomplete.phase`。journal 完整性错误(冲突 / 不合规 / 不可解析)与事务结果分开:cause = `txn_invalid` 且不带事务身份(`txn: null` + `journal`)。
+ */
+export const RSI_ROLLBACK_CAUSES = Object.freeze([
+  'not_wired',
+  'credentials_invalid',
+  'txn_invalid',
+  'txn_absent',
+  'candidate_invalid',
+  'repo_unreadable',
+  'retryable',
+  'manual_event_required',
+  'manual_by_ambiguous',
+] as const);
 export const RSI_REVOCATION_BY = Object.freeze([
   'worker',
   'clear',

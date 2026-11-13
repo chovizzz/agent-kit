@@ -21,7 +21,6 @@
 import { z } from 'zod';
 import { IsoDateSchema } from '../../contracts/common.js';
 import {
-  RSI_COOLDOWN_DAYS,
   RSI_SHADOW_MIN_HITS,
   RSI_SHADOW_MIN_SESSIONS,
   RSI_TARGET_TERMINALS,
@@ -34,6 +33,7 @@ import {
   type RsiAuditLine,
 } from '../../contracts/rsi-personal.js';
 import { idemKey } from './ids.js';
+import { terminalEffectsOf } from './terminal-effects.js';
 import {
   PromoteBaseSchema,
   isTerminalLifecycle,
@@ -350,33 +350,24 @@ function apply(
   for (const e of entries) {
     effects.push({ type: 'append_audit', line: auditOf(e, final.id), idem_key: e.idem_key });
   }
+  // E2:本次转移使记录新进终态 → 终态效果批次(单一事实源 `terminalEffectsOf`,与崩溃恢复同调)
+  const terminalBatch =
+    !isTerminalLifecycle(record.lifecycle) && isTerminalLifecycle(final.lifecycle)
+      ? terminalEffectsOf(final)
+      : [];
+  // E1:veto 事件的即时黑名单。终态批次已含同一 `(id, sha)` 的黑名单时并入 E2,不在同一数组里重复推入
   if (event.kind === 'veto' || (event.kind === 'revocation_reconcile' && event.basis === 'veto')) {
-    effects.push({ type: 'blacklist_veto', id: final.id, content_sha256: final.content_sha256 });
-  }
-  if (!isTerminalLifecycle(record.lifecycle) && isTerminalLifecycle(final.lifecycle)) {
-    const tr = final.terminal_reason;
-    effects.push({
-      type: 'write_tombstone',
-      id: final.id,
-      terminal: final.lifecycle,
-      reason: tr ?? 'unknown',
-    });
-    if (tr === 'auto_rollback') {
-      effects.push({
-        type: 'start_cooldown',
-        cluster_id: final.cluster_id,
-        kind: 'auto_rollback',
-        days: RSI_COOLDOWN_DAYS.auto_rollback,
-      });
-    } else if (final.lifecycle === 'expired') {
-      effects.push({
-        type: 'start_cooldown',
-        cluster_id: final.cluster_id,
-        kind: 'expired',
-        days: RSI_COOLDOWN_DAYS.expired,
-      });
+    const covered = terminalBatch.some(
+      (e) =>
+        e.type === 'blacklist_veto' &&
+        e.id === final.id &&
+        e.content_sha256 === final.content_sha256,
+    );
+    if (!covered) {
+      effects.push({ type: 'blacklist_veto', id: final.id, content_sha256: final.content_sha256 });
     }
   }
+  effects.push(...terminalBatch);
   return { outcome: 'transitioned', next: final, entries, effects };
 }
 

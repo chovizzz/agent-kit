@@ -18,7 +18,11 @@
  * W7 从未发版:生产上不存在真实的旧 journal,这些规则只约束开发期遗留。
  */
 import { z } from 'zod';
-import { RSI_REVOCATION_BY, RSI_REVOCATION_REASONS_BY } from '../../contracts/rsi.js';
+import {
+  RSI_REVOCATION_BY,
+  RSI_REVOCATION_REASONS_BY,
+  type RSI_ROLLBACK_CAUSES,
+} from '../../contracts/rsi.js';
 import { Sha256Schema } from '../../contracts/common.js';
 import {
   PersonalTxnSchema,
@@ -35,6 +39,7 @@ import {
 } from './transition-table.js';
 
 type TxnKind = PersonalTxn['kind'];
+export type RollbackCause = (typeof RSI_ROLLBACK_CAUSES)[number];
 
 /** 同一候选的同一份内容 → 同一个 txn(与 `kind` 无关) */
 export const rollbackTxnId = (candidateId: string, contentSha256: string): string =>
@@ -114,24 +119,28 @@ export interface NewJournalRequest {
 export function newJournal(
   req: NewJournalRequest,
   at: string,
-): { ok: true; txn: PersonalTxn; event: TransitionEvent } | { ok: false; why: string } {
+):
+  | { ok: true; txn: PersonalTxn; event: TransitionEvent }
+  | { ok: false; why: string; cause: RollbackCause } {
   if (req.kind === 'identity_change' || req.reason === 'identity_changed') {
-    return { ok: false, why: 'identity_not_available_before_v6a' };
+    return { ok: false, why: 'identity_not_available_before_v6a', cause: 'candidate_invalid' };
   }
   const sp = sourceProblem(req.by, req.kind, req.reason);
-  if (sp !== null) return { ok: false, why: sp };
+  if (sp !== null) return { ok: false, why: sp, cause: 'candidate_invalid' };
   const id = rollbackTxnId(req.candidate_id, req.content_sha256);
   let event: TransitionEvent | undefined;
   if (req.event !== undefined) {
     const p = TransitionEventSchema.safeParse(req.event);
-    if (!p.success) return { ok: false, why: 'event_invalid' };
+    if (!p.success) return { ok: false, why: 'event_invalid', cause: 'candidate_invalid' };
     event = p.data;
   } else {
     event = reconstructEvent({ txn_id: id, reason: req.reason });
-    if (event === undefined) return { ok: false, why: 'event_required' };
+    if (event === undefined) {
+      return { ok: false, why: 'event_required', cause: 'manual_event_required' };
+    }
   }
   const ep = eventProblem(event, req.reason, req.target_terminal);
-  if (ep !== null) return { ok: false, why: ep };
+  if (ep !== null) return { ok: false, why: ep, cause: 'candidate_invalid' };
   const out = NewPersonalTxnSchema.safeParse({
     schema_version: 1,
     txn_id: id,
@@ -146,7 +155,7 @@ export function newJournal(
     by: req.by,
     terminal_event: event,
   });
-  if (!out.success) return { ok: false, why: 'journal_invalid' };
+  if (!out.success) return { ok: false, why: 'journal_invalid', cause: 'candidate_invalid' };
   return { ok: true, txn: out.data, event };
 }
 
@@ -169,16 +178,25 @@ export interface ReadDeps {
 
 export type JournalRead =
   | { kind: 'ok'; ctx: JournalCtx }
-  | { kind: 'invalid'; why: 'txn_invalid' | 'identity_not_available_before_v6a' }
-  | { kind: 'incomplete'; why: string };
+  /** `txn_invalid` = journal 完整性错误(cause `txn_invalid`,调用方不得把它当作带事务身份的结果);`identity_not_available_before_v6a` = 本期不支持的合法 journal(cause `candidate_invalid`) */
+  | {
+      kind: 'invalid';
+      why: 'txn_invalid' | 'identity_not_available_before_v6a';
+      cause: RollbackCause;
+    }
+  | { kind: 'incomplete'; why: string; cause: RollbackCause };
 
 /** 读 journal(含复用在途 txn):逐键校验 / 还原,先于任何事务动作(见头注) */
 export async function readJournal(d: ReadDeps, t: PersonalTxn): Promise<JournalRead> {
   // E1 授权身份变化是 V6a:本期没有交付第二段的缓存 / 拒绝标记判据,旧 journal 里若有这种类型也一律不动
   if (t.kind === 'identity_change') {
-    return { kind: 'invalid', why: 'identity_not_available_before_v6a' };
+    return {
+      kind: 'invalid',
+      why: 'identity_not_available_before_v6a',
+      cause: 'candidate_invalid',
+    };
   }
-  const bad: JournalRead = { kind: 'invalid', why: 'txn_invalid' };
+  const bad: JournalRead = { kind: 'invalid', why: 'txn_invalid', cause: 'txn_invalid' };
   const missing: string[] = [];
 
   // by:存在 → 必须与 (kind, reason) 相容;缺失 → 唯一还原
@@ -211,7 +229,9 @@ export async function readJournal(d: ReadDeps, t: PersonalTxn): Promise<JournalR
     sha = t.content_sha256;
   } else {
     const rv = await d.revocations.read();
-    if (rv.kind !== 'ok') return { kind: 'incomplete', why: 'revocations_invalid' };
+    if (rv.kind !== 'ok') {
+      return { kind: 'incomplete', why: 'revocations_invalid', cause: 'credentials_invalid' };
+    }
     const bound = (s: string | null | undefined): string | undefined =>
       s !== null && s !== undefined && rollbackTxnId(t.candidate_id, s) === t.txn_id
         ? s
@@ -224,7 +244,13 @@ export async function readJournal(d: ReadDeps, t: PersonalTxn): Promise<JournalR
   }
 
   if (missing.length > 0 || by === undefined || event === undefined || sha === undefined) {
-    return { kind: 'incomplete', why: `legacy_unrecoverable:${missing.join(',')}` };
+    // 缺 content_sha256 = journal 无法绑定事务身份;缺原始证据 = 等人工补事件;只缺来源 = 来源有歧义
+    const cause: RollbackCause = missing.includes('content_sha256')
+      ? 'txn_invalid'
+      : missing.includes('terminal_event')
+        ? 'manual_event_required'
+        : 'manual_by_ambiguous';
+    return { kind: 'incomplete', why: `legacy_unrecoverable:${missing.join(',')}`, cause };
   }
   return { kind: 'ok', ctx: { by, event, sha } };
 }

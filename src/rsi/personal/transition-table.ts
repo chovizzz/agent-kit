@@ -225,6 +225,40 @@ export function terminationTarget(e: TransitionEvent): TargetTerminal {
   return e.kind === 'canary_limit' ? 'expired' : 'rolled_back';
 }
 
+/**
+ * 「保留原保护」的起因分类(owner 2026-11-12 决定 1;纯函数,只读已提交的记录事实):终态记录走过回滚时,冷却按**进入回滚的起因**而不是终态理由发
+ * (harm → veto / clear 把终态理由升级后,原来的 90 天保护不能丢)。`rollback` 字段只有 `enter_rollback` 置非空、其余路径保持 null,所以 `rollback !== null` 可证明走过回滚。
+ *  - `not_applicable`:`rollback === null`(闸拒绝、shadow 到期、直接 clear / veto 等没走过回滚的终态);效果与改前逐字节相同,不新增冷却;
+ *  - `known`:`transitions[]` 里有第一条 `dim=lifecycle ∧ to=rolling_back ∧ from≠rolling_back` 的条目(自环条目不算),取它的 `reason`;`origin_target` 与 `terminationTarget` 同源
+ *    (`limit_reached` → `expired`,其余 → `rolled_back`);
+ *  - `unknown_rollback_origin`:`rollback !== null`、没有该条目、`transitions_dropped > 0`(条目因 256 条截断丢失);
+ *  - `unclassified`:`rollback !== null`、没有该条目、`transitions_dropped === 0`(记录自相矛盾):不伪造 origin、也不冒充历史截断,按保守方向处理。
+ */
+export type OriginProtection =
+  | { kind: 'not_applicable' }
+  | { kind: 'known'; origin_reason: string; origin_target: TargetTerminal }
+  | { kind: 'unknown_rollback_origin' }
+  | { kind: 'unclassified' };
+
+export function originProtection(
+  rec: Pick<PersonalLifecycleRecord, 'rollback' | 'transitions' | 'transitions_dropped'>,
+): OriginProtection {
+  if (rec.rollback === null) return { kind: 'not_applicable' };
+  const entering = rec.transitions.find(
+    (e) => e.dim === 'lifecycle' && e.to === 'rolling_back' && e.from !== 'rolling_back',
+  );
+  if (entering !== undefined) {
+    return {
+      kind: 'known',
+      origin_reason: entering.reason,
+      origin_target: entering.reason === 'limit_reached' ? 'expired' : 'rolled_back',
+    };
+  }
+  return rec.transitions_dropped > 0
+    ? { kind: 'unknown_rollback_origin' }
+    : { kind: 'unclassified' };
+}
+
 /** 转移原因码 → 终态理由(显式映射;闸码另判)。未知码 → undefined(调用方 fail-closed) */
 const TERMINAL_REASON_OF: Readonly<Record<string, TerminalReason>> = Object.freeze({
   vetoed: 'vetoed',
