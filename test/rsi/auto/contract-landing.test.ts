@@ -3,6 +3,8 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  RSI_AUTO_PAUSE_REASONS,
+  RSI_AUTO_RESUME_BLOCKED_REASONS,
   RSI_AUTO_VIEW_FILE,
   RSI_AUTO_VIEW_STALE_HOURS,
   RSI_FAIL_CLOSED_REASONS,
@@ -59,7 +61,19 @@ describe('码表与命令名', () => {
       expect(RSI_FAIL_CLOSED_REASONS).toContain(c);
     }
     expect(RSI_INFO_LINE_CODES).toEqual(expect.arrayContaining(['RSI_MANUAL', 'RSI_CLEAR_DONE']));
-    expect(RSI_INFO_LINE_CODES).not.toContain('RSI_AUTO_RESUMED');
+    // W8b:resume 的两个退 0 结果行登记为信息行;被挡的行仍是退 1 的顶层码,不在信息行里
+    expect(RSI_INFO_LINE_CODES).toEqual(
+      expect.arrayContaining(['RSI_AUTO_RESUMED', 'RSI_AUTO_RESUME_PENDING']),
+    );
+    expect(RSI_INFO_LINE_CODES).not.toContain('RSI_AUTO_RESUME_BLOCKED');
+  });
+
+  it('RSI_AUTO_RESUME_BLOCKED reason= 的取值 = 熔断码(含 user_paused)∪ personal_repo_diverged ∪ personal_owner_changed,熔断码在前保持原序', () => {
+    expect([...RSI_AUTO_RESUME_BLOCKED_REASONS]).toEqual([
+      ...RSI_AUTO_PAUSE_REASONS,
+      'personal_repo_diverged',
+      'personal_owner_changed',
+    ]);
   });
 
   it('命令名:V1 真命令进 RSI_SUBCOMMANDS(只追加、不重排),V4–V6 的命令名注册为桩', () => {

@@ -120,9 +120,12 @@ export const RSI_FAIL_CLOSED_REASONS = Object.freeze([
 export const RSI_INFO_LINE_CODES = Object.freeze([
   'RSI_PROPOSALS_READY',
   'RSI_COLLECTION_STARTED',
-  // §21 W0-22 第 12 条(R21-12.9):非错误信息行,不计入失败码表;`RSI_AUTO_RESUME_PENDING` / `RSI_AUTO_RESUMED` 随 resume(W8b)登记
+  // §21 W0-22 第 12 条(R21-12.9):非错误信息行,不计入失败码表
   'RSI_MANUAL',
   'RSI_CLEAR_DONE',
+  // §21 W0-25(W8b;W0-22 第 2、12 条):`rsi auto resume` 的两个退 0 结果行(信息行,不使命令失败)
+  'RSI_AUTO_RESUMED',
+  'RSI_AUTO_RESUME_PENDING',
 ] as const);
 /** 顶层码,退出 1(R20-3.0 总表「顶层(1)」行):只登记,供「契约表 ↔ 枚举」一致性测试逐行比对 */
 export const RSI_EXIT1_CODES = Object.freeze([
@@ -428,6 +431,16 @@ export const RSI_AUTO_PAUSE_REASONS = Object.freeze([
   'isolation_unverified',
 ] as const);
 export type RsiAutoPauseReason = (typeof RSI_AUTO_PAUSE_REASONS)[number];
+/**
+ * `RSI_AUTO_RESUME_BLOCKED reason=` 的封闭取值(W0-22 第 2 条):熔断码(含 `user_paused`)∪ 两个单独的暂停标志;输出顺序 = `RSI_AUTO_PAUSE_REASONS` 的顺序,其后是两个标志。
+ * 熔断码本身只进 `--json` 与日志、不作 stderr 顶层码;`RSI_AUTO_RESUME_BLOCKED` 是它们唯一的 stderr 出口。
+ */
+export const RSI_AUTO_RESUME_BLOCKED_REASONS = Object.freeze([
+  ...RSI_AUTO_PAUSE_REASONS,
+  'personal_repo_diverged',
+  'personal_owner_changed',
+] as const);
+export type RsiAutoResumeBlockedReason = (typeof RSI_AUTO_RESUME_BLOCKED_REASONS)[number];
 const RsiAutoPauseReasonSchema = z.enum(RSI_AUTO_PAUSE_REASONS);
 
 /** `.state/rsi/state.json`(R20-1.5 / R20-3.4.2 / R20-6.4 / R20-6.6) */
