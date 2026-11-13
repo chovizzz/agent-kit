@@ -241,11 +241,21 @@ export function makeFx(w7: World7 = world7()): WriteFx {
     events.push('user.remove');
     return origRemove(s);
   };
+  // 假的熔断标记端口多带一个 `remove`(生产 `BreakerMarkerPort` 有;resume 的端口类型只收 `read`,命令不得碰 B)
+  const breakerPort = {
+    read: async () => breaker.marker,
+    remove: async () => {
+      events.push('breaker.remove');
+      const had = breaker.marker !== null;
+      breaker.marker = null;
+      return had;
+    },
+  };
   const ports: WritePorts = {
     config: async () => ({ rsiOn: rsiOn.value }),
     locks,
     userMarker: async () => user,
-    breaker: { read: async () => breaker.marker },
+    breaker: breakerPort,
     pauseState: pause,
     holds: { snapshot: async () => new Set(holds) },
     marks,

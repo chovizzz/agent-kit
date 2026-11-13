@@ -156,7 +156,7 @@ describe('能力闸', () => {
     expect(capabilityAvailable('cmd_not_in_table', 99)).toBe(false);
   });
 
-  it('相位够了:读命令跑到处理函数(端口只构造一次);写处理函数表里没有的规范名仍是「未实现」桩,不构造端口', async () => {
+  it('相位够了:读命令跑到处理函数(端口只构造一次);写命令仍接到「未实现」桩(处理函数表里没有该规范名时),不构造端口', async () => {
     let built = 0;
     const deps = {
       phase: 2,
