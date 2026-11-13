@@ -11,7 +11,7 @@ import type { RsiAutoPauseReason } from '../../../contracts/rsi.js';
 import type { PersonalLifecycleRecord } from '../../../contracts/rsi-personal.js';
 import type { HeldLock } from '../../canary/atomic-write.js';
 import type { BreakerMarkerPort, PauseStatePort, UserMarkerPort } from '../../personal/breaker.js';
-import type { RecordRead } from '../../personal/candidate-ports.js';
+import type { RecordRead, RepoRead } from '../../personal/candidate-ports.js';
 import type { ClearDeps } from '../../personal/clear.js';
 import type { RollbackDeps } from '../../personal/rollback.js';
 import type { RsiEarlyContext } from '../../types.js';
@@ -81,6 +81,8 @@ export interface WritePorts {
   clearDeps?: (held: HeldLocks) => ClearDeps;
   /** 无锁读一条记录(`rsi veto` 在取锁前判 `unknown_id`;持锁后仍要重读) */
   peekRecord?: (id: string) => Promise<RecordRead>;
+  /** 无锁读全部记录(`rollback --to --write` 在取锁前展示两节清单用;持锁后仍要重读,锁外那次不作数) */
+  peekRecords?: () => Promise<RepoRead<PersonalLifecycleRecord[]>>;
   vetoLift?: VetoLift;
   rebase?: RebasePort;
   /** 输出泄漏闸的额外禁止值(装配解析;HOME / `KIT_TMP` 由 `forbiddenPaths` 自己收) */
@@ -96,7 +98,7 @@ export const REQUIRED_PORTS = Object.freeze({
   'auto clear': ['locks', 'clearDeps'],
   'auto rebase-baseline': ['config', 'locks', 'rebase', 'pauseState'],
   veto: ['config', 'locks', 'rollbackDeps', 'peekRecord'],
-  'rollback --to': ['config', 'locks', 'rollbackDeps'],
+  'rollback --to': ['config', 'locks', 'rollbackDeps', 'peekRecords'],
 } as const satisfies Record<string, readonly WritePortName[]>);
 
 /** 缺失(未接线)的必需端口名;空 = 通过。静态判定,不调用任何端口 */

@@ -213,7 +213,13 @@ export interface WriteFx {
   rsiOn: { value: boolean };
   lifts: string[];
   /** 非 null:`peekRecord` 用它代替权威读(演练「锁外读与持锁后重读不一致」) */
-  peek: { override: NonNullable<WritePorts['peekRecord']> | null; calls: number };
+  peek: {
+    override: NonNullable<WritePorts['peekRecord']> | null;
+    calls: number;
+    /** `peekRecords`(无锁读全部记录)返回之后、取锁之前的钩子(演练「展示之后记录变了」) */
+    afterAll: (() => void) | null;
+    allCalls: number;
+  };
 }
 
 export const B_MARKER = (id = 'b'.repeat(16)): PauseMarker => ({
@@ -233,7 +239,7 @@ export function makeFx(w7: World7 = world7()): WriteFx {
   const breaker: WriteFx['breaker'] = { marker: null };
   const rsiOn = { value: true };
   const lifts: string[] = [];
-  const peek: WriteFx['peek'] = { override: null, calls: 0 };
+  const peek: WriteFx['peek'] = { override: null, calls: 0, afterAll: null, allCalls: 0 };
   const pause = new FakePauseState(locks, events);
   const marks = new FakeMarks(locks, events);
   const origRemove = user.remove.bind(user);
@@ -275,6 +281,12 @@ export function makeFx(w7: World7 = world7()): WriteFx {
     peekRecord: async (id) => {
       peek.calls += 1;
       return peek.override !== null ? peek.override(id) : w7.store.read(id);
+    },
+    peekRecords: async () => {
+      peek.allCalls += 1;
+      const r = await w7.store.readAll();
+      peek.afterAll?.();
+      return r;
     },
     vetoLift: {
       lift: async (id) => {

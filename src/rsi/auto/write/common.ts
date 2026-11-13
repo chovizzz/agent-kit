@@ -54,3 +54,6 @@ export const pauseOrder = <T extends string>(codes: Iterable<T>): T[] => {
   const set = new Set<string>(codes);
   return [...RSI_AUTO_PAUSE_REASONS.filter((c) => set.has(c))] as unknown as T[];
 };
+
+/** 确认提示(`rebase-baseline` 与 `rollback --to --write` 共用):精确输入 `yes` 才继续 */
+export const CONFIRM_PROMPT_LINE = '输入 yes 确认,其它任何输入都会取消:';

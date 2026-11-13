@@ -12,7 +12,7 @@ import { parseFlags } from '../../args.js';
 import { emitLines, forbiddenPaths } from '../../output.js';
 import { cleanPath } from '../../sanitize.js';
 import type { RsiEarlyContext } from '../../types.js';
-import { failClosed, isTty, notRun, precheck, say, usage } from './common.js';
+import { CONFIRM_PROMPT_LINE, failClosed, isTty, notRun, precheck, say, usage } from './common.js';
 import {
   REQUIRED_PORTS,
   type RebaseSituation,
@@ -20,7 +20,6 @@ import {
   type WritePortsGetter,
 } from './ports.js';
 
-const PROMPT_LINE = '输入 yes 确认,其它任何输入都会取消:';
 /** 清单最多展示的路径条数(其余只给计数) */
 export const REBASE_LIST_MAX = 200;
 
@@ -66,7 +65,7 @@ export async function runRebase(
       `rebase-baseline: 将把${v0.kind === 'owner' ? ' owner_repo_fp 改为当前 [rsi] repo' : '当前 HEAD 记为新基线'}(head=${v0.head.slice(0, 12)})`,
       `记录..HEAD 的相对路径: ${paths.length} 个${paths.length > REBASE_LIST_MAX ? `(仅列前 ${REBASE_LIST_MAX} 个)` : ''}`,
       ...shownPaths,
-      PROMPT_LINE,
+      CONFIRM_PROMPT_LINE,
     ].map((head) => ({ head })),
     forbidden,
   );

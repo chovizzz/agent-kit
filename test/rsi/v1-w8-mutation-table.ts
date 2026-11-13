@@ -1730,8 +1730,8 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
     edits: [
       swap(
         'src/rsi/auto/write/rollback-write.ts',
-        "if (sel.invalid.length > 0) return failClosed(ctx, 'candidate_invalid');",
-        'void sel.invalid;',
+        "if (sel0.invalid.length > 0) return failClosed(ctx, 'candidate_invalid');",
+        'void sel0.invalid;',
       ),
     ],
     tests: ['rsi/auto/write-commands.test.ts'],
@@ -1908,6 +1908,62 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
     tests: ['rsi/auto/write-untrusted-config.test.ts'],
     expectRed: ['配置不可信时其余写命令仍 fail-closed'],
     mustKill: ['配置不可信时其余写命令仍 fail-closed'],
+  },
+  {
+    id: 'rbk_invalid_locked',
+    clause: 'W0-22 第 4 条 持锁后重读仍要先判矛盾记录(取锁前出现的不得被当作可回滚)',
+    edits: [
+      swap(
+        'src/rsi/auto/write/rollback-write.ts',
+        "if (sel.invalid.length > 0) return failClosed(ctx, 'candidate_invalid');",
+        'void sel.invalid;',
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: ['rollback --to 持锁后重读发现矛盾记录'],
+    mustKill: ['rollback --to 持锁后重读发现矛盾记录'],
+  },
+  {
+    id: 'rbk_no_confirm',
+    clause: 'W0-25 rollback --to --write 展示两节后要求 yes(批量、用户可见)',
+    edits: [
+      swap(
+        'src/rsi/auto/write/rollback-write.ts',
+        "if (raw === undefined || raw.replace(/\\r$/, '') !== 'yes') {",
+        'if (false) {',
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: ['rollback --to 展示两节后要求 yes'],
+    mustKill: ['rollback --to 展示两节后要求 yes'],
+  },
+  {
+    id: 'rbk_lock_before_confirm',
+    clause: 'W0-25 拒绝时不取锁(确认先于取锁,不在持锁时等人输入)',
+    edits: [
+      swap(
+        'src/rsi/auto/write/rollback-write.ts',
+        "    ctx.stderr('RSI_CONFIRM_DECLINED\\n');\n    return ExitCode.CHECK_FAILED;",
+        "    await locks.withLocks('rsi_personal_sync', async () => undefined);\n    ctx.stderr('RSI_CONFIRM_DECLINED\\n');\n    return ExitCode.CHECK_FAILED;",
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: ['rollback --to 展示两节后要求 yes'],
+    mustKill: ['rollback --to 展示两节后要求 yes'],
+  },
+  {
+    id: 'rbk_no_stale',
+    clause: 'W0-25 持锁后重选与展示不一致 → RSI_CONFIRM_STALE',
+    edits: [
+      swap(
+        'src/rsi/auto/write/rollback-write.ts',
+        'if (shownKeys.length !== nowKeys.length || shownKeys.some((k, n) => k !== nowKeys[n])) {',
+        'if (false) {',
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: ['rollback --to 持锁后重读重选'],
+    mustKill: ['rollback --to 持锁后重读重选'],
   },
 ];
 

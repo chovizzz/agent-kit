@@ -475,7 +475,7 @@ describe('rsi rollback --to <日期> --write(R21-12.7 / W0-22 第 4 条)', () =>
   it('rollback --to:by=rollback_to、reason=cleared,按生效逆序(进入 canary 晚者在前),三把锁', async () => {
     const w7 = two();
     const fx = makeFx(w7);
-    const r = await runWrite('rollback', ['--to', '2026-11-01', '--write'], fx);
+    const r = await runWrite('rollback', ['--to', '2026-11-01', '--write'], fx, { input: ['yes'] });
     expect(r.code).toBe(0);
     expect(w7.revs.map((x) => [x.candidate_id, x.by, x.reason])).toEqual([
       [ID2, 'rollback_to', 'cleared'],
@@ -491,7 +491,7 @@ describe('rsi rollback --to <日期> --write(R21-12.7 / W0-22 第 4 条)', () =>
   it('rollback --to 日期严格大于:进入日等于 D 的不纳入', async () => {
     const w7 = two();
     const fx = makeFx(w7);
-    const r = await runWrite('rollback', ['--to', '2026-11-03', '--write'], fx);
+    const r = await runWrite('rollback', ['--to', '2026-11-03', '--write'], fx, { input: ['yes'] });
     expect(r.code).toBe(0);
     expect(w7.revs.map((x) => x.candidate_id)).toEqual([ID2]);
   });
@@ -508,7 +508,7 @@ describe('rsi rollback --to <日期> --write(R21-12.7 / W0-22 第 4 条)', () =>
       }),
     );
     const fx = makeFx(w7);
-    const r = await runWrite('rollback', ['--to', '2026-11-01', '--write'], fx);
+    const r = await runWrite('rollback', ['--to', '2026-11-01', '--write'], fx, { input: ['yes'] });
     expect(r.out).toContain('日期不可知,按保守方向纳入: 1');
     expect(w7.revs.map((x) => x.candidate_id)).toEqual([ID2, ID, 'ra_cccccccccccc']);
   });
@@ -526,6 +526,66 @@ describe('rsi rollback --to <日期> --write(R21-12.7 / W0-22 第 4 条)', () =>
     const c = await runWrite('rollback', ['--to', '2026-11-01', '--write'], fx, { tty: false });
     expect([c.code, c.err]).toEqual([2, 'RSI_USAGE reason=not_tty\n']);
     expect(w7.revs).toEqual([]);
+  });
+
+  it('rollback --to 展示两节后要求 yes:拒绝(非 yes / EOF)退 1 RSI_CONFIRM_DECLINED,零写入、不取锁', async () => {
+    for (const input of [['no'], ['yes '], [undefined]]) {
+      const w7 = two();
+      const fx = makeFx(w7);
+      const r = await runWrite('rollback', ['--to', '2026-11-01', '--write'], fx, { input });
+      expect([r.code, r.err], String(input)).toEqual([1, 'RSI_CONFIRM_DECLINED\n']);
+      expect(r.out).toContain('日期不可知,按保守方向纳入: 0');
+      expect(r.out).toContain('输入 yes 确认');
+      expect(w7.revs).toEqual([]);
+      expect(fx.locks.log).toEqual([]);
+      expect([...w7.txns.keys()]).toEqual([]);
+    }
+  });
+
+  it('rollback --to 持锁后重读重选:展示之后清单变了(新增候选)→ RSI_CONFIRM_STALE 退 1,零写入;清单不变则照常', async () => {
+    const w7 = two();
+    const fx = makeFx(w7);
+    fx.peek.afterAll = () =>
+      w7.store.put(
+        canaryRec({
+          id: 'ra_eeeeeeeeeeee',
+          content_sha256: 'e'.repeat(64),
+          target_paths: ['rules/ra_eeeeeeeeeeee.md'],
+          transitions: [entry(1), entry(2, 'canary', '2026-11-06T00:00:00Z')],
+        }),
+      );
+    const r = await runWrite('rollback', ['--to', '2026-11-01', '--write'], fx, { input: ['yes'] });
+    expect([r.code, r.err]).toEqual([1, 'RSI_CONFIRM_STALE\n']);
+    expect(w7.revs).toEqual([]);
+    expect([...w7.txns.keys()]).toEqual([]);
+    expect(fx.peek.allCalls).toBe(1);
+  });
+
+  it('rollback --to 持锁后重读发现矛盾记录:退 3 candidate_invalid,零写入(展示时没有、取锁前出现)', async () => {
+    const w7 = two();
+    const fx = makeFx(w7);
+    fx.peek.afterAll = () =>
+      w7.store.put(
+        canaryRec({
+          id: 'ra_dddddddddddd',
+          content_sha256: 'd'.repeat(64),
+          target_paths: ['rules/ra_dddddddddddd.md'],
+          transitions: [entry(1)],
+        }),
+      );
+    const r = await runWrite('rollback', ['--to', '2026-11-01', '--write'], fx, { input: ['yes'] });
+    expect([r.code, r.err]).toEqual([3, 'RSI_FAIL_CLOSED reason=candidate_invalid\n']);
+    expect(w7.revs).toEqual([]);
+    expect([...w7.txns.keys()]).toEqual([]);
+  });
+
+  it('rollback --to 没有任何候选:无可确认的动作,不提示、不取锁,退 0', async () => {
+    const w7 = world7({ record: null });
+    const fx = makeFx(w7);
+    const r = await runWrite('rollback', ['--to', '2026-11-01', '--write'], fx);
+    expect(r.code).toBe(0);
+    expect(r.out).not.toContain('输入 yes 确认');
+    expect(fx.locks.log).toEqual([]);
   });
 
   it('rollback --to 记录自相矛盾(无进入 canary 记录且没有丢弃转移):在任何写入之前退 3 candidate_invalid', async () => {
@@ -647,7 +707,7 @@ describe('未接线预检:缺任一必需端口 → 退 3 internal,任何写入�
       'rollback --to --write',
       'rollback',
       ['--to', '2026-11-01', '--write'],
-      ['locks', 'rollbackDeps'],
+      ['locks', 'rollbackDeps', 'peekRecords'],
     ],
   ];
   for (const [name, family, argv, needs] of cases) {
