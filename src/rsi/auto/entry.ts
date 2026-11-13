@@ -3,8 +3,8 @@
  * 顺序:二级路由({@link routeAuto};缺失 / 未知的二级命令退 2 `unknown_subcommand`,不回显输入)→ **能力闸**(`RSI_AUTO_SUBCOMMAND_CAPS` + `capabilityAvailable(cap, phase)`:
  * 能力未到期 → 命令桩,退 64 `RSI_NOT_IMPLEMENTED subcommand=<规范名>`,**不解析参数、不读任何东西**)→ 分流:
  *   - 只读(`auto status` / `report` / `show` / `auto clear` 干跑 / `rollback --to` 干跑):处理函数在 `read/`,依赖注入的端口(相位 / 时钟 / TTY 也是注入),零写入;
- *   - 写(`pause` / `resume` / `clear --write` / `rebase-baseline` / `veto` / `rollback --write`):W8a 只注册路由,接到「未实现」桩({@link AutoEntryDeps.write} 是 W8b 替换处理函数的缝),
- *     路由、参数分流与能力闸已一次做全。
+ *   - 写(`pause` / `resume` / `clear --write` / `rebase-baseline` / `veto` / `rollback --write`):处理函数在 `write/`(W8b),端口经 `deps-write.ts` 装配(`{@link AutoEntryDeps.write}` 可整表替换),
+ *     参数 / TTY 校验先于端口装配,预检先于任何写入;路由、参数分流与能力闸已一次做全。
  * 相位当前恒为 `RSI_AUTO_PHASE = 0`:生产上全部是桩;处理函数只经注入的 `phase` 被测试调用。
  * 异常边界:任何未识别的异常 → `RSI_FAIL_CLOSED reason=internal`(退 3,不回显消息)。
  */
@@ -21,6 +21,7 @@ import { forbiddenPaths } from '../output.js';
 import { rsiStubExit } from '../stub.js';
 import type { RsiEarlyContext, RsiSubcommand } from '../types.js';
 import { productionAutoPorts } from './deps.js';
+import { productionWritePorts } from './deps-write.js';
 import { runClearDry } from './read/clear-dry.js';
 import { AutoUsageError, type AutoReadPorts } from './read/ports.js';
 import { parseReportArgs, runReport } from './read/report.js';
@@ -28,9 +29,15 @@ import { parseRollbackToArgs, runRollbackDry } from './read/rollback-dry.js';
 import { checkShowArgs, runShow } from './read/show.js';
 import { runAutoStatus } from './read/status.js';
 import { routeAuto, type AutoCanonical, type AutoFamily } from './route.js';
+import type { WriteHandler } from './write/ports.js';
+import { makeWriteHandlers } from './write/index.js';
 
-/** 写命令的处理函数(W8b 填;W8a 全部缺省 = 未实现桩) */
-export type AutoWriteHandler = (ctx: RsiEarlyContext, rest: readonly string[]) => Promise<number>;
+/** 写命令的处理函数(`write/` 下的 W8b 实现;`deps.write` 里没有的规范名 = 未实现桩) */
+export type AutoWriteHandler = WriteHandler;
+
+/** 生产的写处理函数表:端口由 `deps-write.ts` 装配(未接线的缺失 → 预检退 3);只在相位够了且命中写路由时才会被调用 */
+const productionWriteHandlers = (): Partial<Record<AutoCanonical, AutoWriteHandler>> =>
+  makeWriteHandlers((ctx) => productionWritePorts(ctx));
 
 export interface AutoEntryDeps {
   /** 相位(缺省 `RSI_AUTO_PHASE`;测试注入) */
@@ -39,6 +46,7 @@ export interface AutoEntryDeps {
   now?: () => Date;
   /** 只读端口(缺省 = 生产组装) */
   ports?: (ctx: RsiEarlyContext) => Promise<AutoReadPorts>;
+  /** 写处理函数表(缺省 = 生产表;测试注入;表里没有的规范名仍是「未实现」桩) */
   write?: Partial<Record<AutoCanonical, AutoWriteHandler>>;
 }
 
@@ -61,7 +69,7 @@ export async function runAutoFamily(
   }
   try {
     if (route.write) {
-      const h = deps.write?.[route.canonical];
+      const h = (deps.write ?? productionWriteHandlers())[route.canonical];
       return h === undefined ? rsiStubExit(ctx, route.canonical) : await h(ctx, route.rest);
     }
     // 纯参数 / TTY 校验先于端口装配:坏参数、非 TTY 不会先去读配置 / 打开仓库上下文(也就不会因它们失败而退 3)

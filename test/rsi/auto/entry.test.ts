@@ -156,10 +156,12 @@ describe('能力闸', () => {
     expect(capabilityAvailable('cmd_not_in_table', 99)).toBe(false);
   });
 
-  it('相位够了:读命令跑到处理函数(端口只构造一次);写命令仍接到「未实现」桩(W8b 替换),不构造端口', async () => {
+  it('相位够了:读命令跑到处理函数(端口只构造一次);写处理函数表里没有的规范名仍是「未实现」桩,不构造端口', async () => {
     let built = 0;
     const deps = {
       phase: 2,
+      // W8b 起缺省 = 生产写处理函数表;这里显式给空表,演练「表里没有 = 桩」
+      write: {},
       ports: async (): Promise<AutoReadPorts> => {
         built += 1;
         return portsOf(makeWorld());
