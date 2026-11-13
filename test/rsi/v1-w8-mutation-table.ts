@@ -738,6 +738,7 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
       '失败时已完成的撤销仍先逐行输出',
       'incomplete × ',
       '按 variant × cause 穷举',
+      '同一身份的多次失败',
     ],
     mustKill: ['9a manual_event_required'],
   },
