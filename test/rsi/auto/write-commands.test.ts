@@ -99,13 +99,62 @@ describe('rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与�
     expect(fx.pause.writes[0]?.released_marker_id).toBeUndefined();
   });
 
-  it('resume 对自动解除码不动:仍在 state 里,BLOCKED 行带 auto_release=yes,退 1,不输出 RESUMED', async () => {
+  it('resume 自动解除码条件仍成立(重查命中):保留在 state 里,BLOCKED 行带 auto_release=yes,退 1,不写 state,不输出 RESUMED', async () => {
     const fx = makeFx();
     fx.pause.state = { reasons: ['budget_high_legacy'], diverged: false, owner_changed: false };
+    fx.holds.add('budget_high_legacy');
     const r = await runWrite('auto', ['resume'], fx);
     expect(r.code).toBe(1);
     expect(r.err).toBe('RSI_AUTO_RESUME_BLOCKED reason=budget_high_legacy auto_release=yes\n');
     expect(fx.pause.writes).toEqual([]);
+  });
+
+  it('resume 自动解除码条件已不成立:本次一并清掉(带解除证据),不退 1;B 在 → PENDING 且证据写 B 的 id', async () => {
+    const fx = makeFx();
+    fx.pause.state = { reasons: ['budget_high_legacy'], diverged: false, owner_changed: false };
+    const r0 = await runWrite('auto', ['resume'], fx);
+    expect([r0.code, r0.err]).toEqual([0, 'RSI_AUTO_RESUMED\n']);
+    expect(r0.out).toContain('cleared=budget_high_legacy');
+    expect(fx.pause.writes[0]).toMatchObject({ reasons: [], released_marker_id: null });
+
+    const fy = makeFx();
+    fy.pause.state = { reasons: ['budget_high_legacy'], diverged: false, owner_changed: false };
+    fy.breaker.marker = B_MARKER();
+    const r1 = await runWrite('auto', ['resume'], fy);
+    expect([r1.code, r1.err]).toEqual([
+      0,
+      'RSI_AUTO_RESUME_PENDING breaker_marker=pending paused=yes\n',
+    ]);
+    expect(fy.pause.writes[0]).toMatchObject({ reasons: [], released_marker_id: 'b'.repeat(16) });
+  });
+
+  it('resume 与人工码同在:自动解除码条件已不成立的清掉,仍成立的人工码保留并退 1(已清的照实列出,不写证据)', async () => {
+    const fx = makeFx();
+    fx.pause.state = {
+      reasons: ['rollback_storm', 'budget_high_legacy'],
+      diverged: false,
+      owner_changed: false,
+    };
+    fx.holds.add('gate_internal');
+    const r = await runWrite('auto', ['resume'], fx);
+    expect(r.code).toBe(1);
+    expect(r.err).toBe('RSI_AUTO_RESUME_BLOCKED reason=rollback_storm\n');
+    expect(r.out).toContain('cleared=budget_high_legacy');
+    expect(fx.pause.writes[0]?.reasons).toEqual(['rollback_storm']);
+    expect(fx.pause.writes[0]?.released_marker_id).toBeUndefined();
+  });
+
+  it('resume 重查没覆盖的自动解除码(no_observation / cost_high_legacy / isolation_unverified)条件无从判定:按仍成立处理,保留,退 1', async () => {
+    for (const code of ['no_observation', 'cost_high_legacy', 'isolation_unverified'] as const) {
+      const fx = makeFx();
+      fx.pause.state = { reasons: [code], diverged: false, owner_changed: false };
+      const r = await runWrite('auto', ['resume'], fx);
+      expect([r.code, r.err], code).toEqual([
+        1,
+        `RSI_AUTO_RESUME_BLOCKED reason=${code} auto_release=yes\n`,
+      ]);
+      expect(fx.pause.writes, code).toEqual([]);
+    }
   });
 
   it('resume 不碰 diverged / owner_changed:退 1,提示 rebase-baseline,按码表顺序', async () => {

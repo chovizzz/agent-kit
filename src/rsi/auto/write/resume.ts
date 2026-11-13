@@ -3,7 +3,7 @@
  * 步骤(任一步失败:已落盘的效果保留、先输出已做的、再退 3,可重跑):
  *   ① 参数 / TTY(2)→ 预检(3,零写入)→ `[rsi]` 关闭(4)→ 取锁(`locked` 4);
  *   ② 一次快照:`state.json` 的 `auto_pause` 得 S;U 的实例指纹 `uTok`(`lstat`;不存在 = `none`;非 ENOENT 失败抛错 → 退 3,**不碰 U**);`holds` 重查四项;
- *   ③ 计算:{@link computeResume}(只清条件已不成立的人工码;自动解除码、diverged / owner_changed 不动);U 存在时历史遗留的 state 码 `user_paused` 无条件一并清;
+ *   ③ 计算:{@link computeResume}(只清条件已不成立的人工码)+ {@link autoRelease}(自动解除码里**条件已不成立**的一并清,R21-10.4;`HoldFacts` 没覆盖的自动解除码按仍成立处理);diverged / owner_changed 不动;U 存在时历史遗留的 state 码 `user_paused` 无条件一并清;
  *   ④ 有可清码 → 写 `state.json`(只去可清的码,保留其它键);**清到无剩余熔断码的那一次写入同时写解除证据**({@link stampReleaseEvidence},否则残留 B 会把已解除的码补回);
  *   ⑤ `bump` 入口代(先于放行);⑥ `uTok≠none` → 按指纹删 U(`remove(uTok)`:指纹不符保留并报 `changed`;**`uTok=none` 永不删 U**,恢复期间新建的 U' 因此保留);⑦ **不碰 B**(由持锁 worker 删)。
  * 结果:**读回**操作后的 state / U / B(不是用 `stillHolds` 推算)得剩余集合 R = state 里还在的码 ∪ {diverged / owner_changed 成立者} ∪ {U 在则 `user_paused`}:
@@ -11,6 +11,7 @@
  *   R 空且 B 不在 → 退 0 `RSI_AUTO_RESUMED`(只此一种);R 空且 B 在 → 退 0 `RSI_AUTO_RESUME_PENDING breaker_marker=pending paused=yes`(不得输出 `RSI_AUTO_RESUMED`)。
  * 保证边界:令牌比较与 `unlink` 之间有空窗,不提供 compare-and-unlink 原子性(封闭写者模型内无合法写者;见 W0-22 第 1 条)。
  */
+import type { RsiAutoPauseReason } from '../../../contracts/rsi.js';
 import { ExitCode } from '../../../contracts/exit-codes.js';
 import {
   RSI_AUTO_RESUME_BLOCKED_REASONS,
@@ -20,6 +21,8 @@ import { canonicalJson } from '../../../io/canonical-json.js';
 import { parseFlags } from '../../args.js';
 import {
   RSI_AUTO_RELEASE_REASONS,
+  RSI_RESUME_RECHECK,
+  autoRelease,
   resume as computeResume,
   stampReleaseEvidence,
   type AutoPauseState,
@@ -29,6 +32,16 @@ import { isTty, notRun, pauseOrder, precheck, say, usage } from './common.js';
 import { REQUIRED_PORTS, type WritePorts, type WritePortsGetter } from './ports.js';
 
 type UserOutcome = 'none' | 'removed' | 'changed' | 'absent';
+
+/** `HoldFacts` 重查得到的码(R21-10.2 的重查列);自动解除码里只有这些的「条件已不成立」才是可知的 */
+const RECHECKED: ReadonlySet<string> = new Set(Object.values(RSI_RESUME_RECHECK).flat());
+
+/**
+ * 条件是否仍成立。自动解除码里 `HoldFacts` 没覆盖的(V1:`cost_high_legacy` / `no_observation` / `isolation_unverified`)条件**无从判定**,按仍成立处理(fail-closed:不清、
+ * 退 1、`auto_release=yes`,留给 worker);只有被重查覆盖的码(V1:`budget_high_legacy`)才凭快照判条件已不成立。
+ */
+const stillHolds = (c: RsiAutoPauseReason, holds: ReadonlySet<RsiAutoPauseReason>): boolean =>
+  holds.has(c) || ((RSI_AUTO_RELEASE_REASONS as ReadonlySet<string>).has(c) && !RECHECKED.has(c));
 
 const orderBlocked = (c: Iterable<RsiAutoResumeBlockedReason>): RsiAutoResumeBlockedReason[] => {
   const set = new Set<string>(c);
@@ -66,19 +79,27 @@ export async function runResume(
       const uTok = await um.snapshot();
       const s0 = await ports.pauseState.read();
       const holds = await ports.holds.snapshot();
-      // ③ 计算
+      // ③ 计算:人工码按 R21-10.2 重查;自动解除码**条件已不成立**的在本次一并清(R21-10.4);U 存在时历史遗留的 `user_paused` 无条件清
       const r = computeResume(s0, (c) => holds.has(c));
+      const rel = autoRelease(r.state, (c) => stillHolds(c, holds));
       const legacyUser = uTok !== 'none' && s0.reasons.includes('user_paused');
-      const cleared = pauseOrder([...r.cleared, ...(legacyUser ? (['user_paused'] as const) : [])]);
+      const cleared = pauseOrder([
+        ...r.cleared,
+        ...rel.released,
+        ...(legacyUser ? (['user_paused'] as const) : []),
+      ]);
       // ④ 状态写入(解除证据与清码同一次写入)
       if (cleared.length > 0) {
         let next: AutoPauseState = {
-          ...r.state,
+          ...rel.state,
           reasons: legacyUser
-            ? r.state.reasons.filter((c) => c !== 'user_paused')
-            : r.state.reasons,
+            ? rel.state.reasons.filter((c) => c !== 'user_paused')
+            : rel.state.reasons,
         };
-        if (r.clearMarker) next = await stampReleaseEvidence(ports.breaker, next);
+        const breakerCleared = r.cleared.length + rel.released.length > 0;
+        if (breakerCleared && rel.state.reasons.every((c) => c === 'user_paused')) {
+          next = await stampReleaseEvidence(ports.breaker, next);
+        }
         await held.rsi?.assertHeld();
         await held.personal.assertHeld();
         await ports.pauseState.write(next);
