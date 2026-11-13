@@ -88,6 +88,7 @@ describe('H3 标记先于状态:崩溃窗口里 hint 也看得到', () => {
       at: NOW.toISOString(),
       by: 'breaker',
       reason: 'gate_internal',
+      id: expect.stringMatching(/^[0-9a-f]{16}$/), // W0-23:实例标识
     });
   });
 
@@ -110,7 +111,8 @@ describe('H3 标记先于状态:崩溃窗口里 hint 也看得到', () => {
     expect(parsePauseMarker(await readText(r.file))).toEqual({
       by: 'breaker',
       reason: 'no_observation',
-      at: expect.any(String), // W0-23:at 取自文件内容(解除证据的比较对象)
+      at: expect.any(String), // W0-23:at 只作展示 / 审计
+      id: expect.stringMatching(/^[0-9a-f]{16}$/), // W0-23:id 才是解除证据的比较对象
     });
   });
 });
@@ -124,11 +126,97 @@ describe('W0-23 解除证据(真文件):清码写盘后残留的 B 不复活码,
     const res = resume(r.state.value, () => false);
     // W8 形状:只清状态(带证据),B 留给 worker
     r.state.value = await stampReleaseEvidence(r.d.marker.breaker, res.state);
-    expect(r.state.value.released_marker_at).toBe(JSON.parse(await readText(r.file)).at);
+    expect(r.state.value.released_marker_id).toBe(JSON.parse(await readText(r.file)).id);
     expect(await enforceMute(r.d)).toBe(true); // U 仍在 → mute
     expect(await exists(r.file)).toBe(false);
     expect(r.state.value.reasons).toEqual([]);
     expect(await readText(r.userFile)).toBe(body);
+  });
+});
+
+describe('W0-23 B 的实例标识(真文件):内容 {at, by, reason, id};每次创建换新 id(固定时钟下 at 相同也不同)', () => {
+  it('注入 newId:id 写进文件内容;删后重建换新 id,而 at(固定时钟)完全相同——at 不是身份', async () => {
+    const w = await makeCanaryWorld('w7-marker-id-');
+    const ids = ['aaaaaaaaaaaaaaaa', 'bbbbbbbbbbbbbbbb'];
+    let i = 0;
+    const port = makeBreakerMarkerPort(
+      w.io,
+      w.rsi,
+      () => NOW,
+      () => ids[i++] as string,
+    );
+    const file = path.join(w.rsi, 'AUTO_PAUSE_BREAKER');
+    expect(await port.ensure('gate_internal')).toBe('created');
+    const first = JSON.parse(await readText(file));
+    expect(first).toEqual({
+      at: NOW.toISOString(),
+      by: 'breaker',
+      id: 'aaaaaaaaaaaaaaaa',
+      reason: 'gate_internal',
+    });
+    expect(await port.ensure('gate_internal')).toBe('exists'); // 已存在不覆盖、不消耗 id
+    expect(i).toBe(1);
+    expect(await port.remove()).toBe(true);
+    expect(await port.ensure('gate_internal')).toBe('created');
+    const second = JSON.parse(await readText(file));
+    expect(second.at).toBe(first.at); // 固定时钟:at 相同
+    expect(second.id).toBe('bbbbbbbbbbbbbbbb');
+    expect(second.id).not.toBe(first.id);
+    expect((await port.read())?.id).toBe('bbbbbbbbbbbbbbbb');
+  });
+
+  it('缺省随机源:连续新建两个 B(固定时钟)的 id 都合规且互不相同', async () => {
+    const w = await makeCanaryWorld('w7-marker-id2-');
+    const port = makeBreakerMarkerPort(w.io, w.rsi, () => NOW);
+    await port.ensure('gate_internal');
+    const a = (await port.read())?.id;
+    await port.remove();
+    await port.ensure('gate_internal');
+    const b = (await port.read())?.id;
+    expect(a).toMatch(/^[0-9a-f]{16}$/);
+    expect(b).toMatch(/^[0-9a-f]{16}$/);
+    expect(a).not.toBe(b);
+  });
+
+  it('评审反例(真文件、固定时钟):旧 B 已解除删除、状态留旧证据;新 B 与旧 B 的 at 相同、id 不同;状态写入前崩溃 → 重启补码、B 保留', async () => {
+    const w = await makeCanaryWorld('w7-marker-id3-');
+    const ids = ['aaaaaaaaaaaaaaaa', 'bbbbbbbbbbbbbbbb'];
+    let i = 0;
+    const breaker = makeBreakerMarkerPort(
+      w.io,
+      w.rsi,
+      () => NOW,
+      () => ids[i++] as string,
+    );
+    const file = path.join(w.rsi, 'AUTO_PAUSE_BREAKER');
+    let state: AutoPauseState = NO_PAUSE;
+    let failWrite = false;
+    const d: BreakerDeps = {
+      phase: V1B,
+      marker: { breaker, user: makeUserMarkerPort(w.io, w.rsi, () => NOW) },
+      state: {
+        read: async () => state,
+        write: async (s) => {
+          if (failWrite) throw new Error('crash');
+          state = s;
+        },
+      },
+      canary: { mute: async () => true },
+    };
+    await tripAndMute(d, 'gate_internal'); // 旧 B(id a)
+    await applyResume(
+      d,
+      resume(state, () => false),
+    ); // 解除:状态记 id a、删 B
+    expect(state.released_marker_id).toBe('aaaaaaaaaaaaaaaa');
+    expect(await exists(file)).toBe(false);
+    failWrite = true;
+    await expect(tripAndMute(d, 'gate_internal')).rejects.toThrow('crash'); // 新 B(id b,at 相同)落盘后状态写入前崩溃
+    failWrite = false;
+    expect(JSON.parse(await readText(file)).at).toBe(NOW.toISOString());
+    expect(await enforceMute(d)).toBe(true);
+    expect(state.reasons).toEqual(['gate_internal']); // 补码
+    expect(await exists(file)).toBe(true); // B 保留
   });
 });
 
@@ -166,22 +254,53 @@ describe('标记端口:B 与 U 互不覆盖,各有唯一写者', () => {
   it('内容读不出(空文件)的 B:仍算存在,by=unknown;enforceMute 不据此补码,但仍 mute', async () => {
     const r = await rig('w7-marker-e-');
     await safe.writeFile(r.w.io, r.file, '', { mode: 0o600 });
-    expect(await r.d.marker.breaker.read()).toEqual({ by: 'unknown', reason: null, at: null });
+    expect(await r.d.marker.breaker.read()).toEqual({
+      by: 'unknown',
+      reason: null,
+      at: null,
+      id: null,
+    });
     expect(await enforceMute(r.d)).toBe(true);
     expect(r.state.value.reasons).toEqual([]);
     expect(await r.hint()).toBe('present');
   });
 
   it('parsePauseMarker:各形态', () => {
-    expect(parsePauseMarker('{"by":"user"}')).toEqual({ by: 'user', reason: null, at: null });
+    expect(parsePauseMarker('{"by":"user"}')).toEqual({
+      by: 'user',
+      reason: null,
+      at: null,
+      id: null,
+    });
     expect(parsePauseMarker('{"by":"breaker","reason":"user_vetoes"}')).toEqual({
       by: 'breaker',
       reason: 'user_vetoes',
-      at: null, // 没有 at:不能充当解除证据的比较对象
+      at: null,
+      id: null, // 没有 id(旧格式 B):永远不会被当成残留删除
     });
     expect(
       parsePauseMarker('{"at":"2026-11-12T01:02:03.000Z","by":"breaker","reason":"user_vetoes"}'),
-    ).toEqual({ by: 'breaker', reason: 'user_vetoes', at: '2026-11-12T01:02:03.000Z' });
+    ).toEqual({
+      by: 'breaker',
+      reason: 'user_vetoes',
+      at: '2026-11-12T01:02:03.000Z',
+      id: null, // 有 at 没 id:at 不能充当身份
+    });
+    // id 只认 16 位小写十六进制;缺失 / 格式错 / 非字符串 → null
+    const withId = (id: string): string =>
+      `{"at":"2026-11-12T01:02:03.000Z","by":"breaker","id":${id},"reason":"user_vetoes"}`;
+    expect(parsePauseMarker(withId('"0123456789abcdef"')).id).toBe('0123456789abcdef');
+    for (const bad of [
+      '"0123456789ABCDEF"',
+      '"0123456789abcde"',
+      '"0123456789abcdefa"',
+      '"zzzzzzzzzzzzzzzz"',
+      '""',
+      '5',
+      'null',
+    ]) {
+      expect(parsePauseMarker(withId(bad)).id, bad).toBeNull();
+    }
     // at 不是非空字符串 → null
     expect(parsePauseMarker('{"at":"","by":"breaker","reason":"user_vetoes"}').at).toBeNull();
     expect(parsePauseMarker('{"at":5,"by":"breaker","reason":"user_vetoes"}').at).toBeNull();
@@ -189,8 +308,14 @@ describe('标记端口:B 与 U 互不覆盖,各有唯一写者', () => {
       by: 'unknown',
       reason: null,
       at: null,
+      id: null,
     });
-    expect(parsePauseMarker('not json')).toEqual({ by: 'unknown', reason: null, at: null });
+    expect(parsePauseMarker('not json')).toEqual({
+      by: 'unknown',
+      reason: null,
+      at: null,
+      id: null,
+    });
   });
 });
 

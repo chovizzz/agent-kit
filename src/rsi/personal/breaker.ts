@@ -14,8 +14,8 @@
  * 不读 `state.json`,所以标记必须最先落盘:此后任一时刻崩溃,worker 还没重启时下一次 hint 即停注入(`excluded` / `paused`)。崩溃后每次 worker 步骤调 {@link enforceMute}
  * 补做(幂等):有码缺 B → 补 B;有 B 缺码 → 用 B 里记的原因补码,**不删标记**(fail-closed);处于熔断(含 U 存在)→ 置 canary。
  * 解除侧对称:{@link applyAutoRelease} / {@link applyResume} 先写状态、后删 B(只在没有剩余码时删;**任何路径都不删 U**,U 的删除归 W8 `rsi auto resume`)。
- * **解除证据(W0-23)**:清空熔断码的那次状态写入同时记 `auto_pause.released_marker_at` = 被解除的 B 的 `at`({@link stampReleaseEvidence});`enforceMute` 见「B 在、状态无码」时,
- * `at` 与证据相等 = 解除窗口的残留 → 删 B、不补码;不等(含证据缺 / B 读不出)= 触发窗口 → 补码。W8 的 resume 只清状态、B 留给 worker 删,所以它的状态写入同样必须带证据。
+ * **解除证据(W0-23)**:清空熔断码的那次状态写入同时记 `auto_pause.released_marker_id` = 被解除的 B 的实例标识 `id`({@link stampReleaseEvidence});`enforceMute` 见「B 在、状态无码」时,
+ * `id` 与证据都是合规字符串且相等 = 解除窗口的残留 → 删 B、不补码;其余(证据缺 / null、B 无 id、不等)= 触发窗口 → 补码。B 内容里的 `at` 是墙钟时间(可回拨、可重复),只作展示 / 审计,**不参与任何判定**。W8 的 resume 只清状态、B 留给 worker 删,所以它的状态写入同样必须带证据。
  * `state.json` 的真实写入方(保留其它键、持 `rsi/lock`)在装配处注入 `PauseStatePort`(本块没有该写入方,见汇报「遗留」);标记的文件实现见 `canary/pause-marker.ts`。
  */
 import {
@@ -26,16 +26,19 @@ import {
 } from '../../contracts/rsi.js';
 import { utcDayDiff } from './transition-table.js';
 
+/** B 实例标识的合规格式(与 `parsePauseMarker` 同一口径:16 位小写十六进制) */
+const ID_RE = /^[0-9a-f]{16}$/;
+
 export interface AutoPauseState {
   reasons: readonly RsiAutoPauseReason[];
   diverged: boolean;
   owner_changed: boolean;
   /**
-   * 解除证据(W0-23;可选,缺键 = `null`):**清空熔断码的那一次状态写入**把它设为当时 B 文件内容里的 `at`(B 不存在 / 内容读不出 = `null`),见 {@link stampReleaseEvidence}。
+   * 解除证据(W0-23;可选,缺键 = `null`):**清空熔断码的那一次状态写入**把它设为当时 B 文件内容里的实例标识 `id`(B 不存在 / 内容读不出 / 无 id = `null`),见 {@link stampReleaseEvidence}。
    * 持久事实「B 在、状态无码」有两种来源——触发窗口(B 已落盘、状态未写,应补码)与解除窗口(状态已清码、B 尚未删,不得复活):
-   * {@link enforceMute} 以 B 的 `at` 与本字段相等判定后者。新的熔断触发成功写入状态时清回 `null`({@link tripBreaker})。
+   * {@link enforceMute} 以 B 的 `id` 与本字段相等判定后者(`at` 是墙钟时间,回拨 / 重复时会撞,不作身份)。新的熔断触发成功写入状态时清回 `null`({@link tripBreaker})。
    */
-  released_marker_at?: string | null;
+  released_marker_id?: string | null;
 }
 export const NO_PAUSE: AutoPauseState = Object.freeze({
   reasons: Object.freeze([]) as readonly RsiAutoPauseReason[],
@@ -103,7 +106,7 @@ export function tripBreaker(
   if (s.reasons.includes(reason)) return { kind: 'already', state: s };
   // 新触发清掉旧的解除证据(曾有证据时才写 `null`,没有证据的状态形状不变)
   const cleared =
-    typeof s.released_marker_at === 'string' ? { released_marker_at: null } : ({} as const);
+    typeof s.released_marker_id === 'string' ? { released_marker_id: null } : ({} as const);
   return {
     kind: 'tripped',
     state: { ...s, ...cleared, reasons: ordered([...s.reasons, reason]) },
@@ -245,8 +248,10 @@ export interface CanaryMutePort {
 export interface PauseMarker {
   by: 'user' | 'breaker' | 'unknown';
   reason: RsiAutoPauseReason | null;
-  /** B 内容里的 `at`(解除证据的比较对象);读不出 / 不是非空字符串 = `null`。只有 `by='breaker'` 的合法 B 才带值 */
+  /** B 内容里的 `at`,**只作展示 / 审计,不参与任何判定**(墙钟时间可回拨 / 重复);读不出 = `null` */
   at: string | null;
+  /** B 的实例标识(创建时生成的 16 位十六进制;解除证据的比较对象);缺失 / 格式不对 / 非 breaker 标记 = `null`(旧格式 B 永远是 null,不会被当残留删) */
+  id: string | null;
 }
 /**
  * worker 熔断标记 `.state/rsi/AUTO_PAUSE_BREAKER`(B;R21-12.2、W0-21:独占创建,**不拿锁**,唯一写者 = worker)。
@@ -309,12 +314,12 @@ export async function enforceMute(d: BreakerDeps, anyMarkerPresent?: boolean): P
     // 标记只记首个原因,部分解除后那个原因可能已被合法清掉,不能因为标记还在就复活它
     if (cur.reasons.length === 0) {
       if (isReleasedResidue(b, cur)) {
-        // 解除窗口:状态已清码(同一次写入记了这个 B 的 `at`)、B 尚未删(自动解除 / resume 在删 B 前崩溃,或 W8 resume 只清状态)。
+        // 解除窗口:状态已清码(同一次写入记了这个 B 的 `id`)、B 尚未删(自动解除 / resume 在删 B 前崩溃,或 W8 resume 只清状态)。
         // 删 B,**不补码**;不碰 U。已知边界:残留 B 尚未删除时又发生新触发,`ensure` 因 B 已存在不重写,新码只靠状态写入持久;该次状态写入前崩溃 = 尚未触发
         await d.marker.breaker.remove();
         b = null;
       } else {
-        // 触发窗口(标记已落盘、状态没写;证据缺 / 为旧值 / B 无 `at`):用 B 里记的原因补码
+        // 触发窗口(标记已落盘、状态没写;证据缺 / 为旧值 / B 无 `id`):用 B 里记的原因补码
         const r = tripBreaker(cur, b.reason, d.phase);
         if (r.kind === 'tripped') {
           await d.state.write(r.state);
@@ -330,14 +335,16 @@ export async function enforceMute(d: BreakerDeps, anyMarkerPresent?: boolean): P
   return d.canary.mute();
 }
 
-/** 状态无码时,B 是否是「已解除的残留」:B 的 `at` 与状态里的解除证据都是非空字符串且相等(缺键 / `null` / 读不出一律不等 → 按触发窗口处理,fail-closed) */
+const isMarkerId = (x: unknown): x is string => typeof x === 'string' && ID_RE.test(x);
+
+/** 状态无码时,B 是否是「已解除的残留」:B 的 `id` 与状态里的解除证据都是合规(16 位十六进制)字符串且相等(缺键 / `null` / 无 id / 格式错一律不等 → 按触发窗口处理,fail-closed);`at` 不参与 */
 function isReleasedResidue(b: PauseMarker, s: AutoPauseState): boolean {
-  const ev = s.released_marker_at;
-  return typeof b.at === 'string' && b.at !== '' && typeof ev === 'string' && b.at === ev;
+  const ev = s.released_marker_id;
+  return isMarkerId(b.id) && isMarkerId(ev) && b.id === ev;
 }
 
 /**
- * 清空熔断码的那一次状态写入要带的解除证据:读当前 B 的 `at`(B 不存在 / 内容读不出 = `null`),返回带证据的状态。
+ * 清空熔断码的那一次状态写入要带的解除证据:读当前 B 的 `id`(B 不存在 / 内容读不出 / 无 id = `null`),返回带证据的状态。
  * 调用方(自动解除、`applyResume`、W8 `rsi auto resume` 第 ④ 步)**必须**在「清到无剩余码」的状态写入里用它,再删 B(或留给 worker 删)。读 B 抛错就往外抛,不写状态。
  */
 export async function stampReleaseEvidence(
@@ -345,7 +352,7 @@ export async function stampReleaseEvidence(
   next: AutoPauseState,
 ): Promise<AutoPauseState> {
   const b = await marker.read();
-  return { ...next, released_marker_at: b?.at ?? null };
+  return { ...next, released_marker_id: b?.id ?? null };
 }
 
 /** 自动解除落地:先写状态、后删 B(没有剩余码时);U 无论如何不删 */

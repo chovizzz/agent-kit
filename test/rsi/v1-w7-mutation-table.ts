@@ -740,8 +740,8 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       '状态写入崩溃:标记已在盘上(hint 看得到),状态没写;下一次 enforceMute 补码、不删标记、补 mute',
       '状态已写、mute 崩溃:下一次 enforceMute 补做(熔断仍在 → mute),无熔断则不 mute',
       '已处于该码:不重写状态,但仍补标记与 mute(幂等)',
-      'W0-23 新触发清回证据:tripBreaker / tripAndMute 写出的状态里 released_marker_at = null;已有的码(already)不动',
-      'W0-23 已知边界:残留 B 未删时又触发新码——ensure 因 B 已存在不重写(新码只靠状态);状态写入前崩溃 = 尚未触发,下次 enforceMute 仍把 B 当残留删掉',
+      'W0-23 新触发清回证据:tripBreaker / tripAndMute 写出的状态里 released_marker_id = null;已有的码(already)不动',
+      'W0-23 已知边界:残留 B 未删时又触发新码——ensure 因 B 已存在不重写(同一实例,id 仍与证据相同,新码只靠状态);状态写入前崩溃 = 尚未触发,下次 enforceMute 仍把 B 当残留删掉',
     ],
     mustKill: ['触发:marker.ensure 先于 state.write 先于 canary.mute'],
   },
@@ -756,11 +756,11 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       'W0-21:U(用户标记)存在而状态没码:worker 不补 user_paused、不写 state,但仍 mute',
       '有码而没有标记(状态已写、标记缺):enforceMute 补 B',
       '部分解除后标记仍在:enforceMute 不复活已被清掉的码(标记只记首个原因;状态里已有别的码时不补)',
-      'W0-23 触发窗口仍补码:B 新建、状态未写,证据为 null / 缺键 / 旧值(另一个 at)→ 补码、不删 B',
+      'W0-23 触发窗口仍补码:B 新建、状态未写,证据为 null / 缺键 / 旧值(另一个 id)→ 补码、不删 B',
       'B 的内容不是 by=breaker(by=user / 读不出)时 enforceMute 不据此补码',
       'W0-21 契约用例:worker 熔断 → 用户暂停 → 熔断条件恢复(自动解除):B 删了,U 仍在,isAutoPaused 仍为真、状态里没有 user_paused',
       'W0-23 人工码清除写盘后、删 B 前崩溃:重启后 enforceMute 不复活该码,删 B,U 不变',
-      'W0-23 B 内容损坏(读不出 / at 缺失)+ 无码:沿用现有规则(不补码、不删 B、仍 mute),即便证据为 null',
+      'W0-23 B 内容损坏(读不出)+ 无码:沿用现有规则(不补码、不删 B、仍 mute),即便证据为 null',
     ],
     mustKill: ['状态已写、mute 崩溃'],
   },
@@ -1251,12 +1251,12 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     expectRed: [
       '状态写入崩溃:标记已在盘上',
       '崩溃后下一次 enforceMute:由标记补码',
-      'W0-23 触发窗口仍补码:B 新建、状态未写,证据为 null / 缺键 / 旧值(另一个 at)→ 补码、不删 B',
+      'W0-23 触发窗口仍补码:B 新建、状态未写,证据为 null / 缺键 / 旧值(另一个 id)→ 补码、不删 B',
       'W0-23 人工码清除写盘后、删 B 前崩溃:重启后 enforceMute 不复活该码,删 B,U 不变',
       'W0-23 自动解除同款:清码写盘后、删 B 前崩溃 → 重启不复活、删 B',
       'W0-23 W8 resume 只清状态、B 留给 worker(带证据的写入,不调 remove):下次 worker 运行删 B、不补码',
-      'W0-23 B 内容损坏(读不出 / at 缺失)+ 无码:沿用现有规则(不补码、不删 B、仍 mute),即便证据为 null',
-      'W0-23 已知边界:残留 B 未删时又触发新码——ensure 因 B 已存在不重写(新码只靠状态);状态写入前崩溃 = 尚未触发,下次 enforceMute 仍把 B 当残留删掉',
+      'W0-23 B 内容损坏(读不出)+ 无码:沿用现有规则(不补码、不删 B、仍 mute),即便证据为 null',
+      'W0-23 已知边界:残留 B 未删时又触发新码——ensure 因 B 已存在不重写(同一实例,id 仍与证据相同,新码只靠状态);状态写入前崩溃 = 尚未触发,下次 enforceMute 仍把 B 当残留删掉',
       '熔断 → 状态带证据地清空(B 留下)→ enforceMute:B 被删、不补码;U 内容不变',
     ],
     mustKill: ['状态写入崩溃:标记已在盘上'],
@@ -1296,7 +1296,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       '自动解除:先写状态、后删 B;只在没有剩余码且确有码被清时删;U 无论如何不删',
       '自动解除:仍有码 → B 保留;清空 → 删 B',
       'W0-21 契约用例:worker 熔断 → 用户暂停 → 熔断条件恢复(自动解除):B 删了,U 仍在,isAutoPaused 仍为真、状态里没有 user_paused',
-      'W0-23 解除证据:人工解除清到无码时,同一次状态写入记下被解除 B 的 at(部分清除不记);B 不存在时记 null',
+      'W0-23 解除证据:人工解除清到无码时,同一次状态写入记下被解除 B 的 id(部分清除不记;at 不参与);B 不存在时记 null',
       'W0-23 自动解除同款:清码写盘后、删 B 前崩溃 → 重启不复活、删 B',
       '契约用例(W0-21):worker 熔断 → 用户暂停 → 熔断条件恢复:B 被自动解除删掉,U 仍在,hint 仍停注入',
     ],
@@ -1341,7 +1341,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     tests: [T_BR],
     expectRed: [
       '自动解除:先写状态、后删 B;只在没有剩余码且确有码被清时删;U 无论如何不删',
-      'W0-23 解除证据:人工解除清到无码时,同一次状态写入记下被解除 B 的 at(部分清除不记);B 不存在时记 null',
+      'W0-23 解除证据:人工解除清到无码时,同一次状态写入记下被解除 B 的 id(部分清除不记;at 不参与);B 不存在时记 null',
     ],
     mustKill: ['自动解除:先写状态、后删 B;只在没有剩余码且确有码被清时删;U 无论如何不删'],
   },
@@ -1634,6 +1634,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       '业务批次 deferred:标记未落、整体 deferred;批次可用后 recover 补出含标记的同一批,标记恰好一行',
       '终态已提交后、效果落地前崩溃:recover 补出含标记的同一批;重复 recover 不重复',
       '审计行落地 deferred(终态批次已落):收尾整体记 deferred,而不是报成功',
+      'unknown_rollback_origin + clear:90 天 + protection_unknown;行可被既有 RsiAuditLineSchema 解析,at = 终态条目时间,不伪造 origin',
     ],
     mustKill: [
       'known:取第一条进入回滚的条目(不是最后一条);自环条目不算;limit_reached → expired,其余 → rolled_back',
@@ -2188,15 +2189,16 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
   {
     id: 'evidence_always_restore',
     clause:
-      'W0-23 B 在、状态无码:at 与解除证据相等 = 解除窗口残留,删 B 不补码(去掉比较 = 一律补码,已解除的码复活)',
+      'W0-23 B 在、状态无码:B 的 id 与解除证据相等 = 解除窗口残留,删 B 不补码(去掉比较 = 一律补码,已解除的码复活)',
     edits: [swap(BR, 'if (isReleasedResidue(b, cur)) {', 'if (false) {')],
     tests: [T_BR, T_PM],
     expectRed: [
       'W0-23 人工码清除写盘后、删 B 前崩溃:重启后 enforceMute 不复活该码,删 B,U 不变',
       'W0-23 自动解除同款:清码写盘后、删 B 前崩溃 → 重启不复活、删 B',
       'W0-23 W8 resume 只清状态、B 留给 worker(带证据的写入,不调 remove):下次 worker 运行删 B、不补码',
-      'W0-23 已知边界:残留 B 未删时又触发新码——ensure 因 B 已存在不重写(新码只靠状态);状态写入前崩溃 = 尚未触发,下次 enforceMute 仍把 B 当残留删掉',
+      'W0-23 已知边界:残留 B 未删时又触发新码——ensure 因 B 已存在不重写(同一实例,id 仍与证据相同,新码只靠状态);状态写入前崩溃 = 尚未触发,下次 enforceMute 仍把 B 当残留删掉',
       '熔断 → 状态带证据地清空(B 留下)→ enforceMute:B 被删、不补码;U 内容不变',
+      'W0-23 id 相同 → 删 B 不补码;B 无 id(旧格式)/ id 格式错 / 证据为 null 或缺键 → 补码、B 保留(fail-closed)',
     ],
     mustKill: ['W0-23 人工码清除写盘后、删 B 前崩溃:重启后 enforceMute 不复活该码,删 B,U 不变'],
   },
@@ -2207,32 +2209,36 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     edits: [swap(BR, 'if (isReleasedResidue(b, cur)) {', 'if (true) {')],
     tests: [T_BR, T_PM],
     expectRed: [
-      'W0-23 触发窗口仍补码:B 新建、状态未写,证据为 null / 缺键 / 旧值(另一个 at)→ 补码、不删 B',
+      'W0-23 触发窗口仍补码:B 新建、状态未写,证据为 null / 缺键 / 旧值(另一个 id)→ 补码、不删 B',
       '状态写入崩溃:标记已在盘上(hint 看得到),状态没写;下一次 enforceMute 补码、不删标记、补 mute',
-      'W0-23 B 内容损坏(读不出 / at 缺失)+ 无码:沿用现有规则(不补码、不删 B、仍 mute),即便证据为 null',
+      'W0-23 B 内容损坏(读不出)+ 无码:沿用现有规则(不补码、不删 B、仍 mute),即便证据为 null',
       '崩溃后下一次 enforceMute:由标记补码、标记保留',
+      'W0-23 id 相同 → 删 B 不补码;B 无 id(旧格式)/ id 格式错 / 证据为 null 或缺键 → 补码、B 保留(fail-closed)',
+      'W0-23 评审反例(固定时钟):旧 B(at=T、id=a)已解除删除、状态留证据 a;新 B 的 at 同为 T、id=b;状态写入前崩溃 → 重启补码、B 保留(不再按 at 判残留)',
+      '评审反例(真文件、固定时钟):旧 B 已解除删除、状态留旧证据;新 B 与旧 B 的 at 相同、id 不同;状态写入前崩溃 → 重启补码、B 保留',
     ],
     mustKill: [
-      'W0-23 触发窗口仍补码:B 新建、状态未写,证据为 null / 缺键 / 旧值(另一个 at)→ 补码、不删 B',
+      'W0-23 触发窗口仍补码:B 新建、状态未写,证据为 null / 缺键 / 旧值(另一个 id)→ 补码、不删 B',
     ],
   },
   {
     id: 'evidence_null_matches',
-    clause: 'W0-23 比较两边必须都是非空字符串:null / 缺键 / B 读不出不得「相等」',
+    clause:
+      'W0-23 比较两边必须都是合规 id 字符串:null / 缺键 / B 无 id(旧格式)/ 格式错不得「相等」',
     edits: [
       swap(
         BR,
-        "return typeof b.at === 'string' && b.at !== '' && typeof ev === 'string' && b.at === ev;",
-        'return (b.at ?? null) === (ev ?? null);',
+        'return isMarkerId(b.id) && isMarkerId(ev) && b.id === ev;',
+        'return (b.id ?? null) === (ev ?? null);',
       ),
     ],
     tests: [T_BR],
     expectRed: [
-      'W0-23 触发窗口仍补码:B 新建、状态未写,证据为 null / 缺键 / 旧值(另一个 at)→ 补码、不删 B',
-      'W0-23 B 内容损坏(读不出 / at 缺失)+ 无码:沿用现有规则(不补码、不删 B、仍 mute),即便证据为 null',
+      'W0-23 id 相同 → 删 B 不补码;B 无 id(旧格式)/ id 格式错 / 证据为 null 或缺键 → 补码、B 保留(fail-closed)',
+      'W0-23 B 内容损坏(读不出)+ 无码:沿用现有规则(不补码、不删 B、仍 mute),即便证据为 null',
     ],
     mustKill: [
-      'W0-23 B 内容损坏(读不出 / at 缺失)+ 无码:沿用现有规则(不补码、不删 B、仍 mute),即便证据为 null',
+      'W0-23 B 内容损坏(读不出)+ 无码:沿用现有规则(不补码、不删 B、仍 mute),即便证据为 null',
     ],
   },
   {
@@ -2240,18 +2246,20 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     clause:
       'W0-23 清空熔断码的那一次状态写入同时记解除证据(解除时不写证据 = 残留 B 无法与触发窗口区分)',
     edits: [
-      swap(BR, 'return { ...next, released_marker_at: b?.at ?? null };', 'return { ...next };'),
+      swap(BR, 'return { ...next, released_marker_id: b?.id ?? null };', 'return { ...next };'),
     ],
     tests: [T_BR, T_PM],
     expectRed: [
-      'W0-23 解除证据:人工解除清到无码时,同一次状态写入记下被解除 B 的 at(部分清除不记);B 不存在时记 null',
+      'W0-23 解除证据:人工解除清到无码时,同一次状态写入记下被解除 B 的 id(部分清除不记;at 不参与);B 不存在时记 null',
       'W0-23 人工码清除写盘后、删 B 前崩溃:重启后 enforceMute 不复活该码,删 B,U 不变',
       'W0-23 自动解除同款:清码写盘后、删 B 前崩溃 → 重启不复活、删 B',
       'W0-23 W8 resume 只清状态、B 留给 worker(带证据的写入,不调 remove):下次 worker 运行删 B、不补码',
       '熔断 → 状态带证据地清空(B 留下)→ enforceMute:B 被删、不补码;U 内容不变',
+      'W0-23 stampReleaseEvidence:B 无 id(旧格式)/ 内容读不出 → 证据记 null(不记 at)',
+      '评审反例(真文件、固定时钟):旧 B 已解除删除、状态留旧证据;新 B 与旧 B 的 at 相同、id 不同;状态写入前崩溃 → 重启补码、B 保留',
     ],
     mustKill: [
-      'W0-23 解除证据:人工解除清到无码时,同一次状态写入记下被解除 B 的 at(部分清除不记);B 不存在时记 null',
+      'W0-23 解除证据:人工解除清到无码时,同一次状态写入记下被解除 B 的 id(部分清除不记;at 不参与);B 不存在时记 null',
     ],
   },
   {
@@ -2260,23 +2268,24 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     edits: [
       swap(
         BR,
-        "typeof s.released_marker_at === 'string' ? { released_marker_at: null } : ({} as const);",
+        "typeof s.released_marker_id === 'string' ? { released_marker_id: null } : ({} as const);",
         '({} as const);',
       ),
     ],
     tests: [T_BR],
     expectRed: [
-      'W0-23 新触发清回证据:tripBreaker / tripAndMute 写出的状态里 released_marker_at = null;已有的码(already)不动',
+      'W0-23 新触发清回证据:tripBreaker / tripAndMute 写出的状态里 released_marker_id = null;已有的码(already)不动',
     ],
     mustKill: [
-      'W0-23 新触发清回证据:tripBreaker / tripAndMute 写出的状态里 released_marker_at = null;已有的码(already)不动',
+      'W0-23 新触发清回证据:tripBreaker / tripAndMute 写出的状态里 released_marker_id = null;已有的码(already)不动',
     ],
   },
   {
     id: 'evidence_at_unparsed',
+    // 条目 id 沿用旧名(不删条目):现在解出的是实例标识 id,不是 at
     clause:
-      'W0-23 B 内容里的 at 由 parsePauseMarker 解出(比较对象);丢掉 = 证据永远不等,残留 B 永远复活码',
-    edits: [swap(PM, 'at: okAt ? at : null };', 'at: null };')],
+      'W0-23 B 内容里的实例标识 id 由 parsePauseMarker 解出(比较对象);丢掉 = 证据永远不等,残留 B 永远复活码',
+    edits: [swap(PM, 'id: okId ? id : null,', 'id: null,')],
     tests: [T_PM, T_BR],
     expectRed: [
       'parsePauseMarker:各形态',
@@ -2284,6 +2293,48 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
       '有码缺标记:enforceMute 补标记(独占创建)',
     ],
     mustKill: ['parsePauseMarker:各形态'],
+  },
+  {
+    id: 'evidence_compares_at',
+    clause:
+      'W0-23 解除证据比较与记录的是 B 的实例标识 id,不是 at(墙钟时间可回拨 / 重复):比较并记录 at = 新 B 与旧 B 同 at 时被当残留删掉(评审反例)',
+    edits: [
+      swap(
+        BR,
+        'return isMarkerId(b.id) && isMarkerId(ev) && b.id === ev;',
+        'return b.at !== null && b.at === ev;',
+      ),
+      swap(
+        BR,
+        'return { ...next, released_marker_id: b?.id ?? null };',
+        'return { ...next, released_marker_id: b?.at ?? null };',
+      ),
+    ],
+    tests: [T_BR, T_PM],
+    expectRed: [
+      'W0-23 id 相同 → 删 B 不补码;B 无 id(旧格式)/ id 格式错 / 证据为 null 或缺键 → 补码、B 保留(fail-closed)',
+      'W0-23 解除证据:人工解除清到无码时,同一次状态写入记下被解除 B 的 id(部分清除不记;at 不参与);B 不存在时记 null',
+      '评审反例(真文件、固定时钟):旧 B 已解除删除、状态留旧证据;新 B 与旧 B 的 at 相同、id 不同;状态写入前崩溃 → 重启补码、B 保留',
+    ],
+    mustKill: [
+      '评审反例(真文件、固定时钟):旧 B 已解除删除、状态留旧证据;新 B 与旧 B 的 at 相同、id 不同;状态写入前崩溃 → 重启补码、B 保留',
+    ],
+  },
+  {
+    id: 'marker_id_fixed',
+    clause:
+      'W0-23 每次新建 B 都生成新的随机 id;复用固定 id = 新 B 与旧 B 同 id,解除证据误认新 B 为残留(评审反例的另一半)',
+    edits: [swap(PM, 'id: newId() }', "id: 'aaaaaaaaaaaaaaaa' }")],
+    tests: [T_PM],
+    expectRed: [
+      '注入 newId:id 写进文件内容;删后重建换新 id,而 at(固定时钟)完全相同——at 不是身份',
+      '缺省随机源:连续新建两个 B(固定时钟)的 id 都合规且互不相同',
+      '评审反例(真文件、固定时钟):旧 B 已解除删除、状态留旧证据;新 B 与旧 B 的 at 相同、id 不同;状态写入前崩溃 → 重启补码、B 保留',
+    ],
+    mustKill: [
+      '缺省随机源:连续新建两个 B(固定时钟)的 id 都合规且互不相同',
+      '评审反例(真文件、固定时钟):旧 B 已解除删除、状态留旧证据;新 B 与旧 B 的 at 相同、id 不同;状态写入前崩溃 → 重启补码、B 保留',
+    ],
   },
 ];
 
