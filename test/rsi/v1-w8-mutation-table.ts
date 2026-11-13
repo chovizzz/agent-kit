@@ -819,20 +819,8 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
     expectRed: ['预检通过后、git 读取之前'],
     mustKill: ['预检通过后、git 读取之前'],
   },
-  {
-    id: 'git_include_allowed',
-    clause: 'W0-22 第 6 条 include 拒绝',
-    edits: [
-      swap(
-        'src/rsi/personal/read/git-readonly.ts',
-        "const REJECT_SECTIONS = new Set(['include', 'includeif']);",
-        'const REJECT_SECTIONS = new Set<string>([]);',
-      ),
-    ],
-    tests: ['rsi/auto/git-readonly.test.ts'],
-    expectRed: ['拒绝:'],
-    mustKill: ['拒绝:'],
-  },
+  // 原条目 git_include_allowed(只清空 REJECT_SECTIONS)是等价变异:include / includeif 仍被同一函数里的
+  // 节名白名单拒绝(两层冗余),单独去掉一层没有可观察差别。真正放开 include 的变异见 git_include_whitelisted。
   {
     id: 'git_promisor_key_allowed',
     clause: 'W0-22 第 6 条 promisor 键拒绝',
