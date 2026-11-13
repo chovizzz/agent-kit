@@ -213,7 +213,7 @@ export interface WriteFx {
   rsiOn: { value: boolean };
   lifts: string[];
   /** 非 null:`peekRecord` 用它代替权威读(演练「锁外读与持锁后重读不一致」) */
-  peek: { override: WritePorts['peekRecord'] | null; calls: number };
+  peek: { override: NonNullable<WritePorts['peekRecord']> | null; calls: number };
 }
 
 export const B_MARKER = (id = 'b'.repeat(16)): PauseMarker => ({

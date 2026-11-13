@@ -131,14 +131,16 @@ export async function runResume(
       const paused = ordered.length > 0 || bPending;
       const summary = json
         ? [
-            canonicalJson({
+            ...canonicalJson({
               cleared,
               remaining: ordered,
               user_marker: u1 === 'none' ? 'absent' : 'present',
               breaker_marker: bPending ? 'pending' : 'absent',
               paused,
               request_done: exit === ExitCode.OK,
-            }),
+            })
+              .replace(/\n$/, '')
+              .split('\n'),
           ]
         : [
             `cleared=${cleared.length > 0 ? cleared.join(',') : 'none'}`,

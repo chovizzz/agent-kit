@@ -1852,6 +1852,20 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
     expectRed: ['字段 = config / userMarker / outputForbidden'],
     mustKill: ['字段 = config / userMarker / outputForbidden'],
   },
+  {
+    id: 'entry_imports_write',
+    clause: 'W8b 读写分文件:读侧入口 entry.ts 的静态闭包不含写处理函数 / 写出口',
+    edits: [
+      swap(
+        'src/rsi/auto/entry.ts',
+        "import type { RsiEarlyContext } from '../types.js';",
+        "import type { RsiEarlyContext } from '../types.js';\nimport { makeWriteHandlers } from './write/index.js';\nexport const leakedWrite = makeWriteHandlers;",
+      ),
+    ],
+    tests: ['rsi/auto/zero-write.test.ts'],
+    expectRed: ['生产入口 entry.ts 的传递闭包'],
+    mustKill: ['生产入口 entry.ts 的传递闭包'],
+  },
 ];
 
 /** 实测结果:待主代理整表重跑后回填(W8a 86 条 + W8b 43 条) */

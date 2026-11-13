@@ -19,9 +19,8 @@ import { parseFlags } from '../args.js';
 import { failExit } from '../exit.js';
 import { forbiddenPaths } from '../output.js';
 import { rsiStubExit } from '../stub.js';
-import type { RsiEarlyContext, RsiSubcommand } from '../types.js';
+import type { RsiEarlyContext } from '../types.js';
 import { productionAutoPorts } from './deps.js';
-import { productionWritePorts } from './deps-write.js';
 import { runClearDry } from './read/clear-dry.js';
 import { AutoUsageError, type AutoReadPorts } from './read/ports.js';
 import { parseReportArgs, runReport } from './read/report.js';
@@ -29,15 +28,9 @@ import { parseRollbackToArgs, runRollbackDry } from './read/rollback-dry.js';
 import { checkShowArgs, runShow } from './read/show.js';
 import { runAutoStatus } from './read/status.js';
 import { routeAuto, type AutoCanonical, type AutoFamily } from './route.js';
-import type { WriteHandler } from './write/ports.js';
-import { makeWriteHandlers } from './write/index.js';
 
-/** 写命令的处理函数(`write/` 下的 W8b 实现;`deps.write` 里没有的规范名 = 未实现桩) */
-export type AutoWriteHandler = WriteHandler;
-
-/** 生产的写处理函数表:端口由 `deps-write.ts` 装配(未接线的缺失 → 预检退 3);只在相位够了且命中写路由时才会被调用 */
-const productionWriteHandlers = (): Partial<Record<AutoCanonical, AutoWriteHandler>> =>
-  makeWriteHandlers((ctx) => productionWritePorts(ctx));
+/** 写命令的处理函数(`write/` 下的 W8b 实现经 `commands.ts` 注入;`deps.write` 里没有的规范名 = 未实现桩) */
+export type AutoWriteHandler = (ctx: RsiEarlyContext, rest: readonly string[]) => Promise<number>;
 
 export interface AutoEntryDeps {
   /** 相位(缺省 `RSI_AUTO_PHASE`;测试注入) */
@@ -46,7 +39,7 @@ export interface AutoEntryDeps {
   now?: () => Date;
   /** 只读端口(缺省 = 生产组装) */
   ports?: (ctx: RsiEarlyContext) => Promise<AutoReadPorts>;
-  /** 写处理函数表(缺省 = 生产表;测试注入;表里没有的规范名仍是「未实现」桩) */
+  /** 写处理函数表(缺省 = 空表 = 全部「未实现」桩;生产表由 `commands.ts` 注入,本文件的闭包不含任何写模块;表里没有的规范名仍是桩) */
   write?: Partial<Record<AutoCanonical, AutoWriteHandler>>;
 }
 
@@ -69,7 +62,7 @@ export async function runAutoFamily(
   }
   try {
     if (route.write) {
-      const h = (deps.write ?? productionWriteHandlers())[route.canonical];
+      const h = (deps.write ?? {})[route.canonical];
       return h === undefined ? rsiStubExit(ctx, route.canonical) : await h(ctx, route.rest);
     }
     // 纯参数 / TTY 校验先于端口装配:坏参数、非 TTY 不会先去读配置 / 打开仓库上下文(也就不会因它们失败而退 3)
@@ -139,15 +132,3 @@ function prepare(
       return { usage: 'unknown_subcommand' };
   }
 }
-
-const make = (name: AutoFamily): RsiSubcommand => ({
-  name,
-  owner: 'W8',
-  run: (ctx) => runAutoFamily(name, ctx),
-});
-
-export const autoSubcommand = make('auto');
-export const vetoSubcommand = make('veto');
-export const rollbackSubcommand = make('rollback');
-export const reportSubcommand = make('report');
-export const showSubcommand = make('show');
