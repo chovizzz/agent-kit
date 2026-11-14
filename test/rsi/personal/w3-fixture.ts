@@ -220,6 +220,11 @@ export class MemStore implements AuthoritativeStore {
   /** 让 `read(id)` 返回与 `readAll` 不同的状态(模拟权威记录在列表之后变了) */
   readOverride = new Map<string, PersonalLifecycleRecord>();
   readAllCount = 0;
+  /**
+   * 可编程的 `read(id)` 故障队列(缺省空 = 无故障):每次 `read` 取队首一项,`'deferred'` = 这一次读返回 deferred、`null` = 正常。
+   * 用来演练「首次读不到(`lateEventNotApplied`)、第二次正常」;只影响 `read`,不影响 `readAll`;队列空后行为与原来完全相同(端口契约不变)。
+   */
+  readFaults: ('deferred' | null)[] = [];
   failCommit: CommitResult | null = null;
   throwOnCommit: Error | null = null;
 
@@ -240,6 +245,9 @@ export class MemStore implements AuthoritativeStore {
     };
   }
   async read(id: string): Promise<RecordRead> {
+    if (this.readFaults.shift() === 'deferred') {
+      return { kind: 'deferred', reason: 'personal_repo_diverged', why: 'x' };
+    }
     const all = await this.readAll();
     if (all.kind !== 'ok') return all;
     const r = this.readOverride.get(id) ?? this.records.get(id);

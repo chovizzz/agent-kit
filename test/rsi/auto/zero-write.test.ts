@@ -143,7 +143,27 @@ describe('③ ④ 静态:业务读侧的 import 闭包(运行时依赖与含类�
       expect(c.dynamic).toEqual([]);
       expect(c.unresolved).toEqual([]);
       expect(importersOf(c, 'node:child_process')).toEqual(['src/io/exec.ts']);
+      // 写命令的处理函数表 / 生产写端口 / 装配入口只经 `commands.ts` 进来,读侧入口的闭包里一个都不能有
+      expect(
+        [...c.files].filter(
+          (f) =>
+            f.startsWith('src/rsi/auto/write/') ||
+            f === 'src/rsi/auto/deps-write.ts' ||
+            f === 'src/rsi/auto/commands.ts',
+        ),
+      ).toEqual([]);
     }
+  });
+
+  it('写侧装配入口 commands.ts 的闭包确实含写处理函数表与写出口(对照:拆分后写模块在分发器那一侧,不是丢了);分发器经它取五个子命令', () => {
+    const c = closureOf(['src/rsi/auto/commands.ts']);
+    expect(c.files.has('src/rsi/auto/entry.ts')).toBe(true);
+    expect(c.files.has('src/rsi/auto/write/index.ts')).toBe(true);
+    expect(c.files.has('src/rsi/auto/deps-write.ts')).toBe(true);
+    expect(c.files.has('src/rsi/personal/clear.ts')).toBe(true);
+    expect(c.dynamic).toEqual([]);
+    const d = closureOf(['src/commands/rsi.ts']);
+    expect(d.files.has('src/rsi/auto/commands.ts')).toBe(true);
   });
 
   it('对照:deps.ts / entry.ts 的闭包确实含适配器与 exec.ts(审计工具不是空转);exit-map 属写命令一侧,不在读闭包里', () => {

@@ -37,14 +37,14 @@ import { interpretView } from './read/view-read.js';
 export const PERSONAL_GIT_DIR_REL = '.local/share/agent-kit/personal/.git';
 
 /** 合法关闭 / 确实没有配置:没有仓库与状态目录可泄漏(其余 off 原因 = 配置不可信) */
-const LEGIT_OFF: ReadonlySet<RsiOffReason> = new Set<RsiOffReason>([
+export const LEGIT_OFF: ReadonlySet<RsiOffReason> = new Set<RsiOffReason>([
   'absent',
   'no_section',
   'disabled',
 ]);
 
 /** 不可信配置的 off 原因 → 码表里同名的 fail-closed reason(`cfg_*` / `repo_invalid` 都在 `RSI_FAIL_CLOSED_REASONS`);对不上码表则 internal */
-function untrustedReason(r: RsiOffReason): RsiFailClosedReason {
+export function untrustedReason(r: RsiOffReason): RsiFailClosedReason {
   return (RSI_FAIL_CLOSED_REASONS as readonly string[]).includes(r)
     ? (r as RsiFailClosedReason)
     : 'internal';

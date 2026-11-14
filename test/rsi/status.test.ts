@@ -34,21 +34,32 @@ const doc = (out: string): StatusDoc => JSON.parse(out) as StatusDoc;
 
 const OFF_KEYS = [
   'agents',
+  'auto',
   'breaker',
+  'budget',
+  'canary',
   'confirm',
+  'contrib',
+  'cost',
   'counts',
   'cursor',
+  'exec',
+  'extensions',
   'first_armed',
   'gc_plan_error',
   'index',
+  'isolation',
+  'last_rollback',
   'last_tick',
   'lock',
   'overlay',
+  'pipeline',
   'purge',
   'reason',
   'snapshot',
   'staging',
   'state',
+  'static_watch',
   'stop',
   'tainted',
   'warnings',
@@ -71,6 +82,8 @@ const COUNT_KEYS = [
   'unreadable_runs',
 ];
 
+// R21-13.1 追加 11 个顶层键(auto / pipeline / budget / cost / canary / static_watch / isolation / extensions / contrib / exec / last_rollback),键集合仍固定;
+// 各键的取值由 `status-auto-keys.test.ts` 断言。
 describe('R20-3.4.1 off 与各类配置问题:退出 0、reason 报码、键集合固定、零写入', () => {
   for (const [name, toml] of [
     ['disabled', '[rsi]\nenabled = false\n'],
