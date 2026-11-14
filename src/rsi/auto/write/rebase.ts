@@ -3,7 +3,7 @@
  * 只在**分叉**(情形 ②,无标志)或**换主**(情形 ④,必须 `--adopt-owner`)时可用,其余退 4 `RSI_NOT_RUN reason=not_diverged`(情形 ③ = 记录不可读 → 退 3 `personal_repo_invalid`)。
  * 流程:参数(2)→ TTY(2)→ 预检(3,零写入)→ `[rsi]` 关闭(4)→ 无锁只读判情形并展示 `记录..HEAD` 的相对路径清单(输出例外:清洗 + 泄漏闸 + `RSI_AUTO_LABEL`)→
  * 输入精确 `yes`(只去行尾 `\r`;EOF 算拒绝)才继续,否则退 1 `RSI_CONFIRM_DECLINED`、零写入 → 取锁 → **持锁后重判**(不再分叉 / 换主 → 退 4 `not_diverged`;HEAD 与展示时不同 → 退 1 `RSI_CONFIRM_STALE`,零写入)→
- * 重跑收尾:不分叉、但 `head.json` 已是本命令改写后的值({@link RebasePort.headRewritten})且状态里仍留着对应标志 → 持锁后重判仍如此才只清该标志(幂等续做;没有这两个事实一律照旧退 4 `not_diverged`)。
+ * 重跑收尾:原始情形为 ok(不是「参数与情形不匹配」)、`head.json` 满足对应改写的后置条件({@link RebasePort.headRewritten})且状态里仍留着对应标志 → 持锁后重判三条仍成立才只清该标志(幂等续做;缺任一条一律照旧退 4 `not_diverged`)。
  * 改写 `head.json`(`baseline` 或 `owner`)→ 再清 `state.json.auto_pause` 里对应的 `diverged` / `owner_changed` 标志(先改记录后清标志:中途崩溃只会多停注入)。
  */
 import { ExitCode } from '../../../contracts/exit-codes.js';
@@ -59,7 +59,7 @@ export async function runRebase(
     }
   };
 
-  // 收尾残留:本命令上次已改完 head、标志没清完(锁外只读探测;动作一律持锁后重判)
+  // 收尾残留:head 已满足改写的后置条件、标志没清完(锁外只读探测;动作一律持锁后重判)
   const residueKind = adopt ? 'owner' : 'baseline';
   const hasResidue = async (): Promise<boolean> => {
     const st = await pauseState.read();
@@ -67,16 +67,17 @@ export async function runRebase(
     return flagged && (await rb.headRewritten(residueKind));
   };
 
-  const v0 = verdictOf(await rb.classify(), adopt);
+  const s0 = await rb.classify();
+  const v0 = verdictOf(s0, adopt);
   if (v0.kind === 'invalid') return failClosed(ctx, 'personal_repo_invalid');
   if (v0.kind === 'not_diverged') {
-    if (!(await hasResidue())) return notRun(ctx, 'not_diverged');
+    // 收尾只认原始情形 ok(参数与情形不匹配 ≠ 不分叉:那仍是退 4、零写入)
+    if (s0.kind !== 'ok' || !(await hasResidue())) return notRun(ctx, 'not_diverged');
     return locks.withLocks('rsi_personal_sync', async () => {
-      // 持锁后重判:仍是「不分叉 + head 已改写 + 标志仍在」才收尾;否则维持 not_diverged
-      const again = verdictOf(await rb.classify(), adopt);
+      // 持锁后重判:仍是「原始情形 ok + 后置条件成立 + 标志仍在」才收尾;否则维持 not_diverged
+      const again = await rb.classify();
       if (again.kind === 'invalid') return failClosed(ctx, 'personal_repo_invalid');
-      if (again.kind !== 'not_diverged' || !(await hasResidue()))
-        return notRun(ctx, 'not_diverged');
+      if (again.kind !== 'ok' || !(await hasResidue())) return notRun(ctx, 'not_diverged');
       await clearFlag(residueKind);
       return say(ctx, p, [`rebase-baseline=done kind=${residueKind} resumed=yes`]);
     });

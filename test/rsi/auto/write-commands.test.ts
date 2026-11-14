@@ -780,6 +780,62 @@ describe('rsi auto rebase-baseline(R21-12.5):只在分叉 / 换主可用,确认�
     expect(c.rebase.headWrites).toEqual([]);
   });
 
+  it('收尾只认原始情形 ok:参数与情形不匹配(分叉 + --adopt-owner / 换主不带)即使残留事实齐全也退 4、零写入、不取锁', async () => {
+    const a = makeFx();
+    a.rebase.situation = { kind: 'diverged', head: 'a'.repeat(40) };
+    a.pause.state = { reasons: [], diverged: true, owner_changed: true };
+    a.rebase.rewritten.owner = true;
+    const ra = await runWrite('auto', ['rebase-baseline', '--adopt-owner'], a);
+    expect([ra.code, ra.err]).toEqual([4, 'RSI_NOT_RUN reason=not_diverged\n']);
+    expect(a.pause.writes).toEqual([]);
+    expect(a.pause.state.owner_changed).toBe(true);
+    expect(a.locks.log).toEqual([]);
+    const b = makeFx();
+    b.rebase.situation = { kind: 'owner_changed', head: 'a'.repeat(40) };
+    b.pause.state = { reasons: [], diverged: true, owner_changed: true };
+    b.rebase.rewritten.baseline = true;
+    const rb = await runWrite('auto', ['rebase-baseline'], b);
+    expect([rb.code, rb.err]).toEqual([4, 'RSI_NOT_RUN reason=not_diverged\n']);
+    expect(b.pause.writes).toEqual([]);
+    expect(b.pause.state.diverged).toBe(true);
+    expect(b.locks.log).toEqual([]);
+  });
+
+  it('收尾的持锁重判:锁外 ok、持锁后变成与参数不匹配的情形 / 后置条件不再成立 / 标志已消失 → 都退 4,不清标志', async () => {
+    const a = makeFx();
+    a.rebase.situation = { kind: 'ok' };
+    a.pause.state = { reasons: [], diverged: true, owner_changed: false };
+    a.rebase.rewritten.baseline = true;
+    a.rebase.classifyHook = (n) => {
+      if (n === 2) a.rebase.situation = { kind: 'owner_changed', head: 'a'.repeat(40) };
+    };
+    const ra = await runWrite('auto', ['rebase-baseline'], a);
+    expect([ra.code, ra.err]).toEqual([4, 'RSI_NOT_RUN reason=not_diverged\n']);
+    expect(a.pause.writes).toEqual([]);
+    expect(a.pause.state.diverged).toBe(true);
+    const b = makeFx();
+    b.rebase.situation = { kind: 'ok' };
+    b.pause.state = { reasons: [], diverged: true, owner_changed: false };
+    b.rebase.rewritten.baseline = true;
+    b.rebase.classifyHook = (n) => {
+      if (n === 2) b.rebase.rewritten.baseline = false;
+    };
+    const rb = await runWrite('auto', ['rebase-baseline'], b);
+    expect([rb.code, rb.err]).toEqual([4, 'RSI_NOT_RUN reason=not_diverged\n']);
+    expect(b.pause.writes).toEqual([]);
+    expect(b.pause.state.diverged).toBe(true);
+    const c = makeFx();
+    c.rebase.situation = { kind: 'ok' };
+    c.pause.state = { reasons: [], diverged: true, owner_changed: false };
+    c.rebase.rewritten.baseline = true;
+    c.rebase.classifyHook = (n) => {
+      if (n === 2) c.pause.state = { reasons: [], diverged: false, owner_changed: false };
+    };
+    const rc = await runWrite('auto', ['rebase-baseline'], c);
+    expect([rc.code, rc.err]).toEqual([4, 'RSI_NOT_RUN reason=not_diverged\n']);
+    expect(c.pause.writes).toEqual([]);
+  });
+
   it('非分叉 / 非换主情形退 4 not_diverged(不提示、不取锁、不写);换主必须 --adopt-owner,分叉不接受 --adopt-owner', async () => {
     const fx = makeFx();
     fx.rebase.situation = { kind: 'ok' };

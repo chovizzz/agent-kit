@@ -2038,13 +2038,46 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
     edits: [
       swap(
         'src/rsi/auto/write/rebase.ts',
-        "if (!(await hasResidue())) return notRun(ctx, 'not_diverged');",
+        "if (s0.kind !== 'ok' || !(await hasResidue())) return notRun(ctx, 'not_diverged');",
         "return notRun(ctx, 'not_diverged');",
       ),
     ],
     tests: ['rsi/auto/write-commands.test.ts'],
     expectRed: ['head 写完后崩溃(清标志之前)'],
     mustKill: ['head 写完后崩溃(清标志之前)'],
+  },
+  {
+    id: 'rebase_resume_param_mismatch',
+    clause: 'W0-25 rebase 收尾只认原始情形 ok(参数与情形不匹配不得收尾)',
+    edits: [
+      swap(
+        'src/rsi/auto/write/rebase.ts',
+        "if (s0.kind !== 'ok' || !(await hasResidue())) return notRun(ctx, 'not_diverged');",
+        "if (!(await hasResidue())) return notRun(ctx, 'not_diverged');",
+      ),
+      swap(
+        'src/rsi/auto/write/rebase.ts',
+        "if (again.kind !== 'ok' || !(await hasResidue())) return notRun(ctx, 'not_diverged');",
+        "if (!(await hasResidue())) return notRun(ctx, 'not_diverged');",
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: ['收尾只认原始情形 ok'],
+    mustKill: ['收尾只认原始情形 ok'],
+  },
+  {
+    id: 'rebase_resume_no_recheck',
+    clause: 'W0-25 rebase 收尾须持锁后重判三条事实(锁外探测不作数)',
+    edits: [
+      swap(
+        'src/rsi/auto/write/rebase.ts',
+        "if (again.kind !== 'ok' || !(await hasResidue())) return notRun(ctx, 'not_diverged');",
+        'void again;',
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: ['收尾的持锁重判'],
+    mustKill: ['收尾的持锁重判'],
   },
   {
     id: 'status_inert_changed',
