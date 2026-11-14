@@ -8,7 +8,7 @@
  *
  * W8b 追加(本表后共 58 条:W8b 首版 43 条,接手后新增 12 条〔读写分文件 / resume 自动解除码 / 缩减入口配置不可信 / rollback --to 的 yes 与 STALE / veto 重试〕,再加 `rsi status` 追加键 3 条;id 前缀 pause_ / resume_ / clear_ / out_ / veto_ / rbk_ / rebase_ / status_ / 预检 / 生产组装):写命令的处理函数(pause 不拿锁 / 不覆盖 / 只碰 U;resume 的线性化与指纹、结果行、顺序;
  * clear 的锁序与枚举失败、已完成项先输出;veto 的 deferred 不判 unknown_id、终态只写黑名单、持锁后重读;rollback --to 的 by / reason / 逆序 / 三把锁 / 矛盾记录先于写入;rebase 的确认与持锁复判;未接线预检零写入)。
- * W8b 的结果由主代理跑完回填(`V1_W8_RESULTS` 已重置为 `[]`,主代理整表重跑后统一回填 W8a + W8b)。
+ * W8a + W8b 的结果由主代理整表重跑后统一回填(作业 r21w8b-mut4 @a485734:148 条全杀)。
  * 不在本表的点(如实记录):端口契约的写侧由 `port-contract.test.ts` 的套件覆盖,不是变异;
  * 零写入的层 ②(`KIT_WRITE_ROOTS=:` 子进程)与 (c):相位 0 下经 `main()` 的新命令全是桩,子进程辅助脚本不能注入相位(见 `zero-write.test.ts` 头注);
  * journal 完整性错误「不被消除」的身份单列(`uniq:` 键)只由退出码相同的用例间接覆盖,不单列变异。
@@ -2220,4 +2220,1498 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
 ];
 
 /** 实测结果:待主代理整表重跑后回填(W8a 86 条 + W8b 58 条) */
-export const V1_W8_RESULTS: readonly V1W8Result[] = [];
+/** 实测结果:r21w8b-mut4 @a485734 */
+export const V1_W8_RESULTS: readonly V1W8Result[] = [
+  {
+    id: 'gate_skipped',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      '能力闸 生产相位恒为 0:全部是桩;规范名取表里的键',
+      '能力闸 未到期的命令不构造端口、不解析参数(坏参数照样是桩)、不调用写处理函数',
+    ],
+    restored: true,
+  },
+  {
+    id: 'write_not_stub',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '能力闸 相位够了:读命令跑到处理函数(端口只构造一次);写命令仍接到「未实现」桩(处理函数表里没有该规范名时),不构造端口',
+    ],
+    restored: true,
+  },
+  {
+    id: 'write_flag_ignored',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'routeAuto(纯函数) --write 分流:pause / resume / rebase-baseline / veto 恒为写;clear 与 rollback 仅在含精确 token `--write` 时为写;status / report / show 恒为读',
+      '能力闸 写处理函数的接缝:注入后按规范名调用,参数是二级命令名之后的 rest(W8b 只需替换处理函数)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rollback_write_ignored',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'routeAuto(纯函数) --write 分流:pause / resume / rebase-baseline / veto 恒为写;clear 与 rollback 仅在含精确 token `--write` 时为写;status / report / show 恒为读',
+    ],
+    restored: true,
+  },
+  {
+    id: 'unknown_sub_guess',
+    failed: 1,
+    skipped: 0,
+    killedBy: ['routeAuto(纯函数) auto 的五个二级命令;缺失 / 未知 → undefined(不回显、不猜)'],
+    restored: true,
+  },
+  {
+    id: 'cap_threshold_lowered',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '能力闸 逐能力的相位边界:cmd_* 为 V1a 的命令在相位 1 起可用;cmd_rollback_to 为 V1b,相位 1 仍是桩、相位 2 起可用;不在表里的键恒拒绝',
+    ],
+    restored: true,
+  },
+  {
+    id: 'stale_boundary',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '视图语义(interpretView):缺失 / 损坏 / 陈旧 陈旧阈值 48 小时:恰好 48h 仍 fresh,多 1 毫秒即 stale;as_of 在未来超出时钟容差 → corrupt',
+    ],
+    restored: true,
+  },
+  {
+    id: 'stale_const_changed',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      '视图语义(interpretView):缺失 / 损坏 / 陈旧 陈旧阈值 48 小时:恰好 48h 仍 fresh,多 1 毫秒即 stale;as_of 在未来超出时钟容差 → corrupt',
+      '停住候选三态(视图 fresh) 视图陈旧 → 全部 unconfirmed:view_stale,数据照出并带 as_of;缺失 / 损坏视图 → rollback_stalled 为 null',
+    ],
+    restored: true,
+  },
+  {
+    id: 'future_asof_fresh',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '视图语义(interpretView):缺失 / 损坏 / 陈旧 陈旧阈值 48 小时:恰好 48h 仍 fresh,多 1 毫秒即 stale;as_of 在未来超出时钟容差 → corrupt',
+    ],
+    restored: true,
+  },
+  {
+    id: 'corrupt_as_missing',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '视图语义(interpretView):缺失 / 损坏 / 陈旧 缺失 → missing;读不出 / 非 JSON / 不合 schema → corrupt;不会显示成全零',
+    ],
+    restored: true,
+  },
+  {
+    id: 'view_missing_zero',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      '键集合与文本 / JSON 形状 --json:顶层键与 auto 下的键集合固定;缺失视图时派生键为 null,退 0',
+      '键集合与文本 / JSON 形状 损坏的视图:退 0,view_state=corrupt,派生键为 null(不是零)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'state_invalid_ignored',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'paused 判据与 breaker_marker state.json 过不了 schema → 退 3 state_invalid;stdout 为空',
+    ],
+    restored: true,
+  },
+  {
+    id: 'user_paused_not_added',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'paused 判据与 breaker_marker 用户标记 U 存在 → paused,pause_reasons 含 user_paused;U 与熔断码互不替代',
+    ],
+    restored: true,
+  },
+  {
+    id: 'paused_ignores_owner',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'paused 判据与 breaker_marker diverged / owner_changed 各自单独就使 paused 为真;全部为空则为 false',
+    ],
+    restored: true,
+  },
+  {
+    id: 'breaker_marker_always',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'paused 判据与 breaker_marker B 在而状态无熔断码 → paused 且 breaker_marker=pending;B 在且有码 → breaker_marker=absent',
+    ],
+    restored: true,
+  },
+  {
+    id: 'profile_effective_raw',
+    failed: 1,
+    skipped: 0,
+    killedBy: ['键集合与文本 / JSON 形状 profile_effective:相位 < V3 恒为 lite,相位 ≥ V3 取配置值'],
+    restored: true,
+  },
+  {
+    id: 'stalled_copy_recovers',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '停住候选的人工处置文案 stalled 时给出固定处置;明说「不会自动恢复」;不含「删除即可」,不宣称会自动恢复,不写「完成后 resume」',
+    ],
+    restored: true,
+  },
+  {
+    id: 'grace_inclusive',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '停住候选三态(视图 fresh) 不可重建类 + 超过 60 分钟宽限 + 无 journal → stalled;宽限内 → pending(60 分钟整仍 pending)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'grace_const_changed',
+    failed: 4,
+    skipped: 0,
+    killedBy: [
+      '停住候选三态(视图 fresh) 不可重建类 + 超过 60 分钟宽限 + 无 journal → stalled;宽限内 → pending(60 分钟整仍 pending)',
+      '停住候选三态(视图 fresh) harm_* / judge_* / limit_reached 都按不可重建类',
+      '停住候选三态(视图 fresh) 该候选已有 journal(按 (id, sha) 现算的 txn 名)→ 不列入;同 id 不同 sha 的 journal 不算',
+      '停住候选的人工处置文案 stalled 时给出固定处置;明说「不会自动恢复」;不含「删除即可」,不宣称会自动恢复,不写「完成后 resume」',
+    ],
+    restored: true,
+  },
+  {
+    id: 'stall_recoverable_as_stalled',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '停住候选三态(视图 fresh) 可重建类原因(cleared)即使超时也不是 stalled(worker 会补 journal)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'stall_journal_ignored',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      '停住候选三态(视图 fresh) 该候选已有 journal(按 (id, sha) 现算的 txn 名)→ 不列入;同 id 不同 sha 的 journal 不算',
+      '视图截断(JSON):截断标志不丢,缺失 / 损坏为 null 而不是 false fresh + rolling_back_truncated=true + 可见条目都有 journal → rollback_stalled 为 [],但 rollback_stalled_truncated 为 true(分得清「没有」与「被截断」)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'stall_sha_ignored',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '停住候选三态(视图 fresh) 该候选已有 journal(按 (id, sha) 现算的 txn 名)→ 不列入;同 id 不同 sha 的 journal 不算',
+    ],
+    restored: true,
+  },
+  {
+    id: 'stall_view_stale_ignored',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '停住候选三态(视图 fresh) 视图陈旧 → 全部 unconfirmed:view_stale,数据照出并带 as_of;缺失 / 损坏视图 → rollback_stalled 为 null',
+    ],
+    restored: true,
+  },
+  {
+    id: 'existence_single_read',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      '停住候选三态(视图 fresh) 存在性双读之间事务目录变化 → unconfirmed:snapshot_moving(不重试、不退 4)',
+      '停住候选三态(视图 fresh) 撤销凭据在双读之间变化同样 → snapshot_moving;事务目录读不出 → unconfirmed:txn_unreadable',
+    ],
+    restored: true,
+  },
+  {
+    id: 'status_reads_journal',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      '停住候选三态(视图 fresh) 存在性双读之间事务目录变化 → unconfirmed:snapshot_moving(不重试、不退 4)',
+      'status 不跑 git、不解析 journal 内容(弱协议) 完整运行后:受限只读 git 端口与 journal 内容读取的调用次数都是 0',
+    ],
+    restored: true,
+  },
+  {
+    id: 'content_no_recheck',
+    failed: 3,
+    skipped: 0,
+    killedBy: [
+      '内容验证双读协议 head.json 在两次读之间被改动一次 → 回到开头重试后成功;每次都被改 → 3 次用尽退 4 RSI_SNAPSHOT_BUSY',
+      '内容验证双读协议 事务目录增删、撤销凭据变化 → 同样不稳定(用尽退 4)',
+      '内容验证双读协议 同名原子替换 journal / 只改 phase(目录成员不变)→ 内容摘要变化 → 不稳定;去掉 journal 内容复核会漏掉它',
+    ],
+    restored: true,
+  },
+  {
+    id: 'journal_digest_dropped',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '内容验证双读协议 同名原子替换 journal / 只改 phase(目录成员不变)→ 内容摘要变化 → 不稳定;去掉 journal 内容复核会漏掉它',
+    ],
+    restored: true,
+  },
+  {
+    id: 'busy_as_failed',
+    failed: 4,
+    skipped: 0,
+    killedBy: [
+      '内容验证双读协议 head.json 在两次读之间被改动一次 → 回到开头重试后成功;每次都被改 → 3 次用尽退 4 RSI_SNAPSHOT_BUSY',
+      '内容验证双读协议 事务目录增删、撤销凭据变化 → 同样不稳定(用尽退 4)',
+      '内容验证双读协议 同名原子替换 journal / 只改 phase(目录成员不变)→ 内容摘要变化 → 不稳定;去掉 journal 内容复核会漏掉它',
+      '内容验证双读协议 记录提交对象消失(gc)→ 回到开头重试;持续消失 → 用尽退 4,不是「没有候选」',
+    ],
+    restored: true,
+  },
+  {
+    id: 'consistency_claims_atomic',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      '输出边界 每处正文前带 RSI_AUTO_LABEL(只引用常量);正文逐行带「| 」前缀;一致性口径是 double-read,不写「原子」',
+      '内容验证双读协议 改后改回(ABA)不被检出:输出照常,文案不含「原子」',
+    ],
+    restored: true,
+  },
+  {
+    id: 'object_missing_not_retry',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '内容验证双读协议 记录提交对象消失(gc)→ 回到开头重试;持续消失 → 用尽退 4,不是「没有候选」',
+    ],
+    restored: true,
+  },
+  {
+    id: 'unreadable_as_empty',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '读取失败一律 fail-closed(退 3,不当成「没有候选」) 适配器不可读 / 未装配 → 3 personal_repo_invalid;head.json 不合规 → 同;记录不合规 / 文件名与 id 不符 → 3 candidate_invalid',
+    ],
+    restored: true,
+  },
+  {
+    id: 'record_id_mismatch_ok',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '读取失败一律 fail-closed(退 3,不当成「没有候选」) 适配器不可读 / 未装配 → 3 personal_repo_invalid;head.json 不合规 → 同;记录不合规 / 文件名与 id 不符 → 3 candidate_invalid',
+    ],
+    restored: true,
+  },
+  {
+    id: 'show_no_tty_check',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '参数与 TTY 顺序(都在读取之前判) 无 TTY → 退 2 not_tty,且没有任何读取;未知参数 → unknown_arg;id 形状不对 / 不存在 → unknown_id(退 2)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'show_no_leak_gate',
+    failed: 1,
+    skipped: 0,
+    killedBy: ['输出边界 泄漏闸:正文含禁止值 → 退 3 output_leak,stdout 一个字节都不写'],
+    restored: true,
+  },
+  {
+    id: 'show_label_dropped',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      '输出边界 每处正文前带 RSI_AUTO_LABEL(只引用常量);正文逐行带「| 」前缀;一致性口径是 double-read,不写「原子」',
+      'N4-2 关联提案裁决段(失败只影响该段) 有裁决记录 → 段内容带标签与清洗后的字段;自报记录带 declared',
+    ],
+    restored: true,
+  },
+  {
+    id: 'show_body_unprefixed',
+    failed: 3,
+    skipped: 0,
+    killedBy: [
+      '输出边界 每处正文前带 RSI_AUTO_LABEL(只引用常量);正文逐行带「| 」前缀;一致性口径是 double-read,不写「原子」',
+      '输出边界 正文清洗:控制 / 双向覆盖 / 行分隔字符 → `?`;正文不能伪造本命令的行(只有一行真正的 journal=)',
+      'N4-2 关联提案裁决段(失败只影响该段) 裁决读取不可用 / 抛错 → 只有该段是 unavailable,其余输出与退出码不变',
+    ],
+    restored: true,
+  },
+  {
+    id: 'show_body_unsanitized',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '输出边界 正文清洗:控制 / 双向覆盖 / 行分隔字符 → `?`;正文不能伪造本命令的行(只有一行真正的 journal=)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'journal_binding_loose',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'journal 三态与保护标记 absent(只表示「该次读取下不存在」)/ ok / invalid;invalid 只写「按运行手册处置」,不含路径与「删除即可」',
+    ],
+    restored: true,
+  },
+  {
+    id: 'report_claims_complete',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '四类情形 (1)完整但前几天无事件 与 (2)被截断:不区分——输出逐字节相同,都是 request_before_observed=true',
+    ],
+    restored: true,
+  },
+  {
+    id: 'report_prior_ignored',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      '四类情形 (3)空文件:audit_file=present、observed=null、文本写「观察到 0 行」,不报「0 次转移」;账显示曾有转移 → 退 3 audit_invalid',
+      '四类情形 (4)文件缺失:无账显示 → 退 0 并标「无审计文件(未观察到任何事件)」;账显示曾有转移 → 退 3 audit_invalid',
+    ],
+    restored: true,
+  },
+  {
+    id: 'report_skip_corrupt',
+    failed: 1,
+    skipped: 0,
+    killedBy: ['四类情形 任一行不合规 → corrupt_lines=<n>,退 3,不得跳过后退 0;读不出 → 退 3'],
+    restored: true,
+  },
+  {
+    id: 'report_before_flipped',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      '四类情形 (1)完整但前几天无事件 与 (2)被截断:不区分——输出逐字节相同,都是 request_before_observed=true',
+      '四类情形 请求起点不早于已观察起点 → request_before_observed=false',
+    ],
+    restored: true,
+  },
+  {
+    id: 'report_week_start_shifted',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '参数与区间 --week = 当前 UTC 周的周一起;--since D 必须是真实日历日;--week 与 --since 互斥',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rb_boundary_inclusive',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'select-rollback(纯函数):严格大于 / 日期不可知 / 矛盾记录 候选「进入 canary 的 UTC 日」> D(不含当日):D = 进入日 → 不含;D = 前一天 → 含;差一天的两侧都钉住',
+      'select-rollback(纯函数):严格大于 / 日期不可知 / 矛盾记录 带时区偏移的时间先换算成 UTC 日再比较',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rb_unknown_excluded',
+    failed: 3,
+    skipped: 0,
+    killedBy: [
+      'select-rollback(纯函数):严格大于 / 日期不可知 / 矛盾记录 日期不可知(transitions_dropped>0 且无进入 canary 的记录)→ 单列纳入,不进主列表;dropped=0 而缺记录 → invalid(不静默排除)',
+      'select-rollback(纯函数):严格大于 / 日期不可知 / 矛盾记录 rolling_back 可由从未进入 canary 的候选进入:完整历史(dropped=0)里没有进入记录 = 不在范围,不是 invalid;历史被截断则仍按日期不可知纳入',
+      'rsi rollback --to 干跑 文本:主列表与「日期不可知,按保守方向纳入」单列一节,计数分开;json 的 date_unknown[] 同样单列',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rb_unknown_unlisted',
+    failed: 3,
+    skipped: 0,
+    killedBy: [
+      'select-rollback(纯函数):严格大于 / 日期不可知 / 矛盾记录 日期不可知(transitions_dropped>0 且无进入 canary 的记录)→ 单列纳入,不进主列表;dropped=0 而缺记录 → invalid(不静默排除)',
+      'select-rollback(纯函数):严格大于 / 日期不可知 / 矛盾记录 rolling_back 可由从未进入 canary 的候选进入:完整历史(dropped=0)里没有进入记录 = 不在范围,不是 invalid;历史被截断则仍按日期不可知纳入',
+      'rsi rollback --to 干跑 文本:主列表与「日期不可知,按保守方向纳入」单列一节,计数分开;json 的 date_unknown[] 同样单列',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rb_utc_offset_ignored',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'select-rollback(纯函数):严格大于 / 日期不可知 / 矛盾记录 带时区偏移的时间先换算成 UTC 日再比较',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rb_order_flipped',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'select-rollback(纯函数):严格大于 / 日期不可知 / 矛盾记录 候选「进入 canary 的 UTC 日」> D(不含当日):D = 进入日 → 不含;D = 前一天 → 含;差一天的两侧都钉住',
+      'select-rollback(纯函数):严格大于 / 日期不可知 / 矛盾记录 按生效逆序:进入 canary 晚者在前,同刻按 id',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rb_bad_date_rollover',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'select-rollback(纯函数):严格大于 / 日期不可知 / 矛盾记录 parseUtcDate:只接受真实日历日的 YYYY-MM-DD',
+      'rsi rollback --to 干跑 参数先于任何读取:缺 --to / 坏日期 → 2 bad_date;未知参数 → 2 unknown_arg',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rb_off_exit_zero',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi rollback --to 干跑 [rsi] 关闭 → 退 4 RSI_NOT_RUN reason=off,提示改用 rsi auto clear;不是 0',
+    ],
+    restored: true,
+  },
+  {
+    id: 'cleardry_lists_terminal',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi auto clear 干跑 只列非终态候选(终态不列);带 journal 三态;不依赖 [rsi](关闭时照常完成)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'exit_priority_reversed',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '优先级 取最小号:not_wired(1)压过 locked(7);locked(7)压过 manual(9);busy(8)压过 manual(9);cause 优先级 1<2<3<4<5<6',
+    ],
+    restored: true,
+  },
+  {
+    id: 'exit_manual_as_3',
+    failed: 13,
+    skipped: 0,
+    killedBy: [
+      '11 行逐格 9a manual_event_required → 退 1',
+      '11 行逐格 9b manual_by_ambiguous → 退 1',
+      '11 行逐格 9c retryable → 退 1',
+      '11 行逐格 9d static_removal_pending → 退 1',
+      '优先级 第 9 行退 1(不是 3);匹配 cause 而不是 why 前缀:why 写成 repo_unreadable:… 但 cause=retryable 仍是第 9 行',
+      '事务身份归并与完整性错误 失败时已完成的撤销仍先逐行输出(信息行在前,失败行在后);成功 variant 缺 txn 对应候选时以 txn= 代替',
+      '按 variant × cause 穷举 incomplete × retryable → 退 1',
+      '按 variant × cause 穷举 refused(带事务身份)× retryable → 退 1',
+      '按 variant × cause 穷举 incomplete × manual_event_required → 退 1',
+      '按 variant × cause 穷举 refused(带事务身份)× manual_event_required → 退 1',
+      '按 variant × cause 穷举 incomplete × manual_by_ambiguous → 退 1',
+      '按 variant × cause 穷举 refused(带事务身份)× manual_by_ambiguous → 退 1',
+      '同一身份的多次失败 严重失败后接轻微失败(及反向)仍保留最严重的;失败→成功→失败仍未解决',
+    ],
+    restored: true,
+  },
+  {
+    id: 'exit_missing_cause_ok',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '11 行逐格 6 失败 variant 上缺失 / 未识别的 cause → 退 3 internal;成功 variant 无 cause 是正常(不打 3)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'exit_complete_clears_all',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      '事务身份归并与完整性错误 同一身份的后续 complete 消除此前的失败;同 id 不同 sha(不同 txn)互不消除',
+      '事务身份归并与完整性错误 journal 完整性错误(refused、txn=null、带 journal 句柄)不被任何 complete 消除;每份独立(同候选两份不一致 journal 各报一份)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'exit_enum_failure_ok',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '事务身份归并与完整性错误 候选枚举失败(含部分成功后)→ 退 3 personal_repo_invalid,不得退 0;已成功项先输出',
+    ],
+    restored: true,
+  },
+  {
+    id: 'exit_busy_as_locked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '11 行逐格 7 / 8 命令级前置:locked / off / not_diverged → 退 4 RSI_NOT_RUN;快照协议用尽 → 退 4 RSI_SNAPSHOT_BUSY',
+    ],
+    restored: true,
+  },
+  {
+    id: 'exit_cause_row_swapped',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      '11 行逐格 2 credentials_invalid → 退 3 reason=revocations_invalid',
+      '优先级 取最小号:not_wired(1)压过 locked(7);locked(7)压过 manual(9);busy(8)压过 manual(9);cause 优先级 1<2<3<4<5<6',
+    ],
+    restored: true,
+  },
+  {
+    id: 'git_no_preflight',
+    failed: 19,
+    skipped: 0,
+    killedBy: [
+      '真仓库(假 HOME 下的私有仓库,真 git) 预检拒绝:include 引入 promisor → unreadable 且 spawn 次数 = 0(含「假旧版 git:忽略 GIT_NO_LAZY_FETCH 并对缺失对象尝试抓取」的场景)',
+      '真仓库(假 HOME 下的私有仓库,真 git) 预检拒绝:includeIf → unreadable 且 spawn 次数 = 0(含「假旧版 git:忽略 GIT_NO_LAZY_FETCH 并对缺失对象尝试抓取」的场景)',
+      '真仓库(假 HOME 下的私有仓库,真 git) 预检拒绝:extensions.partialClone → unreadable 且 spawn 次数 = 0(含「假旧版 git:忽略 GIT_NO_LAZY_FETCH 并对缺失对象尝试抓取」的场景)',
+      '真仓库(假 HOME 下的私有仓库,真 git) 预检拒绝:remote.origin.promisor → unreadable 且 spawn 次数 = 0(含「假旧版 git:忽略 GIT_NO_LAZY_FETCH 并对缺失对象尝试抓取」的场景)',
+      '真仓库(假 HOME 下的私有仓库,真 git) 预检拒绝:partialclonefilter → unreadable 且 spawn 次数 = 0(含「假旧版 git:忽略 GIT_NO_LAZY_FETCH 并对缺失对象尝试抓取」的场景)',
+      '真仓库(假 HOME 下的私有仓库,真 git) 预检拒绝:续行 \\ → unreadable 且 spawn 次数 = 0(含「假旧版 git:忽略 GIT_NO_LAZY_FETCH 并对缺失对象尝试抓取」的场景)',
+      '真仓库(假 HOME 下的私有仓库,真 git) 预检拒绝:旧式段头 [remote.foo] → unreadable 且 spawn 次数 = 0(含「假旧版 git:忽略 GIT_NO_LAZY_FETCH 并对缺失对象尝试抓取」的场景)',
+      '真仓库(假 HOME 下的私有仓库,真 git) 预检拒绝:config 超过 64 KiB → unreadable 且 spawn 次数 = 0(含「假旧版 git:忽略 GIT_NO_LAZY_FETCH 并对缺失对象尝试抓取」的场景)',
+      '真仓库(假 HOME 下的私有仓库,真 git) 预检拒绝:config 权限 0000(读不出) → unreadable 且 spawn 次数 = 0(含「假旧版 git:忽略 GIT_NO_LAZY_FETCH 并对缺失对象尝试抓取」的场景)',
+      '真仓库(假 HOME 下的私有仓库,真 git) 预检拒绝:config 是目录 → unreadable 且 spawn 次数 = 0(含「假旧版 git:忽略 GIT_NO_LAZY_FETCH 并对缺失对象尝试抓取」的场景)',
+      '真仓库(假 HOME 下的私有仓库,真 git) 预检拒绝:config 是符号链接 → unreadable 且 spawn 次数 = 0(含「假旧版 git:忽略 GIT_NO_LAZY_FETCH 并对缺失对象尝试抓取」的场景)',
+      '真仓库(假 HOME 下的私有仓库,真 git) 预检拒绝:config.worktree 存在 → unreadable 且 spawn 次数 = 0(含「假旧版 git:忽略 GIT_NO_LAZY_FETCH 并对缺失对象尝试抓取」的场景)',
+      '真仓库(假 HOME 下的私有仓库,真 git) 预检拒绝:.gitconfig 存在 → unreadable 且 spawn 次数 = 0(含「假旧版 git:忽略 GIT_NO_LAZY_FETCH 并对缺失对象尝试抓取」的场景)',
+      '真仓库(假 HOME 下的私有仓库,真 git) 预检拒绝:.config/git 存在 → unreadable 且 spawn 次数 = 0(含「假旧版 git:忽略 GIT_NO_LAZY_FETCH 并对缺失对象尝试抓取」的场景)',
+      '真仓库(假 HOME 下的私有仓库,真 git) 预检拒绝:objects/pack/x.promisor → unreadable 且 spawn 次数 = 0(含「假旧版 git:忽略 GIT_NO_LAZY_FETCH 并对缺失对象尝试抓取」的场景)',
+      '真仓库(假 HOME 下的私有仓库,真 git) 预检拒绝:objects/info/alternates → unreadable 且 spawn 次数 = 0(含「假旧版 git:忽略 GIT_NO_LAZY_FETCH 并对缺失对象尝试抓取」的场景)',
+      '真仓库(假 HOME 下的私有仓库,真 git) 预检拒绝:info/grafts → unreadable 且 spawn 次数 = 0(含「假旧版 git:忽略 GIT_NO_LAZY_FETCH 并对缺失对象尝试抓取」的场景)',
+      '真仓库(假 HOME 下的私有仓库,真 git) 仓库目录本身不安全 → unreadable 且 spawn = 0:相对路径、符号链接、非本人属主、权限宽于 0700(含 git init 默认的 0755)',
+      '真仓库(假 HOME 下的私有仓库,真 git) 每次读取前都预检:装配时 / 第一次读取通过不能替代第二次读取前的检查(第二次读取前改 config 必须被拒)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'git_no_recheck',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      '真仓库(假 HOME 下的私有仓库,真 git) 预检通过后、git 读取之前(spawn 期间)config 被改 → 结果被丢弃并拒收(changed_during_read)。注:此情形只检测并拒收,不保证零写入',
+      '真仓库(假 HOME 下的私有仓库,真 git) 存在性集合在 spawn 期间变化(出现 .promisor 文件)同样拒收',
+    ],
+    restored: true,
+  },
+  {
+    id: 'git_promisor_key_allowed',
+    failed: 6,
+    skipped: 0,
+    killedBy: [
+      '配置预检的严格子集解析(纯函数) 拒绝:remote.promisor',
+      '配置预检的严格子集解析(纯函数) 拒绝:remote.partialclonefilter',
+      '配置预检的严格子集解析(纯函数) 拒绝:任一段内的 promisor 键',
+      '真仓库(假 HOME 下的私有仓库,真 git) 预检拒绝:remote.origin.promisor → unreadable 且 spawn 次数 = 0(含「假旧版 git:忽略 GIT_NO_LAZY_FETCH 并对缺失对象尝试抓取」的场景)',
+      '真仓库(假 HOME 下的私有仓库,真 git) 预检拒绝:partialclonefilter → unreadable 且 spawn 次数 = 0(含「假旧版 git:忽略 GIT_NO_LAZY_FETCH 并对缺失对象尝试抓取」的场景)',
+      '真仓库(假 HOME 下的私有仓库,真 git) 每次读取前都预检:装配时 / 第一次读取通过不能替代第二次读取前的检查(第二次读取前改 config 必须被拒)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'git_extensions_open',
+    failed: 3,
+    skipped: 0,
+    killedBy: [
+      '配置预检的严格子集解析(纯函数) 拒绝:extensions.partialClone',
+      '配置预检的严格子集解析(纯函数) 拒绝:extensions 白名单外的键',
+      '真仓库(假 HOME 下的私有仓库,真 git) 预检拒绝:extensions.partialClone → unreadable 且 spawn 次数 = 0(含「假旧版 git:忽略 GIT_NO_LAZY_FETCH 并对缺失对象尝试抓取」的场景)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'git_alternates_allowed',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '真仓库(假 HOME 下的私有仓库,真 git) 预检拒绝:objects/info/alternates → unreadable 且 spawn 次数 = 0(含「假旧版 git:忽略 GIT_NO_LAZY_FETCH 并对缺失对象尝试抓取」的场景)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'git_promisor_file_ok',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      '真仓库(假 HOME 下的私有仓库,真 git) 预检拒绝:objects/pack/x.promisor → unreadable 且 spawn 次数 = 0(含「假旧版 git:忽略 GIT_NO_LAZY_FETCH 并对缺失对象尝试抓取」的场景)',
+      '真仓库(假 HOME 下的私有仓库,真 git) 存在性集合在 spawn 期间变化(出现 .promisor 文件)同样拒收',
+    ],
+    restored: true,
+  },
+  {
+    id: 'git_config_cap_removed',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '真仓库(假 HOME 下的私有仓库,真 git) 预检拒绝:config 超过 64 KiB → unreadable 且 spawn 次数 = 0(含「假旧版 git:忽略 GIT_NO_LAZY_FETCH 并对缺失对象尝试抓取」的场景)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'git_argv_shape_open',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'argv 形状:三种之外一律拒绝 非法形状:多 / 少参数、`--` 路径、非 40 位小写 oid、revision 表达式、第四种操作、形状 ① 的后缀缺失,各一例',
+      'argv 形状:三种之外一律拒绝 <FIXED> 逐项等值:缺一项 / 换值 / 换序 / 另一个仓库目录都拒绝',
+    ],
+    restored: true,
+  },
+  {
+    id: 'git_fixed_prefix_loose',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'argv 形状:三种之外一律拒绝 <FIXED> 逐项等值:缺一项 / 换值 / 换序 / 另一个仓库目录都拒绝',
+    ],
+    restored: true,
+  },
+  {
+    id: 'git_env_loose',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '封闭 env 恰好 12 个键,值等于清单;多一键 / 缺一键 / 值不同都拒绝;从不含 GIT_DIR 等危险键',
+    ],
+    restored: true,
+  },
+  {
+    id: 'git_env_value_changed',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '封闭 env 恰好 12 个键,值等于清单;多一键 / 缺一键 / 值不同都拒绝;从不含 GIT_DIR 等危险键',
+    ],
+    restored: true,
+  },
+  {
+    id: 'git_cwd_not_repo',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '真仓库(假 HOME 下的私有仓库,真 git) 三种读取都成功;每次 spawn 的 argv 通过形状校验、env 恰为封闭清单、cwd = 仓库目录、git 是绝对路径',
+    ],
+    restored: true,
+  },
+  {
+    id: 'git_blob_count_cap',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '真仓库(假 HOME 下的私有仓库,真 git) blob 个数上限 512、总字节上限 8 MiB:超限即 unreadable(output_limit)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'git_blob_bytes_cap',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '真仓库(假 HOME 下的私有仓库,真 git) blob 个数上限 512、总字节上限 8 MiB:超限即 unreadable(output_limit)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'git_stdout_cap',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '真仓库(假 HOME 下的私有仓库,真 git) git 异常退出码 → unreadable(stderr 不进输出);超时 / 启动失败 / 输出超 4 MiB 各自映射;形状 ① 的退出码 1 才是 missing',
+    ],
+    restored: true,
+  },
+  {
+    id: 'git_nonzero_ok',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '真仓库(假 HOME 下的私有仓库,真 git) git 异常退出码 → unreadable(stderr 不进输出);超时 / 启动失败 / 输出超 4 MiB 各自映射;形状 ① 的退出码 1 才是 missing',
+    ],
+    restored: true,
+  },
+  {
+    id: 'git_missing_any_status1',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '真仓库(假 HOME 下的私有仓库,真 git) git 异常退出码 → unreadable(stderr 不进输出);超时 / 启动失败 / 输出超 4 MiB 各自映射;形状 ① 的退出码 1 才是 missing',
+    ],
+    restored: true,
+  },
+  {
+    id: 'git_uid_unchecked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '真仓库(假 HOME 下的私有仓库,真 git) 仓库目录本身不安全 → unreadable 且 spawn = 0:相对路径、符号链接、非本人属主、权限宽于 0700(含 git init 默认的 0755)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'git_wide_mode_ok',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '真仓库(假 HOME 下的私有仓库,真 git) 仓库目录本身不安全 → unreadable 且 spawn = 0:相对路径、符号链接、非本人属主、权限宽于 0700(含 git init 默认的 0755)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'runner_guard_removed',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '封闭 env runGitClosed 自身的守卫:相对路径 / 文件名不是 git / env 键越界 / cwd 非绝对 → 抛错(不 spawn)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'home_unreadable_as_absent',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'HomeReadPort 契约:生产适配器 makeHomeReadPort 读失败 → unreadable,绝不是 absent / 空',
+    ],
+    restored: true,
+  },
+  {
+    id: 'git_include_whitelisted',
+    failed: 6,
+    skipped: 0,
+    killedBy: [
+      '配置预检的严格子集解析(纯函数) 拒绝:include 段与 includeIf 段(单独触发:config 除该段外完全合规,对照组通过)',
+      '配置预检的严格子集解析(纯函数) 拒绝:include',
+      '配置预检的严格子集解析(纯函数) 拒绝:includeIf',
+      '配置预检的严格子集解析(纯函数) 拒绝:INCLUDE(大小写不敏感)',
+      '真仓库(假 HOME 下的私有仓库,真 git) 预检拒绝:include 引入 promisor → unreadable 且 spawn 次数 = 0(含「假旧版 git:忽略 GIT_NO_LAZY_FETCH 并对缺失对象尝试抓取」的场景)',
+      '真仓库(假 HOME 下的私有仓库,真 git) 预检拒绝:includeIf → unreadable 且 spawn 次数 = 0(含「假旧版 git:忽略 GIT_NO_LAZY_FETCH 并对缺失对象尝试抓取」的场景)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'leak_extra_empty',
+    failed: 3,
+    skipped: 0,
+    killedBy: [
+      '泄漏闸的禁止值来自端口(生产组装注入;HOME 外的仓库根 / 状态目录 / realpath) HOME 外的仓库根 / 状态目录出现在正文 → 退 3 output_leak,stdout 零字节;正文不含这些路径 → 正常输出(正向对照)',
+      '泄漏闸的禁止值来自端口(生产组装注入;HOME 外的仓库根 / 状态目录 / realpath) 禁止值的 realpath 同样拦:端口给符号链接路径、正文含其真实路径 → 退 3,stdout 零字节',
+      '泄漏闸的禁止值来自端口(生产组装注入;HOME 外的仓库根 / 状态目录 / realpath) 经 emitLines 的其它命令(status)同用端口的禁止值',
+    ],
+    restored: true,
+  },
+  {
+    id: 'status_trunc_keys_dropped',
+    failed: 4,
+    skipped: 0,
+    killedBy: [
+      '键集合与文本 / JSON 形状 --json:顶层键与 auto 下的键集合固定;缺失视图时派生键为 null,退 0',
+      '视图截断(JSON):截断标志不丢,缺失 / 损坏为 null 而不是 false fresh + rolling_back_truncated=true + 可见条目都有 journal → rollback_stalled 为 [],但 rollback_stalled_truncated 为 true(分得清「没有」与「被截断」)',
+      '视图截断(JSON):截断标志不丢,缺失 / 损坏为 null 而不是 false protection_marks_truncated 独立于 rolling_back_truncated;未截断的 fresh 视图两个键都是 false',
+      '视图截断(JSON):截断标志不丢,缺失 / 损坏为 null 而不是 false 视图缺失 / 损坏 → 两个截断键都是 null(不是 false);文本不出现截断提示',
+    ],
+    restored: true,
+  },
+  {
+    id: 'status_trunc_null_as_false',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      '键集合与文本 / JSON 形状 --json:顶层键与 auto 下的键集合固定;缺失视图时派生键为 null,退 0',
+      '视图截断(JSON):截断标志不丢,缺失 / 损坏为 null 而不是 false 视图缺失 / 损坏 → 两个截断键都是 null(不是 false);文本不出现截断提示',
+    ],
+    restored: true,
+  },
+  {
+    id: 'untrusted_cfg_as_off',
+    failed: 4,
+    skipped: 0,
+    killedBy: [
+      '配置不可信 → 所有读命令在输出之前 fail-closed(退 3,stdout 零字节) cfg_parse:6 个读命令都退 3 RSI_FAIL_CLOSED reason=cfg_parse,stdout 为空',
+      '配置不可信 → 所有读命令在输出之前 fail-closed(退 3,stdout 零字节) cfg_schema:6 个读命令都退 3 RSI_FAIL_CLOSED reason=cfg_schema,stdout 为空',
+      '配置不可信 → 所有读命令在输出之前 fail-closed(退 3,stdout 零字节) repo_invalid(repo 在 HOME 之外且不存在):6 个读命令都退 3 RSI_FAIL_CLOSED reason=repo_invalid,stdout 为空',
+      '配置不可信 → 所有读命令在输出之前 fail-closed(退 3,stdout 零字节) cfg_perm:6 个读命令都退 3 RSI_FAIL_CLOSED reason=cfg_perm,stdout 为空',
+    ],
+    restored: true,
+  },
+  {
+    id: 'explicit_root_dropped',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      '禁止集合(端口 outputForbidden) 合法关闭(absent / no_section / disabled):照常组装,显式 --root(相对路径按 cwd 解析)进入集合',
+      '禁止集合(端口 outputForbidden) forbiddenExtra 不静默丢项:配置 on 而没有 io / 缺状态目录 / 缺仓库根 → 抛 fail-closed;explicitRoot 是唯一可选来源',
+    ],
+    restored: true,
+  },
+  {
+    id: 'forbidden_extra_silent',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '禁止集合(端口 outputForbidden) forbiddenExtra 不静默丢项:配置 on 而没有 io / 缺状态目录 / 缺仓库根 → 抛 fail-closed;explicitRoot 是唯一可选来源',
+    ],
+    restored: true,
+  },
+  {
+    id: 'pause_takes_lock',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'rsi auto pause(R21-12.2):独占创建用户暂停文件 pause 创建 U:不拿锁、不要 TTY、只碰 U(不写 state、不 bump、不碰熔断标记)',
+      '未接线预检:缺任一必需端口 → 退 3 internal,任何写入之前(零写入,pause 除外) 全部未接线(只有 userMarker 与 config):除 pause 外每个写命令退 3 零写入;pause 恰好写 U 一个文件',
+    ],
+    restored: true,
+  },
+  {
+    id: 'pause_overwrites',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi auto pause(R21-12.2):独占创建用户暂停文件 pause 已存在时不覆盖:输出「已暂停(已存在)」,退 0,实例不变',
+    ],
+    restored: true,
+  },
+  {
+    id: 'pause_touches_state',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'rsi auto pause(R21-12.2):独占创建用户暂停文件 pause 创建 U:不拿锁、不要 TTY、只碰 U(不写 state、不 bump、不碰熔断标记)',
+      'rsi auto pause(R21-12.2):独占创建用户暂停文件 pause 已存在时不覆盖:输出「已暂停(已存在)」,退 0,实例不变',
+    ],
+    restored: true,
+  },
+  {
+    id: 'pause_off_runs',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi auto pause(R21-12.2):独占创建用户暂停文件 pause 在 [rsi] 关闭时退 4 off,不写 U;未知参数退 2',
+    ],
+    restored: true,
+  },
+  {
+    id: 'resume_no_evidence',
+    failed: 3,
+    skipped: 0,
+    killedBy: [
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 清掉条件已不成立的人工码,写解除证据,bump,按指纹删 U;B 在 → PENDING 退 0,不得输出 RESUMED,不碰 B',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 在无剩余码、U 与 B 都不在时才输出 RESUMED(退 0)',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 自动解除码条件已不成立:本次一并清掉(带解除证据),不退 1;B 在 → PENDING 且证据写 B 的 id',
+    ],
+    restored: true,
+  },
+  {
+    id: 'resume_clears_holding',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 不清仍成立的码:退 1,逐行 BLOCKED,不写证据,已清的码照实列出',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 与人工码同在:自动解除码条件已不成立的清掉,仍成立的人工码保留并退 1(已清的照实列出,不写证据)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'resume_no_bump',
+    failed: 5,
+    skipped: 0,
+    killedBy: [
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 清掉条件已不成立的人工码,写解除证据,bump,按指纹删 U;B 在 → PENDING 退 0,不得输出 RESUMED,不碰 B',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 的顺序:先写 state(带证据),再 bump,最后删 U',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 指纹为空(快照时没有 U)永不删:步骤 ② 之后新建的 U′ 保留,结果行 BLOCKED user_paused new=yes,退 1',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 指纹不符(步骤 ② 之后 U 被换实例)保留并报 changed;U′ 与 B 同在时追加 breaker_marker=pending',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 中途失败:已落盘的先输出(已完成:cleared=…),再退 3,可重跑',
+    ],
+    restored: true,
+  },
+  {
+    id: 'resume_empty_stamp_deletes',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 指纹为空(快照时没有 U)永不删:步骤 ② 之后新建的 U′ 保留,结果行 BLOCKED user_paused new=yes,退 1',
+    ],
+    restored: true,
+  },
+  {
+    id: 'resume_mismatch_deletes',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 指纹不符(步骤 ② 之后 U 被换实例)保留并报 changed;U′ 与 B 同在时追加 breaker_marker=pending',
+    ],
+    restored: true,
+  },
+  {
+    id: 'resume_touches_breaker',
+    failed: 5,
+    skipped: 0,
+    killedBy: [
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 清掉条件已不成立的人工码,写解除证据,bump,按指纹删 U;B 在 → PENDING 退 0,不得输出 RESUMED,不碰 B',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 自动解除码条件已不成立:本次一并清掉(带解除证据),不退 1;B 在 → PENDING 且证据写 B 的 id',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 的顺序:先写 state(带证据),再 bump,最后删 U',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 指纹不符(步骤 ② 之后 U 被换实例)保留并报 changed;U′ 与 B 同在时追加 breaker_marker=pending',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume --json:追加 paused 与 request_done(PENDING 行:paused=true,request_done=true)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'resume_result_mismatch',
+    failed: 4,
+    skipped: 0,
+    killedBy: [
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 清掉条件已不成立的人工码,写解除证据,bump,按指纹删 U;B 在 → PENDING 退 0,不得输出 RESUMED,不碰 B',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 自动解除码条件已不成立:本次一并清掉(带解除证据),不退 1;B 在 → PENDING 且证据写 B 的 id',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 指纹不符(步骤 ② 之后 U 被换实例)保留并报 changed;U′ 与 B 同在时追加 breaker_marker=pending',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume --json:追加 paused 与 request_done(PENDING 行:paused=true,request_done=true)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'resume_diverged_dropped',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 不碰 diverged / owner_changed:退 1,提示 rebase-baseline,按码表顺序',
+    ],
+    restored: true,
+  },
+  {
+    id: 'resume_order_swapped',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 的顺序:先写 state(带证据),再 bump,最后删 U',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 指纹不符(步骤 ② 之后 U 被换实例)保留并报 changed;U′ 与 B 同在时追加 breaker_marker=pending',
+    ],
+    restored: true,
+  },
+  {
+    id: 'resume_user_not_in_r',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 指纹为空(快照时没有 U)永不删:步骤 ② 之后新建的 U′ 保留,结果行 BLOCKED user_paused new=yes,退 1',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 指纹不符(步骤 ② 之后 U 被换实例)保留并报 changed;U′ 与 B 同在时追加 breaker_marker=pending',
+    ],
+    restored: true,
+  },
+  {
+    id: 'resume_two_locks',
+    failed: 14,
+    skipped: 0,
+    killedBy: [
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 清掉条件已不成立的人工码,写解除证据,bump,按指纹删 U;B 在 → PENDING 退 0,不得输出 RESUMED,不碰 B',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 在无剩余码、U 与 B 都不在时才输出 RESUMED(退 0)',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 不清仍成立的码:退 1,逐行 BLOCKED,不写证据,已清的码照实列出',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 自动解除码条件仍成立(重查命中):保留在 state 里,BLOCKED 行带 auto_release=yes,退 1,不写 state,不输出 RESUMED',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 自动解除码条件已不成立:本次一并清掉(带解除证据),不退 1;B 在 → PENDING 且证据写 B 的 id',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 与人工码同在:自动解除码条件已不成立的清掉,仍成立的人工码保留并退 1(已清的照实列出,不写证据)',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 重查没覆盖的自动解除码(no_observation / cost_high_legacy / isolation_unverified)条件无从判定:按仍成立处理,保留,退 1',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 不碰 diverged / owner_changed:退 1,提示 rebase-baseline,按码表顺序',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 的顺序:先写 state(带证据),再 bump,最后删 U',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 指纹为空(快照时没有 U)永不删:步骤 ② 之后新建的 U′ 保留,结果行 BLOCKED user_paused new=yes,退 1',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 指纹不符(步骤 ② 之后 U 被换实例)保留并报 changed;U′ 与 B 同在时追加 breaker_marker=pending',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume:U 存在时历史遗留的 state 码 user_paused 一并清;U 不存在时它仍算剩余(不得谎报 RESUMED)',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 中途失败:已落盘的先输出(已完成:cleared=…),再退 3,可重跑',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume --json:追加 paused 与 request_done(PENDING 行:paused=true,request_done=true)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'clear_takes_rsi_lock',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi auto clear --write(R21-12.4 / R21-9.5 缩减入口):只拿 personal → sync clear 撤销成功:退 0,RSI_CLEAR_DONE 先逐行输出,只拿 personal → sync(不取 rsi/lock),不要求 [rsi] 可用',
+    ],
+    restored: true,
+  },
+  {
+    id: 'clear_off_short_circuit',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi auto clear --write(R21-12.4 / R21-9.5 缩减入口):只拿 personal → sync clear 撤销成功:退 0,RSI_CLEAR_DONE 先逐行输出,只拿 personal → sync(不取 rsi/lock),不要求 [rsi] 可用',
+    ],
+    restored: true,
+  },
+  {
+    id: 'clear_enum_ignored',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi auto clear --write(R21-12.4 / R21-9.5 缩减入口):只拿 personal → sync clear 仓库读不出(deferred 且无只读记录):没有处理任何新候选,退 3 personal_repo_invalid,不写凭据',
+    ],
+    restored: true,
+  },
+  {
+    id: 'out_failure_first',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '输出归并(emitOutcomes):完整性先于归并、同身份才消除、已完成项先输出 journal 完整性错误(不带身份)不被另一份 journal 的 complete 消除:退 3 txn_invalid',
+    ],
+    restored: true,
+  },
+  {
+    id: 'veto_deferred_unknown_id',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判 veto 仓库 deferred / invalid 时不得判 unknown_id:退 3(不是 2),零写入',
+    ],
+    restored: true,
+  },
+  {
+    id: 'veto_no_reread',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判 veto 持锁后重读记录再判:锁外读到的是 canary,持锁时已是终态 → 只写黑名单,不新开回滚',
+    ],
+    restored: true,
+  },
+  {
+    id: 'veto_terminal_rolls_back',
+    failed: 4,
+    skipped: 0,
+    killedBy: [
+      'rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判 veto 已终态候选只写黑名单:记录不动,没有 journal,没有撤销凭据',
+      'rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判 veto 持锁后重读记录再判:锁外读到的是 canary,持锁时已是终态 → 只写黑名单,不新开回滚',
+      'rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判 veto 终态候选(原理由 cleared)的黑名单 E1 deferred:退非零、不输出成功行;恢复扫描不会补;重跑且落地正常 → 退 0,黑名单恰好一条',
+      'rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判 veto 迟到事件没施加、事务已走完且黑名单 E1 deferred:同样退非零(不静默退 0);重跑落地正常 → 退 0',
+    ],
+    restored: true,
+  },
+  {
+    id: 'veto_wrong_source',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判 veto 已部署候选:startRollback(kind=rollback, reason=vetoed, by=veto),三把锁,黑名单落 E1 键',
+    ],
+    restored: true,
+  },
+  {
+    id: 'veto_off_ignored',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判 veto 参数 / 环境:非 TTY 退 2;[rsi] 关闭退 4 off;缺 id 退 2 unknown_arg;零写入',
+    ],
+    restored: true,
+  },
+  {
+    id: 'veto_lift_ignored',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判 veto --lift 只调黑名单解除端口:记录与 journal 不动',
+    ],
+    restored: true,
+  },
+  {
+    id: 'veto_e2_not_landed',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判 veto 未部署(shadow)候选:引擎 veto 事件直接 rejected(vetoed),终态批次 E2 整批落地,不写撤销凭据',
+    ],
+    restored: true,
+  },
+  {
+    id: 'veto_e1_not_landed',
+    failed: 4,
+    skipped: 0,
+    killedBy: [
+      'rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判 veto 已终态候选只写黑名单:记录不动,没有 journal,没有撤销凭据',
+      'rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判 veto 较晚事件首次没施加、但事务随即走完(记录已按原理由进终态):不再新开空事务,改走终态 veto → 退 0,只落黑名单(不静默丢 veto)',
+      'rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判 veto 终态候选(原理由 cleared)的黑名单 E1 deferred:退非零、不输出成功行;恢复扫描不会补;重跑且落地正常 → 退 0,黑名单恰好一条',
+      'rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判 veto 迟到事件没施加、事务已走完且黑名单 E1 deferred:同样退非零(不静默退 0);重跑落地正常 → 退 0',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rbk_wrong_source',
+    failed: 3,
+    skipped: 0,
+    killedBy: [
+      'rsi rollback --to <日期> --write(R21-12.7 / W0-22 第 4 条) rollback --to:by=rollback_to、reason=cleared,按生效逆序(进入 canary 晚者在前),三把锁',
+      'rsi rollback --to <日期> --write(R21-12.7 / W0-22 第 4 条) rollback --to 日期严格大于:进入日等于 D 的不纳入',
+      'rsi rollback --to <日期> --write(R21-12.7 / W0-22 第 4 条) rollback --to 日期不可知的候选单列纳入并展示(计数分开),排在日期可知者之后',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rbk_wrong_reason',
+    failed: 3,
+    skipped: 0,
+    killedBy: [
+      'rsi rollback --to <日期> --write(R21-12.7 / W0-22 第 4 条) rollback --to:by=rollback_to、reason=cleared,按生效逆序(进入 canary 晚者在前),三把锁',
+      'rsi rollback --to <日期> --write(R21-12.7 / W0-22 第 4 条) rollback --to 日期严格大于:进入日等于 D 的不纳入',
+      'rsi rollback --to <日期> --write(R21-12.7 / W0-22 第 4 条) rollback --to 日期不可知的候选单列纳入并展示(计数分开),排在日期可知者之后',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rbk_order_flipped',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'rsi rollback --to <日期> --write(R21-12.7 / W0-22 第 4 条) rollback --to:by=rollback_to、reason=cleared,按生效逆序(进入 canary 晚者在前),三把锁',
+      'rsi rollback --to <日期> --write(R21-12.7 / W0-22 第 4 条) rollback --to 日期不可知的候选单列纳入并展示(计数分开),排在日期可知者之后',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rbk_unknown_excluded',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi rollback --to <日期> --write(R21-12.7 / W0-22 第 4 条) rollback --to 日期不可知的候选单列纳入并展示(计数分开),排在日期可知者之后',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rbk_off_exit_zero',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi rollback --to <日期> --write(R21-12.7 / W0-22 第 4 条) rollback --to:[rsi] 关闭退 4 off 并提示改用 auto clear;坏日期退 2;非 TTY 退 2;零写入',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rbk_two_locks',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi rollback --to <日期> --write(R21-12.7 / W0-22 第 4 条) rollback --to:by=rollback_to、reason=cleared,按生效逆序(进入 canary 晚者在前),三把锁',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rbk_invalid_after_write',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi rollback --to <日期> --write(R21-12.7 / W0-22 第 4 条) rollback --to 记录自相矛盾(无进入 canary 记录且没有丢弃转移):在任何写入之前退 3 candidate_invalid',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rebase_no_confirm',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'rsi auto rebase-baseline(R21-12.5):只在分叉 / 换主可用,确认后才改写 拒绝(非 yes / EOF)退 1 RSI_CONFIRM_DECLINED,零写入、不取锁',
+      'rsi auto rebase-baseline(R21-12.5):只在分叉 / 换主可用,确认后才改写 没有「已改写」事实就不清标志:本来没分叉且状态里也没有标志 → 退 4;有标志但 head 并未改写(记录与 HEAD 不符)→ 仍退 4,不动标志;仍分叉 → 走正常确认流程',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rebase_non_diverged_runs',
+    failed: 6,
+    skipped: 0,
+    killedBy: [
+      'rsi auto rebase-baseline(R21-12.5):只在分叉 / 换主可用,确认后才改写 head 写完后崩溃(清标志之前):重跑不被 not_diverged 短路,持锁后收尾清 diverged 标志 → 退 0,不再改写 head',
+      'rsi auto rebase-baseline(R21-12.5):只在分叉 / 换主可用,确认后才改写 pause state 写失败(head 已改写):重跑同样收尾清标志;换主(--adopt-owner)同形',
+      'rsi auto rebase-baseline(R21-12.5):只在分叉 / 换主可用,确认后才改写 没有「已改写」事实就不清标志:本来没分叉且状态里也没有标志 → 退 4;有标志但 head 并未改写(记录与 HEAD 不符)→ 仍退 4,不动标志;仍分叉 → 走正常确认流程',
+      'rsi auto rebase-baseline(R21-12.5):只在分叉 / 换主可用,确认后才改写 收尾只认原始情形 ok:参数与情形不匹配(分叉 + --adopt-owner / 换主不带)即使残留事实齐全也退 4、零写入、不取锁',
+      'rsi auto rebase-baseline(R21-12.5):只在分叉 / 换主可用,确认后才改写 收尾的持锁重判:锁外 ok、持锁后变成与参数不匹配的情形 / 后置条件不再成立 / 标志已消失 → 都退 4,不清标志',
+      'rsi auto rebase-baseline(R21-12.5):只在分叉 / 换主可用,确认后才改写 非分叉 / 非换主情形退 4 not_diverged(不提示、不取锁、不写);换主必须 --adopt-owner,分叉不接受 --adopt-owner',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rebase_no_recheck',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi auto rebase-baseline(R21-12.5):只在分叉 / 换主可用,确认后才改写 持锁后重判:确认之后 HEAD 变了 → RSI_CONFIRM_STALE(退 1)零写入;不再分叉 → 退 4 not_diverged',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rebase_label_dropped',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi auto rebase-baseline(R21-12.5):只在分叉 / 换主可用,确认后才改写 分叉:展示带标签的相对路径清单,输入 yes 才改写 head.json,并清 diverged 标志;三把锁',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rebase_paths_unsanitized',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi auto rebase-baseline(R21-12.5):只在分叉 / 换主可用,确认后才改写 路径清单过清洗:控制字符被替换,不能伪造行',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rebase_flag_kept',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'rsi auto rebase-baseline(R21-12.5):只在分叉 / 换主可用,确认后才改写 分叉:展示带标签的相对路径清单,输入 yes 才改写 head.json,并清 diverged 标志;三把锁',
+      'rsi auto rebase-baseline(R21-12.5):只在分叉 / 换主可用,确认后才改写 head 写完后崩溃(清标志之前):重跑不被 not_diverged 短路,持锁后收尾清 diverged 标志 → 退 0,不再改写 head',
+    ],
+    restored: true,
+  },
+  {
+    id: 'precheck_skipped',
+    failed: 10,
+    skipped: 0,
+    killedBy: [
+      '未接线预检:缺任一必需端口 → 退 3 internal,任何写入之前(零写入,pause 除外) resume:缺 userMarker → 退 3 internal;没有取锁、没有任何写入',
+      '未接线预检:缺任一必需端口 → 退 3 internal,任何写入之前(零写入,pause 除外) resume:缺 breaker → 退 3 internal;没有取锁、没有任何写入',
+      '未接线预检:缺任一必需端口 → 退 3 internal,任何写入之前(零写入,pause 除外) resume:缺 pauseState → 退 3 internal;没有取锁、没有任何写入',
+      '未接线预检:缺任一必需端口 → 退 3 internal,任何写入之前(零写入,pause 除外) resume:缺 holds → 退 3 internal;没有取锁、没有任何写入',
+      '未接线预检:缺任一必需端口 → 退 3 internal,任何写入之前(零写入,pause 除外) resume:缺 marks → 退 3 internal;没有取锁、没有任何写入',
+      '未接线预检:缺任一必需端口 → 退 3 internal,任何写入之前(零写入,pause 除外) clear --write:缺 clearDeps → 退 3 internal;没有取锁、没有任何写入',
+      '未接线预检:缺任一必需端口 → 退 3 internal,任何写入之前(零写入,pause 除外) rebase-baseline:缺 pauseState → 退 3 internal;没有取锁、没有任何写入',
+      '未接线预检:缺任一必需端口 → 退 3 internal,任何写入之前(零写入,pause 除外) veto:缺 rollbackDeps → 退 3 internal;没有取锁、没有任何写入',
+      '未接线预检:缺任一必需端口 → 退 3 internal,任何写入之前(零写入,pause 除外) rollback --to --write:缺 locks → 退 3 internal;没有取锁、没有任何写入',
+      '未接线预检:缺任一必需端口 → 退 3 internal,任何写入之前(零写入,pause 除外) rollback --to --write:缺 rollbackDeps → 退 3 internal;没有取锁、没有任何写入',
+    ],
+    restored: true,
+  },
+  {
+    id: 'ports_before_args',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 参数 / 环境:非 TTY 退 2 零写入;锁被占用退 4 locked 零写入;[rsi] 关闭退 4 off',
+      '未接线预检:缺任一必需端口 → 退 3 internal,任何写入之前(零写入,pause 除外) 参数 / TTY 校验先于端口装配:坏参数、非 TTY 不会构造端口',
+    ],
+    restored: true,
+  },
+  {
+    id: 'prod_wires_locks',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '生产写组装 productionWritePorts:只接了用户标记端口,其余一律缺失(未接线) 字段 = config / userMarker / outputForbidden;[rsi] 无配置 = 合法关闭(rsiOn=false)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'entry_imports_write',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '③ ④ 静态:业务读侧的 import 闭包(运行时依赖与含类型依赖两种口径) 生产入口 entry.ts 的传递闭包(运行时与含类型两种口径):除 deps / entry 自己、exec.ts(runGitClosed)与适配器外,不含任何写出口 / 锁 / 回滚写模块',
+    ],
+    restored: true,
+  },
+  {
+    id: 'clear_untrusted_blocked',
+    failed: 8,
+    skipped: 0,
+    killedBy: [
+      '配置不可信时 auto clear --write(缩减入口)照常完成 HOME 侧撤销 cfg_parse:撤销完成(退 0),只拿 personal → sync 锁,stdout / stderr 不含候选正文、仓库根 / 状态目录 / [rsi] repo 路径',
+      '配置不可信时 auto clear --write(缩减入口)照常完成 HOME 侧撤销 cfg_parse:仓库读不出时退 3 personal_repo_invalid(归并规则不因配置不可信而变),不写凭据',
+      '配置不可信时 auto clear --write(缩减入口)照常完成 HOME 侧撤销 cfg_schema:撤销完成(退 0),只拿 personal → sync 锁,stdout / stderr 不含候选正文、仓库根 / 状态目录 / [rsi] repo 路径',
+      '配置不可信时 auto clear --write(缩减入口)照常完成 HOME 侧撤销 cfg_schema:仓库读不出时退 3 personal_repo_invalid(归并规则不因配置不可信而变),不写凭据',
+      '配置不可信时 auto clear --write(缩减入口)照常完成 HOME 侧撤销 repo_invalid:撤销完成(退 0),只拿 personal → sync 锁,stdout / stderr 不含候选正文、仓库根 / 状态目录 / [rsi] repo 路径',
+      '配置不可信时 auto clear --write(缩减入口)照常完成 HOME 侧撤销 repo_invalid:仓库读不出时退 3 personal_repo_invalid(归并规则不因配置不可信而变),不写凭据',
+      '配置不可信时 auto clear --write(缩减入口)照常完成 HOME 侧撤销 cfg_perm:撤销完成(退 0),只拿 personal → sync 锁,stdout / stderr 不含候选正文、仓库根 / 状态目录 / [rsi] repo 路径',
+      '配置不可信时 auto clear --write(缩减入口)照常完成 HOME 侧撤销 cfg_perm:仓库读不出时退 3 personal_repo_invalid(归并规则不因配置不可信而变),不写凭据',
+    ],
+    restored: true,
+  },
+  {
+    id: 'clear_prints_paths',
+    failed: 8,
+    skipped: 0,
+    killedBy: [
+      '配置不可信时 auto clear --write(缩减入口)照常完成 HOME 侧撤销 cfg_parse:撤销完成(退 0),只拿 personal → sync 锁,stdout / stderr 不含候选正文、仓库根 / 状态目录 / [rsi] repo 路径',
+      '配置不可信时 auto clear --write(缩减入口)照常完成 HOME 侧撤销 cfg_parse:仓库读不出时退 3 personal_repo_invalid(归并规则不因配置不可信而变),不写凭据',
+      '配置不可信时 auto clear --write(缩减入口)照常完成 HOME 侧撤销 cfg_schema:撤销完成(退 0),只拿 personal → sync 锁,stdout / stderr 不含候选正文、仓库根 / 状态目录 / [rsi] repo 路径',
+      '配置不可信时 auto clear --write(缩减入口)照常完成 HOME 侧撤销 cfg_schema:仓库读不出时退 3 personal_repo_invalid(归并规则不因配置不可信而变),不写凭据',
+      '配置不可信时 auto clear --write(缩减入口)照常完成 HOME 侧撤销 repo_invalid:撤销完成(退 0),只拿 personal → sync 锁,stdout / stderr 不含候选正文、仓库根 / 状态目录 / [rsi] repo 路径',
+      '配置不可信时 auto clear --write(缩减入口)照常完成 HOME 侧撤销 repo_invalid:仓库读不出时退 3 personal_repo_invalid(归并规则不因配置不可信而变),不写凭据',
+      '配置不可信时 auto clear --write(缩减入口)照常完成 HOME 侧撤销 cfg_perm:撤销完成(退 0),只拿 personal → sync 锁,stdout / stderr 不含候选正文、仓库根 / 状态目录 / [rsi] repo 路径',
+      '配置不可信时 auto clear --write(缩减入口)照常完成 HOME 侧撤销 cfg_perm:仓库读不出时退 3 personal_repo_invalid(归并规则不因配置不可信而变),不写凭据',
+    ],
+    restored: true,
+  },
+  {
+    id: 'other_writes_fail_open',
+    failed: 4,
+    skipped: 0,
+    killedBy: [
+      '配置不可信时其余写命令仍 fail-closed(退 3,stdout 零字节,零写入) cfg_parse:5 个写命令都退 3 RSI_FAIL_CLOSED reason=cfg_parse',
+      '配置不可信时其余写命令仍 fail-closed(退 3,stdout 零字节,零写入) cfg_schema:5 个写命令都退 3 RSI_FAIL_CLOSED reason=cfg_schema',
+      '配置不可信时其余写命令仍 fail-closed(退 3,stdout 零字节,零写入) repo_invalid:5 个写命令都退 3 RSI_FAIL_CLOSED reason=repo_invalid',
+      '配置不可信时其余写命令仍 fail-closed(退 3,stdout 零字节,零写入) cfg_perm:5 个写命令都退 3 RSI_FAIL_CLOSED reason=cfg_perm',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rbk_invalid_locked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi rollback --to <日期> --write(R21-12.7 / W0-22 第 4 条) rollback --to 持锁后重读发现矛盾记录:退 3 candidate_invalid,零写入(展示时没有、取锁前出现)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rbk_no_confirm',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi rollback --to <日期> --write(R21-12.7 / W0-22 第 4 条) rollback --to 展示两节后要求 yes:拒绝(非 yes / EOF)退 1 RSI_CONFIRM_DECLINED,零写入、不取锁',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rbk_lock_before_confirm',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi rollback --to <日期> --write(R21-12.7 / W0-22 第 4 条) rollback --to 展示两节后要求 yes:拒绝(非 yes / EOF)退 1 RSI_CONFIRM_DECLINED,零写入、不取锁',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rbk_no_stale',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi rollback --to <日期> --write(R21-12.7 / W0-22 第 4 条) rollback --to 持锁后重读重选:展示之后清单变了(新增候选)→ RSI_CONFIRM_STALE 退 1,零写入;清单不变则照常',
+    ],
+    restored: true,
+  },
+  {
+    id: 'veto_no_late_retry',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判 veto 复用在途 txn 时较晚的 veto 事件首次没施加(lateEventNotApplied):重试一次,第二次正常 → 退 0,记录进 vetoed,不报 late_event_not_applied',
+    ],
+    restored: true,
+  },
+  {
+    id: 'veto_late_complete_lost',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判 veto 较晚事件首次没施加、但事务随即走完(记录已按原理由进终态):不再新开空事务,改走终态 veto → 退 0,只落黑名单(不静默丢 veto)',
+      'rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判 veto 迟到事件没施加、事务已走完且黑名单 E1 deferred:同样退非零(不静默退 0);重跑落地正常 → 退 0',
+    ],
+    restored: true,
+  },
+  {
+    id: 'veto_e1_deferred_ok',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判 veto 终态候选(原理由 cleared)的黑名单 E1 deferred:退非零、不输出成功行;恢复扫描不会补;重跑且落地正常 → 退 0,黑名单恰好一条',
+      'rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判 veto 迟到事件没施加、事务已走完且黑名单 E1 deferred:同样退非零(不静默退 0);重跑落地正常 → 退 0',
+    ],
+    restored: true,
+  },
+  {
+    id: 'veto_no_lock_lost_check',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判 veto 转移已提交但丢锁(lockLost):立即结束(退 3 lock_lost),E2 与审计出口调用次数为 0;恢复扫描随后补出效果',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rebase_resume_unconditional',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'rsi auto rebase-baseline(R21-12.5):只在分叉 / 换主可用,确认后才改写 没有「已改写」事实就不清标志:本来没分叉且状态里也没有标志 → 退 4;有标志但 head 并未改写(记录与 HEAD 不符)→ 仍退 4,不动标志;仍分叉 → 走正常确认流程',
+      'rsi auto rebase-baseline(R21-12.5):只在分叉 / 换主可用,确认后才改写 收尾的持锁重判:锁外 ok、持锁后变成与参数不匹配的情形 / 后置条件不再成立 / 标志已消失 → 都退 4,不清标志',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rebase_resume_missing',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'rsi auto rebase-baseline(R21-12.5):只在分叉 / 换主可用,确认后才改写 head 写完后崩溃(清标志之前):重跑不被 not_diverged 短路,持锁后收尾清 diverged 标志 → 退 0,不再改写 head',
+      'rsi auto rebase-baseline(R21-12.5):只在分叉 / 换主可用,确认后才改写 pause state 写失败(head 已改写):重跑同样收尾清标志;换主(--adopt-owner)同形',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rebase_resume_param_mismatch',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'rsi auto rebase-baseline(R21-12.5):只在分叉 / 换主可用,确认后才改写 收尾只认原始情形 ok:参数与情形不匹配(分叉 + --adopt-owner / 换主不带)即使残留事实齐全也退 4、零写入、不取锁',
+      'rsi auto rebase-baseline(R21-12.5):只在分叉 / 换主可用,确认后才改写 收尾的持锁重判:锁外 ok、持锁后变成与参数不匹配的情形 / 后置条件不再成立 / 标志已消失 → 都退 4,不清标志',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rebase_resume_no_recheck',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi auto rebase-baseline(R21-12.5):只在分叉 / 换主可用,确认后才改写 收尾的持锁重判:锁外 ok、持锁后变成与参数不匹配的情形 / 后置条件不再成立 / 标志已消失 → 都退 4,不清标志',
+    ],
+    restored: true,
+  },
+  {
+    id: 'status_inert_changed',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'rsi status --json:R21-13.1 追加键 [rsi] 关闭(off):惰性值,V1 的视图派生键全是 null,auto 未启用 / 未暂停,phase 取当前相位',
+      'rsi status --json:R21-13.1 追加键 on 而没有视图(missing):V1 的视图派生键是 null(绝不显示成全零);[rsi.auto] 启用与 profile 如实报告,相位低于 V3 时 profile_effective 恒 lite',
+    ],
+    restored: true,
+  },
+  {
+    id: 'status_missing_view_zero',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'rsi status --json:R21-13.1 追加键 on 而没有视图(missing):V1 的视图派生键是 null(绝不显示成全零);[rsi.auto] 启用与 profile 如实报告,相位低于 V3 时 profile_effective 恒 lite',
+      'rsi status --json:R21-13.1 追加键 损坏的视图(不是 JSON / 过不了 schema):派生键 null,命令仍退 0',
+    ],
+    restored: true,
+  },
+  {
+    id: 'status_user_marker_ignored',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi status --json:R21-13.1 追加键 暂停:U 文件存在 → paused 且 pause_reasons 含 user_paused;state 的熔断码与 diverged 如实带出;B 单独存在也算 paused',
+    ],
+    restored: true,
+  },
+];
