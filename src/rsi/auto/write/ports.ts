@@ -60,6 +60,11 @@ export interface RebasePort {
   changedPaths(): Promise<readonly string[]>;
   /** 改写 `head.json`:`baseline` = 记录提交换成 `expectHead`;`owner` = `owner_repo_fp` 换成当前 `[rsi] repo` 的指纹。持 `personal/lock` */
   rewriteHead(kind: 'baseline' | 'owner', expectHead: string): Promise<void>;
+  /**
+   * 「本命令已完成 head 改写」的可验证事实(只读):`baseline` = `head.json` 记录的提交等于当前 HEAD;`owner` = 记录的 `owner_repo_fp` 等于当前 `[rsi] repo` 的指纹。
+   * 与状态里仍留着对应标志合起来,才是「改写已完成、标志没清完」的收尾依据(W0-25);读不出抛错。
+   */
+  headRewritten(kind: 'baseline' | 'owner'): Promise<boolean>;
 }
 
 /** 端口装配(惰性):参数 / TTY 校验先于装配,坏参数不会先去读配置 */

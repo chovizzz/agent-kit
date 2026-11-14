@@ -10,6 +10,7 @@
  * `--lift`:只解除指纹黑名单(`VetoLift` 端口),候选记录不动、仍是终态。
  * 持锁后候选消失(锁外读到过):退 3 `candidate_invalid`(不判 `unknown_id`:它在锁外已经存在过,消失说明并发写入 / 记录异常)。
  */
+import { RsiLockError } from '../../lock-error.js';
 import { RsiCandidateIdSchema } from '../../../contracts/rsi.js';
 import type { PersonalLifecycleRecord } from '../../../contracts/rsi-personal.js';
 import { RSI_VETO_EVIDENCE } from './evidence.js';
@@ -150,6 +151,12 @@ export async function runVeto(
   });
 }
 
+/** E1 deferred 的终态 veto:否决没有落地,输出明确信息行(摘要过泄漏闸),退 1;stdout 不含成功行 */
+async function failedVeto(ctx: RsiEarlyContext, p: WritePorts, id: string): Promise<number> {
+  const shown = await say(ctx, p, [`veto: id=${id} 否决未落地(黑名单落地推迟),请重跑 rsi veto`]);
+  return shown !== 0 ? shown : 1;
+}
+
 /** 终态 / 无部署候选:经引擎 `veto` 事件(终态上是空操作,只落 E1);转移提交后落终态批次 E2 与审计 */
 async function directVeto(
   ctx: RsiEarlyContext,
@@ -181,6 +188,8 @@ async function directVeto(
   if (r.kind === 'halt') return haltExit(ctx, r);
   if (r.kind === 'refused' || r.kind === 'stale') return failClosed(ctx, 'candidate_invalid');
   if (r.kind === 'transitioned') {
+    // 转移已提交但丢锁:立即结束本步,不再调用任何写出口(E2 / 审计),交给已提交终态记录的恢复机制续做(candidate-apply 的 `lockLost` 约定)
+    if (r.lockLost === true) throw new RsiLockError('lock_lost');
     // E2:终态批次整批落地(与回滚执行器收尾同一函数)
     const batch = await landTerminalEffects(d.keyedEffects, r.next);
     const audit = await landAuditEffects(d.keyedEffects, r.next);
@@ -190,6 +199,11 @@ async function directVeto(
       await say(ctx, p, [`veto: id=${rec.id} 已提交,效果落地失败(重跑 rsi veto 补做)`]);
       return failClosed(ctx, 'internal');
     }
+  }
+  // 终态记录上的空操作 veto:没有提交任何新事实,E1 黑名单一旦 deferred,恢复扫描(只扫 `rolling_back ∧ reason=vetoed`)推不出这次否决 →
+  // 不得退 0 宣告成功;退 1(可重跑的未完成)。重跑时黑名单按 `(id, sha)` 集合插入,幂等
+  if (r.kind === 'noop' && landed.includes('deferred') && rec.terminal_reason !== 'vetoed') {
+    return failedVeto(ctx, p, rec.id);
   }
   const effects = landed.includes('deferred')
     ? 'deferred'

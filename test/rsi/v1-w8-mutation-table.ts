@@ -1756,11 +1756,7 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
     id: 'rebase_non_diverged_runs',
     clause: 'R21-12.5 其它情形退 4 not_diverged',
     edits: [
-      swap(
-        'src/rsi/auto/write/rebase.ts',
-        "if (v0.kind === 'not_diverged') return notRun(ctx, 'not_diverged');",
-        'void v0;',
-      ),
+      swap('src/rsi/auto/write/rebase.ts', "if (v0.kind === 'not_diverged') {", 'if (false) {'),
     ],
     tests: ['rsi/auto/write-commands.test.ts'],
     expectRed: ['非分叉 / 非换主情形退 4 not_diverged'],
@@ -1802,7 +1798,7 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
     edits: [
       swap(
         'src/rsi/auto/write/rebase.ts',
-        "if (v1.kind === 'baseline' && st.diverged) await pauseState.write({ ...st, diverged: false });",
+        "if (kind === 'baseline' && st.diverged) await pauseState.write({ ...st, diverged: false });",
         'void st;',
       ),
     ],
@@ -1993,6 +1989,62 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
     tests: ['rsi/auto/write-commands.test.ts'],
     expectRed: ['veto 较晚事件首次没施加、但事务随即走完'],
     mustKill: ['veto 较晚事件首次没施加、但事务随即走完'],
+  },
+  {
+    id: 'veto_e1_deferred_ok',
+    clause: 'W0-25 终态 veto 的黑名单 E1 deferred 不得退 0(恢复扫描补不出这次否决)',
+    edits: [
+      swap(
+        'src/rsi/auto/write/veto.ts',
+        "if (r.kind === 'noop' && landed.includes('deferred') && rec.terminal_reason !== 'vetoed') {",
+        'if (false) {',
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: ['veto 终态候选(原理由 cleared)的黑名单 E1 deferred'],
+    mustKill: ['veto 终态候选(原理由 cleared)的黑名单 E1 deferred'],
+  },
+  {
+    id: 'veto_no_lock_lost_check',
+    clause: 'candidate-apply 的 lockLost 约定:丢锁后不得再调 E2 / 审计出口',
+    edits: [
+      swap(
+        'src/rsi/auto/write/veto.ts',
+        "if (r.lockLost === true) throw new RsiLockError('lock_lost');",
+        'void RsiLockError;',
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: ['veto 转移已提交但丢锁(lockLost)'],
+    mustKill: ['veto 转移已提交但丢锁(lockLost)'],
+  },
+  {
+    id: 'rebase_resume_unconditional',
+    clause: 'W0-25 rebase 收尾只在「head 已改写」可验证时清标志(不得对 classify=ok 无条件清)',
+    edits: [
+      swap(
+        'src/rsi/auto/write/rebase.ts',
+        'return flagged && (await rb.headRewritten(residueKind));',
+        'return flagged;',
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: ['没有「已改写」事实就不清标志'],
+    mustKill: ['没有「已改写」事实就不清标志'],
+  },
+  {
+    id: 'rebase_resume_missing',
+    clause: 'W0-25 rebase 改完 head 后崩溃的重跑须能收尾清标志(不被 not_diverged 短路)',
+    edits: [
+      swap(
+        'src/rsi/auto/write/rebase.ts',
+        "if (!(await hasResidue())) return notRun(ctx, 'not_diverged');",
+        "return notRun(ctx, 'not_diverged');",
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: ['head 写完后崩溃(清标志之前)'],
+    mustKill: ['head 写完后崩溃(清标志之前)'],
   },
   {
     id: 'status_inert_changed',

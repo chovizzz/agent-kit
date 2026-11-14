@@ -124,8 +124,15 @@ export class FakePauseState implements PauseStatePort {
   async read(): Promise<AutoPauseState> {
     return structuredClone(this.state);
   }
+  /** 非 null:下一次 `write` 抛它(一次性),状态不变 */
+  writeFault: Error | null = null;
   async write(s: AutoPauseState): Promise<void> {
     this.locks.assertInside('rsi');
+    if (this.writeFault !== null) {
+      const e = this.writeFault;
+      this.writeFault = null;
+      throw e;
+    }
     this.events.push('state.write');
     this.writes.push(structuredClone(s));
     this.state = structuredClone(s);
@@ -160,7 +167,17 @@ export class FakeKeyedSink implements KeyedEffectSink {
   audits: RsiAuditLine[] = [];
   others: TransitionEffect[] = [];
   deferred = false;
+  /** 每次 `applyOnce` 的键(含 deferred / 抛错的那次),按调用顺序 */
+  calls: string[] = [];
+  /** 非 null:下一次 `applyOnce` 抛它(一次性),什么都不落(演练丢锁) */
+  throwOnce: Error | null = null;
   async applyOnce(key: string, effects: readonly TransitionEffect[]): Promise<KeyedEffectResult> {
+    this.calls.push(key);
+    if (this.throwOnce !== null) {
+      const e = this.throwOnce;
+      this.throwOnce = null;
+      throw e;
+    }
     if (this.deferred) return 'deferred';
     if (this.keys.has(key)) return 'already';
     this.keys.add(key);
@@ -192,8 +209,18 @@ export class FakeRebase implements RebasePort {
   async changedPaths(): Promise<readonly string[]> {
     return [...this.paths];
   }
+  /** 「head.json 已是改写后的值」(`headRewritten` 的事实源);默认都不是 */
+  rewritten: Record<'baseline' | 'owner', boolean> = { baseline: false, owner: false };
+  /** 改写完成之后的钩子(演练「head 写完后崩溃」) */
+  afterRewrite: (() => void) | null = null;
   async rewriteHead(kind: 'baseline' | 'owner', head: string): Promise<void> {
     this.headWrites.push([kind, head]);
+    this.rewritten[kind] = true;
+    this.situation = { kind: 'ok' };
+    this.afterRewrite?.();
+  }
+  async headRewritten(kind: 'baseline' | 'owner'): Promise<boolean> {
+    return this.rewritten[kind];
   }
 }
 

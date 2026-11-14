@@ -5,6 +5,8 @@
 import { describe, expect, it } from 'vitest';
 import { RSI_AUTO_LABEL } from '../../../src/contracts/rsi.js';
 import { emitOutcomes } from '../../../src/rsi/auto/write/outcome-output.js';
+import { RsiLockError } from '../../../src/rsi/lock-error.js';
+import { recoverTerminalEffects } from '../../../src/rsi/personal/effects-recover.js';
 import { startRollback, type RollbackOutcome } from '../../../src/rsi/personal/rollback.js';
 import type { RsiEarlyContext } from '../../../src/rsi/types.js';
 import { Crash, canaryRec, harmReq, recordOf, world7, ID, SHA } from '../rollback/w7-fixture.js';
@@ -462,6 +464,64 @@ describe('rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判', () => 
     expect([...w7.txns.keys()]).toEqual([]);
   });
 
+  it('veto 终态候选(原理由 cleared)的黑名单 E1 deferred:退非零、不输出成功行;恢复扫描不会补;重跑且落地正常 → 退 0,黑名单恰好一条', async () => {
+    const w7 = world7({ record: rec('rolled_back', { terminal_reason: 'cleared' }) });
+    const fx = makeFx(w7);
+    fx.sink.deferred = true;
+    const a = await runWrite('veto', [ID], fx);
+    expect(a.code).toBe(1);
+    expect(a.out).toContain('否决未落地');
+    expect(a.out).not.toContain('result=');
+    expect(fx.sink.blacklist.size).toBe(0);
+    // 恢复扫描(落地恢复后)推不出这次否决:黑名单仍没有
+    fx.sink.deferred = false;
+    await recoverTerminalEffects({ store: w7.store, effects: fx.sink });
+    expect(fx.sink.blacklist.size).toBe(0);
+    // 重跑:幂等,按 (id, sha) 集合插入
+    const b = await runWrite('veto', [ID], fx);
+    expect(b.code, b.err).toBe(0);
+    expect(b.out).toContain('result=blacklist_only');
+    const c = await runWrite('veto', [ID], fx);
+    expect(c.code, c.err).toBe(0);
+    expect([...fx.sink.blacklist]).toEqual([`${ID}:${SHA}`]);
+    expect(fx.sink.blacklistCount).toBe(1);
+  });
+
+  it('veto 迟到事件没施加、事务已走完且黑名单 E1 deferred:同样退非零(不静默退 0);重跑落地正常 → 退 0', async () => {
+    const w7 = world7();
+    w7.crashAt('after:payload');
+    await expect(startRollback(w7.d, harmReq())).rejects.toBeInstanceOf(Crash);
+    const fx = makeFx(w7);
+    w7.store.readFaults = [null, null, 'deferred'];
+    fx.sink.deferred = true;
+    const a = await runWrite('veto', [ID], fx);
+    expect(a.code).toBe(1);
+    expect(a.out).toContain('否决未落地');
+    expect(fx.sink.blacklist.size).toBe(0);
+    fx.sink.deferred = false;
+    const b = await runWrite('veto', [ID], fx);
+    expect(b.code, b.err).toBe(0);
+    expect(fx.sink.blacklist.has(`${ID}:${SHA}`)).toBe(true);
+    expect(fx.sink.blacklistCount).toBe(1);
+  });
+
+  it('veto 转移已提交但丢锁(lockLost):立即结束(退 3 lock_lost),E2 与审计出口调用次数为 0;恢复扫描随后补出效果', async () => {
+    const w7 = world7({ record: rec('shadow') });
+    const fx = makeFx(w7);
+    // 提交后的第一个落地调用抛 lock_lost → `applyEvent` 报 `lockLost`
+    fx.sink.throwOnce = new RsiLockError('lock_lost');
+    const r = await runWrite('veto', [ID], fx);
+    expect(r.code).toBe(3);
+    expect(r.err).toContain('lock_lost');
+    expect(w7.store.records.get(ID)?.lifecycle).toBe('rejected');
+    // 只有触发丢锁的那一次落地调用;其后 E2(`terminal:` 键)与其余审计出口一次都没调
+    expect(fx.sink.calls).toHaveLength(1);
+    expect(fx.sink.keys.size).toBe(0);
+    await recoverTerminalEffects({ store: w7.store, effects: fx.sink });
+    expect(fx.sink.keys.has(`terminal:${ID}:${SHA}`)).toBe(true);
+    expect(fx.sink.blacklist.has(`${ID}:${SHA}`)).toBe(true);
+  });
+
   it('veto 参数 / 环境:非 TTY 退 2;[rsi] 关闭退 4 off;缺 id 退 2 unknown_arg;零写入', async () => {
     const fx = makeFx(world7({ record: canaryRec() }));
     const a = await runWrite('veto', [ID], fx, { tty: false });
@@ -658,6 +718,66 @@ describe('rsi auto rebase-baseline(R21-12.5):只在分叉 / 换主可用,确认�
       expect(fx.rebase.headWrites).toEqual([]);
       expect(fx.locks.log).toEqual([]);
     }
+  });
+
+  it('head 写完后崩溃(清标志之前):重跑不被 not_diverged 短路,持锁后收尾清 diverged 标志 → 退 0,不再改写 head', async () => {
+    const fx = makeFx();
+    fx.pause.state = { reasons: [], diverged: true, owner_changed: false };
+    fx.rebase.afterRewrite = () => {
+      throw new Error('crash');
+    };
+    const a = await runWrite('auto', ['rebase-baseline'], fx, { input: ['yes'] });
+    expect(a.code).not.toBe(0);
+    expect(fx.pause.state.diverged).toBe(true);
+    fx.rebase.afterRewrite = null;
+    const b = await runWrite('auto', ['rebase-baseline'], fx);
+    expect(b.code, b.err).toBe(0);
+    expect(b.out).toContain('resumed=yes');
+    expect(fx.pause.state.diverged).toBe(false);
+    expect(fx.rebase.headWrites).toHaveLength(1);
+    expect(fx.locks.log.filter((l) => l.startsWith('acquire')).length).toBe(6);
+  });
+
+  it('pause state 写失败(head 已改写):重跑同样收尾清标志;换主(--adopt-owner)同形', async () => {
+    const fx = makeFx();
+    fx.pause.state = { reasons: [], diverged: false, owner_changed: true };
+    fx.rebase.situation = { kind: 'owner_changed', head: 'a'.repeat(40) };
+    fx.pause.writeFault = new Error('disk');
+    const a = await runWrite('auto', ['rebase-baseline', '--adopt-owner'], fx, { input: ['yes'] });
+    expect(a.code).not.toBe(0);
+    expect(fx.pause.state.owner_changed).toBe(true);
+    const b = await runWrite('auto', ['rebase-baseline', '--adopt-owner'], fx);
+    expect(b.code, b.err).toBe(0);
+    expect(fx.pause.state.owner_changed).toBe(false);
+    // 不带 --adopt-owner 不会清 owner_changed(情形 ④ 仍须显式 adopt)
+    const fx2 = makeFx();
+    fx2.pause.state = { reasons: [], diverged: false, owner_changed: true };
+    fx2.rebase.situation = { kind: 'ok' };
+    fx2.rebase.rewritten.owner = true;
+    const c = await runWrite('auto', ['rebase-baseline'], fx2);
+    expect([c.code, c.err]).toEqual([4, 'RSI_NOT_RUN reason=not_diverged\n']);
+    expect(fx2.pause.state.owner_changed).toBe(true);
+  });
+
+  it('没有「已改写」事实就不清标志:本来没分叉且状态里也没有标志 → 退 4;有标志但 head 并未改写(记录与 HEAD 不符)→ 仍退 4,不动标志;仍分叉 → 走正常确认流程', async () => {
+    const a = makeFx();
+    a.rebase.situation = { kind: 'ok' };
+    const ra = await runWrite('auto', ['rebase-baseline'], a, { input: ['yes'] });
+    expect([ra.code, ra.err]).toEqual([4, 'RSI_NOT_RUN reason=not_diverged\n']);
+    expect(a.locks.log).toEqual([]);
+    const b = makeFx();
+    b.rebase.situation = { kind: 'ok' };
+    b.pause.state = { reasons: [], diverged: true, owner_changed: false };
+    const rb = await runWrite('auto', ['rebase-baseline'], b, { input: ['yes'] });
+    expect([rb.code, rb.err]).toEqual([4, 'RSI_NOT_RUN reason=not_diverged\n']);
+    expect(b.pause.state.diverged).toBe(true);
+    expect(b.pause.writes).toEqual([]);
+    const c = makeFx();
+    c.pause.state = { reasons: [], diverged: true, owner_changed: false };
+    c.rebase.rewritten.baseline = true; // 标志与「已改写」都在,但仓库确实仍分叉:以分叉判定为准,走确认
+    const rc = await runWrite('auto', ['rebase-baseline'], c, { input: ['no'] });
+    expect([rc.code, rc.err]).toEqual([1, 'RSI_CONFIRM_DECLINED\n']);
+    expect(c.rebase.headWrites).toEqual([]);
   });
 
   it('非分叉 / 非换主情形退 4 not_diverged(不提示、不取锁、不写);换主必须 --adopt-owner,分叉不接受 --adopt-owner', async () => {
