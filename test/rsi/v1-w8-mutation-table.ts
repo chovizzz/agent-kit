@@ -1292,7 +1292,10 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
       ),
     ],
     tests: ['rsi/auto/write-commands.test.ts'],
-    expectRed: ['pause 创建 U:不拿锁、不要 TTY、只碰 U'],
+    expectRed: [
+      'pause 创建 U:不拿锁、不要 TTY、只碰 U',
+      '全部未接线(只有 userMarker 与 config):除 pause 外每个写命令退 3 零写入;pause 恰好写 U 一个文件',
+    ],
     mustKill: ['pause 创建 U:不拿锁、不要 TTY、只碰 U'],
   },
   {
@@ -1320,7 +1323,10 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
       ),
     ],
     tests: ['rsi/auto/write-commands.test.ts'],
-    expectRed: ['pause 创建 U:不拿锁、不要 TTY、只碰 U'],
+    expectRed: [
+      'pause 创建 U:不拿锁、不要 TTY、只碰 U',
+      'pause 已存在时不覆盖:输出「已暂停(已存在)」,退 0,实例不变',
+    ],
     mustKill: ['pause 创建 U:不拿锁、不要 TTY、只碰 U'],
   },
   {
@@ -1348,7 +1354,11 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
       ),
     ],
     tests: ['rsi/auto/write-commands.test.ts'],
-    expectRed: ['resume 清掉条件已不成立的人工码,写解除证据'],
+    expectRed: [
+      'resume 清掉条件已不成立的人工码,写解除证据',
+      'resume 在无剩余码、U 与 B 都不在时才输出 RESUMED(退 0)',
+      'resume 自动解除码条件已不成立:本次一并清掉(带解除证据),不退 1;B 在 → PENDING 且证据写 B 的 id',
+    ],
     mustKill: ['resume 清掉条件已不成立的人工码,写解除证据'],
   },
   {
@@ -1362,7 +1372,10 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
       ),
     ],
     tests: ['rsi/auto/write-commands.test.ts'],
-    expectRed: ['resume 不清仍成立的码'],
+    expectRed: [
+      'resume 不清仍成立的码',
+      'resume 与人工码同在:自动解除码条件已不成立的清掉,仍成立的人工码保留并退 1(已清的照实列出,不写证据)',
+    ],
     mustKill: ['resume 不清仍成立的码'],
   },
   {
@@ -1370,7 +1383,13 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
     clause: 'W0-22 第 1 条 bump 入口代',
     edits: [swap('src/rsi/auto/write/resume.ts', 'await ports.marks.bump();', 'void ports.marks;')],
     tests: ['rsi/auto/write-commands.test.ts'],
-    expectRed: ['resume 清掉条件已不成立的人工码,写解除证据', 'resume 的顺序:先写 state'],
+    expectRed: [
+      'resume 清掉条件已不成立的人工码,写解除证据',
+      'resume 的顺序:先写 state',
+      'resume 指纹为空(快照时没有 U)永不删:步骤 ② 之后新建的 U′ 保留,结果行 BLOCKED user_paused new=yes,退 1',
+      'resume 指纹不符(步骤 ② 之后 U 被换实例)保留并报 changed;U′ 与 B 同在时追加 breaker_marker=pending',
+      'resume 中途失败:已落盘的先输出(已完成:cleared=…),再退 3,可重跑',
+    ],
     mustKill: ['resume 清掉条件已不成立的人工码,写解除证据'],
   },
   {
@@ -1413,7 +1432,13 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
       ),
     ],
     tests: ['rsi/auto/write-commands.test.ts'],
-    expectRed: ['resume 清掉条件已不成立的人工码,写解除证据'],
+    expectRed: [
+      'resume 清掉条件已不成立的人工码,写解除证据',
+      'resume 自动解除码条件已不成立:本次一并清掉(带解除证据),不退 1;B 在 → PENDING 且证据写 B 的 id',
+      'resume 的顺序:先写 state(带证据),再 bump,最后删 U',
+      'resume 指纹不符(步骤 ② 之后 U 被换实例)保留并报 changed;U′ 与 B 同在时追加 breaker_marker=pending',
+      'resume --json:追加 paused 与 request_done(PENDING 行:paused=true,request_done=true)',
+    ],
     mustKill: ['resume 清掉条件已不成立的人工码,写解除证据'],
   },
   {
@@ -1430,6 +1455,8 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
     expectRed: [
       'resume 清掉条件已不成立的人工码,写解除证据',
       'resume --json:追加 paused 与 request_done',
+      'resume 自动解除码条件已不成立:本次一并清掉(带解除证据),不退 1;B 在 → PENDING 且证据写 B 的 id',
+      'resume 指纹不符(步骤 ② 之后 U 被换实例)保留并报 changed;U′ 与 B 同在时追加 breaker_marker=pending',
     ],
     mustKill: ['resume 清掉条件已不成立的人工码,写解除证据'],
   },
@@ -1455,7 +1482,10 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
       swap('src/rsi/auto/write/resume.ts', '// ⑦ 读回(不碰 B)', 'await ports.marks.bump();'),
     ],
     tests: ['rsi/auto/write-commands.test.ts'],
-    expectRed: ['resume 的顺序:先写 state(带证据),再 bump,最后删 U'],
+    expectRed: [
+      'resume 的顺序:先写 state(带证据),再 bump,最后删 U',
+      'resume 指纹不符(步骤 ② 之后 U 被换实例)保留并报 changed;U′ 与 B 同在时追加 breaker_marker=pending',
+    ],
     mustKill: ['resume 的顺序:先写 state(带证据),再 bump,最后删 U'],
   },
   {
@@ -1486,7 +1516,22 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
       ),
     ],
     tests: ['rsi/auto/write-commands.test.ts'],
-    expectRed: ['resume 清掉条件已不成立的人工码,写解除证据'],
+    expectRed: [
+      'resume 清掉条件已不成立的人工码,写解除证据',
+      'resume 在无剩余码、U 与 B 都不在时才输出 RESUMED(退 0)',
+      'resume 不清仍成立的码:退 1,逐行 BLOCKED,不写证据,已清的码照实列出',
+      'resume 自动解除码条件仍成立(重查命中):保留在 state 里,BLOCKED 行带 auto_release=yes,退 1,不写 state,不输出 RESUMED',
+      'resume 自动解除码条件已不成立:本次一并清掉(带解除证据),不退 1;B 在 → PENDING 且证据写 B 的 id',
+      'resume 与人工码同在:自动解除码条件已不成立的清掉,仍成立的人工码保留并退 1(已清的照实列出,不写证据)',
+      'resume 重查没覆盖的自动解除码(no_observation / cost_high_legacy / isolation_unverified)条件无从判定:按仍成立处理,保留,退 1',
+      'resume 不碰 diverged / owner_changed:退 1,提示 rebase-baseline,按码表顺序',
+      'resume 的顺序:先写 state(带证据),再 bump,最后删 U',
+      'resume 指纹为空(快照时没有 U)永不删:步骤 ② 之后新建的 U′ 保留,结果行 BLOCKED user_paused new=yes,退 1',
+      'resume 指纹不符(步骤 ② 之后 U 被换实例)保留并报 changed;U′ 与 B 同在时追加 breaker_marker=pending',
+      'resume:U 存在时历史遗留的 state 码 user_paused 一并清;U 不存在时它仍算剩余(不得谎报 RESUMED)',
+      'resume 中途失败:已落盘的先输出(已完成:cleared=…),再退 3,可重跑',
+      'resume --json:追加 paused 与 request_done(PENDING 行:paused=true,request_done=true)',
+    ],
     mustKill: ['resume 清掉条件已不成立的人工码,写解除证据'],
   },
   {
@@ -1589,7 +1634,12 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
       ),
     ],
     tests: ['rsi/auto/write-commands.test.ts'],
-    expectRed: ['veto 已终态候选只写黑名单'],
+    expectRed: [
+      'veto 已终态候选只写黑名单',
+      'veto 持锁后重读记录再判:锁外读到的是 canary,持锁时已是终态 → 只写黑名单,不新开回滚',
+      'veto 终态候选(原理由 cleared)的黑名单 E1 deferred:退非零、不输出成功行;恢复扫描不会补;重跑且落地正常 → 退 0,黑名单恰好一条',
+      'veto 迟到事件没施加、事务已走完且黑名单 E1 deferred:同样退非零(不静默退 0);重跑落地正常 → 退 0',
+    ],
     mustKill: ['veto 已终态候选只写黑名单'],
   },
   {
@@ -1647,7 +1697,12 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
       ),
     ],
     tests: ['rsi/auto/write-commands.test.ts'],
-    expectRed: ['veto 已终态候选只写黑名单'],
+    expectRed: [
+      'veto 已终态候选只写黑名单',
+      'veto 较晚事件首次没施加、但事务随即走完(记录已按原理由进终态):不再新开空事务,改走终态 veto → 退 0,只落黑名单(不静默丢 veto)',
+      'veto 终态候选(原理由 cleared)的黑名单 E1 deferred:退非零、不输出成功行;恢复扫描不会补;重跑且落地正常 → 退 0,黑名单恰好一条',
+      'veto 迟到事件没施加、事务已走完且黑名单 E1 deferred:同样退非零(不静默退 0);重跑落地正常 → 退 0',
+    ],
     mustKill: ['veto 已终态候选只写黑名单'],
   },
   {
@@ -1655,7 +1710,11 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
     clause: 'W0-20 rollback --to 的来源',
     edits: [swap('src/rsi/auto/write/rollback-write.ts', "by: 'rollback_to',", "by: 'clear',")],
     tests: ['rsi/auto/write-commands.test.ts'],
-    expectRed: ['rollback --to:by=rollback_to、reason=cleared,按生效逆序'],
+    expectRed: [
+      'rollback --to:by=rollback_to、reason=cleared,按生效逆序',
+      'rollback --to 日期严格大于:进入日等于 D 的不纳入',
+      'rollback --to 日期不可知的候选单列纳入并展示(计数分开),排在日期可知者之后',
+    ],
     mustKill: ['rollback --to:by=rollback_to、reason=cleared,按生效逆序'],
   },
   {
@@ -1665,7 +1724,11 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
       swap('src/rsi/auto/write/rollback-write.ts', "reason: 'cleared',", "reason: 'vetoed',"),
     ],
     tests: ['rsi/auto/write-commands.test.ts'],
-    expectRed: ['rollback --to:by=rollback_to、reason=cleared,按生效逆序'],
+    expectRed: [
+      'rollback --to:by=rollback_to、reason=cleared,按生效逆序',
+      'rollback --to 日期严格大于:进入日等于 D 的不纳入',
+      'rollback --to 日期不可知的候选单列纳入并展示(计数分开),排在日期可知者之后',
+    ],
     mustKill: ['rollback --to:by=rollback_to、reason=cleared,按生效逆序'],
   },
   {
@@ -1679,7 +1742,10 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
       ),
     ],
     tests: ['rsi/auto/write-commands.test.ts'],
-    expectRed: ['rollback --to:by=rollback_to、reason=cleared,按生效逆序'],
+    expectRed: [
+      'rollback --to:by=rollback_to、reason=cleared,按生效逆序',
+      'rollback --to 日期不可知的候选单列纳入并展示(计数分开),排在日期可知者之后',
+    ],
     mustKill: ['rollback --to:by=rollback_to、reason=cleared,按生效逆序'],
   },
   {
@@ -1749,7 +1815,10 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
       ),
     ],
     tests: ['rsi/auto/write-commands.test.ts'],
-    expectRed: ['拒绝(非 yes / EOF)退 1 RSI_CONFIRM_DECLINED'],
+    expectRed: [
+      '拒绝(非 yes / EOF)退 1 RSI_CONFIRM_DECLINED',
+      '没有「已改写」事实就不清标志:本来没分叉且状态里也没有标志 → 退 4;有标志但 head 并未改写(记录与 HEAD 不符)→ 仍退 4,不动标志;仍分叉 → 走正常确认流程',
+    ],
     mustKill: ['拒绝(非 yes / EOF)退 1 RSI_CONFIRM_DECLINED'],
   },
   {
@@ -1759,7 +1828,14 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
       swap('src/rsi/auto/write/rebase.ts', "if (v0.kind === 'not_diverged') {", 'if (false) {'),
     ],
     tests: ['rsi/auto/write-commands.test.ts'],
-    expectRed: ['非分叉 / 非换主情形退 4 not_diverged'],
+    expectRed: [
+      '非分叉 / 非换主情形退 4 not_diverged',
+      'head 写完后崩溃(清标志之前):重跑不被 not_diverged 短路,持锁后收尾清 diverged 标志 → 退 0,不再改写 head',
+      'pause state 写失败(head 已改写):重跑同样收尾清标志;换主(--adopt-owner)同形',
+      '没有「已改写」事实就不清标志:本来没分叉且状态里也没有标志 → 退 4;有标志但 head 并未改写(记录与 HEAD 不符)→ 仍退 4,不动标志;仍分叉 → 走正常确认流程',
+      '收尾只认原始情形 ok:参数与情形不匹配(分叉 + --adopt-owner / 换主不带)即使残留事实齐全也退 4、零写入、不取锁',
+      '收尾的持锁重判:锁外 ok、持锁后变成与参数不匹配的情形 / 后置条件不再成立 / 标志已消失 → 都退 4,不清标志',
+    ],
     mustKill: ['非分叉 / 非换主情形退 4 not_diverged'],
   },
   {
@@ -1803,7 +1879,10 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
       ),
     ],
     tests: ['rsi/auto/write-commands.test.ts'],
-    expectRed: ['分叉:展示带标签的相对路径清单'],
+    expectRed: [
+      '分叉:展示带标签的相对路径清单',
+      'head 写完后崩溃(清标志之前):重跑不被 not_diverged 短路,持锁后收尾清 diverged 标志 → 退 0,不再改写 head',
+    ],
     mustKill: ['分叉:展示带标签的相对路径清单'],
   },
   {
@@ -1831,7 +1910,10 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
       ),
     ],
     tests: ['rsi/auto/write-commands.test.ts'],
-    expectRed: ['参数 / TTY 校验先于端口装配'],
+    expectRed: [
+      '参数 / TTY 校验先于端口装配',
+      'resume 参数 / 环境:非 TTY 退 2 零写入;锁被占用退 4 locked 零写入;[rsi] 关闭退 4 off',
+    ],
     mustKill: ['参数 / TTY 校验先于端口装配'],
   },
   {
@@ -1987,7 +2069,10 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
       ),
     ],
     tests: ['rsi/auto/write-commands.test.ts'],
-    expectRed: ['veto 较晚事件首次没施加、但事务随即走完'],
+    expectRed: [
+      'veto 较晚事件首次没施加、但事务随即走完',
+      'veto 迟到事件没施加、事务已走完且黑名单 E1 deferred:同样退非零(不静默退 0);重跑落地正常 → 退 0',
+    ],
     mustKill: ['veto 较晚事件首次没施加、但事务随即走完'],
   },
   {
@@ -2001,7 +2086,10 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
       ),
     ],
     tests: ['rsi/auto/write-commands.test.ts'],
-    expectRed: ['veto 终态候选(原理由 cleared)的黑名单 E1 deferred'],
+    expectRed: [
+      'veto 终态候选(原理由 cleared)的黑名单 E1 deferred',
+      'veto 迟到事件没施加、事务已走完且黑名单 E1 deferred:同样退非零(不静默退 0);重跑落地正常 → 退 0',
+    ],
     mustKill: ['veto 终态候选(原理由 cleared)的黑名单 E1 deferred'],
   },
   {
@@ -2029,7 +2117,10 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
       ),
     ],
     tests: ['rsi/auto/write-commands.test.ts'],
-    expectRed: ['没有「已改写」事实就不清标志'],
+    expectRed: [
+      '没有「已改写」事实就不清标志',
+      '收尾的持锁重判:锁外 ok、持锁后变成与参数不匹配的情形 / 后置条件不再成立 / 标志已消失 → 都退 4,不清标志',
+    ],
     mustKill: ['没有「已改写」事实就不清标志'],
   },
   {
@@ -2043,7 +2134,10 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
       ),
     ],
     tests: ['rsi/auto/write-commands.test.ts'],
-    expectRed: ['head 写完后崩溃(清标志之前)'],
+    expectRed: [
+      'head 写完后崩溃(清标志之前)',
+      'pause state 写失败(head 已改写):重跑同样收尾清标志;换主(--adopt-owner)同形',
+    ],
     mustKill: ['head 写完后崩溃(清标志之前)'],
   },
   {
@@ -2062,7 +2156,10 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
       ),
     ],
     tests: ['rsi/auto/write-commands.test.ts'],
-    expectRed: ['收尾只认原始情形 ok'],
+    expectRed: [
+      '收尾只认原始情形 ok',
+      '收尾的持锁重判:锁外 ok、持锁后变成与参数不匹配的情形 / 后置条件不再成立 / 标志已消失 → 都退 4,不清标志',
+    ],
     mustKill: ['收尾只认原始情形 ok'],
   },
   {
@@ -2086,7 +2183,10 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
       swap('src/rsi/auto/read/status-keys.ts', "    exec: 'not_available',", "    exec: 'off',"),
     ],
     tests: ['rsi/status-auto-keys.test.ts'],
-    expectRed: ['[rsi] 关闭(off):惰性值'],
+    expectRed: [
+      '[rsi] 关闭(off):惰性值',
+      'on 而没有视图(missing):V1 的视图派生键是 null(绝不显示成全零);[rsi.auto] 启用与 profile 如实报告,相位低于 V3 时 profile_effective 恒 lite',
+    ],
     mustKill: ['[rsi] 关闭(off):惰性值'],
   },
   {
