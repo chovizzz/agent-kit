@@ -435,14 +435,31 @@ describe('rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判', () => 
     w7.crashAt('after:payload');
     await expect(startRollback(w7.d, harmReq())).rejects.toBeInstanceOf(Crash);
     const fx = makeFx(w7);
-    // 本命令的 `store.read` 顺序:锁外 peek、持锁后重读、引擎的较晚事件状态读(第三次返回 deferred → lateEventNotApplied=repo_deferred);之后全部正常
-    w7.store.readFaults = [null, null, 'deferred'];
+    // 本命令第一次 `startRollback` 内的 `store.read` 顺序:锁外 peek、持锁后重读、较晚事件状态读(deferred → lateEventNotApplied=repo_deferred)、
+    // 收尾读记录(仍 deferred → 撤销段走完但记录没动,返回 revocation_complete,journal 保留;与 W7「仓库不可读期间」同形);重试时全部正常
+    w7.store.readFaults = [null, null, 'deferred', 'deferred'];
     const r = await runWrite('veto', [ID], fx);
     expect(w7.store.readFaults).toEqual([]);
     expect(r.code, r.err).toBe(0);
     expect(r.out).not.toContain('late_event_not_applied');
     expect(recordOf(w7).terminal_reason).toBe('vetoed');
     expect(w7.revs).toHaveLength(1);
+  });
+
+  it('veto 较晚事件首次没施加、但事务随即走完(记录已按原理由进终态):不再新开空事务,改走终态 veto → 退 0,只落黑名单(不静默丢 veto)', async () => {
+    const w7 = world7();
+    w7.crashAt('after:payload');
+    await expect(startRollback(w7.d, harmReq())).rejects.toBeInstanceOf(Crash);
+    const fx = makeFx(w7);
+    // 只有较晚事件状态读(第三次)一次性 deferred;收尾读正常 → 事务 complete,记录以 harm 理由进终态,veto 没有施加
+    w7.store.readFaults = [null, null, 'deferred'];
+    const r = await runWrite('veto', [ID], fx);
+    expect(w7.store.readFaults).toEqual([]);
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toContain('result=blacklist_only');
+    expect(recordOf(w7).terminal_reason).not.toBe('vetoed');
+    expect(fx.sink.blacklist.has(`${ID}:${SHA}`)).toBe(true);
+    expect([...w7.txns.keys()]).toEqual([]);
   });
 
   it('veto 参数 / 环境:非 TTY 退 2;[rsi] 关闭退 4 off;缺 id 退 2 unknown_arg;零写入', async () => {

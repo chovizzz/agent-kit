@@ -127,6 +127,12 @@ export async function runVeto(
     let out: RollbackOutcome = await startRollback(d, req);
     // 复用在途 txn 时较晚的 veto 事件没有(或尚未)持久化:按 W7 约定重试一次
     if (out.status !== 'refused' && out.lateEventNotApplied !== undefined) {
+      if (out.status === 'complete') {
+        // 事务已走完(journal 已删):记录已按原理由进终态,重走 startRollback 只会新开一个空事务并静默丢掉 veto → 改走终态 veto(只落黑名单 E1)
+        const again = await d.store.read(a.id);
+        if (again.kind !== 'ok') return failClosed(ctx, 'personal_repo_invalid');
+        return directVeto(ctx, p, d, again.record, event);
+      }
       out = await startRollback(d, req);
     }
     const late = out.status !== 'refused' ? out.lateEventNotApplied : undefined;

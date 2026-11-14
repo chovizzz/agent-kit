@@ -1343,8 +1343,8 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
     edits: [
       swap(
         'src/rsi/auto/write/resume.ts',
-        'if (r.clearMarker) next = await stampReleaseEvidence(ports.breaker, next);',
-        'if (r.clearMarker) next = { ...next };',
+        'next = await stampReleaseEvidence(ports.breaker, next);',
+        'next = { ...next };',
       ),
     ],
     tests: ['rsi/auto/write-commands.test.ts'],
@@ -1830,8 +1830,8 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
     edits: [
       swap(
         'src/rsi/auto/write/index.ts',
-        'run(ctx, rest, () => ports(ctx));',
-        'run(ctx, rest, ((g) => () => g)(await ports(ctx)));',
+        'run(ctx, rest, () => factory(ctx));',
+        'run(ctx, rest, ((g) => () => g)(await factory(ctx)));',
       ),
     ],
     tests: ['rsi/auto/write-commands.test.ts'],
@@ -1978,6 +1978,21 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
     tests: ['rsi/auto/write-commands.test.ts'],
     expectRed: ['veto 复用在途 txn 时较晚的 veto 事件首次没施加'],
     mustKill: ['veto 复用在途 txn 时较晚的 veto 事件首次没施加'],
+  },
+  {
+    id: 'veto_late_complete_lost',
+    clause:
+      'W7 约定:较晚事件没施加而事务已走完 → 命令改走终态 veto(落黑名单),不新开空事务静默丢 veto',
+    edits: [
+      swap(
+        'src/rsi/auto/write/veto.ts',
+        "      if (out.status === 'complete') {",
+        '      if (false) {',
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: ['veto 较晚事件首次没施加、但事务随即走完'],
+    mustKill: ['veto 较晚事件首次没施加、但事务随即走完'],
   },
   {
     id: 'status_inert_changed',
