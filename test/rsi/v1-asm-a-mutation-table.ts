@@ -184,7 +184,8 @@ export const V1_ASM_A_MUTATIONS: readonly V1AsmAMutation[] = [
       ),
     ],
     tests: ['rsi/asm/a-adapters.test.ts'],
-    expectRed: ['peek:读失败 / 记录不合规 / head 不合规 / 不稳定一律是 invalid',
+    expectRed: [
+      'peek:读失败 / 记录不合规 / head 不合规 / 不稳定一律是 invalid',
       'peek:head.json 不存在 = absent;读成功且 id 在 = ok;读成功且 id 不在 = missing(正向对照)',
     ],
     mustKill: ['peek:读失败 / 记录不合规 / head 不合规 / 不稳定一律是 invalid'],
@@ -559,7 +560,8 @@ export const V1_ASM_A_MUTATIONS: readonly V1AsmAMutation[] = [
       ),
     ],
     tests: ['rsi/asm/a-factory-zero-io.test.ts'],
-    expectRed: ['assembleReadAdapters 创建:零读盘、不解析 git 路径、不调 payload / spawn',
+    expectRed: [
+      'assembleReadAdapters 创建:零读盘、不解析 git 路径、不调 payload / spawn',
       'recorded:gitPath() 解析不到 = 未装配(unreadable not_wired),解析只做一次,spawn 一次都不调;解析到但仓库目录不存在 = 在预检就拒绝,同样不 spawn',
     ],
     mustKill: ['assembleReadAdapters 创建:零读盘、不解析 git 路径、不调 payload / spawn'],
