@@ -77,7 +77,8 @@ describe('entry_time_only_via_stamp(B2 档)', () => {
       readTextSync(path.join(ROOT, 'src/rsi/personal/entry-stamp.ts')),
     );
     expect(stamp).toHaveLength(1);
-    expect(stamp[0]).toContain('now().toISOString()');
+    // 命中的是 `now()` 这个调用节点本身(外层 `.toISOString()` 不是时钟调用):必须是裸调用形态,不是 `X.now()`
+    expect(stamp[0]).toMatch(/^\d+:now\(\)$/);
     const seal = clockCalls('seal.ts', readTextSync(path.join(ROOT, 'src/rsi/store/seal.ts')));
     expect(seal.some((c) => c.includes('now()'))).toBe(true);
   });

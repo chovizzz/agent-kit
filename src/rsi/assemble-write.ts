@@ -29,7 +29,7 @@ import { RsiLockError, type RsiLockErrorKind } from './lock-error.js';
 import { acquireRsiLock } from './lock.js';
 import { rsiDirReadonly, type RsiLockDeps } from './lock-read.js';
 import { makeCacheCleanup } from './personal/cache-cleanup.js';
-import { inspectPersonalRepo, type PersonalRepoDeps, type StepHook } from './personal/commit.js';
+import type { PersonalRepoDeps, StepHook } from './personal/commit.js';
 import { personalRepoStore } from './personal/candidate-repo.js';
 import type { PersonalLocks } from './personal/commit.js';
 import { isSealedInterval, type EntrySeal } from './personal/entry-stamp.js';

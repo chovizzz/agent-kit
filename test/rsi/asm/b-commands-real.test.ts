@@ -18,7 +18,17 @@ import { personalRepoStore } from '../../../src/rsi/personal/candidate-repo.js';
 import { commitPersonal, openPersonalRepo } from '../../../src/rsi/personal/commit.js';
 import type { RsiEarlyContext } from '../../../src/rsi/types.js';
 import { ID, SHA, rec } from '../personal/transition-fixture.js';
-import { git, makeWorld, repoDeps, withLock, type World } from '../personal/repo-helpers.js';
+import {
+  git,
+  makeWorld,
+  repoDeps,
+  slowTests,
+  withLock,
+  type World,
+} from '../personal/repo-helpers.js';
+
+// 每个用例要起几十次真 git 子进程(验证机高负载时单个用例超 20s):沿用 personal 套件的慢用例口径
+slowTests();
 
 const CLOCK = new Date('2026-11-10T12:00:00.000Z');
 const STATE_DOC = {
@@ -45,8 +55,15 @@ async function seed(w: World, r: PersonalLifecycleRecord): Promise<void> {
   });
 }
 
-const rsiDirOf = async (w: World): Promise<string> =>
-  path.join(await realpath(w.io.stateDir), 'rsi');
+/** state 目录可能还不存在(没有任何命令取过 rsi 锁):不存在时退回未解析路径(只用于「不存在」的断言) */
+const rsiDirOf = async (w: World): Promise<string> => {
+  try {
+    return path.join(await realpath(w.io.stateDir), 'rsi');
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return path.join(w.io.stateDir, 'rsi');
+    throw e;
+  }
+};
 
 async function ledgerOf(
   w: World,
@@ -131,6 +148,7 @@ describe('veto 命令级(真 git + 假 HOME + 真存储核)', () => {
     const w = await makeWorld('b2-sealed-');
     await seed(w, rec('shadow'));
     const head = git(w, ['rev-parse', 'HEAD']);
+    await mkdirp(w.io, w.io.stateDir, 0o700); // 先建 state,rsiDirOf 才能解析真实路径
     const dir = await rsiDirOf(w);
     await mkdirp(w.io, dir, 0o700);
     await createExclusive(
