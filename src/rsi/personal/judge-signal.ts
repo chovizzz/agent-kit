@@ -152,20 +152,30 @@ function shapeOf(raw: unknown): JudgeSourceRead | null {
   }
 }
 
+/** 一次评估共用的单调时钟 deadline 与 abort controller:端口读取与读后的同步校验同一个预算 */
+interface Clock {
+  readonly started: number;
+  readonly budgetMs: number;
+  readonly ctl: AbortController;
+}
+
+const elapsed = (c: Clock): number => performance.now() - c.started;
+
 async function readBudgeted(
   source: ProposalJudgeSource,
   runId: string,
   proposalId: string,
-  budgetMs: number,
+  clock: Clock,
 ): Promise<JudgeSourceRead | JudgeNone> {
-  const started = performance.now();
-  const ctl = new AbortController();
+  const { ctl } = clock;
+  const remaining = clock.budgetMs - elapsed(clock);
+  if (remaining <= 0) return unreadable('timeout');
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<JudgeNone>((resolve) => {
     timer = setTimeout(() => {
       ctl.abort();
       resolve(unreadable('timeout'));
-    }, budgetMs);
+    }, remaining);
   });
   const read = (async (): Promise<JudgeSourceRead | JudgeNone> => {
     try {
@@ -176,10 +186,7 @@ async function readBudgeted(
     }
   })();
   try {
-    const r = await Promise.race([read, timeout]);
-    // 同步工作(解析 / 校验)占住事件循环时定时器来不及触发:返回前再用单调时钟核对一次,超预算的结论不予采信
-    if (r.kind !== 'none' && performance.now() - started > budgetMs) return unreadable('timeout');
-    return r;
+    return await Promise.race([read, timeout]);
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }
@@ -195,18 +202,34 @@ export async function readJudgeVerdict(
   env: JudgeEnv,
   opts: JudgeEvalOptions = {},
 ): Promise<JudgeVerdict> {
+  const clock: Clock = {
+    started: performance.now(),
+    budgetMs: opts.budgetMs ?? JUDGE_READ_BUDGET_MS,
+    ctl: new AbortController(),
+  };
+  const v = await judgeWithin(link, source, env, clock);
+  // 预算覆盖整次评估(端口读取 + schema / judgeEvidence / ruleSha256 / 记录哈希):同步工作占住事件循环时定时器来不及触发,
+  // 所以返回前用单调时钟再核一次——超预算的结论(无论哪一种)不予采信,统一 unreadable('timeout'),并中止 controller。不承诺抢占同步 JS
+  if (elapsed(clock) > clock.budgetMs) {
+    clock.ctl.abort();
+    return unreadable('timeout');
+  }
+  return v;
+}
+
+async function judgeWithin(
+  link: unknown,
+  source: ProposalJudgeSource | null,
+  env: JudgeEnv,
+  clock: Clock,
+): Promise<JudgeVerdict> {
   if (link === null || link === undefined) return none('no_link', 'none', 'no_source', 'null');
   // 跨信任边界:权威记录是 strictObject,这里是防御层——损坏不得降级成「无关联」放行
   const l = parseLink(link);
   if (l === null) return none('invalid', 'invalid', 'indeterminate', 'malformed_link');
   if (source === null) return unreadable('unwired');
 
-  const r = await readBudgeted(
-    source,
-    l.run_id,
-    l.proposal_id,
-    opts.budgetMs ?? JUDGE_READ_BUDGET_MS,
-  );
+  const r = await readBudgeted(source, l.run_id, l.proposal_id, clock);
   if (r.kind === 'none') return r;
   switch (r.kind) {
     case 'run_gone':

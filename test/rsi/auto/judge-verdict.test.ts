@@ -3,6 +3,7 @@
  * 取值:无裁决 → absent(`judge=none`);读 / 解析 / 校验失败、rule_changed、未装配 → invalid(`judge=invalid`);已校验 → ok(session_confirmed 带 declared 三项,spawned 带 proven 的 vendor / model)。
  */
 import { describe, expect, it } from 'vitest';
+import type { JudgeVerdictRead } from '../../../src/rsi/auto/read/ports.js';
 import { makeJudgeVerdictPort } from '../../../src/rsi/auto/read/judge-verdict.js';
 import {
   evaluateJudgeSignal,
@@ -114,6 +115,34 @@ describe('W9a 展示端口:取值映射', () => {
           eaten.kind === 'signal' || (eaten.kind === 'none' && eaten.reason === 'not_tightening'),
         ).toBe(true);
       }
+    }
+  });
+});
+
+describe('W9a 展示端口:provenance 与身份标签在类型层关联(L1)', () => {
+  it('spawned ↔ proven、session_confirmed ↔ declared 不可拆开(编译期:矛盾组合必须报错;运行期:映射出的两种分支标签一致)', async () => {
+    const base = { kind: 'ok', verdict: 'accept', overfit: 'low', injection: 'false' } as const;
+    const mk = (x: JudgeVerdictRead): JudgeVerdictRead => x;
+    const wrong1 = {
+      ...base,
+      judge_provenance: 'spawned',
+      identity: { kind: 'declared', agent: 'a', vendor: 'v', model: 'm' },
+    } as const;
+    const wrong2 = {
+      ...base,
+      judge_provenance: 'session_confirmed',
+      identity: { kind: 'proven', vendor: 'v', model: 'm' },
+    } as const;
+    // @ts-expect-error spawned 不能带 declared 身份
+    const bad1 = mk(wrong1);
+    // @ts-expect-error session_confirmed 不能带 proven 身份
+    const bad2 = mk(wrong2);
+    expect([bad1.kind, bad2.kind]).toEqual(['ok', 'ok']);
+    const sc = await verdictOf(okRead(sessionJudged({ verdict: 'accept' })));
+    const sp = await verdictOf(okRead(spawnedJudged({ verdict: 'accept' })));
+    for (const v of [sc, sp]) {
+      if (v.kind !== 'ok') throw new Error('期望 ok');
+      expect(v.judge_provenance === 'spawned' ? 'proven' : 'declared').toBe(v.identity.kind);
     }
   });
 });

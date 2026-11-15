@@ -6,7 +6,7 @@
  * 也不用 `loadRunEntries`——它一份坏提案就整 run 抛错);YAML 经 judge store 同一个受限解析器。③–⑥ 由纯函数 `judge-signal.ts` 做。
  *
  * **一致性协议(尽力检测,不是原子快照)**:读之前记下各目录 / 文件的身份(dev、ino,文件另含 size、mtime),读完后重新 stat 并**重做一次归属判定与 `TAINTED` 检查**;
- * 任何不一致 → `unreadable('race')`(不得降为「无裁决」)。检测不到同 inode 内容被换回原样的 ABA(同 UID 进程可做到,R21-1.8 的既有残余),本模块只收紧,不据此放行。
+ * 任何不一致 → `unreadable('race')`;回读时文件的安全属性(普通文件、`nlink = 1`、属主、大小上限)也重新核对,不合格 → `unreadable('recheck_unsafe')`(读期间被加了硬链接不改身份元数据,不能只比身份)(不得降为「无裁决」)。检测不到同 inode 内容被换回原样的 ABA(同 UID 进程可做到,R21-1.8 的既有残余),本模块只收紧,不据此放行。
  * 每次读之间检查 `signal`(2 秒预算由 `judge-signal.ts` 的 `readJudgeVerdict` 持有):已中止 → `unreadable('timeout')`。
  *
  * 失败分类:归属为「采集中」的 run 里,提案目录 / 文件读不出(含不存在、过大、链接、属主不符)一律 `unreadable`(无从判断是否曾有 reject);YAML 解析失败 / 非对象 = `invalid`;
@@ -68,6 +68,22 @@ const dirSame = (before: SafeDirResult, after: SafeDirResult, withTime: boolean)
     (!withTime || before.meta.mtimeMs === after.meta.mtimeMs)
   );
 };
+
+/**
+ * 末次回读的安全属性(与首读 `readFileSafe` 同口径,且不依赖身份 / 内容元数据:读期间新增硬链接不改 dev / ino / size / mtime):
+ * 普通文件、`nlink === 1`、属主 = 当前 uid(与 `OWNER` 策略相同;平台没有 getuid 时不校验)、大小不超上限。返回不合格的原因,合格 = `null`。
+ */
+export function recheckUnsafe(
+  st: { isFile(): boolean; nlink: number; uid: number; size: number },
+  uid: number | undefined,
+  maxBytes: number,
+): 'not_regular' | 'hardlink' | 'owner' | 'too_large' | null {
+  if (!st.isFile()) return 'not_regular';
+  if (st.nlink !== 1) return 'hardlink';
+  if (uid !== undefined && st.uid !== uid) return 'owner';
+  if (st.size > maxBytes) return 'too_large';
+  return null;
+}
 
 const fileSame = (a: Ident | null, b: Ident | null): boolean => {
   if (a === null || b === null) return a === b;
@@ -201,9 +217,11 @@ export function makeProposalJudgeSource(deps: JudgeSourceDeps): ProposalJudgeSou
       if (dRulesTop !== null && !dirSame(dRulesTop, await again(rulesTop), false)) return racy();
       if (dRules !== null && !dirSame(dRules, await again(rulesDir), true)) return racy();
       // 文件身份:只有 ENOENT 算「不存在」;其余错误(EACCES / EIO / ENOTDIR …)是读不出,不得折叠成「没变」
-      const fileIdent = async (p: string): Promise<Ident | null | 'error'> => {
+      const wantUid = typeof process.getuid === 'function' ? process.getuid() : undefined;
+      const fileIdent = async (p: string): Promise<Ident | null | 'error' | 'unsafe'> => {
         try {
           const s = await lstat(p);
+          if (recheckUnsafe(s, wantUid, JUDGE_SOURCE_MAX_BYTES) !== null) return 'unsafe';
           return { dev: s.dev, ino: s.ino, size: s.size, mtimeMs: s.mtimeMs };
         } catch (e) {
           return (e as NodeJS.ErrnoException).code === 'ENOENT' ? null : 'error';
@@ -211,10 +229,12 @@ export function makeProposalJudgeSource(deps: JudgeSourceDeps): ProposalJudgeSou
       };
       const propNow = await fileIdent(propFile);
       if (propNow === 'error') return bad('recheck_io');
+      if (propNow === 'unsafe') return bad('recheck_unsafe');
       if (!fileSame(propIdent, propNow)) return racy();
       if (target !== null && dRules !== null && dRules.kind === 'ok') {
         const ruleNow = await fileIdent(path.join(rulesDir, `${target}.md`));
         if (ruleNow === 'error') return bad('recheck_io');
+        if (ruleNow === 'unsafe') return bad('recheck_unsafe');
         if (!fileSame(ruleIdent, ruleNow)) return racy();
       }
       const second = await attribute();

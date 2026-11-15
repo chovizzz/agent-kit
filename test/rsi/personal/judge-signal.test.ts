@@ -222,6 +222,62 @@ describe('W9a 判官裁决判定:墙钟预算', () => {
   });
 });
 
+describe('W9a 判官裁决判定:墙钟预算覆盖读后校验(M1)', () => {
+  const spin = (ms: number): void => {
+    const t0 = performance.now();
+    while (performance.now() - t0 < ms) {
+      // 故意占住事件循环
+    }
+  };
+  const goodRead = (sig: AbortSignal[] = []) =>
+    fakeSource((signal) => {
+      sig.push(signal);
+      return okRead(sessionJudged({ verdict: 'accept' }));
+    });
+
+  it('端口立即返回,但同步的 ruleSha256 耗时超预算(哈希仍正确)→ unreadable / timeout / indeterminate,controller 被中止;对照:不超时同输入 = not_tightening', async () => {
+    const slowEnv: JudgeEnv = {
+      ...env,
+      ruleSha256: (t) => {
+        spin(60);
+        return env.ruleSha256(t);
+      },
+    };
+    const sigs: AbortSignal[] = [];
+    const s = await evaluateJudgeSignal(LINK, goodRead(sigs), slowEnv, { budgetMs: 20 });
+    expect(s).toEqual({
+      kind: 'none',
+      reason: 'unreadable',
+      display: 'invalid',
+      growth: 'indeterminate',
+      why: 'timeout',
+    });
+    expect(growthBlockOf(s)).toBe('indeterminate');
+    expect(sigs[0]?.aborted).toBe(true);
+    // 对照:同一输入、预算充足 → not_tightening,不阻增影响
+    const sigs2: AbortSignal[] = [];
+    const ok = await evaluateJudgeSignal(LINK, goodRead(sigs2), slowEnv, { budgetMs: 2000 });
+    expect(ok).toMatchObject({ kind: 'none', reason: 'not_tightening', growth: null });
+    expect(growthBlockOf(ok)).toBeNull();
+    expect(sigs2[0]?.aborted).toBe(false);
+  });
+
+  it('judgeEvidence 同步耗时超预算同样不采信(校验类结论也不能越过预算);对照:预算内 = 校验通过', async () => {
+    const slowEnv: JudgeEnv = {
+      ...env,
+      judgeEvidence: (p) => {
+        spin(60);
+        return env.judgeEvidence(p);
+      },
+    };
+    const s = await readJudgeVerdict(LINK, goodRead(), slowEnv, { budgetMs: 20 });
+    expect(s).toMatchObject({ kind: 'none', reason: 'unreadable', why: 'timeout' });
+    expect((await readJudgeVerdict(LINK, goodRead(), slowEnv, { budgetMs: 2000 })).kind).toBe(
+      'verified',
+    );
+  });
+});
+
 describe('W9a 判官裁决判定:③ 提案校验', () => {
   const cases: [string, unknown, NoneExpect][] = [
     [

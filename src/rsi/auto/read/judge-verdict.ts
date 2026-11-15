@@ -29,21 +29,28 @@ export function makeJudgeVerdictPort(
       );
       if (v.kind === 'none') return { kind: v.display === 'none' ? 'absent' : 'invalid' };
       const { judge, side } = v;
-      return {
-        kind: 'ok',
-        judge_provenance: judge.provenance,
+      const base = {
+        kind: 'ok' as const,
         verdict: judge.verdict,
         overfit: judge.overfit_risk,
         injection: judge.injection_suspected ? 'true' : 'false',
-        identity:
-          judge.provenance === 'session_confirmed'
-            ? {
-                kind: 'declared',
-                agent: judge.declared.agent,
-                vendor: judge.declared.vendor,
-                model: judge.declared.model,
-              }
-            : { kind: 'proven', vendor: side.vendor, model: side.model },
+      };
+      if (judge.provenance === 'session_confirmed') {
+        return {
+          ...base,
+          judge_provenance: 'session_confirmed',
+          identity: {
+            kind: 'declared',
+            agent: judge.declared.agent,
+            vendor: judge.declared.vendor,
+            model: judge.declared.model,
+          },
+        };
+      }
+      return {
+        ...base,
+        judge_provenance: 'spawned',
+        identity: { kind: 'proven', vendor: side.vendor, model: side.model },
       };
     },
   };

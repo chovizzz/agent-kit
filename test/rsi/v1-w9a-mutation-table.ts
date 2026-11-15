@@ -7,8 +7,8 @@
  * 只约束到文件级;精度由 `mustKill`(专属用例必须变红)保证)。结果由主代理执行变异后回填 `V1_W9A_RESULTS`(W9a 实装块不执行变异,故留空)。变异 id 用短的下划线词。
  *
  * 契约 R20-18.39 写的并表位置(`test/judge/n4-mutation-table.ts`)不存在,N4 的表在 `test/rsi/n4-mutation-table.ts`;本表独立成文件(W0-27)。
- * 不在本表的点(如实记录):`rule-hash.ts` 的归一化 / 抛错语义由 `checks-gov` 与 `test/judge/rule-hash.test.ts` 既有用例与 a24 变异守住,本表只守「拆分后闭包与再导出」;
- * 读适配器的属主校验(`owner`)在同 UID 的测试环境里无法构造「别人的文件」,没有对应变异;一致性协议的 `dProp` / `dRules` 目录核对与文件身份核对互相冗余(任一单独删除都有另一道发现),不单列变异。
+ * 不在本表的点(如实记录):`JudgeVerdictRead` 的 provenance ↔ identity 关联是编译期性质(`@ts-expect-error` 用例由 tsc 守,变异跑的是 vitest,不进本表);`rule-hash.ts` 的归一化 / 抛错语义由 `checks-gov` 与 `test/judge/rule-hash.test.ts` 既有用例与 a24 变异守住,本表只守「拆分后闭包与再导出」;
+ * 读适配器首读的属主校验(`owner`;回读的属主核对由 `recheckUnsafe` 假 stat 用例与变异覆盖)在同 UID 的测试环境里无法构造「别人的文件」,没有对应变异;一致性协议的 `dProp` / `dRules` 目录核对与文件身份核对互相冗余(任一单独删除都有另一道发现),不单列变异。
  */
 export interface Edit {
   file: string;
@@ -1086,17 +1086,151 @@ export const V1_W9A_MUTATIONS: readonly V1W9AMutation[] = [
   },
   {
     id: 'budget_clock_unchecked',
-    clause: 'W0-27 2 秒预算:同步工作超预算的结论不予采信',
+    clause: 'W0-27 2 秒预算:同步工作超预算的结论不予采信(整次评估的末尾核对)',
     edits: [
       swap(
         'src/rsi/personal/judge-signal.ts',
-        "    if (r.kind !== 'none' && performance.now() - started > budgetMs) return unreadable('timeout');\n",
-        '',
+        '  if (elapsed(clock) > clock.budgetMs) {\n',
+        '  if (elapsed(clock) > clock.budgetMs * 1e9) {\n',
       ),
     ],
     tests: ['rsi/personal/judge-signal.test.ts'],
-    expectRed: ['同步工作占住事件循环、定时器来不及触发时', 'W9a 判官裁决判定'],
-    mustKill: ['同步工作占住事件循环、定时器来不及触发时'],
+    expectRed: [
+      '同步工作占住事件循环、定时器来不及触发时',
+      '端口立即返回,但同步的 ruleSha256 耗时超预算',
+      'judgeEvidence 同步耗时超预算',
+      'W9a 判官裁决判定',
+    ],
+    mustKill: [
+      '同步工作占住事件循环、定时器来不及触发时',
+      '端口立即返回,但同步的 ruleSha256 耗时超预算',
+      'judgeEvidence 同步耗时超预算',
+    ],
+  },
+  {
+    id: 'budget_timeout_no_abort',
+    clause: 'W0-27 2 秒预算:读后校验超时路径同时中止 controller',
+    edits: [
+      swap(
+        'src/rsi/personal/judge-signal.ts',
+        "    clock.ctl.abort();\n    return unreadable('timeout');\n  }\n  return v;",
+        "    return unreadable('timeout');\n  }\n  return v;",
+      ),
+    ],
+    tests: ['rsi/personal/judge-signal.test.ts'],
+    expectRed: ['端口立即返回,但同步的 ruleSha256 耗时超预算', 'W9a 判官裁决判定'],
+    mustKill: ['端口立即返回,但同步的 ruleSha256 耗时超预算'],
+  },
+  {
+    id: 'recheck_hardlink_unchecked',
+    clause: 'W0-27 末次回读:nlink = 1(读期间新增硬链接不改身份元数据)',
+    edits: [
+      swap(
+        'src/rsi/personal/read/judge-source.ts',
+        "  if (st.nlink !== 1) return 'hardlink';\n",
+        "  if (st.nlink < 1) return 'hardlink';\n",
+      ),
+    ],
+    tests: ['rsi/personal/judge-source.test.ts'],
+    expectRed: [
+      '读期间提案被硬链接到 run 目录树之外',
+      '读期间规则被硬链接到 run 目录树之外',
+      'recheckUnsafe 逐项',
+      'W9a 读适配器',
+    ],
+    mustKill: [
+      '读期间提案被硬链接到 run 目录树之外',
+      '读期间规则被硬链接到 run 目录树之外',
+      'recheckUnsafe 逐项',
+    ],
+  },
+  {
+    id: 'recheck_owner_unchecked',
+    clause: 'W0-27 末次回读:属主 = 当前 uid(与首读 OWNER 策略相同)',
+    edits: [
+      swap(
+        'src/rsi/personal/read/judge-source.ts',
+        "  if (uid !== undefined && st.uid !== uid) return 'owner';\n",
+        '',
+      ),
+    ],
+    tests: ['rsi/personal/judge-source.test.ts'],
+    expectRed: ['recheckUnsafe 逐项', 'W9a 读适配器'],
+    mustKill: ['recheckUnsafe 逐项'],
+  },
+  {
+    id: 'recheck_size_unchecked',
+    clause: 'W0-27 末次回读:大小不超 64 KiB 上限',
+    edits: [
+      swap(
+        'src/rsi/personal/read/judge-source.ts',
+        "  if (st.size > maxBytes) return 'too_large';\n",
+        '',
+      ),
+    ],
+    tests: ['rsi/personal/judge-source.test.ts'],
+    expectRed: ['recheckUnsafe 逐项', 'W9a 读适配器'],
+    mustKill: ['recheckUnsafe 逐项'],
+  },
+  {
+    id: 'recheck_regular_unchecked',
+    clause: 'W0-27 末次回读:必须是普通文件',
+    edits: [
+      swap(
+        'src/rsi/personal/read/judge-source.ts',
+        "  if (!st.isFile()) return 'not_regular';\n",
+        '',
+      ),
+    ],
+    tests: ['rsi/personal/judge-source.test.ts'],
+    expectRed: ['recheckUnsafe 逐项', 'W9a 读适配器'],
+    mustKill: ['recheckUnsafe 逐项'],
+  },
+  {
+    id: 'recheck_unsafe_ignored',
+    clause: 'W0-27 末次回读:安全属性不合格 → unreadable(recheck_unsafe),不得当作「没变」',
+    edits: [
+      swap(
+        'src/rsi/personal/read/judge-source.ts',
+        "          if (recheckUnsafe(s, wantUid, JUDGE_SOURCE_MAX_BYTES) !== null) return 'unsafe';\n",
+        '',
+      ),
+    ],
+    tests: ['rsi/personal/judge-source.test.ts'],
+    expectRed: [
+      '读期间提案被硬链接到 run 目录树之外',
+      '读期间规则被硬链接到 run 目录树之外',
+      'W9a 读适配器',
+    ],
+    mustKill: ['读期间提案被硬链接到 run 目录树之外', '读期间规则被硬链接到 run 目录树之外'],
+  },
+  {
+    id: 'recheck_unsafe_prop_branch_dropped',
+    clause: 'W0-27 末次回读:提案的不安全结论映射成 recheck_unsafe(不折叠成 race)',
+    edits: [
+      swap(
+        'src/rsi/personal/read/judge-source.ts',
+        "      if (propNow === 'unsafe') return bad('recheck_unsafe');\n",
+        '',
+      ),
+    ],
+    tests: ['rsi/personal/judge-source.test.ts'],
+    expectRed: ['读期间提案被硬链接到 run 目录树之外', 'W9a 读适配器'],
+    mustKill: ['读期间提案被硬链接到 run 目录树之外'],
+  },
+  {
+    id: 'recheck_unsafe_rule_branch_dropped',
+    clause: 'W0-27 末次回读:规则的不安全结论映射成 recheck_unsafe(不折叠成 race)',
+    edits: [
+      swap(
+        'src/rsi/personal/read/judge-source.ts',
+        "        if (ruleNow === 'unsafe') return bad('recheck_unsafe');\n",
+        '',
+      ),
+    ],
+    tests: ['rsi/personal/judge-source.test.ts'],
+    expectRed: ['读期间规则被硬链接到 run 目录树之外', 'W9a 读适配器'],
+    mustKill: ['读期间规则被硬链接到 run 目录树之外'],
   },
   {
     id: 'run_id_shape_unchecked',

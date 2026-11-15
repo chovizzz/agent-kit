@@ -25,6 +25,7 @@ import {
 import {
   JUDGE_SOURCE_MAX_BYTES,
   makeProposalJudgeSource,
+  recheckUnsafe,
   type JudgeAttribution,
   type JudgeSourceDeps,
 } from '../../../src/rsi/personal/read/judge-source.js';
@@ -461,6 +462,51 @@ describe('W9a 读适配器:一致性协议与预算(读期间被换 → unreadab
       growth: 'indeterminate',
       why: 'race',
     });
+  });
+});
+
+describe('W9a 读适配器:末次回读的安全属性(M2)', () => {
+  it('读期间提案被硬链接到 run 目录树之外(身份 / 内容元数据不变)→ unreadable(recheck_unsafe);对照:不动 = ok', async () => {
+    const w = await world();
+    expect((await readOf(w)).kind).toBe('ok');
+    const r = await readOf(w, {
+      seam: { afterReads: () => hardlink(w.fx, w.propFile, path.join(w.dir, 'outside-prop.yaml')) },
+    });
+    expect(r).toEqual({ kind: 'unreadable', why: 'recheck_unsafe' });
+    // 经纯判定:增影响闸输入 = indeterminate(不是信号、不是 not_tightening)
+    const w2 = await world({ proposal: stringify(sessionJudged({ verdict: 'accept' })) });
+    const s = await evaluateJudgeSignal(
+      LINK,
+      source(w2, {
+        seam: { afterReads: () => hardlink(w2.fx, w2.propFile, path.join(w2.dir, 'out.yaml')) },
+      }),
+      env,
+    );
+    expect(s).toMatchObject({ kind: 'none', reason: 'unreadable', growth: 'indeterminate' });
+  });
+
+  it('读期间规则被硬链接到 run 目录树之外 → unreadable(recheck_unsafe);对照:不动 = ok', async () => {
+    const w = await world();
+    expect((await readOf(w)).kind).toBe('ok');
+    const r = await readOf(w, {
+      seam: { afterReads: () => hardlink(w.fx, w.ruleFile, path.join(w.dir, 'outside-rule.md')) },
+    });
+    expect(r).toEqual({ kind: 'unreadable', why: 'recheck_unsafe' });
+  });
+
+  it('recheckUnsafe 逐项(假 stat):普通文件、nlink = 1、属主、大小上限各一条负向,边界与对照合格', () => {
+    const ok = { isFile: () => true, nlink: 1, uid: 501, size: JUDGE_SOURCE_MAX_BYTES };
+    expect(recheckUnsafe(ok, 501, JUDGE_SOURCE_MAX_BYTES)).toBeNull();
+    expect(recheckUnsafe(ok, undefined, JUDGE_SOURCE_MAX_BYTES)).toBeNull();
+    expect(recheckUnsafe({ ...ok, isFile: () => false }, 501, JUDGE_SOURCE_MAX_BYTES)).toBe(
+      'not_regular',
+    );
+    expect(recheckUnsafe({ ...ok, nlink: 2 }, 501, JUDGE_SOURCE_MAX_BYTES)).toBe('hardlink');
+    expect(recheckUnsafe({ ...ok, nlink: 0 }, 501, JUDGE_SOURCE_MAX_BYTES)).toBe('hardlink');
+    expect(recheckUnsafe({ ...ok, uid: 0 }, 501, JUDGE_SOURCE_MAX_BYTES)).toBe('owner');
+    expect(
+      recheckUnsafe({ ...ok, size: JUDGE_SOURCE_MAX_BYTES + 1 }, 501, JUDGE_SOURCE_MAX_BYTES),
+    ).toBe('too_large');
   });
 });
 
