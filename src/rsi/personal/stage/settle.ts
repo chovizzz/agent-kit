@@ -114,6 +114,10 @@ export function createRoundBudget(
 }
 
 // ---------- settleSafety ----------
+/**
+ * 扫尾端口。契约:端口**返回(兑现)之前**必须已完成它发起的全部写(未 await 的延迟 / 后台写不受保证:`runAsSweep` 的上下文令牌在端口兑现后失效,
+ * 之后发起的写按普通写处理)。
+ */
 export interface SweepPorts {
   enforceMute(): Promise<EnforceResult>;
   reconcileCaches(): Promise<StepOutcome>;
@@ -138,6 +142,11 @@ interface SweepRecord {
   outcome: SweepOutcome | null;
 }
 const sweeps = new WeakMap<object, SweepRecord>();
+/** 脏标记已置位,或有一个会置脏的写还在途(完成后才置位) */
+const dirtyNow = (st: {
+  readonly dirty: ReadonlySet<unknown>;
+  readonly dirtyInFlight: boolean;
+}): boolean => st.dirty.size > 0 || st.dirtyInFlight;
 
 /**
  * 每轮至多**真正扫尾一次**(状态在回合上:未开始 / 进行中 / 已完成):
@@ -157,7 +166,7 @@ export function settleSafety(
     if (o === null) return prev.running;
     if (o.kind === 'rejected') return Promise.reject(o.error);
     if (o.result.kind === 'unsettled') return Promise.resolve(o.result);
-    if (st.dirty.size === 0) return Promise.resolve(o.result);
+    if (!dirtyNow(st)) return Promise.resolve(o.result);
     markRoundUnsettled(round, 'safety_not_settled');
     return Promise.resolve({ kind: 'unsettled', reason: 'safety_not_settled', faults: [] });
   }
@@ -225,12 +234,12 @@ async function sweepOnce(
     if (thrown.rethrow instanceof PersonalLockLost) markRoundUnsettled(round, 'safety_not_settled');
     throw thrown.rethrow;
   }
-  // 扫尾窗口内别处并发发起的脏写(不在扫尾上下文内)使脏标记非空:不能报 settled
+  // 扫尾窗口内别处并发发起的脏写(不在扫尾上下文内)使脏标记非空、或仍在进行(尚未置脏):都不能报 settled
   if (
     results.length === 3 &&
     results.every((r) => r === 'ok') &&
     faults.length === 0 &&
-    st.dirty.size === 0
+    !dirtyNow(st)
   ) {
     return { kind: 'settled', swept: true };
   }

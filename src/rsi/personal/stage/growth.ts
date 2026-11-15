@@ -376,28 +376,50 @@ function mint(round: BothRound, op: GrowthOp, gen: number): GrowthPass {
 const isCandidateOp = (op: GrowthOpName): op is CandidateOpName =>
   (CANDIDATE_OPS as readonly string[]).includes(op);
 
-/** 把请求变成获准操作(候选类只取 `(id, content_sha256)`)。跨信任边界:畸形请求 = `RoundInternalError('bad_request')`(调用方违约,不是拒绝码) */
-export function opOfReq(req: GrowthReq): GrowthOp {
+/**
+ * 解析请求(跨信任边界):每个属性**只读一次**(`op` / `cand` / `id` / `content_sha256`),校验与产出用同一组局部值——getter / Proxy 的二次读取变化
+ * 不会让校验对象与获准对象分叉。畸形请求 = `RoundInternalError('bad_request')`(调用方违约,不是拒绝码)。`cand` 仅候选类 op 有。
+ */
+function readReq(req: GrowthReq): { readonly op: GrowthOp; readonly cand: object | null } {
   const r = req as { op?: unknown; cand?: unknown } | null;
-  if (typeof r !== 'object' || r === null || typeof r.op !== 'string') {
+  if (typeof r !== 'object' || r === null) throw new RoundInternalError('bad_request');
+  const opName: unknown = r.op;
+  if (typeof opName !== 'string' || !(GROWTH_OPS as readonly string[]).includes(opName)) {
     throw new RoundInternalError('bad_request');
   }
-  if (!(GROWTH_OPS as readonly string[]).includes(r.op))
-    throw new RoundInternalError('bad_request');
-  const op = r.op as GrowthOpName;
-  if (!isCandidateOp(op)) return { cap: op } as GrowthOp;
-  const c = r.cand as Partial<TaintCandidate> | null | undefined;
-  if (
-    typeof c !== 'object' ||
-    c === null ||
-    typeof c.id !== 'string' ||
-    c.id === '' ||
-    typeof c.content_sha256 !== 'string' ||
-    c.content_sha256 === ''
-  ) {
+  const name = opName as GrowthOpName;
+  if (!isCandidateOp(name)) return { op: { cap: name } as GrowthOp, cand: null };
+  const c: unknown = r.cand;
+  if (typeof c !== 'object' || c === null) throw new RoundInternalError('bad_request');
+  const id: unknown = (c as { id?: unknown }).id;
+  const sha: unknown = (c as { content_sha256?: unknown }).content_sha256;
+  if (typeof id !== 'string' || id === '' || typeof sha !== 'string' || sha === '') {
     throw new RoundInternalError('bad_request');
   }
-  return { cap: op, cand: { id: c.id, content_sha256: c.content_sha256 } };
+  return { op: { cap: name, cand: { id, content_sha256: sha } }, cand: c };
+}
+
+/** 把请求变成获准操作(候选类只取 `(id, content_sha256)`) */
+export function opOfReq(req: GrowthReq): GrowthOp {
+  return readReq(req).op;
+}
+
+/**
+ * 候选来源快照:每个字段**只读一次**,校验与冻结用同一组局部值(getter / Proxy 的读取抛错、二次读取变化都不能让校验对象与快照分叉);
+ * null / undefined 保持原样,其余畸形(非对象 / 缺字段 / 空串 / 非字符串 / 读取抛错)一律按「来源缺失」(null)处理,绝不当成有来源。
+ */
+function snapshotSource(s: unknown): TaintCandidate['source'] {
+  if (s === undefined) return undefined;
+  if (typeof s !== 'object' || s === null) return null;
+  try {
+    const runId: unknown = (s as { run_id?: unknown }).run_id;
+    const proposalId: unknown = (s as { proposal_id?: unknown }).proposal_id;
+    if (typeof runId !== 'string' || runId === '') return null;
+    if (typeof proposalId !== 'string' || proposalId === '') return null;
+    return Object.freeze({ run_id: runId, proposal_id: proposalId });
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -405,32 +427,19 @@ export function opOfReq(req: GrowthReq): GrowthOp {
  * 调用方持有的可变别名在评估期间被改写(`req.cand` 换成别的候选)既不会让检查对象与获准对象分叉,也看不到(快照冻结)。畸形请求 = `RoundInternalError('bad_request')`。
  */
 function snapshotReq(req: GrowthReq): GrowthReq {
-  const op = opOfReq(req);
-  if (!('cand' in op)) return Object.freeze({ op: op.cap }) as GrowthReq;
-  const c = (req as CandidateReq).cand;
-  const s = c.source as unknown;
-  const nonEmpty = (v: unknown): v is string => typeof v === 'string' && v !== '';
-  const source =
-    s === undefined
-      ? undefined
-      : typeof s === 'object' && s !== null
-        ? nonEmpty((s as { run_id?: unknown }).run_id) &&
-          nonEmpty((s as { proposal_id?: unknown }).proposal_id)
-          ? Object.freeze({
-              run_id: (s as { run_id: string }).run_id,
-              proposal_id: (s as { proposal_id: string }).proposal_id,
-            })
-          : null // 缺字段 / 空串 / 非字符串的来源(畸形)按「来源缺失」处理
-        : null; // 非对象的来源(畸形)同样按「来源缺失」处理,绝不当成有来源
+  const { op, cand } = readReq(req);
+  if (!('cand' in op) || cand === null) return Object.freeze({ op: op.cap }) as GrowthReq;
+  const c = cand as { lifecycle?: unknown; source?: unknown };
   return Object.freeze({
     op: op.cap,
     cand: Object.freeze({
-      id: c.id,
-      content_sha256: c.content_sha256,
+      // 身份取 `readReq` 已校验的值(不重读调用方对象)
+      id: op.cand.id,
+      content_sha256: op.cand.content_sha256,
       lifecycle: c.lifecycle,
-      source,
+      source: snapshotSource(c.source),
     }),
-  }) as GrowthReq;
+  }) as unknown as GrowthReq;
 }
 
 export function sameOp(a: GrowthOp, b: GrowthOp): boolean {

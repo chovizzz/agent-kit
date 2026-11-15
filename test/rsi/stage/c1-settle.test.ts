@@ -493,3 +493,88 @@ describe('settleSafety · M4:扫尾只豁免「自己发起的写」,窗口内�
     expect(b.round.safetyDirty.kinds()).toEqual(['trip']);
   });
 });
+
+describe('settleSafety · M4b:在途的外部脏写与遗留的后台写', () => {
+  it('核验等待期间外部脏写已开始但未完成(脏标记尚未置位)→ 扫尾不得报 settled;写完成后脏标记置位', async () => {
+    const { round } = await openBoth();
+    await dirty(round);
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>((r) => {
+      enter = r;
+    });
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const p = sweepPorts(round, {
+      verifyMuted: async () => {
+        enter();
+        await gate;
+        return { ok: true };
+      },
+    });
+    const pending = settleSafety(round, p, createRoundBudget(round, { startRollbackLimit: 3 }));
+    await entered;
+    let finishWrite!: () => void;
+    const writeGate = new Promise<void>((r) => {
+      finishWrite = r;
+    });
+    const write = round.writeAdapter('revocation', () => writeGate)(); // 不 await:写在途
+    expect(round.safetyDirty.isDirty()).toBe(false); // 尚未置脏
+    release();
+    expect(await pending).toEqual({ kind: 'unsettled', reason: 'safety_not_settled', faults: [] });
+    finishWrite();
+    await write;
+    expect([...round.safetyDirty.kinds()].sort()).toEqual(['revocation', 'trip']);
+  });
+  it('已 settled 的回合上又有脏写在途 → 再调用不返回缓存的 settled(unsettled,不重扫);正向对照:非脏种类的在途写不影响', async () => {
+    const a = await openBoth();
+    await dirty(a.round);
+    const budget = createRoundBudget(a.round, { startRollbackLimit: 3 });
+    const pa = sweepPorts(a.round);
+    expect(await settleSafety(a.round, pa, budget)).toEqual({ kind: 'settled', swept: true });
+    let finishAudit!: () => void;
+    const auditGate = new Promise<void>((r) => {
+      finishAudit = r;
+    });
+    const audit = a.round.writeAdapter('audit_append', () => auditGate)();
+    expect(await settleSafety(a.round, pa, budget)).toEqual({ kind: 'settled', swept: true });
+    finishAudit();
+    await audit;
+    let finishDirty!: () => void;
+    const dirtyGate = new Promise<void>((r) => {
+      finishDirty = r;
+    });
+    const w = a.round.writeAdapter('trip', () => dirtyGate)();
+    expect(await settleSafety(a.round, pa, budget)).toEqual({
+      kind: 'unsettled',
+      reason: 'safety_not_settled',
+      faults: [],
+    });
+    expect(pa.calls.length).toBe(3); // 没有第二次扫尾
+    finishDirty();
+    await w;
+  });
+  it('端口遗留的后台写(端口兑现之后才执行)不再享受扫尾豁免:照常置脏', async () => {
+    const { round } = await openBoth();
+    await dirty(round);
+    let late: Promise<void> = Promise.resolve();
+    const p = sweepPorts(round, {
+      enforceMute: () => {
+        late = new Promise<void>((resolve) => {
+          setTimeout(() => {
+            void round
+              .writeAdapter('revocation', () => Promise.resolve())()
+              .then(() => resolve());
+          }, 10);
+        });
+        return Promise.resolve({ mute: 'muted', fault: null });
+      },
+    });
+    expect(
+      await settleSafety(round, p, createRoundBudget(round, { startRollbackLimit: 3 })),
+    ).toEqual({ kind: 'settled', swept: true });
+    await late;
+    expect(round.safetyDirty.kinds()).toEqual(['revocation']);
+  });
+});

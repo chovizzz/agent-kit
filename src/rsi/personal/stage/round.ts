@@ -82,8 +82,13 @@ export interface RoundInternals {
   readonly form: 'both' | 'rsi_only';
   gen: number;
   inFlight: 0 | 1;
-  /** 在「扫尾上下文」里运行 `f`:`f` 发起的异步链上的写(经写适配器)是扫尾自己的写,不置脏;别处并发发起的写不在此上下文内,照常置脏 */
-  runAsSweep<T>(f: () => T): T;
+  /** 一个**会置脏**的写(脏种类、且不是扫尾自己的写)正在进行:此时脏标记还没置位,收敛判定不能当它不存在 */
+  dirtyInFlight: boolean;
+  /**
+   * 在「扫尾上下文」里运行 `f`:`f` 的异步链上、**`f` 返回之前**发起的写(经写适配器)是扫尾自己的写,不置脏;别处并发发起的写不在此上下文内,照常置脏。
+   * 上下文令牌在 `f` 兑现 / 拒绝后立即失效:端口遗留的定时器 / 后台任务之后发起的写不再被豁免。
+   */
+  runAsSweep<T>(f: () => Promise<T>): Promise<T>;
   /** 当前同步 / 异步上下文是否在本回合的扫尾上下文内(写适配器入口同步读取) */
   inSweep(): boolean;
   readonly unsettled: UnsettledReason[];
@@ -114,13 +119,21 @@ function makeInternals(form: 'both' | 'rsi_only'): RoundInternals {
   const unsettled: UnsettledReason[] = [];
   const dirty = new Set<DirtyKind>();
   // 每回合一个上下文存储(函数体内创建:模块顶层不得有构造调用,见 c1-inert)
-  const sweepScope = new AsyncLocalStorage<true>();
+  const sweepScope = new AsyncLocalStorage<{ active: boolean }>();
   return {
     form,
     gen: 0,
     inFlight: 0,
-    runAsSweep: <T>(f: () => T): T => sweepScope.run(true, f),
-    inSweep: (): boolean => sweepScope.getStore() === true,
+    dirtyInFlight: false,
+    runAsSweep: async <T>(f: () => Promise<T>): Promise<T> => {
+      const token = { active: true };
+      try {
+        return await sweepScope.run(token, f);
+      } finally {
+        token.active = false;
+      }
+    },
+    inSweep: (): boolean => sweepScope.getStore()?.active === true,
     unsettled,
     dirty,
     latch: new Map(),
@@ -152,6 +165,8 @@ function writeAdapterOf(
       // 单飞:嵌套 / 并发使用 = 编程错误。抛在 try 之前,所以**不会**碰外层写的 inFlight / gen(外层 finally 照常收尾)
       if (st.inFlight !== 0) throw new RoundInternalError(`write_in_flight:${kind}`);
       st.inFlight = 1;
+      const setsDirty = DIRTY_KIND_SET.has(kind) && !ownSweepWrite;
+      if (setsDirty) st.dirtyInFlight = true;
       try {
         return await fn.apply(this, args);
       } catch (e) {
@@ -161,7 +176,8 @@ function writeAdapterOf(
       } finally {
         // 无条件推进(覆盖写成功后抛错 / 部分成功;`DefinitelyNotWritten` 也保守推进);授权写内 `requireGrowth` 看到的仍是本写之前的 gen
         st.gen += 1;
-        if (DIRTY_KIND_SET.has(kind) && !ownSweepWrite) st.dirty.add(kind as DirtyKind);
+        if (setsDirty) st.dirty.add(kind as DirtyKind);
+        st.dirtyInFlight = false;
         st.inFlight = 0;
       }
     };

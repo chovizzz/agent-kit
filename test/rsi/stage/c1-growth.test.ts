@@ -1672,3 +1672,73 @@ describe('L1:GrowthStage.ops 按声明的 ReadonlySet 形状验证(不要求原�
     }
   });
 });
+
+describe('M2b:来源快照每个字段只读一次(校验对象 = 快照对象)', () => {
+  it('getter 首次合法、再读非法:快照取首次读到的值,且每个字段只读一次', async () => {
+    const { round } = await openBoth();
+    const reads = { run_id: 0, proposal_id: 0 };
+    const source = {
+      get run_id(): string {
+        reads.run_id += 1;
+        return reads.run_id === 1 ? 'run-1' : '';
+      },
+      get proposal_id(): string {
+        reads.proposal_id += 1;
+        return reads.proposal_id === 1 ? 'p-1' : '';
+      },
+    };
+    const seen: unknown[] = [];
+    const r = readers({
+      judge: (_r, q) => {
+        seen.push(q.cand.source);
+        return Promise.resolve({ ok: true as const });
+      },
+    });
+    expect(await deny(round, reqOf('grant', cand({ source })), r)).toBe('PASS');
+    expect(reads).toEqual({ run_id: 1, proposal_id: 1 });
+    expect(seen).toEqual([{ run_id: 'run-1', proposal_id: 'p-1' }]);
+  });
+  it('getter 抛错 / Proxy 陷阱抛错 → 来源缺失 → source_unknown(不是异常);首次非法即缺失', async () => {
+    const { round } = await openBoth();
+    const throwing = {
+      get run_id(): string {
+        throw new Error('boom');
+      },
+      proposal_id: 'p-1',
+    };
+    const proxy = new Proxy(
+      {},
+      {
+        get(): never {
+          throw new Error('trap');
+        },
+      },
+    );
+    for (const source of [throwing, proxy]) {
+      expect(await deny(round, reqOf('grant', cand({ source: source as never })), readers())).toBe(
+        'source_unknown',
+      );
+    }
+  });
+  it('候选 id / 内容哈希取校验后的值:getter 二次读取变化不进入快照与 pass', async () => {
+    const { round } = await openBoth();
+    let n = 0;
+    const c = {
+      get id(): string {
+        n += 1;
+        return n === 1 ? 'cand-A' : 'cand-B';
+      },
+      content_sha256: 'a'.repeat(64),
+      lifecycle: 'shadow',
+      source: { run_id: 'run-1', proposal_id: 'p-1' },
+    };
+    const v = await evaluateGrowth(round, { op: 'grant', cand: c as never }, readers(), STAGE_ALL);
+    expect(isGrowthPass(v)).toBe(true);
+    if (isGrowthPass(v))
+      expect(v.op).toEqual({
+        cap: 'grant',
+        cand: { id: 'cand-A', content_sha256: 'a'.repeat(64) },
+      });
+    expect(n).toBe(1);
+  });
+});
