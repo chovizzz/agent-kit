@@ -14,6 +14,25 @@ import type { SealGuard, SealRegion, SealRegionState, Watermark } from './ports.
 
 export class SealRegistry {
   private readonly regions = new Set<RegionImpl>();
+  private compacting = false;
+  /**
+   * 压缩租约(B1b):`Compactor.compact` 在整个运行期间持有。**已有未 close 的区域 → `region_open`**;租约期间 `SealGuard.open` 也拒绝(`region_open`),
+   * 否则「检查之后、P2 rename 之前」才打开的区域仍持旧 W,它的首次创建事件可能落进新 W 之下而 P1 没数到(破坏 I6)。同一时刻只允许一个压缩。
+   */
+  acquireCompactionLease(): () => void {
+    this.assertNoOpenRegion();
+    if (this.compacting) throw new StoreError('compact_blocked', 'concurrent_compaction');
+    this.compacting = true;
+    let released = false;
+    return (): void => {
+      if (released) return;
+      released = true;
+      this.compacting = false;
+    };
+  }
+  isCompacting(): boolean {
+    return this.compacting;
+  }
   hasOpenRegion(): boolean {
     return this.regions.size > 0;
   }
@@ -92,8 +111,11 @@ export interface SealGuardDeps {
 export function createSealGuard(deps: SealGuardDeps): SealGuard {
   return {
     async open(held) {
+      if (deps.registry.isCompacting()) throw new StoreError('region_open', 'compacting');
       await held.assertHeld();
       const wm = await deps.readWatermark();
+      // 读水位线期间压缩可能刚拿到租约:登记前再核一次(同步,中间没有 await)
+      if (deps.registry.isCompacting()) throw new StoreError('region_open', 'compacting');
       return new RegionImpl(wm.through, deps.registry);
     },
   };

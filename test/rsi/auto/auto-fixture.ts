@@ -31,6 +31,11 @@ export interface World {
   view: RawRead;
   markers: MarkerRead;
   audit: RawRead;
+  /** `audit-compaction.json` 原文 */
+  compaction: RawRead;
+  /** 第 n 次(从 1 起)读取的覆盖值:给了就用它代替 `compaction`(「两次读取之间」变化) */
+  compactionAt?: (n: number) => RawRead;
+  compactionReads: number;
   prior: boolean;
   head: RawRead;
   rev: RawRead;
@@ -67,6 +72,8 @@ export function makeWorld(over: Partial<World> = {}): World {
     view: { kind: 'absent' },
     markers: { user: 'absent', breaker: 'absent' },
     audit: { kind: 'absent' },
+    compaction: { kind: 'absent' },
+    compactionReads: 0,
     prior: false,
     head: { kind: 'absent' },
     rev: { kind: 'absent' },
@@ -123,6 +130,12 @@ export function portsOf(w: World): AutoReadPorts {
       return done('markers', w.markers);
     },
     audit: async () => w.audit,
+    compaction: async () => {
+      w.compactionReads += 1;
+      const v = w.compactionAt?.(w.compactionReads) ?? w.compaction;
+      w.hooks.after?.('compaction', w.compactionReads);
+      return v;
+    },
     priorActivity: async () => w.prior,
     home: {
       async head() {

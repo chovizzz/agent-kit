@@ -12,6 +12,7 @@
  * 锁序固定 `rsi → personal → sync`:本模块不暴露任何单独取锁的函数(`LockOrder` 由命令装配的 `withLocks` 实现,B2),只在已持有的能力上工作。
  */
 import { AsyncLocalStorage } from 'node:async_hooks';
+import type { RsiAuditCompaction } from '../../contracts/rsi-store.js';
 import { StoreError } from './errors.js';
 import type { StoreBackend } from './backend.js';
 import type { HeldStore, LockCap, TxnPorts } from './ports.js';
@@ -21,6 +22,25 @@ interface TxnContext {
   txn: number;
 }
 const txnContext = new AsyncLocalStorage<TxnContext>();
+
+/**
+ * 压缩文件的事务内端口(B1b;**只给 `Compactor`**)。不进冻结的 `TxnPorts`(`keyof TxnPorts` 被 `ports-freeze.test.ts` 钉住):
+ * 与 `TxnPorts` 同一个 token、同一个串行队列、同一次锁复核,经 {@link compactionPortOf} 取得;事务结束后再用 = `txn_closed`。
+ */
+export interface CompactionTxnPort {
+  /** 文件缺失 = `null`;不受支持 → `compaction_unsupported` */
+  read(): Promise<RsiAuditCompaction | null>;
+  /** P2 的提交点:要求 `next.gen` = 当前 + 1、`through` 不回退、过读侧同一份语义校验;tmp → 复核锁 → rename */
+  commit(next: RsiAuditCompaction): Promise<void>;
+}
+const compactionPorts = new WeakMap<TxnPorts, CompactionTxnPort>();
+
+/** 取事务端口对应的压缩端口;不是本协调器造出的端口(伪造 / 旧事务以外的对象)= `txn_closed` */
+export function compactionPortOf(ports: TxnPorts): CompactionTxnPort {
+  const c = compactionPorts.get(ports);
+  if (c === undefined) throw new StoreError('txn_closed', 'not_a_transaction_port');
+  return c;
+}
 
 export interface HeldStoreDeps {
   rsi: LockCap;
@@ -79,6 +99,11 @@ export function createHeldStore(deps: HeldStoreDeps): HeldStore {
         rewrite: (text) => track(() => deps.backend.rewriteAudit(text, assertBoth)),
       },
     };
+
+    compactionPorts.set(ports, {
+      read: () => track(() => deps.backend.readCompaction()),
+      commit: (next) => track(() => deps.backend.writeCompaction(next, assertBoth)),
+    });
 
     try {
       await assertBoth();

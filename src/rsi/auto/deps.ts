@@ -177,6 +177,7 @@ export async function productionAutoPorts(
     view: () => fixed('auto-view.json'),
     markers,
     audit: () => fixed('audit.jsonl'),
+    compaction: () => fixed('audit-compaction.json'),
     async priorActivity() {
       const ledger = await fixed(CANARY_FILES.ledger);
       if (ledger.kind === 'unreadable' || (ledger.kind === 'ok' && ledger.text !== '')) return true;

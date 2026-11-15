@@ -438,7 +438,7 @@ export const V1_ASM_B1A_MUTATIONS: readonly V1AsmB1aMutation[] = [
     clause: 'W0-26 §7 水位线须早于今日',
     edits: [
       swap(
-        'src/rsi/store/backend.ts',
+        'src/contracts/rsi-compaction.ts',
         'if (p.data.through !== null && p.data.through >= today) {',
         'if (false) {',
       ),
@@ -701,7 +701,7 @@ export const V1_ASM_B1A_MUTATIONS: readonly V1AsmB1aMutation[] = [
     clause: 'W0-26 §8 lines = deleted + derived_missing',
     edits: [
       swap(
-        'src/contracts/rsi-store.ts',
+        'src/contracts/rsi-compaction.ts',
         'if (m.lines !== m.deleted + m.derived_missing) {',
         'if (false) {',
       ),
@@ -751,7 +751,7 @@ export const V1_ASM_B1A_MUTATIONS: readonly V1AsmB1aMutation[] = [
     clause: 'W0-26 §8 transition_by_to 之和 = by_kind.transition',
     edits: [
       swap(
-        'src/contracts/rsi-store.ts',
+        'src/contracts/rsi-compaction.ts',
         "if (sum(m.transition_by_to) !== (m.by_kind['transition'] ?? 0)) {",
         'if (false) {',
       ),

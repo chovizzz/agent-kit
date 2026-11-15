@@ -119,6 +119,7 @@ describe('导出面', () => {
     const w = await makeWorld('mem');
     expect(Object.keys(w.store).sort()).toEqual([
       'appender',
+      'compactor',
       'held',
       'recovery',
       'registry',

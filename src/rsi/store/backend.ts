@@ -16,6 +16,7 @@ import {
   RSI_EFFECTS_LIMITS,
   RSI_LEDGER_REFINE,
   RsiAuditCompactionSchema,
+  parseCompactionBytes,
   RsiEffectsLedgerSchema,
   type RsiAuditCompaction,
   type RsiEffectsLedger,
@@ -60,22 +61,9 @@ export function encodeLedger(l: RsiEffectsLedger): string {
 }
 
 export function decodeCompaction(bytes: Buffer, today: string): RsiAuditCompaction {
-  let raw: unknown;
-  try {
-    raw = JSON.parse(strictUtf8(bytes));
-  } catch (e) {
-    throw new StoreError('compaction_unsupported', e instanceof TypeError ? 'utf8' : 'json');
-  }
-  const p = RsiAuditCompactionSchema.safeParse(raw);
-  if (!p.success) {
-    const token = p.error.issues.map((i) => i.message).find((m) => m.endsWith('_sum'));
-    throw new StoreError('compaction_unsupported', token ?? 'schema');
-  }
-  // I1:水位线必须早于今日(UTC)
-  if (p.data.through !== null && p.data.through >= today) {
-    throw new StoreError('compaction_unsupported', 'through_not_before_today');
-  }
-  return p.data;
+  const r = parseCompactionBytes(bytes, today);
+  if (!r.ok) throw new StoreError('compaction_unsupported', r.detail);
+  return r.value;
 }
 
 export interface StoreBackend {

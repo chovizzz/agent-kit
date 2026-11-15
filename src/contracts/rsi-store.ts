@@ -9,13 +9,11 @@
  * 本文件只有 schema、常量与纯谓词,无 I/O。**生产相位 0 下没有任何入口写这三个文件**(见 `test/rsi/store/inert.test.ts`)。
  */
 import { z } from 'zod';
-import { IsoDateSchema, IsoTimestampSchema, Sha256Schema } from './common.js';
+import { IsoTimestampSchema, Sha256Schema } from './common.js';
+import { GenInt } from './rsi-compaction.js';
 import { RSI_AUDIT_MAX_LINES, RSI_TERMINAL_REASONS, RsiCandidateIdSchema } from './rsi.js';
 
 const Hex = (n: number): z.ZodString => z.string().regex(new RegExp(`^[0-9a-f]{${n}}$`));
-const NonNegInt = z.number().int().nonnegative();
-/** `gen` 上限 = `Number.MAX_SAFE_INTEGER`:到顶拒写(`gen_overflow`),不回绕 */
-const GenInt = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 
 export const RSI_EFFECTS_FILE = 'effects.json';
 export const RSI_AUDIT_FILE = 'audit.jsonl';
@@ -137,47 +135,17 @@ export const EMPTY_EFFECTS_LEDGER: RsiEffectsLedger = Object.freeze({
   applied: [],
 }) as RsiEffectsLedger;
 
-// --- 压缩与水位线 ---
-export const RSI_COMPACTION_REFINE = Object.freeze({
-  linesSum: 'lines_sum',
-  byKindSum: 'by_kind_sum',
-  transitionSum: 'transition_sum',
-} as const);
-
-const sum = (r: Record<string, number>): number => Object.values(r).reduce((a, b) => a + b, 0);
-
-export const RsiAuditMonthSchema = z
-  .strictObject({
-    lines: NonNegInt,
-    /** 压缩实际删除的唯一行 */
-    deleted: NonNegInt,
-    /** 缺失但可由权威记录派生的唯一事件 */
-    derived_missing: NonNegInt,
-    by_kind: z.record(z.string().max(64), NonNegInt),
-    transition_by_to: z.record(z.string().max(64), NonNegInt),
-  })
-  .superRefine((m, ctx) => {
-    if (m.lines !== m.deleted + m.derived_missing) {
-      ctx.addIssue({ code: 'custom', message: RSI_COMPACTION_REFINE.linesSum });
-    }
-    if (sum(m.by_kind) !== m.lines) {
-      ctx.addIssue({ code: 'custom', message: RSI_COMPACTION_REFINE.byKindSum });
-    }
-    if (sum(m.transition_by_to) !== (m.by_kind['transition'] ?? 0)) {
-      ctx.addIssue({ code: 'custom', message: RSI_COMPACTION_REFINE.transitionSum });
-    }
-  });
-export type RsiAuditMonth = z.infer<typeof RsiAuditMonthSchema>;
-
-export const RsiAuditCompactionSchema = z.strictObject({
-  schema_version: z.literal(1),
-  /** 首次创建 = 1,每次提交 +1;文件缺失 = 虚拟 `gen: 0` */
-  gen: GenInt.min(1),
-  /** 水位线 W(UTC 日);≤ W 的事件不再追加明细。`null` = 尚未推进 */
-  through: IsoDateSchema.nullable(),
-  months: z.record(z.string().regex(/^\d{4}-\d{2}$/), RsiAuditMonthSchema),
-});
-export type RsiAuditCompaction = z.infer<typeof RsiAuditCompactionSchema>;
+// --- 压缩与水位线(schema 与纯解码在 `rsi-compaction.ts`:读命令的 import 闭包只许碰它,不许碰本文件;这里再导出以保持原导入路径) ---
+export {
+  RSI_COMPACTION_REFINE,
+  RsiAuditCompactionSchema,
+  RsiAuditMonthSchema,
+  parseCompactionBytes,
+  parseCompactionText,
+  type CompactionParse,
+  type RsiAuditCompaction,
+  type RsiAuditMonth,
+} from './rsi-compaction.js';
 
 // --- 错误 / cause 码表(§E 第 9 项) ---
 /** `RSI_FAIL_CLOSED reason=` 取值(与 `RSI_FAIL_CLOSED_REASONS` 子集一致;退出码一律 3,§20.3 总表) */
