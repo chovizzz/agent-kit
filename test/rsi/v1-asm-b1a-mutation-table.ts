@@ -303,7 +303,7 @@ export const V1_ASM_B1A_MUTATIONS: readonly V1AsmB1aMutation[] = [
       'first_has_no_compacted_return',
       'first_residue_row_under_watermark_is_sealed_not_already',
     ],
-    mustKill: ['first_has_no_compacted_return'],
+    mustKill: ['first_residue_row_under_watermark_is_sealed_not_already'],
   },
   {
     id: 'replay_without_source_compacted',

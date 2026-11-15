@@ -6,9 +6,12 @@
  */
 import * as path from 'node:path';
 import ts from 'typescript';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { readDir, readTextSync } from '../../../src/io/read-fs.js';
 import { ROOT } from '../closure-util.js';
+
+// 全仓 AST 扫描在负载高的验证机上较慢
+vi.setConfig({ testTimeout: 120_000 });
 
 const INTERNAL = ['rsi/store/ledger-merge', 'rsi/store/backend'];
 const ALLOWED_PREFIXES = ['src/rsi/store/', 'test/rsi/store/'];

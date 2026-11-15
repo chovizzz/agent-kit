@@ -89,6 +89,7 @@ export async function planKeyedAppend(
       continue;
     }
     if (st.wm !== null && utcDay(line.at) <= st.wm) {
+      if (origin.kind === 'first') throw new AuditSealedError('sealed_interval', key); // 不可达:上面已先拒绝(为类型收窄保留)
       const ev = resolve === undefined ? null : await resolve(origin.source, key);
       if (ev === null || !sameSealedFields(ev, line)) {
         throw new AuditSealedError('sealed_unknown_event', key);

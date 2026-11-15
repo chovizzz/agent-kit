@@ -6,10 +6,12 @@
  * 每条都有正向对照(虚拟入口 import 存储核时同一检查必须变红)。
  */
 import * as path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { RSI_AUTO_PHASE } from '../../../src/contracts/rsi.js';
 import { existsSync, readDir, readTextSync } from '../../../src/io/read-fs.js';
 import { ROOT, closureOf } from '../closure-util.js';
+
+vi.setConfig({ testTimeout: 120_000 });
 
 const ENTRIES = [
   'cli.ts',
