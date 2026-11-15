@@ -5,7 +5,7 @@
  */
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import type { PersonalLifecycleRecord } from '../../../src/contracts/rsi-personal.js';
-import type { RsiLifecycleState } from '../../../src/contracts/rsi.js';
+import type { RsiLifecycleState, RsiOutcome } from '../../../src/contracts/rsi.js';
 import type { RsiObservation } from '../../../src/rsi/services/observe.js';
 import type { RsiServiceCtx } from '../../../src/rsi/types.js';
 import type { StepHalt } from '../../../src/rsi/personal/candidate-ports.js';
@@ -17,8 +17,19 @@ import type {
   JudgeReduceSlot,
   JudgeSlots,
 } from '../../../src/rsi/personal/judge-slot.js';
-import type { PersonalFault, PersonalFaultCode } from '../../../src/rsi/personal/stage/errors.js';
-import type { FallbackTrack } from '../../../src/rsi/personal/stage/fallback.js';
+import type {
+  Classified,
+  HaltClass,
+  LockLossOwner,
+  PersonalFault,
+  PersonalFaultCode,
+  StaleGrowthReason,
+} from '../../../src/rsi/personal/stage/errors.js';
+import type {
+  FallbackSkipReason,
+  FallbackTrack,
+  FollowUpPlan,
+} from '../../../src/rsi/personal/stage/fallback.js';
 import type {
   AdmissionFact,
   BarrierDeny,
@@ -89,12 +100,15 @@ import type {
   PersonalStage,
   RsiOnlyTripReason,
   TripReason,
+  UnsettledReason,
+  WriteKind,
 } from '../../../src/rsi/personal/stage/types.js';
 
 const names = (m: object): string[] => Object.keys(m).sort();
 // 排除 unique-symbol 品牌键(类型里有、运行期没有、不可命名)
 type K<T> = Exclude<keyof T, symbol>;
 type Assignable<A, B> = [A] extends [B] ? true : false;
+type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 
 describe('运行期导出清单(多一个 / 少一个符号都红;GrowthPass 的构造点不导出)', () => {
   it('stage/growth.ts', async () => {
@@ -116,6 +130,7 @@ describe('运行期导出清单(多一个 / 少一个符号都红;GrowthPass 的
   });
   it('stage/round.ts', async () => {
     expect(names(await import('../../../src/rsi/personal/stage/round.js'))).toEqual([
+      'growthAccessOf',
       'isWriteAdapted',
       'judgeBlockedOf',
       'markRoundUnsettled',
@@ -597,5 +612,191 @@ describe('8 监测信号表(常量)', () => {
     expectTypeOf<keyof MonitorSignal>().toEqualTypeOf<
       'id' | 'inputs' | 'meaning' | 'conditional' | 'caveat'
     >();
+  });
+});
+
+describe('导出函数 / 类型的签名冻结(互相可赋值即同形;readonly 与参数名不计)', () => {
+  it('错误域', async () => {
+    const m = await import('../../../src/rsi/personal/stage/errors.js');
+    type E = typeof m;
+    expectTypeOf<Same<E['classify'], (e: unknown) => Classified>>().toEqualTypeOf<true>();
+    expectTypeOf<Same<E['classifyHalt'], (h: StepHalt) => HaltClass>>().toEqualTypeOf<true>();
+    expectTypeOf<Same<E['isRsiLockLost'], (e: unknown) => boolean>>().toEqualTypeOf<true>();
+    expectTypeOf<
+      Same<
+        E['resolveLockLoss'],
+        (
+          rsi: { assertHeld(): Promise<void> },
+          personal: { assertHeld(): Promise<void> },
+        ) => Promise<LockLossOwner>
+      >
+    >().toEqualTypeOf<true>();
+    expectTypeOf<Same<LockLossOwner, 'rsi' | 'personal' | 'unknown'>>().toEqualTypeOf<true>();
+    expectTypeOf<
+      Same<Classified['kind'], 'rethrow' | 'end_personal_round' | 'fault'>
+    >().toEqualTypeOf<true>();
+    expectTypeOf<
+      Same<HaltClass['kind'], 'stop_step' | 'stop_step_unsettled' | 'lock_lost_unresolved'>
+    >().toEqualTypeOf<true>();
+    expectTypeOf<
+      Same<
+        StaleGrowthReason,
+        | 'not_minted'
+        | 'already_used'
+        | 'nonce_mismatch'
+        | 'round_mismatch'
+        | 'gen_changed'
+        | 'op_mismatch'
+        | 'unsettled'
+        | 'vetoed'
+        | 'veto_unreadable'
+        | 'veto_not_checked'
+        | 'veto_check_in_flight'
+      >
+    >().toEqualTypeOf<true>();
+    expect(m.classify.length).toBe(1);
+  });
+  it('锁适配点 / 回合工厂', async () => {
+    const li = await import('../../../src/rsi/personal/stage/lock-identity.js');
+    const rd = await import('../../../src/rsi/personal/stage/round.js');
+    type L = typeof li;
+    type R = typeof rd;
+    expectTypeOf<
+      Same<ReturnType<L['attemptPersonal']>, Promise<PersonalAttempt>>
+    >().toEqualTypeOf<true>();
+    expectTypeOf<Same<ReturnType<L['wrapPersonalLock']>, HeldPersonal>>().toEqualTypeOf<true>();
+    expectTypeOf<Same<L['isProducedAttempt'], (a: unknown) => boolean>>().toEqualTypeOf<true>();
+    expectTypeOf<Same<L['newRoundId'], () => string>>().toEqualTypeOf<true>();
+    expectTypeOf<
+      Same<
+        R['openRound'],
+        (
+          rsi: HeldRsi,
+          attempt: PersonalAttempt,
+          opts?: { readonly newId?: () => string },
+        ) => RoundOpen
+      >
+    >().toEqualTypeOf<true>();
+    expectTypeOf<
+      Same<
+        R['growthAccessOf'],
+        (
+          open: RoundOpen,
+          flags: { readonly updateBusy: boolean; readonly lockLost: boolean },
+        ) => GrowthAccess
+      >
+    >().toEqualTypeOf<true>();
+    expectTypeOf<
+      Same<
+        R['markRoundUnsettled'],
+        (round: BothRound | RsiOnlyRound, reason: UnsettledReason) => void
+      >
+    >().toEqualTypeOf<true>();
+    expectTypeOf<
+      Same<R['judgeBlockedOf'], (round: BothRound, id: string) => JudgeGrowthDeny | null>
+    >().toEqualTypeOf<true>();
+    expectTypeOf<
+      Same<
+        R['recordJudgeBlocked'],
+        (
+          round: BothRound,
+          blocked: readonly { readonly id: string; readonly code: JudgeGrowthDeny }[],
+        ) => void
+      >
+    >().toEqualTypeOf<true>();
+    expectTypeOf<Same<R['isWriteAdapted'], (fn: unknown) => boolean>>().toEqualTypeOf<true>();
+    // roundInternals / RoundInternals / isProducedAttempt / newRoundId 是 stage 目录内部用,不属于对外冻结面
+    expect(rd.growthAccessOf.length).toBe(2);
+  });
+  it('settleSafety 两个重载 / 兜底协调器 / 判决槽包装 / 授权辅助', async () => {
+    const st = await import('../../../src/rsi/personal/stage/settle.js');
+    const fb = await import('../../../src/rsi/personal/stage/fallback.js');
+    const js = await import('../../../src/rsi/personal/judge-slot.js');
+    const gr = await import('../../../src/rsi/personal/stage/growth.js');
+    expectTypeOf<
+      Same<
+        typeof st.createRoundBudget,
+        {
+          (round: BothRound, opts: { readonly startRollbackLimit: number }): RoundBudget;
+          (round: RsiOnlyRound): RoundBudget;
+        }
+      >
+    >().toEqualTypeOf<true>();
+    expectTypeOf<Same<typeof fb.newFallbackTrack, () => FallbackTrack>>().toEqualTypeOf<true>();
+    expectTypeOf<
+      Same<
+        typeof fb.planAfterFallback,
+        (outcome: RsiOutcome, fb: FallbackReport | null) => FollowUpPlan
+      >
+    >().toEqualTypeOf<true>();
+    expectTypeOf<
+      Same<typeof fb.fallbackLogCode, (r: FallbackReport) => string>
+    >().toEqualTypeOf<true>();
+    expectTypeOf<
+      Same<
+        typeof fb.runFallbackOnce,
+        (input: {
+          readonly track: FallbackTrack;
+          readonly stage: Pick<PersonalStage, 'eligible' | 'safetyFallback'> | undefined;
+          readonly ctx: FallbackCtx;
+          readonly original: unknown;
+          readonly outcome: RsiOutcome;
+        }) => Promise<FallbackReport | null>
+      >
+    >().toEqualTypeOf<true>();
+    expectTypeOf<Same<FollowUpPlan['callFinish'], boolean>>().toEqualTypeOf<true>();
+    expectTypeOf<
+      Same<
+        FallbackSkipReason,
+        | 'rsi_lock_lost'
+        | 'unrecordable_outcome'
+        | 'p_completed'
+        | 'already_tried'
+        | 'no_stage'
+        | 'ineligible'
+      >
+    >().toEqualTypeOf<true>();
+    expectTypeOf<
+      Same<
+        typeof js.checkJudgeGrowth,
+        (
+          slot: JudgeGrowthSlot | undefined | null,
+          rec: PersonalLifecycleRecord,
+          opts?: { readonly timeoutMs?: number },
+        ) => Promise<JudgeGrowthVerdict>
+      >
+    >().toEqualTypeOf<true>();
+    expectTypeOf<
+      Same<typeof js.normalizeJudgeVerdict, (v: unknown) => JudgeGrowthVerdict | null>
+    >().toEqualTypeOf<true>();
+    expectTypeOf<
+      Same<typeof js.normalizeJudgeReport, (r: unknown) => JudgeReduceReport | null>
+    >().toEqualTypeOf<true>();
+    expectTypeOf<Same<typeof js.UNAVAILABLE_JUDGE, JudgeSlots>>().toEqualTypeOf<true>();
+    expectTypeOf<
+      Same<typeof gr.growthDenied, (code: GrowthDeny) => GrowthVerdict>
+    >().toEqualTypeOf<true>();
+    expectTypeOf<Same<typeof gr.opOfReq, (req: GrowthReq) => GrowthOp>>().toEqualTypeOf<true>();
+    expectTypeOf<
+      Same<typeof gr.sameOp, (a: GrowthOp, b: GrowthOp) => boolean>
+    >().toEqualTypeOf<true>();
+    expectTypeOf<
+      Same<typeof gr.isGrowthPass, (v: GrowthVerdict) => v is GrowthPass>
+    >().toEqualTypeOf<true>();
+    expectTypeOf<
+      Same<
+        UnsettledReason,
+        | `write_outcome_unknown:${WriteKind}`
+        | 'safety_not_settled'
+        | 'compaction_failed'
+        | 'step_integrity:repo_invalid'
+        | 'step_integrity:revocations_invalid'
+        | 'step_integrity:commit_failed'
+        | 'step_integrity:candidate_invalid'
+        | `budget_exceeded:${string}`
+        | 'lock_loss_unresolved'
+      >
+    >().toEqualTypeOf<true>();
+    expect(st.settleSafety.length).toBe(3);
   });
 });

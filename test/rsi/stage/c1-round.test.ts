@@ -14,6 +14,7 @@ import {
   wrapPersonalLock,
 } from '../../../src/rsi/personal/stage/lock-identity.js';
 import {
+  growthAccessOf,
   isWriteAdapted,
   judgeBlockedOf,
   markRoundUnsettled,
@@ -385,5 +386,52 @@ describe('markRoundUnsettled', () => {
     await b.round.writeAdapter('effects', () => Promise.resolve())();
     expect(b.round.gen()).toBe(1);
     expect(a.round.gen()).toBe(0);
+  });
+});
+
+describe('growthAccessOf:S3 的入口许可(update_busy 时 S3 不运行)', () => {
+  it('update_busy_does_not_expose_round:持两锁但 update 忙 → denied update_busy,没有 round;不忙 → open 带同一个 round', async () => {
+    const w = await openBoth();
+    const open = openRound(
+      fakeLock(RSI_NONCE),
+      await attemptPersonal(() => Promise.resolve(asRaw(fakeLock(PERSONAL_NONCE)))),
+    );
+    const busy = growthAccessOf(open, { updateBusy: true, lockLost: false });
+    expect(busy).toEqual({ kind: 'denied', code: 'update_busy' });
+    expect('round' in busy).toBe(false);
+    const ok = growthAccessOf(open, { updateBusy: false, lockLost: false });
+    expect(ok.kind).toBe('open');
+    if (ok.kind === 'open' && open.kind === 'both') expect(ok.round).toBe(open.round);
+    expect(w.round.id).toBeTypeOf('string');
+  });
+
+  it('忙 / 故障的 rsi-only 回合 → denied personal_busy / personal_fault(没有 round);失锁优先于一切', async () => {
+    const b = await openBusy();
+    expect(growthAccessOf(b.open, { updateBusy: false, lockLost: false })).toEqual({
+      kind: 'denied',
+      code: 'personal_busy',
+    });
+    expect(growthAccessOf(b.open, { updateBusy: true, lockLost: false })).toEqual({
+      kind: 'denied',
+      code: 'personal_busy',
+    }); // rsi-only 的原因先于 update_busy
+    const f = openRound(
+      fakeLock(RSI_NONCE),
+      await attemptPersonal(() => Promise.reject(new RsiLockError('write_denied'))),
+    );
+    expect(growthAccessOf(f, { updateBusy: false, lockLost: false })).toEqual({
+      kind: 'denied',
+      code: 'personal_fault',
+    });
+    const both = openRound(
+      fakeLock(RSI_NONCE),
+      await attemptPersonal(() => Promise.resolve(asRaw(fakeLock(PERSONAL_NONCE)))),
+    );
+    for (const open of [b.open, f, both]) {
+      expect(growthAccessOf(open, { updateBusy: true, lockLost: true })).toEqual({
+        kind: 'denied',
+        code: 'lock_lost',
+      });
+    }
   });
 });

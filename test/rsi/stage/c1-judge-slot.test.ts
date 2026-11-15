@@ -41,6 +41,7 @@ const unreadableDouble = (): JudgeSlots => ({
       ),
   },
 });
+// 共享契约的 describe 标题前缀:判决槽共享契约(不可用状态)(变异整表的 off-target 判定按标题前缀匹配)
 judgeSlotUnavailableContract('UNAVAILABLE_JUDGE', () => UNAVAILABLE_JUDGE);
 judgeSlotUnavailableContract('读失败替身', unreadableDouble);
 

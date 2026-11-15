@@ -23,6 +23,7 @@ import {
   WRITE_KINDS,
   type DirtyKind,
   type UnsettledReason,
+  type GrowthAccess,
   type WriteKind,
 } from './types.js';
 
@@ -237,4 +238,18 @@ export function recordJudgeBlocked(
 }
 export function judgeBlockedOf(round: BothRound, id: string): JudgeBlockCode | null {
   return roundInternals(round).latch.get(id) ?? null;
+}
+
+/**
+ * S3(增影响)的入口许可(纯函数;优先级 `lock_lost` > rsi-only 的 `personal_busy` / `personal_fault` > `update_busy` > `open`):
+ * **只有 `open` 变体带 `BothRound`**——`update_busy` 时 S0–S2 照跑(它们用的是 `RoundOpen.round`),但 S3 拿不到 round,`evaluateGrowth` 在类型上不可调用。
+ */
+export function growthAccessOf(
+  open: RoundOpen,
+  flags: { readonly updateBusy: boolean; readonly lockLost: boolean },
+): GrowthAccess {
+  if (flags.lockLost) return { kind: 'denied', code: 'lock_lost' };
+  if (open.kind === 'rsi_only') return { kind: 'denied', code: open.deny };
+  if (flags.updateBusy) return { kind: 'denied', code: 'update_busy' };
+  return { kind: 'open', round: open.round };
 }
