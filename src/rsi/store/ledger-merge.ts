@@ -47,7 +47,13 @@ export interface PlanOptions {
 
 export type PlanResult =
   | { kind: 'satisfied' }
-  | { kind: 'commit'; next: RsiEffectsLedger; droppedKeys: number }
+  | {
+      kind: 'commit';
+      next: RsiEffectsLedger;
+      droppedKeys: number;
+      /** 批次自身已满足(键已登记 / 状态已满足且无需登记),提交的只是维护性变化(过期冷却 / 水位线覆盖的 applied);`applyOnce` 仍报批次自己的结论 `satisfied` */
+      maintenanceOnly?: true;
+    }
   | { kind: 'not_committed'; cause: 'effects_full' };
 
 // ---------- effects 的运行时校验(跨信任边界) ----------
@@ -343,8 +349,9 @@ export function planBatch(
   opts: PlanOptions = {},
 ): PlanResult {
   const w = beginWorking(state);
-  applyBatch(w, key, effects, meta, intent, opts);
-  return finalize(w, opts); // 无变化 = satisfied;有维护性变化(过期冷却 / 水位线覆盖的 applied)时 = 独立提交
+  const own = applyBatch(w, key, effects, meta, intent, opts);
+  const f = finalize(w, opts);
+  return own === 'satisfied' && f.kind === 'commit' ? { ...f, maintenanceOnly: true } : f; // 无变化 = satisfied;有维护性变化(过期冷却 / 水位线覆盖的 applied)时 = 独立提交
 }
 
 export type BatchOutcome =

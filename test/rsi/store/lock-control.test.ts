@@ -266,3 +266,34 @@ describe('H1 LockCap 的 root / 锁种类 / acquisition 校验', () => {
     expect((err as RsiLockError).kind).toBe('internal');
   });
 });
+
+describe('H1 没有释放屏障的句柄(无 path / root 的最小形状):HeldStore.release 自己等在途事务', () => {
+  it('release_waits_inflight_without_gate:只有 control.release 的等待可用时仍先等事务、再逆序释放;对照:事务结束后的 release 立即完成', async () => {
+    const log: string[] = [];
+    const plain = (name: string) => ({
+      assertHeld: async (): Promise<void> => undefined,
+      release: async (): Promise<void> => {
+        log.push(`release:${name}`);
+      },
+    });
+    const store = assembleRsiStore({
+      fs: new MemFs(),
+      rsi: plain('rsi'),
+      personal: plain('personal'),
+    });
+    const g = gate();
+    const txn = store.held.transaction(async () => {
+      await g.promise;
+      log.push('txn-done');
+    });
+    const rel = store.held.release();
+    await tick();
+    expect(log).toEqual([]); // 事务在途:不得先释放
+    g.open();
+    await txn;
+    await rel;
+    expect(log).toEqual(['txn-done', 'release:personal', 'release:rsi']);
+    await store.held.release(); // 对照:已释放后幂等,不再重复
+    expect(log).toHaveLength(3);
+  });
+});

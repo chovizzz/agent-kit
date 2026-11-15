@@ -439,11 +439,11 @@ describe('M3 没有新状态的批也能裁过期冷却 / 水位线覆盖的 app
       await seed(w, FILES.effects, canonicalJson({ ...l, cooldowns: [expiredCool] }));
     };
 
-    it('applyOnce 同键重放(already)也做维护提交:过期冷却被裁、gen +1;随后再重放 = satisfied 零写', async () => {
+    it('applyOnce 同键重放(already)也做维护提交:过期冷却被裁、gen +1,结果仍报批次自己的结论 satisfied(与 recoverThrough 一致);随后再重放 = satisfied 零写', async () => {
       const w = await makeWorld(kind);
       await withExpiredCooldown(w);
       expect(await w.store.sink.applyOnce('K', [tomb()], meta())).toEqual({
-        ledger: 'committed',
+        ledger: 'satisfied',
         audit: 'not_applicable',
       });
       const l = await ledgerOf(w);

@@ -108,7 +108,7 @@ export function createKeyedEffectSink(deps: ApplyDeps): KeyedEffectSink {
         if (plan !== null && plan.kind === 'not_committed') {
           return { ledger: 'not_committed', audit: 'not_applicable', cause: plan.cause };
         }
-        const ledgerWillCommit = plan?.kind === 'commit';
+        const ledgerWillCommit = plan?.kind === 'commit' && plan.maintenanceOnly !== true;
         if (auditFull) {
           return ledgerWillCommit
             ? { ledger: 'not_committed', audit: 'not_applicable', cause: 'audit_full' }
@@ -123,7 +123,8 @@ export function createKeyedEffectSink(deps: ApplyDeps): KeyedEffectSink {
         let ledgerLayer: LedgerLayer = 'not_applicable';
         if (plan !== null && plan.kind === 'commit') {
           await p.ledgerWrite.commit(plan.next);
-          ledgerLayer = 'committed';
+          // 只做了维护性提交(批次自己已满足)= 报批次自己的结论 satisfied,与 recoverThrough 一致
+          ledgerLayer = plan.maintenanceOnly === true ? 'satisfied' : 'committed';
         } else if (plan !== null) {
           ledgerLayer = 'satisfied';
         }

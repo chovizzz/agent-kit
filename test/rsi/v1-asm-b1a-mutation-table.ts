@@ -556,9 +556,9 @@ export const V1_ASM_B1A_MUTATIONS: readonly V1AsmB1aMutation[] = [
     id: 'release_not_waiting',
     clause: 'W0-26 §12 release 等在途事务',
     edits: [swap('src/rsi/store/lock-control.ts', 'await tail;', ';')],
-    tests: ['rsi/store/txn.test.ts'],
-    expectRed: ['release_waits_inflight_txn'],
-    mustKill: ['release_waits_inflight_txn'],
+    tests: ['rsi/store/lock-control.test.ts'],
+    expectRed: ['release_waits_inflight_without_gate'],
+    mustKill: ['release_waits_inflight_without_gate'],
   },
   {
     id: 'release_inside_allowed',
