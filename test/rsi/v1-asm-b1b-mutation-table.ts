@@ -79,7 +79,7 @@ export const V1_ASM_B1B_MUTATIONS: readonly V1AsmB1bMutation[] = [
       ),
       swap(
         'src/rsi/store/seal.ts',
-        "// 读水位线期间压缩可能刚拿到租约:登记前再核一次(同步,中间没有 await)\n      if (deps.registry.isCompacting()) throw new StoreError('region_open', 'compacting');",
+        "// 登记前同步复核(中间没有 await):正在压缩,或读取期间纪元变过 = 拒绝\n      if (deps.registry.isCompacting()) throw new StoreError('region_open', 'compacting');",
         '',
       ),
     ],
@@ -98,13 +98,7 @@ export const V1_ASM_B1B_MUTATIONS: readonly V1AsmB1bMutation[] = [
   {
     id: 'concurrent_compaction_allowed',
     clause: '同一时刻只允许一个压缩',
-    edits: [
-      swap(
-        'src/rsi/store/seal.ts',
-        "if (this.compacting) throw new StoreError('compact_blocked', 'concurrent_compaction');",
-        '',
-      ),
-    ],
+    edits: [swap('src/rsi/store/seal.ts', "if (this.compacting) return 'busy';", '')],
     tests: ['rsi/store/compactor.test.ts'],
     expectRed: ['compaction_lease_blocks_region_open_during_p2'],
     mustKill: ['compaction_lease_blocks_region_open_during_p2'],
@@ -893,6 +887,76 @@ export const V1_ASM_B1B_MUTATIONS: readonly V1AsmB1bMutation[] = [
     tests: ['rsi/store/b1b-gate.test.ts'],
     expectRed: ['生产惰性:相位常量 0'],
     mustKill: ['生产惰性:相位常量 0'],
+  },
+  {
+    id: 'busy_thrown',
+    clause: '并发压缩 = 返回 compact_blocked(同一个码不兼作异常)',
+    edits: [
+      swap(
+        'src/rsi/store/compactor.ts',
+        "if (release === 'busy') return blocked('compact_blocked', []);",
+        "if (release === 'busy') throw new StoreError('compact_blocked', 'concurrent_compaction');",
+      ),
+    ],
+    tests: ['rsi/store/compactor.test.ts'],
+    expectRed: ['compaction_lease_blocks_region_open_during_p2'],
+    mustKill: ['compaction_lease_blocks_region_open_during_p2'],
+  },
+  {
+    id: 'lease_epoch_ignored',
+    clause: 'open 读水位线期间发生过一次完整压缩(ABA)= 拒绝',
+    edits: [
+      swap(
+        'src/rsi/store/seal.ts',
+        'if (deps.registry.epoch() !== epoch) {',
+        'if (false as boolean) {',
+      ),
+    ],
+    tests: ['rsi/store/compactor.test.ts'],
+    expectRed: ['lease_epoch_open_straddling_compaction_refused'],
+    mustKill: ['lease_epoch_open_straddling_compaction_refused'],
+  },
+  {
+    id: 'event_time_missing_skipped',
+    clause: '有账效果却没有权威事件时间 = fail-closed(E2)',
+    edits: [
+      swap(
+        'src/rsi/store/reconcile-source.ts',
+        "if (effects.length > 0 && at === undefined) {\n            throw new StoreError('state_invalid', 'event_time_missing');\n          }",
+        '',
+      ),
+    ],
+    tests: ['rsi/store/reconcile-source.test.ts'],
+    expectRed: ['终态记录 transitions 为空 → batchesThrough 抛 state_invalid'],
+    mustKill: ['终态记录 transitions 为空 → batchesThrough 抛 state_invalid'],
+  },
+  {
+    id: 'event_time_missing_e1_skipped',
+    clause: '有账效果却没有权威事件时间 = fail-closed(E1)',
+    edits: [
+      swap(
+        'src/rsi/store/reconcile-source.ts',
+        "if (at === undefined) throw new StoreError('state_invalid', 'event_time_missing');",
+        '',
+      ),
+    ],
+    tests: ['rsi/store/reconcile-source.test.ts'],
+    expectRed: ['rolling_back + vetoed 而 transitions 为空'],
+    mustKill: ['rolling_back + vetoed 而 transitions 为空'],
+  },
+  {
+    id: 'deps_compaction_lenient_utf8',
+    clause: '读侧压缩文件严格 UTF-8',
+    edits: [
+      swap(
+        'src/rsi/auto/deps.ts',
+        "new TextDecoder('utf-8', { fatal: true }).decode(b)",
+        "b.toString('utf8')",
+      ),
+    ],
+    tests: ['rsi/auto/deps-compaction.test.ts'],
+    expectRed: ['端到端 rsi report:非法 UTF-8 的压缩文件'],
+    mustKill: ['端到端 rsi report:非法 UTF-8 的压缩文件'],
   },
 ];
 

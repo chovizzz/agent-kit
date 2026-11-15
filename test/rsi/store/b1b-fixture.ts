@@ -309,3 +309,41 @@ export function gateCommit(
     },
   };
 }
+
+/**
+ * 第一次 `read(name)`:**先读到结果**,再挂起到 `release()` 才返回(模拟「读到了旧值、返回前别的操作完成」);之后的读不受影响。
+ * `reached` 在第一次读已拿到结果、开始挂起时落定。
+ */
+export function gateFirstRead(
+  inner: StoreFs,
+  name: string,
+): { fs: StoreFs; reached: Promise<void>; release(): void } {
+  let release = (): void => undefined;
+  let reach = (): void => undefined;
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const reached = new Promise<void>((r) => {
+    reach = r;
+  });
+  let used = false;
+  return {
+    reached,
+    release: () => release(),
+    fs: {
+      writeTmp: (n, t) => inner.writeTmp(n, t),
+      commitTmp: (n) => inner.commitTmp(n),
+      removeTmp: (n) => inner.removeTmp(n),
+      appendSynced: (n, t) => inner.appendSynced(n, t),
+      async read(n, m) {
+        const r = await inner.read(n, m);
+        if (n === name && !used) {
+          used = true;
+          reach();
+          await gate;
+        }
+        return r;
+      },
+    },
+  };
+}

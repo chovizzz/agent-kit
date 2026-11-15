@@ -118,6 +118,10 @@ export function createReconcileSource(deps: { records: RecordsPort }): Reconcile
               e.type === 'start_cooldown',
           );
           const at = terminalAt(rec);
+          // 有账效果却取不到权威事件时间:无法证明它是否落在封存区间,不能跳过(也不能拿 now 补)= fail-closed
+          if (effects.length > 0 && at === undefined) {
+            throw new StoreError('state_invalid', 'event_time_missing');
+          }
           if (effects.length > 0 && at !== undefined && utcDay(at) <= W) {
             out.push({
               key: terminalEffectKey(rec),
@@ -127,7 +131,8 @@ export function createReconcileSource(deps: { records: RecordsPort }): Reconcile
           }
         } else if (rec.lifecycle === 'rolling_back' && rec.rollback?.reason === 'vetoed') {
           const at = rollbackEnteredAt(rec);
-          if (at !== undefined && utcDay(at) <= W) {
+          if (at === undefined) throw new StoreError('state_invalid', 'event_time_missing');
+          if (utcDay(at) <= W) {
             out.push({
               key: vetoEffectKey(rec),
               effects: [{ type: 'blacklist_veto', id: rec.id, content_sha256: rec.content_sha256 }],

@@ -178,6 +178,36 @@ describe('batchesThrough(E2 终态批次 / E1 即时否决)', () => {
   });
 });
 
+describe('event_time_missing:有账效果却没有权威事件时间 = fail-closed(不跳过、不拿 now 补)', () => {
+  it('终态记录 transitions 为空 → batchesThrough 抛 state_invalid(event_time_missing);对照:有条目则正常', async () => {
+    const empty = fakeRecords([terminalRecord()]);
+    empty.list = [{ ...terminalRecord(), transitions: [] }];
+    const e = await rejects(createReconcileSource({ records: empty }).batchesThrough('2026-10-31'));
+    expect([e.code, e.detail]).toEqual(['state_invalid', 'event_time_missing']);
+    const ok = createReconcileSource({ records: fakeRecords([terminalRecord()]) });
+    expect((await ok.batchesThrough('2026-10-31')).length).toBe(1);
+  });
+
+  it('rolling_back + vetoed 而 transitions 为空 = 同样抛;rolling_back 非 vetoed 的空记录不产生批次(无账效果,不抛)', async () => {
+    const vetoed = fakeRecords([rec('rolling_back', { transitions: [] })]);
+    const e = await rejects(
+      createReconcileSource({ records: vetoed }).batchesThrough('2026-10-31'),
+    );
+    expect([e.code, e.detail]).toEqual(['state_invalid', 'event_time_missing']);
+    const harm = fakeRecords([
+      rec('rolling_back', {
+        transitions: [],
+        rollback: {
+          phase: 'rollback_requested',
+          reason: 'harm_c1',
+          target_terminal: 'rolled_back',
+        },
+      }),
+    ]);
+    expect(await createReconcileSource({ records: harm }).batchesThrough('2026-10-31')).toEqual([]);
+  });
+});
+
 describe('resolve(权威事件取回:每次重读,不缓存)', () => {
   it('按 idem_key 取回条目行与保护标记行;未知键 / 未知 locator 种类 = null', async () => {
     const records = fakeRecords([terminalRecord(), markedRecord()]);

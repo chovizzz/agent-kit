@@ -44,6 +44,7 @@ import type { SealRegistry } from './seal.js';
 import { compactionPortOf } from './txn.js';
 
 export interface CompactorDeps {
+  /** 注意:必须是 `createHeldStore` 造出的协调器(压缩端口经 `compactionPortOf` 取自它的事务端口);不是任意结构兼容的 `HeldStore` 都可替换——这是存储核内部装配 */
   held: HeldStore;
   registry: SealRegistry;
   /** 缺省 = 未接线(`compact_unwired`) */
@@ -217,6 +218,7 @@ export function createCompactor(deps: CompactorDeps): Compactor {
     async compact(opts = {}) {
       if (reconcile === unwiredReconcileSource) throw new StoreError('compact_unwired');
       const release = deps.registry.acquireCompactionLease();
+      if (release === 'busy') return blocked('compact_blocked', []); // 已有压缩在跑:返回值,不抛
       try {
         return await run(opts);
       } finally {

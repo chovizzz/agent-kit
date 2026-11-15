@@ -177,7 +177,16 @@ export async function productionAutoPorts(
     view: () => fixed('auto-view.json'),
     markers,
     audit: () => fixed('audit.jsonl'),
-    compaction: () => fixed('audit-compaction.json'),
+    // 压缩文件必须严格 UTF-8 解码(与存储核 `parseCompactionBytes` 同一口径):非法字节序列 = 读不出,不静默替换后放行
+    async compaction() {
+      try {
+        const b = await readFixed('audit-compaction.json');
+        if (b === null) return { kind: 'absent' };
+        return { kind: 'ok', text: new TextDecoder('utf-8', { fatal: true }).decode(b) };
+      } catch {
+        return { kind: 'unreadable' };
+      }
+    },
     async priorActivity() {
       const ledger = await fixed(CANARY_FILES.ledger);
       if (ledger.kind === 'unreadable' || (ledger.kind === 'ok' && ledger.text !== '')) return true;

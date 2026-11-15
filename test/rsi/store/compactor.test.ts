@@ -26,6 +26,7 @@ import {
   emptyLedger,
   fullOldAuditText,
   gateCommit,
+  gateFirstRead,
   makeCWorld,
   rec,
   rowOfEntry,
@@ -464,7 +465,7 @@ describe.each(KINDS)('compact_blocked 与零写入拒绝(%s)', (kind) => {
 });
 
 describe('压缩租约(P2 期间不许新开区域)', () => {
-  it('compaction_lease_blocks_region_open_during_p2:P2 的 rename 挂起时 SealGuard.open = region_open(compacting),并发第二个压缩 = compact_blocked;完成后可开', async () => {
+  it('compaction_lease_blocks_region_open_during_p2:P2 的 rename 挂起时 SealGuard.open = region_open(compacting),并发第二个压缩 = 返回 compact_blocked;完成后可开', async () => {
     const holder: { g?: ReturnType<typeof gateCommit> } = {};
     const w = await makeCWorld('mem', {
       records: [terminalRecord()],
@@ -479,11 +480,46 @@ describe('压缩租约(P2 期间不许新开区域)', () => {
     await gate.reached;
     const e = await rejects(w.s.seal.open(w.personal));
     expect([e.code, e.detail]).toEqual(['region_open', 'compacting']);
-    const e2 = await rejects(w.compactor.compact({ through: W }));
-    expect([e2.code, e2.detail]).toEqual(['compact_blocked', 'concurrent_compaction']);
+    // 并发的第二个压缩:返回 compact_blocked(返回值,不抛;同一个码不兼作异常)
+    const second = w.compactor.compact({ through: W });
+    const raced = await Promise.race([
+      second,
+      new Promise<string>((r) => setTimeout(() => r('pending'), 300)),
+    ]);
+    expect(raced).toEqual({ kind: 'compact_blocked', cause: 'compact_blocked', batches: [] });
     gate.release();
     expect(await running).toMatchObject({ kind: 'advanced' });
     const r = await w.s.seal.open(w.personal); // 租约已释放
+    expect(r.watermark).toBe(W);
+    r.close();
+  });
+
+  it('lease_epoch_open_straddling_compaction_refused:open 读到旧水位线、返回前一次完整压缩已结束并释放租约 → open 拒绝(region_open),不登记持旧 W 的区域', async () => {
+    const holder: { g?: ReturnType<typeof gateFirstRead> } = {};
+    const w = await makeCWorld('mem', {
+      records: [terminalRecord()],
+      wrap: (inner) => {
+        holder.g = gateFirstRead(inner, FILES.compaction);
+        return holder.g.fs;
+      },
+    });
+    await seedAudit(w, [obsRow(OBS_AT), RECENT]);
+    const gate = holder.g as ReturnType<typeof gateFirstRead>;
+    const opening = w.s.seal.open(w.personal).then(
+      (r) => r,
+      (e: unknown) => e,
+    );
+    await gate.reached; // open 已读到「无压缩文件」,返回被挂起
+    expect(await w.compactor.compact({ through: W })).toMatchObject({ kind: 'advanced' }); // 租约获取并释放
+    gate.release();
+    const out = await opening;
+    expect(out).toBeInstanceOf(StoreError);
+    expect([(out as StoreError).code, (out as StoreError).detail]).toEqual([
+      'region_open',
+      'compaction_during_open',
+    ]);
+    // 对照:压缩结束后重新 open 得到新 W
+    const r = await w.s.seal.open(w.personal);
     expect(r.watermark).toBe(W);
     r.close();
   });
