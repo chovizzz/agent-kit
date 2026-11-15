@@ -13,7 +13,7 @@ import { SignalSchema } from '../contracts/signal.js';
 import type { IoContext } from '../io/paths.js';
 import { exists, readDir, readLines, TOO_LONG_LINE } from '../io/read-fs.js';
 import { hasStructureFields } from '../signals/structure.js';
-import { SignalStoreError } from '../signals/state-store.js';
+import { SignalStoreError } from '../signals/store-error.js';
 import { hasInvisible } from './text.js';
 import type { LoadedSignal, LoadResult, LoadStats } from './types.js';
 
