@@ -1389,6 +1389,23 @@ export const V1_ASM_C1A_MUTATIONS: readonly V1AsmC1aMutation[] = [
     expectRed: ['fallback_reentry_from_sync_prefix_sees_pending'],
     mustKill: ['fallback_reentry_from_sync_prefix_sees_pending'],
   },
+  {
+    id: 'halt_lookup_uses_prototype',
+    clause: 'Pi3 F5 classifyHalt 只认自有属性(未知值 fail-closed)',
+    edits: [
+      swap(
+        'src/rsi/personal/stage/errors.ts',
+        "if (typeof h !== 'string' || !Object.hasOwn(HALT_CLASS, h)) {",
+        "if (typeof h !== 'string' || !(h in HALT_CLASS)) {",
+      ),
+    ],
+    tests: ['rsi/stage/c1-fallback.test.ts', 'rsi/stage/c1-judge-slot.test.ts'],
+    expectRed: [
+      'halt_proto_keys_are_unknown',
+      '原型链键经 normalize → classify 同样按「完整性不明」处理',
+    ],
+    mustKill: ['halt_proto_keys_are_unknown'],
+  },
 ];
 
 /** 由主代理整表执行变异后回填 */

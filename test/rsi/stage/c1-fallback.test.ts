@@ -108,6 +108,33 @@ describe('classifyHalt(StepHalt 的处置;lock_lost 不能默认当个人锁)', 
   });
 });
 
+describe('classifyHalt 只认自有属性(原型链键不是合法分类)', () => {
+  it('halt_proto_keys_are_unknown:toString / constructor / __proto__ / hasOwnProperty / 非字符串 → stop_step_unsettled', () => {
+    for (const h of [
+      'toString',
+      'constructor',
+      '__proto__',
+      'hasOwnProperty',
+      'valueOf',
+      '',
+      7,
+      null,
+      undefined,
+    ]) {
+      expect(classifyHalt(h as never), String(h)).toEqual({
+        kind: 'stop_step_unsettled',
+        cause: 'candidate_invalid',
+      });
+    }
+    // 正向对照:合法值仍按表走
+    expect(classifyHalt('commit_failed')).toEqual({
+      kind: 'stop_step_unsettled',
+      cause: 'commit_failed',
+    });
+    expect(classifyHalt('repo_absent')).toEqual({ kind: 'stop_step' });
+  });
+});
+
 describe('resolveLockLoss:StepHalt=lock_lost 查明是哪把锁', () => {
   const held = { assertHeld: () => Promise.resolve() };
   const lostRsi = { assertHeld: () => Promise.reject(new RsiLockError('lock_lost')) };

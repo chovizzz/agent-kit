@@ -132,9 +132,12 @@ const HALT_CLASS: Readonly<Record<StepHalt, HaltClass>> = Object.freeze({
 });
 
 export function classifyHalt(h: StepHalt): HaltClass {
-  const c = (HALT_CLASS as Readonly<Record<string, HaltClass | undefined>>)[h];
-  // 跨信任边界:未知值 = 完整性不明,按「停本步并 unsettled」处理,绝不当成可继续
-  return c ?? { kind: 'stop_step_unsettled', cause: 'candidate_invalid' };
+  // 跨信任边界:只认自有属性(`toString` / `constructor` / `__proto__` 等继承键不是合法分类);
+  // 未知值 = 完整性不明,按「停本步并 unsettled」处理,绝不当成可继续
+  if (typeof h !== 'string' || !Object.hasOwn(HALT_CLASS, h)) {
+    return { kind: 'stop_step_unsettled', cause: 'candidate_invalid' };
+  }
+  return HALT_CLASS[h];
 }
 
 export type LockLossOwner = 'rsi' | 'personal' | 'unknown';

@@ -134,6 +134,7 @@ describe('冻结的取值', () => {
       'vetoed',
       'veto_unreadable',
       'veto_not_checked',
+      'veto_check_in_flight',
     ]);
   });
 

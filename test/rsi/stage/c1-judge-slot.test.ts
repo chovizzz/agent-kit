@@ -214,5 +214,14 @@ describe('normalizeJudgeReport(run 返回值的运行期校验)', () => {
     expect(classifyHalt(lost?.halted as never).kind).toBe('lock_lost_unresolved'); // judge_returns_*_lock_lost 的分流入口,归属需 resolveLockLoss
     const weird = normalizeJudgeReport({ ...good, halted: 'brand_new' });
     expect(classifyHalt(weird?.halted as never).kind).toBe('stop_step_unsettled');
+    // 原型链键经 normalize → classify 同样按「完整性不明」处理(不是 Object.prototype 上的函数)
+    for (const k of ['toString', 'constructor', '__proto__']) {
+      const r = normalizeJudgeReport({ ...good, halted: k });
+      expect(r, k).not.toBeNull();
+      expect(classifyHalt(r?.halted as never), k).toEqual({
+        kind: 'stop_step_unsettled',
+        cause: 'candidate_invalid',
+      });
+    }
   });
 });
