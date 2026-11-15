@@ -206,7 +206,8 @@ describe('终态记录上的空操作 × 封存区间:保护写不被阻断', ()
   it('封存拒绝只对终态记录降级为 noop;非终态仍整体拒绝(不会因降级产生条目)', async () => {
     const w = world('2026-11-10', at('2026-11-10T12:00:00.000Z'), rec('canary'));
     const r = await applyEvent(w.d, rec('canary'), VETO);
-    expect(r).toMatchObject({ kind: 'halt', halt: 'sealed_interval' });
+    // `why: 'stamp'` = 在取时处就拒(非终态不降级);降级后再在提交前拒会是 'non_terminal_after_stamp'
+    expect(r).toMatchObject({ kind: 'halt', halt: 'sealed_interval', why: 'stamp' });
     expect(w.store.commits).toEqual([]);
   });
 });

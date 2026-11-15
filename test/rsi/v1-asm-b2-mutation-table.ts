@@ -2,7 +2,7 @@
  * §21 V1 装配块 B2(命令接线)必杀变异:封存挂点 / 旧→新效果适配层 / 三层结果 / CommandLocks / 锁绑定端口 / 生产装配。
  * 执行方式同 B1a:验证机私有检出里 cp 备份 → 按锚点替换(每个锚点在对应文件里恰好出现一次)→ 跑 `tests` → 失败集合非空、命中 `expectRed`、`mustKill` 每项至少命中一个、没有 skipped → cp 还原并逐文件 sha256 核对。
  * 不用 git checkout / stash 还原。本文件只写表与期望红的测试名;变异由主代理整表执行,结果记进 `V1_ASM_B2_RESULTS`(本块不执行变异,故留空)。
- * 未覆盖的点(如实记录):`rewritePersonalHead` 的 HEAD 复核与 `inspectPersonalRepo` 的只读性没有命令级用例(rebase-baseline 真 git 端到端未做),故不入表。
+ * 未覆盖的点(如实记录):`inspectPersonalRepo` 的只读性没有命令级用例,rebase-baseline 真 git 命令级端到端未做(`rewritePersonalHead` 的 HEAD 复核 / 让出点由 b-rewrite-head-order 真 git 用例钉住,写后复核由 b-rebase-recheck 钉住),故这两项不入表。
  */
 export interface Edit {
   file: string;
@@ -40,7 +40,16 @@ export const V1_ASM_B2_MUTATIONS: readonly V1AsmB2Mutation[] = [
       },
     ],
     tests: ['rsi/asm/b-stamp-apply.test.ts'],
-    expectRed: ['transition_entry_under_watermark_refused_before_commit'],
+    expectRed: [
+      '正向对照:时刻在水位线之后',
+      'create_boundary_W_vs_W_plus_1',
+      'stale_now_captured_before_lock_refused',
+      'compaction_between_stamp_and_commit_refused',
+      'protective_veto_lands_under_sealed_clock(引擎层)',
+      'noop_row_sealed_dropped_with_report',
+      '封存拒绝只对终态记录降级为 noop',
+      'transition_entry_under_watermark_refused_before_commit',
+    ],
     mustKill: ['transition_entry_under_watermark_refused_before_commit'],
   },
   {
@@ -54,7 +63,13 @@ export const V1_ASM_B2_MUTATIONS: readonly V1AsmB2Mutation[] = [
       },
     ],
     tests: ['rsi/asm/b-stamp-apply.test.ts'],
-    expectRed: ['每个分支之后区域都已关闭', '正向对照:时刻在水位线之后'],
+    expectRed: [
+      'transition_entry_under_watermark_refused_before_commit',
+      'compaction_between_stamp_and_commit_refused',
+      'protective_veto_lands_under_sealed_clock(引擎层)',
+      '每个分支之后区域都已关闭',
+      '正向对照:时刻在水位线之后',
+    ],
     mustKill: ['每个分支之后区域都已关闭'],
   },
   {
@@ -183,7 +198,11 @@ export const V1_ASM_B2_MUTATIONS: readonly V1AsmB2Mutation[] = [
       },
     ],
     tests: ['rsi/asm/b-effects-adapter.test.ts'],
-    expectRed: ['user_veto 路由'],
+    expectRed: [
+      'terminal: 键:event_at = 终态条目时间',
+      'user_veto 路由:veto: 键上单项 blacklist_veto 走 userVeto',
+      'user_veto 路由',
+    ],
     mustKill: ['user_veto 路由'],
   },
   {
@@ -213,7 +232,11 @@ export const V1_ASM_B2_MUTATIONS: readonly V1AsmB2Mutation[] = [
       },
     ],
     tests: ['rsi/asm/b-effects-adapter.test.ts'],
-    expectRed: ['toLegacyResult:映射规则逐格'],
+    expectRed: [
+      'toLegacyResult:映射规则逐格',
+      '三层信息不塌缩:收集器保留完整',
+      'toLegacyResult:映射规则逐格',
+    ],
     mustKill: ['toLegacyResult:映射规则逐格'],
   },
   {
@@ -241,7 +264,13 @@ export const V1_ASM_B2_MUTATIONS: readonly V1AsmB2Mutation[] = [
       },
     ],
     tests: ['rsi/asm/b-command-locks.test.ts'],
-    expectRed: ['rsi → personal → sync 取'],
+    expectRed: [
+      '试锁失败(',
+      'rsi_personal_sync:rsi → personal → sync 取',
+      'fn 抛错也逆序释放',
+      'fn 成功而释放失败',
+      'rsi → personal → sync 取',
+    ],
     mustKill: ['rsi → personal → sync 取'],
   },
   {
@@ -269,7 +298,14 @@ export const V1_ASM_B2_MUTATIONS: readonly V1AsmB2Mutation[] = [
       },
     ],
     tests: ['rsi/asm/b-command-locks.test.ts'],
-    expectRed: ['rsi → personal → sync 取'],
+    expectRed: [
+      '试锁失败(',
+      'rsi_personal_sync:rsi → personal → sync 取',
+      'personal_sync(缩减入口)不取 rsi',
+      'fn 抛错也逆序释放',
+      'fn 成功而释放失败',
+      'rsi → personal → sync 取',
+    ],
     mustKill: ['rsi → personal → sync 取'],
   },
   {
@@ -339,7 +375,12 @@ export const V1_ASM_B2_MUTATIONS: readonly V1AsmB2Mutation[] = [
       },
     ],
     tests: ['rsi/asm/b-commands-real.test.ts'],
-    expectRed: ['veto_routed_to_new_sink'],
+    expectRed: [
+      'shadow 候选:记录 rejected、黑名单经新端口落账',
+      'protective_veto_lands_under_sealed_clock:取时落在水位线之内',
+      'veto_routed_to_new_sink',
+      'veto_routed_to_new_sink',
+    ],
     mustKill: ['veto_routed_to_new_sink'],
   },
   {
@@ -383,6 +424,101 @@ export const V1_ASM_B2_MUTATIONS: readonly V1AsmB2Mutation[] = [
     tests: ['rsi/asm/b-inert.test.ts'],
     expectRed: ['inert_at_phase0_'],
     mustKill: ['inert_at_phase0_'],
+  },
+  {
+    id: 'veto_noop_ensure_removed',
+    clause:
+      '评审 R1 ①:终态重复 veto(引擎 noop + 空 effects)由命令补调用户否决端口,lift 之后再 veto 重新生效',
+    edits: [
+      {
+        file: 'src/rsi/auto/write/veto.ts',
+        anchor: 'const extra = await guard.ensure();',
+        replacement: 'const extra = null as KeyedEffectResult | null;',
+      },
+    ],
+    tests: ['rsi/asm/b-veto-relanding.test.ts', 'rsi/asm/b-commands-real.test.ts'],
+    expectRed: [
+      'veto → lift → veto:黑名单重新生效',
+      '对照:连续两次 veto(中间没有 lift)',
+      '第三次 veto:黑名单项不再是 lifted',
+    ],
+    mustKill: ['veto → lift → veto:黑名单重新生效', '第三次 veto:黑名单项不再是 lifted'],
+  },
+  {
+    id: 'veto_rollback_ensure_removed',
+    clause: '评审 R1 ①:回滚路径(在途回滚的重复 veto 事件)同样补调用户否决端口',
+    edits: [
+      {
+        file: 'src/rsi/auto/write/veto.ts',
+        anchor: "if (out.status !== 'refused') await guard.ensure();",
+        replacement: 'void 0;',
+      },
+    ],
+    tests: ['rsi/asm/b-veto-relanding.test.ts'],
+    expectRed: ['回滚路径:在途回滚'],
+    mustKill: ['回滚路径:在途回滚'],
+  },
+  {
+    id: 'rebase_post_write_check_removed',
+    clause:
+      '评审 R1 ②:head.json 写后、清暂停标志前复核情形;非 ok 保持暂停、不报完成(退 1 RSI_CONFIRM_STALE)',
+    edits: [
+      {
+        file: 'src/rsi/auto/write/rebase.ts',
+        anchor: "if ((await rb.classify()).kind !== 'ok') {",
+        replacement: 'if (false as boolean) {',
+      },
+    ],
+    tests: ['rsi/asm/b-rebase-recheck.test.ts'],
+    expectRed: ['baseline:写入之后 HEAD 又变', 'owner(--adopt-owner):写入之后仓库前提不成立'],
+    mustKill: ['baseline:写入之后 HEAD 又变', 'owner(--adopt-owner):写入之后仓库前提不成立'],
+  },
+  {
+    id: 'rewrite_head_check_removed',
+    clause: '评审 R1 ②:rewritePersonalHead 复核时 HEAD 已变 → 抛 head_changed、head.json 不动',
+    edits: [
+      {
+        file: 'src/rsi/personal/commit.ts',
+        anchor:
+          "if (revParse(git, 'HEAD^{commit}') !== expectHead) throw new Error('head_changed');",
+        replacement: 'void 0;',
+      },
+    ],
+    tests: ['rsi/asm/b-rewrite-head-order.test.ts'],
+    expectRed: ['rewrite_head_recheck_after_lock_await'],
+    mustKill: ['rewrite_head_recheck_after_lock_await'],
+  },
+  {
+    id: 'rewrite_head_yield_before_write',
+    clause:
+      '评审 R1 ②:最后一次 HEAD 复核与 head.json 写入之间没有让出点(旧实现的复核后还 await 一次锁复核)',
+    edits: [
+      {
+        file: 'src/rsi/personal/commit.ts',
+        anchor: "head: kind === 'baseline' ? expectHead : hd.value.head,",
+        replacement:
+          "head: (await assertLockHandles(locks), kind === 'baseline' ? expectHead : hd.value.head),",
+      },
+    ],
+    tests: ['rsi/asm/b-rewrite-head-order.test.ts'],
+    expectRed: ['rewrite_head_no_yield_between_check_and_write'],
+    mustKill: ['rewrite_head_no_yield_between_check_and_write'],
+  },
+  {
+    id: 'holds_repo_invalid_folds_absent',
+    clause: '评审 R1 ③:HoldFacts 只有 invalid 才算 personal_repo_invalid;从未建仓(absent)不成立',
+    edits: [
+      {
+        file: 'src/rsi/assemble-write.ts',
+        anchor:
+          "repoInvalid: async () => (await inspectPersonalRepo(repoDeps)).kind === 'invalid',",
+        replacement:
+          "repoInvalid: async () => (await inspectPersonalRepo(repoDeps)).kind !== 'ok',",
+      },
+    ],
+    tests: ['rsi/asm/b-commands-real.test.ts'],
+    expectRed: ['从未建仓 → 快照不含 personal_repo_invalid'],
+    mustKill: ['从未建仓 → 快照不含 personal_repo_invalid'],
   },
 ];
 

@@ -7,6 +7,9 @@
  *   - `proposed` / `shadow`:引擎 `veto` 事件直接 → `rejected`(`vetoed`),终态批次 E2 经 {@link landTerminalEffects} 整批落地(与回滚执行器收尾同一函数);
  *   - 已部署 / `rolling_back` / `retiring`:`startRollback(kind=rollback, reason=vetoed, by=veto, target=rolled_back, event=veto)`;`lateEventNotApplied` 按 W7 约定**重试一次**,仍未落 → 退 1 并写明;
  *   - `blocked` 等引擎不接受 veto 的状态:引擎拒绝 → 退 3 `candidate_invalid`(不绕过引擎)。
+ * **用户否决意图独立保证**(`veto → lift → veto` 不得静默失效):引擎对已有事件的 `idem_key` 返回 `noop`(`duplicate_idem_key`)且空 effects,E1 不会产出,
+ * 命令层不能指望引擎一定给出黑名单 effect。所以凡命令成功走完而**本次没有调到 `veto:<id>:<sha>` 键**(终态 noop / 复用在途事务而较晚事件重复),命令自己补调一次
+ * (经带键端口,生产装配里路由到 `userVeto.veto`,覆盖 lifted),结果并入三层 / deferred 判定。不改全局事件幂等规则。
  * `--lift`:只解除指纹黑名单(`VetoLift` 端口),候选记录不动、仍是终态。
  * 持锁后候选消失(锁外读到过):退 3 `candidate_invalid`(不判 `unknown_id`:它在锁外已经存在过,消失说明并发写入 / 记录异常)。
  */
@@ -37,6 +40,41 @@ import {
   type WritePorts,
   type WritePortsGetter,
 } from './ports.js';
+
+type VetoDeps = ReturnType<NonNullable<WritePorts['rollbackDeps']>>;
+
+/** 本次命令内是否已经调过 `veto:<id>:<sha>` 键(成功返回才算);没调过则 {@link UserVetoGuard.ensure} 补调。包一层带键端口,不改引擎 / 执行器 */
+interface UserVetoGuard {
+  d: VetoDeps;
+  ensure: () => Promise<KeyedEffectResult | null>;
+}
+
+function guardUserVeto(
+  d0: VetoDeps,
+  rec: Pick<PersonalLifecycleRecord, 'id' | 'content_sha256'>,
+): UserVetoGuard {
+  const key = vetoEffectKey(rec);
+  let called = false;
+  const d: VetoDeps = {
+    ...d0,
+    keyedEffects: {
+      applyOnce: async (k, effects) => {
+        const r = await d0.keyedEffects.applyOnce(k, effects);
+        if (k === key) called = true;
+        return r;
+      },
+    },
+  };
+  return {
+    d,
+    ensure: async () =>
+      called
+        ? null
+        : d.keyedEffects.applyOnce(key, [
+            { type: 'blacklist_veto', id: rec.id, content_sha256: rec.content_sha256 },
+          ]),
+  };
+}
 
 type Args = { ok: true; id: string; lift: boolean } | { ok: false; reason: string };
 
@@ -99,12 +137,14 @@ export async function runVeto(
   const locks = p.locks as NonNullable<WritePorts['locks']>;
   const rollbackDeps = p.rollbackDeps as NonNullable<WritePorts['rollbackDeps']>;
   const code = await locks.withLocks('rsi_personal_sync', async (held) => {
-    const d = rollbackDeps(held);
+    const d0 = rollbackDeps(held);
     // 持锁后重读再判:锁外那次读不作数
-    const cur = await d.store.read(a.id);
+    const cur = await d0.store.read(a.id);
     if (cur.kind === 'missing') return failClosed(ctx, 'candidate_invalid');
     if (cur.kind !== 'ok') return failClosed(ctx, 'personal_repo_invalid');
     const rec = cur.record;
+    const guard = guardUserVeto(d0, rec);
+    const d = guard.d;
 
     if (a.lift) {
       const lifted = await (p.vetoLift as NonNullable<WritePorts['vetoLift']>).lift(
@@ -116,7 +156,7 @@ export async function runVeto(
 
     const event: TransitionEvent = { kind: 'veto', evidence: RSI_VETO_EVIDENCE };
     if (isTerminalLifecycle(rec.lifecycle) || DIRECT.has(rec.lifecycle)) {
-      return directVeto(ctx, p, d, rec, event);
+      return directVeto(ctx, p, guard, rec, event);
     }
     const req: RollbackRequest = {
       candidate_id: rec.id,
@@ -136,10 +176,12 @@ export async function runVeto(
         // 事务已走完(journal 已删):记录已按原理由进终态,重走 startRollback 只会新开一个空事务并静默丢掉 veto → 改走终态 veto(只落黑名单 E1)
         const again = await d.store.read(a.id);
         if (again.kind !== 'ok') return failClosed(ctx, 'personal_repo_invalid');
-        return directVeto(ctx, p, d, again.record, event);
+        return directVeto(ctx, p, guard, again.record, event);
       }
       out = await startRollback(d, req);
     }
+    // 复用在途事务而较晚的 veto 事件早已持久化(重复事件 = 空 effects)时,E1 不会再出现:用户这次显式的否决由命令自己保证(lift 之后再 veto 必须重新生效)
+    if (out.status !== 'refused') await guard.ensure();
     const late = out.status !== 'refused' ? out.lateEventNotApplied : undefined;
     return emitOutcomes(
       ctx,
@@ -189,10 +231,11 @@ async function failedVeto(ctx: RsiEarlyContext, p: WritePorts, id: string): Prom
 async function directVeto(
   ctx: RsiEarlyContext,
   p: WritePorts,
-  d: ReturnType<NonNullable<WritePorts['rollbackDeps']>>,
+  guard: UserVetoGuard,
   rec: PersonalLifecycleRecord,
   event: TransitionEvent,
 ): Promise<number> {
+  const d = guard.d;
   const landed: KeyedEffectResult[] = [];
   const ad: ApplyDeps = {
     store: d.store,
@@ -231,6 +274,11 @@ async function directVeto(
       await say(ctx, p, [`veto: id=${rec.id} 已提交,效果落地失败(重跑 rsi veto 补做)`]);
       return applyLayers(ctx, p, failClosed(ctx, 'internal'));
     }
+  }
+  // 终态上的空操作若是重复事件(`duplicate_idem_key`),引擎不产出 E1:命令补调(用户显式否决;lift 之后再 veto 靠它重新生效),结果并入 deferred / 三层判定
+  if (r.kind === 'noop') {
+    const extra = await guard.ensure();
+    if (extra !== null) landed.push(extra);
   }
   // 终态记录上的空操作 veto:没有提交任何新事实,E1 黑名单一旦 deferred,恢复扫描(只扫 `rolling_back ∧ reason=vetoed`)推不出这次否决 →
   // 不得退 0 宣告成功;退 1(可重跑的未完成)。重跑时黑名单按 `(id, sha)` 集合插入,幂等

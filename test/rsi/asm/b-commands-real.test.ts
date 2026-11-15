@@ -9,13 +9,14 @@ import { describe, expect, it } from 'vitest';
 import type { PersonalLifecycleRecord } from '../../../src/contracts/rsi-personal.js';
 import { canonicalJson } from '../../../src/io/canonical-json.js';
 import { existsSync, readText, realpath } from '../../../src/io/read-fs.js';
-import { createExclusive, mkdirp } from '../../../src/io/safe-fs.js';
+import { createExclusive, mkdirp, writeFile } from '../../../src/io/safe-fs.js';
 import { assembleWriteAdapters } from '../../../src/rsi/assemble-write.js';
 import { runAutoFamily } from '../../../src/rsi/auto/entry.js';
 import { makeWriteHandlers } from '../../../src/rsi/auto/write/index.js';
 import type { WritePorts } from '../../../src/rsi/auto/write/ports.js';
 import { personalRepoStore } from '../../../src/rsi/personal/candidate-repo.js';
 import { commitPersonal, openPersonalRepo } from '../../../src/rsi/personal/commit.js';
+import { PERSONAL_STATE_FILES, statePath } from '../../../src/rsi/personal/home-state.js';
 import type { RsiEarlyContext } from '../../../src/rsi/types.js';
 import { ID, SHA, rec } from '../personal/transition-fixture.js';
 import {
@@ -190,6 +191,11 @@ describe('veto 命令级(真 git + 假 HOME + 真存储核)', () => {
     expect(r.err).toContain('RSI_FAIL_CLOSED reason=personal_repo_invalid');
     expect(git(w, ['rev-parse', 'HEAD'])).toBe(head);
     expect(existsSync(path.join(await rsiDirOf(w), 'effects.json'))).toBe(false);
+    // 未装配 = 读端口恒 not_wired → 汇总为 personal_repo_invalid;若被装配成 git 读(或抛错)原因会是别的(例如 'unreadable')
+    expect(await a.ports.peekRecords?.()).toEqual({
+      kind: 'invalid',
+      why: 'personal_repo_invalid',
+    });
   });
 });
 
@@ -271,5 +277,62 @@ describe('锁绑定端口与路由', () => {
       await expect(a2.ports.marks?.bump()).rejects.toMatchObject({ reason: 'state_invalid' });
       expect(await readText(f)).toBe('{"schema_version":1,"gen":-1}');
     });
+  });
+});
+
+describe('veto → lift → veto 重新生效(真存储核;评审第 1 轮 ①)', () => {
+  type Item = { candidate_id: string; vetoed_gen: number; lifted_gen?: number };
+  const itemsOf = async (w: World): Promise<Item[]> =>
+    (
+      JSON.parse(await readText(path.join(await rsiDirOf(w), 'effects.json'))) as {
+        blacklist: Item[];
+      }
+    ).blacklist;
+
+  it('第三次 veto:黑名单项不再是 lifted(vetoed_gen 前进),输出 effects=applied;对照:连续两次 veto 第二次是 already 且账不变', async () => {
+    const w = await makeWorld('b2-relift-');
+    await seed(w, rec('shadow'));
+    const a = await adaptersOf(w, () => CLOCK);
+    const ports = portsOf(w, a, true);
+    expect((await run('veto', [ID], ports)).code).toBe(0);
+    const [first] = await itemsOf(w);
+    expect(first?.lifted_gen).toBeUndefined();
+
+    const dup = await run('veto', [ID], ports);
+    expect(dup.code, dup.err).toBe(0);
+    expect(dup.out).toContain('result=blacklist_only effects=already');
+    expect(await itemsOf(w)).toEqual([first]);
+
+    expect((await run('veto', ['--lift', ID], ports)).code).toBe(0);
+    expect((await itemsOf(w))[0]?.lifted_gen).toBeDefined();
+
+    const third = await run('veto', [ID], ports);
+    expect(third.code, third.err).toBe(0);
+    expect(third.out).toContain('result=blacklist_only effects=applied');
+    const [last] = await itemsOf(w);
+    expect(last?.lifted_gen).toBeUndefined();
+    expect(last?.vetoed_gen).toBeGreaterThan(first?.vetoed_gen ?? Number.POSITIVE_INFINITY);
+  });
+});
+
+describe('HoldFacts 装配级(评审第 1 轮 ③):absent 与 invalid 分开', () => {
+  it('从未建仓 → 快照不含 personal_repo_invalid;对照:head.json 损坏 → 含', async () => {
+    const w = await makeWorld('b2-holds-absent-');
+    const a = await adaptersOf(w, () => CLOCK);
+    const absent = await a.ports.holds?.snapshot();
+    expect(absent?.has('personal_repo_invalid')).toBe(false);
+    // 没有数据源的三类仍恒成立(已定口径,不因仓库状态改变)
+    expect([...(absent ?? [])].sort()).toEqual([
+      'apply_failed',
+      'budget_high_legacy',
+      'gate_internal',
+    ]);
+
+    const w2 = await makeWorld('b2-holds-bad-');
+    await seed(w2, rec('shadow'));
+    const a2 = await adaptersOf(w2, () => CLOCK);
+    expect((await a2.ports.holds?.snapshot())?.has('personal_repo_invalid')).toBe(false); // 合法仓库对照
+    await writeFile(w2.io, statePath(w2.h, PERSONAL_STATE_FILES.head), 'not json');
+    expect((await a2.ports.holds?.snapshot())?.has('personal_repo_invalid')).toBe(true);
   });
 });
