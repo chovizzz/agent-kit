@@ -13,6 +13,7 @@ import {
   SessionRefIdSchema,
   Sha256Schema,
 } from './common.js';
+import { JudgeSeenSchema } from './judge-signal.js';
 import {
   RSI_AUDIT_KINDS,
   RSI_BOOTSTRAP_PHASES,
@@ -467,6 +468,8 @@ export const CandidateWorkingCopySchema = z.strictObject({
     bytes_injected: NonNegInt,
   }),
   repo_removal_deferred: z.boolean(),
+  /** W0-27(订正 R21-3.8):上一次已写审计的判官裁决评估结果;可选,缺失 = 从未评估;工作副本可重建,丢了只多一行基线;永不参与安全判定 */
+  judge_seen: JudgeSeenSchema.optional(),
 });
 export type CandidateWorkingCopy = z.infer<typeof CandidateWorkingCopySchema>;
 

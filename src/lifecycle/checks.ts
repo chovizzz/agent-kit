@@ -8,7 +8,6 @@
  * 保守取向:拿不准的一律按不通过;检查自身抛异常也按不通过(`CHECK_INTERNAL_ERROR`)。
  * 语义上刻意不给覆盖参数:C3 没有「放宽某字段」的入口;晋升用的是另一个名字清楚的 `checkC3Governance`。
  */
-import { createHash } from 'node:crypto';
 import { addDays } from '../atoms/dates.js';
 import type { Atom } from '../contracts/atom.js';
 import { RunIdSchema } from '../contracts/common.js';
@@ -16,13 +15,13 @@ import type { JudgeRecord, Proposal } from '../contracts/proposal.js';
 import type { Redactor } from '../contracts/redact.js';
 import { vendorEvidence } from '../contracts/vendor.js';
 import { isUnsafePath } from '../guards/paths.js';
-import { canonicalText } from '../io/canonical-text.js';
 import { findDuplicate, type DedupeTarget, type DedupeThresholds } from '../reflect/dedupe.js';
 import { REVIEW_DAYS_STABLE, REVIEW_DAYS_VOLATILE } from '../reflect/merge.js';
 import { patchUnsafe, SAFE_PATH_RE } from '../reflect/stage.js';
 import { hasInvisible } from '../reflect/text.js';
 import { scanDangerousPhrases } from '../reflect/validate.js';
 import { findInvisibleRanges } from './invisible.js';
+import { RuleHashError, ruleSha256 } from './rule-hash.js';
 
 export const CHECK_CODES = ['C1', 'C1b', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9'] as const;
 export type CheckCode = (typeof CHECK_CODES)[number];
@@ -503,51 +502,7 @@ export function checkC5(input: C5Input): CheckResult {
 
 // ---------------------------------------------------------------- C6
 
-export class RuleHashError extends Error {
-  readonly code = 'RULE_TEXT_UNHASHABLE';
-}
-
-const NORMALIZED = '__NORMALIZED__';
-/**
- * 顶层 `status:` / `review_by:` 行:只把**值**换成占位符,值后面的内容(行尾注释等)原样保留并参与哈希,
- * 所以评审后往这两行追加注释不会让哈希不变。值只接受简单标量(字母数字、`-`、`_`、`.`,可带引号);
- * 块标量(`|` `>`)、流式写法、带引号的键等一律不匹配 → 计数不是恰好一行 → 抛 `RuleHashError`(fail-closed)。
- */
-const SCALAR_LINE_RE = /^((?:status|review_by))(\s*:\s*)(['"]?[A-Za-z0-9._-]+['"]?)((?:\s.*)?)$/;
-
-/**
- * 规则文本哈希(C6,供 L3/L4 复用):把 frontmatter 顶层的 `status:` 与 `review_by:` 两行的值归一化后,
- * 对 `canonicalText(全文)` 取 sha256(hex)。否则晋升 PR 改这两行就会改哈希。
- * 这里的哈希**不等于** `Atom.sha256`(那是未归一化的整文件哈希),也不是契约注释里的「渲染内容哈希」(未核实,见汇报)。
- * frontmatter 缺失,或 `status` / `review_by` 不是恰好各出现一次 → 抛 `RuleHashError`(不猜)。
- */
-export function ruleSha256(atomText: string): string {
-  const lf = atomText.replace(/^﻿/, '').replace(/\r\n?/g, '\n');
-  const lines = lf.split('\n');
-  if (lines[0] !== '---') throw new RuleHashError('RULE_TEXT_UNHASHABLE: 缺 frontmatter');
-  const end = lines.indexOf('---', 1);
-  if (end < 0) throw new RuleHashError('RULE_TEXT_UNHASHABLE: frontmatter 未闭合');
-  let status = 0;
-  let review = 0;
-  for (let i = 1; i < end; i++) {
-    const line = lines[i] as string;
-    const sm = SCALAR_LINE_RE.exec(line);
-    if (sm === null) continue;
-    if (sm[1] === 'status') {
-      lines[i] = `${sm[1]}${sm[2]}${NORMALIZED}${sm[4]}`;
-      status++;
-    } else if (sm[1] === 'review_by') {
-      lines[i] = `${sm[1]}${sm[2]}${NORMALIZED}${sm[4]}`;
-      review++;
-    }
-  }
-  if (status !== 1 || review !== 1) {
-    throw new RuleHashError('RULE_TEXT_UNHASHABLE: status/review_by 不是恰好各一行');
-  }
-  return createHash('sha256')
-    .update(canonicalText(lines.join('\n')), 'utf8')
-    .digest('hex');
-}
+export { RuleHashError, ruleSha256 };
 
 export interface C6Input {
   judge: JudgeRecord | undefined;
