@@ -392,19 +392,21 @@ describe('D4 view 构造:出口校验(不合 schema 不产出)', () => {
 });
 
 describe('D4 view 构造:历史不可见时拒绝重建(不把「看不见」写成确定的 0 / null)', () => {
-  it('任一记录 transitions_dropped > 0 → history_incomplete(含非终态记录);对照:dropped = 0 时产出确定计数', () => {
+  it('transitions_dropped > 0 本身不拒绝重建(终态进入转移是最后追加的条目,截不掉):终态 / 非终态记录照常产出确定计数;对照:截断且进入转移缺失 → history_incomplete', () => {
     const t = terminal(1, 'expired', '2026-11-10T00:00:00Z');
     expect(ok(snap({ records: [t] })).pipeline.last30d.expired).toBe(1);
-    expect(why(snap({ records: [{ ...t, transitions_dropped: 2 }] }))).toBe('history_incomplete');
-    // 被截掉的历史里可能有近 30 日的终态转移:非终态记录(shadow)上有截断同样无法证明
-    expect(why(snap({ records: [rec(2, 'shadow', { transitions_dropped: 1 })] }))).toBe(
-      'history_incomplete',
+    expect(ok(snap({ records: [{ ...t, transitions_dropped: 2 }] })).pipeline.last30d.expired).toBe(
+      1,
     );
-    expect(why(snap({ records: [rec(2, 'shadow', { transitions_dropped: 0 })] }))).toBeNull();
-    // 其它记录再正常,也不能掩盖那一条
+    // 非终态记录上有截断:不可能藏着终态转移,不冻结全局视图
+    expect(why(snap({ records: [rec(2, 'shadow', { transitions_dropped: 1 })] }))).toBeNull();
     expect(
       why(snap({ records: [rec(3, 'proposed'), { ...t, id: cid(4), transitions_dropped: 1 }] })),
-    ).toBe('history_incomplete');
+    ).toBeNull();
+    // 对照:同一条终态记录,进入转移真的不在了 → 拒绝(拒绝理由是缺转移,不是截断计数)
+    expect(why(snap({ records: [{ ...t, transitions: [], transitions_dropped: 2 }] }))).toBe(
+      'history_incomplete',
+    );
   });
 
   it('终态记录里找不到进入该终态的 lifecycle 转移 → history_incomplete(last_rollback 不能写成 null);对照:补上转移即可产出', () => {

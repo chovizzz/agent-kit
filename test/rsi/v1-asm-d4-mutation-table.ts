@@ -137,7 +137,7 @@ const RED_BY_TEST: Readonly<Record<string, readonly string[]>> = {
     'rename 失败(目标位置是非空目录)→ write_failed;临时文件被清掉,旧内容(目录)原样不动,不抛错',
     '视图对象本身读取即抛错(奇异对象)→ invalid_view,不外抛,零写入',
     '视图不合 schema(跨信任边界再校验)→ invalid_view,零写入;对照:同一端口写合法视图成功',
-    '任一记录 transitions_dropped > 0 → history_incomplete',
+    'transitions_dropped > 0 本身不拒绝重建',
     '终态记录里找不到进入该终态的 lifecycle 转移 → history_incomplete',
     '同一 id 的两条记录(非 canary、终态均可)→ input_invalid',
     '违规视图报 invalid_view(不是 write_failed)',
@@ -834,11 +834,17 @@ export const V1_ASM_D4_MUTATIONS: readonly V1AsmD4Mutation[] = [
     ['适配器覆盖迭代器 / size 的 Set 子类', '非原生 Set(Proxy / 鸭子类型 / 数组)→ invalid_result'],
   ),
   m(
-    'vb_dropped_ignored',
-    'M3:transitions_dropped > 0 → 拒绝重建(不把看不见的历史写成确定的 0 / null)',
-    [swap(VB, 'if (rec.transitions_dropped > 0) historyIncomplete = true;', 'void 0;')],
+    'vb_dropped_rejects',
+    'M3(收窄):transitions_dropped > 0 本身不是拒绝理由(否则一条截断过的记录长期冻结整个视图)',
+    [
+      swap(
+        VB,
+        'let historyIncomplete = false;',
+        'let historyIncomplete = s.records.some((r) => r.transitions_dropped > 0);',
+      ),
+    ],
     [T_VIEW],
-    ['任一记录 transitions_dropped > 0 → history_incomplete'],
+    ['transitions_dropped > 0 本身不拒绝重建'],
   ),
   m(
     'vb_terminal_entry_unchecked',
@@ -865,7 +871,7 @@ export const V1_ASM_D4_MUTATIONS: readonly V1AsmD4Mutation[] = [
     ],
     [T_VIEW],
     [
-      '任一记录 transitions_dropped > 0 → history_incomplete',
+      'transitions_dropped > 0 本身不拒绝重建',
       '终态记录里找不到进入该终态的 lifecycle 转移 → history_incomplete',
     ],
   ),
