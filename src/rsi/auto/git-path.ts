@@ -37,7 +37,7 @@ const defaultProbe: GitPathProbe = {
 /**
  * 单个候选 → **规范路径**(`realpath`)或 `null`。检查对象是规范路径指向的文件(不是候选名这个可被替换的入口),返回的也是规范路径:
  * 普通文件、至少一个可执行位、不可被组 / 其他人写、属主是 root 或当前用户、文件名仍是 `git`;
- * 并且**父目录**(规范路径的 dirname)是目录、不可被组 / 其他人写、属主是 root 或当前用户(父目录可写 = 目录项可被替换,文件自身权限再严也无意义)。
+ * 并且规范路径的**每一级祖先目录**(从直接父目录到根)都是目录、不可被组 / 其他人写、属主是 root 或当前用户(任何一级可写 = 它下面的目录项可被替换,文件自身权限再严也无意义)。
  * 残余(不消除 TOCTOU):本函数只给出「探测那一刻」的结论;返回规范路径只缩小竞态窗口。**执行侧每次调用前仍须自检**(重新核对路径元数据),不得把这次结果当作永久可信。
  */
 export async function canonicalGit(candidate: string, probe: GitPathProbe): Promise<string | null> {
@@ -51,8 +51,12 @@ export async function canonicalGit(candidate: string, probe: GitPathProbe): Prom
     if (!st.isFile) return null;
     if ((st.mode & 0o111) === 0) return null;
     if (!trusted(st)) return null;
-    const dir = await probe.stat(path.dirname(real));
-    if (!dir.isDirectory || !trusted(dir)) return null;
+    // 整条信任链:从直接父目录一路到根,每一级都得是目录、不可被组 / 其他人写、属主可信——任何一级可写,它下面的目录项都能被替换。
+    for (let dir = path.dirname(real); ; dir = path.dirname(dir)) {
+      const st = await probe.stat(dir);
+      if (!st.isDirectory || !trusted(st)) return null;
+      if (dir === path.dirname(dir)) break;
+    }
     return real;
   } catch {
     return null;

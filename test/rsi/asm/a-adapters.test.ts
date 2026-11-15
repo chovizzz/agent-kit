@@ -266,6 +266,37 @@ describe('B 标记读:句柄级安全读取(检查与读取之间被替换不能
     expect(gone).toBeNull();
   });
 
+  it('打开之后、fstat 之前被新标记替换(旧 inode 失链)→ 重读到新标记,不是 null;一直在被替换 → 抛错(replaced);不替换的对照读到原标记', async () => {
+    const replace = async (w: { io: Parameters<typeof safe.remove>[0] }, file: string) => {
+      await safe.remove(w.io, file);
+      await safe.writeFile(w.io, file, BODY, { mode: 0o600 });
+    };
+    const a = await markerWorld('asm-a-marker-unlinked-once-');
+    let n = 0;
+    const once = await makeBreakerMarkerReader(a.w.rsi, {
+      afterOpen: async () => {
+        if (n++ === 0) await replace(a.w, a.file);
+      },
+    }).read();
+    expect(n).toBe(2); // 第一次读到失链的旧 inode,重读一次拿到新标记
+    expect(once).toEqual({ by: 'user', reason: null, at: null, id: null });
+    const b = await markerWorld('asm-a-marker-unlinked-always-');
+    let m = 0;
+    const always = makeBreakerMarkerReader(b.w.rsi, {
+      afterOpen: async () => {
+        m += 1;
+        await replace(b.w, b.file);
+      },
+    });
+    await expect(always.read()).rejects.toThrow(/not safely readable \(replaced\)/);
+    expect(m).toBe(3); // 首读 + 2 次重读,有界
+    const c = await markerWorld('asm-a-marker-unlinked-ctl-');
+    let k = 0;
+    const ctl = await makeBreakerMarkerReader(c.w.rsi, { afterOpen: () => void k++ }).read();
+    expect(k).toBe(1);
+    expect(ctl).toEqual({ by: 'user', reason: null, at: null, id: null });
+  });
+
   it('检查之后、打开之前被换成悬空符号链接 → 抛错,不是 null(变异:按路径 lstat 后再读 → 红)', async () => {
     const { w, file } = await markerWorld('asm-a-marker-race-dl-');
     const reader = makeBreakerMarkerReader(w.rsi, {

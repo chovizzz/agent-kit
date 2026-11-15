@@ -14,7 +14,18 @@ import {
 const ME = 501;
 const good = { isFile: true, isDirectory: false, mode: 0o100755, uid: 0 };
 const goodDir = { isFile: false, isDirectory: true, mode: 0o040755, uid: 0 };
-const DIRS = ['/usr/bin', '/opt/homebrew/bin', '/usr/local/bin', '/opt/x', '/opt/real'];
+const DIRS = [
+  '/',
+  '/usr',
+  '/opt',
+  '/opt/homebrew',
+  '/usr/local',
+  '/usr/bin',
+  '/opt/homebrew/bin',
+  '/usr/local/bin',
+  '/opt/x',
+  '/opt/real',
+];
 
 function probeOf(
   table: Record<string, Partial<typeof good> | 'throw'>,
@@ -27,7 +38,7 @@ function probeOf(
     stats,
     async stat(p) {
       stats.push(p);
-      if (DIRS.includes(p)) return { ...goodDir, ...dirs[p] };
+      if (DIRS.includes(p) || dirs[p] !== undefined) return { ...goodDir, ...dirs[p] };
       const t = table[p];
       if (t === undefined || t === 'throw') throw Object.assign(new Error('x'), { code: 'ENOENT' });
       return { ...good, ...t };
@@ -93,6 +104,37 @@ describe('resolveGitPath', () => {
     expect(await canonicalGit(c, bad)).toBeNull();
     // 无链接的对照:返回值就是候选本身
     expect(await canonicalGit(c, probeOf({ [c]: {} }))).toBe(c);
+  });
+
+  it('祖先目录(不只直接父目录)可被组 / 其他人写或属主不可信 → 拒绝;Cellar 形状的链接路径整条链合规时被接受并返回规范路径', async () => {
+    const c = '/opt/homebrew/bin/git';
+    const real = '/opt/homebrew/Cellar/git/2.47.0/bin/git';
+    const chain = {
+      '/opt/homebrew': { uid: ME },
+      '/opt/homebrew/Cellar': { uid: ME },
+      '/opt/homebrew/Cellar/git': { uid: ME },
+      '/opt/homebrew/Cellar/git/2.47.0': { uid: ME },
+      '/opt/homebrew/Cellar/git/2.47.0/bin': { uid: ME },
+    };
+    const ok = probeOf({ [real]: { uid: ME } }, { [c]: real }, chain);
+    expect(await canonicalGit(c, ok)).toBe(real);
+    // 整条链都被查到(直接父目录一路到根)
+    expect(ok.stats).toEqual(
+      expect.arrayContaining(['/opt/homebrew/Cellar/git/2.47.0', '/opt', '/']),
+    );
+    for (const [why, at, over] of [
+      ['版本目录组可写', '/opt/homebrew/Cellar/git/2.47.0', { uid: ME, mode: 0o040775 }],
+      ['Cellar 属主是别人', '/opt/homebrew/Cellar', { uid: 7777 }],
+      ['上级不是目录', '/opt/homebrew/Cellar/git', { uid: ME, isDirectory: false }],
+      ['根下一级其他人可写', '/opt', { mode: 0o040777 }],
+    ] as const) {
+      const bad = probeOf({ [real]: { uid: ME } }, { [c]: real }, { ...chain, [at]: over });
+      expect(await canonicalGit(c, bad), why).toBeNull();
+    }
+    // root 属主的 /usr/bin 不因此被误拒(对照)
+    expect(await canonicalGit('/usr/bin/git', probeOf({ '/usr/bin/git': {} }))).toBe(
+      '/usr/bin/git',
+    );
   });
 
   it('父目录可被组 / 其他人写、属主不可信、不是目录 → 拒绝;文件自身合规的对照被接受(变异:去掉父目录检查 → 红)', async () => {

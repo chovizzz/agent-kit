@@ -6,6 +6,7 @@
 import * as path from 'node:path';
 import { RSI_AUTO_PAUSE_REASONS, type RsiAutoPauseReason } from '../../contracts/rsi.js';
 import { readFileSafe } from '../../io/read-fs.js';
+import type { SafeReadResult } from '../../io/read-fs.js';
 import type { BreakerMarkerPort, PauseMarker } from '../personal/breaker.js';
 import { RSI_FILE_OWNER } from '../lock-read.js';
 import { CANARY_FILES } from './files.js';
@@ -51,6 +52,8 @@ export class MarkerUnsafeError extends Error {
 
 /** 标记正文的读取上限(合法内容只有几十字节;远大于它即不可信) */
 const MARKER_MAX_BYTES = 64 * 1024;
+/** 打开后发现旧 inode 已失链(标记被替换)时最多重读几次;仍在被替换 → 抛错 */
+const MARKER_REREADS = 2;
 
 /**
  * 只读的 B 标记端口(类型上只有 `read`;命令侧 `WritePorts.breaker` 与 worker 只读判定共用)。
@@ -62,7 +65,10 @@ const MARKER_MAX_BYTES = 64 * 1024;
  */
 export function makeBreakerMarkerReader(
   rsiDir: string,
-  seam: { beforeOpen?: () => Promise<void> | void } = {},
+  seam: {
+    beforeOpen?: () => Promise<void> | void;
+    afterOpen?: () => Promise<void> | void;
+  } = {},
 ): Pick<BreakerMarkerPort, 'read'> {
   const file = path.join(rsiDir, CANARY_FILES.pauseBreaker);
   return {
@@ -71,10 +77,22 @@ export function makeBreakerMarkerReader(
         maxBytes: MARKER_MAX_BYTES,
         owner: RSI_FILE_OWNER,
         ...(seam.beforeOpen === undefined ? {} : { beforeOpen: seam.beforeOpen }),
+        ...(seam.afterOpen === undefined ? {} : { afterOpen: seam.afterOpen }),
       });
-      if (r.kind === 'missing') return null;
-      if (r.kind === 'unsafe') throw new MarkerUnsafeError(r.why);
-      return parsePauseMarker(r.bytes.toString('utf8'));
+      // 打开后旧 inode 失链 ≠ 标记路径不存在(写侧替换标记就是这个时序):有界重读,读到新标记就用新标记;
+      // 一直在被替换 → 无法确认,fail-closed(抛错),绝不返回「无标记」。
+      let cur: SafeReadResult = r;
+      for (let i = 0; cur.kind === 'missing' && cur.unlinked === true; i += 1) {
+        if (i >= MARKER_REREADS) throw new MarkerUnsafeError('replaced');
+        cur = await readFileSafe(file, {
+          maxBytes: MARKER_MAX_BYTES,
+          owner: RSI_FILE_OWNER,
+          ...(seam.afterOpen === undefined ? {} : { afterOpen: seam.afterOpen }),
+        });
+      }
+      if (cur.kind === 'missing') return null;
+      if (cur.kind === 'unsafe') throw new MarkerUnsafeError(cur.why);
+      return parsePauseMarker(cur.bytes.toString('utf8'));
     },
   };
 }

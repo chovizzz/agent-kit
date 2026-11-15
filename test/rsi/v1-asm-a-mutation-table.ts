@@ -281,8 +281,8 @@ export const V1_ASM_A_MUTATIONS: readonly V1AsmAMutation[] = [
     edits: [
       swap(
         'src/rsi/canary/pause-marker-read.ts',
-        "      if (r.kind === 'missing') return null;\n",
-        "      if (r.kind === 'missing' || r.kind === 'unsafe') return null;\n",
+        "      if (cur.kind === 'missing') return null;\n",
+        "      if (cur.kind === 'missing' || cur.kind === 'unsafe') return null;\n",
       ),
     ],
     tests: ['rsi/asm/a-adapters.test.ts'],
@@ -410,8 +410,8 @@ export const V1_ASM_A_MUTATIONS: readonly V1AsmAMutation[] = [
     edits: [
       swap(
         'src/rsi/canary/pause-marker-read.ts',
-        "      if (r.kind === 'unsafe') throw new MarkerUnsafeError(r.why);\n",
-        "      if (r.kind === 'unsafe') return null;\n",
+        "      if (cur.kind === 'unsafe') throw new MarkerUnsafeError(cur.why);\n",
+        "      if (cur.kind === 'unsafe') return null;\n",
       ),
     ],
     tests: ['rsi/asm/a-adapters.test.ts'],
@@ -758,8 +758,8 @@ export const V1_ASM_A_MUTATIONS: readonly V1AsmAMutation[] = [
     edits: [
       swap(
         'src/rsi/auto/git-path.ts',
-        '    const dir = await probe.stat(path.dirname(real));\n    if (!dir.isDirectory || !trusted(dir)) return null;\n',
-        '',
+        '      if (!st.isDirectory || !trusted(st)) return null;\n      if (dir === path.dirname(dir)) break;',
+        '      if (dir === path.dirname(dir)) break;',
       ),
     ],
     tests: ['rsi/asm/a-git-path.test.ts'],
@@ -782,6 +782,7 @@ export const V1_ASM_A_MUTATIONS: readonly V1AsmAMutation[] = [
         maxBytes: MARKER_MAX_BYTES,
         owner: RSI_FILE_OWNER,
         ...(seam.beforeOpen === undefined ? {} : { beforeOpen: seam.beforeOpen }),
+        ...(seam.afterOpen === undefined ? {} : { afterOpen: seam.afterOpen }),
       });
 `,
         `      const r = await (async (): Promise<any> => {
@@ -812,7 +813,13 @@ export const V1_ASM_A_MUTATIONS: readonly V1AsmAMutation[] = [
   {
     id: 'marker_owner_policy_dropped',
     clause: 'B 标记读:属主 / 权限校验被去掉(0644 的标记被读成合法)',
-    edits: [swap('src/rsi/canary/pause-marker-read.ts', '        owner: RSI_FILE_OWNER,\n', '')],
+    edits: [
+      swap(
+        'src/rsi/canary/pause-marker-read.ts',
+        '        maxBytes: MARKER_MAX_BYTES,\n        owner: RSI_FILE_OWNER,\n',
+        '        maxBytes: MARKER_MAX_BYTES,\n',
+      ),
+    ],
     tests: ['rsi/asm/a-adapters.test.ts'],
     expectRed: ['权限过宽 / 硬链接 / 超限'],
     mustKill: ['权限过宽 / 硬链接 / 超限'],
@@ -974,6 +981,48 @@ export const V1_ASM_A_MUTATIONS: readonly V1AsmAMutation[] = [
     tests: ['rsi/asm/a-closure-util.test.ts'],
     expectRed: ['绕过静态闭包的写法'],
     mustKill: ['绕过静态闭包的写法'],
+  },
+  {
+    id: 'marker_unlinked_as_absent',
+    clause: 'B 标记读:打开后旧 inode 失链(标记被新文件替换)直接当成「无标记」,不重读',
+    edits: [
+      swap(
+        'src/rsi/canary/pause-marker-read.ts',
+        "      for (let i = 0; cur.kind === 'missing' && cur.unlinked === true; i += 1) {",
+        '      for (let i = 0; i < 0; i += 1) {',
+      ),
+    ],
+    tests: ['rsi/asm/a-adapters.test.ts'],
+    expectRed: ['打开之后、fstat 之前被新标记替换'],
+    mustKill: ['打开之后、fstat 之前被新标记替换'],
+  },
+  {
+    id: 'marker_replaced_forever_absent',
+    clause: 'B 标记读:一直在被替换时返回「无标记」而不是抛错',
+    edits: [
+      swap(
+        'src/rsi/canary/pause-marker-read.ts',
+        "        if (i >= MARKER_REREADS) throw new MarkerUnsafeError('replaced');",
+        '        if (i >= MARKER_REREADS) return null;',
+      ),
+    ],
+    tests: ['rsi/asm/a-adapters.test.ts'],
+    expectRed: ['打开之后、fstat 之前被新标记替换'],
+    mustKill: ['打开之后、fstat 之前被新标记替换'],
+  },
+  {
+    id: 'gp_only_direct_parent',
+    clause: 'resolveGitPath:只查直接父目录,不查更上级祖先(祖先可写 = 下级目录项可被替换)',
+    edits: [
+      swap(
+        'src/rsi/auto/git-path.ts',
+        '      if (dir === path.dirname(dir)) break;',
+        '      break;',
+      ),
+    ],
+    tests: ['rsi/asm/a-git-path.test.ts'],
+    expectRed: ['祖先目录'],
+    mustKill: ['祖先目录'],
   },
 ];
 
