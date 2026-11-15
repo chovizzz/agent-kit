@@ -1,6 +1,8 @@
 /**
  * 装配块 A 段「空写入根」子进程用例的作业体:同一份代码既在进程内跑(基准),也被 `asm-a-entry.ts` 打包后在真子进程里跑
  * (`KIT_WRITE_ROOTS=:` = 写入根集合为空,safe-fs 一律拒写)。读作业对**真实**只读适配器(`assembleReadAdapters`)逐端口取值,把每个结果(或错误名)收成一个对象;
+ * `commands` 作业(W8a 遗留的零写入层 ②):对**生产组装**(`productionAutoPorts`:不给 gitPath = 未装配)经 `runAutoFamily` 直接跑五类只读命令——`phase: 2` 只经
+ * deps 参数注入(与 `test/rsi/auto/zero-write.test.ts` 的 `runDirect` 同一条缝,**不加任何相位环境变量**,所以不是生产后门);每条命令收 `{code, out, err, audit}`。
  * 写探针(对照)直接用 safe-fs 写一次,证明「空写入根」确实在起作用。
  * 子进程里不读 `process.env`:全部由作业给(与 ro-entry 同法);git 路径解析 = `null`(未装配),spawn 间谍一旦被调用就记下来并抛错。
  */
@@ -9,15 +11,32 @@ import { mkdirp } from '../../../src/io/safe-fs.js';
 import { getRealHome } from '../../../src/io/paths.js';
 import { createRsiIoContext } from '../../../src/rsi/io.js';
 import { assembleReadAdapters } from '../../../src/rsi/assemble-read.js';
+import { runAutoFamily } from '../../../src/rsi/auto/entry.js';
 
 export interface AsmAJob {
-  kind: 'read' | 'write_probe';
+  kind: 'read' | 'commands' | 'write_probe';
   env: Record<string, string>;
   cwd: string;
   repo: string;
 }
 
 export type AsmAResult = Record<string, unknown>;
+
+/** 与 `test/rsi/auto/zero-write.test.ts` 的 `CASES` 同一集合 */
+export const COMMAND_CASES: readonly (readonly [
+  'auto' | 'report' | 'show' | 'rollback',
+  readonly string[],
+])[] = [
+  ['auto', ['status']],
+  ['auto', ['status', '--json']],
+  ['auto', ['clear']],
+  ['auto', ['clear', '--json']],
+  ['report', []],
+  ['report', ['--json', '--since', '2026-01-01']],
+  ['show', ['ra_0123456789ab']],
+  ['rollback', ['--to', '2026-11-01']],
+  ['rollback', ['--to', '2026-11-01', '--json']],
+];
 
 const never = (): never => {
   throw new Error('redactor must not be used by the read job');
@@ -46,6 +65,31 @@ export async function runAsmAJob(
       ? { writeAudit: (op: string, p: string) => void audit.push({ op, path: p }) }
       : {}),
   });
+  if (job.kind === 'commands') {
+    const out: AsmAResult = {};
+    for (const [family, argv] of COMMAND_CASES) {
+      const calls: { op: string; path: string }[] = [];
+      let o = '';
+      let e = '';
+      const code = await runAutoFamily(
+        family,
+        {
+          argv: [...argv],
+          overlayPath: undefined,
+          explicitRoot: undefined,
+          env: job.env,
+          cwd: job.cwd,
+          writeAudit: (op: string, p: string) => void calls.push({ op, path: p }),
+          stdout: (t: string) => (o += t),
+          stderr: (t: string) => (e += t),
+          isTty: true,
+        },
+        { phase: 2 },
+      );
+      out[`${family} ${argv.join(' ')}`] = { code, out: o, err: e, audit: calls };
+    }
+    return out;
+  }
   if (job.kind === 'write_probe') {
     return {
       probe: await take(async () => {
