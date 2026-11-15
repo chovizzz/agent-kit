@@ -280,7 +280,10 @@ export interface Selection {
   evidenceDropped: number;
   /** 因此没有证据了的簇数(并入 `truncated.clusters_dropped`) */
   clustersEmptied: number;
-  /** 因处在冷却中(R21-11.1)而不提的簇数(只数本来会被提的簇;并入 `truncated.clusters_dropped`) */
+  /**
+   * 因处在冷却中(R21-11.1)而不提的簇数(并入 `truncated.clusters_dropped`)。口径 = 「冷却前具备初始证据的簇」:当前项目有可作证据的成员(`mine.length >= 1`)即计入,
+   * **不**要求它在单条闸之后仍有证据——所以这不是精确的反事实统计(唯一证据本来会被单条闸丢掉的簇,现在也计为冷却丢簇)
+   */
   cooldownDropped: number;
 }
 
@@ -327,7 +330,7 @@ export function selectClustersScreened(
       .filter((s) => s.project_key === currentKey)
       .sort((a, b) => (a.sig_id < b.sig_id ? -1 : a.sig_id > b.sig_id ? 1 : 0));
     // R21-11.1:冷却中的聚类不进 digest。用**原始**成员算聚类 id(先于路径中和 / 单条闸,与候选签名的来源一致),
-    // 并在 5 簇截断之前丢弃(冷却簇不占名额)。只数「本来会被提」的簇
+    // 并在 5 簇截断之前丢弃(冷却簇不占名额)。计数口径 = 冷却前具备初始证据(`mine.length >= 1`)的簇,不是精确的反事实统计(见 `Selection.cooldownDropped`)
     if (cooled?.(c.members, eligible) === true) {
       if (mine.length >= 1) cooldownDropped++;
       return { id: c.id, kind: c.kind as string, current: [] as LoadedSignal[], other: 0 };

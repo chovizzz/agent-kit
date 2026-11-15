@@ -8,7 +8,11 @@ import { describe, expect, it } from 'vitest';
 import { readText } from '../../../src/io/read-fs.js';
 import { chmod, mkdirp, symlink, writeFile } from '../../../src/io/safe-fs.js';
 import { runRsiNotice } from '../../../src/rsi/notice.js';
-import { convertedCount, readConvertedProposals } from '../../../src/rsi/pending-converted.js';
+import {
+  convertedCount,
+  readConvertedFromState,
+  readConvertedProposals,
+} from '../../../src/rsi/pending-converted.js';
 import {
   scanPending,
   type Classify,
@@ -140,6 +144,23 @@ describe('D4 A6:待审不计已成候选的提案', () => {
     expect(brief(known(await scan(f, 2))).pending).toEqual([[RUN, 1]]);
   });
 
+  it('报告暂存编号里有重复:即使去重个数恰好等于 counts 的提案数也不扣(重复编号 = 报告不可信);对照:无重复时扣减', async () => {
+    // counts 登记 1 个;报告 staged = [-001, -001](去重 1 个 = counts,旧口径会认为基数一致,把唯一的待审提案扣没)
+    const h = await makeRoFx('d4-pend-dupids-');
+    const dup = reportDoc(RUN, 'ingest', ['2026-10-24-001', '2026-10-24-001']);
+    await putReport(h, RUN, 'ingest', 1, `${JSON.stringify(dup)}\n`);
+    await convert(h, 1, RUN, 1);
+    expect(brief(known(await scan(h, 1)))).toEqual({
+      pending: [[RUN, 1]],
+      toNotify: [[RUN, 1]],
+      converted: 'ok',
+    });
+    // 对照:报告无重复、counts 1 = 编号 1 → 转化后不再待审
+    const g = await world('d4-pend-dupids-ctl-', 1);
+    await convert(g, 1, RUN, 1);
+    expect(brief(known(await scan(g, 1))).pending).toEqual([]);
+  });
+
   it('proposals = 0 的 run 保持改前行为(仍待审)', async () => {
     const z = await world('d4-pend-zero-', 0);
     await convert(z, 1, RUN, 1);
@@ -245,6 +266,47 @@ describe('D4 A6:读失败 = 转化未知 = 不扣减(噪音方向,绝不当作�
       pending: [[RUN, 3]],
       converted: 'unsafe',
     });
+  });
+
+  it('`.state/rsi` 本身是指向外部目录的符号链接(外部目录与其 candidates/ 都是 0700、副本合法)→ unsafe,不跟随;对照:同一份外部内容作为真实 rsi 目录时可扣减', async () => {
+    const f = await world('d4-pend-rsilink-');
+    const ext = path.join(f.io.stateDir, 'ext-rsi');
+    await mkdirp(f.io, path.join(ext, 'candidates'), 0o700);
+    await chmod(f.io, ext, 0o700);
+    await writeFile(
+      f.io,
+      path.join(ext, 'candidates', `${cid(1)}.json`),
+      JSON.stringify(copyDoc(cid(1), RUN, proposalIds(1)[0] as string)),
+      { mode: 0o600 },
+    );
+    // 对照(前提):外部目录本身是合法的 rsi 目录,读取器直接读它 → ok,且该副本能扣掉 -001
+    const direct = await readConvertedProposals(ext);
+    expect(direct.state).toBe('ok');
+    expect(convertedCount(direct, RUN, proposalIds(1))).toBe(1);
+
+    const link = path.join(f.io.stateDir, 'rsi');
+    await symlink(f.io, ext, link);
+    // 直接读 `<stateDir>/rsi`(链接):读取器自己就拒绝
+    expect((await readConvertedProposals(link)).state).toBe('unsafe');
+    // 从 stateDir 出发:先验 rsi 目录
+    const fromState = await readConvertedFromState(f.io.stateDir);
+    expect([fromState.state, fromState.byRun.size]).toEqual(['unsafe', 0]);
+    // 经 scanPending:不扣减(整个 run 仍待审、仍待通知)
+    expect(brief(known(await scan(f, 3)))).toEqual({
+      pending: [[RUN, 3]],
+      toNotify: [[RUN, 3]],
+      converted: 'unsafe',
+    });
+  });
+
+  it('`.state/rsi` 不存在 → missing(扣减 0,不是 unsafe);rsi 目录权限过宽 → unsafe', async () => {
+    const f = await world('d4-pend-norsi-');
+    expect((await readConvertedFromState(f.io.stateDir)).state).toBe('missing');
+    await mkdirp(f.io, path.join(f.io.stateDir, 'rsi'), 0o700);
+    await chmod(f.io, path.join(f.io.stateDir, 'rsi'), 0o755);
+    expect((await readConvertedFromState(f.io.stateDir)).state).toBe('unsafe');
+    await chmod(f.io, path.join(f.io.stateDir, 'rsi'), 0o700);
+    expect((await readConvertedFromState(f.io.stateDir)).state).toBe('missing'); // 对照:权限收紧后回到「没有候选目录」
   });
 
   it('坏文件(非 JSON / schema 不过 / 文件名与 id 不符 / 过大)不参与扣减并计入 unreadable;好文件照常扣减', async () => {

@@ -45,10 +45,51 @@ export type ClusterCooldownFilter = (
 
 const WHY_RE = /^[a-z0-9_]{1,64}$/;
 
+/**
+ * 冷却集合的资源边界(M1):端口返回值跨信任边界,「形状合法」不等于「大小合理」。超限 → `unavailable`(`too_large`),fail-closed。
+ * `id` 的上限与 `PersonalLifecycleRecord.cluster_id` 的 `max(128)` 同量级,留一倍余量;条数 / 累计字节按「90 天窗口内的冷却账」放宽后取整。
+ */
+export const COOLDOWN_MAX_IDS = 10_000;
+export const COOLDOWN_MAX_ID_BYTES = 256;
+export const COOLDOWN_MAX_TOTAL_BYTES = 1024 * 1024;
+
+/** 原生 `Set` 的内部槽位访问器:不经对象自己的原型链,所以适配器覆盖 `size` / `values` / `Symbol.iterator` 都影响不到它们 */
+const SET_SIZE = Object.getOwnPropertyDescriptor(Set.prototype, 'size')?.get as (
+  this: Set<unknown>,
+) => number;
+const SET_VALUES = Set.prototype.values as (this: Set<unknown>) => IterableIterator<unknown>;
+
+/** 受控地读出原生 Set 的元素:非原生 Set(鸭子类型 / Proxy / 跨界对象)→ `null`;超限 → `'too_large'`;元素不合格 → `'invalid'` */
+function copyNativeSet(raw: unknown): Set<string> | 'too_large' | 'invalid' | null {
+  let size: number;
+  try {
+    size = SET_SIZE.call(raw as Set<unknown>); // 非原生 Set 在这里抛 TypeError
+  } catch {
+    return null;
+  }
+  if (size > COOLDOWN_MAX_IDS) return 'too_large';
+  const copy = new Set<string>();
+  let bytes = 0;
+  // 用内建的 `values()` 取迭代器(不调用适配器可覆盖的 `[Symbol.iterator]`):条数已由 size 封顶,不会不终止
+  for (const id of SET_VALUES.call(raw as Set<unknown>)) {
+    // 元素必须是非空字符串;id 的具体格式归账侧,这里不复制它的规则
+    if (typeof id !== 'string' || id === '') return 'invalid';
+    const n = Buffer.byteLength(id, 'utf8');
+    bytes += n;
+    if (n > COOLDOWN_MAX_ID_BYTES || bytes > COOLDOWN_MAX_TOTAL_BYTES) return 'too_large';
+    copy.add(id);
+  }
+  return copy;
+}
+
 /** UTC 日 `YYYY-MM-DD`(与 R20-16.3 的 `utcToday` 同口径,本文件不依赖 session.ts) */
 export const utcDayOf = (now: Date): string => now.toISOString().slice(0, 10);
 
-/** 读冷却事实,永不抛错。未注入端口 → `null`(不过滤);注入后任何读失败 → `unavailable` */
+/**
+ * 读冷却事实,永不抛错。未注入端口 → `null`(不过滤);注入后任何读失败 → `unavailable`。
+ * 边界:返回的集合受 {@link COOLDOWN_MAX_IDS} 等上限约束,且只按原生 `Set` 的内部槽位读取。
+ * **不涵盖**:`source.activeClusterIds` 本身长时间不返回——那是调用方的时间预算与取消责任(本函数不设超时),不能把它当成已覆盖的读失败。
+ */
 export async function readCooldown(
   port: CooldownPort | undefined,
   now: Date,
@@ -60,14 +101,12 @@ export async function readCooldown(
     if (typeof raw !== 'object' || raw === null)
       return { kind: 'unavailable', why: 'invalid_result' };
     const r = raw as { kind?: unknown; active?: unknown; why?: unknown };
-    if (r.kind === 'ok' && r.active instanceof Set) {
-      // 逐项核对(不只看 Set 外壳):元素必须是非空字符串;校验后复制,不保留适配器可变集合的引用。id 的具体格式归账侧,这里不复制它的规则
-      const copy = new Set<string>();
-      for (const id of r.active as Set<unknown>) {
-        if (typeof id !== 'string' || id === '')
-          return { kind: 'unavailable', why: 'invalid_result' };
-        copy.add(id);
-      }
+    if (r.kind === 'ok') {
+      // 校验后复制,不保留适配器可变集合的引用;遍历方式与上限见 copyNativeSet
+      const copy = copyNativeSet(r.active);
+      if (copy === 'too_large') return { kind: 'unavailable', why: 'too_large' };
+      if (copy === null || copy === 'invalid')
+        return { kind: 'unavailable', why: 'invalid_result' };
       return { kind: 'ok', active: copy };
     }
     if (r.kind === 'unavailable' && typeof r.why === 'string' && WHY_RE.test(r.why)) {
@@ -81,7 +120,7 @@ export async function readCooldown(
 
 /**
  * 由一次读结果造出簇过滤器。`read = null`(未接线)→ 过滤器永远 `false`;`unavailable` → 永远 `true`;
- * `clusterId` 抛错 → 该簇按在冷却中处理(fail-closed)。丢弃个数由 `selectClustersScreened` 数(只数「本来会被提」的簇)。
+ * `clusterId` 抛错 → 该簇按在冷却中处理(fail-closed)。丢弃个数由 `selectClustersScreened` 数(口径 = 冷却前具备初始证据的簇,见 `Selection.cooldownDropped`)。
  */
 export function makeCooldownFilter(
   port: CooldownPort | undefined,

@@ -2,6 +2,10 @@
  * A6「待审」不计已成候选的提案(契约 §21.3 R21-3.7 / R21-3.8 段末:「已成候选的提案不再算 A6『待审』」;D4 / 设计稿 verify_r21-asm-d-design.md §7)。
  *
  * 数据源 = 候选**工作副本** `.state/rsi/candidates/<id>.json` 的 `source`(`{run_id, proposal_id}`,R21-3.8;不读私有仓库的权威记录,那要起 git 子进程)。
+ * **source 真实性(已核实,origin/main)**:工作副本只在权威记录提交成功之后才写——创建路径 `personal/candidate-step.ts`(`store.commit` 返回 `committed` 之后才 `newWorkingCopy` + `working.put`,约 340–365 行),
+ * 转移路径 `personal/candidate-apply.ts`(`store.commit` 成功之后才 `working.put`,约 99–110 行,文件头注释同序),缺副本重建路径 `candidate-step.ts` ③(只从刚读到的权威记录的 `source_proposal` 重建);
+ * `source` 创建后不改(其余路径只 `{...wc}` 展开补丁)。main 上没有「权威记录未提交就先落盘」的路径,所以这里**不再**核对权威记录(那要起 git 子进程)。
+ * 残余:`WorkingStore.put` 的生产实现不在 main(只有端口),装配时必须保持「提交后才写」的顺序;副本在权威记录被清除 / 仓库回退后可能仍在——此时该提案确实曾转为候选,不再算待审。
  * 工作副本没有删除路径(终态后仍在,至少到 `repo_removal_deferred` 收口);丢失只会让提案重回待审——这是**噪音方向**,不是安全方向。
  * 因此本读取器的读失败一律映射为「转化未知」:**不扣减**(与今天的行为相同),并留下稳定原因,绝不抛错、不返回 `known:false`(那会改变 hint / status / D17 现有输出)。
  *
@@ -14,7 +18,7 @@ import {
   type CandidateWorkingCopy,
 } from '../contracts/rsi-personal.js';
 import { readDir, readFileSafe, statDirSafe } from '../io/read-fs.js';
-import { RSI_DIR_OWNER, RSI_FILE_OWNER } from './lock-read.js';
+import { RSI_DIR_OWNER, RSI_FILE_OWNER, rsiDirReadonly } from './lock-read.js';
 
 /** 单个工作副本的读取上限(字节):合法副本远小于此;超出按坏文件处理 */
 export const CONVERTED_FILE_MAX_BYTES = 256 * 1024;
@@ -72,6 +76,10 @@ export async function readConvertedProposals(
   const dir = path.join(rsiDir, 'candidates');
   let st: Awaited<ReturnType<typeof statDirSafe>>;
   try {
+    // 先验 `rsiDir` 自己(不跟随符号链接、属主 / 权限口径同 rsiDirReadonly):`statDirSafe(dir)` 的 O_NOFOLLOW 只保护末级,父目录是链接会被穿透
+    const top = await statDirSafe(rsiDir, { owner: RSI_DIR_OWNER });
+    if (top.kind === 'missing') return { state: 'missing', byRun: new Map(), unreadable: 0 };
+    if (top.kind === 'unsafe') return unknown('unsafe');
     st = await statDirSafe(dir, { owner: RSI_DIR_OWNER });
   } catch {
     return unknown('unsafe');
@@ -135,4 +143,24 @@ export function convertedCount(
   let n = 0;
   for (const id of new Set(stagedIds)) if (done.has(id)) n++;
   return n;
+}
+
+/**
+ * 从 `<stateDir>` 出发读已成候选的提案:先用只读 `rsiDirReadonly`(真实路径 + `rsi/` 不是链接 / 属主 / 权限)校验 `rsi/` 目录,再进候选扫描。
+ * 生产调用方里 hint / notice 的 `stateDir` 来自已校验的 `rsiDir`,但 status / dismiss 在 `rsiDir` 为 null(缺失或不安全)时回落到 `io.stateDir`,
+ * 所以校验必须在这里做,不能依赖调用方。`rsi/` 不存在 → `missing`(扣减 0);不安全 / 校验抛错 → `unsafe`(不扣减)。
+ */
+export async function readConvertedFromState(
+  stateDir: string,
+  deps: { over?: () => boolean; limits?: ConvertedLimits } = {},
+): Promise<ConvertedProposals> {
+  let d: Awaited<ReturnType<typeof rsiDirReadonly>>;
+  try {
+    d = await rsiDirReadonly({ stateDir });
+  } catch {
+    return unknown('unsafe');
+  }
+  if (d.kind === 'missing') return { state: 'missing', byRun: new Map(), unreadable: 0 };
+  if (d.kind === 'unsafe') return unknown('unsafe');
+  return readConvertedProposals(d.dir, deps);
 }

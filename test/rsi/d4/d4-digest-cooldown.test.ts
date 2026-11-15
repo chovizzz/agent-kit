@@ -7,6 +7,9 @@
 import { describe, expect, it } from 'vitest';
 import { selectClustersScreened } from '../../../src/rsi/digest.js';
 import {
+  COOLDOWN_MAX_ID_BYTES,
+  COOLDOWN_MAX_IDS,
+  COOLDOWN_MAX_TOTAL_BYTES,
   makeCooldownFilter,
   readCooldown,
   reportOf,
@@ -115,6 +118,84 @@ describe('D4 冷却:读冷却事实(readCooldown 永不抛错)', () => {
         kind: 'unavailable',
         why: 'invalid_result',
       });
+    }
+  });
+});
+
+describe('D4 冷却:ok 集合的资源边界与受控遍历(M1;超限 → unavailable/too_large,不当成「没有命中」)', () => {
+  const read = (active: unknown) =>
+    readCooldown(
+      portOf({ kind: 'ok', active } as never, () => null),
+      NOW,
+    );
+  const ids = (n: number, width = 8): Set<string> =>
+    new Set(Array.from({ length: n }, (_, i) => String(i).padStart(width, 'x')));
+
+  it('常量钉死:10000 条 / 单个 256 字节 / 累计 1 MiB', () => {
+    expect([COOLDOWN_MAX_IDS, COOLDOWN_MAX_ID_BYTES, COOLDOWN_MAX_TOTAL_BYTES]).toEqual([
+      10_000,
+      256,
+      1024 * 1024,
+    ]);
+  });
+
+  it('条数:恰好 10000 → ok;10001 → unavailable(too_large)', async () => {
+    const at = await read(ids(COOLDOWN_MAX_IDS));
+    expect(at.kind === 'ok' && at.active.size).toBe(COOLDOWN_MAX_IDS);
+    expect(await read(ids(COOLDOWN_MAX_IDS + 1))).toEqual({
+      kind: 'unavailable',
+      why: 'too_large',
+    });
+  });
+
+  it('单个 id:恰好 256 字节 → ok;257 字节 → too_large;按 UTF-8 字节而不是字符数(129 个 é = 258 字节)', async () => {
+    expect((await read(new Set(['a'.repeat(256)]))).kind).toBe('ok');
+    expect(await read(new Set(['a'.repeat(257)]))).toEqual({
+      kind: 'unavailable',
+      why: 'too_large',
+    });
+    const wide = new Set(['é'.repeat(129)]);
+    expect([...wide][0]?.length).toBe(129);
+    expect(await read(wide)).toEqual({ kind: 'unavailable', why: 'too_large' });
+    expect((await read(new Set(['é'.repeat(128)]))).kind).toBe('ok'); // 256 字节,对照
+  });
+
+  it('累计字节:4096 个 256 字节的 id(恰好 1 MiB)→ ok;4097 个 → too_large(条数与单个都没超)', async () => {
+    const mk = (n: number): Set<string> =>
+      new Set(Array.from({ length: n }, (_, i) => String(i).padStart(COOLDOWN_MAX_ID_BYTES, 'x')));
+    const at = await read(mk(4096));
+    expect(at.kind === 'ok' && at.active.size).toBe(4096);
+    expect(await read(mk(4097))).toEqual({ kind: 'unavailable', why: 'too_large' });
+  });
+
+  it('适配器覆盖迭代器 / size 的 Set 子类:读的是真实内容(不调用被覆盖的迭代器),也不能靠谎报 size 绕过上限', async () => {
+    // 有限但与真实内容不同的假迭代器(无限迭代器会让「用了被覆盖迭代器」的变异直接挂死,这里用可断言的内容代替)
+    const fake = (): IterableIterator<string> => ['evil_1', 'evil_2'].values();
+    const evil = new Set(['c_real']);
+    Object.defineProperty(evil, Symbol.iterator, { value: fake });
+    Object.defineProperty(evil, 'values', { value: fake });
+    Object.defineProperty(evil, 'forEach', { value: fake });
+    expect(await read(evil)).toEqual({ kind: 'ok', active: new Set(['c_real']) });
+
+    const liar = ids(COOLDOWN_MAX_IDS + 1);
+    Object.defineProperty(liar, 'size', { get: () => 1 });
+    expect(liar.size).toBe(1);
+    expect(await read(liar)).toEqual({ kind: 'unavailable', why: 'too_large' });
+  });
+
+  it('非原生 Set(Proxy / 鸭子类型 / 数组)→ invalid_result;对照:原生 Set 同内容 ok', async () => {
+    const real = new Set(['c_1']);
+    expect(await read(real)).toEqual({ kind: 'ok', active: new Set(['c_1']) });
+    for (const fake of [
+      new Proxy(real, {}),
+      {
+        size: 1,
+        values: () => ['c_1'][Symbol.iterator](),
+        [Symbol.iterator]: () => ['c_1'][Symbol.iterator](),
+      },
+      ['c_1'],
+    ]) {
+      expect(await read(fake)).toEqual({ kind: 'unavailable', why: 'invalid_result' });
     }
   });
 });
@@ -257,6 +338,15 @@ describe('D4 冷却:取舍里的位置(selectClustersScreened;冷却簇不占 5 
     expect(lens(r)).toEqual([8, 4, 3, 3, 2]);
     const both = selectClustersScreened(all, KEY, (s) => s, filterFor(okSet('alpha2', 'alpha1')));
     expect(both.cooldownDropped).toBe(2);
+  });
+
+  it('cooldownDropped 口径 = 冷却前具备初始证据的簇(不是精确的反事实):证据本来会被单条闸全部丢掉的冷却簇也计 1,且不进单条闸;对照:不冷却时它们走 clustersEmptied', () => {
+    const none = selectClustersScreened(all, KEY, () => null);
+    expect([none.cooldownDropped, none.evidenceDropped, none.clustersEmptied]).toEqual([0, 23, 6]);
+    const r = selectClustersScreened(all, KEY, () => null, filterFor(okSet('alpha2')));
+    // alpha2 簇(10 条)没进单条闸:evidenceDropped = 23 - 10;它计为冷却丢簇而不是 clustersEmptied
+    expect([r.cooldownDropped, r.evidenceDropped, r.clustersEmptied]).toEqual([1, 13, 5]);
+    expect(r.selected).toEqual([]);
   });
 
   it('读不到冷却事实(unavailable)→ 一个簇也不提,6 个本来会被提的簇全部计入 cooldownDropped', () => {

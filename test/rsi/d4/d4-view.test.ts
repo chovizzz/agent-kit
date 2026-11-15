@@ -391,6 +391,56 @@ describe('D4 view 构造:出口校验(不合 schema 不产出)', () => {
   });
 });
 
+describe('D4 view 构造:历史不可见时拒绝重建(不把「看不见」写成确定的 0 / null)', () => {
+  it('任一记录 transitions_dropped > 0 → history_incomplete(含非终态记录);对照:dropped = 0 时产出确定计数', () => {
+    const t = terminal(1, 'expired', '2026-11-10T00:00:00Z');
+    expect(ok(snap({ records: [t] })).pipeline.last30d.expired).toBe(1);
+    expect(why(snap({ records: [{ ...t, transitions_dropped: 2 }] }))).toBe('history_incomplete');
+    // 被截掉的历史里可能有近 30 日的终态转移:非终态记录(shadow)上有截断同样无法证明
+    expect(why(snap({ records: [rec(2, 'shadow', { transitions_dropped: 1 })] }))).toBe(
+      'history_incomplete',
+    );
+    expect(why(snap({ records: [rec(2, 'shadow', { transitions_dropped: 0 })] }))).toBeNull();
+    // 其它记录再正常,也不能掩盖那一条
+    expect(
+      why(snap({ records: [rec(3, 'proposed'), { ...t, id: cid(4), transitions_dropped: 1 }] })),
+    ).toBe('history_incomplete');
+  });
+
+  it('终态记录里找不到进入该终态的 lifecycle 转移 → history_incomplete(last_rollback 不能写成 null);对照:补上转移即可产出', () => {
+    const bare = rec(1, 'rolled_back', { terminal_reason: 'auto_rollback', transitions: [] });
+    expect(why(snap({ records: [bare] }))).toBe('history_incomplete');
+    // 只有别的状态 / 别的维度的转移也不行
+    const other = rec(2, 'expired', {
+      terminal_reason: 'auto_expired',
+      transitions: [tr('shadow', '2026-11-10T00:00:00Z', 'gates_passed')],
+    });
+    expect(why(snap({ records: [other] }))).toBe('history_incomplete');
+    const good = terminal(1, 'rolled_back', '2026-11-12T00:00:00Z', 'harm_c1');
+    expect(ok(snap({ records: [good] })).last_rollback).toEqual({
+      id: cid(1),
+      at: '2026-11-12T00:00:00Z',
+      reason: 'harm_c1',
+    });
+  });
+});
+
+describe('D4 view 构造:候选 id 必须唯一(重复记录不得放大聚合)', () => {
+  it('同一 id 的两条记录(非 canary、终态均可)→ input_invalid;对照:不同 id 时各计一次', () => {
+    const a = rec(1, 'proposed');
+    expect(why(snap({ records: [a, a] }))).toBe('input_invalid');
+    const t = terminal(2, 'expired', '2026-11-10T00:00:00Z');
+    expect(why(snap({ records: [t, t] }))).toBe('input_invalid');
+    // 对照:id 不同 → 状态计数 2、last30d 2(放大的就是这两个数)
+    const v = ok(
+      snap({
+        records: [a, rec(3, 'proposed'), t, terminal(4, 'expired', '2026-11-10T00:00:00Z')],
+      }),
+    );
+    expect([v.pipeline.states['proposed'], v.pipeline.last30d.expired]).toEqual([2, 2]);
+  });
+});
+
 describe('D4 view 构造:坏输入不外抛', () => {
   it('标记 / 转移里的时间戳无法解析(日期运算抛错)→ input_invalid,不外抛;对照:合法时间戳产出', () => {
     expect(why(snap({ protectionMarks: [mark(1, 'protection_unknown', 'not-a-date')] }))).toBe(
@@ -536,5 +586,85 @@ describe('D4 view 写端口(真实目录;持 rsi/lock;读侧 interpretView 读�
     }
     expect(await writeAutoView(d, good)).toEqual({ ok: true });
     expect(await exists(file)).toBe(true);
+  });
+
+  it('违规视图报 invalid_view(不是 write_failed):校验通过之后才会走到序列化,二者原因码不同;对照:合法视图成功', async () => {
+    const w = await makeCanaryWorld('d4-vw-invalid-why-');
+    const d = { io: w.io, rsiDir: w.rsi, locks: { rsi: held } };
+    const good = view();
+    for (const bad of [
+      { ...good, record_oid: 'zz' },
+      { ...good, budget: { used_pct: 'x' } },
+      { ...good, schema_version: 2 },
+      { ...good, cost: { injected_bytes_mean: -1, s2_count: 0 } },
+    ]) {
+      expect(await writeAutoView(d, bad as unknown as AutoView), JSON.stringify(bad)).toEqual({
+        ok: false,
+        why: 'invalid_view',
+      });
+    }
+    expect(await exists(path.join(w.rsi, 'auto-view.json'))).toBe(false);
+    expect(await writeAutoView(d, good)).toEqual({ ok: true });
+  });
+
+  describe('写端口的封闭枚举复核(schema 里是开放字符串的三处;不改已冻结的 AutoViewSchema)', () => {
+    const withRollback = (): AutoView =>
+      view({
+        records: [
+          terminal(1, 'rolled_back', '2026-11-12T00:00:00Z', 'harm_c1'),
+          rolling(2, 'rolling_back', '2026-11-13T00:00:00Z'),
+        ],
+      });
+
+    it('last_rollback.reason / rolling_back[].origin_reason 不在转移原因码枚举里(如绝对路径 / 用户名)→ invalid_view,零写入;对照:合法原因码写成功', async () => {
+      const w = await makeCanaryWorld('d4-vw-reason-');
+      const d = { io: w.io, rsiDir: w.rsi, locks: { rsi: held } };
+      const file = path.join(w.rsi, 'auto-view.json');
+      const good = withRollback();
+      expect(good.last_rollback?.reason).toBe('harm_c1');
+      expect(good.rolling_back[0]?.origin_reason).toBe('harm_c1');
+
+      const badA = {
+        ...good,
+        last_rollback: { ...(good.last_rollback as object), reason: '/Users/alice/private' },
+      };
+      const badB = {
+        ...good,
+        rolling_back: good.rolling_back.map((r) => ({ ...r, origin_reason: '/home/bob/x' })),
+      };
+      for (const bad of [badA, badB]) {
+        // 前提:它们确实通过 AutoViewSchema(所以只有语义复核能拦住)
+        expect(AutoViewSchema.safeParse(bad).success).toBe(true);
+        expect(await writeAutoView(d, bad as unknown as AutoView)).toEqual({
+          ok: false,
+          why: 'invalid_view',
+        });
+        expect(await exists(file)).toBe(false);
+      }
+      expect(await writeAutoView(d, good)).toEqual({ ok: true });
+      expect(await exists(file)).toBe(true);
+    });
+
+    it('pipeline.states 的键不是生命周期状态集合(多一个键 / 少一个键 / 换成路径)→ invalid_view;对照:完整键集写成功', async () => {
+      const w = await makeCanaryWorld('d4-vw-states-');
+      const d = { io: w.io, rsiDir: w.rsi, locks: { rsi: held } };
+      const file = path.join(w.rsi, 'auto-view.json');
+      const good = view();
+      const withStates = (states: Record<string, number>): AutoView => ({
+        ...good,
+        pipeline: { ...good.pipeline, states },
+      });
+      const extra = withStates({ ...good.pipeline.states, '/Users/alice': 1 });
+      const fewer = Object.fromEntries(
+        Object.entries(good.pipeline.states).filter(([k]) => k !== 'proposed'),
+      );
+      const renamed = withStates({ ...fewer, '/Users/alice/x': 0 });
+      for (const bad of [extra, withStates(fewer), renamed]) {
+        expect(AutoViewSchema.safeParse(bad).success).toBe(true);
+        expect(await writeAutoView(d, bad)).toEqual({ ok: false, why: 'invalid_view' });
+        expect(await exists(file)).toBe(false);
+      }
+      expect(await writeAutoView(d, good)).toEqual({ ok: true });
+    });
   });
 });

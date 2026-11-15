@@ -56,7 +56,7 @@ export const RSI_DIR_OWNER: OwnerPolicy = { maxPerm: RSI_DIR_MODE };
  * (R20-7.2,句柄级校验,不自动收紧)。
  */
 export async function rsiDirReadonly(
-  io: IoContext,
+  io: Pick<IoContext, 'stateDir'>,
   opts: { beforeOpen?: (file: string) => Promise<void> | void } = {},
 ): Promise<{ kind: 'ok'; dir: string } | { kind: 'missing' } | { kind: 'unsafe' }> {
   let stateReal: string;

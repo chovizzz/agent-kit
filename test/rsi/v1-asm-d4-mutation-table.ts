@@ -74,6 +74,9 @@ const RED_BY_TEST: Readonly<Record<string, readonly string[]>> = {
     '候选目录里的非副本名(临时文件 / 点文件 / 目录)被忽略,不算坏文件',
     '扫描前后目录树不变(只读)',
     '提醒(notice):RSI_PROPOSALS_READY 的 proposals= 是剩余数;全部转化后什么都不提示、不记账',
+    '报告暂存编号里有重复:即使去重个数恰好等于 counts 的提案数也不扣',
+    '`.state/rsi` 本身是指向外部目录的符号链接',
+    '`.state/rsi` 不存在 → missing',
   ],
   'rsi/d4/d4-digest-cooldown.test.ts': [
     '未注入端口 → null(未接线,不过滤);注入后原样返回 ok 集合',
@@ -98,6 +101,13 @@ const RED_BY_TEST: Readonly<Record<string, readonly string[]>> = {
     '读不到冷却事实(端口 unavailable)→ fail-closed:空摘要 reason=no_clusters,两个簇都计入丢弃,退出码仍 0',
     '项目被排除(没有可提的簇)→ 已注入的端口不被调用,报告 skipped;摘要 reason=project_excluded',
     '端口抛错 → 同样 fail-closed,原因 source_threw(异常文本不外泄)',
+    '常量钉死:10000 条 / 单个 256 字节 / 累计 1 MiB',
+    '条数:恰好 10000 → ok;10001 → unavailable(too_large)',
+    '单个 id:恰好 256 字节 → ok;257 字节 → too_large',
+    '累计字节:4096 个 256 字节的 id',
+    '适配器覆盖迭代器 / size 的 Set 子类',
+    '非原生 Set(Proxy / 鸭子类型 / 数组)→ invalid_result',
+    'cooldownDropped 口径 = 冷却前具备初始证据的簇',
   ],
   'rsi/d4/d4-view.test.ts': [
     '夹具里的记录都过 PersonalLifecycleRecordSchema(否则下面的断言没有意义)',
@@ -127,6 +137,12 @@ const RED_BY_TEST: Readonly<Record<string, readonly string[]>> = {
     'rename 失败(目标位置是非空目录)→ write_failed;临时文件被清掉,旧内容(目录)原样不动,不抛错',
     '视图对象本身读取即抛错(奇异对象)→ invalid_view,不外抛,零写入',
     '视图不合 schema(跨信任边界再校验)→ invalid_view,零写入;对照:同一端口写合法视图成功',
+    '任一记录 transitions_dropped > 0 → history_incomplete',
+    '终态记录里找不到进入该终态的 lifecycle 转移 → history_incomplete',
+    '同一 id 的两条记录(非 canary、终态均可)→ input_invalid',
+    '违规视图报 invalid_view(不是 write_failed)',
+    'last_rollback.reason / rolling_back[].origin_reason 不在转移原因码枚举里',
+    'pipeline.states 的键不是生命周期状态集合',
   ],
   'rsi/d4/d4-closure.test.ts': [
     'pending.ts / pending-converted.ts(',
@@ -237,7 +253,7 @@ export const V1_ASM_D4_MUTATIONS: readonly V1AsmD4Mutation[] = [
     [
       swap(
         PEND,
-        'const consistent = new Set(o.ids).size === o.run.proposals;',
+        'const consistent = o.ids.length === new Set(o.ids).size && o.ids.length === o.run.proposals;',
         'const consistent = true;',
       ),
     ],
@@ -418,8 +434,14 @@ export const V1_ASM_D4_MUTATIONS: readonly V1AsmD4Mutation[] = [
   ),
   m(
     'cd_set_check_dropped',
-    '端口返回的 active 必须是 Set',
-    [swap(COOL, "r.kind === 'ok' && r.active instanceof Set", "r.kind === 'ok'")],
+    '端口返回的 active 必须是原生 Set(鸭子类型 / Proxy / 数组 → invalid_result)',
+    [
+      swap(
+        COOL,
+        'size = SET_SIZE.call(raw as Set<unknown>); // 非原生 Set 在这里抛 TypeError',
+        'size = 0;',
+      ),
+    ],
     [T_COOL],
     ['端口抛错 / 返回形状不对'],
   ),
@@ -692,7 +714,7 @@ export const V1_ASM_D4_MUTATIONS: readonly V1AsmD4Mutation[] = [
     '写端口对跨信任边界的视图再校验 schema',
     [swap(VW, "if (!parsed.success) return { ok: false, why: 'invalid_view' };", 'void 0;')],
     [T_VIEW],
-    ['视图不合 schema(跨信任边界再校验)'],
+    ['视图不合 schema(跨信任边界再校验)', '违规视图报 invalid_view(不是 write_failed)'],
   ),
   m(
     'vw_parse_throws',
@@ -734,6 +756,145 @@ export const V1_ASM_D4_MUTATIONS: readonly V1AsmD4Mutation[] = [
     [swap(VW, '`${RSI_AUTO_VIEW_FILE}.tmp`', '`${RSI_AUTO_VIEW_FILE}.nope`')],
     [T_VIEW],
     ['rename 失败(目标位置是非空目录)'],
+  ),
+  // ---- 验收评审补充(M1–M5 与另三条;表末追加,既有条目的顺序不变) ----
+  m(
+    'pend_dup_ids_counted',
+    'A6:report 暂存编号重复 = 报告不可信,即使去重个数 = counts 也不扣',
+    [swap(PEND, 'o.ids.length === new Set(o.ids).size && ', '')],
+    [T_PEND],
+    ['报告暂存编号里有重复:即使去重个数恰好等于 counts 的提案数也不扣'],
+  ),
+  m(
+    'conv_rsi_link_followed',
+    '候选读取器先验 rsi 目录本身(符号链接 / 属主 / 权限),不只验末级 candidates',
+    [swap(CONV, "if (top.kind === 'unsafe') return unknown('unsafe');", 'void 0;')],
+    [T_PEND],
+    ['`.state/rsi` 本身是指向外部目录的符号链接'],
+  ),
+  m(
+    'conv_state_dir_unchecked',
+    '从 stateDir 出发读候选前用只读 rsiDirReadonly 校验 rsi 目录',
+    [swap(CONV, "if (d.kind === 'unsafe') return unknown('unsafe');", 'void 0;')],
+    [T_PEND],
+    ['`.state/rsi` 本身是指向外部目录的符号链接', '`.state/rsi` 不存在 → missing'],
+  ),
+  m(
+    'cd_too_many_ids',
+    'M1:冷却集合条数上限(超限 → unavailable/too_large)',
+    [swap(COOL, "if (size > COOLDOWN_MAX_IDS) return 'too_large';", 'void 0;')],
+    [T_COOL],
+    ['条数:恰好 10000 → ok;10001 → unavailable(too_large)'],
+  ),
+  m(
+    'cd_id_bytes_unbounded',
+    'M1:单个 id 的字节上限',
+    [swap(COOL, 'n > COOLDOWN_MAX_ID_BYTES || ', 'false || ')],
+    [T_COOL],
+    ['单个 id:恰好 256 字节 → ok;257 字节 → too_large'],
+  ),
+  m(
+    'cd_total_bytes_unbounded',
+    'M1:累计字节上限',
+    [swap(COOL, ' || bytes > COOLDOWN_MAX_TOTAL_BYTES', ' || false')],
+    [T_COOL],
+    ['累计字节:4096 个 256 字节的 id'],
+  ),
+  m(
+    'cd_bytes_as_chars',
+    'M1:上限按 UTF-8 字节而不是字符数',
+    [swap(COOL, "Buffer.byteLength(id, 'utf8')", 'id.length')],
+    [T_COOL],
+    ['单个 id:恰好 256 字节 → ok;257 字节 → too_large'],
+  ),
+  m(
+    'cd_overridable_iter',
+    'M1:受控遍历原生 Set(不调用适配器可覆盖的迭代器)',
+    [swap(COOL, 'SET_VALUES.call(raw as Set<unknown>)', '(raw as Set<unknown>)')],
+    [T_COOL],
+    ['适配器覆盖迭代器 / size 的 Set 子类'],
+  ),
+  m(
+    'cd_size_overridable',
+    'M1:size 取内部槽位(适配器谎报 size 绕不过上限)',
+    [
+      swap(
+        COOL,
+        'size = SET_SIZE.call(raw as Set<unknown>); // 非原生 Set 在这里抛 TypeError',
+        'size = (raw as Set<unknown>).size;',
+      ),
+    ],
+    [T_COOL],
+    ['适配器覆盖迭代器 / size 的 Set 子类', '非原生 Set(Proxy / 鸭子类型 / 数组)→ invalid_result'],
+  ),
+  m(
+    'vb_dropped_ignored',
+    'M3:transitions_dropped > 0 → 拒绝重建(不把看不见的历史写成确定的 0 / null)',
+    [swap(VB, 'if (rec.transitions_dropped > 0) historyIncomplete = true;', 'void 0;')],
+    [T_VIEW],
+    ['任一记录 transitions_dropped > 0 → history_incomplete'],
+  ),
+  m(
+    'vb_terminal_entry_unchecked',
+    'M3:终态记录里找不到进入该终态的转移 → 拒绝重建',
+    [
+      swap(
+        VB,
+        '(TERMINALS as readonly string[]).includes(rec.lifecycle) && enteredAt(rec) === null',
+        'false',
+      ),
+    ],
+    [T_VIEW],
+    ['终态记录里找不到进入该终态的 lifecycle 转移 → history_incomplete'],
+  ),
+  m(
+    'vb_history_flag_ignored',
+    'M3:历史不完整的标记必须真的拒绝产出',
+    [
+      swap(
+        VB,
+        "if (historyIncomplete) return { ok: false, why: 'history_incomplete' };",
+        'void 0;',
+      ),
+    ],
+    [T_VIEW],
+    [
+      '任一记录 transitions_dropped > 0 → history_incomplete',
+      '终态记录里找不到进入该终态的 lifecycle 转移 → history_incomplete',
+    ],
+  ),
+  m(
+    'vb_dup_ids_allowed',
+    'M5:候选 id 必须唯一(重复记录不得放大聚合)',
+    [swap(VB, 'new Set(s.records.map((r) => r.id)).size !== s.records.length', 'false')],
+    [T_VIEW],
+    ['同一 id 的两条记录(非 canary、终态均可)→ input_invalid'],
+  ),
+  m(
+    'vw_reason_unchecked',
+    'M4:写端口按封闭转移原因码复核 last_rollback.reason / rolling_back[].origin_reason',
+    [
+      swap(
+        VW,
+        'if (r !== undefined && !RsiTransitionReasonSchema.safeParse(r).success) return false;',
+        'void 0;',
+      ),
+    ],
+    [T_VIEW],
+    ['last_rollback.reason / rolling_back[].origin_reason 不在转移原因码枚举里'],
+  ),
+  m(
+    'vw_states_keys_unchecked',
+    'M4:写端口复核 pipeline.states 的键集合 = 生命周期状态集合',
+    [
+      swap(
+        VW,
+        'return keys.length === states.size && keys.every((k) => states.has(k));',
+        'return true;',
+      ),
+    ],
+    [T_VIEW],
+    ['pipeline.states 的键不是生命周期状态集合'],
   ),
 ];
 

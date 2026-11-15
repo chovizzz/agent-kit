@@ -28,7 +28,7 @@ import {
 import { readDir, readFileSafe, statDirSafe } from '../io/read-fs.js';
 import { RSI_FILE_OWNER } from './lock-read.js';
 import {
-  readConvertedProposals,
+  readConvertedFromState,
   convertedCount,
   type ConvertedLimits,
   type ConvertedProposals,
@@ -229,7 +229,7 @@ export async function scanPending(input: ScanInput, deps: ScanDeps = {}): Promis
   const converted: ConvertedProposals =
     open.length === 0
       ? { state: 'missing', byRun: new Map(), unreadable: 0 }
-      : await readConvertedProposals(path.join(input.stateDir, 'rsi'), {
+      : await readConvertedFromState(input.stateDir, {
           ...(deps.over !== undefined ? { over: deps.over } : {}),
           limits: {
             ...deps.convertedLimits,
@@ -238,7 +238,8 @@ export async function scanPending(input: ScanInput, deps: ScanDeps = {}): Promis
         });
   for (const o of open) {
     // 两份来源的基数必须一致才敢扣:counts 登记的提案数 = report 暂存编号(去重)个数;不一致(或编号重复)= 该 run 的转化未知,保持原样不扣减
-    const consistent = new Set(o.ids).size === o.run.proposals;
+    // 编号重复(`ids.length !== 去重个数`)本身就是 report 不可信:一律不扣
+    const consistent = o.ids.length === new Set(o.ids).size && o.ids.length === o.run.proposals;
     const rest = consistent
       ? o.run.proposals - convertedCount(converted, o.run.runId, o.ids)
       : o.run.proposals;

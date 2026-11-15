@@ -7,7 +7,9 @@
  * 口径(逐项等同 R21-13.1 原文;**契约没写死的取舍**在此登记,装配 C 段 / owner 可订正):
  *  - `pipeline.states`:每个 `lifecycle` 状态一个键(含 0),值 = 该状态的记录数;
  *  - `pipeline.last30d`:近 30 个 UTC 日(今天及前 29 天)内「进入四个终态」的转移数(按 `transitions[]` 里 `dim=lifecycle`、`to=终态` 的 `at` 的 UTC 日;终态不可再出,故每个候选每个终态至多计一次);
- *    `transitions[]` 因 256 条上限被截掉的历史看不见,只会少数、不会多数;
+ *    历史不可见时**拒绝重建**(`history_incomplete`,保留旧视图):任一记录 `transitions_dropped > 0`(256 条上限截掉了更早的转移,近 30 日的终态转移 / 最近一次回滚可能就在被截部分),
+ *    或终态记录里找不到进入该终态的 lifecycle 转移 → 不输出「新鲜的确定计数」(AutoView 没有「未知」的表达,写 0 / null 就是编造确定事实);
+ *  - 输入的快照里候选 id 必须唯一(重复 = `input_invalid`):重复记录会把状态计数与 last30d 放大,单条记录各自过 schema 并不能证明集合没有重复;
  *  - `canary`:`lifecycle=canary` 的记录(至多一条;多于一条 = 不变量被破坏 → 不产出),`treat` / `control` 取调用方给的分组计数,**缺则不产出**(不把「不知道」写成 0);
  *  - `last_rollback`:最近一次进入 `rolled_back` 的转移(`at` 最晚,同刻取 id 最小)的 `{id, at, reason(=该转移的原因码)}`,没有 = `null`;
  *  - `rolling_back`:`lifecycle ∈ {rolling_back, retiring}` 的记录,`entered_at` = 该记录进入当前状态的最后一次 lifecycle 转移的 `at`
@@ -46,6 +48,7 @@ export interface AutoViewSnapshot {
 export type ViewBuildWhy =
   | 'schema_invalid'
   | 'input_invalid'
+  | 'history_incomplete'
   | 'canary_ambiguous'
   | 'canary_stats_missing'
   | 'rolling_back_entry_unknown';
@@ -80,6 +83,12 @@ function build(s: AutoViewSnapshot): ViewBuild {
   const today = dayOf(asOf);
   const windowStart = addDays(today, -(VIEW_LAST_DAYS - 1)); // 含
 
+  // 集合不变量:候选 id 唯一(重复会放大 states / last30d;纯函数,不引入 I/O)
+  if (new Set(s.records.map((r) => r.id)).size !== s.records.length) {
+    throw new Error('duplicate_candidate_id'); // 由 buildAutoView 统一映射为 input_invalid
+  }
+  let historyIncomplete = false;
+
   const states: Record<string, number> = {};
   for (const st of RSI_LIFECYCLE_STATES) states[st] = 0;
   const last30d = { rejected: 0, rolled_back: 0, expired: 0, retired: 0 };
@@ -89,6 +98,10 @@ function build(s: AutoViewSnapshot): ViewBuild {
 
   for (const rec of s.records) {
     states[rec.lifecycle] = (states[rec.lifecycle] ?? 0) + 1;
+    if (rec.transitions_dropped > 0) historyIncomplete = true;
+    if ((TERMINALS as readonly string[]).includes(rec.lifecycle) && enteredAt(rec) === null) {
+      historyIncomplete = true; // 终态记录里看不到进入该终态的转移:无法证明它不在近 30 日 / 不是最近一次回滚
+    }
     for (const term of TERMINALS) {
       const hit = rec.transitions.find(
         (t) =>
@@ -124,6 +137,7 @@ function build(s: AutoViewSnapshot): ViewBuild {
     }
   }
 
+  if (historyIncomplete) return { ok: false, why: 'history_incomplete' };
   if (canaries.length > 1) return { ok: false, why: 'canary_ambiguous' };
   let canary: AutoView['canary'] = null;
   const c = canaries[0];
