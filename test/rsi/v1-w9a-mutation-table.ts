@@ -157,24 +157,50 @@ export const V1_W9A_MUTATIONS: readonly V1W9AMutation[] = [
   },
   {
     id: 'timeout_no_abort',
-    clause: 'W0-27 2 秒预算经 AbortSignal 传给端口',
-    edits: [swap('src/rsi/personal/judge-signal.ts', '      ctl.abort();\n', '')],
+    // 末尾的整次评估核对(M1)也会中止 controller,单独拿掉定时器里的中止看不出差别:两层一起拿掉,才是「超时不中止」
+    clause: 'W0-27 2 秒预算经 AbortSignal 传给端口(定时器层与末尾核对两层都不中止)',
+    edits: [
+      swap('src/rsi/personal/judge-signal.ts', '      ctl.abort();\n', ''),
+      swap(
+        'src/rsi/personal/judge-signal.ts',
+        "    clock.ctl.abort();\n    return unreadable('timeout');\n  }\n  return v;",
+        "    return unreadable('timeout');\n  }\n  return v;",
+      ),
+    ],
     tests: ['rsi/personal/judge-signal.test.ts'],
-    expectRed: ['读超时 → unreadable(timeout)', 'W9a 判官裁决判定'],
+    expectRed: [
+      '读超时 → unreadable(timeout)',
+      '端口立即返回,但同步的 ruleSha256 耗时超预算',
+      'judgeEvidence 同步耗时超预算',
+      '同步工作占住事件循环、定时器来不及触发时',
+      'W9a 判官裁决判定',
+    ],
     mustKill: ['读超时 → unreadable(timeout)'],
   },
   {
     id: 'timeout_as_no_verdict',
-    clause: 'W0-27 超时 = unreadable',
+    // 末尾的整次评估核对(M1)会把超预算的任何结论改回 unreadable(timeout),单独变异定时器层看不出差别:连同末尾核对一起失效
+    clause: 'W0-27 超时 = unreadable(定时器层给出「无裁决」且末尾核对失效)',
     edits: [
       swap(
         'src/rsi/personal/judge-signal.ts',
         "resolve(unreadable('timeout'));",
         "resolve(none('not_verified', 'none', null, 'timeout'));",
       ),
+      swap(
+        'src/rsi/personal/judge-signal.ts',
+        '  if (elapsed(clock) > clock.budgetMs) {\n',
+        '  if (elapsed(clock) > clock.budgetMs * 1e9) {\n',
+      ),
     ],
     tests: ['rsi/personal/judge-signal.test.ts'],
-    expectRed: ['读超时 → unreadable(timeout)', 'W9a 判官裁决判定'],
+    expectRed: [
+      '读超时 → unreadable(timeout)',
+      '端口立即返回,但同步的 ruleSha256 耗时超预算',
+      'judgeEvidence 同步耗时超预算',
+      '同步工作占住事件循环、定时器来不及触发时',
+      'W9a 判官裁决判定',
+    ],
     mustKill: ['读超时 → unreadable(timeout)'],
   },
   {
