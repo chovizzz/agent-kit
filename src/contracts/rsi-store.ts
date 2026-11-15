@@ -209,6 +209,7 @@ export const RSI_STORE_CAUSES = Object.freeze({
   region_closed: 'internal',
   region_open: 'internal',
   observation_row_sealed: 'audit_invalid',
+  stamp_mismatch: 'audit_invalid',
   // 压缩文件
   compaction_unsupported: 'audit_invalid',
   compaction_unreadable: 'audit_invalid',
@@ -220,6 +221,7 @@ export const RSI_STORE_CAUSES = Object.freeze({
   txn_closed: 'internal',
   txn_nested: 'internal',
   release_inside_transaction: 'internal',
+  lock_cap_mismatch: 'internal',
   store_io: 'internal',
 } as const satisfies Record<string, StoreFailClosedReason>);
 export type StoreCause = keyof typeof RSI_STORE_CAUSES;

@@ -114,6 +114,16 @@ describe('classifyAuditFile(纯函数)', () => {
     expect(sameRowForKey(selfLoop, { ...selfLoop, at: '2026-11-15T09:00:00.000Z' })).toBe(false);
     expect(isNoopObservation(noopRow(hex16(4)))).toBe(true);
   });
+
+  it('r5_exception_only_for_self_loop_terminal:真正进入终态的转移(from ≠ to)不适用排除 at 的例外——同键异 at = 冲突;对照:终态空操作行(from = to)异 at 视为同一行', () => {
+    const intoTerminal = trow(hex16(5), AT1, { from: 'shadow', to: 'rejected', reason: 'vetoed' });
+    const later = { ...intoTerminal, at: '2026-11-15T09:00:00.000Z' };
+    expect(isNoopObservation(intoTerminal)).toBe(false);
+    expect(sameRowForKey(intoTerminal, later)).toBe(false);
+    const noop = noopRow(hex16(6));
+    expect(isNoopObservation(noop)).toBe(true);
+    expect(sameRowForKey(noop, { ...noop, at: '2026-11-15T09:00:00.000Z' })).toBe(true);
+  });
 });
 
 describe.each(KINDS)('appendKeyed replay / appendObservation(%s)', (kind) => {

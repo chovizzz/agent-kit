@@ -15,6 +15,10 @@ import type { TransitionEffect } from '../personal/transition.js';
 export interface LockCap {
   assertHeld(): Promise<void>;
   release(): Promise<void>;
+  /** 锁文件路径(真实句柄有;测试假件可无)。与 `StoreFs.root` 一起验锁种类 / root 归属,**要么都给要么都不给** */
+  readonly path?: string;
+  /** 挂释放屏障(真实句柄有):句柄自己的 `release()` 也先经 acquisition 控制块。同一句柄只接受同一个屏障 */
+  attachReleaseGate?(gate: { beforeRelease(): Promise<void> }): void;
 }
 /**
  * 需要的锁集合(与 `auto/write/ports.ts` 的 `LockOrder` 同一字面量集合,类型测试钉住):`personal_sync` = 缩减入口;`rsi_personal_sync` = 三把锁。
@@ -22,7 +26,11 @@ export interface LockCap {
  */
 export type LockOrder = 'personal_sync' | 'rsi_personal_sync';
 
-export type AuditTextRead = { kind: 'missing' } | { kind: 'ok'; text: string };
+/**
+ * 审计文件读出:`text` = 最后一个换行(含)之前的**完整行**(按字节找换行,严格 UTF-8 解码);`torn: true` = 其后还有无结尾换行的尾部字节(撕裂尾,
+ * 不解码——短写可停在多字节字符中间,不能因此整文件拒读)。
+ */
+export type AuditTextRead = { kind: 'missing' } | { kind: 'ok'; text: string; torn?: true };
 /** 水位线读出:文件缺失 = `{through: null, gen: 0}`(虚拟,合法) */
 export interface Watermark {
   through: UtcDay | null;

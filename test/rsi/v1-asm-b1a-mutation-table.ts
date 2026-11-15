@@ -221,7 +221,7 @@ export const V1_ASM_B1A_MUTATIONS: readonly V1AsmB1aMutation[] = [
     edits: [
       swap(
         'src/rsi/store/ledger-merge.ts',
-        "if (!changed) return 'satisfied';",
+        "if (!changed && !(unregistered && opts.registerSatisfiedKey === true)) return 'satisfied';",
         "if (false) return 'satisfied';",
       ),
     ],
@@ -416,8 +416,11 @@ export const V1_ASM_B1A_MUTATIONS: readonly V1AsmB1aMutation[] = [
     clause: 'W0-26 §6 R5 判别式',
     edits: [swap('src/rsi/store/audit-classify.ts', 'r.from === r.to &&', 'true &&')],
     tests: ['rsi/store/audit.test.ts'],
-    expectRed: ['同键内容规则:默认含 at;唯一例外是终态空操作行'],
-    mustKill: ['同键内容规则:默认含 at;唯一例外是终态空操作行'],
+    expectRed: [
+      '同键内容规则:默认含 at;唯一例外是终态空操作行',
+      'r5_exception_only_for_self_loop_terminal',
+    ],
+    mustKill: ['r5_exception_only_for_self_loop_terminal'],
   },
   {
     id: 'dup_key_allowed',
@@ -510,7 +513,13 @@ export const V1_ASM_B1A_MUTATIONS: readonly V1AsmB1aMutation[] = [
   {
     id: 'foreign_region_accepted',
     clause: 'W0-26 §9 区域必须由 SealGuard 创建',
-    edits: [swap('src/rsi/store/seal.ts', 'if (!(region instanceof RegionImpl))', 'if (false)')],
+    edits: [
+      swap(
+        'src/rsi/store/seal.ts',
+        'if (!(region instanceof RegionImpl) || !registry.owns(region)) {',
+        'if (false) {',
+      ),
+    ],
     tests: ['rsi/store/audit.test.ts'],
     expectRed: ['不是本模块创建的区域 = region_closed'],
     mustKill: ['不是本模块创建的区域 = region_closed'],
@@ -534,7 +543,7 @@ export const V1_ASM_B1A_MUTATIONS: readonly V1AsmB1aMutation[] = [
     clause: 'W0-26 §12 closing 后拒绝新事务',
     edits: [
       swap(
-        'src/rsi/store/txn.ts',
+        'src/rsi/store/lock-control.ts',
         "if (closing) return Promise.reject(new StoreError('txn_closing'));",
         ';',
       ),
@@ -546,7 +555,7 @@ export const V1_ASM_B1A_MUTATIONS: readonly V1AsmB1aMutation[] = [
   {
     id: 'release_not_waiting',
     clause: 'W0-26 §12 release 等在途事务',
-    edits: [swap('src/rsi/store/txn.ts', 'await tail;', ';')],
+    edits: [swap('src/rsi/store/lock-control.ts', 'await tail;', ';')],
     tests: ['rsi/store/txn.test.ts'],
     expectRed: ['release_waits_inflight_txn'],
     mustKill: ['release_waits_inflight_txn'],
@@ -556,7 +565,7 @@ export const V1_ASM_B1A_MUTATIONS: readonly V1AsmB1aMutation[] = [
     clause: 'W0-26 §12 事务内 release 拒绝',
     edits: [
       swap(
-        'src/rsi/store/txn.ts',
+        'src/rsi/store/lock-control.ts',
         "return Promise.reject(new StoreError('release_inside_transaction'));",
         'return Promise.resolve();',
       ),
@@ -570,7 +579,7 @@ export const V1_ASM_B1A_MUTATIONS: readonly V1AsmB1aMutation[] = [
     clause: 'W0-26 §12 事务内再开事务拒绝',
     edits: [
       swap(
-        'src/rsi/store/txn.ts',
+        'src/rsi/store/lock-control.ts',
         "return Promise.reject(new StoreError('txn_nested'));",
         'return Promise.resolve(undefined as never);',
       ),
@@ -612,7 +621,11 @@ export const V1_ASM_B1A_MUTATIONS: readonly V1AsmB1aMutation[] = [
     id: 'personal_not_released',
     clause: 'W0-26 §12 逆序释放',
     edits: [
-      swap('src/rsi/store/txn.ts', 'await deps.personal.release();', 'await Promise.resolve();'),
+      swap(
+        'src/rsi/store/lock-control.ts',
+        'await personal.release();',
+        'await Promise.resolve();',
+      ),
     ],
     tests: ['rsi/store/txn.test.ts'],
     expectRed: ['release_waits_inflight_txn'],
@@ -809,6 +822,333 @@ export const V1_ASM_B1A_MUTATIONS: readonly V1AsmB1aMutation[] = [
     tests: ['rsi/store/backend.test.ts'],
     expectRed: ['账 / 压缩文件含非法 UTF-8'],
     mustKill: ['账 / 压缩文件含非法 UTF-8'],
+  },
+  // ---- 验收评审修复(H1 / H2 / H3 / M1 / M2 / M3)的变异锚点 ----
+  {
+    id: 'control_not_shared',
+    clause: 'W0-26 §12 同一 acquisition 重复装配共享控制块(H1)',
+    edits: [
+      swap(
+        'src/rsi/store/lock-control.ts',
+        '    return a.control; // root 由 `rsi.path` 唯一决定(上面的身份校验已确认),同一对句柄不会换 root',
+        '    return createControl(rsi, personal);',
+      ),
+    ],
+    tests: ['rsi/store/lock-control.test.ts'],
+    expectRed: [
+      'same_acquisition_two_helds_serialized',
+      'shared_closing_and_release',
+      'real_handles_same_acquisition_serialized_and_raw_release_gated',
+    ],
+    mustKill: ['same_acquisition_two_helds_serialized', 'shared_closing_and_release'],
+  },
+  {
+    id: 'rsi_gate_not_attached',
+    clause: 'W0-26 §12 原始句柄 release 经释放屏障(H1)',
+    edits: [swap('src/rsi/store/lock-control.ts', '  rsi.attachReleaseGate?.(gate);', '  ;')],
+    tests: ['rsi/store/lock-control.test.ts'],
+    expectRed: [
+      'raw_release_waits_for_paused_commit',
+      'raw_release_inside_own_txn_rejected',
+      'real_handles_same_acquisition_serialized_and_raw_release_gated',
+    ],
+    mustKill: ['raw_release_waits_for_paused_commit'],
+  },
+  {
+    id: 'raw_release_inside_txn_allowed',
+    clause: 'W0-26 §12 事务回调内的原始 release 拒绝(H1)',
+    edits: [
+      swap(
+        'src/rsi/store/lock-control.ts',
+        "return Promise.reject(new StoreError('release_inside_transaction', 'raw_release'));",
+        'return Promise.resolve();',
+      ),
+    ],
+    tests: ['rsi/store/lock-control.test.ts'],
+    expectRed: ['raw_release_inside_own_txn_rejected'],
+    mustKill: ['raw_release_inside_own_txn_rejected'],
+  },
+  {
+    id: 'identity_rsi_path_unchecked',
+    clause: 'W0-26 §12 LockCap 校验 root 归属与锁种类(H1)',
+    edits: [
+      swap(
+        'src/rsi/store/lock-control.ts',
+        "if (rsi.path !== path.join(root, 'lock')) throw mismatch('rsi_root');",
+        ';',
+      ),
+    ],
+    tests: ['rsi/store/lock-control.test.ts'],
+    expectRed: ['把槽位锁 digests/lock 当 rsi 锁', '角色互换(personal 句柄当 rsi 锁)= rsi_root'],
+    mustKill: ['把槽位锁 digests/lock 当 rsi 锁'],
+  },
+  {
+    id: 'identity_personal_kind_unchecked',
+    clause: 'W0-26 §12 personal 句柄的锁种类 / 路径校验(H1)',
+    edits: [
+      swap(
+        'src/rsi/store/lock-control.ts',
+        'if (personal.path === rsi.path || personal.path.startsWith(root + path.sep)) {',
+        'if (false) {',
+      ),
+    ],
+    tests: ['rsi/store/lock-control.test.ts'],
+    expectRed: ['角色互换(personal 句柄当 rsi 锁)= rsi_root;personal 路径落在 root 之下'],
+    mustKill: ['角色互换(personal 句柄当 rsi 锁)= rsi_root;personal 路径落在 root 之下'],
+  },
+  {
+    id: 'identity_half_allowed',
+    clause: 'W0-26 §12 身份只给一半 = 拒绝(H1)',
+    edits: [
+      swap(
+        'src/rsi/store/lock-control.ts',
+        "if (declared.some((d) => d !== declared[0])) throw mismatch('identity_half');",
+        ';',
+      ),
+    ],
+    tests: ['rsi/store/lock-control.test.ts'],
+    expectRed: ['只给一半身份 = identity_half'],
+    mustKill: ['只给一半身份 = identity_half'],
+  },
+  {
+    id: 'same_cap_allowed',
+    clause: 'W0-26 §12 同一句柄不能同时当 rsi 与 personal(H1)',
+    edits: [
+      swap(
+        'src/rsi/store/lock-control.ts',
+        "if (rsi === personal) throw mismatch('same_cap');",
+        ';',
+      ),
+    ],
+    tests: ['rsi/store/lock-control.test.ts'],
+    expectRed: ['同一个句柄同时当 rsi 与 personal = same_cap'],
+    mustKill: ['同一个句柄同时当 rsi 与 personal = same_cap'],
+  },
+  {
+    id: 'acquisition_conflict_allowed',
+    clause: 'W0-26 §12 句柄已绑给别的组合 = 拒绝(H1)',
+    edits: [
+      swap(
+        'src/rsi/store/lock-control.ts',
+        'if (a === undefined || a !== b || a.rsi !== rsi || a.personal !== personal) {',
+        'if (false) {',
+      ),
+    ],
+    tests: ['rsi/store/lock-control.test.ts'],
+    expectRed: ['acquisition_conflict:句柄已绑给别的组合'],
+    mustKill: ['acquisition_conflict:句柄已绑给别的组合'],
+  },
+  {
+    id: 'audit_read_whole_file_utf8',
+    clause: 'W0-26 §7 撕裂尾按字节恢复(H2)',
+    edits: [
+      swap(
+        'src/rsi/store/backend.ts',
+        'const lf = r.bytes.lastIndexOf(0x0a);',
+        'const lf = r.bytes.length - 1;',
+      ),
+    ],
+    tests: ['rsi/store/review-fixes.test.ts'],
+    expectRed: ['short_write_mid_multibyte_char_recovers', '只有尾部字节(无任何完整行)也是撕裂尾'],
+    mustKill: ['short_write_mid_multibyte_char_recovers'],
+  },
+  {
+    id: 'torn_flag_ignored',
+    clause: 'W0-26 §7 后端确认的撕裂尾必须分类为 torn_tail(H2)',
+    edits: [
+      swap(
+        'src/rsi/store/audit-classify.ts',
+        "? { kind: 'torn_tail', rows, byKey, goodText: text }",
+        "? { kind: 'ok', rows, byKey }",
+      ),
+    ],
+    tests: ['rsi/store/review-fixes.test.ts'],
+    expectRed: [
+      'classifyAuditFile(text, tornTail)',
+      'short_write_mid_multibyte_char_recovers',
+      '只有尾部字节(无任何完整行)也是撕裂尾',
+    ],
+    mustKill: ['classifyAuditFile(text, tornTail)', 'short_write_mid_multibyte_char_recovers'],
+  },
+  {
+    id: 'complete_lines_lenient_utf8',
+    clause: 'W0-26 §7 完整行内非法 UTF-8 仍 fail-closed(H2)',
+    edits: [
+      swap(
+        'src/rsi/store/backend.ts',
+        'const text = strictUtf8(complete);',
+        "const text = complete.toString('utf8');",
+      ),
+    ],
+    tests: ['rsi/store/review-fixes.test.ts'],
+    expectRed: ['complete_line_invalid_utf8_still_fail_closed'],
+    mustKill: ['complete_line_invalid_utf8_still_fail_closed'],
+  },
+  {
+    id: 'satisfied_key_not_registered',
+    clause: 'W0-26 §2 状态已满足但键未登记的批登记键(H3)',
+    edits: [
+      swap(
+        'src/rsi/store/ledger-merge.ts',
+        "if (!changed && !(unregistered && opts.registerSatisfiedKey === true)) return 'satisfied';",
+        "if (!changed) return 'satisfied';",
+      ),
+    ],
+    tests: ['rsi/store/review-fixes.test.ts'],
+    expectRed: [
+      'registerSatisfiedKey=true 时',
+      'noop_then_conflicting_content',
+      'established_by_other_key_registers_identity',
+      'registration_under_watermark_not_committed',
+      'user_veto_noop_registers_key',
+    ],
+    mustKill: ['noop_then_conflicting_content', 'established_by_other_key_registers_identity'],
+  },
+  {
+    id: 'apply_once_not_registering',
+    clause: 'W0-26 §2 applyOnce 登记身份(H3)',
+    edits: [
+      swap(
+        'src/rsi/store/apply-once.ts',
+        '          watermark: wm,\n          registerSatisfiedKey: true,',
+        '          watermark: wm,\n          registerSatisfiedKey: false,',
+      ),
+    ],
+    tests: ['rsi/store/review-fixes.test.ts', 'rsi/store/apply-once.test.ts'],
+    expectRed: [
+      'noop_then_conflicting_content',
+      'established_by_other_key_registers_identity',
+      'lift_replay_after_prune_noop',
+    ],
+    mustKill: ['noop_then_conflicting_content'],
+  },
+  {
+    id: 'user_veto_not_registering',
+    clause: 'W0-26 §2 用户否决登记身份(H3)',
+    edits: [
+      swap(
+        'src/rsi/store/apply-once.ts',
+        '            watermark: wm,\n            registerSatisfiedKey: true,',
+        '            watermark: wm,\n            registerSatisfiedKey: false,',
+      ),
+    ],
+    tests: ['rsi/store/review-fixes.test.ts'],
+    expectRed: ['user_veto_noop_registers_key'],
+    mustKill: ['user_veto_noop_registers_key'],
+  },
+  {
+    id: 'recover_registers_keys',
+    clause: 'W0-26 §2 压缩前恢复不登记身份(H3 例外)',
+    edits: [
+      swap(
+        'src/rsi/store/apply-once.ts',
+        'registerSatisfiedKey: false,',
+        'registerSatisfiedKey: true,',
+      ),
+    ],
+    tests: ['rsi/store/review-fixes.test.ts'],
+    expectRed: ['recover_through_does_not_register'],
+    mustKill: ['recover_through_does_not_register'],
+  },
+  {
+    id: 'capacity_before_audit_validation',
+    clause: 'W0-26 §2 验证先于容量结果(M1)',
+    edits: [
+      swap(
+        'src/rsi/store/apply-once.ts',
+        'if (lines.length > 0) {',
+        "if (lines.length > 0 && plan?.kind !== 'not_committed') {",
+      ),
+    ],
+    tests: ['rsi/store/review-fixes.test.ts'],
+    expectRed: [
+      'capacity_masks_audit_conflict_fixed',
+      '账满时,审计文件有坏行 / 重复键也先报完整性错误',
+    ],
+    mustKill: ['capacity_masks_audit_conflict_fixed'],
+  },
+  {
+    id: 'stamp_binding_unchecked',
+    clause: 'W0-26 §9 first 行 at 必须等于区域 stamp(M2)',
+    edits: [swap('src/rsi/store/audit-appender.ts', 'assertLinesStamped(region, items);', ';')],
+    tests: ['rsi/store/review-fixes.test.ts'],
+    expectRed: ['first_rows_must_use_stamp_time'],
+    mustKill: ['first_rows_must_use_stamp_time'],
+  },
+  {
+    id: 'region_registry_unchecked',
+    clause: 'W0-26 §9 区域必须由本域注册表创建(M2)',
+    edits: [
+      swap(
+        'src/rsi/store/seal.ts',
+        'if (!(region instanceof RegionImpl) || !registry.owns(region)) {',
+        'if (!(region instanceof RegionImpl)) {',
+      ),
+    ],
+    tests: ['rsi/store/review-fixes.test.ts'],
+    expectRed: ['foreign_store_region_rejected'],
+    mustKill: ['foreign_store_region_rejected'],
+  },
+  {
+    id: 'registry_domain_unbound',
+    clause: 'W0-26 §9 注册表绑定 acquisition(M2)',
+    edits: [
+      swap(
+        'src/rsi/store/seal.ts',
+        'if (this.domain !== null && this.domain !== identity) {',
+        'if (false) {',
+      ),
+    ],
+    tests: ['rsi/store/review-fixes.test.ts'],
+    expectRed: ['registry_bound_to_acquisition'],
+    mustKill: ['registry_bound_to_acquisition'],
+  },
+  {
+    id: 'maintenance_prune_applied_skipped',
+    clause: 'W0-26 §4 维护性提交:删水位线覆盖的 applied(M3)',
+    edits: [
+      swap(
+        'src/rsi/store/ledger-merge.ts',
+        "if (kept.length === next.applied.length) return { kind: 'satisfied' };",
+        "return { kind: 'satisfied' };",
+      ),
+    ],
+    tests: ['rsi/store/review-fixes.test.ts'],
+    expectRed: ['watermark_covered_applied_pruned_by_noop_batch'],
+    mustKill: ['watermark_covered_applied_pruned_by_noop_batch'],
+  },
+  {
+    id: 'plan_batch_early_satisfied',
+    clause: 'W0-26 §4 维护性提交:单批空操作也收尾(M3)',
+    edits: [
+      swap(
+        'src/rsi/store/ledger-merge.ts',
+        '  applyBatch(w, key, effects, meta, intent, opts);',
+        "  if (applyBatch(w, key, effects, meta, intent, opts) === 'satisfied') return { kind: 'satisfied' };",
+      ),
+    ],
+    tests: ['rsi/store/review-fixes.test.ts'],
+    expectRed: [
+      'expired_cooldown_pruned_by_noop_batch',
+      '满账(2000 条过期冷却)上的空操作批也能腾出条数',
+      'watermark_covered_applied_pruned_by_noop_batch',
+      'applyOnce 同键重放(already)也做维护提交',
+    ],
+    mustKill: ['expired_cooldown_pruned_by_noop_batch', 'applyOnce 同键重放(already)也做维护提交'],
+  },
+  {
+    id: 'recover_noop_no_maintenance',
+    clause: 'W0-26 §4 维护性提交:恢复全部 satisfied 时也收尾(M3)',
+    edits: [
+      swap(
+        'src/rsi/store/ledger-merge.ts',
+        '    const plan = finalize(w, opts);',
+        "    if (!outcomes.some((o) => o.state === 'changed')) {\n      return { outcomes, plan: null, planError: null };\n    }\n    const plan = finalize(w, opts);",
+      ),
+    ],
+    tests: ['rsi/store/review-fixes.test.ts'],
+    expectRed: ['recoverThrough 全部 satisfied 时也提交维护性变化'],
+    mustKill: ['recoverThrough 全部 satisfied 时也提交维护性变化'],
   },
 ];
 

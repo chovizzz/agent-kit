@@ -11,6 +11,7 @@ import {
 } from '../../../src/contracts/rsi-store.js';
 import { canonicalJsonLine } from '../../../src/io/canonical-json.js';
 import { createIoContext, type IoContext } from '../../../src/io/paths.js';
+import { appendFileSynced, writeFile } from '../../../src/io/safe-fs.js';
 import { readDir } from '../../../src/io/read-fs.js';
 import { RsiLockError } from '../../../src/rsi/lock-error.js';
 import { createBackend, type StoreBackend } from '../../../src/rsi/store/backend.js';
@@ -99,15 +100,23 @@ export class FakeLock implements LockCap {
   held = true;
   releases = 0;
   asserts = 0;
+  /** 与真实句柄同一契约:挂上的释放屏障在 `release()` 真正动手前先等(同一句柄只接受同一个屏障) */
+  private gate: { beforeRelease(): Promise<void> } | undefined;
   constructor(
     readonly name: string,
     private readonly log: string[],
+    readonly path?: string,
   ) {}
+  attachReleaseGate(gate: { beforeRelease(): Promise<void> }): void {
+    if (this.gate !== undefined && this.gate !== gate) throw new RsiLockError('internal');
+    this.gate = gate;
+  }
   async assertHeld(): Promise<void> {
     this.asserts++;
     if (!this.held) throw new RsiLockError('lock_lost');
   }
   async release(): Promise<void> {
+    await this.gate?.beforeRelease();
     this.log.push(`release:${this.name}`);
     this.held = false;
     this.releases++;
@@ -252,6 +261,18 @@ export interface World {
   bytes(name: string): Promise<Buffer | null>;
 }
 
+/** 给任意 `StoreFs` 加上 `root`(委托其余方法;内存假件没有 root 时用来演示「锁带 path、fs 带 root」的真实装配形状) */
+export function withRoot(inner: StoreFs, root: string): StoreFs {
+  return {
+    root,
+    read: (n, m) => inner.read(n, m),
+    writeTmp: (n, t) => inner.writeTmp(n, t),
+    commitTmp: (n) => inner.commitTmp(n),
+    removeTmp: (n) => inner.removeTmp(n),
+    appendSynced: (n, t) => inner.appendSynced(n, t),
+  };
+}
+
 export interface WorldOptions {
   wrap?: (inner: StoreFs) => StoreFs;
   clockIso?: string;
@@ -347,4 +368,22 @@ export function fullAuditText(): string {
     jsonLine(trow(hex16(i + 0x100000))),
   ).join('');
   return fullAuditCache;
+}
+
+// ---------- 字节级播种(撕裂尾可停在多字节字符中间;`StoreFs` 端口只收字符串,所以直接写底层) ----------
+const absOf = async (w: World, name: string): Promise<string> =>
+  path.join(await rsiDir(w.io), name);
+
+/** 用任意字节覆盖 `name`(内存:直接放 Buffer;真文件:经 `safe-fs`) */
+export async function seedBytes(w: World, name: string, bytes: Uint8Array): Promise<void> {
+  if (w.kind === 'mem') (w.raw as MemFs).files.set(name, Buffer.from(bytes));
+  else await writeFile(w.io, await absOf(w, name), bytes, { mode: 0o600 });
+}
+
+/** 在 `name` 末尾追加任意字节(模拟停在字符中间的短写) */
+export async function rawAppendBytes(w: World, name: string, bytes: Uint8Array): Promise<void> {
+  if (w.kind === 'mem') {
+    const m = w.raw as MemFs;
+    m.files.set(name, Buffer.concat([m.files.get(name) ?? Buffer.alloc(0), Buffer.from(bytes)]));
+  } else await appendFileSynced(w.io, await absOf(w, name), bytes, 0o600);
 }

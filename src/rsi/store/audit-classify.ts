@@ -15,7 +15,8 @@ export type AuditClass =
 
 export type GoodAuditClass = Exclude<AuditClass, { kind: 'bad' }>;
 
-export function classifyAuditFile(text: string): AuditClass {
+/** `tornTail`:调用方(后端按字节读)已确认 `text` 之后还有无结尾换行的尾部字节;`text` 本身只含完整行 */
+export function classifyAuditFile(text: string, tornTail = false): AuditClass {
   const parts = text.split('\n');
   const tail = parts[parts.length - 1] as string; // `split` 至少返回一个元素;结尾有换行时为 ''
   const complete = parts.slice(0, -1);
@@ -37,7 +38,11 @@ export function classifyAuditFile(text: string): AuditClass {
     }
     rows.push(p.data);
   }
-  if (tail === '') return { kind: 'ok', rows, byKey };
+  if (tail === '') {
+    return tornTail
+      ? { kind: 'torn_tail', rows, byKey, goodText: text }
+      : { kind: 'ok', rows, byKey };
+  }
   return { kind: 'torn_tail', rows, byKey, goodText: text.slice(0, text.length - tail.length) };
 }
 

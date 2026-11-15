@@ -38,6 +38,11 @@ export interface PlanOptions {
   today?: UtcDay;
   /** 已提交的水位线 W:事件日 ≤ W 的 `applied` 键不记(可裁) */
   watermark?: UtcDay | null;
+  /**
+   * 状态已满足但**身份未登记**(键不在 `applied`)的批:`true` = 登记该键并提交(`applyOnce` / 用户否决用,H3:否则同键异内容随后可直接成功);
+   * 缺省 `false` = 零写(压缩前恢复 `recoverThrough` 用:它处理的事件日 ≤ 即将推进的 W,键推进后本就被裁,无需登记)。
+   */
+  registerSatisfiedKey?: boolean;
 }
 
 export type PlanResult =
@@ -224,7 +229,7 @@ function mergeEffect(
 }
 
 /**
- * 处理一个批次;`satisfied` = 无需写(键已满足 / 状态已满足 / 没有账类效果),`changed` = Working 已合并。
+ * 处理一个批次;`satisfied` = 无需写(键已满足 / 状态已满足且无需登记身份 / 没有账类效果),`changed` = Working 已合并(含「状态已满足、仅登记身份」)。
  * 任何校验失败抛错且**不改动 Working**。
  */
 export function applyBatch(
@@ -248,10 +253,9 @@ export function applyBatch(
   validateTombstones(w, effects);
   let changed = false;
   for (const e of effects) changed = mergeEffect(w, e, m, intent, opts.today) || changed;
-  if (!changed) return 'satisfied';
-  if (findKey(w, key) === undefined) {
-    w.newKeys.push({ key, event_at: m.event_at, batch_sha256: hash });
-  }
+  const unregistered = findKey(w, key) === undefined;
+  if (!changed && !(unregistered && opts.registerSatisfiedKey === true)) return 'satisfied';
+  if (unregistered) w.newKeys.push({ key, event_at: m.event_at, batch_sha256: hash });
   return 'changed';
 }
 
@@ -262,12 +266,31 @@ const byteLen = (l: RsiEffectsLedger): number => Buffer.byteLength(canonicalJson
  * 取使条数与字节同时合规的最长前缀;旧键不得挤占新效果的空间)→ 账 schema 再校验。非键状态合规时空键集必然合规,所以旧键永远不会把合法效果变成 `effects_full`。
  */
 export function finalize(w: Working, opts: PlanOptions): PlanResult {
-  if (w.base.gen >= Number.MAX_SAFE_INTEGER) throw new StoreError('gen_overflow');
   const next = w.next;
   if (opts.today !== undefined) {
     const today = opts.today;
     next.cooldowns = next.cooldowns.filter((c) => cooldownActive(c, today));
   }
+  const wm = opts.watermark ?? null;
+  const live = (a: RsiAppliedKey): boolean => wm === null || utcDay(a.event_at) > wm;
+  // 非键状态相对旧账有无变化(`gen` 与 `applied` 之外的全部字段)
+  const stateSig = (l: RsiEffectsLedger): string => canonicalJson({ ...l, gen: 0, applied: [] });
+  const stateChanged = stateSig(next) !== stateSig(w.base);
+  const check = (): void => {
+    if (w.base.gen >= Number.MAX_SAFE_INTEGER) throw new StoreError('gen_overflow');
+  };
+  // 维护性提交(M3):没有状态变化、也没有要记的新键时,仍可独立形成提交——删被水位线覆盖的 applied;无可删 = 零写
+  if (!stateChanged && !w.newKeys.some(live)) {
+    const kept = next.applied.filter(live);
+    if (kept.length === next.applied.length) return { kind: 'satisfied' };
+    check();
+    const pruned: RsiEffectsLedger = { ...next, applied: kept };
+    if (!RsiEffectsLedgerSchema.safeParse(pruned).success) {
+      throw new StoreError('state_invalid', 'plan_invalid');
+    }
+    return { kind: 'commit', next: pruned, droppedKeys: next.applied.length - kept.length };
+  }
+  check();
   const L = RSI_EFFECTS_LIMITS;
   if (
     next.blacklist.length > L.blacklist ||
@@ -276,8 +299,6 @@ export function finalize(w: Working, opts: PlanOptions): PlanResult {
   ) {
     return { kind: 'not_committed', cause: 'effects_full' };
   }
-  const wm = opts.watermark ?? null;
-  const live = (a: RsiAppliedKey): boolean => wm === null || utcDay(a.event_at) > wm;
   const oldKeys = next.applied
     .filter(live)
     .sort(
@@ -304,6 +325,10 @@ export function finalize(w: Working, opts: PlanOptions): PlanResult {
   if (!RsiEffectsLedgerSchema.safeParse(final).success) {
     throw new StoreError('state_invalid', 'plan_invalid');
   }
+  // 只登记新键、而它们全被保留子集丢弃(字节贴线)且状态没变 = 与旧账等价,不提交
+  const keySig = (l: RsiEffectsLedger): string =>
+    canonicalJson([...l.applied].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)));
+  if (!stateChanged && keySig(final) === keySig(w.base)) return { kind: 'satisfied' };
   return { kind: 'commit', next: final, droppedKeys: candidates.length - keep };
 }
 
@@ -318,8 +343,8 @@ export function planBatch(
   opts: PlanOptions = {},
 ): PlanResult {
   const w = beginWorking(state);
-  if (applyBatch(w, key, effects, meta, intent, opts) === 'satisfied') return { kind: 'satisfied' };
-  return finalize(w, opts);
+  applyBatch(w, key, effects, meta, intent, opts);
+  return finalize(w, opts); // 无变化 = satisfied;有维护性变化(过期冷却 / 水位线覆盖的 applied)时 = 独立提交
 }
 
 export type BatchOutcome =
@@ -357,10 +382,10 @@ export function planBatches(
       outcomes.push({ state: 'failed', cause: e.code });
     }
   }
-  if (!outcomes.some((o) => o.state === 'changed'))
-    return { outcomes, plan: null, planError: null };
   try {
-    return { outcomes, plan: finalize(w, opts), planError: null };
+    // 没有任何 `changed` 时也收尾:维护性变化(M3)可独立提交;无变化 = `satisfied` → 无计划
+    const plan = finalize(w, opts);
+    return { outcomes, plan: plan.kind === 'satisfied' ? null : plan, planError: null };
   } catch (e) {
     if (!(e instanceof StoreError)) throw e;
     return { outcomes, plan: null, planError: e };

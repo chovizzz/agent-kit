@@ -14,6 +14,21 @@ import type { SealGuard, SealRegion, SealRegionState, Watermark } from './ports.
 
 export class SealRegistry {
   private readonly regions = new Set<RegionImpl>();
+  private domain: symbol | null = null;
+  /**
+   * 绑定到一次 acquisition(`LockControl.identity`):装配时调用;同一注册表绑给**另一次** acquisition = 拒绝(`lock_cap_mismatch`),
+   * 所以别的存储域创建的区域 / 注册表不能被本域追加器接受(评审 M2)。同一 acquisition 重复绑定幂等。
+   */
+  bindDomain(identity: symbol): void {
+    if (this.domain !== null && this.domain !== identity) {
+      throw new StoreError('lock_cap_mismatch', 'registry_foreign');
+    }
+    this.domain = identity;
+  }
+  /** @internal */
+  owns(r: RegionImpl): boolean {
+    return r.registry === this;
+  }
   hasOpenRegion(): boolean {
     return this.regions.size > 0;
   }
@@ -36,9 +51,13 @@ class RegionImpl implements SealRegion {
   private stamp: IsoTimestamp | null = null;
   constructor(
     readonly watermark: UtcDay | null,
-    private readonly registry: SealRegistry,
+    readonly registry: SealRegistry,
   ) {
     registry.track(this);
+  }
+  /** @internal 本区域 stamp 出的事件时刻(未 stamp = null) */
+  get stampedAt(): IsoTimestamp | null {
+    return this.stamp;
   }
   get state(): SealRegionState {
     return this.current;
@@ -76,11 +95,26 @@ class RegionImpl implements SealRegion {
   }
 }
 
-/** 追加器对 `first` 来源的入口:区域必须已 stamp 且未关闭(不是本模块创建的区域 = 拒绝) */
-export function beginAuditAttempt(region: SealRegion): void {
-  if (!(region instanceof RegionImpl))
+/**
+ * 追加器对 `first` 来源的入口:区域必须是**本存储域的注册表**创建的(别处创建 / 别的 acquisition 的区域 = `region_closed:foreign_region`,不改任何状态)、
+ * 已 stamp 且未关闭;通过后进入 `audit_attempted`,返回区域供 {@link assertLinesStamped} 与收尾 `close()` 使用。
+ */
+export function beginAuditAttempt(region: SealRegion, registry: SealRegistry): SealRegion {
+  if (!(region instanceof RegionImpl) || !registry.owns(region)) {
     throw new AuditSealedError('region_closed', 'foreign_region');
+  }
   region.beginAudit();
+  return region;
+}
+
+/** `first` 的每一行 `at` 必须**逐字等于**本区域 stamp 的时刻(stamp 与实际事件绑定;否则 `stamp_mismatch`,零写入) */
+export function assertLinesStamped(region: SealRegion, items: readonly unknown[]): void {
+  const stamped = region instanceof RegionImpl ? region.stampedAt : null;
+  const atOf = (i: unknown): unknown =>
+    typeof i === 'object' && i !== null ? (i as { at?: unknown }).at : undefined;
+  if (stamped === null || items.some((i) => atOf(i) !== stamped)) {
+    throw new StoreError('stamp_mismatch');
+  }
 }
 
 export interface SealGuardDeps {

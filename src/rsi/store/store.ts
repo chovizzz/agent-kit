@@ -23,6 +23,7 @@ import type {
   UserVetoPort,
 } from './ports.js';
 import { SealRegistry, createSealGuard } from './seal.js';
+import { acquireLockControl } from './lock-control.js';
 import { createHeldStore } from './txn.js';
 
 export interface RsiStoreDeps {
@@ -53,8 +54,15 @@ export interface RsiStore {
 export function assembleRsiStore(deps: RsiStoreDeps): RsiStore {
   const clock = deps.clock ?? ((): Date => new Date());
   const backend = createBackend(deps.fs, clock);
-  const held = createHeldStore({ rsi: deps.rsi, personal: deps.personal, backend });
+  const held = createHeldStore({
+    rsi: deps.rsi,
+    personal: deps.personal,
+    backend,
+    ...(deps.fs.root !== undefined ? { root: deps.fs.root } : {}),
+  });
   const registry = deps.registry ?? new SealRegistry();
+  // 区域 / 注册表绑定到 acquisition(同一对句柄 → 同一控制块,幂等);别的 acquisition 的注册表 = 拒绝
+  registry.bindDomain(acquireLockControl(deps.rsi, deps.personal, deps.fs.root).identity);
   const apply = {
     held,
     clock,
@@ -69,6 +77,7 @@ export function assembleRsiStore(deps: RsiStoreDeps): RsiStore {
     recovery: createLedgerRecovery(apply),
     appender: createAuditAppender({
       held,
+      registry,
       ...(apply.resolve !== undefined ? { resolve: apply.resolve } : {}),
     }),
     seal: createSealGuard({ registry, readWatermark: () => backend.readWatermark() }),

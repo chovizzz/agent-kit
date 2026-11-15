@@ -16,6 +16,8 @@ export type StoreFileRead =
   { kind: 'ok'; bytes: Buffer } | { kind: 'missing' } | { kind: 'unsafe'; why: string };
 
 export interface StoreFs {
+  /** 已确认安全的 `.state/rsi` 目录(真实现有;内存假件可无)。与 `LockCap.path` 一起验 root 归属 */
+  readonly root?: string;
   /** 句柄级安全读;不存在 = `missing`,链接 / 非普通文件 / 超限 / I/O 错 = `unsafe`(调用方 fail-closed,不当作不存在) */
   read(name: string, maxBytes: number): Promise<StoreFileRead>;
   /** 写临时文件 `<name>.tmp`:先清掉上次崩溃的残留,再独占创建并 fsync;失败 = 抛错,不留半截文件 */
@@ -40,6 +42,7 @@ export function safeStoreFs(io: IoContext, dir: string): StoreFs {
     return path.join(dir, n);
   };
   return {
+    root: dir,
     async read(name, maxBytes) {
       const r = await readFileSafe(abs(name), { maxBytes, owner: RSI_FILE_OWNER });
       if (r.kind === 'ok') return { kind: 'ok', bytes: r.bytes };
