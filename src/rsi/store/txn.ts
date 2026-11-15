@@ -44,15 +44,21 @@ export function createHeldStore(deps: HeldStoreDeps): HeldStore {
     const id = ++seq;
     const token = { alive: true, accepting: true };
     const pending = new Set<Promise<unknown>>();
+    /** 事务内的读写也串行(同一事务里并发的 commit / rewrite / append 不得争用同一 `.tmp`) */
+    let opTail: Promise<unknown> = Promise.resolve();
 
     /** 登记一个写 / 读:同步入口先验 token;链内再复核锁与 token */
     const track = <R>(op: () => Promise<R>): Promise<R> => {
       if (!token.alive || !token.accepting) return Promise.reject(new StoreError('txn_closed'));
-      const run = (async (): Promise<R> => {
+      const run = opTail.then(async (): Promise<R> => {
         await assertBoth();
         if (!token.alive) throw new StoreError('txn_closed');
         return op();
-      })();
+      });
+      opTail = run.then(
+        () => undefined,
+        () => undefined,
+      );
       pending.add(run);
       const forget = (): void => {
         pending.delete(run);

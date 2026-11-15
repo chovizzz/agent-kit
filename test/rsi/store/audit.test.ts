@@ -2,7 +2,7 @@
  * B1a:审计追加器与分类函数——first / replay 区分(`compacted` 负向)、`appendObservation`、`idem_key`、坏行 / 撕裂尾 / 重复键 / 同键冲突(含 `at`)、R5 例外、容量。
  * 追加器测试内存假件与真文件系统同跑;分类函数是纯函数。
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   classifyAuditFile,
   isNoopObservation,
@@ -32,6 +32,9 @@ import {
   type FsKind,
   type World,
 } from './store-fixture.js';
+
+// 20000 行审计文件的播种 / 分类在真文件系统上较慢
+vi.setConfig({ testTimeout: 120_000 });
 
 const KINDS: readonly FsKind[] = ['mem', 'real'];
 const REPLAY = { kind: 'replay', source: { kind: 'test', ref: 'r' } } as const;
@@ -373,6 +376,18 @@ describe.each(KINDS)('appendKeyed first(%s)', (kind) => {
     expect([e.code, e instanceof AuditSealedError]).toEqual(['sealed_interval', true]);
     expect(await w.bytes(FILES.audit)).toBeNull();
     expect(region.state).toBe('closed'); // 失败也结束区域
+  });
+
+  it('first_residue_row_under_watermark_is_sealed_not_already:文件里仍有 ≤ W 的残留同键行时,first 仍是 sealed_interval(封存检查先于 already)', async () => {
+    const w = await makeWorld(kind);
+    const old = trow(hex16(1), '2026-11-10T08:00:00.000Z');
+    const region = await regionOf(w, '2026-11-10T08:00:00.000Z');
+    await seed(w, FILES.audit, jsonLine(old));
+    await seed(w, FILES.compaction, JSON.stringify(compactionDoc('2026-11-14')));
+    const e = await rejects(w.store.appender.appendKeyed([old], { kind: 'first', region }));
+    expect(e.code).toBe('sealed_interval');
+    // 对照:replay 来源的同一行 = already(残留行,不看源)
+    expect(await w.store.appender.appendKeyed([old], REPLAY)).toEqual(['already']);
   });
 
   it('first_append_after_region_closed_refused:关闭后再用同一区域 = region_closed;未 stamp 的区域同样拒绝', async () => {

@@ -2,7 +2,7 @@
  * B1a:`LedgerRecoveryPort.recoverThrough` 的端口契约(设计稿 v3 §A.5「B1a 用例」;内存假件与真文件系统同跑)。
  * **只证端口,不计作压缩编排已通过**:`Compactor` 缺席,审计满的情形用真追加器 + 满的审计文件(假 appender 的等价物)。
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { RSI_EFFECTS_LIMITS } from '../../../src/contracts/rsi-store.js';
 import { decodeLedger } from '../../../src/rsi/store/backend.js';
 import { StoreError } from '../../../src/rsi/store/errors.js';
@@ -30,6 +30,9 @@ import {
   type World,
 } from './store-fixture.js';
 
+// 20000 行审计文件的播种 / 分类在真文件系统上较慢
+vi.setConfig({ testTimeout: 120_000 });
+
 const KINDS: readonly FsKind[] = ['mem', 'real'];
 const W = '2026-11-14';
 const E1 = '2026-11-10T08:00:00.000Z';
@@ -53,7 +56,7 @@ const rejects = async (p: Promise<unknown>): Promise<StoreError> => {
   throw new Error('expected rejection');
 };
 const fullAudit = (): string =>
-  Array.from({ length: 20000 }, (_, i) => jsonLine(trow(hex16(i + 1)))).join('');
+  Array.from({ length: 20000 }, (_, i) => jsonLine(trow(hex16(i + 0x100000)))).join('');
 
 describe.each(KINDS)('recoverThrough 契约(%s)', (kind) => {
   it('recover_through_rejects_event_after_W:任一批事件日 > W → 整个调用 out_of_range,零写入;事件日 == W 通过(边界对照)', async () => {
@@ -268,6 +271,24 @@ describe.each(KINDS)('recoverThrough 契约(%s)', (kind) => {
     expect((await rejects(w2.store.recovery.recoverThrough(W, [batch('k', [tomb()])]))).code).toBe(
       'compaction_unsupported',
     );
+  });
+
+  it('recover_dependent_satisfied_not_reported:依赖本次未提交修改的「满足」不得报成 satisfied;提交成功时同批一起 committed(对照)', async () => {
+    const w = await makeWorld(kind, {
+      wrap: (inner) => faulty(inner, [{ op: 'commitTmp', name: FILES.effects, code: 'EXDEV' }]),
+    });
+    const two = [batch('k1', [tomb(ID)]), batch('k2', [tomb(ID)])];
+    expect(await w.store.recovery.recoverThrough(W, two)).toEqual([
+      { batch_id: 'k1', state: 'ledger_not_committed', cause: 'store_io' },
+      { batch_id: 'k2', state: 'ledger_not_committed', cause: 'store_io' },
+    ]);
+    expect(await w.bytes(FILES.effects)).toBeNull();
+    // 对照:故障只注入一次,重试后两批都在这一次提交里
+    expect(await w.store.recovery.recoverThrough(W, two)).toEqual([
+      { batch_id: 'k1', state: 'ledger_committed' },
+      { batch_id: 'k2', state: 'ledger_committed' },
+    ]);
+    // 真正调用前已满足的批,提交失败时保持 satisfied(见 recover_through_satisfied_preserved_on_failure)
   });
 
   it('提交时 rename 失败(commitTmp EXDEV):批标 not_committed(store_io),tmp 已清', async () => {

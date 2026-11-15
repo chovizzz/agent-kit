@@ -93,6 +93,40 @@ describe('事务协调器', () => {
     expect(await rejects(writeP as Promise<void>)).toBeInstanceOf(RsiLockError);
   });
 
+  it('ops_inside_txn_serialized:同一事务内并发的 commit 被串行——第二个在第一个提交后读到新 gen 而被拒,不争用 .tmp', async () => {
+    const w = await makeWorld('mem');
+    const mk = (gen: number, id: string) => ({
+      schema_version: 1 as const,
+      gen,
+      blacklist: [],
+      tombstones: [
+        {
+          id,
+          terminal: 'rejected' as const,
+          reason: 'vetoed' as const,
+          at: '2026-11-15T08:00:00.000Z',
+        },
+      ],
+      cooldowns: [],
+      applied: [],
+    });
+    const res = await held(w).transaction(async (p) =>
+      Promise.allSettled([
+        p.ledgerWrite.commit(mk(1, 'ra_0123456789ab')),
+        p.ledgerWrite.commit(mk(1, 'ra_ba9876543210')),
+      ]),
+    );
+    expect(res.map((r) => r.status)).toEqual(['fulfilled', 'rejected']);
+    expect((res[1] as PromiseRejectedResult).reason).toMatchObject({
+      code: 'state_invalid',
+      detail: 'gen_not_sequential',
+    });
+    expect(
+      JSON.parse((await w.bytes(FILES.effects))?.toString('utf8') ?? '{}').tombstones[0].id,
+    ).toBe('ra_0123456789ab');
+    expect(await w.tmpFiles()).toEqual([]);
+  });
+
   it('release_waits_inflight_txn / external_release_waits_not_rejected:事务外 release 等在途事务完成,再逆序释放 personal → rsi', async () => {
     const w = await makeWorld('mem');
     const g = gate();

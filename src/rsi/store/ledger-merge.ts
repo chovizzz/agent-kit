@@ -333,9 +333,25 @@ export function planBatches(
 ): { outcomes: BatchOutcome[]; plan: PlanResult | null; planError: StoreError | null } {
   const w = beginWorking(state);
   const outcomes: BatchOutcome[] = [];
+  let anyChanged = false;
   for (const b of batches) {
     try {
-      outcomes.push({ state: applyBatch(w, b.key, b.effects, b.meta, 'replay', opts) });
+      const r = applyBatch(w, b.key, b.effects, b.meta, 'replay', opts);
+      // 前面的批次已改动 Working 时,本批的 `satisfied` 可能只是「依赖本次未提交的修改」:对 base 独立复核,
+      // 不独立满足的按 `changed` 处理(提交失败时与前批同命运,不得报成「调用前已满足」)
+      if (r === 'satisfied' && anyChanged && b.effects.length > 0) {
+        const alone = beginWorking(state);
+        try {
+          if (applyBatch(alone, b.key, b.effects, b.meta, 'replay', opts) === 'changed') {
+            outcomes.push({ state: 'changed' });
+            continue;
+          }
+        } catch (e) {
+          if (!(e instanceof StoreError)) throw e;
+        }
+      }
+      if (r === 'changed') anyChanged = true;
+      outcomes.push({ state: r });
     } catch (e) {
       if (!(e instanceof StoreError)) throw e;
       outcomes.push({ state: 'failed', cause: e.code });

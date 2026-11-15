@@ -38,12 +38,16 @@ export function ioError(e: unknown): Error {
   return new StoreError('store_io', code ?? (e instanceof Error ? e.name : 'unknown'));
 }
 
+/** 严格 UTF-8(非法字节序列 = 抛,不静默替换为 U+FFFD 后被规范化覆盖) */
+const strictUtf8 = (bytes: Buffer): string =>
+  new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+
 export function decodeLedger(bytes: Buffer): RsiEffectsLedger {
   let raw: unknown;
   try {
-    raw = JSON.parse(bytes.toString('utf8'));
-  } catch {
-    throw new StoreError('state_invalid', 'json');
+    raw = JSON.parse(strictUtf8(bytes));
+  } catch (e) {
+    throw new StoreError('state_invalid', e instanceof TypeError ? 'utf8' : 'json');
   }
   const p = RsiEffectsLedgerSchema.safeParse(raw);
   if (p.success) return p.data;
@@ -58,9 +62,9 @@ export function encodeLedger(l: RsiEffectsLedger): string {
 export function decodeCompaction(bytes: Buffer, today: string): RsiAuditCompaction {
   let raw: unknown;
   try {
-    raw = JSON.parse(bytes.toString('utf8'));
-  } catch {
-    throw new StoreError('compaction_unsupported', 'json');
+    raw = JSON.parse(strictUtf8(bytes));
+  } catch (e) {
+    throw new StoreError('compaction_unsupported', e instanceof TypeError ? 'utf8' : 'json');
   }
   const p = RsiAuditCompactionSchema.safeParse(raw);
   if (!p.success) {
@@ -182,6 +186,11 @@ export function createBackend(fs: StoreFs, clock: () => Date): StoreBackend {
       const cur = await readCompaction();
       if (next.gen !== (cur?.gen ?? 0) + 1)
         throw new StoreError('compaction_unsupported', 'gen_not_sequential');
+      // 与读侧同一份语义校验(I1:through 须早于今日)——不得写出下一次读取就拒绝的文件;I4:水位线不回退
+      decodeCompaction(Buffer.from(canonicalJson(next), 'utf8'), today());
+      if (cur?.through != null && (next.through === null || next.through < cur.through)) {
+        throw new StoreError('compaction_unsupported', 'through_regressed');
+      }
       await atomicReplace(RSI_AUDIT_COMPACTION_FILE, canonicalJson(next), assertHeld);
     },
   };

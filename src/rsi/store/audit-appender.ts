@@ -78,6 +78,10 @@ export async function planKeyedAppend(
       continue;
     }
     inBatch.set(key, line);
+    // `first` 的封存检查先于「文件里已有同键行」的 already:事件日 ≤ W 的 first 一律 sealed_interval(不因残留行而返回 already)
+    if (origin.kind === 'first' && st.wm !== null && utcDay(line.at) <= st.wm) {
+      throw new AuditSealedError('sealed_interval', key);
+    }
     const have = st.cls.byKey.get(key);
     if (have !== undefined) {
       if (!sameRowForKey(have, line)) throw new AuditKeyConflict(key);
@@ -85,7 +89,6 @@ export async function planKeyedAppend(
       continue;
     }
     if (st.wm !== null && utcDay(line.at) <= st.wm) {
-      if (origin.kind === 'first') throw new AuditSealedError('sealed_interval', key);
       const ev = resolve === undefined ? null : await resolve(origin.source, key);
       if (ev === null || !sameSealedFields(ev, line)) {
         throw new AuditSealedError('sealed_unknown_event', key);

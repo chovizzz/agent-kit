@@ -98,6 +98,39 @@ describe('后端 compaction 读写', () => {
     );
   });
 
+  it('writeCompaction 与读侧同一份语义:through ≥ 今日 / 水位线回退 = compaction_unsupported(不写出读不回的文件)', async () => {
+    const w = await makeWorld('mem');
+    const doc = { schema_version: 1 as const, gen: 1, through: '2026-11-10', months: {} };
+    expect(await code(w.backend.writeCompaction({ ...doc, through: '2026-11-15' }, noop))).toEqual([
+      'compaction_unsupported',
+      'through_not_before_today',
+    ]);
+    expect(await code(w.backend.writeCompaction({ ...doc, through: '2027-01-01' }, noop))).toEqual([
+      'compaction_unsupported',
+      'through_not_before_today',
+    ]);
+    expect(await w.bytes(FILES.compaction)).toBeNull();
+    await w.backend.writeCompaction(doc, noop);
+    expect(
+      await code(w.backend.writeCompaction({ ...doc, gen: 2, through: '2026-11-09' }, noop)),
+    ).toEqual(['compaction_unsupported', 'through_regressed']);
+    expect(await code(w.backend.writeCompaction({ ...doc, gen: 2, through: null }, noop))).toEqual([
+      'compaction_unsupported',
+      'through_regressed',
+    ]);
+    await w.backend.writeCompaction({ ...doc, gen: 2, through: '2026-11-12' }, noop);
+    expect((await w.backend.readWatermark()).through).toBe('2026-11-12');
+  });
+
+  it('账 / 压缩文件含非法 UTF-8 = 严格解码失败(utf8),不静默替换后被覆盖', async () => {
+    const w = await makeWorld('mem');
+    const bad = Buffer.concat([Buffer.from('{"a":"'), Buffer.from([0xff]), Buffer.from('"}')]);
+    (w.raw as MemFs).files.set(FILES.effects, bad);
+    (w.raw as MemFs).files.set(FILES.compaction, bad);
+    expect(await code(w.backend.readLedger())).toEqual(['state_invalid', 'utf8']);
+    expect(await code(w.backend.readCompaction())).toEqual(['compaction_unsupported', 'utf8']);
+  });
+
   it('读不出 = compaction_unreadable(不当作缺失);链接 / 超限 = unsafe', async () => {
     const w = await makeWorld('mem');
     (w.raw as MemFs).unsafe.add(FILES.compaction);

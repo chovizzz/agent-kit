@@ -62,7 +62,10 @@ export interface HeldStore {
 
 // ---------- 2. KeyedEffectSink ----------
 export type LedgerLayer = 'committed' | 'satisfied' | 'not_committed' | 'not_applicable';
-/** `appended` = 本次带的每一行都已在文件里(新追加或原本就在);`compacted` = 每一行都被水位线覆盖;`pending` = 账已提交 / 已满足而审计追加失败 */
+/**
+ * `appended` = 本次带的每一行**要么已在文件里(新追加或原本就在)、要么已被水位线覆盖**(至少一行在文件里;**混合批返回 `appended`**,调用方不得据此推断每行都在文件里);
+ * `compacted` = 每一行都被水位线覆盖(都已由压缩计入汇总);`pending` = 账已提交 / 已满足而审计追加失败。
+ */
 export type AuditLayer = 'appended' | 'pending' | 'compacted' | 'not_applicable';
 /**
  * 存储端结果只有两层(命令层另组合 `authority`,存储端不推断)。`cause`:`ledger = not_committed` 时是 `effects_full` / `audit_full`(容量,撤销优先,不抛);

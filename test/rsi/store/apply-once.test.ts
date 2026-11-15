@@ -2,7 +2,7 @@
  * B1a:`KeyedEffectSink.applyOnce` / `UserVetoPort` 的端口契约套件——**内存假件与真实现(真文件系统)同跑**,包括错误语义与幂等:
  * 三层结果、同键同 / 异内容、`audit:` 路由、审计满与账满(撤销优先)、压缩不受支持、账不合规、gen 与 lift 语义、零写入。
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { RsiEffectsLedgerSchema, RSI_EFFECTS_LIMITS } from '../../../src/contracts/rsi-store.js';
 import { RsiLockError } from '../../../src/rsi/lock-error.js';
 import { decodeLedger } from '../../../src/rsi/store/backend.js';
@@ -32,6 +32,9 @@ import {
   type World,
 } from './store-fixture.js';
 
+// 20000 行审计文件的播种 / 分类在真文件系统上较慢
+vi.setConfig({ testTimeout: 120_000 });
+
 const KINDS: readonly FsKind[] = ['mem', 'real'];
 const ledgerOf = async (w: World) => {
   const b = await w.bytes(FILES.effects);
@@ -57,7 +60,7 @@ const rejects = async (p: Promise<unknown>): Promise<StoreError> => {
   throw new Error('expected rejection');
 };
 const fullAudit = (n = 20000): string =>
-  Array.from({ length: n }, (_, i) => jsonLine(trow(hex16(i + 1)))).join('');
+  Array.from({ length: n }, (_, i) => jsonLine(trow(hex16(i + 0x100000)))).join('');
 
 describe.each(KINDS)('applyOnce 契约(%s)', (kind) => {
   it('三层结果:首次 = committed,同键同内容 = satisfied 且文件字节不变、不写 tmp', async () => {

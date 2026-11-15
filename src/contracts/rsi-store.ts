@@ -163,6 +163,9 @@ export const RsiAuditMonthSchema = z
     if (sum(m.by_kind) !== m.lines) {
       ctx.addIssue({ code: 'custom', message: RSI_COMPACTION_REFINE.byKindSum });
     }
+    if (sum(m.transition_by_to) !== (m.by_kind['transition'] ?? 0)) {
+      ctx.addIssue({ code: 'custom', message: RSI_COMPACTION_REFINE.transitionSum });
+    }
   });
 export type RsiAuditMonth = z.infer<typeof RsiAuditMonthSchema>;
 

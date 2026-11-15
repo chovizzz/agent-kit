@@ -290,16 +290,19 @@ export const V1_ASM_B1A_MUTATIONS: readonly V1AsmB1aMutation[] = [
   },
   {
     id: 'first_not_sealed',
-    clause: 'W0-26 §9 first 事件日 ≤ W 拒绝',
+    clause: 'W0-26 §9 first 事件日 ≤ W 拒绝(先于 already)',
     edits: [
       swap(
         'src/rsi/store/audit-appender.ts',
-        "if (origin.kind === 'first') throw new AuditSealedError('sealed_interval', key);",
-        "if (false) throw new AuditSealedError('sealed_interval', key);",
+        "if (origin.kind === 'first' && st.wm !== null && utcDay(line.at) <= st.wm) {",
+        'if (false) {',
       ),
     ],
     tests: ['rsi/store/audit.test.ts'],
-    expectRed: ['first_has_no_compacted_return'],
+    expectRed: [
+      'first_has_no_compacted_return',
+      'first_residue_row_under_watermark_is_sealed_not_already',
+    ],
     mustKill: ['first_has_no_compacted_return'],
   },
   {
@@ -728,6 +731,90 @@ export const V1_ASM_B1A_MUTATIONS: readonly V1AsmB1aMutation[] = [
     tests: ['rsi/store/backend.test.ts'],
     expectRed: ['fs_port_name_escape'],
     mustKill: ['fs_port_name_escape'],
+  },
+  {
+    id: 'ops_not_serialized',
+    clause: 'W0-26 §12 事务内读写串行',
+    edits: [
+      swap(
+        'src/rsi/store/txn.ts',
+        'const run = opTail.then(async',
+        'const run = Promise.resolve().then(async',
+      ),
+    ],
+    tests: ['rsi/store/txn.test.ts'],
+    expectRed: ['ops_inside_txn_serialized'],
+    mustKill: ['ops_inside_txn_serialized'],
+  },
+  {
+    id: 'transition_sum_unchecked',
+    clause: 'W0-26 §8 transition_by_to 之和 = by_kind.transition',
+    edits: [
+      swap(
+        'src/contracts/rsi-store.ts',
+        "if (sum(m.transition_by_to) !== (m.by_kind['transition'] ?? 0)) {",
+        'if (false) {',
+      ),
+    ],
+    tests: ['rsi/store/contract.test.ts'],
+    expectRed: ['合法通过;through 可为 null'],
+    mustKill: ['合法通过;through 可为 null'],
+  },
+  {
+    id: 'recover_dependent_satisfied',
+    clause: 'W0-26 §2 依赖未提交修改的满足不得报 satisfied',
+    edits: [
+      swap(
+        'src/rsi/store/ledger-merge.ts',
+        "if (r === 'satisfied' && anyChanged && b.effects.length > 0) {",
+        'if (false) {',
+      ),
+    ],
+    tests: ['rsi/store/recovery.test.ts'],
+    expectRed: ['recover_dependent_satisfied_not_reported'],
+    mustKill: ['recover_dependent_satisfied_not_reported'],
+  },
+  {
+    id: 'compaction_write_unchecked',
+    clause: 'W0-26 §7 写入与读侧同一语义',
+    edits: [
+      swap(
+        'src/rsi/store/backend.ts',
+        "decodeCompaction(Buffer.from(canonicalJson(next), 'utf8'), today());",
+        ';',
+      ),
+    ],
+    tests: ['rsi/store/backend.test.ts'],
+    expectRed: ['writeCompaction 与读侧同一份语义'],
+    mustKill: ['writeCompaction 与读侧同一份语义'],
+  },
+  {
+    id: 'compaction_regress_allowed',
+    clause: 'W0-26 §7 水位线不回退',
+    edits: [
+      swap(
+        'src/rsi/store/backend.ts',
+        'if (cur?.through != null && (next.through === null || next.through < cur.through)) {',
+        'if (false) {',
+      ),
+    ],
+    tests: ['rsi/store/backend.test.ts'],
+    expectRed: ['writeCompaction 与读侧同一份语义'],
+    mustKill: ['writeCompaction 与读侧同一份语义'],
+  },
+  {
+    id: 'utf8_lenient',
+    clause: 'W0-26 §7 严格 UTF-8',
+    edits: [
+      swap(
+        'src/rsi/store/backend.ts',
+        "new TextDecoder('utf-8', { fatal: true }).decode(bytes);",
+        "bytes.toString('utf8');",
+      ),
+    ],
+    tests: ['rsi/store/backend.test.ts'],
+    expectRed: ['账 / 压缩文件含非法 UTF-8'],
+    mustKill: ['账 / 压缩文件含非法 UTF-8'],
   },
 ];
 

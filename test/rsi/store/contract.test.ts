@@ -99,7 +99,7 @@ describe('RsiAuditCompaction schema', () => {
     deleted: 2,
     derived_missing: 1,
     by_kind: { transition: 3 },
-    transition_by_to: {},
+    transition_by_to: { shadow: 3 },
   };
   const doc = { schema_version: 1, gen: 1, through: '2026-10-31', months: { '2026-10': month } };
   const m = (v: unknown): string[] => {
@@ -113,6 +113,9 @@ describe('RsiAuditCompaction schema', () => {
     expect(
       m({ ...doc, months: { '2026-10': { ...month, by_kind: { transition: 2 } } } }),
     ).toContain('by_kind_sum');
+    expect(
+      m({ ...doc, months: { '2026-10': { ...month, transition_by_to: { shadow: 2 } } } }),
+    ).toContain('transition_sum');
     expect(m({ ...doc, months: { '2026-1': month } }).length).toBeGreaterThan(0);
     expect(m({ ...doc, gen: 0 }).length).toBeGreaterThan(0);
     expect(m({ ...doc, through: '2026-02-30' }).length).toBeGreaterThan(0);
