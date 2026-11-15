@@ -50,11 +50,11 @@ export const cool = (
   kind: 'auto_rollback' | 'expired' = 'auto_rollback',
   days = 90,
 ): TransitionEffect => ({ type: 'start_cooldown', cluster_id: cluster, kind, days });
-export const meta = (at = AT1, extra: Partial<ApplyOnceMeta> = {}): ApplyOnceMeta => ({
-  event_at: at,
-  fp_hmac: FP,
-  ...extra,
-});
+export const meta = (
+  at = AT1,
+  extra: Partial<ApplyOnceMeta> = {},
+): ApplyOnceMeta & { fp_hmac: string } =>
+  ({ event_at: at, fp_hmac: FP, ...extra }) as ApplyOnceMeta & { fp_hmac: string };
 export const trow = (idem: string, at = AT1, over: Partial<RsiAuditLine> = {}): RsiAuditLine => ({
   at,
   kind: 'transition',
