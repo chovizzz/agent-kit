@@ -11,7 +11,9 @@
  *    而同一 pass 不能服务第二次写;
  *  - 铸造要求 `inFlight == 0`(写进行中铸造 = `RoundInternalError`),且铸造时 `gen` 必须等于评估开始时的 `gen`(评估期间有写 = 事实已过时 = `RoundInternalError`);
  *  - 缺 stage 或 op 不在 `stage.ops` 内 → `growth_unwired`(**先于任何其它码**,零 reader 调用);
- *  - 候选来源缺失(`source` 为 null / undefined)一律拒绝(`source_unknown`),与 W9 的 `source_proposal === null → ok(不消费)` 各自独立。
+ *  - 候选来源缺失一律拒绝(`source_unknown`),与 W9 的 `source_proposal === null → ok(不消费)` 各自独立:null / undefined / 非对象 / 缺 `run_id` 或 `proposal_id` /
+ *    任一为空串或非字符串,在请求快照阶段就按「来源缺失」处理(与 reader 无关);
+ *  - `candidate_create` 的 G6 要求**本 due 轮已完成重扫的证据**:`rescanned === true` 且 `rescanRoundId === round.id`(不由 `rescanRequired` 解除);是否 due 仍由 G9 判定。
  */
 import { normalizeJudgeVerdict, type JudgeGrowthVerdict } from '../judge-slot.js';
 import {
@@ -145,6 +147,8 @@ export interface TaintFact {
   /** 本轮是否要求先做排除重扫(仅 `l0Due` 的轮) / 是否已做 */
   readonly rescanRequired: boolean;
   readonly rescanned: boolean;
+  /** 完成重扫的回合 id(`rescanned` 为真时必须等于 `round.id`,否则视为未重扫;未重扫 = null);非 string / null = 事实不可信 */
+  readonly rescanRoundId: string | null;
   /** 逐候选(候选类 op 才读):`unknown` = 来源 / run / 标记查不实;`conflict` = 污染凭据与已有凭据冲突 */
   readonly candidate?: 'clean' | 'tainted' | 'unknown' | 'conflict';
 }
@@ -405,15 +409,19 @@ function snapshotReq(req: GrowthReq): GrowthReq {
   if (!('cand' in op)) return Object.freeze({ op: op.cap }) as GrowthReq;
   const c = (req as CandidateReq).cand;
   const s = c.source as unknown;
+  const nonEmpty = (v: unknown): v is string => typeof v === 'string' && v !== '';
   const source =
-    typeof s === 'object' && s !== null
-      ? Object.freeze({
-          run_id: (s as { run_id: string }).run_id,
-          proposal_id: (s as { proposal_id: string }).proposal_id,
-        })
-      : s === undefined
-        ? undefined
-        : null; // 非对象的来源(畸形)按「来源缺失」处理,绝不当成有来源
+    s === undefined
+      ? undefined
+      : typeof s === 'object' && s !== null
+        ? nonEmpty((s as { run_id?: unknown }).run_id) &&
+          nonEmpty((s as { proposal_id?: unknown }).proposal_id)
+          ? Object.freeze({
+              run_id: (s as { run_id: string }).run_id,
+              proposal_id: (s as { proposal_id: string }).proposal_id,
+            })
+          : null // 缺字段 / 空串 / 非字符串的来源(畸形)按「来源缺失」处理
+        : null; // 非对象的来源(畸形)同样按「来源缺失」处理,绝不当成有来源
   return Object.freeze({
     op: op.cap,
     cand: Object.freeze({
@@ -438,6 +446,20 @@ export function sameOp(a: GrowthOp, b: GrowthOp): boolean {
 }
 
 // ---------- evaluateGrowth ----------
+/**
+ * 跨信任边界:`stage.ops` 按声明的 `ReadonlySet` 形状验证(`has` 是函数、结果严格为 `true`),不要求原生 `Set`;
+ * 缺 stage / 无 `has` / `has` 抛错 / 返回非 `true` 一律 = 未装配。
+ */
+function stageWires(stage: GrowthStage | undefined, op: GrowthOpName): boolean {
+  try {
+    const ops = stage?.ops as { has?: unknown } | undefined | null;
+    if (typeof ops !== 'object' || ops === null || typeof ops.has !== 'function') return false;
+    return (ops.has as (v: unknown) => unknown).call(ops, op) === true;
+  } catch {
+    return false;
+  }
+}
+
 type Step = { readonly id: CheckId; readonly run: () => Promise<GrowthDeny | null> };
 
 function parseOkResult(
@@ -520,11 +542,18 @@ function stepsOf(
       if (f.scan === 'pending') return 'taint_pending';
       if (f.scan !== 'ok') return 'taint_unavailable';
       // 跨信任边界:消费的布尔字段必须就是布尔(缺键 / 非布尔 = 事实不可信 = 拒绝,不得被解释成「不要求重扫」)
-      if (typeof f.rescanRequired !== 'boolean' || typeof f.rescanned !== 'boolean') {
+      if (
+        typeof f.rescanRequired !== 'boolean' ||
+        typeof f.rescanned !== 'boolean' ||
+        (f.rescanRoundId !== null && typeof f.rescanRoundId !== 'string')
+      ) {
         return 'taint_unavailable';
       }
-      if (f.rescanRequired && !f.rescanned) return 'taint_pending';
-      if (p.G6 === 'rescan') return null;
+      // 重扫证据必须属于本轮:`rescanned` 为真且 `rescanRoundId === round.id`(别轮 / null 的证据 = 未重扫)
+      const rescanDone = f.rescanned && f.rescanRoundId === round.id;
+      // 创建:重扫是硬要求,不由 `rescanRequired` 解除(G6 与 G9 之间跨过 L0 到期边界也不会放行);是否 due 另由 G9 判定
+      if (p.G6 === 'rescan') return rescanDone ? null : 'taint_pending';
+      if (f.rescanRequired && !rescanDone) return 'taint_pending';
       switch (f.candidate) {
         case 'clean':
           return null;
@@ -605,8 +634,7 @@ export async function evaluateGrowth(
   const st = roundInternals(round);
   if (st.form !== 'both') throw new RoundInternalError('round_not_both');
   if (st.inFlight !== 0) throw new RoundInternalError('mint_while_write_in_flight');
-  const ops = stage?.ops;
-  if (!(ops instanceof Set) || !ops.has(snap.op)) return growthDenied('growth_unwired');
+  if (!stageWires(stage, snap.op)) return growthDenied('growth_unwired');
   const genAtStart = st.gen;
   const lockCheck = async (): Promise<GrowthDeny | null> => {
     try {

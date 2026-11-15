@@ -415,6 +415,7 @@ describe('逐项拒绝码与优先级(以 grant 为例,全 ✓ 的 op)', () => {
             scan: 'ok',
             rescanRequired: false,
             rescanned: false,
+            rescanRoundId: null,
             candidate: 'clean',
           }),
       },
@@ -429,6 +430,7 @@ describe('逐项拒绝码与优先级(以 grant 为例,全 ✓ 的 op)', () => {
             scan: 'unavailable',
             rescanRequired: false,
             rescanned: false,
+            rescanRoundId: null,
             candidate: 'clean',
           }),
       },
@@ -443,6 +445,7 @@ describe('逐项拒绝码与优先级(以 grant 为例,全 ✓ 的 op)', () => {
             scan: 'pending',
             rescanRequired: false,
             rescanned: false,
+            rescanRoundId: null,
             candidate: 'clean',
           }),
       },
@@ -457,6 +460,7 @@ describe('逐项拒绝码与优先级(以 grant 为例,全 ✓ 的 op)', () => {
             scan: 'ok',
             rescanRequired: true,
             rescanned: false,
+            rescanRoundId: null,
             candidate: 'clean',
           }),
       },
@@ -471,6 +475,7 @@ describe('逐项拒绝码与优先级(以 grant 为例,全 ✓ 的 op)', () => {
             scan: 'ok',
             rescanRequired: false,
             rescanned: false,
+            rescanRoundId: null,
             candidate: 'tainted',
           }),
       },
@@ -485,6 +490,7 @@ describe('逐项拒绝码与优先级(以 grant 为例,全 ✓ 的 op)', () => {
             scan: 'ok',
             rescanRequired: false,
             rescanned: false,
+            rescanRoundId: null,
             candidate: 'conflict',
           }),
       },
@@ -499,6 +505,7 @@ describe('逐项拒绝码与优先级(以 grant 为例,全 ✓ 的 op)', () => {
             scan: 'ok',
             rescanRequired: false,
             rescanned: false,
+            rescanRoundId: null,
             candidate: 'unknown',
           }),
       },
@@ -513,6 +520,7 @@ describe('逐项拒绝码与优先级(以 grant 为例,全 ✓ 的 op)', () => {
             scan: 'ok',
             rescanRequired: false,
             rescanned: false,
+            rescanRoundId: null,
           }),
       },
       'source_unknown',
@@ -694,7 +702,8 @@ describe('按 op 放宽 / 收紧(每条:放宽的 op 通过、收紧的 op 拒�
             capabilityReady: true,
             scan: 'ok',
             rescanRequired: false,
-            rescanned: false,
+            rescanned: true,
+            rescanRoundId: round.id, // 本轮已重扫的证据(创建的 G6 要求;下面的「重扫」用例逐项覆盖)
             candidate: 'clean',
             ...over,
           } as never),
@@ -1432,6 +1441,7 @@ describe('请求快照:检查对象与获准对象不可分叉', () => {
           scan: 'ok' as const,
           rescanRequired: false,
           rescanned: false,
+          rescanRoundId: null,
           candidate: 'clean' as const,
         });
       },
@@ -1477,6 +1487,7 @@ describe('G6 对畸形事实 fail-closed(逐字段)', () => {
     scan: 'ok',
     rescanRequired: false,
     rescanned: false,
+    rescanRoundId: null,
     candidate: 'clean',
   };
   const mk = (over: Record<string, unknown>) =>
@@ -1488,6 +1499,8 @@ describe('G6 对畸形事实 fail-closed(逐字段)', () => {
       ['rescanRequired 缺键', { rescanRequired: undefined }, 'taint_unavailable'],
       ['rescanned 非布尔', { rescanned: 1 }, 'taint_unavailable'],
       ['rescanned 缺键', { rescanned: undefined }, 'taint_unavailable'],
+      ['rescanRoundId 非字符串', { rescanRoundId: 5 }, 'taint_unavailable'],
+      ['rescanRoundId 缺键', { rescanRoundId: undefined }, 'taint_unavailable'],
       ['scan 非法枚举', { scan: 'maybe' }, 'taint_unavailable'],
       ['capabilityReady 非布尔', { capabilityReady: 'true' }, 'taint_unavailable'],
       ['candidate 非法枚举', { candidate: 'fine' }, 'source_unknown'],
@@ -1502,5 +1515,160 @@ describe('G6 对畸形事实 fail-closed(逐字段)', () => {
     }
     // 正向对照:合法事实通过
     expect(await deny(round, reqOf('grant'), mk({}))).toBe('PASS');
+  });
+});
+
+describe('M1:candidate_create 要求「本轮」已完成重扫的证据(不由 rescanRequired 解除)', () => {
+  const taint = (over: Record<string, unknown>) =>
+    readers({
+      taint: () =>
+        Promise.resolve({
+          capabilityReady: true,
+          scan: 'ok',
+          rescanRequired: false,
+          rescanned: false,
+          rescanRoundId: null,
+          candidate: 'clean',
+          ...over,
+        } as never),
+      throttle: () => Promise.resolve({ due: true }),
+    });
+  it('评审复现:rescanRequired=false 且 rescanned=false、due=true → 创建被拒 taint_pending(G9 不能替代重扫证据)', async () => {
+    const { round } = await openBoth();
+    expect(await deny(round, reqOf('candidate_create'), taint({}))).toBe('taint_pending');
+    // 正向对照:同一组事实但证据属于本轮 → PASS
+    expect(
+      await deny(
+        round,
+        reqOf('candidate_create'),
+        taint({ rescanned: true, rescanRoundId: round.id }),
+      ),
+    ).toBe('PASS');
+  });
+  it('证据不属于本轮(别的回合 id / null / 空串)→ taint_pending;rescanned 为假但带本轮 id 也拒', async () => {
+    const { round } = await openBoth();
+    for (const over of [
+      { rescanned: true, rescanRoundId: 'other-round' },
+      { rescanned: true, rescanRoundId: null },
+      { rescanned: true, rescanRoundId: '' },
+      { rescanned: false, rescanRoundId: round.id },
+    ]) {
+      expect(await deny(round, reqOf('candidate_create'), taint(over)), JSON.stringify(over)).toBe(
+        'taint_pending',
+      );
+    }
+  });
+  it('不 due 仍由 G9 拒绝(重扫证据齐全也不放行);非创建的候选类只在 rescanRequired 时要求本轮证据', async () => {
+    const { round } = await openBoth();
+    const done = { rescanned: true, rescanRoundId: round.id };
+    const notDue = readers({
+      taint: () =>
+        Promise.resolve({
+          capabilityReady: true,
+          scan: 'ok',
+          rescanRequired: false,
+          rescanned: true,
+          rescanRoundId: round.id,
+          candidate: 'clean',
+        } as never),
+      throttle: () => Promise.resolve({ due: false }),
+    });
+    expect(await deny(round, reqOf('candidate_create'), notDue)).toBe('throttled');
+    // grant:不要求重扫 → 无证据也 PASS;要求重扫而证据属于别轮 → taint_pending;本轮证据 → PASS
+    expect(await deny(round, reqOf('grant'), taint({}))).toBe('PASS');
+    expect(
+      await deny(
+        round,
+        reqOf('grant'),
+        taint({ rescanRequired: true, rescanned: true, rescanRoundId: 'other-round' }),
+      ),
+    ).toBe('taint_pending');
+    expect(await deny(round, reqOf('grant'), taint({ rescanRequired: true, ...done }))).toBe(
+      'PASS',
+    );
+  });
+});
+
+describe('M2:候选来源逐字段校验(缺字段 = 来源缺失 = source_unknown,与 reader 无关)', () => {
+  it('来源为 {} / 缺任一键 / 空串 / 非字符串 → source_unknown,且不调用任何 reader', async () => {
+    const { round } = await openBoth();
+    const bads: unknown[] = [
+      {},
+      { run_id: 'run-1' },
+      { proposal_id: 'p-1' },
+      { run_id: '', proposal_id: 'p-1' },
+      { run_id: 'run-1', proposal_id: '' },
+      { run_id: 1, proposal_id: 'p-1' },
+      { run_id: 'run-1', proposal_id: null },
+      [],
+    ];
+    for (const source of bads) {
+      const r = readers();
+      expect(
+        await deny(round, reqOf('grant', cand({ source: source as never })), r),
+        JSON.stringify(source),
+      ).toBe('source_unknown');
+      // G1 .. G5 是前序检查(可读);来源缺失在 G6 内先于 taint reader 判定
+      expect(r.calls, JSON.stringify(source)).not.toContain('taint');
+    }
+    // 正向对照:合法来源通过,且 pass 绑定的仍是候选 id / 内容哈希
+    expect(await deny(round, reqOf('grant', cand()), readers())).toBe('PASS');
+  });
+  it('所有候选类 op 都一样;创建 / bootstrap / admission 不看来源', async () => {
+    const { round } = await openBoth();
+    const bad = cand({ source: {} as never });
+    for (const op of ['shadow_to_canary', 'grant', 'deploy_inject'] as const) {
+      expect(await deny(round, reqOf(op, bad), readers()), op).toBe('source_unknown');
+    }
+    expect(await deny(round, reqOf('candidate_create'), readers())).toBe('PASS');
+  });
+});
+
+describe('L1:GrowthStage.ops 按声明的 ReadonlySet 形状验证(不要求原生 Set)', () => {
+  const wrapper = (ops: readonly string[]): GrowthStage => {
+    const inner = new Set<string>(ops);
+    return {
+      ops: {
+        has: (v: unknown) => inner.has(v as string),
+        size: inner.size,
+        forEach: () => undefined,
+        entries: () => inner.entries(),
+        keys: () => inner.keys(),
+        values: () => inner.values(),
+        [Symbol.iterator]: () => inner.values(),
+      } as unknown as GrowthStage['ops'],
+    };
+  };
+  it('非原生的 ReadonlySet 包装对象:含 op → 正常评估;不含 → growth_unwired(零 reader 调用)', async () => {
+    const { round } = await openBoth();
+    const r1 = readers();
+    expect(await deny(round, reqOf('grant'), r1, wrapper(['grant']))).toBe('PASS');
+    const r2 = readers();
+    expect(await deny(round, reqOf('grant'), r2, wrapper(['bootstrap']))).toBe('growth_unwired');
+    expect(r2.calls).toEqual([]);
+  });
+  it('畸形 ops(数组 / 无 has / has 抛错 / has 返回非 true)→ growth_unwired(fail-closed),零 reader 调用', async () => {
+    const { round } = await openBoth();
+    const bads: unknown[] = [
+      ['grant'],
+      {},
+      null,
+      { has: 1 },
+      {
+        has: () => {
+          throw new Error('boom');
+        },
+      },
+      { has: () => 'yes' },
+      { has: () => 1 },
+    ];
+    for (const ops of bads) {
+      const r = readers();
+      expect(
+        await deny(round, reqOf('grant'), r, { ops } as unknown as GrowthStage),
+        JSON.stringify(ops),
+      ).toBe('growth_unwired');
+      expect(r.calls).toEqual([]);
+    }
   });
 });

@@ -7,10 +7,13 @@
  *  3. 固定顺序、各一次:`enforceMute()`(读**新**状态)→ `reconcileCaches()`(对**新**凭据)→ 只读核验 `verifyMuted()`;任一步抛错 / 故障 → 记故障并继续其余步骤(尽力);
  *  4. **不重跑** S1、压缩、触发评估、自动解除、污染扫描(`tripAndMute` 内含自己的静音,不依赖扫尾);
  *  5. 全部通过 → `settled`;核验失败或任一步故障 → `unsettled('safety_not_settled')`,**`safetyDirty` 保持置位**(把第 2 步取走的标记放回),不再循环。
- *     扫尾自己的写**不再置脏**(`sweeping` 期间写适配器不置脏标记;`gen` 照常推进)。
+ *     扫尾自己的写**不再置脏**:按**异步上下文归属**判定(扫尾每个端口调用都在 `runAsSweep` 内,该调用链上经写适配器发起的写免置脏;`gen` 照常推进);
+ *     扫尾窗口内**别处并发发起**的脏写不在该上下文内,照常置脏;扫尾结束时脏标记非空 → `unsettled`(不报 `settled`、不重扫)。
+ *  6. 失锁**不被扫尾吞掉**:rsi 锁 `lock_lost` 与个人锁 `PersonalLockLost` 都是终态——立即停止余下扫尾步骤,放回脏标记,以**同一个错误对象**拒绝(之后每次调用得到同一个 rejection);
+ *     个人锁丢失另使本轮 `unsettled('safety_not_settled')`。调用方据此「只释放句柄、跳过余下个人步骤」。
  * `gen` 与 `safetyDirty` 互不相干:审计补行、压缩、effects 写使 `gen` 变化(只作废已铸造的 pass),但不置脏、不触发扫尾,更不导致永久 `unsettled`。
  */
-import { RoundInternalError, classify, type PersonalFault } from './errors.js';
+import { PersonalLockLost, RoundInternalError, classify, type PersonalFault } from './errors.js';
 import type { MutedVerdict, EnforceResult, StepOutcome } from './ports.js';
 import {
   markRoundUnsettled,
@@ -191,41 +194,44 @@ async function sweepOnce(
   const attempt = async (port: BudgetPort | null, f: () => Promise<boolean>): Promise<StepRun> => {
     try {
       if (port !== null) budget.charge(port);
-      return (await f()) ? 'ok' : 'not_ok';
+      return (await st.runAsSweep(f)) ? 'ok' : 'not_ok';
     } catch (e) {
       const c = classify(e);
-      if (c.kind === 'rethrow') return { rethrow: e };
+      // rsi 失锁 / 个人失锁:控制信号必须原样传出,不得降级成普通的「未收敛」
+      if (c.kind === 'rethrow' || c.kind === 'end_personal_round') return { rethrow: e };
       if (c.kind === 'fault') faults.push(c.fault);
       return 'not_ok';
     }
   };
   const results: StepRun[] = [];
-  st.sweeping = true;
-  try {
-    // 固定顺序、各一次;任一步失败不挡后面的(尽力),核验放最后(只读,不占预算)
+  // 固定顺序、各一次;任一步普通失败不挡后面的(尽力),失锁立即停止;核验放最后(只读,不占预算)
+  results.push(
+    await attempt('enforceMute', async () => (await ports.enforceMute()).fault === null),
+  );
+  if (!results.some((r) => typeof r === 'object')) {
     results.push(
-      await attempt('enforceMute', async () => (await ports.enforceMute()).fault === null),
+      await attempt('reconcileCaches', async () => {
+        const o = await ports.reconcileCaches();
+        return o.kind === 'done' || o.kind === 'skipped';
+      }),
     );
-    if (!results.some((r) => typeof r === 'object')) {
-      results.push(
-        await attempt('reconcileCaches', async () => {
-          const o = await ports.reconcileCaches();
-          return o.kind === 'done' || o.kind === 'skipped';
-        }),
-      );
-    }
-    if (!results.some((r) => typeof r === 'object')) {
-      results.push(await attempt(null, async () => (await ports.verifyMuted()).ok === true));
-    }
-  } finally {
-    st.sweeping = false;
+  }
+  if (!results.some((r) => typeof r === 'object')) {
+    results.push(await attempt(null, async () => (await ports.verifyMuted()).ok === true));
   }
   const thrown = results.find((r): r is { readonly rethrow: unknown } => typeof r === 'object');
   if (thrown !== undefined) {
     st.restoreDirty(snapshot);
+    if (thrown.rethrow instanceof PersonalLockLost) markRoundUnsettled(round, 'safety_not_settled');
     throw thrown.rethrow;
   }
-  if (results.length === 3 && results.every((r) => r === 'ok') && faults.length === 0) {
+  // 扫尾窗口内别处并发发起的脏写(不在扫尾上下文内)使脏标记非空:不能报 settled
+  if (
+    results.length === 3 &&
+    results.every((r) => r === 'ok') &&
+    faults.length === 0 &&
+    st.dirty.size === 0
+  ) {
     return { kind: 'settled', swept: true };
   }
   st.restoreDirty(snapshot); // safetyDirty 保持置位

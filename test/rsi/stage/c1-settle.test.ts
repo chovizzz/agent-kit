@@ -3,6 +3,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { RsiLockError } from '../../../src/rsi/lock-error.js';
+import { PersonalLockLost } from '../../../src/rsi/personal/stage/errors.js';
 import type { SweepPorts } from '../../../src/rsi/personal/stage/settle.js';
 import { createRoundBudget, settleSafety } from '../../../src/rsi/personal/stage/settle.js';
 import type { BothRound, RsiOnlyRound } from '../../../src/rsi/personal/stage/round.js';
@@ -341,5 +342,154 @@ describe('settleSafety', () => {
     expect(r.kind).toBe('unsettled'); // 最终失败,而不是重入者先看到的 settled
     expect(await inner).toBe(r);
     expect(p.calls.filter((c) => c === 'enforceMute').length).toBe(1);
+  });
+});
+
+describe('settleSafety · H1:扫尾不吞个人失锁(PersonalLockLost 是终态,同一个错误对象向外传播)', () => {
+  const step = ['enforceMute', 'reconcileCaches', 'verifyMuted'] as const;
+  for (const at of step) {
+    it(`${at} 抛 PersonalLockLost → 立即停止余下步骤、放回脏标记、本轮 unsettled,以同一错误对象拒绝;再调用得到同一个 rejection(端口零调用)`, async () => {
+      const { round } = await openBoth();
+      await dirty(round);
+      const lost = new PersonalLockLost();
+      const throwing = (): Promise<never> => Promise.reject(lost);
+      // 只覆盖出错的那一个端口(不把其它端口显式设成 undefined)
+      const over = {
+        [at]: () => {
+          p.calls.push(at);
+          return throwing();
+        },
+      } as unknown as Partial<SweepPorts>;
+      const p = sweepPorts(round, over);
+      const budget = createRoundBudget(round, { startRollbackLimit: 3 });
+      await expect(settleSafety(round, p, budget)).rejects.toBe(lost);
+      // 失锁之后不再调用后面的步骤
+      expect(p.calls).toEqual(step.slice(0, step.indexOf(at) + 1));
+      expect(round.safetyDirty.kinds()).toEqual(['trip']); // 脏标记放回
+      expect(round.unsettled()).toEqual(['safety_not_settled']);
+      const p2 = sweepPorts(round);
+      await expect(
+        settleSafety(round, p2, createRoundBudget(round, { startRollbackLimit: 3 })),
+      ).rejects.toBe(lost);
+      await expect(settleSafety(round, p, budget)).rejects.toBe(lost);
+      expect(p2.calls).toEqual([]);
+    });
+  }
+  it('正向对照:普通错误仍尽力跑完后续步骤并以 unsettled 返回(不拒绝);rsi 失锁同样上抛但不另标未决', async () => {
+    const a = await openBoth();
+    await dirty(a.round);
+    const pa = sweepPorts(a.round, { enforceMute: () => Promise.reject(new Error('io')) });
+    const r = await settleSafety(
+      a.round,
+      pa,
+      createRoundBudget(a.round, { startRollbackLimit: 3 }),
+    );
+    expect(r.kind).toBe('unsettled');
+    expect(pa.calls).toEqual(['reconcileCaches', 'verifyMuted']);
+    const b = await openBoth();
+    await dirty(b.round);
+    const rsiLost = new RsiLockError('lock_lost');
+    const pb = sweepPorts(b.round, { enforceMute: () => Promise.reject(rsiLost) });
+    await expect(
+      settleSafety(b.round, pb, createRoundBudget(b.round, { startRollbackLimit: 3 })),
+    ).rejects.toBe(rsiLost);
+    expect(b.round.unsettled()).toEqual([]);
+  });
+});
+
+describe('settleSafety · M4:扫尾只豁免「自己发起的写」,窗口内并发的其它写照常置脏', () => {
+  interface Gate {
+    readonly ports: SweepPorts;
+    readonly entered: Promise<void>;
+    release(): void;
+  }
+  /** verifyMuted 挂起在 gate 上;`entered` 在核验已开始(读取已发起)后兑现 */
+  function gated(round: BothRound): Gate {
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>((r) => {
+      enter = r;
+    });
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const base = sweepPorts(round, {
+      verifyMuted: async () => {
+        enter();
+        await gate;
+        return { ok: true };
+      },
+    });
+    return { ports: base, entered, release };
+  }
+  it('核验等待期间(测试自己的上下文)发起 state_pause_flag 写 → 脏标记非空 → unsettled(不是 settled),脏标记保持置位', async () => {
+    const { round } = await openBoth();
+    await dirty(round);
+    const g = gated(round);
+    const pending = settleSafety(
+      round,
+      g.ports,
+      createRoundBudget(round, { startRollbackLimit: 3 }),
+    );
+    await g.entered;
+    await round.writeAdapter('state_pause_flag', () => Promise.resolve())(); // 不在扫尾上下文内
+    g.release();
+    expect(await pending).toEqual({ kind: 'unsettled', reason: 'safety_not_settled', faults: [] });
+    expect([...round.safetyDirty.kinds()].sort()).toEqual(['state_pause_flag', 'trip']);
+    expect(round.unsettled()).toEqual(['safety_not_settled']);
+  });
+  it('revocation 写同理;正向对照:同一流程无外部写 → settled', async () => {
+    const a = await openBoth();
+    await dirty(a.round);
+    const ga = gated(a.round);
+    const pa = settleSafety(
+      a.round,
+      ga.ports,
+      createRoundBudget(a.round, { startRollbackLimit: 3 }),
+    );
+    await ga.entered;
+    await a.round.writeAdapter('revocation', () => Promise.resolve())();
+    ga.release();
+    expect((await pa).kind).toBe('unsettled');
+    const b = await openBoth();
+    await dirty(b.round);
+    const gb = gated(b.round);
+    const pb = settleSafety(
+      b.round,
+      gb.ports,
+      createRoundBudget(b.round, { startRollbackLimit: 3 }),
+    );
+    await gb.entered;
+    gb.release();
+    expect(await pb).toEqual({ kind: 'settled', swept: true });
+    expect(b.round.safetyDirty.isDirty()).toBe(false);
+  });
+  it('扫尾端口调用链上(含跨 await / 定时器之后)的脏种类写仍是扫尾自己的写:不置脏', async () => {
+    const { round } = await openBoth();
+    await dirty(round);
+    const p = sweepPorts(round, {
+      enforceMute: async () => {
+        await new Promise<void>((r) => setTimeout(r, 0));
+        await round.writeAdapter('revocation', () => Promise.resolve())();
+        return { mute: 'muted', fault: null };
+      },
+    });
+    expect(
+      await settleSafety(round, p, createRoundBudget(round, { startRollbackLimit: 3 })),
+    ).toEqual({ kind: 'settled', swept: true });
+    expect(round.safetyDirty.isDirty()).toBe(false);
+  });
+  it('一个回合的扫尾上下文不豁免另一个回合的写', async () => {
+    const a = await openBoth();
+    const b = await openBoth({ rsi: 'cccc3333cccc3333', personal: 'dddd4444dddd4444' });
+    await dirty(a.round);
+    const p = sweepPorts(a.round, {
+      enforceMute: async () => {
+        await b.round.writeAdapter('trip', () => Promise.resolve())(); // 另一回合的写
+        return { mute: 'muted', fault: null };
+      },
+    });
+    await settleSafety(a.round, p, createRoundBudget(a.round, { startRollbackLimit: 3 }));
+    expect(b.round.safetyDirty.kinds()).toEqual(['trip']);
   });
 });

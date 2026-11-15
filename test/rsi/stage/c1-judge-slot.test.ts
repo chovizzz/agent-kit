@@ -226,3 +226,79 @@ describe('normalizeJudgeReport(run 返回值的运行期校验)', () => {
     }
   });
 });
+
+describe('checkJudgeGrowth:跨信任边界的运行期包装(永不抛) · M3:槽入口属性访问异常也收敛成拒绝', () => {
+  const IND = { ok: false, code: 'judge_indeterminate' };
+  it('check 的 getter 抛错 → resolve judge_indeterminate(不是 reject);getter 只读一次', async () => {
+    let reads = 0;
+    const slot = {
+      get check(): never {
+        reads += 1;
+        throw new Error('broken slot');
+      },
+    } as unknown as JudgeGrowthSlot;
+    await expect(checkJudgeGrowth(slot, rec(SRC))).resolves.toEqual(IND);
+    expect(reads).toBe(1);
+  });
+  it('Proxy 的 get 陷阱抛错 → judge_indeterminate;正常槽读取一次 check 且保留 receiver', async () => {
+    const proxy = new Proxy(
+      {},
+      {
+        get(): never {
+          throw new Error('trap');
+        },
+      },
+    ) as unknown as JudgeGrowthSlot;
+    await expect(checkJudgeGrowth(proxy, rec(SRC))).resolves.toEqual(IND);
+    // 正向对照:getter 只读一次、`this` 是槽本身
+    let reads = 0;
+    let receiver: unknown = null;
+    const slot = {
+      get check() {
+        reads += 1;
+        return function (this: unknown) {
+          receiver = this;
+          return Promise.resolve({ ok: true as const });
+        };
+      },
+    } as unknown as JudgeGrowthSlot;
+    expect(await checkJudgeGrowth(slot, rec(SRC))).toEqual({ ok: true });
+    expect(reads).toBe(1);
+    expect(receiver).toBe(slot);
+  });
+  it('check 不是函数(未装配)仍是 judge_unavailable,与「读取抛错」的 judge_indeterminate 区分', async () => {
+    const slot = { check: 5 } as unknown as JudgeGrowthSlot;
+    expect(await checkJudgeGrowth(slot, rec(SRC))).toEqual({
+      ok: false,
+      code: 'judge_unavailable',
+    });
+  });
+});
+
+describe('normalizeJudgeReport(run 返回值的运行期校验) · L2:halted 只产出合法 StepHalt', () => {
+  const good = {
+    evaluated: 0,
+    transitioned: [],
+    blocked: [],
+    deferred: [],
+    halted: null,
+    unavailable: false,
+  };
+  it('未知 halted(任意字符串 / 原型链键)规范化为 candidate_invalid;七个合法值原样透传', () => {
+    for (const h of ['brand_new', 'toString', 'constructor', '__proto__', '']) {
+      expect(normalizeJudgeReport({ ...good, halted: h })?.halted, h).toBe('candidate_invalid');
+    }
+    for (const h of [
+      'repo_absent',
+      'repo_deferred',
+      'repo_invalid',
+      'revocations_invalid',
+      'commit_failed',
+      'candidate_invalid',
+      'lock_lost',
+    ]) {
+      expect(normalizeJudgeReport({ ...good, halted: h })?.halted, h).toBe(h);
+    }
+    expect(normalizeJudgeReport(good)?.halted).toBeNull();
+  });
+});

@@ -110,12 +110,14 @@ export function readers(over: Partial<GrowthReaders> = {}): RecordedReaders {
     ),
     repo: wrap('repo', () => Promise.resolve({ ok: true as const })),
     barrier: wrap('barrier', () => Promise.resolve({ ok: true as const })),
-    taint: wrap('taint', () =>
+    // 默认:本轮已完成重扫的证据(`rescanRoundId` 取自收到的 round,创建操作的 G6 才能通过)
+    taint: wrap('taint', (round: BothRound) =>
       Promise.resolve({
         capabilityReady: true,
         scan: 'ok' as const,
         rescanRequired: false,
-        rescanned: false,
+        rescanned: true,
+        rescanRoundId: round.id as string | null,
         candidate: 'clean' as const,
       }),
     ),

@@ -78,6 +78,17 @@ export const JUDGE_CHECK_TIMEOUT_MS = 2000;
 
 const DENY_SET: ReadonlySet<string> = new Set(JUDGE_GROWTH_DENY_CODES);
 
+/** `StepHalt` 的运行期全集(`Record` 保证与类型穷尽一致:新增 / 删除成员即类型错误) */
+const STEP_HALTS: Readonly<Record<StepHalt, true>> = Object.freeze({
+  repo_absent: true,
+  repo_deferred: true,
+  repo_invalid: true,
+  revocations_invalid: true,
+  commit_failed: true,
+  candidate_invalid: true,
+  lock_lost: true,
+});
+
 /** 跨信任边界校验:只认 `{ok:true}` 与 `{ok:false, code ∈ 三码}`;其余 → null */
 export function normalizeJudgeVerdict(v: unknown): JudgeGrowthVerdict | null {
   if (typeof v !== 'object' || v === null) return null;
@@ -90,24 +101,34 @@ export function normalizeJudgeVerdict(v: unknown): JudgeGrowthVerdict | null {
 }
 
 /**
- * `check` 的运行期包装(D 在两处调它,不直接调槽):抛错 / 超时 / 非法值 → `judge_indeterminate`。永不抛。
+ * `check` 的运行期包装(D 在两处调它,不直接调槽):抛错 / 超时 / 非法值 / 读取 `check` 属性抛错 → `judge_indeterminate`。永不抛。
  * 槽对象本身缺失 / 无 `check` 方法(未装配)→ `judge_unavailable`。
+ * 限制(不是硬时限):超时预算只约束**异步等待**,打断不了同步阻塞,也不会取消已启动的检查(其结果被丢弃)。
  */
 export async function checkJudgeGrowth(
   slot: JudgeGrowthSlot | undefined | null,
   rec: PersonalLifecycleRecord,
   opts: { readonly timeoutMs?: number } = {},
 ): Promise<JudgeGrowthVerdict> {
-  if (slot === undefined || slot === null || typeof slot.check !== 'function') {
-    return { ok: false, code: 'judge_unavailable' };
+  if (slot === undefined || slot === null) return { ok: false, code: 'judge_unavailable' };
+  // 跨信任边界:`check` 只读取**一次**(getter / Proxy 的读取异常也收敛成拒绝),调用时保留 receiver
+  let check: unknown;
+  try {
+    check = (slot as { check?: unknown }).check;
+  } catch {
+    return { ok: false, code: 'judge_indeterminate' };
   }
+  if (typeof check !== 'function') return { ok: false, code: 'judge_unavailable' };
   const timeoutMs = opts.timeoutMs ?? JUDGE_CHECK_TIMEOUT_MS;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const timeout = new Promise<'timeout'>((resolve) => {
       timer = setTimeout(() => resolve('timeout'), timeoutMs);
     });
-    const r = await Promise.race([slot.check(rec), timeout]);
+    const r = await Promise.race([
+      (check as (r: PersonalLifecycleRecord) => unknown).call(slot, rec),
+      timeout,
+    ]);
     if (r === 'timeout') return { ok: false, code: 'judge_indeterminate' };
     return normalizeJudgeVerdict(r) ?? { ok: false, code: 'judge_indeterminate' };
   } catch {
@@ -147,13 +168,20 @@ export function normalizeJudgeReport(r: unknown): JudgeReduceReport | null {
   }
   const halted = o['halted'];
   if (halted !== null && typeof halted !== 'string') return null;
+  // 未知 halted 值 = 完整性不明:规范化为 `candidate_invalid`(进 `classifyHalt` 即「停本步并 unsettled」),不把任意字符串包装成合法 `StepHalt`;`lock_lost` 原样透传
+  const haltedOut: StepHalt | null =
+    halted === null
+      ? null
+      : Object.hasOwn(STEP_HALTS, halted)
+        ? (halted as StepHalt)
+        : 'candidate_invalid';
   if (typeof o['unavailable'] !== 'boolean') return null;
   return {
     evaluated: o['evaluated'],
     transitioned: [...(o['transitioned'] as string[])],
     blocked: blockedOut,
     deferred: deferredOut,
-    halted: halted as StepHalt | null,
+    halted: haltedOut,
     unavailable: o['unavailable'],
   };
 }

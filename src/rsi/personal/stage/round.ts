@@ -9,6 +9,7 @@
  *  3. `evaluateGrowth(round: BothRound, …)` 是 `GrowthPass` 的**唯一**铸造点(`growth.ts` 模块私有),而 `PersonalRound.growth` 在无 `BothRound` 时是 `denied` 变体(无 round 字段)。
  * 运行期的第二道:`growth.ts` 的铸造登记表只认本模块铸造且未消费的 pass。威胁模型:防工程误用,不防同进程恶意代码(强转可绕过类型,绕不过登记表与盘上 nonce)。
  */
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { DefinitelyNotWritten, RoundInternalError, type PersonalFault } from './errors.js';
 import type { JudgeGrowthDeny } from '../judge-slot.js';
 import {
@@ -81,7 +82,10 @@ export interface RoundInternals {
   readonly form: 'both' | 'rsi_only';
   gen: number;
   inFlight: 0 | 1;
-  sweeping: boolean;
+  /** 在「扫尾上下文」里运行 `f`:`f` 发起的异步链上的写(经写适配器)是扫尾自己的写,不置脏;别处并发发起的写不在此上下文内,照常置脏 */
+  runAsSweep<T>(f: () => T): T;
+  /** 当前同步 / 异步上下文是否在本回合的扫尾上下文内(写适配器入口同步读取) */
+  inSweep(): boolean;
   readonly unsettled: UnsettledReason[];
   readonly dirty: Set<DirtyKind>;
   readonly latch: Map<string, JudgeBlockCode>;
@@ -109,11 +113,14 @@ const DIRTY_KIND_SET: ReadonlySet<string> = new Set(DIRTY_KINDS);
 function makeInternals(form: 'both' | 'rsi_only'): RoundInternals {
   const unsettled: UnsettledReason[] = [];
   const dirty = new Set<DirtyKind>();
+  // 每回合一个上下文存储(函数体内创建:模块顶层不得有构造调用,见 c1-inert)
+  const sweepScope = new AsyncLocalStorage<true>();
   return {
     form,
     gen: 0,
     inFlight: 0,
-    sweeping: false,
+    runAsSweep: <T>(f: () => T): T => sweepScope.run(true, f),
+    inSweep: (): boolean => sweepScope.getStore() === true,
     unsettled,
     dirty,
     latch: new Map(),
@@ -140,6 +147,8 @@ function writeAdapterOf(
     if (typeof impl !== 'function') throw new RoundInternalError('write_impl_not_function');
     const fn = impl as unknown as (this: unknown, ...a: unknown[]) => Promise<unknown>;
     const wrapped = async function (this: unknown, ...args: unknown[]): Promise<unknown> {
+      // 写的来源在入口同步判定(异步上下文归属):扫尾自己发起的写才免置脏;并发的其它写按普通写处理
+      const ownSweepWrite = st.inSweep();
       // 单飞:嵌套 / 并发使用 = 编程错误。抛在 try 之前,所以**不会**碰外层写的 inFlight / gen(外层 finally 照常收尾)
       if (st.inFlight !== 0) throw new RoundInternalError(`write_in_flight:${kind}`);
       st.inFlight = 1;
@@ -152,7 +161,7 @@ function writeAdapterOf(
       } finally {
         // 无条件推进(覆盖写成功后抛错 / 部分成功;`DefinitelyNotWritten` 也保守推进);授权写内 `requireGrowth` 看到的仍是本写之前的 gen
         st.gen += 1;
-        if (DIRTY_KIND_SET.has(kind) && !st.sweeping) st.dirty.add(kind as DirtyKind);
+        if (DIRTY_KIND_SET.has(kind) && !ownSweepWrite) st.dirty.add(kind as DirtyKind);
         st.inFlight = 0;
       }
     };

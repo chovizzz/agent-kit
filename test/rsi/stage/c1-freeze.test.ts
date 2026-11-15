@@ -54,6 +54,7 @@ import type {
   HeldLock,
   HeldPersonal,
   HeldRsi,
+  PersonalAttempt,
 } from '../../../src/rsi/personal/stage/lock-identity.js';
 import type { MonitorSignal } from '../../../src/rsi/personal/stage/monitoring.js';
 import type {
@@ -388,8 +389,9 @@ describe('3 授权类型(C 为唯一来源)', () => {
     expectTypeOf<keyof ConfigFact>().toEqualTypeOf<'trusted' | 'autoEnabled' | 'confirmed'>();
     expectTypeOf<keyof StateFact>().toEqualTypeOf<'valid' | 'paused' | 'flags' | 'safetyFault'>();
     expectTypeOf<keyof TaintFact>().toEqualTypeOf<
-      'capabilityReady' | 'scan' | 'rescanRequired' | 'rescanned' | 'candidate'
+      'capabilityReady' | 'scan' | 'rescanRequired' | 'rescanned' | 'rescanRoundId' | 'candidate'
     >();
+    expectTypeOf<TaintFact['rescanRoundId']>().toEqualTypeOf<string | null>();
     expectTypeOf<keyof PurgeFact>().toEqualTypeOf<'capabilityReady' | 'journalPresent'>();
     expectTypeOf<keyof AdmissionFact>().toEqualTypeOf<'wired' | 'effective' | 'versionsMatch'>();
     expectTypeOf<BarrierDeny>().toEqualTypeOf<
@@ -707,6 +709,11 @@ describe('导出函数 / 类型的签名冻结(互相可赋值即同形;readonly
     expectTypeOf<Same<R['isWriteAdapted'], (fn: unknown) => boolean>>().toEqualTypeOf<true>();
     // roundInternals / RoundInternals / isProducedAttempt / newRoundId 是 stage 目录内部用,不属于对外冻结面
     expect(rd.growthAccessOf.length).toBe(2);
+    // 类型断言都配运行期断言(lint:动态 import 的值不能只当类型用)
+    expect(typeof li.attemptPersonal).toBe('function');
+    expect(typeof li.wrapPersonalLock).toBe('function');
+    expect(typeof li.isProducedAttempt).toBe('function');
+    expect(typeof li.newRoundId).toBe('function');
   });
   it('settleSafety 两个重载 / 兜底协调器 / 判决槽包装 / 授权辅助', async () => {
     const st = await import('../../../src/rsi/personal/stage/settle.js');
@@ -798,5 +805,11 @@ describe('导出函数 / 类型的签名冻结(互相可赋值即同形;readonly
       >
     >().toEqualTypeOf<true>();
     expect(st.settleSafety.length).toBe(3);
+    expect(typeof fb.newFallbackTrack).toBe('function');
+    expect(typeof fb.runFallbackOnce).toBe('function');
+    expect(typeof js.checkJudgeGrowth).toBe('function');
+    expect(typeof js.normalizeJudgeReport).toBe('function');
+    expect(typeof gr.growthDenied).toBe('function');
+    expect(typeof gr.evaluateGrowth).toBe('function');
   });
 });
