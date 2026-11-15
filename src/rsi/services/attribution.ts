@@ -16,7 +16,7 @@ import { MAX_LINE_BYTES, lstat, openStreamSafe, readDir, readFileSafe } from '..
 import { createAttributor, type Attribution } from '../attribution.js';
 import type { RsiConfigOn } from '../config.js';
 import { JsonlStream } from '../jsonl-stream.js';
-import { RSI_FILE_OWNER, rsiDirReadonly } from '../lock.js';
+import { RSI_FILE_OWNER, rsiDirReadonly } from '../lock-read.js';
 import { RsiFailClosedError } from '../types.js';
 
 const FIXED_MAX_BYTES = 64 * 1024 * 1024;
