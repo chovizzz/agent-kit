@@ -1303,4 +1303,806 @@ export const V1_W9A_MUTATIONS: readonly V1W9AMutation[] = [
 ];
 
 /** 结果(由主代理整表重跑后回填,必须与 `V1_W9A_MUTATIONS` 同序;实装块留空) */
-export const V1_W9A_RESULTS: readonly V1W9AResult[] = [];
+/** 实测结果:r21w9a-mut-f4 @0374c97(dolphin):83 条全部被杀 */
+export const V1_W9A_RESULTS: readonly V1W9AResult[] = [
+  {
+    id: 'nolink_not_blocked',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'W9a 判官裁决判定:来源与读失败的取值表 source_proposal 为 null / 缺失 → no_link:展示 none、增影响拒绝(no_source),且根本不读端口',
+      'W9a 判官裁决判定:结果代码、judge_seen 与增影响输入 no_link 只在增影响一侧被拦(no_source),转移侧与「无裁决」同为 none',
+    ],
+    restored: true,
+  },
+  {
+    id: 'link_corrupt_not_indeterminate',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W9a 判官裁决判定:来源与读失败的取值表 source_proposal 损坏(多键 / 非法 run_id / 空 proposal_id / 非对象)→ invalid 但按读不出对待(indeterminate),不降级成无关联放行;端口不被调用',
+    ],
+    restored: true,
+  },
+  {
+    id: 'unwired_as_no_verdict',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'W9a 判官裁决判定:来源与读失败的取值表 读端口未装配(null)→ unreadable / indeterminate(带 source_proposal 的候选不得增影响);绝不当作「无裁决」',
+      'W9a 判官裁决判定:结果代码、judge_seen 与增影响输入 judgeResultCode / judgeSeenOf / growthBlockOf 的取值表;judgeSeenOf 的输出总能过 JudgeSeenSchema',
+    ],
+    restored: true,
+  },
+  {
+    id: 'run_gone_not_blocking',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'W9a 判官裁决判定:来源与读失败的取值表 端口给出的分类原样映射:run_gone → none / source_gone;run_excluded → none / 不拦;unreadable → invalid / indeterminate;invalid → invalid / 不拦',
+      'W9a 判官裁决判定:结果代码、judge_seen 与增影响输入 judgeResultCode / judgeSeenOf / growthBlockOf 的取值表;judgeSeenOf 的输出总能过 JudgeSeenSchema',
+    ],
+    restored: true,
+  },
+  {
+    id: 'unreadable_not_indeterminate',
+    failed: 7,
+    skipped: 0,
+    killedBy: [
+      'W9a 判官裁决判定:来源与读失败的取值表 读端口未装配(null)→ unreadable / indeterminate(带 source_proposal 的候选不得增影响);绝不当作「无裁决」',
+      'W9a 判官裁决判定:来源与读失败的取值表 端口抛错 / 返回非法形状 → unreadable(io / port_contract);永不向外抛',
+      'W9a 判官裁决判定:来源与读失败的取值表 端口给出的分类原样映射:run_gone → none / source_gone;run_excluded → none / 不拦;unreadable → invalid / indeterminate;invalid → invalid / 不拦',
+      'W9a 判官裁决判定:来源与读失败的取值表 读超时 → unreadable(timeout),signal 被中止;迟到的结果不产生未处理的拒绝',
+      'W9a 判官裁决判定:墙钟预算覆盖读后校验(M1) 端口立即返回,但同步的 ruleSha256 耗时超预算(哈希仍正确)→ unreadable / timeout / indeterminate,controller 被中止;对照:不超时同输入 = not_tightening',
+      'W9a 判官裁决判定:⑤ 规则文本与评审绑定 规则文本无法哈希(无 frontmatter)→ invalid(rule_unhashable),不抛;规则目标名与提案 targets[0] 不一致 → 端口违约(unreadable)',
+      'W9a 判官裁决判定:结果代码、judge_seen 与增影响输入 judgeResultCode / judgeSeenOf / growthBlockOf 的取值表;judgeSeenOf 的输出总能过 JudgeSeenSchema',
+    ],
+    restored: true,
+  },
+  {
+    id: 'port_throw_as_excluded',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W9a 判官裁决判定:来源与读失败的取值表 端口抛错 / 返回非法形状 → unreadable(io / port_contract);永不向外抛',
+    ],
+    restored: true,
+  },
+  {
+    id: 'port_shape_unchecked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W9a 判官裁决判定:来源与读失败的取值表 端口抛错 / 返回非法形状 → unreadable(io / port_contract);永不向外抛',
+    ],
+    restored: true,
+  },
+  {
+    id: 'timeout_no_abort',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'W9a 判官裁决判定:来源与读失败的取值表 读超时 → unreadable(timeout),signal 被中止;迟到的结果不产生未处理的拒绝',
+      'W9a 判官裁决判定:墙钟预算覆盖读后校验(M1) 端口立即返回,但同步的 ruleSha256 耗时超预算(哈希仍正确)→ unreadable / timeout / indeterminate,controller 被中止;对照:不超时同输入 = not_tightening',
+    ],
+    restored: true,
+  },
+  {
+    id: 'timeout_as_no_verdict',
+    failed: 4,
+    skipped: 0,
+    killedBy: [
+      'W9a 判官裁决判定:来源与读失败的取值表 读超时 → unreadable(timeout),signal 被中止;迟到的结果不产生未处理的拒绝',
+      'W9a 判官裁决判定:墙钟预算 同步工作占住事件循环、定时器来不及触发时,超预算的结论也不予采信(unreadable / timeout);预算内同一结果是信号',
+      'W9a 判官裁决判定:墙钟预算覆盖读后校验(M1) 端口立即返回,但同步的 ruleSha256 耗时超预算(哈希仍正确)→ unreadable / timeout / indeterminate,controller 被中止;对照:不超时同输入 = not_tightening',
+      'W9a 判官裁决判定:墙钟预算覆盖读后校验(M1) judgeEvidence 同步耗时超预算同样不采信(校验类结论也不能越过预算);对照:预算内 = 校验通过',
+    ],
+    restored: true,
+  },
+  {
+    id: 'schema_failure_as_no_verdict',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W9a 判官裁决判定:③ 提案校验 不过 ProposalSchema(多余键) → invalid(内容类:不阻增影响)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'layer_check_dropped',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W9a 判官裁决判定:③ 提案校验 team 层提案的记录不被消费 → invalid(内容类:不阻增影响)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'id_check_dropped',
+    failed: 1,
+    skipped: 0,
+    killedBy: ['W9a 判官裁决判定:③ 提案校验 id 不等于 proposal_id → invalid(内容类:不阻增影响)'],
+    restored: true,
+  },
+  {
+    id: 'run_id_check_dropped',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W9a 判官裁决判定:③ 提案校验 reflector.run_id 不等于 run_id → invalid(内容类:不阻增影响)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'op_check_dropped',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'W9a 判官裁决判定:③ 提案校验 op 不是 add → invalid(内容类:不阻增影响)',
+      'W9a 判官裁决判定:③ 提案校验 targets 不是单目标 → invalid(内容类:不阻增影响)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'evidence_check_skipped',
+    failed: 4,
+    skipped: 0,
+    killedBy: [
+      'W9a 判官裁决判定:④ 记录来源与校验 没有 judge 键 → not_verified,展示 none;校验失败才展示 invalid——两者信号侧同为 not_verified',
+      'W9a 判官裁决判定:④ 记录来源与校验 session_confirmed 的 reject 记录:binding 被改 / 声明的厂商与模型对不上 → 不消费;有效时消费(正向对照)',
+      'W9a 判官裁决判定:④ 记录来源与校验 spawned:非 proven(最后一跳槽位与 provider 不符 → JUDGE_* 码)不消费;proven 才消费(正向对照)',
+      'W9a 判官裁决判定:④ 记录来源与校验 证据层级与 provenance 必须配对:注入函数给出错配层级(spawned 却 self_confirmed)→ 不消费',
+    ],
+    restored: true,
+  },
+  {
+    id: 'evidence_issues_ignored',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W9a 判官裁决判定:④ 记录来源与校验 证据层级与 provenance 必须配对:注入函数给出错配层级(spawned 却 self_confirmed)→ 不消费',
+    ],
+    restored: true,
+  },
+  {
+    id: 'evidence_tier_ignored',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W9a 判官裁决判定:④ 记录来源与校验 证据层级与 provenance 必须配对:注入函数给出错配层级(spawned 却 self_confirmed)→ 不消费',
+    ],
+    restored: true,
+  },
+  {
+    id: 'evidence_throw_escapes',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W9a 判官裁决判定:④ 记录来源与校验 evidence 注入函数抛错 → not_verified(不向外抛,不当作通过)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'judge_absent_shown_invalid',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W9a 判官裁决判定:④ 记录来源与校验 没有 judge 键 → not_verified,展示 none;校验失败才展示 invalid——两者信号侧同为 not_verified',
+    ],
+    restored: true,
+  },
+  {
+    id: 'validation_failed_shown_none',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'W9a 判官裁决判定:④ 记录来源与校验 没有 judge 键 → not_verified,展示 none;校验失败才展示 invalid——两者信号侧同为 not_verified',
+      'W9a 判官裁决判定:④ 记录来源与校验 spawned:非 proven(最后一跳槽位与 provider 不符 → JUDGE_* 码)不消费;proven 才消费(正向对照)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rule_unbound_passes',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W9a 判官裁决判定:⑤ 规则文本与评审绑定 spawned 记录缺 rule_sha256(schema 里可选)不算 ⑤ 通过 → rule_changed;带上匹配的哈希则消费',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rule_hash_not_compared',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W9a 判官裁决判定:⑤ 规则文本与评审绑定 规则文本被改(rule_sha256 不符)→ rule_changed,展示 invalid、不阻增影响;原文 → 信号(正向对照)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rule_absent_as_no_verdict',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W9a 判官裁决判定:⑤ 规则文本与评审绑定 规则文件不存在 → rule_changed(rule_absent);不是 unreadable',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rule_unhashable_escapes',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W9a 判官裁决判定:⑤ 规则文本与评审绑定 规则文本无法哈希(无 frontmatter)→ invalid(rule_unhashable),不抛;规则目标名与提案 targets[0] 不一致 → 端口违约(unreadable)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'binding_spawned_wrong',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W9a 判官裁决判定:⑥ 信号与二进制取值 binding_sha256:session 取 confirmation.binding_sha256;spawned 取解析后整条记录的规范 JSON 哈希,显式写与缺省写 provenance 一致',
+    ],
+    restored: true,
+  },
+  {
+    id: 'injection_not_preferred',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'W9a 判官裁决判定:⑥ 信号与二进制取值 reject → reject;injection_suspected → injection;两者同时成立取 injection(accept + injection 也是 injection)',
+      'W9a 判官裁决判定:结果代码、judge_seen 与增影响输入 judgeResultCode / judgeSeenOf / growthBlockOf 的取值表;judgeSeenOf 的输出总能过 JudgeSeenSchema',
+    ],
+    restored: true,
+  },
+  {
+    id: 'accept_is_signal',
+    failed: 3,
+    skipped: 0,
+    killedBy: [
+      'W9a 判官裁决判定:墙钟预算覆盖读后校验(M1) 端口立即返回,但同步的 ruleSha256 耗时超预算(哈希仍正确)→ unreadable / timeout / indeterminate,controller 被中止;对照:不超时同输入 = not_tightening',
+      'W9a 判官裁决判定:⑥ 信号与二进制取值 accept / revise(无 injection)→ not_tightening,零影响:展示按已校验显示,增影响不拦',
+      'W9a 判官裁决判定:结果代码、judge_seen 与增影响输入 judgeResultCode / judgeSeenOf / growthBlockOf 的取值表;judgeSeenOf 的输出总能过 JudgeSeenSchema',
+    ],
+    restored: true,
+  },
+  {
+    id: 'injection_flag_ignored',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W9a 判官裁决判定:⑥ 信号与二进制取值 reject → reject;injection_suspected → injection;两者同时成立取 injection(accept + injection 也是 injection)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'seen_indeterminate_dropped',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W9a 判官裁决判定:结果代码、judge_seen 与增影响输入 judgeResultCode / judgeSeenOf / growthBlockOf 的取值表;judgeSeenOf 的输出总能过 JudgeSeenSchema',
+    ],
+    restored: true,
+  },
+  {
+    id: 'growth_signal_not_blocking',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W9a 判官裁决判定:结果代码、judge_seen 与增影响输入 judgeResultCode / judgeSeenOf / growthBlockOf 的取值表;judgeSeenOf 的输出总能过 JudgeSeenSchema',
+    ],
+    restored: true,
+  },
+  {
+    id: 'taint_marker_ignored',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'W9a 读适配器:归属(R20-18.34 ①) TAINTED 标记存在 → run_excluded;标记不安全(是目录 / 符号链接)→ unreadable(读不出标记不得当作没被污染);无标记 → 可读',
+      '端口契约套件:生产适配器 run 不在 → run_gone;被 taint / 不在采集中 → run_excluded;二者都不会是 ok',
+    ],
+    restored: true,
+  },
+  {
+    id: 'taint_unsafe_as_clean',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W9a 读适配器:归属(R20-18.34 ①) TAINTED 标记存在 → run_excluded;标记不安全(是目录 / 符号链接)→ unreadable(读不出标记不得当作没被污染);无标记 → 可读',
+    ],
+    restored: true,
+  },
+  {
+    id: 'attribution_error_as_consumable',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'W9a 读适配器:归属(R20-18.34 ①) 归属现算:counts 里没有该 run / 标 tainted / 证据有 X 或 U → run_excluded;全 P → 可读;归属读取抛错 → unreadable',
+      'W9a 读适配器:一致性协议与预算(读期间被换 → unreadable,绝不降为无裁决) 归属在读期间变化(第二次判定不再是采集中 / 读不出)→ 不返回 ok:前者 race,后者 attribution',
+    ],
+    restored: true,
+  },
+  {
+    id: 'attribution_not_applied',
+    failed: 3,
+    skipped: 0,
+    killedBy: [
+      'W9a 读适配器:归属(R20-18.34 ①) 归属现算:counts 里没有该 run / 标 tainted / 证据有 X 或 U → run_excluded;全 P → 可读;归属读取抛错 → unreadable',
+      'W9a 读适配器:一致性协议与预算(读期间被换 → unreadable,绝不降为无裁决) 归属在读期间变化(第二次判定不再是采集中 / 读不出)→ 不返回 ok:前者 race,后者 attribution',
+      '端口契约套件:生产适配器 run 不在 → run_gone;被 taint / 不在采集中 → run_excluded;二者都不会是 ok',
+    ],
+    restored: true,
+  },
+  {
+    id: 'run_missing_as_excluded',
+    failed: 3,
+    skipped: 0,
+    killedBy: [
+      'W9a 读适配器:归属(R20-18.34 ①) run 目录不存在 / reflect 目录不存在 → run_gone(gc 之后);同名普通文件不是目录 → unreadable',
+      '端口契约套件:生产适配器 run 不在 → run_gone;被 taint / 不在采集中 → run_excluded;二者都不会是 ok',
+      '端口契约套件:生产适配器 同一份返回值经纯判定得到同一个结论(信号 / none 原因)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'reflect_missing_as_excluded',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W9a 读适配器:归属(R20-18.34 ①) run 目录不存在 / reflect 目录不存在 → run_gone(gc 之后);同名普通文件不是目录 → unreadable',
+    ],
+    restored: true,
+  },
+  {
+    id: 'run_dir_link_followed',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'W9a 读适配器:归属(R20-18.34 ①) run 目录不存在 / reflect 目录不存在 → run_gone(gc 之后);同名普通文件不是目录 → unreadable',
+      'W9a 读适配器:归属(R20-18.34 ①) run 目录 / reflect 目录是符号链接 → unreadable(不跟随);对照:换回真实目录即可读',
+    ],
+    restored: true,
+  },
+  {
+    id: 'proposal_missing_as_invalid',
+    failed: 3,
+    skipped: 0,
+    killedBy: [
+      'W9a 读适配器:安全读取与失败分类(R20-18.34 ②) 采集中的 run 里提案目录 / 文件缺失 → unreadable(无从判断是否曾有 reject),不是 invalid',
+      '端口契约套件:生产适配器 采集中的 run 缺提案文件 → unreadable;YAML 损坏 → invalid(两类不得互换)',
+      '端口契约套件:生产适配器 同一份返回值经纯判定得到同一个结论(信号 / none 原因)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'proposal_unsafe_ignored',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'W9a 读适配器:安全读取与失败分类(R20-18.34 ②) 提案是符号链接 / 硬链接(nlink > 1)→ unreadable;对照:普通文件可读',
+      'W9a 读适配器:安全读取与失败分类(R20-18.34 ②) 64 KiB 上限:恰好 65536 字节可读,多 1 字节 → unreadable(too_large);规则文件同口径',
+    ],
+    restored: true,
+  },
+  {
+    id: 'max_bytes_widened',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W9a 读适配器:安全读取与失败分类(R20-18.34 ②) 64 KiB 上限:恰好 65536 字节可读,多 1 字节 → unreadable(too_large);规则文件同口径',
+    ],
+    restored: true,
+  },
+  {
+    id: 'proposal_id_shape_unchecked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W9a 读适配器:安全读取与失败分类(R20-18.34 ②) YAML 无法解析 / 不是对象 → invalid(内容类);提案 id 形状不对(含 ../ 穿越)→ unreadable(来源链接损坏),在任何读取之前拒绝(归属没被调用)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'yaml_error_as_unreadable',
+    failed: 3,
+    skipped: 0,
+    killedBy: [
+      'W9a 读适配器:安全读取与失败分类(R20-18.34 ②) YAML 无法解析 / 不是对象 → invalid(内容类);提案 id 形状不对(含 ../ 穿越)→ unreadable(来源链接损坏),在任何读取之前拒绝(归属没被调用)',
+      'W9a 读适配器:一致性协议与预算(读期间被换 → unreadable,绝不降为无裁决) 内容类失败路径同样做读后核对:坏 YAML / 非对象在读期间被换 → race(不是稳定的 invalid);不换仍是 invalid(正向对照)',
+      '端口契约套件:生产适配器 采集中的 run 缺提案文件 → unreadable;YAML 损坏 → invalid(两类不得互换)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rule_unsafe_ignored',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'W9a 读适配器:安全读取与失败分类(R20-18.34 ②) 64 KiB 上限:恰好 65536 字节可读,多 1 字节 → unreadable(too_large);规则文件同口径',
+      'W9a 读适配器:安全读取与失败分类(R20-18.34 ②) 规则:文件不存在 / rules 目录不存在 → rule = null(由 ⑤ 判 rule_changed);规则是链接 / rules 目录是链接 → unreadable',
+    ],
+    restored: true,
+  },
+  {
+    id: 'race_proposal_unchecked',
+    failed: 3,
+    skipped: 0,
+    killedBy: [
+      'W9a 读适配器:一致性协议与预算(读期间被换 → unreadable,绝不降为无裁决) 提案在读与核对之间被改写(同路径、内容不同)→ race',
+      'W9a 读适配器:一致性协议与预算(读期间被换 → unreadable,绝不降为无裁决) 内容类失败路径同样做读后核对:坏 YAML / 非对象在读期间被换 → race(不是稳定的 invalid);不换仍是 invalid(正向对照)',
+      'W9a 读适配器:一致性协议与预算(读期间被换 → unreadable,绝不降为无裁决) 经纯判定:读期间被换 → none / unreadable / indeterminate(增影响拒绝),不是 not_verified 也不是信号',
+    ],
+    restored: true,
+  },
+  {
+    id: 'race_rule_unchecked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W9a 读适配器:一致性协议与预算(读期间被换 → unreadable,绝不降为无裁决) 规则被改写 / 规则被删 / 规则被新建(读时不存在)→ race',
+    ],
+    restored: true,
+  },
+  {
+    id: 'race_run_dir_unchecked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W9a 读适配器:一致性协议与预算(读期间被换 → unreadable,绝不降为无裁决) 目录被整体换走、子项原样挪回(子项身份不变)→ race:只有目录自身的身份核对能发现(run 目录 / reflect 目录各一)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'race_reflect_dir_unchecked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W9a 读适配器:一致性协议与预算(读期间被换 → unreadable,绝不降为无裁决) 目录被整体换走、子项原样挪回(子项身份不变)→ race:只有目录自身的身份核对能发现(run 目录 / reflect 目录各一)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'attribution_recheck_dropped',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W9a 读适配器:一致性协议与预算(读期间被换 → unreadable,绝不降为无裁决) 归属在读期间变化(第二次判定不再是采集中 / 读不出)→ 不返回 ok:前者 race,后者 attribution',
+    ],
+    restored: true,
+  },
+  {
+    id: 'attribution_flip_ignored',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W9a 读适配器:一致性协议与预算(读期间被换 → unreadable,绝不降为无裁决) 归属在读期间变化(第二次判定不再是采集中 / 读不出)→ 不返回 ok:前者 race,后者 attribution',
+    ],
+    restored: true,
+  },
+  {
+    id: 'abort_ignored',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W9a 读适配器:一致性协议与预算(读期间被换 → unreadable,绝不降为无裁决) 预算:signal 已中止 → unreadable(timeout),且不读文件;读完后才中止同样 timeout',
+    ],
+    restored: true,
+  },
+  {
+    id: 'display_none_as_invalid',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W9a 展示端口:取值映射 确实无裁决 → absent:无 judge 键、run_gone、run_excluded(不暴露原因)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'display_invalid_as_none',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'W9a 展示端口:取值映射 读 / 解析 / 校验失败 → invalid:unreadable、内容 invalid、校验失败、rule_changed、规则缺失、未装配;端口抛错也是 invalid',
+      'W9a 展示端口:取值映射 已校验的 spawned(proven):identity 是 proven 的 vendor / model,没有 declared',
+    ],
+    restored: true,
+  },
+  {
+    id: 'display_proven_identity_lost',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'W9a 展示端口:取值映射 已校验的 spawned(proven):identity 是 proven 的 vendor / model,没有 declared',
+      'W9a 展示端口:provenance 与身份标签在类型层关联(L1) spawned ↔ proven、session_confirmed ↔ declared 不可拆开(编译期:矛盾组合必须报错;运行期:映射出的两种分支标签一致)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'display_injection_flag_lost',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'W9a 展示端口:取值映射 已校验的 session_confirmed:字段取契约值,declared 是 agent / vendor / model 三项;accept 也显示(⑥ 不适用于展示)',
+      'W9a 展示端口:取值映射 展示与消费同判:对每个输入,展示为 ok ⇔ 消费侧 ①–⑤ 通过;展示 ok 且 reject / injection ⇔ 消费侧是信号',
+    ],
+    restored: true,
+  },
+  {
+    id: 'show_self_label_dropped',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'N4-2 关联提案裁决段(失败只影响该段) 自报记录带 SELF_REPORT_LABEL_JUDGE 而不带 VENDOR_PROVEN_LABEL;spawned 且 proven 反之,只显示 vendor / model(没有 declared)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'show_proven_label_swapped',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'N4-2 关联提案裁决段(失败只影响该段) 自报记录带 SELF_REPORT_LABEL_JUDGE 而不带 VENDOR_PROVEN_LABEL;spawned 且 proven 反之,只显示 vendor / model(没有 declared)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'show_unavailable_not_invalid',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'N4-2 关联提案裁决段(失败只影响该段) 裁决读取不可用 / 抛错 → 只有该段是 unavailable,其余输出与退出码不变',
+    ],
+    restored: true,
+  },
+  {
+    id: 'show_declared_collapsed',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'N4-2 关联提案裁决段(失败只影响该段) 有裁决记录 → 段内容带标签与清洗后的字段;自报记录带 declared',
+    ],
+    restored: true,
+  },
+  {
+    id: 'show_none_text_old',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'N4-2 关联提案裁决段(失败只影响该段) 裁决读取不可用 / 抛错 → 只有该段是 unavailable,其余输出与退出码不变',
+    ],
+    restored: true,
+  },
+  {
+    id: 'show_judge_fields_unsanitized',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'N4-2 关联提案裁决段(失败只影响该段) 有裁决记录 → 段内容带标签与清洗后的字段;自报记录带 declared',
+    ],
+    restored: true,
+  },
+  {
+    id: 'closure_signal_imports_lifecycle',
+    failed: 7,
+    skipped: 0,
+    killedBy: [
+      'W9a 闭包闸(运行时依赖) judge-signal.ts:只有 contracts / canonical-json 与 node:crypto、zod;没有任何禁用文件,没有 src/lifecycle,没有动态 import',
+      'W9a 闭包闸(运行时依赖) judge-verdict.ts(展示映射):同样没有禁用文件;闭包含 judge-signal(展示与消费同一份判定)',
+      'W9a 闭包闸(含类型依赖) judge-signal.ts:只有 contracts / canonical-json 与 node:crypto、zod;没有任何禁用文件,没有 src/lifecycle,没有动态 import',
+      'W9a 闭包闸(含类型依赖) judge-source.ts:闭包无写出口 / 锁 / 子进程 / judge store / lifecycle;node:fs 只被 read-fs 引入;外部模块只有 node:*、zod、yaml',
+      'W9a 闭包闸(含类型依赖) judge-verdict.ts(展示映射):同样没有禁用文件;闭包含 judge-signal(展示与消费同一份判定)',
+      'W9a 闭包闸:负向对照(往真实入口加一条禁用 import,检查必须红) judge-signal.ts / judge-source.ts:每种禁用 import 都让闭包检查变红',
+      'W9a 闭包闸:负向对照(往真实入口加一条禁用 import,检查必须红) 动态 import / require 绕过也被看见',
+    ],
+    restored: true,
+  },
+  {
+    id: 'closure_source_imports_store',
+    failed: 3,
+    skipped: 0,
+    killedBy: [
+      'W9a 闭包闸(运行时依赖) judge-source.ts:闭包无写出口 / 锁 / 子进程 / judge store / lifecycle;node:fs 只被 read-fs 引入;外部模块只有 node:*、zod、yaml',
+      'W9a 闭包闸(含类型依赖) judge-source.ts:闭包无写出口 / 锁 / 子进程 / judge store / lifecycle;node:fs 只被 read-fs 引入;外部模块只有 node:*、zod、yaml',
+      'W9a 闭包闸:负向对照(往真实入口加一条禁用 import,检查必须红) judge-signal.ts / judge-source.ts:每种禁用 import 都让闭包检查变红',
+    ],
+    restored: true,
+  },
+  {
+    id: 'closure_rule_hash_imports_safe_fs',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'W9a 闭包闸(运行时依赖) rule-hash.ts:闭包恰为它自己、canonical-text 与 node:crypto;checks.ts 再导出同名符号(对照:checks.ts 的闭包含 safe-fs 写出口)',
+      'W9a 闭包闸(含类型依赖) rule-hash.ts:闭包恰为它自己、canonical-text 与 node:crypto;checks.ts 再导出同名符号(对照:checks.ts 的闭包含 safe-fs 写出口)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'checks_reexport_dropped',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'judge 记录里的 rule_sha256 judge 成功后记录带 rule_sha256,且等于规则文件当前的 ruleSha256(正向对照:改一个字就对不上)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'judge_seen_key_dropped',
+    failed: 1,
+    skipped: 0,
+    killedBy: ['W0-27 judge_seen(订正 R21-3.8) 可选键:缺失合法(旧工作副本);带合法取值合法'],
+    restored: true,
+  },
+  {
+    id: 'judge_seen_required',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'W0-27 judge_seen(订正 R21-3.8) 可选键:缺失合法(旧工作副本);带合法取值合法',
+      'W0-27 judge_seen(订正 R21-3.8) 负向:未知结果码 / binding 不是 64 位小写十六进制 / 缺键 / 多键 / indeterminate 非布尔 / judge_seen 为 null → 工作副本不合规',
+    ],
+    restored: true,
+  },
+  {
+    id: 'judge_seen_binding_loose',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W0-27 judge_seen(订正 R21-3.8) 负向:未知结果码 / binding 不是 64 位小写十六进制 / 缺键 / 多键 / indeterminate 非布尔 / judge_seen 为 null → 工作副本不合规',
+    ],
+    restored: true,
+  },
+  {
+    id: 'judge_reasons_extended',
+    failed: 4,
+    skipped: 0,
+    killedBy: [
+      'W0-27 judge_seen(订正 R21-3.8) 负向:未知结果码 / binding 不是 64 位小写十六进制 / 缺键 / 多键 / indeterminate 非布尔 / judge_seen 为 null → 工作副本不合规',
+      'W0-27 judge_seen(订正 R21-3.8) JudgeSeenSchema 的 result 恰为 8 个忽略原因 + judge_reject / judge_injection',
+      'W0-27 订正正文 W0-27 正文写明:读不出与三种来源缺失拒绝增影响、内容类不阻、judge_seen 不参与安全判定、ruleSha256 搬到 rule-hash.ts、未接线',
+      'W9a 判官裁决判定:结果代码、judge_seen 与增影响输入 JUDGE_IGNORE_REASONS 恰为契约的 8 个原因(不新增码)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'link_proposal_id_shape_unchecked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W9a 判官裁决判定:来源与读失败的取值表 source_proposal 损坏(多键 / 非法 run_id / 空 proposal_id / 非对象)→ invalid 但按读不出对待(indeterminate),不降级成无关联放行;端口不被调用',
+    ],
+    restored: true,
+  },
+  {
+    id: 'port_envelope_proposal_unchecked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W9a 判官裁决判定:来源与读失败的取值表 端口抛错 / 返回非法形状 → unreadable(io / port_contract);永不向外抛',
+    ],
+    restored: true,
+  },
+  {
+    id: 'port_envelope_why_unchecked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W9a 判官裁决判定:来源与读失败的取值表 端口抛错 / 返回非法形状 → unreadable(io / port_contract);永不向外抛',
+    ],
+    restored: true,
+  },
+  {
+    id: 'budget_clock_unchecked',
+    failed: 3,
+    skipped: 0,
+    killedBy: [
+      'W9a 判官裁决判定:墙钟预算 同步工作占住事件循环、定时器来不及触发时,超预算的结论也不予采信(unreadable / timeout);预算内同一结果是信号',
+      'W9a 判官裁决判定:墙钟预算覆盖读后校验(M1) 端口立即返回,但同步的 ruleSha256 耗时超预算(哈希仍正确)→ unreadable / timeout / indeterminate,controller 被中止;对照:不超时同输入 = not_tightening',
+      'W9a 判官裁决判定:墙钟预算覆盖读后校验(M1) judgeEvidence 同步耗时超预算同样不采信(校验类结论也不能越过预算);对照:预算内 = 校验通过',
+    ],
+    restored: true,
+  },
+  {
+    id: 'budget_timeout_no_abort',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W9a 判官裁决判定:墙钟预算覆盖读后校验(M1) 端口立即返回,但同步的 ruleSha256 耗时超预算(哈希仍正确)→ unreadable / timeout / indeterminate,controller 被中止;对照:不超时同输入 = not_tightening',
+    ],
+    restored: true,
+  },
+  {
+    id: 'recheck_hardlink_unchecked',
+    failed: 3,
+    skipped: 0,
+    killedBy: [
+      'W9a 读适配器:末次回读的安全属性(M2) 读期间提案被硬链接到 run 目录树之外(身份 / 内容元数据不变)→ unreadable(recheck_unsafe);对照:不动 = ok',
+      'W9a 读适配器:末次回读的安全属性(M2) 读期间规则被硬链接到 run 目录树之外 → unreadable(recheck_unsafe);对照:不动 = ok',
+      'W9a 读适配器:末次回读的安全属性(M2) recheckUnsafe 逐项(假 stat):普通文件、nlink = 1、属主、大小上限各一条负向,边界与对照合格',
+    ],
+    restored: true,
+  },
+  {
+    id: 'recheck_owner_unchecked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W9a 读适配器:末次回读的安全属性(M2) recheckUnsafe 逐项(假 stat):普通文件、nlink = 1、属主、大小上限各一条负向,边界与对照合格',
+    ],
+    restored: true,
+  },
+  {
+    id: 'recheck_size_unchecked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W9a 读适配器:末次回读的安全属性(M2) recheckUnsafe 逐项(假 stat):普通文件、nlink = 1、属主、大小上限各一条负向,边界与对照合格',
+    ],
+    restored: true,
+  },
+  {
+    id: 'recheck_regular_unchecked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W9a 读适配器:末次回读的安全属性(M2) recheckUnsafe 逐项(假 stat):普通文件、nlink = 1、属主、大小上限各一条负向,边界与对照合格',
+    ],
+    restored: true,
+  },
+  {
+    id: 'recheck_unsafe_ignored',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'W9a 读适配器:末次回读的安全属性(M2) 读期间提案被硬链接到 run 目录树之外(身份 / 内容元数据不变)→ unreadable(recheck_unsafe);对照:不动 = ok',
+      'W9a 读适配器:末次回读的安全属性(M2) 读期间规则被硬链接到 run 目录树之外 → unreadable(recheck_unsafe);对照:不动 = ok',
+    ],
+    restored: true,
+  },
+  {
+    id: 'recheck_unsafe_prop_branch_dropped',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W9a 读适配器:末次回读的安全属性(M2) 读期间提案被硬链接到 run 目录树之外(身份 / 内容元数据不变)→ unreadable(recheck_unsafe);对照:不动 = ok',
+    ],
+    restored: true,
+  },
+  {
+    id: 'recheck_unsafe_rule_branch_dropped',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W9a 读适配器:末次回读的安全属性(M2) 读期间规则被硬链接到 run 目录树之外 → unreadable(recheck_unsafe);对照:不动 = ok',
+    ],
+    restored: true,
+  },
+  {
+    id: 'run_id_shape_unchecked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W9a 读适配器:安全读取与失败分类(R20-18.34 ②) YAML 无法解析 / 不是对象 → invalid(内容类);提案 id 形状不对(含 ../ 穿越)→ unreadable(来源链接损坏),在任何读取之前拒绝(归属没被调用)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'invalid_content_skips_recheck',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W9a 读适配器:一致性协议与预算(读期间被换 → unreadable,绝不降为无裁决) 内容类失败路径同样做读后核对:坏 YAML / 非对象在读期间被换 → race(不是稳定的 invalid);不换仍是 invalid(正向对照)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'recheck_io_as_missing',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'W9a 读适配器:一致性协议与预算(读期间被换 → unreadable,绝不降为无裁决) 复核时文件 lstat 失败不是 ENOENT(EACCES)→ unreadable(recheck_io),不折叠成「没变」;规则确实缺失时仍是 rule = null(正向对照)',
+    ],
+    restored: true,
+  },
+];
