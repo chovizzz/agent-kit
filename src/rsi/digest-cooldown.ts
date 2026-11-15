@@ -55,18 +55,24 @@ export async function readCooldown(
 ): Promise<CooldownRead | null> {
   if (port === undefined) return null;
   try {
-    const r = await port.source.activeClusterIds(utcDayOf(now));
+    // 端口返回值跨信任边界:当 unknown 处理,逐层收窄(适配器可能返回 null / 缺键 / 错误形状)
+    const raw: unknown = await port.source.activeClusterIds(utcDayOf(now));
+    if (typeof raw !== 'object' || raw === null)
+      return { kind: 'unavailable', why: 'invalid_result' };
+    const r = raw as { kind?: unknown; active?: unknown; why?: unknown };
     if (r.kind === 'ok' && r.active instanceof Set) {
       // 逐项核对(不只看 Set 外壳):元素必须是非空字符串;校验后复制,不保留适配器可变集合的引用。id 的具体格式归账侧,这里不复制它的规则
       const copy = new Set<string>();
-      for (const id of r.active) {
+      for (const id of r.active as Set<unknown>) {
         if (typeof id !== 'string' || id === '')
           return { kind: 'unavailable', why: 'invalid_result' };
         copy.add(id);
       }
       return { kind: 'ok', active: copy };
     }
-    if (r.kind === 'unavailable' && typeof r.why === 'string' && WHY_RE.test(r.why)) return r;
+    if (r.kind === 'unavailable' && typeof r.why === 'string' && WHY_RE.test(r.why)) {
+      return { kind: 'unavailable', why: r.why };
+    }
     return { kind: 'unavailable', why: 'invalid_result' };
   } catch {
     return { kind: 'unavailable', why: 'source_threw' };

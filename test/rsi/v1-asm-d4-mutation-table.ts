@@ -49,6 +49,93 @@ const T_COOL = 'rsi/d4/d4-digest-cooldown.test.ts';
 const T_VIEW = 'rsi/d4/d4-view.test.ts';
 const T_CLOS = 'rsi/d4/d4-closure.test.ts';
 
+/**
+ * 每个杀手测试文件里的全部用例名(字面子串)。**expectRed 取「变异专属用例 ∪ 其杀手测试文件的全部用例」**(宽),原因:单点变异会连带打红同文件里
+ * 其它带对应断言的用例(含对照分支),57 条逐一手推容易漏,漏了就是实跑时的「计划外红」;装配 A 段同样补宽过一轮。**必杀(mustKill)保持最小**,
+ * 只列该变异专属的用例。由 `m()` 合并,不手写。
+ */
+const RED_BY_TEST: Readonly<Record<string, readonly string[]>> = {
+  'rsi/d4/d4-pending.test.ts': [
+    '正向对照:没有候选副本 → 整个 run 待审、待通知,proposals 是原数',
+    '部分转化:仍待审,proposals 变为剩余数(待审与待通知一致)',
+    '全部转化:run 不再待审、不再待通知(但仍是暂存 run);其它 run 的副本不影响本 run',
+    'counts 的提案数与报告暂存编号(去重)个数不一致 → 该 run 转化未知,不扣减(不隐藏未转化的提案);基数一致才扣(对照)',
+    'proposals = 0 的 run 保持改前行为(仍待审)',
+    '没有待审 run(没有暂存 run / 暂存 run 都已忽略)时不读候选目录(即使它不安全也不影响)',
+    '工作副本的 source 指向本 run、但提案编号不属于它(误写 / 伪造)→ 不扣减真实提案;对照:编号属于它则扣减',
+    '转化读取阶段时间预算用尽:扫描仍 known,待审 / 待通知 = 未扣减的旧结果,converted=budget;预算充足时才扣减(对照)',
+    '字节预算与报告读取共用同一个总量上限:报告读完只剩 10 字节 → budget、不扣减;余量充足 → 扣减(对照)',
+    '候选目录权限过宽(不安全)→ converted=unsafe,整个 run 仍待审;恢复权限后扣减(对照)',
+    '候选目录是符号链接 → unsafe,不跟随',
+    '坏文件(非 JSON / schema 不过 / 文件名与 id 不符 / 过大)不参与扣减并计入 unreadable;好文件照常扣减',
+    '条目数超过上限 → truncated,不给部分结果(一份都不扣);上限内 → ok(对照)',
+    '总字节预算 / 调用方时间预算用尽 → budget,不给部分结果',
+    '读取上限在读之前按剩余总量设置:文件恰好等于剩余量 → ok;少 1 字节 → budget(不是坏文件);第二个文件无剩余 → budget',
+    '候选目录里的非副本名(临时文件 / 点文件 / 目录)被忽略,不算坏文件',
+    '扫描前后目录树不变(只读)',
+    '提醒(notice):RSI_PROPOSALS_READY 的 proposals= 是剩余数;全部转化后什么都不提示、不记账',
+  ],
+  'rsi/d4/d4-digest-cooldown.test.ts': [
+    '未注入端口 → null(未接线,不过滤);注入后原样返回 ok 集合',
+    '把「今天」按 UTC 日传给端口(带偏移的时间按 UTC 折算;UTC 日界两侧不同)',
+    '端口报告 unavailable:带稳定短码原样保留;短码不合格式(路径 / 异常文本)→ invalid_result',
+    '端口抛错 / 返回形状不对(ok 但 active 不是 Set、未知 kind)→ unavailable,不当成「没有冷却」',
+    '元素必须是非空字符串(Set<number> / Set<object> / 混合 / 含空串)→ unavailable,不当成「没有命中」',
+    '合法集合被复制:适配器读完后再改它,不影响本次结果',
+    '未接线 / 未读 → 永远不过滤',
+    '命中判定:全部成员的 id 或可作证据成员的 id 任一在冷却集合里 → 冷却;都不在 → 不冷却(对照);空集合 → 不冷却',
+    '聚类 id 算不出(null)→ 该簇不在冷却账里(不可能被提成过候选);算 id 抛错 → 按冷却中处理(fail-closed)',
+    '端口读不到(unavailable)→ 所有簇都在冷却中,与簇内容无关',
+    '报告:未接线 / 未读(已注入但无可提的簇)/ ok / unavailable 四种形状固定',
+    '基线(无过滤)→ 8,4,3,3,2;冷却集合不命中时与基线逐项相同(对照)',
+    '冷却中的最大簇被丢弃且先于 5 簇截断:原本被挤掉的 1 条簇补位;cooldownDropped 计 1',
+    '只数「本来会被提」的簇:只有其它项目有证据的冷却簇不计数(它本来就不入选);同一簇两种证据口径只数一次',
+    '读不到冷却事实(unavailable)→ 一个簇也不提,6 个本来会被提的簇全部计入 cooldownDropped',
+    '冷却丢弃发生在单条闸之前:被冷却的簇不增加 evidenceDropped / clustersEmptied',
+    '未接线 → 与改前相同(2 个簇、clusters_dropped=0),报告 not_wired',
+    '正向对照:接线但冷却集合为空 → 与未接线输出相同;端口收到的是 UTC 今天',
+    '命中冷却的簇不进摘要(文本不出现),计入 truncated.clusters_dropped;另一个簇照常',
+    '读不到冷却事实(端口 unavailable)→ fail-closed:空摘要 reason=no_clusters,两个簇都计入丢弃,退出码仍 0',
+    '项目被排除(没有可提的簇)→ 已注入的端口不被调用,报告 skipped;摘要 reason=project_excluded',
+    '端口抛错 → 同样 fail-closed,原因 source_threw(异常文本不外泄)',
+  ],
+  'rsi/d4/d4-view.test.ts': [
+    '夹具里的记录都过 PersonalLifecycleRecordSchema(否则下面的断言没有意义)',
+    '空快照:每个 lifecycle 状态一个键(0)、四个终态 0、canary / last_rollback 为 null、两个清单空且未截断;过 AutoViewSchema',
+    'record_oid 就是输入的权威 HEAD(purge 改写后换了 HEAD,视图跟着换)',
+    'pipeline.states 按状态计数',
+    '输出与记录输入顺序无关(确定性)',
+    '边界:今天 / 前 29 日计入;前 30 日 / 未来日不计;非终态转移、deploy 维度转移不计',
+    '取最近一次进入 rolled_back 的转移:at 最晚;同刻取 id 最小;reason 是该转移的原因码',
+    '没有进入过 rolled_back → null(不是占位对象);对照:进入 rolling_back 但未完成不算',
+    '有 canary 且有分组计数 → {id, treat, control};没有 canary → null',
+    '有 canary 但没有它的分组计数 → 不产出(canary_stats_missing);别的候选的计数不能顶替',
+    '同时有两个 canary(不变量被破坏)→ 不产出(canary_ambiguous),不挑一个',
+    'rolling_back 与 retiring 都列;entered_at 取进入当前状态的最后一次 lifecycle 转移;origin_reason / target_terminal 来自 rollback;最久的在前',
+    '找不到进入当前状态的转移(历史被截断)→ 不产出(rolling_back_entry_unknown),不编造时间;补上转移即可产出(对照)',
+    '至多 64 条:恰好 64 条不截断;65 条保留最久的 64 条并置 rolling_back_truncated',
+    '第 90 个 UTC 日当天移除、前一天仍保留(边界);标记不依赖候选状态',
+    '同 (id, mark) 只留最新;同一候选的两种标记各保留;按 at 降序、同刻按 id',
+    '至多 64 条:恰好 64 条不截断;65 条保留最新的 64 条(最老的被截)并置 protection_marks_truncated',
+    '预算越界 / 负数 / 非十六进制 oid / 非整数计数 → schema_invalid;正向对照:合法值产出',
+    '字节均值四舍五入取整(契约是整数);0 与边界 100 合法',
+    '标记 / 转移里的时间戳无法解析(日期运算抛错)→ input_invalid,不外抛;对照:合法时间戳产出',
+    '写成功:文件 0600、没有临时文件;读侧读回 fresh 且与写入的视图逐键相等;record_oid 不变',
+    '再次写入整体替换旧视图(不是合并):读侧看到新的 as_of 与 oid',
+    '写前就丢锁 → lock_lost,不创建文件;已有旧视图则原样不动',
+    '写的中途(临时文件已建、rename 之前)丢锁 → 旧视图原样不动;RsiLockError(lock_lost) 报 lock_lost,其它错误报 write_failed',
+    'rename 失败(目标位置是非空目录)→ write_failed;临时文件被清掉,旧内容(目录)原样不动,不抛错',
+    '视图对象本身读取即抛错(奇异对象)→ invalid_view,不外抛,零写入',
+    '视图不合 schema(跨信任边界再校验)→ invalid_view,零写入;对照:同一端口写合法视图成功',
+  ],
+  'rsi/d4/d4-closure.test.ts': [
+    'pending.ts / pending-converted.ts(',
+    '对照:写端口 view-write.ts 的闭包含 safe-fs 与写标识符(上面的断言确实能报出写依赖)',
+    'view-build.ts 的闭包(含类型)没有写出口 / 锁 / 子进程,无写标识符,外部依赖只有 zod / crypto / path',
+    'digest-cooldown.ts 与 digest.ts 的闭包不含候选源(clusterId 由装配处注入)与写出口之外的新依赖',
+  ],
+};
+
 const m = (
   id: string,
   clause: string,
@@ -56,7 +143,14 @@ const m = (
   tests: readonly string[],
   red: readonly string[],
   must: readonly string[] = red,
-): V1AsmD4Mutation => ({ id, clause, edits, tests, expectRed: red, mustKill: must });
+): V1AsmD4Mutation => ({
+  id,
+  clause,
+  edits,
+  tests,
+  expectRed: [...new Set([...red, ...tests.flatMap((t) => RED_BY_TEST[t] ?? [])])],
+  mustKill: must,
+});
 
 export const V1_ASM_D4_MUTATIONS: readonly V1AsmD4Mutation[] = [
   // ---- A6:待审不计已成候选的提案 ----
