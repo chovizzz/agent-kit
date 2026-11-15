@@ -125,6 +125,7 @@ export const V1_ASM_A_MUTATIONS: readonly V1AsmAMutation[] = [
     tests: ['rsi/asm/a-git-path.test.ts'],
     expectRed: [
       '拒绝:不可执行 / 组或其他人可写 / 属主既非 root 也非当前用户 / 不是普通文件 / 不存在',
+      '全部解析不到 → null(保持未装配);只探测固定候选(不查 PATH:合规的 git 放在别处也不影响结果)',
     ],
     mustKill: [
       '拒绝:不可执行 / 组或其他人可写 / 属主既非 root 也非当前用户 / 不是普通文件 / 不存在',
@@ -183,7 +184,9 @@ export const V1_ASM_A_MUTATIONS: readonly V1AsmAMutation[] = [
       ),
     ],
     tests: ['rsi/asm/a-adapters.test.ts'],
-    expectRed: ['peek:读失败 / 记录不合规 / head 不合规 / 不稳定一律是 invalid'],
+    expectRed: ['peek:读失败 / 记录不合规 / head 不合规 / 不稳定一律是 invalid',
+      'peek:head.json 不存在 = absent;读成功且 id 在 = ok;读成功且 id 不在 = missing(正向对照)',
+    ],
     mustKill: ['peek:读失败 / 记录不合规 / head 不合规 / 不稳定一律是 invalid'],
   },
   {
@@ -351,6 +354,7 @@ export const V1_ASM_A_MUTATIONS: readonly V1AsmAMutation[] = [
     tests: ['rsi/asm/a-adapters.test.ts'],
     expectRed: [
       '读失败 / 形状不合规 → 抛错,绝不返回空:内容缺失、没有 frontmatter、缺 name / description / 正文',
+      'frontmatter 按 YAML 取真实值:折叠多行标量、引号;空值 / 非字符串 / 非映射 / 坏 YAML → 抛错;包内真实技能文件可解析',
     ],
     mustKill: [
       '读失败 / 形状不合规 → 抛错,绝不返回空:内容缺失、没有 frontmatter、缺 name / description / 正文',
@@ -555,7 +559,9 @@ export const V1_ASM_A_MUTATIONS: readonly V1AsmAMutation[] = [
       ),
     ],
     tests: ['rsi/asm/a-factory-zero-io.test.ts'],
-    expectRed: ['assembleReadAdapters 创建:零读盘、不解析 git 路径、不调 payload / spawn'],
+    expectRed: ['assembleReadAdapters 创建:零读盘、不解析 git 路径、不调 payload / spawn',
+      'recorded:gitPath() 解析不到 = 未装配(unreadable not_wired),解析只做一次,spawn 一次都不调;解析到但仓库目录不存在 = 在预检就拒绝,同样不 spawn',
+    ],
     mustKill: ['assembleReadAdapters 创建:零读盘、不解析 git 路径、不调 payload / spawn'],
   },
   {

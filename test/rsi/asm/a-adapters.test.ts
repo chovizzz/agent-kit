@@ -427,9 +427,14 @@ describe('PresetSource:预置技能的比对形', () => {
     expect((await one(SKILL_MD('s', 'd'))).length).toBe(1); // 对照
     await expect(one(undefined)).rejects.toThrow();
     await expect(one('# no frontmatter\n')).rejects.toThrow();
-    await expect(one('---\nname: s\n---\nbody\n')).rejects.toThrow();
-    await expect(one('---\ndescription: d\n---\nbody\n')).rejects.toThrow();
-    await expect(one('---\nname: s\ndescription: d\n---\n   \n')).rejects.toThrow();
+    // 钉到具体原因:只断言「抛了」的话,去掉 description 校验后 `.trim()` 的 TypeError 也算过(变异 preset_shape_loose 实测存活)。
+    await expect(one('---\nname: s\n---\nbody\n')).rejects.toThrow('preset read: skill_shape');
+    await expect(one('---\ndescription: d\n---\nbody\n')).rejects.toThrow(
+      'preset read: skill_shape',
+    );
+    await expect(one('---\nname: s\ndescription: d\n---\n   \n')).rejects.toThrow(
+      'preset read: skill_shape',
+    );
     await expect(
       makePresetSource({ payload: () => Promise.reject(new Error('no payload')) }).presets(),
     ).rejects.toThrow('no payload');
