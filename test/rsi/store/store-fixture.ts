@@ -199,6 +199,8 @@ export function faulty(
     return null;
   };
   return {
+    // 里氏替换:包装器保留底层的 `root`(真实装配的身份校验依赖它),不论是否经 `makeWorld` 的 `wrap`
+    ...(inner.root !== undefined ? { root: inner.root } : {}),
     hits,
     calls,
     async read(name, max) {
@@ -318,8 +320,13 @@ export async function makeWorld(kind: FsKind, opts: WorldOptions = {}): Promise<
     personalPath = path.join(dir, 'home', 'rsi-personal', 'lock');
     if (fs.root === undefined) Object.defineProperty(fs, 'root', { value: raw.root });
   }
-  const rsiLock = new FakeLock('rsi', log, rsiPath, 'rsi');
-  const personalLock = new FakeLock('personal', log, personalPath, 'personal');
+  const rsiLock = new FakeLock('rsi', log, rsiPath, rsiPath === undefined ? undefined : 'rsi');
+  const personalLock = new FakeLock(
+    'personal',
+    log,
+    personalPath,
+    personalPath === undefined ? undefined : 'personal',
+  );
   const clockFn = (): Date => new Date(clock.iso);
   const store = assembleRsiStore({
     fs,

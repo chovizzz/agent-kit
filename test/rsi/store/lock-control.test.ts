@@ -182,8 +182,14 @@ describe('H1 LockCap 的 root / 锁种类 / acquisition 校验', () => {
   const mk = (rsiPath?: string, personalPath?: string, root?: string) => {
     const log: string[] = [];
     const fs: StoreFs = root === undefined ? new MemFs() : withRoot(new MemFs(), root);
-    const rsi = new FakeLock('rsi', log, rsiPath, 'rsi');
-    const personal = new FakeLock('personal', log, personalPath, 'personal');
+    // 种类只在真实形状(带 path)下声明:无 path 的假件保持「都不声明」,角色互换等用例仍走 acquisition 绑定检查
+    const rsi = new FakeLock('rsi', log, rsiPath, rsiPath === undefined ? undefined : 'rsi');
+    const personal = new FakeLock(
+      'personal',
+      log,
+      personalPath,
+      personalPath === undefined ? undefined : 'personal',
+    );
     return { fs, rsi, personal, log };
   };
   const assemble = (x: ReturnType<typeof mk>) =>
