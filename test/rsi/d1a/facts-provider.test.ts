@@ -308,7 +308,7 @@ describe('gateFacts 的类别与透传', () => {
     const w = makeWorld();
     w.signals = DEFAULT_SIGNALS.slice(0, 1);
     const g = await realOf(w).gateFacts(w.rec, w.wc);
-    expect(g?.evidence.map((e) => e.signal === null)).toEqual([false, true]);
+    expect(g?.evidence?.map((e) => e.signal === null)).toEqual([false, true]);
   });
   it('legacy HoldFacts:返回值只表示「事实源不可用」,不含放行 / 拒绝字段(`triggers_partial` 日志待接线,D1a 无日志端口)', () => {
     const p = realOf(makeWorld());

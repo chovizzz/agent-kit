@@ -98,12 +98,15 @@ export function readersOf(w: FactsWorld, failure: Failure = null): FactsReaders 
     throw new Error(`injected read failure: ${name}`);
   };
   const g = goodFacts(w.draft);
+  const { existing, budget, replay } = g;
+  if (existing === null || budget === null || replay === null)
+    throw new Error('夹具错误:全绿闸事实不应含 null');
   const existingNoPresets = {
-    atoms: g.existing.atoms,
-    stableCandidates: g.existing.stableCandidates,
-    frameworkIds: g.existing.frameworkIds,
-    safetyAtomIds: g.existing.safetyAtomIds,
-    projectNames: g.existing.projectNames,
+    atoms: existing.atoms,
+    stableCandidates: existing.stableCandidates,
+    frameworkIds: existing.frameworkIds,
+    safetyAtomIds: existing.safetyAtomIds,
+    projectNames: existing.projectNames,
   };
   return {
     staged: {
@@ -172,11 +175,11 @@ export function readersOf(w: FactsWorld, failure: Failure = null): FactsReaders 
       },
       budget: async () => {
         boom('context');
-        return g.budget;
+        return budget;
       },
       replay: async () => {
         boom('context');
-        return g.replay;
+        return replay;
       },
       pass2Clean: async () => {
         boom('context');
