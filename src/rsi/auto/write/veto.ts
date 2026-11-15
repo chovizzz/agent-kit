@@ -30,7 +30,7 @@ import type { KeyedEffectResult } from '../../personal/rollback-ports.js';
 import { isTerminalLifecycle, type TransitionEvent } from '../../personal/transition-table.js';
 import type { RsiEarlyContext } from '../../types.js';
 import { failClosed, isTty, notRun, precheck, say, usage } from './common.js';
-import { emitOutcomes, outcomeCounts } from './outcome-output.js';
+import { applyLayers, emitOutcomes, outcomeCounts } from './outcome-output.js';
 import {
   REQUIRED_PORTS,
   type WritePortName,
@@ -98,7 +98,7 @@ export async function runVeto(
 
   const locks = p.locks as NonNullable<WritePorts['locks']>;
   const rollbackDeps = p.rollbackDeps as NonNullable<WritePorts['rollbackDeps']>;
-  return locks.withLocks('rsi_personal_sync', async (held) => {
+  const code = await locks.withLocks('rsi_personal_sync', async (held) => {
     const d = rollbackDeps(held);
     // 持锁后重读再判:锁外那次读不作数
     const cur = await d.store.read(a.id);
@@ -128,6 +128,8 @@ export async function runVeto(
       event,
     };
     let out: RollbackOutcome = await startRollback(d, req);
+    // 取时落在封存区间被拒:凭据已落(第二段在记录推进之前),E1 黑名单这里补落(保护写不被封存阻断;幂等),退出码由三层组合升级为 3
+    if (p.layers !== undefined && p.layers.sealedEvents.length > 0) await protectiveE1(d, rec);
     // 复用在途 txn 时较晚的 veto 事件没有(或尚未)持久化:按 W7 约定重试一次
     if (out.status !== 'refused' && out.lateEventNotApplied !== undefined) {
       if (out.status === 'complete') {
@@ -151,12 +153,36 @@ export async function runVeto(
       { forceNonZero: late !== undefined },
     );
   });
+  // 消费方未接线:黑名单写进账之后**不得报完整成功**(D 之前账没有读者,否决不生效);沿用 `failedVeto` 的退 1,输出 `consumer=unwired`
+  if (code === 0 && !a.lift && p.consumers === undefined) return unwiredVeto(ctx, p, a.id);
+  return code;
+}
+
+async function unwiredVeto(ctx: RsiEarlyContext, p: WritePorts, id: string): Promise<number> {
+  const shown = await say(ctx, p, [
+    `veto: id=${id} consumer=unwired 否决已记入账,但账的消费方尚未接线,否决暂不生效`,
+  ]);
+  return shown !== 0 ? shown : 1;
+}
+
+/** 保护写:E1 黑名单按 `veto:` 键幂等落地;失败不遮盖已有结论(结论由三层组合报告) */
+async function protectiveE1(
+  d: ReturnType<NonNullable<WritePorts['rollbackDeps']>>,
+  rec: PersonalLifecycleRecord,
+): Promise<void> {
+  try {
+    await d.keyedEffects.applyOnce(vetoEffectKey(rec), [
+      { type: 'blacklist_veto', id: rec.id, content_sha256: rec.content_sha256 },
+    ]);
+  } catch {
+    // 落不下去就保持原结论;重跑 `rsi veto` 幂等补做
+  }
 }
 
 /** E1 deferred 的终态 veto:否决没有落地,输出明确信息行(摘要过泄漏闸),退 1;stdout 不含成功行 */
 async function failedVeto(ctx: RsiEarlyContext, p: WritePorts, id: string): Promise<number> {
   const shown = await say(ctx, p, [`veto: id=${id} 否决未落地(黑名单落地推迟),请重跑 rsi veto`]);
-  return shown !== 0 ? shown : 1;
+  return shown !== 0 ? shown : applyLayers(ctx, p, 1);
 }
 
 /** 终态 / 无部署候选:经引擎 `veto` 事件(终态上是空操作,只落 E1);转移提交后落终态批次 E2 与审计 */
@@ -188,7 +214,10 @@ async function directVeto(
     ...(d.seal !== undefined ? { seal: d.seal } : {}),
   };
   const r = await applyEvent(ad, rec, event);
-  if (r.kind === 'halt') return haltExit(ctx, r);
+  if (r.kind === 'halt') {
+    if (r.halt === 'sealed_interval') await protectiveE1(d, rec);
+    return applyLayers(ctx, p, haltExit(ctx, r));
+  }
   if (r.kind === 'refused' || r.kind === 'stale') return failClosed(ctx, 'candidate_invalid');
   if (r.kind === 'transitioned') {
     // 转移已提交但丢锁:立即结束本步,不再调用任何写出口(E2 / 审计),交给已提交终态记录的恢复机制续做(candidate-apply 的 `lockLost` 约定)
@@ -200,7 +229,7 @@ async function directVeto(
     if (audit !== 'none') landed.push(audit);
     if (r.effectsFailed !== undefined) {
       await say(ctx, p, [`veto: id=${rec.id} 已提交,效果落地失败(重跑 rsi veto 补做)`]);
-      return failClosed(ctx, 'internal');
+      return applyLayers(ctx, p, failClosed(ctx, 'internal'));
     }
   }
   // 终态记录上的空操作 veto:没有提交任何新事实,E1 黑名单一旦 deferred,恢复扫描(只扫 `rolling_back ∧ reason=vetoed`)推不出这次否决 →
@@ -213,7 +242,8 @@ async function directVeto(
     : landed.includes('applied')
       ? 'applied'
       : 'already';
-  return say(ctx, p, [
-    `veto: id=${rec.id} from=${rec.lifecycle} result=${r.kind === 'noop' ? 'blacklist_only' : 'rejected'} effects=${effects}`,
+  const shown = await say(ctx, p, [
+    `veto: id=${rec.id} from=${rec.lifecycle} result=${r.kind === 'noop' ? 'blacklist_only' : 'rejected'} effects=${effects}${r.kind === 'noop' && r.observationRowSealed === true ? ' observation_row_sealed=yes' : ''}`,
   ]);
+  return shown !== 0 ? shown : applyLayers(ctx, p, 0);
 }
