@@ -15,7 +15,7 @@ import {
   type PendingScan,
   type ScanDeps,
 } from '../../../src/rsi/pending.js';
-import { makeA6World, putReport, putRsiFile, proposalIds } from '../a6-fixture.js';
+import { makeA6World, putReport, putRsiFile, proposalIds, reportDoc } from '../a6-fixture.js';
 import { treeOf } from '../rsi-fixture.js';
 import { NOW, key, makeRoFx, type RoFx } from '../ro-fixture.js';
 
@@ -120,13 +120,27 @@ describe('D4 A6:待审不计已成候选的提案', () => {
     expect(brief(known(await scan(g, 3))).pending).toEqual([[RUN, 3]]);
   });
 
-  it('counts 的提案数小于报告里的真实编号数(不一致)→ 剩余数下限 0,不出现负数;proposals = 0 的 run 保持改前行为(仍待审)', async () => {
-    const f = await world('d4-pend-clamp-', 3); // 报告暂存 3 个编号,counts 却只登记 1 个
-    for (const n of [1, 2, 3]) await convert(f, n, RUN, n);
-    expect(brief(known(await scan(f, 1))).pending).toEqual([]);
-    const conv = await readConvertedProposals(path.join(f.io.stateDir, 'rsi'));
-    expect(convertedCount(conv, RUN, proposalIds(3))).toBe(3);
+  it('counts 的提案数与报告暂存编号(去重)个数不一致 → 该 run 转化未知,不扣减(不隐藏未转化的提案);基数一致才扣(对照)', async () => {
+    // counts 登记 1 个、报告有 2 个编号,只转化了 -001:若直接相减会得到剩余 0,整个 run(含未转化的 -002)消失
+    const f = await world('d4-pend-mismatch-a-', 2);
+    await convert(f, 1, RUN, 1);
+    expect(brief(known(await scan(f, 1))).pending).toEqual([[RUN, 1]]);
+    // counts 登记 3 个、报告只有 2 个编号且都已转化:同样不扣
+    const g = await world('d4-pend-mismatch-b-', 2);
+    await convert(g, 1, RUN, 1);
+    await convert(g, 2, RUN, 2);
+    expect(brief(known(await scan(g, 3))).pending).toEqual([[RUN, 3]]);
+    // 报告编号重复(去重后 1 个 ≠ counts 的 2 个)
+    const h = await makeRoFx('d4-pend-mismatch-c-');
+    const dup = reportDoc(RUN, 'ingest', ['2026-10-24-001', '2026-10-24-001']);
+    await putReport(h, RUN, 'ingest', 2, `${JSON.stringify(dup)}\n`);
+    await convert(h, 1, RUN, 1);
+    expect(brief(known(await scan(h, 2))).pending).toEqual([[RUN, 2]]);
+    // 对照:基数一致(counts 2、报告 2)→ 转化 -001 后剩 1
+    expect(brief(known(await scan(f, 2))).pending).toEqual([[RUN, 1]]);
+  });
 
+  it('proposals = 0 的 run 保持改前行为(仍待审)', async () => {
     const z = await world('d4-pend-zero-', 0);
     await convert(z, 1, RUN, 1);
     expect(brief(known(await scan(z, 0))).pending).toEqual([[RUN, 0]]);
@@ -154,6 +168,8 @@ describe('D4 A6:待审不计已成候选的提案', () => {
   it('工作副本的 source 指向本 run、但提案编号不属于它(误写 / 伪造)→ 不扣减真实提案;对照:编号属于它则扣减', async () => {
     const f = await world('d4-pend-foreign-', 1);
     await putCopy(f, cid(1), copyDoc(cid(1), RUN, '2026-10-24-099')); // 报告里只有 -001
+    const conv = await readConvertedProposals(path.join(f.io.stateDir, 'rsi'));
+    expect(convertedCount(conv, RUN, proposalIds(1))).toBe(0);
     expect(brief(known(await scan(f, 1)))).toEqual({
       pending: [[RUN, 1]],
       toNotify: [[RUN, 1]],
@@ -187,6 +203,8 @@ describe('D4 A6:时间 / 字节预算耗尽 → 回退为旧口径的结果,而�
       toNotify: [[RUN, 3]],
       converted: 'budget',
     });
+    const none = known(await scan(f, 3, { limits: { maxTotalBytes: report } })); // 报告恰好用完总量:一个字节都不再读
+    expect(brief(none)).toEqual({ pending: [[RUN, 3]], toNotify: [[RUN, 3]], converted: 'budget' });
     const roomy = known(await scan(f, 3, { limits: { maxTotalBytes: report + 1_000_000 } }));
     expect(brief(roomy).pending).toEqual([[RUN, 2]]);
     // 独立的测试缝也生效(取更小者)
@@ -269,6 +287,20 @@ describe('D4 A6:读失败 = 转化未知 = 不扣减(噪音方向,绝不当作�
     const time = await readConvertedProposals(rsi, { over: () => true });
     expect([time.state, time.byRun.size]).toEqual(['budget', 0]);
     expect((await readConvertedProposals(rsi, { over: () => false })).state).toBe('ok');
+  });
+
+  it('读取上限在读之前按剩余总量设置:文件恰好等于剩余量 → ok;少 1 字节 → budget(不是坏文件);第二个文件无剩余 → budget', async () => {
+    const f = await world('d4-pend-cap-');
+    await convert(f, 1, RUN, 1);
+    const rsi = path.join(f.io.stateDir, 'rsi');
+    const size = Buffer.byteLength(await readText(path.join(candDir(f), `${cid(1)}.json`)));
+    const exact = await readConvertedProposals(rsi, { limits: { maxTotalBytes: size } });
+    expect([exact.state, exact.unreadable, exact.byRun.get(RUN)?.size]).toEqual(['ok', 0, 1]);
+    const less = await readConvertedProposals(rsi, { limits: { maxTotalBytes: size - 1 } });
+    expect([less.state, less.unreadable, less.byRun.size]).toEqual(['budget', 0, 0]);
+    await convert(f, 2, RUN, 2);
+    const second = await readConvertedProposals(rsi, { limits: { maxTotalBytes: size } });
+    expect([second.state, second.byRun.size]).toEqual(['budget', 0]);
   });
 
   it('候选目录里的非副本名(临时文件 / 点文件 / 目录)被忽略,不算坏文件', async () => {

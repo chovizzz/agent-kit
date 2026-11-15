@@ -237,7 +237,11 @@ export async function scanPending(input: ScanInput, deps: ScanDeps = {}): Promis
           },
         });
   for (const o of open) {
-    const rest = Math.max(0, o.run.proposals - convertedCount(converted, o.run.runId, o.ids));
+    // 两份来源的基数必须一致才敢扣:counts 登记的提案数 = report 暂存编号(去重)个数;不一致(或编号重复)= 该 run 的转化未知,保持原样不扣减
+    const consistent = new Set(o.ids).size === o.run.proposals;
+    const rest = consistent
+      ? o.run.proposals - convertedCount(converted, o.run.runId, o.ids)
+      : o.run.proposals;
     // 每个提案都已成候选:不再待审(R21-3.8)。`proposals = 0` 的 run 本来就没有可扣的,保持改前行为(仍待审)
     if (rest === 0 && o.run.proposals > 0) continue;
     const ref: RunRef = rest === o.run.proposals ? o.run : { runId: o.run.runId, proposals: rest };

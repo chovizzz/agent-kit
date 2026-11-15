@@ -66,8 +66,8 @@ export const V1_ASM_D4_MUTATIONS: readonly V1AsmD4Mutation[] = [
     [
       swap(
         PEND,
-        'const rest = Math.max(0, o.run.proposals - convertedCount(converted, o.run.runId, o.ids));',
-        'const rest = o.run.proposals;',
+        'o.run.proposals - convertedCount(converted, o.run.runId, o.ids)',
+        'o.run.proposals',
       ),
     ],
     [T_PEND],
@@ -92,7 +92,7 @@ export const V1_ASM_D4_MUTATIONS: readonly V1AsmD4Mutation[] = [
     'proposals=0 的 run 保持改前行为(仍待审)',
     [swap(PEND, 'if (rest === 0 && o.run.proposals > 0) continue;', 'if (rest === 0) continue;')],
     [T_PEND],
-    ['counts 的提案数小于报告里的真实编号数(不一致)'],
+    ['proposals = 0 的 run 保持改前行为(仍待审)'],
   ),
   m(
     'pend_notice_uses_total',
@@ -138,17 +138,17 @@ export const V1_ASM_D4_MUTATIONS: readonly V1AsmD4Mutation[] = [
     ['全部转化:run 不再待审'],
   ),
   m(
-    'conv_no_clamp',
-    '剩余数下限 0',
+    'pend_cardinality_unchecked',
+    '两份来源基数一致才扣减:counts 提案数 = report 暂存编号去重个数',
     [
       swap(
         PEND,
-        'Math.max(0, o.run.proposals - convertedCount(converted, o.run.runId, o.ids))',
-        'o.run.proposals - convertedCount(converted, o.run.runId, o.ids)',
+        'const consistent = new Set(o.ids).size === o.run.proposals;',
+        'const consistent = true;',
       ),
     ],
     [T_PEND],
-    ['counts 的提案数小于报告里的真实编号数(不一致)'],
+    ['counts 的提案数与报告暂存编号(去重)个数不一致'],
   ),
   m(
     'conv_foreign_id_deducted',
@@ -181,10 +181,30 @@ export const V1_ASM_D4_MUTATIONS: readonly V1AsmD4Mutation[] = [
   ),
   m(
     'conv_byte_budget_ignored',
-    '总字节预算用尽 = 转化未知',
-    [swap(CONV, "if (total > maxTotal) return unknown('budget');", 'void 0;')],
+    '总字节预算:读之前按剩余总量设上限',
+    [
+      swap(
+        CONV,
+        'const cap = Math.min(maxFile, Math.max(0, maxTotal - total));',
+        'const cap = maxFile;',
+      ),
+    ],
     [T_PEND],
-    ['总字节预算 / 调用方时间预算用尽'],
+    ['总字节预算 / 调用方时间预算用尽', '读取上限在读之前按剩余总量设置'],
+  ),
+  m(
+    'conv_cap_overrun_as_bad_file',
+    '被剩余预算卡住的超限不是坏文件,而是预算用尽',
+    [
+      swap(
+        CONV,
+        "if (r.kind === 'unsafe' && r.why === 'too_large' && cap < maxFile) return unknown('budget');",
+        'void 0;',
+      ),
+    ],
+    [T_PEND],
+    ['读取上限在读之前按剩余总量设置', '总字节预算 / 调用方时间预算用尽'],
+    ['读取上限在读之前按剩余总量设置'],
   ),
   m(
     'conv_time_budget_ignored',

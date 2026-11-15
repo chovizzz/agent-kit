@@ -92,12 +92,15 @@ export async function readConvertedProposals(
     const m = COPY_NAME.exec(e.name);
     // 非副本形状的名字(临时文件、点文件、目录、链接)不是候选,忽略;它们不会让「转化未知」
     if (m === null || !e.isFile || e.isSymbolicLink) continue;
+    // 读之前就按剩余总量设上限(不是读完再记账):已用尽时一个字节都不再读
+    const cap = Math.min(maxFile, Math.max(0, maxTotal - total));
     const r = await readFileSafe(path.join(dir, e.name), {
-      maxBytes: maxFile,
+      maxBytes: cap,
       owner: RSI_FILE_OWNER,
     });
+    // 超限是被「剩余预算」卡住(而不是文件本身超过单文件上限)→ 预算用尽,整体放弃;单文件超限才是坏文件
+    if (r.kind === 'unsafe' && r.why === 'too_large' && cap < maxFile) return unknown('budget');
     if (r.kind === 'ok') total += r.bytes.length;
-    if (total > maxTotal) return unknown('budget');
     if (deps.over?.() === true) return unknown('budget');
     if (r.kind !== 'ok') {
       unreadable++;
@@ -119,7 +122,8 @@ export async function readConvertedProposals(
 /**
  * run 里「已成候选」的**真实**提案数(**唯一谓词**):该 run 的 `report.json` 暂存的提案编号 ∩ 工作副本 `source.proposal_id`(同 run)。
  * 只认报告里真实存在的编号:工作副本里指向本 run 却不属于它的 `proposal_id`(误写 / 伪造)不会把真实待审提案扣掉。
- * 待审剩余数 = `counts.staged` 的提案数 − 本函数(下限 0,由调用方算);读不了工作副本时 `byRun` 为空 → 0(不扣减)。
+ * 待审剩余数 = `counts.staged` 的提案数 − 本函数,**仅当** counts 的提案数 = report 暂存编号去重个数时才扣(由 `scanPending` 判,基数不一致 = 转化未知);
+ * 读不了工作副本时 `byRun` 为空 → 0(不扣减)。
  */
 export function convertedCount(
   converted: ConvertedProposals,
