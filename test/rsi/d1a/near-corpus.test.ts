@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
-  CORPUS_KEY,
+  CORPUS_KEYS,
   DEFAULT_THRESHOLDS,
   evaluateCorpus,
   formatReport,
@@ -34,11 +34,46 @@ const mk = (
 });
 
 describe('语料评估:统计与阈值建议', () => {
-  it('默认阈值 0.05 … 1.00 共 20 档;内置密钥是 32 字节', () => {
+  it('默认阈值 0.05 … 1.00 共 20 档;评估密钥 5 把、各 32 字节、互不相同,第一把是字节 1..32', () => {
     expect(DEFAULT_THRESHOLDS).toHaveLength(20);
     expect(DEFAULT_THRESHOLDS[0]).toBe(0.05);
     expect(DEFAULT_THRESHOLDS[19]).toBe(1);
-    expect(CORPUS_KEY.length).toBe(32);
+    expect(CORPUS_KEYS).toHaveLength(5);
+    for (const k of CORPUS_KEYS) expect(k.length).toBe(32);
+    expect(new Set(CORPUS_KEYS.map((k) => Buffer.from(k).toString('hex'))).size).toBe(5);
+    expect(Array.from(CORPUS_KEYS[0] as Uint8Array)).toEqual(
+      Array.from({ length: 32 }, (_v, i) => i + 1),
+    );
+  });
+
+  it('评估统计依赖密钥:超过 64 个 shingle 的被否决内容 → 多密钥最坏情形 + 波动警告;不超过时多 / 单密钥一致(对照)', () => {
+    const words = (n: number): string =>
+      Array.from({ length: n }, (_v, i) => `w${i + 1}`).join(' ');
+    const long = [mk('m_long', 'match', words(80), words(50))];
+    const ths = [0.5, 0.6, 0.7];
+    const multi = evaluateCorpus(long, { thresholds: ths });
+    const single = evaluateCorpus(long, {
+      thresholds: ths,
+      keys: [CORPUS_KEYS[0] as Uint8Array],
+    });
+    expect(multi.keys).toBe(5);
+    expect(single.keys).toBe(1);
+    expect(multi.truncatedIds).toEqual(['m_long']);
+    expect(multi.warnings).toContain('bottom_k_truncation_key_dependent');
+    multi.thresholds.forEach((t, i) => {
+      expect(t.tp).toBeLessThanOrEqual((single.thresholds[i] as { tp: number }).tp);
+    });
+    // 对照:草图未截断(≤ 64 个 shingle)时与密钥无关
+    const short = [mk('m', 'match', A, PREFIX), mk('n', 'nomatch', A, REWRITE)];
+    const a = evaluateCorpus(short, { thresholds: ths });
+    const b = evaluateCorpus(short, { thresholds: ths, keys: [CORPUS_KEYS[2] as Uint8Array] });
+    expect(a.thresholds.map((t) => [t.tp, t.fn, t.fp, t.tn])).toEqual(
+      b.thresholds.map((t) => [t.tp, t.fn, t.fp, t.tn]),
+    );
+    expect(a.warnings).not.toContain('bottom_k_truncation_key_dependent');
+    expect(() => evaluateCorpus(short, { keys: [] })).toThrowError(
+      new RangeError('at least one evaluation key is required'),
+    );
   });
 
   it('命中 / 误报按阈值分档:前缀(覆盖率 6/11)在 0.5 命中、在 0.6 漏掉;改写与无关恒不命中', () => {

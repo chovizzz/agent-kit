@@ -316,3 +316,32 @@ describe('gateFacts 的类别与透传', () => {
     expect(Object.values(p.holdFacts())).toEqual(['unavailable', 'unavailable']);
   });
 });
+
+describe('gateFacts:注入的 fingerprint 依赖失败', () => {
+  const withFp = (w: FactsWorld, fingerprint: (b: string) => string): FactsProviderD1a =>
+    makeFactsProvider({ readers: readersOf(w), fingerprint, now: () => NOW });
+
+  it('fingerprint 抛普通错误 / 返回非法值 → gateFacts = null;promoteFacts 不依赖它(正向对照)', async () => {
+    const w = makeWorld();
+    const throwing = withFp(w, () => {
+      throw new Error('fingerprint backend down');
+    });
+    expect(await throwing.gateFacts(w.rec, w.wc)).toBeNull();
+    expect(await throwing.promoteFacts(w.rec, w.wc)).toEqual(expectedPromote(w));
+    expect(await withFp(w, () => 'not-hex').gateFacts(w.rec, w.wc)).toBeNull();
+    expect(await withFp(w, fingerprintOf).gateFacts(w.rec, w.wc)).toEqual(expectedGate(w));
+  });
+
+  it('fingerprint 抛 RsiLockError → 原实例传播(不吞成 null)', async () => {
+    const w = makeWorld();
+    const lost = new RsiLockError('lock_lost');
+    const p = withFp(w, () => {
+      throw lost;
+    });
+    const e = await p.gateFacts(w.rec, w.wc).then(
+      () => undefined,
+      (x: unknown) => x,
+    );
+    expect(e).toBe(lost);
+  });
+});

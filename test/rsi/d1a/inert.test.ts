@@ -1,7 +1,7 @@
 /**
  * D1a:**生产惰性**的证明(设计稿 v4 §9 D1a 行)——合并后没有任何生产入口使用新模块,新模块也不 import 任何增影响汇点:
  *  ① 生产入口的 import 闭包(运行时 / 含类型各一次)不含 `src/rsi/personal/fp/**` 与 `src/rsi/personal/facts/**`;
- *  ② 仓库里没有任何**别的**源文件 import 它们(没有 re-export 偷渡);
+ *  ② 仓库里没有任何**别的**源文件 import 它们(没有 re-export 偷渡;正则扫描只是补充,完整性论证靠 ① 与「闭包内无非字面量 import / require」);
  *  ③ 新模块自身的运行时闭包不含增影响汇点(`grantCanary` / `stepAdmission` / `applyEvent` / 提交 / 建仓)与 near 草案之外的语料工具;
  *  ④ 语料工具与 near 草案计算只在 `test/tools/**`,不在任何生产入口闭包内(`near_draft_compute_not_in_production_closure`);
  *  ⑤ 相位常量仍为 0。
@@ -61,6 +61,8 @@ describe('生产惰性(D1a)', () => {
       const c = closureOf(ENTRIES, { includeTypes });
       expect([...c.files].filter(isNew), `includeTypes=${includeTypes}`).toEqual([]);
       expect(c.unresolved).toEqual([]);
+      // 非字面量的 import() / require() 会绕过静态闭包:生产入口闭包里一个都不许有
+      expect(c.dynamic, `includeTypes=${includeTypes}`).toEqual([]);
     }
   });
 
@@ -75,6 +77,20 @@ describe('生产惰性(D1a)', () => {
     expect(hit).toContain('src/rsi/personal/facts/facts-provider.ts');
     expect(hit).toContain('src/rsi/personal/fp/fp-key.ts');
     expect(hit).toContain('src/rsi/personal/fp/near-algo.ts');
+  });
+
+  it('正向对照:非字面量 import() / require() 会被记入 dynamic(绕过静态闭包的写法不会被漏掉)', () => {
+    const c = closureOf(['src/rsi/inert-probe.ts'], {
+      virtual: {
+        'src/rsi/inert-probe.ts':
+          "const p = './personal/fp/near-algo.js';\nexport const m = await import(p);\nexport const r = require(p);",
+      },
+    });
+    expect(c.dynamic.sort()).toEqual([
+      'src/rsi/inert-probe.ts:import()',
+      'src/rsi/inert-probe.ts:require()',
+    ]);
+    expect([...c.files].filter(isNew)).toEqual([]);
   });
 
   it('没有别的源文件 import fp/ 或 facts/(含 re-export / 动态 import);正向对照:扫描器能识别', async () => {
@@ -112,6 +128,7 @@ describe('生产惰性(D1a)', () => {
     const c = closureOf(NEW_ENTRY_FILES, { includeTypes: false });
     expect(GROWTH_SINKS.filter((s) => c.files.has(s))).toEqual([]);
     expect(c.unresolved).toEqual([]);
+    expect(c.dynamic).toEqual([]);
     const probe = closureOf(['src/rsi/personal/candidate-step.ts'], { includeTypes: false });
     expect(GROWTH_SINKS.filter((s) => probe.files.has(s)).length).toBeGreaterThan(0);
   });

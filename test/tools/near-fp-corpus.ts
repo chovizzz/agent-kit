@@ -5,18 +5,29 @@
  * 语料格式:目录下每个 `*.jsonl`(不递归,按文件名排序),每行一个 JSON 对象:
  *   {"id": "<唯一 id>", "label": "match" | "nomatch", "vetoed": "<被否决内容>", "candidate": "<候选内容>", "kind": "<可选分类>"}
  * `match` = 应被近似指纹拦下(扩写 / 前后缀 / 模板填充);`nomatch` = 不应拦(无关内容 / 同主题但独立的规则)。
- * 输出只含 case id 与统计,**绝不输出文本内容**。统计与密钥无关(固定使用一把内置的测试密钥;仅 32 位哈希碰撞的概率层面不同)。
+ * 输出只含 case id 与统计,**绝不输出文本内容**(id 与文件名同样会被输出:语料提供者不得把正文放进 id / 文件名)。
+ * 统计**依赖密钥**:被否决内容超过 64 个不同 shingle 时,最小 64 个哈希取决于密钥(换密钥会换抽样,覆盖率与命中率随之波动)。
+ * 所以每个用例用多把公开、确定性的评估密钥各算一遍(`CORPUS_KEYS`),阈值统计取**最坏情形**(命中取最小、误报取最大),阈值建议按最坏情形给;
+ * 覆盖率分布用第一把密钥;存在超过 64 个 shingle 的被否决内容时报 `bottom_k_truncation_key_dependent`。评估密钥与生产 `fp.key` 无关,不读真实密钥。
  */
 import {
   NEAR_ALGO,
   assertNearThreshold,
+  NEAR_SKETCH_SIZE,
   nearCoverage,
   nearHashSet,
   nearMatches,
+  nearShingles,
   nearSketch,
 } from '../../src/rsi/personal/fp/near-algo.js';
 
-export const CORPUS_KEY: Uint8Array = Uint8Array.from({ length: 32 }, (_v, i) => i + 1);
+/** 公开、确定性的评估密钥(第一把 = 字节 1..32);不是任何真实密钥 */
+export const CORPUS_KEYS: readonly Uint8Array[] = Object.freeze(
+  [1, 7, 53, 101, 199].map((mul) =>
+    Uint8Array.from({ length: 32 }, (_v, i) => (mul * (i + 1)) & 0xff),
+  ),
+);
+export const CORPUS_KEY: Uint8Array = CORPUS_KEYS[0] as Uint8Array;
 export const DEFAULT_THRESHOLDS: readonly number[] = Object.freeze(
   Array.from({ length: 20 }, (_v, i) => Math.round((i + 1) * 5) / 100),
 );
@@ -116,6 +127,10 @@ export interface CorpusReport {
   exactOnlyIds: string[];
   coverage: { match: CoverageSummary; nomatch: CoverageSummary };
   thresholds: ThresholdStat[];
+  /** 评估所用密钥数(阈值统计取这些密钥下的最坏情形) */
+  keys: number;
+  /** 被否决内容的完整 shingle 数超过草图容量(64)的用例:其统计随密钥波动 */
+  truncatedIds: string[];
   recommendation: null | { threshold: number; hitRate: number; fpRate: number };
   maxFpRate: number;
   warnings: string[];
@@ -135,7 +150,8 @@ const summarize = (xs: number[]): CoverageSummary => {
 export interface EvalOptions {
   thresholds?: readonly number[];
   maxFpRate?: number;
-  key?: Uint8Array;
+  /** 评估密钥(缺省 {@link CORPUS_KEYS});至少一把,每把 32 字节 */
+  keys?: readonly Uint8Array[];
 }
 
 export function evaluateCorpus(cases: readonly CorpusCase[], opts: EvalOptions = {}): CorpusReport {
@@ -145,54 +161,70 @@ export function evaluateCorpus(cases: readonly CorpusCase[], opts: EvalOptions =
   if (typeof maxFpRate !== 'number' || !(maxFpRate >= 0 && maxFpRate <= 1)) {
     throw new RangeError('maxFpRate must be in [0, 1]');
   }
-  const key = opts.key ?? CORPUS_KEY;
-  const exactOnlyIds: string[] = [];
-  const scored: {
-    id: string;
-    label: CorpusLabel;
-    near: readonly string[];
-    cand: ReadonlySet<string>;
-  }[] = [];
-  for (const c of cases) {
-    const near = nearSketch(key, c.vetoed);
-    if (near.length === 0) {
-      exactOnlyIds.push(c.id);
-      continue;
-    }
-    scored.push({ id: c.id, label: c.label, near, cand: nearHashSet(key, c.candidate) });
-  }
+  const keys = opts.keys ?? CORPUS_KEYS;
+  if (keys.length === 0) throw new RangeError('at least one evaluation key is required');
+  const shingleCount = new Map(cases.map((c) => [c.id, nearShingles(c.vetoed).length]));
+  const exactOnlyIds = cases.filter((c) => shingleCount.get(c.id) === 0).map((c) => c.id);
+  const usable = cases.filter((c) => (shingleCount.get(c.id) as number) > 0);
+  const truncatedIds = usable
+    .filter((c) => (shingleCount.get(c.id) as number) > NEAR_SKETCH_SIZE)
+    .map((c) => c.id);
+  // 每把密钥各算一遍:草图取最小 64 个哈希,抽样随密钥变化
+  const perKey = keys.map((key) =>
+    usable.map((c) => ({
+      id: c.id,
+      label: c.label,
+      near: nearSketch(key, c.vetoed),
+      cand: nearHashSet(key, c.candidate),
+    })),
+  );
+  const scored = perKey[0] as (typeof perKey)[number];
   const cov = (label: CorpusLabel): number[] =>
     scored.filter((s) => s.label === label).map((s) => nearCoverage(s.near, s.cand) as number);
-  const nMatch = scored.filter((s) => s.label === 'match').length;
-  const nNo = scored.filter((s) => s.label === 'nomatch').length;
+  const nMatch = usable.filter((c) => c.label === 'match').length;
+  const nNo = usable.length - nMatch;
   const stats: ThresholdStat[] = thresholds.map((t) => {
-    const st: ThresholdStat = {
-      threshold: t,
-      tp: 0,
-      fn: 0,
-      fp: 0,
-      tn: 0,
-      hitRate: null,
-      fpRate: null,
-      fnIds: [],
-      fpIds: [],
-    };
-    for (const s of scored) {
-      const hit = nearMatches(s.near, s.cand, t);
-      if (s.label === 'match') {
-        if (hit) st.tp++;
-        else {
-          st.fn++;
-          st.fnIds.push(s.id);
-        }
-      } else if (hit) {
-        st.fp++;
-        st.fpIds.push(s.id);
-      } else st.tn++;
+    // 最坏情形:命中取各密钥下的最小,误报取最大
+    let tp = Number.POSITIVE_INFINITY;
+    let tn = Number.POSITIVE_INFINITY;
+    let fn = 0;
+    let fp = 0;
+    const fnSet = new Set<string>();
+    const fpSet = new Set<string>();
+    for (const rows of perKey) {
+      let kTp = 0;
+      let kFn = 0;
+      let kFp = 0;
+      let kTn = 0;
+      for (const s of rows) {
+        const hit = nearMatches(s.near, s.cand, t);
+        if (s.label === 'match') {
+          if (hit) kTp++;
+          else {
+            kFn++;
+            fnSet.add(s.id);
+          }
+        } else if (hit) {
+          kFp++;
+          fpSet.add(s.id);
+        } else kTn++;
+      }
+      tp = Math.min(tp, kTp);
+      tn = Math.min(tn, kTn);
+      fn = Math.max(fn, kFn);
+      fp = Math.max(fp, kFp);
     }
-    st.hitRate = nMatch === 0 ? null : st.tp / nMatch;
-    st.fpRate = nNo === 0 ? null : st.fp / nNo;
-    return st;
+    return {
+      threshold: t,
+      tp,
+      fn,
+      fp,
+      tn,
+      hitRate: nMatch === 0 ? null : tp / nMatch,
+      fpRate: nNo === 0 ? null : fp / nNo,
+      fnIds: usable.filter((c) => fnSet.has(c.id)).map((c) => c.id),
+      fpIds: usable.filter((c) => fpSet.has(c.id)).map((c) => c.id),
+    };
   });
   // 建议:误报率 ≤ maxFpRate 的阈值里取命中率最高者;并列取最高阈值(离误报边界最远)
   const feasible = stats.filter(
@@ -217,6 +249,7 @@ export function evaluateCorpus(cases: readonly CorpusCase[], opts: EvalOptions =
   if (nNo === 0) warnings.push('no_nomatch_cases');
   if (recommendation === null) warnings.push('no_threshold_within_max_fp_rate');
   if (exactOnlyIds.length > 0) warnings.push('exact_only_cases_excluded');
+  if (truncatedIds.length > 0) warnings.push('bottom_k_truncation_key_dependent');
   return {
     algo: {
       version: NEAR_ALGO.version,
@@ -224,6 +257,8 @@ export function evaluateCorpus(cases: readonly CorpusCase[], opts: EvalOptions =
       draftThreshold: NEAR_ALGO.threshold,
     },
     cases: cases.length,
+    keys: keys.length,
+    truncatedIds,
     counts: { match: nMatch, nomatch: nNo },
     exactOnlyIds,
     coverage: { match: summarize(cov('match')), nomatch: summarize(cov('nomatch')) },
@@ -243,6 +278,9 @@ export function formatReport(r: CorpusReport): string {
   );
   L.push(
     `cases ${r.cases}: match ${r.counts.match}, nomatch ${r.counts.nomatch}, exact_only excluded ${r.exactOnlyIds.length}${r.exactOnlyIds.length > 0 ? ` [${r.exactOnlyIds.join(', ')}]` : ''}`,
+  );
+  L.push(
+    `eval keys ${r.keys} (worst case across keys); bottom-k truncated (key-dependent) ${r.truncatedIds.length}${r.truncatedIds.length > 0 ? ` [${r.truncatedIds.join(', ')}]` : ''}`,
   );
   for (const k of ['match', 'nomatch'] as const) {
     const c = r.coverage[k];

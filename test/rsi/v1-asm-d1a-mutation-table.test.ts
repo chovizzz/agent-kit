@@ -11,10 +11,10 @@ import { V1_ASM_D1A_MUTATIONS, V1_ASM_D1A_RESULTS } from './v1-asm-d1a-mutation-
 const countOf = (text: string, needle: string): number => text.split(needle).length - 1;
 
 describe('D1a 变异表', () => {
-  it('id 唯一且为下划线词;每条都有杀手测试与 mustKill;条数恰为 60', () => {
+  it('id 唯一且为下划线词;每条都有杀手测试与 mustKill;条数恰为 63', () => {
     const ids = V1_ASM_D1A_MUTATIONS.map((m) => m.id);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids.length).toBe(60);
+    expect(ids.length).toBe(63);
     for (const m of V1_ASM_D1A_MUTATIONS) {
       expect(m.mustKill.length, m.id).toBeGreaterThan(0);
       expect(m.id, m.id).toMatch(/^[a-z0-9]+(_[a-z0-9]+)*$/);

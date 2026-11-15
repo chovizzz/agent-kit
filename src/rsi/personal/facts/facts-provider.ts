@@ -73,11 +73,12 @@ export function makeFactsProvider(d: FactsProviderDeps): FactsProviderD1a {
   ): Promise<GateOut | null> {
     const src = await source(wc);
     if (src === null) return null;
-    const dr = buildDraft(src.sp, src.signals, { fingerprint: d.fingerprint });
-    if (dr.kind !== 'draft') return null;
-    const draft: CandidateDraft = dr.draft;
-    if (draft.id !== rec.id || draft.contentSha256 !== rec.content_sha256) return null;
+    // 草稿构建会调用注入的 fingerprint(可能抛错 / 返回非法值):同属读失败,一并受 guarded 保护(锁丢失仍原样抛)
     return guarded(async () => {
+      const dr = buildDraft(src.sp, src.signals, { fingerprint: d.fingerprint });
+      if (dr.kind !== 'draft') return null;
+      const draft: CandidateDraft = dr.draft;
+      if (draft.id !== rec.id || draft.contentSha256 !== rec.content_sha256) return null;
       const verdictOf = await verdicts(src.signals);
       const trigger = draft.atom.fm.trigger;
       const ledger = await r.ledger.read();
