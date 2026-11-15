@@ -241,6 +241,9 @@ function mergeEffect(
   }
 }
 
+/** 空批(没有账类效果)在本次调用身份表里的身份:不是 64 位十六进制,不会与任何 `batchSha256` 相等 */
+const EMPTY_BATCH_IDENTITY = 'empty-batch';
+
 /**
  * 处理一个批次;`satisfied` = 无需写(键已满足 / 状态已满足且无需登记身份 / 没有账类效果),`changed` = Working 已合并(含「状态已满足、仅登记身份」)。
  * 任何校验失败抛错且**不改动 Working**。
@@ -253,13 +256,16 @@ export function applyBatch(
   intent: LedgerIntent,
   opts: PlanOptions,
 ): 'satisfied' | 'changed' {
-  if (effects.length === 0) return 'satisfied';
-  const m = checkMeta(effects, meta);
-  const hash = batchSha256(effects, m);
-  // 本次调用内的身份表:先于任何 `satisfied` 提前返回(状态已满足的批也要记)
+  // 没有账类效果的批(含恢复时分离掉审计效果后为空的批)不校验 meta、不落账,但**仍参与本次调用内的身份表**:
+  // 身份取固定值(与任何非空批的指纹都不同),所以同一次调用里「空批 ↔ 同键非空批」无论先后都是冲突(第 3 轮评审中)
+  const empty = effects.length === 0;
+  const m = empty ? null : checkMeta(effects, meta);
+  const hash = m === null ? EMPTY_BATCH_IDENTITY : batchSha256(effects, m);
+  // 本次调用内的身份表:先于任何 `satisfied` 提前返回(状态已满足的批、空批也要记)
   const seen = opts.seenKeys?.get(key);
   if (seen !== undefined && seen !== hash) throw new EffectsKeyConflict(`key:${key}`);
   opts.seenKeys?.set(key, hash);
+  if (m === null) return 'satisfied';
   if (intent === 'replay') {
     const have = findKey(w, key);
     if (have !== undefined) {

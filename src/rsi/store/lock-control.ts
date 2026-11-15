@@ -74,6 +74,8 @@ export function acquireLockControl(
   rsi: LockCap,
   personal: LockCap,
   root: string | undefined,
+  /** 调用方随后要 `adoptRegistry` 的表(装配传入):首次绑定前先验它可接受,拒绝时两把句柄不被占用(第 3 轮评审中) */
+  registry?: SealRegistry,
 ): LockControl {
   checkIdentity(rsi, personal, root);
   const a = bindingOf.get(rsi);
@@ -85,6 +87,8 @@ export function acquireLockControl(
     return a.control; // root 由 `rsi.path` 唯一决定(上面的身份校验已确认),同一对句柄不会换 root
   }
   const control = createControl(rsi, personal);
+  // 首次绑定的全部可拒绝检查都在占用之前:传入的注册表已绑给别的 acquisition = 拒绝,此时屏障没挂、`bindingOf` 没写
+  if (registry?.isBoundElsewhere(control.identity) === true) throw mismatch('registry_foreign');
   const binding: Binding = { control, rsi, personal };
   // 原子占用:两把句柄先**无副作用预检**(任一已被别的屏障占着 = 拒绝,谁都没动),再挂;预检与挂之间没有 await,不会被插入
   const gate = { beforeRelease: () => drain(control) };

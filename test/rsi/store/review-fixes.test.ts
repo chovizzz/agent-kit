@@ -509,6 +509,36 @@ describe.each(KINDS)('R2 recoverThrough 同次调用内的同键冲突 / userVet
     ]);
   });
 
+  it('recover_same_call_empty_batch_key_identity:同一次恢复里没有账类效果的批也占键身份——空批之后同键非空批、非空批之后同键空批都是 effects_key_conflict,账字节不变;对照:同键两个空批 / 空批后异键非空批都正常', async () => {
+    const w = await makeWorld(kind);
+    await w.store.sink.applyOnce('base', [tomb()], meta()); // ID 的墓碑已存在
+    const before = await w.bytes(FILES.effects);
+    const E = { key: 'K', effects: [], meta: meta(EV) };
+    const A = { key: 'K', effects: [tomb(ID)], meta: meta(EV) }; // 状态已满足的非空批
+    const B = { key: 'K', effects: [tomb(ID2)], meta: meta(EV) };
+    expect(await w.store.recovery.recoverThrough(W, [E, B])).toEqual([
+      { batch_id: 'K', state: 'satisfied' },
+      { batch_id: 'K', state: 'ledger_not_committed', cause: 'effects_key_conflict' },
+    ]);
+    expect(await w.bytes(FILES.effects)).toEqual(before); // 零写入:ID2 的墓碑没有被悄悄建立
+    expect(await w.store.recovery.recoverThrough(W, [A, E])).toEqual([
+      { batch_id: 'K', state: 'satisfied' },
+      { batch_id: 'K', state: 'ledger_not_committed', cause: 'effects_key_conflict' },
+    ]);
+    expect(await w.bytes(FILES.effects)).toEqual(before);
+    // 对照 1:同键两个空批 = 都 satisfied,零写
+    expect(await w.store.recovery.recoverThrough(W, [E, { ...E }])).toEqual([
+      { batch_id: 'K', state: 'satisfied' },
+      { batch_id: 'K', state: 'satisfied' },
+    ]);
+    expect(await w.bytes(FILES.effects)).toEqual(before);
+    // 对照 2:空批之后换一个键的非空批 = 正常提交(拒绝来自同键,不是 B 本身)
+    expect(await w.store.recovery.recoverThrough(W, [E, { ...B, key: 'K2' }])).toEqual([
+      { batch_id: 'K', state: 'satisfied' },
+      { batch_id: 'K2', state: 'ledger_committed' },
+    ]);
+  });
+
   it('user_veto_maintenance_only_reports_satisfied:否决自身已满足、只有维护性写入(过期冷却被裁)= ledger:satisfied 但账确实被写(satisfied ≠ 零写盘);对照:全新否决 = committed', async () => {
     const w = await makeWorld(kind);
     expect(await w.store.userVeto.veto(ID, SHA, meta())).toEqual({

@@ -259,6 +259,26 @@ describe('H1 LockCap 的 root / 锁种类 / acquisition 校验', () => {
     expect(await mismatch(() => assemble(x))).toBeUndefined();
   });
 
+  it('registry_foreign_first_assembly_no_binding:首次装配传入别的 acquisition 的注册表 = registry_foreign,且两把句柄都没被占用(rsi 换搭档仍可装配、personal 释放不经屏障);对照:同样的句柄不传注册表可装配', async () => {
+    const a = mk();
+    const storeA = assemble(a);
+    const x = mk();
+    expect(
+      await mismatch(() =>
+        assembleRsiStore({ fs: x.fs, rsi: x.rsi, personal: x.personal, registry: storeA.registry }),
+      ),
+    ).toBe('registry_foreign');
+    await x.personal.release(); // 没被挂屏障:立即释放
+    expect(x.log).toEqual(['release:personal']);
+    // 没留下绑定:rsi 句柄换一个搭档可以装配(失败的那次若已占用,这里会是 acquisition_conflict)
+    const other = new FakeLock('personal2', x.log);
+    expect(
+      await mismatch(() => assembleRsiStore({ fs: x.fs, rsi: x.rsi, personal: other })),
+    ).toBeUndefined();
+    // 对照:全新句柄不传注册表 = 可装配(拒绝来自注册表,不是句柄形状)
+    expect(await mismatch(() => assemble(mk()))).toBeUndefined();
+  });
+
   it('句柄已挂了别的屏障 = 拒绝(同一句柄只接受同一个屏障;预检先于占用,不静默覆盖),原因钉在 release_gate_taken;对照:屏障槽空的假件可装配', async () => {
     const x = mk();
     const foreign = { beforeRelease: async (): Promise<void> => undefined };

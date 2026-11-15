@@ -1272,6 +1272,34 @@ export const V1_ASM_B1A_MUTATIONS: readonly V1AsmB1aMutation[] = [
     expectRed: ['user_veto_maintenance_only_reports_satisfied'],
     mustKill: ['user_veto_maintenance_only_reports_satisfied'],
   },
+  {
+    id: 'recover_empty_batch_skips_identity',
+    clause: 'W0-26 §2 recoverThrough:身份表覆盖全部批次,含没有账类效果的批(第 3 轮评审中)',
+    edits: [
+      swap(
+        'src/rsi/store/ledger-merge.ts',
+        'const empty = effects.length === 0;',
+        "const empty = effects.length === 0;\n  if (empty) return 'satisfied';",
+      ),
+    ],
+    tests: ['rsi/store/review-fixes.test.ts'],
+    expectRed: ['recover_same_call_empty_batch_key_identity'],
+    mustKill: ['recover_same_call_empty_batch_key_identity'],
+  },
+  {
+    id: 'registry_foreign_checked_after_binding',
+    clause: 'W0-26 §12 装配被拒零副作用:注册表不可接受时句柄不被占用(第 3 轮评审中)',
+    edits: [
+      swap(
+        'src/rsi/store/lock-control.ts',
+        "if (registry?.isBoundElsewhere(control.identity) === true) throw mismatch('registry_foreign');",
+        '',
+      ),
+    ],
+    tests: ['rsi/store/lock-control.test.ts'],
+    expectRed: ['registry_foreign_first_assembly_no_binding'],
+    mustKill: ['registry_foreign_first_assembly_no_binding'],
+  },
 ];
 
 /** 由主代理整表执行变异后回填 */
