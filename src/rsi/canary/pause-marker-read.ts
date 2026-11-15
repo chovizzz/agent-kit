@@ -5,8 +5,9 @@
  */
 import * as path from 'node:path';
 import { RSI_AUTO_PAUSE_REASONS, type RsiAutoPauseReason } from '../../contracts/rsi.js';
-import { lstat, readText } from '../../io/read-fs.js';
+import { readFileSafe } from '../../io/read-fs.js';
 import type { BreakerMarkerPort, PauseMarker } from '../personal/breaker.js';
+import { RSI_FILE_OWNER } from '../lock-read.js';
 import { CANARY_FILES } from './files.js';
 
 const REASONS: ReadonlySet<string> = new Set(RSI_AUTO_PAUSE_REASONS);
@@ -40,35 +41,40 @@ export function parsePauseMarker(text: string): PauseMarker {
   return { by: 'unknown', reason: null, at: null, id: null };
 }
 
-/** 标记路径存在但不是普通文件(符号链接 / 目录 / 其它):读侧不跟随、不猜,抛错(调用方当「状态未知」,不是「没有标记」) */
+/** 标记路径存在但不安全(符号链接 / 目录 / 非普通文件 / 硬链接 / 属主或权限不对 / 超限 / 其它读错误):读侧不跟随、不猜,抛错(调用方当「状态未知」,不是「没有标记」) */
 export class MarkerUnsafeError extends Error {
   readonly code = 'RSI_MARKER_UNSAFE';
-  constructor() {
-    super('breaker marker is not a regular file');
+  constructor(readonly why: string = 'unsafe') {
+    super(`breaker marker is not safely readable (${why})`);
   }
 }
 
+/** 标记正文的读取上限(合法内容只有几十字节;远大于它即不可信) */
+const MARKER_MAX_BYTES = 64 * 1024;
+
 /**
  * 只读的 B 标记端口(类型上只有 `read`;命令侧 `WritePorts.breaker` 与 worker 只读判定共用)。
- * **比写侧端口的 `read` 更严**:先 `lstat`——确认不存在(ENOENT)才是 `null`;存在但是符号链接(含悬空链接:跟随读会报 ENOENT,不能据此说「没有标记」)/ 目录 / 非普通文件 → 抛错;
- * 其它 `lstat` / 读错误照抛。`lstat` 成功后到读取之间文件被删(读报 ENOENT)= 确认不存在 → `null`。
+ * **比写侧端口的 `read` 更严**:经句柄级 `readFileSafe`(`O_NOFOLLOW | O_NONBLOCK` 打开 + 对句柄 fstat:普通文件、`nlink == 1`、属主与 0600 权限、大小上限;与撤销凭据读同一入口),
+ * 不再 `lstat` 后另行按路径读(检查—使用竞态:检查后被换成链接会被跟随,换成悬空链接会被读成「不存在」)。
+ * 三态映射:`missing`(open 报 ENOENT,或打开后被 unlink)才是 `null`;`unsafe`(含悬空 / 有效符号链接 → ELOOP)→ 抛 {@link MarkerUnsafeError};`ok` → 解析。
+ * 残余(同 `readFileSafe`):`O_NOFOLLOW` 只管末级,父目录 `rsiDir` 的安全由调用方(`rsiDirReadonly`)承担。
+ * `seam.beforeOpen` 是测试缝(演练「检查之后、读取之前被替换」),生产装配不传。
  */
-export function makeBreakerMarkerReader(rsiDir: string): Pick<BreakerMarkerPort, 'read'> {
+export function makeBreakerMarkerReader(
+  rsiDir: string,
+  seam: { beforeOpen?: () => Promise<void> | void } = {},
+): Pick<BreakerMarkerPort, 'read'> {
   const file = path.join(rsiDir, CANARY_FILES.pauseBreaker);
   return {
     async read(): Promise<PauseMarker | null> {
-      let text: string;
-      try {
-        const st = await lstat(file);
-        if (!st.isFile() || st.isSymbolicLink()) throw new MarkerUnsafeError();
-        text = await readText(file);
-      } catch (e) {
-        if (!(e instanceof MarkerUnsafeError) && (e as NodeJS.ErrnoException).code === 'ENOENT') {
-          return null;
-        }
-        throw e;
-      }
-      return parsePauseMarker(text);
+      const r = await readFileSafe(file, {
+        maxBytes: MARKER_MAX_BYTES,
+        owner: RSI_FILE_OWNER,
+        ...(seam.beforeOpen === undefined ? {} : { beforeOpen: seam.beforeOpen }),
+      });
+      if (r.kind === 'missing') return null;
+      if (r.kind === 'unsafe') throw new MarkerUnsafeError(r.why);
+      return parsePauseMarker(r.bytes.toString('utf8'));
     },
   };
 }

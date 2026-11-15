@@ -7,6 +7,7 @@
  * 子进程里不读 `process.env`:全部由作业给(与 ro-entry 同法);git 路径解析 = `null`(未装配),spawn 间谍一旦被调用就记下来并抛错。
  */
 import * as path from 'node:path';
+import type { PersonalLifecycleRecord } from '../../../src/contracts/rsi-personal.js';
 import { mkdirp } from '../../../src/io/safe-fs.js';
 import { getRealHome } from '../../../src/io/paths.js';
 import { createRsiIoContext } from '../../../src/rsi/io.js';
@@ -18,6 +19,10 @@ export interface AsmAJob {
   env: Record<string, string>;
   cwd: string;
   repo: string;
+  /** 非空世界:包内 payload 的预置技能(`kind=skill`);缺省 = 空 payload */
+  skills?: { payload_path: string; text: string }[];
+  /** 非空世界:shadow 记录(`readySince.recover` 的输入);缺省 = 不调用 */
+  shadowRec?: unknown;
 }
 
 export type AsmAResult = Record<string, unknown>;
@@ -112,7 +117,12 @@ export async function runAsmAJob(
       spawnCalls.push('spawn');
       throw new Error('spawn must not be called');
     },
-    payload: async () => ({ manifest: { files: [] }, contents: new Map() }),
+    payload: async () => ({
+      manifest: {
+        files: (job.skills ?? []).map((k) => ({ kind: 'skill', payload_path: k.payload_path })),
+      },
+      contents: new Map((job.skills ?? []).map((k) => [k.payload_path, k.text])),
+    }),
   });
   const since = '2026-11-01T00:00:00Z';
   const out: AsmAResult = {
@@ -132,6 +142,13 @@ export async function runAsmAJob(
     collectedThrough: await take(() => a.analysis.collectedThrough()),
     payloadDrift: await take(() => a.analysis.payloadDrift()),
     classify: await take(() => a.analysis.classify('p_0000000000000000')),
+    ...(job.shadowRec === undefined
+      ? {}
+      : {
+          readySince: await take(() =>
+            a.readySince.recover(job.shadowRec as PersonalLifecycleRecord),
+          ),
+        }),
     spawnCalls,
   };
   return out;

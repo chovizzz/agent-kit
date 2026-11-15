@@ -43,7 +43,7 @@ export const V1_ASM_A_MUTATIONS: readonly V1AsmAMutation[] = [
   {
     id: 'gp_not_file_accepted',
     clause: 'resolveGitPath:不是普通文件的候选被接受',
-    edits: [swap('src/rsi/auto/git-path.ts', '    if (!st.isFile) return false;\n', '')],
+    edits: [swap('src/rsi/auto/git-path.ts', '    if (!st.isFile) return null;\n', '')],
     tests: ['rsi/asm/a-git-path.test.ts'],
     expectRed: [
       '拒绝:不可执行 / 组或其他人可写 / 属主既非 root 也非当前用户 / 不是普通文件 / 不存在',
@@ -56,7 +56,7 @@ export const V1_ASM_A_MUTATIONS: readonly V1AsmAMutation[] = [
     id: 'gp_exec_bit_dropped',
     clause: 'resolveGitPath:不可执行的候选被接受',
     edits: [
-      swap('src/rsi/auto/git-path.ts', '    if ((st.mode & 0o111) === 0) return false;\n', ''),
+      swap('src/rsi/auto/git-path.ts', '    if ((st.mode & 0o111) === 0) return null;\n', ''),
     ],
     tests: ['rsi/asm/a-git-path.test.ts'],
     expectRed: [
@@ -70,10 +70,16 @@ export const V1_ASM_A_MUTATIONS: readonly V1AsmAMutation[] = [
     id: 'gp_writable_accepted',
     clause: 'resolveGitPath:组 / 其他人可写的候选被接受',
     edits: [
-      swap('src/rsi/auto/git-path.ts', '    if ((st.mode & 0o022) !== 0) return false;\n', ''),
+      swap(
+        'src/rsi/auto/git-path.ts',
+        '    (st.mode & 0o022) === 0 && (st.uid === 0 || st.uid === probe.uid);\n',
+        '    st.uid === 0 || st.uid === probe.uid;\n',
+      ),
     ],
     tests: ['rsi/asm/a-git-path.test.ts'],
     expectRed: [
+      '候选是符号链接',
+      '父目录可被组 / 其他人写',
       '拒绝:不可执行 / 组或其他人可写 / 属主既非 root 也非当前用户 / 不是普通文件 / 不存在',
     ],
     mustKill: [
@@ -86,12 +92,13 @@ export const V1_ASM_A_MUTATIONS: readonly V1AsmAMutation[] = [
     edits: [
       swap(
         'src/rsi/auto/git-path.ts',
-        '    if (st.uid !== 0 && st.uid !== probe.uid) return false;\n',
-        '',
+        '    (st.mode & 0o022) === 0 && (st.uid === 0 || st.uid === probe.uid);\n',
+        '    (st.mode & 0o022) === 0;\n',
       ),
     ],
     tests: ['rsi/asm/a-git-path.test.ts'],
     expectRed: [
+      '父目录可被组 / 其他人写',
       '拒绝:不可执行 / 组或其他人可写 / 属主既非 root 也非当前用户 / 不是普通文件 / 不存在',
     ],
     mustKill: [
@@ -104,8 +111,8 @@ export const V1_ASM_A_MUTATIONS: readonly V1AsmAMutation[] = [
     edits: [
       swap(
         'src/rsi/auto/git-path.ts',
-        "    return path.isAbsolute(real) && path.basename(real) === 'git';",
-        '    return true;',
+        "    if (!path.isAbsolute(real) || path.basename(real) !== 'git') return null;\n",
+        '',
       ),
     ],
     tests: ['rsi/asm/a-git-path.test.ts'],
@@ -118,8 +125,8 @@ export const V1_ASM_A_MUTATIONS: readonly V1AsmAMutation[] = [
     edits: [
       swap(
         'src/rsi/auto/git-path.ts',
-        '  } catch {\n    return false;\n  }',
-        '  } catch {\n    return true;\n  }',
+        '  } catch {\n    return null;\n  }',
+        '  } catch {\n    return candidate;\n  }',
       ),
     ],
     tests: ['rsi/asm/a-git-path.test.ts'],
@@ -270,12 +277,17 @@ export const V1_ASM_A_MUTATIONS: readonly V1AsmAMutation[] = [
   },
   {
     id: 'marker_error_absent',
-    clause: 'B 标记读:非 ENOENT 的读错误被当成不存在',
+    clause: 'B 标记读:不可安全读取(unsafe:读错误 / 权限 / 超限 / 链接)被当成不存在',
     edits: [
-      swap('src/rsi/canary/pause-marker-read.ts', '        throw e;', '        return null;'),
+      swap(
+        'src/rsi/canary/pause-marker-read.ts',
+        "      if (r.kind === 'missing') return null;\n",
+        "      if (r.kind === 'missing' || r.kind === 'unsafe') return null;\n",
+      ),
     ],
     tests: ['rsi/asm/a-adapters.test.ts'],
     expectRed: [
+      '权限过宽 / 硬链接 / 超限',
       '缺失 = null;合法 / 不认识的内容 = 与写侧端口相同的解析;类型上只有 read;读错误(非 ENOENT)抛错',
     ],
     mustKill: [
@@ -391,16 +403,20 @@ export const V1_ASM_A_MUTATIONS: readonly V1AsmAMutation[] = [
   },
   {
     id: 'marker_nonregular_accepted',
-    clause: 'B 标记读:符号链接 / 非普通文件不再被拒(悬空链接被读成「不存在」)',
+    clause:
+      'B 标记读:不安全(符号链接 / 非普通文件 / 权限过宽 / 硬链接 / 超限)不再被拒,被读成「不存在」',
     edits: [
       swap(
         'src/rsi/canary/pause-marker-read.ts',
-        '        if (!st.isFile() || st.isSymbolicLink()) throw new MarkerUnsafeError();\n',
-        '',
+        "      if (r.kind === 'unsafe') throw new MarkerUnsafeError(r.why);\n",
+        "      if (r.kind === 'unsafe') return null;\n",
       ),
     ],
     tests: ['rsi/asm/a-adapters.test.ts'],
     expectRed: [
+      '检查之后、打开之前被换成悬空符号链接',
+      '检查之后、打开之前被换成指向有效文件的符号链接',
+      '权限过宽 / 硬链接 / 超限',
       '缺失 = null;合法 / 不认识的内容 = 与写侧端口相同的解析;类型上只有 read;读错误(非 ENOENT)抛错',
     ],
     mustKill: [
@@ -469,13 +485,18 @@ export const V1_ASM_A_MUTATIONS: readonly V1AsmAMutation[] = [
     edits: [
       swap(
         'src/rsi/analysis/source-ports.ts',
-        'if (cur.present && (cur.markerDrifted || cur.sha !== e.sha256)) drifted = true;',
-        'if (cur.present && cur.markerDrifted) drifted = true;',
+        'if (!cur.present || cur.markerDrifted || cur.sha !== e.sha256) drifted = true;',
+        'if (!cur.present || cur.markerDrifted) drifted = true;',
       ),
     ],
-    tests: ['rsi/asm/a-adapters.test.ts'],
-    expectRed: ['没有登记表 = clean;内容与登记一致 = clean(对照);被改过 = drifted'],
-    mustKill: ['没有登记表 = clean;内容与登记一致 = clean(对照);被改过 = drifted'],
+    tests: ['rsi/asm/a-adapters.test.ts', 'rsi/asm/a-empty-write-root.test.ts'],
+    expectRed: [
+      '没有登记表 = clean(只表示没有登记项漂移);内容与登记一致 = clean(对照);被改过 = drifted',
+      '非空世界的对照',
+    ],
+    mustKill: [
+      '没有登记表 = clean(只表示没有登记项漂移);内容与登记一致 = clean(对照);被改过 = drifted',
+    ],
   },
   {
     id: 'through_partial_ok',
@@ -501,12 +522,13 @@ export const V1_ASM_A_MUTATIONS: readonly V1AsmAMutation[] = [
     edits: [
       swap(
         'src/rsi/analysis/source-ports.ts',
-        'return new Date(Math.max(0, end - t.duration_ms)).toISOString();',
+        'return new Date(start).toISOString();',
         'return new Date(end).toISOString();',
       ),
     ],
     tests: ['rsi/asm/a-adapters.test.ts'],
     expectRed: [
+      'duration_ms 大于完成时刻',
       'ok:取开始时刻(完成时刻减时长);ok_partial / 其它结果 / 无 tick / 缺失 / 不合规 = null',
     ],
     mustKill: [
@@ -662,8 +684,8 @@ export const V1_ASM_A_MUTATIONS: readonly V1AsmAMutation[] = [
     edits: [
       swap(
         'src/rsi/canary/pause-marker-read.ts',
-        "import { lstat, readText } from '../../io/read-fs.js';",
-        "import { lstat, readText } from '../../io/read-fs.js';\nimport { createExclusiveDurable } from '../../io/safe-fs.js';\nexport const asmProbe = createExclusiveDurable;",
+        "import { readFileSafe } from '../../io/read-fs.js';",
+        "import { readFileSafe } from '../../io/read-fs.js';\nimport { createExclusiveDurable } from '../../io/safe-fs.js';\nexport const asmProbe = createExclusiveDurable;",
       ),
     ],
     tests: ['rsi/asm/a-zero-write.test.ts'],
@@ -696,408 +718,259 @@ export const V1_ASM_A_MUTATIONS: readonly V1AsmAMutation[] = [
     expectRed: ['safe-fs / exec / 锁 / 含写出口的原模块:读根文件红'],
     mustKill: ['safe-fs / exec / 锁 / 含写出口的原模块:读根文件红'],
   },
+  // ---- 验收评审采纳项(H1 / H2 / M1 / M2 / M3 / L1 / L2)新增 ----
+  {
+    id: 'gp_returns_candidate',
+    clause: 'resolveGitPath:返回候选原路径而不是规范路径(候选链接可在探测后被换掉)',
+    edits: [
+      swap(
+        'src/rsi/auto/git-path.ts',
+        '    return real;\n  } catch {',
+        '    return candidate;\n  } catch {',
+      ),
+    ],
+    tests: ['rsi/asm/a-git-path.test.ts'],
+    expectRed: ['候选是符号链接'],
+    mustKill: ['候选是符号链接'],
+  },
+  {
+    id: 'gp_stat_candidate_not_real',
+    clause: 'resolveGitPath:元数据检查对象是候选名而不是规范路径指向的文件',
+    edits: [
+      swap(
+        'src/rsi/auto/git-path.ts',
+        '    const st = await probe.stat(real);\n',
+        '    const st = await probe.stat(candidate);\n',
+      ),
+    ],
+    tests: ['rsi/asm/a-git-path.test.ts'],
+    expectRed: ['候选是符号链接', 'realpath 之后文件名不是 git'],
+    mustKill: ['候选是符号链接'],
+  },
+  {
+    id: 'gp_parent_unchecked',
+    clause: 'resolveGitPath:父目录可被组 / 其他人写(目录项可被替换)仍被接受',
+    edits: [
+      swap(
+        'src/rsi/auto/git-path.ts',
+        '    const dir = await probe.stat(path.dirname(real));\n    if (!dir.isDirectory || !trusted(dir)) return null;\n',
+        '',
+      ),
+    ],
+    tests: ['rsi/asm/a-git-path.test.ts'],
+    expectRed: ['父目录可被组 / 其他人写'],
+    mustKill: ['父目录可被组 / 其他人写'],
+  },
+  {
+    id: 'marker_check_use_race',
+    clause:
+      'B 标记读:改回按路径 lstat 后再 readText(检查—使用竞态:检查后被换成链接被跟随 / 悬空链接被读成「不存在」)',
+    edits: [
+      swap(
+        'src/rsi/canary/pause-marker-read.ts',
+        "import { readFileSafe } from '../../io/read-fs.js';",
+        "import { lstat, readText } from '../../io/read-fs.js';",
+      ),
+      swap(
+        'src/rsi/canary/pause-marker-read.ts',
+        `      const r = await readFileSafe(file, {
+        maxBytes: MARKER_MAX_BYTES,
+        owner: RSI_FILE_OWNER,
+        ...(seam.beforeOpen === undefined ? {} : { beforeOpen: seam.beforeOpen }),
+      });
+`,
+        `      const r = await (async (): Promise<any> => {
+        try {
+          const st = await lstat(file);
+          if (!st.isFile() || st.isSymbolicLink()) return { kind: 'unsafe', why: 'link' };
+          await seam.beforeOpen?.();
+          return { kind: 'ok', bytes: Buffer.from(await readText(file)) };
+        } catch (e) {
+          if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'missing' };
+          throw e;
+        }
+      })();
+`,
+      ),
+    ],
+    tests: ['rsi/asm/a-adapters.test.ts'],
+    expectRed: [
+      '检查之后、打开之前被换成悬空符号链接',
+      '检查之后、打开之前被换成指向有效文件的符号链接',
+      '权限过宽 / 硬链接 / 超限',
+    ],
+    mustKill: [
+      '检查之后、打开之前被换成悬空符号链接',
+      '检查之后、打开之前被换成指向有效文件的符号链接',
+    ],
+  },
+  {
+    id: 'marker_owner_policy_dropped',
+    clause: 'B 标记读:属主 / 权限校验被去掉(0644 的标记被读成合法)',
+    edits: [swap('src/rsi/canary/pause-marker-read.ts', '        owner: RSI_FILE_OWNER,\n', '')],
+    tests: ['rsi/asm/a-adapters.test.ts'],
+    expectRed: ['权限过宽 / 硬链接 / 超限'],
+    mustKill: ['权限过宽 / 硬链接 / 超限'],
+  },
+  {
+    id: 'drift_missing_entry_clean',
+    clause: 'payloadDrift:有登记而目标文件 / 托管块缺失被判 clean',
+    edits: [
+      swap(
+        'src/rsi/analysis/source-ports.ts',
+        '        if (!cur.present || cur.markerDrifted || cur.sha !== e.sha256) drifted = true;\n',
+        '        if (cur.present && (cur.markerDrifted || cur.sha !== e.sha256)) drifted = true;\n',
+      ),
+    ],
+    tests: ['rsi/asm/a-adapters.test.ts', 'rsi/asm/a-empty-write-root.test.ts'],
+    expectRed: ['条目文件已不在 = drifted', '托管块整体不在 = drifted', '非空世界的对照'],
+    mustKill: ['条目文件已不在 = drifted', '托管块整体不在 = drifted'],
+  },
+  {
+    id: 'drift_block_missing_clean',
+    clause: 'payloadDrift:有登记的托管块整体缺失被判 clean(文件级缺失仍判 drifted)',
+    edits: [
+      swap(
+        'src/rsi/analysis/source-ports.ts',
+        '        if (!cur.present || cur.markerDrifted || cur.sha !== e.sha256) drifted = true;\n',
+        '        if ((cur.present || e.block_id === undefined) && (!cur.present || cur.markerDrifted || cur.sha !== e.sha256)) drifted = true;\n',
+      ),
+    ],
+    tests: ['rsi/asm/a-adapters.test.ts'],
+    expectRed: ['托管块整体不在 = drifted'],
+    mustKill: ['托管块整体不在 = drifted'],
+  },
+  {
+    id: 'preset_first_copy_only',
+    clause: '预置技能:同 id 比对形不同的副本只取第一份(漏掉只与被丢弃副本重叠的候选)',
+    edits: [
+      swap(
+        'src/rsi/personal/read/step-sources.ts',
+        '        byForm.set(JSON.stringify([t.id, t.do, t.why]), t);\n',
+        '        if (!byForm.has(t.id)) byForm.set(t.id, t);\n',
+      ),
+    ],
+    tests: ['rsi/asm/a-adapters.test.ts', 'rsi/asm/a-empty-write-root.test.ts'],
+    expectRed: ['同 id 比对形不同的副本全部保留', '非空世界:有效暂存提案'],
+    mustKill: ['同 id 比对形不同的副本全部保留'],
+  },
+  {
+    id: 'preset_identical_not_merged',
+    clause: '预置技能:比对形完全相同的副本不合并(按来源路径各留一条)',
+    edits: [
+      swap(
+        'src/rsi/personal/read/step-sources.ts',
+        '        byForm.set(JSON.stringify([t.id, t.do, t.why]), t);\n',
+        '        byForm.set(JSON.stringify([t.id, t.do, t.why, f.payload_path]), t);\n',
+      ),
+    ],
+    tests: ['rsi/asm/a-adapters.test.ts', 'rsi/asm/a-empty-write-root.test.ts'],
+    expectRed: ['比对形完全相同的多 agent 副本合并为一条', '非空世界:有效暂存提案'],
+    mustKill: ['比对形完全相同的多 agent 副本合并为一条'],
+  },
+  {
+    id: 'preset_sort_dropped',
+    clause: '预置技能:结果顺序依赖遍历顺序(不按 id / do / why 排序)',
+    edits: [
+      swap(
+        'src/rsi/personal/read/step-sources.ts',
+        'cmp(a.id, b.id) || cmp(a.do, b.do) || cmp(a.why, b.why)',
+        '0',
+      ),
+    ],
+    tests: ['rsi/asm/a-adapters.test.ts'],
+    expectRed: ['同 id 比对形不同的副本全部保留'],
+    mustKill: ['同 id 比对形不同的副本全部保留'],
+  },
+  {
+    id: 'collected_negative_start_kept',
+    clause: 'collectedThrough:duration_ms 大于完成时刻(开始时刻为负)不返回 null',
+    edits: [swap('src/rsi/analysis/source-ports.ts', '  if (start < 0) return null;\n', '')],
+    tests: ['rsi/asm/a-adapters.test.ts'],
+    expectRed: ['duration_ms 大于完成时刻'],
+    mustKill: ['duration_ms 大于完成时刻'],
+  },
+  {
+    id: 'assemble_staged_empty',
+    clause: '读侧组合根:暂存清单恒为空(非空世界才能发现)',
+    edits: [
+      swap('src/rsi/assemble-read.ts', '        return p.data.staged;\n', '        return [];\n'),
+    ],
+    tests: ['rsi/asm/a-empty-write-root.test.ts'],
+    expectRed: ['非空世界:有效暂存提案'],
+    mustKill: ['非空世界:有效暂存提案'],
+  },
+  {
+    id: 'assemble_presets_unwired',
+    clause: '读侧组合根:预置技能不取包内 payload(恒空)',
+    edits: [
+      swap(
+        'src/rsi/assemble-read.ts',
+        '    presets: makePresetSource({ payload: d.payload }),\n',
+        '    presets: makePresetSource({ payload: async () => ({ manifest: { files: [] }, contents: new Map() }) }),\n',
+      ),
+    ],
+    tests: ['rsi/asm/a-empty-write-root.test.ts'],
+    expectRed: ['非空世界:有效暂存提案'],
+    mustKill: ['非空世界:有效暂存提案'],
+  },
+  {
+    id: 'closure_util_export_from_ignored',
+    clause: 'closureOf:`export … from` / `export * from` 不进闭包',
+    edits: [
+      swap(
+        'test/rsi/closure-util.ts',
+        '      if (includeTypes || !n.isTypeOnly) specs.push(n.moduleSpecifier.text);\n',
+        '',
+      ),
+    ],
+    tests: ['rsi/asm/a-closure-util.test.ts'],
+    expectRed: ['运行时依赖:静态 import', '仅类型依赖', '经中间模块的传递'],
+    mustKill: ['运行时依赖:静态 import', '经中间模块的传递'],
+  },
+  {
+    id: 'closure_util_type_only_as_runtime',
+    clause: 'closureOf:`import type` 在运行时口径也进闭包(口径失真)',
+    edits: [
+      swap(
+        'test/rsi/closure-util.ts',
+        '      if (includeTypes || !n.importClause?.isTypeOnly) specs.push(n.moduleSpecifier.text);\n',
+        '      specs.push(n.moduleSpecifier.text);\n',
+      ),
+    ],
+    tests: ['rsi/asm/a-closure-util.test.ts'],
+    expectRed: ['仅类型依赖'],
+    mustKill: ['仅类型依赖'],
+  },
+  {
+    id: 'closure_util_member_require_ignored',
+    clause: 'closureOf:`module.require(…)` 不被记为 dynamic',
+    edits: [
+      swap(
+        'test/rsi/closure-util.ts',
+        "      n.expression.name.text === 'require'\n",
+        "      n.expression.name.text === 'require_x'\n",
+      ),
+    ],
+    tests: ['rsi/asm/a-closure-util.test.ts'],
+    expectRed: ['绕过静态闭包的写法'],
+    mustKill: ['绕过静态闭包的写法'],
+  },
+  {
+    id: 'closure_util_create_require_ignored',
+    clause: 'closureOf:`createRequire(…)(…)` 不被记为 dynamic',
+    edits: [
+      swap(
+        'test/rsi/closure-util.ts',
+        "      n.expression.text === 'createRequire'\n",
+        "      n.expression.text === 'createRequire_x'\n",
+      ),
+    ],
+    tests: ['rsi/asm/a-closure-util.test.ts'],
+    expectRed: ['绕过静态闭包的写法'],
+    mustKill: ['绕过静态闭包的写法'],
+  },
 ];
 
 /** 执行变异后回填(与 `V1_ASM_A_MUTATIONS` 同序);未执行时为空 */
-/** 实测结果:r21asma-mut-f2 @2d58591(dolphin) */
-export const V1_ASM_A_RESULTS: readonly V1AsmAResult[] = [
-  {
-    id: 'gp_not_file_accepted',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'resolveGitPath 拒绝:不可执行 / 组或其他人可写 / 属主既非 root 也非当前用户 / 不是普通文件 / 不存在',
-    ],
-    restored: true,
-  },
-  {
-    id: 'gp_exec_bit_dropped',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'resolveGitPath 拒绝:不可执行 / 组或其他人可写 / 属主既非 root 也非当前用户 / 不是普通文件 / 不存在',
-    ],
-    restored: true,
-  },
-  {
-    id: 'gp_writable_accepted',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'resolveGitPath 拒绝:不可执行 / 组或其他人可写 / 属主既非 root 也非当前用户 / 不是普通文件 / 不存在',
-    ],
-    restored: true,
-  },
-  {
-    id: 'gp_owner_unchecked',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'resolveGitPath 拒绝:不可执行 / 组或其他人可写 / 属主既非 root 也非当前用户 / 不是普通文件 / 不存在',
-    ],
-    restored: true,
-  },
-  {
-    id: 'gp_real_name_unchecked',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'resolveGitPath realpath 之后文件名不是 git → 拒绝(makeGitReadonly 的断言);相对路径 / 文件名不是 git 的候选 → 拒绝',
-    ],
-    restored: true,
-  },
-  {
-    id: 'gp_probe_error_accepted',
-    failed: 2,
-    skipped: 0,
-    killedBy: [
-      'resolveGitPath 拒绝:不可执行 / 组或其他人可写 / 属主既非 root 也非当前用户 / 不是普通文件 / 不存在',
-      'resolveGitPath 全部解析不到 → null(保持未装配);只探测固定候选(不查 PATH:合规的 git 放在别处也不影响结果)',
-    ],
-    restored: true,
-  },
-  {
-    id: 'peek_read_error_absent',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'peekRecord(s) / recordedSha:经 RecordedReadPort 的只读预读 peek:读失败 / 记录不合规 / head 不合规 / 不稳定一律是 invalid,绝不是 missing 或 absent',
-    ],
-    restored: true,
-  },
-  {
-    id: 'peek_exit_absent',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'peekRecord(s) / recordedSha:经 RecordedReadPort 的只读预读 peek:读失败 / 记录不合规 / head 不合规 / 不稳定一律是 invalid,绝不是 missing 或 absent',
-    ],
-    restored: true,
-  },
-  {
-    id: 'peek_head_null_ok',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'peekRecord(s) / recordedSha:经 RecordedReadPort 的只读预读 peek:head.json 不存在 = absent;读成功且 id 在 = ok;读成功且 id 不在 = missing(正向对照)',
-    ],
-    restored: true,
-  },
-  {
-    id: 'peek_invalid_as_missing',
-    failed: 2,
-    skipped: 0,
-    killedBy: [
-      'peekRecord(s) / recordedSha:经 RecordedReadPort 的只读预读 peek:head.json 不存在 = absent;读成功且 id 在 = ok;读成功且 id 不在 = missing(正向对照)',
-      'peekRecord(s) / recordedSha:经 RecordedReadPort 的只读预读 peek:读失败 / 记录不合规 / head 不合规 / 不稳定一律是 invalid,绝不是 missing 或 absent',
-    ],
-    restored: true,
-  },
-  {
-    id: 'peek_id_ignored',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'peekRecord(s) / recordedSha:经 RecordedReadPort 的只读预读 peek:head.json 不存在 = absent;读成功且 id 在 = ok;读成功且 id 不在 = missing(正向对照)',
-    ],
-    restored: true,
-  },
-  {
-    id: 'sha_failure_value',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'peekRecord(s) / recordedSha:经 RecordedReadPort 的只读预读 recordedSha:读到 = content_sha256;读不到 / 候选不在 / 记录坏 = null',
-    ],
-    restored: true,
-  },
-  {
-    id: 'cred_throw_empty',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      '撤销凭据读(只读适配器)与写侧 homeRevocationReader 同一契约 端口抛错 → invalid(不外泄、不当成空)',
-    ],
-    restored: true,
-  },
-  {
-    id: 'cred_unreadable_empty',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      '撤销凭据读(只读适配器)与写侧 homeRevocationReader 同一契约 缺失 = ok [];合法 = 行;读失败 / 缺尾换行 / 坏行 / 不合 schema / 权限过宽 = invalid(绝不是空);与写侧逐输入同结论',
-    ],
-    restored: true,
-  },
-  {
-    id: 'cred_parse_empty',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      '撤销凭据读(只读适配器)与写侧 homeRevocationReader 同一契约 缺失 = ok [];合法 = 行;读失败 / 缺尾换行 / 坏行 / 不合 schema / 权限过宽 = invalid(绝不是空);与写侧逐输入同结论',
-    ],
-    restored: true,
-  },
-  {
-    id: 'marker_error_absent',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'B 标记只读端口与写侧端口 read 同一语义 缺失 = null;合法 / 不认识的内容 = 与写侧端口相同的解析;类型上只有 read;读错误(非 ENOENT)抛错,绝不是 null;悬空 / 有效符号链接也抛错',
-    ],
-    restored: true,
-  },
-  {
-    id: 'staged_classify_skipped',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'StagedSource:暂存提案来源 只收未 tainted、证据非空、全部归属 P 的 run;其余不装载(正向对照:合规 run 被装载)',
-    ],
-    restored: true,
-  },
-  {
-    id: 'staged_load_swallowed',
-    failed: 1,
-    skipped: 0,
-    killedBy: ['StagedSource:暂存提案来源 装载失败 / 暂存清单读失败 → 抛错(不跳过坏 run 去尽量)'],
-    restored: true,
-  },
-  {
-    id: 'signal_bad_row_skipped',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'SignalLookup:按 sig_id 取信号 任一行不合 schema → 整体抛错(不返回「少几条」冒充成功);信号库不存在 = 空',
-    ],
-    restored: true,
-  },
-  {
-    id: 'preset_content_skipped',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'PresetSource:预置技能的比对形 读失败 / 形状不合规 → 抛错,绝不返回空:内容缺失、没有 frontmatter、缺 name / description / 正文',
-    ],
-    restored: true,
-  },
-  {
-    id: 'preset_shape_loose',
-    failed: 2,
-    skipped: 0,
-    killedBy: [
-      'PresetSource:预置技能的比对形 读失败 / 形状不合规 → 抛错,绝不返回空:内容缺失、没有 frontmatter、缺 name / description / 正文',
-      'PresetSource:预置技能的比对形 frontmatter 按 YAML 取真实值:折叠多行标量、引号;空值 / 非字符串 / 非映射 / 坏 YAML → 抛错;包内真实技能文件可解析',
-    ],
-    restored: true,
-  },
-  {
-    id: 'preset_yaml_naive',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'PresetSource:预置技能的比对形 frontmatter 按 YAML 取真实值:折叠多行标量、引号;空值 / 非字符串 / 非映射 / 坏 YAML → 抛错;包内真实技能文件可解析',
-    ],
-    restored: true,
-  },
-  {
-    id: 'signal_vanished_ignored',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'SignalLookup:按 sig_id 取信号 已枚举的月文件打开前消失(scan 返回 null)→ 整体抛错,不当成「这些 id 不存在」(正向对照:scan 返回文件号时成功)',
-    ],
-    restored: true,
-  },
-  {
-    id: 'marker_nonregular_accepted',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'B 标记只读端口与写侧端口 read 同一语义 缺失 = null;合法 / 不认识的内容 = 与写侧端口相同的解析;类型上只有 read;读错误(非 ENOENT)抛错,绝不是 null;悬空 / 有效符号链接也抛错',
-    ],
-    restored: true,
-  },
-  {
-    id: 'preset_kind_ignored',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'PresetSource:预置技能的比对形 取包内 kind=skill 的 SKILL.md:id = name、do = description、why = 正文;多 agent 副本只取第一份(按 payload_path 升序);其它类别 / 非 SKILL.md 不收',
-    ],
-    restored: true,
-  },
-  {
-    id: 'preset_nonskillmd_taken',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'PresetSource:预置技能的比对形 取包内 kind=skill 的 SKILL.md:id = name、do = description、why = 正文;多 agent 副本只取第一份(按 payload_path 升序);其它类别 / 非 SKILL.md 不收',
-    ],
-    restored: true,
-  },
-  {
-    id: 'drift_ledger_unreadable_clean',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      '分析源端口 payloadDrift:登记表条目的当前内容 vs 登记 sha 登记表不合规、条目路径是符号链接 → 抛错(unavailable),绝不落成 clean',
-    ],
-    restored: true,
-  },
-  {
-    id: 'drift_entry_unsafe_skipped',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      '分析源端口 payloadDrift:登记表条目的当前内容 vs 登记 sha 登记表不合规、条目路径是符号链接 → 抛错(unavailable),绝不落成 clean',
-    ],
-    restored: true,
-  },
-  {
-    id: 'drift_sha_ignored',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      '分析源端口 payloadDrift:登记表条目的当前内容 vs 登记 sha 没有登记表 = clean;内容与登记一致 = clean(对照);被改过 = drifted;条目文件已不在 = clean(不算漂移)',
-    ],
-    restored: true,
-  },
-  {
-    id: 'through_partial_ok',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      '分析源端口 collectedThrough:最近一次完整成功 tick 的开始时刻 ok:取开始时刻(完成时刻减时长);ok_partial / 其它结果 / 无 tick / 缺失 / 不合规 = null(分析 unavailable)',
-    ],
-    restored: true,
-  },
-  {
-    id: 'through_end_not_start',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      '分析源端口 collectedThrough:最近一次完整成功 tick 的开始时刻 ok:取开始时刻(完成时刻减时长);ok_partial / 其它结果 / 无 tick / 缺失 / 不合规 = null(分析 unavailable)',
-    ],
-    restored: true,
-  },
-  {
-    id: 'c4_unavailable_zero',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      '分析源端口 c4Bytes:canary.json 的 treat 注入字节数 合规 = 字节数;缺失 / 不合规 = null(不是 0)',
-    ],
-    restored: true,
-  },
-  {
-    id: 'asm_unwired_fake_success',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      '工厂创建与 import 不读盘、不起子进程 recorded:gitPath() 解析不到 = 未装配(unreadable not_wired),解析只做一次,spawn 一次都不调;解析到但仓库目录不存在 = 在预检就拒绝,同样不 spawn',
-    ],
-    restored: true,
-  },
-  {
-    id: 'asm_gitpath_not_memoized',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      '工厂创建与 import 不读盘、不起子进程 recorded:gitPath() 解析不到 = 未装配(unreadable not_wired),解析只做一次,spawn 一次都不调;解析到但仓库目录不存在 = 在预检就拒绝,同样不 spawn',
-    ],
-    restored: true,
-  },
-  {
-    id: 'asm_eager_gitpath',
-    failed: 2,
-    skipped: 0,
-    killedBy: [
-      '工厂创建与 import 不读盘、不起子进程 assembleReadAdapters 创建:零读盘、不解析 git 路径、不调 payload / spawn;第一次调用端口才读(正向对照)',
-      '工厂创建与 import 不读盘、不起子进程 recorded:gitPath() 解析不到 = 未装配(unreadable not_wired),解析只做一次,spawn 一次都不调;解析到但仓库目录不存在 = 在预检就拒绝,同样不 spawn',
-    ],
-    restored: true,
-  },
-  {
-    id: 'closure_root_safe_fs',
-    failed: 2,
-    skipped: 0,
-    killedBy: [
-      '读侧组合根与只读适配器:import 闭包(运行时依赖与含类型依赖两种口径) src/rsi/assemble-read.ts(运行时依赖):不含写出口 / 锁 / 子进程出口 / 含写出口的原模块,无写类标识符,无动态 import,外部依赖在白名单内',
-      '读侧组合根与只读适配器:import 闭包(运行时依赖与含类型依赖两种口径) src/rsi/assemble-read.ts(含类型依赖):不含写出口 / 锁 / 子进程出口 / 含写出口的原模块,无写类标识符,无动态 import,外部依赖在白名单内',
-    ],
-    restored: true,
-  },
-  {
-    // killedBy 只列日志里完整的 2 条:验证机步骤日志单行约 780 字节截断,实际红 4 条(同一断言在其余读入口上的同名用例)
-    id: 'closure_staged_store',
-    failed: 4,
-    skipped: 0,
-    killedBy: [
-      '读侧组合根与只读适配器:import 闭包(运行时依赖与含类型依赖两种口径) src/rsi/assemble-read.ts(运行时依赖):不含写出口 / 锁 / 子进程出口 / 含写出口的原模块,无写类标识符,无动态 import,外部依赖在白名单内',
-      '读侧组合根与只读适配器:import 闭包(运行时依赖与含类型依赖两种口径) src/rsi/assemble-read.ts(含类型依赖):不含写出口 / 锁 / 子进程出口 / 含写出口的原模块,无写类标识符,无动态 import,外部依赖在白名单内',
-    ],
-    restored: true,
-  },
-  {
-    // killedBy 只列日志里完整的 2 条:验证机步骤日志单行约 780 字节截断,实际红 4 条(同一断言在其余读入口上的同名用例)
-    id: 'closure_analysis_ledger',
-    failed: 4,
-    skipped: 0,
-    killedBy: [
-      '读侧组合根与只读适配器:import 闭包(运行时依赖与含类型依赖两种口径) src/rsi/assemble-read.ts(运行时依赖):不含写出口 / 锁 / 子进程出口 / 含写出口的原模块,无写类标识符,无动态 import,外部依赖在白名单内',
-      '读侧组合根与只读适配器:import 闭包(运行时依赖与含类型依赖两种口径) src/rsi/assemble-read.ts(含类型依赖):不含写出口 / 锁 / 子进程出口 / 含写出口的原模块,无写类标识符,无动态 import,外部依赖在白名单内',
-    ],
-    restored: true,
-  },
-  {
-    id: 'closure_attribution_lock',
-    failed: 2,
-    skipped: 0,
-    killedBy: [
-      '读侧组合根与只读适配器:import 闭包(运行时依赖与含类型依赖两种口径) src/rsi/assemble-read.ts(运行时依赖):不含写出口 / 锁 / 子进程出口 / 含写出口的原模块,无写类标识符,无动态 import,外部依赖在白名单内',
-      '读侧组合根与只读适配器:import 闭包(运行时依赖与含类型依赖两种口径) src/rsi/assemble-read.ts(含类型依赖):不含写出口 / 锁 / 子进程出口 / 含写出口的原模块,无写类标识符,无动态 import,外部依赖在白名单内',
-    ],
-    restored: true,
-  },
-  {
-    // killedBy 只列日志里完整的 2 条:验证机步骤日志单行约 780 字节截断,实际红 6 条(同一断言在其余读入口上的同名用例)
-    id: 'closure_scan_state_store',
-    failed: 6,
-    skipped: 0,
-    killedBy: [
-      '读侧组合根与只读适配器:import 闭包(运行时依赖与含类型依赖两种口径) src/rsi/assemble-read.ts(运行时依赖):不含写出口 / 锁 / 子进程出口 / 含写出口的原模块,无写类标识符,无动态 import,外部依赖在白名单内',
-      '读侧组合根与只读适配器:import 闭包(运行时依赖与含类型依赖两种口径) src/rsi/assemble-read.ts(含类型依赖):不含写出口 / 锁 / 子进程出口 / 含写出口的原模块,无写类标识符,无动态 import,外部依赖在白名单内',
-    ],
-    restored: true,
-  },
-  {
-    // killedBy 只列日志里完整的 2 条:验证机步骤日志单行约 780 字节截断,实际红 4 条(同一断言在其余读入口上的同名用例)
-    id: 'closure_marker_safe_fs',
-    failed: 4,
-    skipped: 0,
-    killedBy: [
-      '读侧组合根与只读适配器:import 闭包(运行时依赖与含类型依赖两种口径) src/rsi/assemble-read.ts(运行时依赖):不含写出口 / 锁 / 子进程出口 / 含写出口的原模块,无写类标识符,无动态 import,外部依赖在白名单内',
-      '读侧组合根与只读适配器:import 闭包(运行时依赖与含类型依赖两种口径) src/rsi/assemble-read.ts(含类型依赖):不含写出口 / 锁 / 子进程出口 / 含写出口的原模块,无写类标识符,无动态 import,外部依赖在白名单内',
-    ],
-    restored: true,
-  },
-  {
-    id: 'eslint_read_root_rule_dropped',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'eslint:读侧组合根 / 只读适配器 import 写出口即红;未登记文件同样代码不红(负对照) safe-fs / exec / 锁 / 含写出口的原模块:读根文件红,放行文件(原写侧模块、测试)不红',
-    ],
-    restored: true,
-  },
-  {
-    id: 'eslint_ledger_not_forbidden',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'eslint:读侧组合根 / 只读适配器 import 写出口即红;未登记文件同样代码不红(负对照) safe-fs / exec / 锁 / 含写出口的原模块:读根文件红,放行文件(原写侧模块、测试)不红',
-    ],
-    restored: true,
-  },
-];
+export const V1_ASM_A_RESULTS: readonly V1AsmAResult[] = [];

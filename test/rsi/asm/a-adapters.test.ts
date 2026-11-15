@@ -21,6 +21,8 @@ import {
   collectedThroughOf,
   makeAnalysisReadPorts,
 } from '../../../src/rsi/analysis/source-ports.js';
+import { renderManagedBlock } from '../../../src/render/managed-block.js';
+import { findDuplicate } from '../../../src/reflect/dedupe.js';
 import { makeHomeReadPort } from '../../../src/rsi/personal/read/home-reads.js';
 import { makeRevocationReadAdapter } from '../../../src/rsi/personal/read/credentials.js';
 import {
@@ -243,6 +245,69 @@ describe('B 标记只读端口与写侧端口 read 同一语义', () => {
   });
 });
 
+describe('B 标记读:句柄级安全读取(检查与读取之间被替换不能跟随 / 不能被读成「不存在」)', () => {
+  const BODY = JSON.stringify({ by: 'user' });
+  const markerWorld = async (tag: string) => {
+    const w = await makeCanaryWorld(tag);
+    const file = path.join(w.rsi, 'AUTO_PAUSE_BREAKER');
+    await safe.writeFile(w.io, file, BODY, { mode: 0o600 });
+    return { w, file };
+  };
+
+  it('正向对照:缝存在但不替换 → 读到普通文件内容;打开前被删 = 确认不存在 = null', async () => {
+    const { w, file } = await markerWorld('asm-a-marker-race-ok-');
+    let called = 0;
+    const same = await makeBreakerMarkerReader(w.rsi, { beforeOpen: () => void called++ }).read();
+    expect(called).toBe(1);
+    expect(same).toEqual({ by: 'user', reason: null, at: null, id: null });
+    const gone = await makeBreakerMarkerReader(w.rsi, {
+      beforeOpen: () => safe.remove(w.io, file),
+    }).read();
+    expect(gone).toBeNull();
+  });
+
+  it('检查之后、打开之前被换成悬空符号链接 → 抛错,不是 null(变异:按路径 lstat 后再读 → 红)', async () => {
+    const { w, file } = await markerWorld('asm-a-marker-race-dl-');
+    const reader = makeBreakerMarkerReader(w.rsi, {
+      beforeOpen: async () => {
+        await safe.remove(w.io, file);
+        await safe.symlink(w.io, path.join(w.dir, 'nowhere'), file);
+      },
+    });
+    await expect(reader.read()).rejects.toThrow(/not safely readable \(link\)/);
+  });
+
+  it('检查之后、打开之前被换成指向有效文件的符号链接 → 抛错,不跟随读取目标(变异:按路径 lstat 后再读 → 红)', async () => {
+    const { w, file } = await markerWorld('asm-a-marker-race-ln-');
+    const reader = makeBreakerMarkerReader(w.rsi, {
+      beforeOpen: async () => {
+        const real = path.join(w.dir, 'real-marker');
+        await safe.writeFile(w.io, real, JSON.stringify({ by: 'user' }), { mode: 0o600 });
+        await safe.remove(w.io, file);
+        await safe.symlink(w.io, real, file);
+      },
+    });
+    await expect(reader.read()).rejects.toThrow(/not safely readable \(link\)/);
+  });
+
+  it('权限过宽 / 硬链接 / 超限 → 抛错(与撤销凭据读同一校验);0600 的同内容文件为正向对照(变异:去掉属主 / 权限校验 → 红)', async () => {
+    const { w, file } = await markerWorld('asm-a-marker-meta-');
+    const reader = makeBreakerMarkerReader(w.rsi);
+    expect(await reader.read()).not.toBeNull();
+    await safe.chmod(w.io, file, 0o644);
+    await expect(reader.read()).rejects.toThrow(/\(perm\)/);
+    await safe.chmod(w.io, file, 0o600);
+    expect(await reader.read()).not.toBeNull();
+    await safe.hardlink(w.io, file, path.join(w.dir, 'alias-marker'));
+    await expect(reader.read()).rejects.toThrow(/\(hardlink\)/);
+    await safe.remove(w.io, path.join(w.dir, 'alias-marker'));
+    expect(await reader.read()).not.toBeNull();
+    await safe.remove(w.io, file);
+    await safe.writeFile(w.io, file, 'x'.repeat(70 * 1024), { mode: 0o600 });
+    await expect(reader.read()).rejects.toThrow(/\(too_large\)/);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // StagedSource
 // ---------------------------------------------------------------------------
@@ -392,7 +457,7 @@ describe('PresetSource:预置技能的比对形', () => {
     ): (() => Promise<PresetPayload>) =>
     async () => ({ manifest: { files }, contents: new Map(contents) });
 
-  it('取包内 kind=skill 的 SKILL.md:id = name、do = description、why = 正文;多 agent 副本只取第一份(按 payload_path 升序);其它类别 / 非 SKILL.md 不收', async () => {
+  it('取包内 kind=skill 的 SKILL.md:id = name、do = description、why = 正文;比对形完全相同的多 agent 副本合并为一条;其它类别 / 非 SKILL.md 不收(正向对照)', async () => {
     const src = makePresetSource({
       payload: payload(
         [
@@ -402,18 +467,57 @@ describe('PresetSource:预置技能的比对形', () => {
           { kind: 'rules', payload_path: 'files/claude/home/rules/a/SKILL.md' },
         ],
         [
-          ['files/pi/home/x/commit-checklist/SKILL.md', SKILL_MD('commit-checklist', 'pi copy')],
+          ['files/pi/home/x/commit-checklist/SKILL.md', SKILL_MD('commit-checklist', 'same copy')],
           [
             'files/claude/home/x/commit-checklist/SKILL.md',
-            SKILL_MD('commit-checklist', 'claude copy'),
+            SKILL_MD('commit-checklist', 'same copy'),
           ],
           ['files/claude/home/rules/a/SKILL.md', SKILL_MD('not-a-skill', 'x')],
         ],
       ),
     });
     const got = await src.presets();
-    expect(got.map((t) => [t.id, t.do])).toEqual([['commit-checklist', 'claude copy']]);
+    expect(got.map((t) => [t.id, t.do])).toEqual([['commit-checklist', 'same copy']]);
     expect(got[0]?.why).toContain('step one');
+  });
+
+  it('同 id 比对形不同的副本全部保留(不按 id 丢弃),顺序确定;与被丢弃副本重叠的候选仍被 findDuplicate 命中(变异:按 id 只取第一份 → 红)', async () => {
+    const files = [
+      { kind: 'skill', payload_path: 'files/pi/home/x/commit-checklist/SKILL.md' },
+      { kind: 'skill', payload_path: 'files/claude/home/x/commit-checklist/SKILL.md' },
+    ];
+    // 两份副本的描述与正文用不相交的词:候选只与其中一份高度重叠
+    const PI_DO = 'zebra quartz marble lantern';
+    const CL_DO = 'apple river cobalt meadow';
+    const contents: [string, string][] = [
+      [
+        'files/pi/home/x/commit-checklist/SKILL.md',
+        SKILL_MD(
+          'commit-checklist',
+          PI_DO,
+          'zebra quartz marble lantern orchid velvet harbor ember\n',
+        ),
+      ],
+      [
+        'files/claude/home/x/commit-checklist/SKILL.md',
+        SKILL_MD(
+          'commit-checklist',
+          CL_DO,
+          'apple river cobalt meadow falcon timber copper glacier\n',
+        ),
+      ],
+    ];
+    const got = await makePresetSource({ payload: payload(files, contents) }).presets();
+    expect(got.map((t) => t.do)).toEqual([CL_DO, PI_DO]);
+    // 文件顺序对调,结果不变(确定性来自排序,不是遍历顺序)
+    const swapped = await makePresetSource({
+      payload: payload([...files].reverse(), [...contents].reverse()),
+    }).presets();
+    expect(swapped).toEqual(got);
+    // 下游口径:候选只与「靠后的那份」重叠,也必须命中
+    const draft = { id: 'cand', do: PI_DO, why: got[1]?.why ?? '' };
+    expect(findDuplicate(draft, got)?.duplicateOf).toBe('commit-checklist');
+    expect(findDuplicate(draft, got.slice(0, 1))).toBeUndefined();
   });
 
   it('读失败 / 形状不合规 → 抛错,绝不返回空:内容缺失、没有 frontmatter、缺 name / description / 正文', async () => {
@@ -494,6 +598,18 @@ describe('分析源端口 collectedThrough:最近一次完整成功 tick 的开�
     expect(collectedThroughOf(Buffer.from('{nope'))).toBeNull();
     expect(collectedThroughOf(Buffer.from('{"schema_version":1}'))).toBeNull();
   });
+
+  it('duration_ms 大于完成时刻(开始时刻为负)= null,不合成 epoch;恰好开始于 epoch 的是合法对照(变异:钳到 0 → 红)', () => {
+    expect(
+      collectedThroughOf(tick({ completed_at: '1970-01-01T00:00:05.000Z', duration_ms: 5_000 })),
+    ).toBe('1970-01-01T00:00:00.000Z');
+    expect(
+      collectedThroughOf(tick({ completed_at: '1970-01-01T00:00:05.000Z', duration_ms: 5_001 })),
+    ).toBeNull();
+    expect(
+      collectedThroughOf(tick({ completed_at: '1970-01-01T00:00:05.000Z', duration_ms: 10_000 })),
+    ).toBeNull();
+  });
 });
 
 describe('分析源端口 c4Bytes:canary.json 的 treat 注入字节数', () => {
@@ -543,7 +659,7 @@ describe('分析源端口 payloadDrift:登记表条目的当前内容 vs 登记 
       readState: async () => null,
     });
 
-  it('没有登记表 = clean;内容与登记一致 = clean(对照);被改过 = drifted;条目文件已不在 = clean(不算漂移)', async () => {
+  it('没有登记表 = clean(只表示没有登记项漂移);内容与登记一致 = clean(对照);被改过 = drifted;条目文件已不在 = drifted(有登记而内容缺失)', async () => {
     const w = await newWorld('asm-a-drift-');
     expect(await portsFor(w).payloadDrift()).toBe('clean');
     await w.put(SKILL_PATH, 'original\n');
@@ -552,6 +668,9 @@ describe('分析源端口 payloadDrift:登记表条目的当前内容 vs 登记 
     await w.put(SKILL_PATH, 'edited by user\n');
     expect(await portsFor(w).payloadDrift()).toBe('drifted');
     await safe.remove(w.io, path.join(w.home, SKILL_PATH));
+    expect(await portsFor(w).payloadDrift()).toBe('drifted');
+    // 对照:文件放回登记时的内容 → 又回到 clean(缺失才是漂移的原因)
+    await w.put(SKILL_PATH, 'original\n');
     expect(await portsFor(w).payloadDrift()).toBe('clean');
   });
 
@@ -566,5 +685,64 @@ describe('分析源端口 payloadDrift:登记表条目的当前内容 vs 登记 
     await safe.mkdirp(l.io, path.join(l.home, '.claude/skills/commit-checklist'), 0o755);
     await safe.symlink(l.io, path.join(l.home, 'elsewhere.md'), path.join(l.home, SKILL_PATH));
     await expect(portsFor(l).payloadDrift()).rejects.toThrow();
+  });
+
+  describe('托管块条目', () => {
+    const BLOCK_PATH = '.codex/AGENTS.md';
+    const BLOCK_ID = 'agent-kit-rules';
+    const BODY = 'rules v1\n';
+    const blockLedger = JSON.stringify({
+      schema_version: 1,
+      kit_version: '1.0.0',
+      payload_sha256: 'c'.repeat(64),
+      entries: [
+        {
+          path: BLOCK_PATH,
+          kind: 'block',
+          block_id: BLOCK_ID,
+          sha256: sha(BODY),
+          created_file: false,
+          agents: ['codex'],
+          txn: 'txn-20261115T000000Z-000001',
+        },
+      ],
+    });
+    const worldWith = async (tag: string, fileText: string | null) => {
+      const w = await newWorld(tag);
+      await w.put('.local/state/agent-kit/sync/ledger.json', blockLedger);
+      if (fileText !== null) await w.put(BLOCK_PATH, fileText);
+      return w;
+    };
+    const rendered = renderManagedBlock(BLOCK_ID, BODY);
+
+    it('块完好 = clean(对照);块体被改 = drifted;块外有内容但托管块整体不在 = drifted;目标文件缺失 = drifted', async () => {
+      const ok = await worldWith('asm-a-drift-blk-ok-', `user text\n${rendered}`);
+      expect(await portsFor(ok).payloadDrift()).toBe('clean');
+
+      const edited = await worldWith(
+        'asm-a-drift-blk-edit-',
+        `user text\n${rendered.replace('rules v1', 'rules HAND-EDITED')}`,
+      );
+      expect(await portsFor(edited).payloadDrift()).toBe('drifted');
+
+      const noBlock = await worldWith('asm-a-drift-blk-none-', 'user text only\n');
+      expect(await portsFor(noBlock).payloadDrift()).toBe('drifted');
+
+      const noFile = await worldWith('asm-a-drift-blk-nofile-', null);
+      expect(await portsFor(noFile).payloadDrift()).toBe('drifted');
+    });
+
+    it('只剩一个标记(缺 end / 缺 begin)= 块损坏 → 抛错(unavailable),不是 clean 也不是 drifted', async () => {
+      const noEnd = await worldWith(
+        'asm-a-drift-blk-noend-',
+        rendered.replace('<!-- agent-kit:end -->\n', ''),
+      );
+      await expect(portsFor(noEnd).payloadDrift()).rejects.toThrow(/entry_unsafe/);
+      const noBegin = await worldWith(
+        'asm-a-drift-blk-nobegin-',
+        `${BODY}<!-- agent-kit:end -->\n`,
+      );
+      await expect(portsFor(noBegin).payloadDrift()).rejects.toThrow(/entry_unsafe/);
+    });
   });
 });

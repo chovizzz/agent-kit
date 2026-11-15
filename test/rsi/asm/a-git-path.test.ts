@@ -6,16 +6,20 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   GIT_PATH_CANDIDATES,
   acceptableGit,
+  canonicalGit,
   resolveGitPath,
   type GitPathProbe,
 } from '../../../src/rsi/auto/git-path.js';
 
 const ME = 501;
-const good = { isFile: true, mode: 0o100755, uid: 0 };
+const good = { isFile: true, isDirectory: false, mode: 0o100755, uid: 0 };
+const goodDir = { isFile: false, isDirectory: true, mode: 0o040755, uid: 0 };
+const DIRS = ['/usr/bin', '/opt/homebrew/bin', '/usr/local/bin', '/opt/x', '/opt/real'];
 
 function probeOf(
   table: Record<string, Partial<typeof good> | 'throw'>,
   real: Record<string, string> = {},
+  dirs: Record<string, Partial<typeof goodDir>> = {},
 ): GitPathProbe & { stats: string[] } {
   const stats: string[] = [];
   return {
@@ -23,6 +27,7 @@ function probeOf(
     stats,
     async stat(p) {
       stats.push(p);
+      if (DIRS.includes(p)) return { ...goodDir, ...dirs[p] };
       const t = table[p];
       if (t === undefined || t === 'throw') throw Object.assign(new Error('x'), { code: 'ENOENT' });
       return { ...good, ...t };
@@ -63,8 +68,10 @@ describe('resolveGitPath', () => {
 
   it('realpath 之后文件名不是 git → 拒绝(makeGitReadonly 的断言);相对路径 / 文件名不是 git 的候选 → 拒绝', async () => {
     const c = '/usr/bin/git';
-    expect(await acceptableGit(c, probeOf({ [c]: {} }, { [c]: '/opt/x/git' }))).toBe(true);
-    expect(await acceptableGit(c, probeOf({ [c]: {} }, { [c]: '/opt/x/not-git' }))).toBe(false);
+    expect(await acceptableGit(c, probeOf({ '/opt/x/git': {} }, { [c]: '/opt/x/git' }))).toBe(true);
+    expect(
+      await acceptableGit(c, probeOf({ '/opt/x/not-git': {} }, { [c]: '/opt/x/not-git' })),
+    ).toBe(false);
     expect(await acceptableGit('git', probeOf({ git: {} }))).toBe(false);
     expect(await acceptableGit('/usr/bin/gitx', probeOf({ '/usr/bin/gitx': {} }))).toBe(false);
   });
@@ -74,6 +81,40 @@ describe('resolveGitPath', () => {
     expect(await resolveGitPath({ probe })).toBeNull();
     expect(probe.stats.length).toBeGreaterThan(0);
     expect(probe.stats.every((p) => GIT_PATH_CANDIDATES.includes(p))).toBe(true);
+  });
+
+  it('候选是符号链接:检查的是链接目标(规范路径)并返回规范路径,不返回候选名;目标不合规则拒绝(变异:检查 / 返回候选原路径 → 红)', async () => {
+    const c = '/usr/bin/git';
+    const linked = probeOf({ '/opt/real/git': {} }, { [c]: '/opt/real/git' });
+    expect(await canonicalGit(c, linked)).toBe('/opt/real/git');
+    expect(await resolveGitPath({ probe: linked, candidates: [c] })).toBe('/opt/real/git');
+    // 候选名本身的元数据合规、链接目标不合规:必须拒绝(只检查候选名会放过)
+    const bad = probeOf({ [c]: {}, '/opt/real/git': { mode: 0o100777 } }, { [c]: '/opt/real/git' });
+    expect(await canonicalGit(c, bad)).toBeNull();
+    // 无链接的对照:返回值就是候选本身
+    expect(await canonicalGit(c, probeOf({ [c]: {} }))).toBe(c);
+  });
+
+  it('父目录可被组 / 其他人写、属主不可信、不是目录 → 拒绝;文件自身合规的对照被接受(变异:去掉父目录检查 → 红)', async () => {
+    const c = '/usr/bin/git';
+    expect(await canonicalGit(c, probeOf({ [c]: {} }))).toBe(c);
+    for (const [why, dir] of [
+      ['组可写', { mode: 0o040775 }],
+      ['其他人可写', { mode: 0o040757 }],
+      ['属主是别人', { uid: 7777 }],
+      ['不是目录', { isDirectory: false }],
+    ] as const) {
+      expect(await canonicalGit(c, probeOf({ [c]: {} }, {}, { '/usr/bin': dir })), why).toBeNull();
+    }
+    // 父目录属主是当前用户且 0755:可接受(对照)
+    expect(await canonicalGit(c, probeOf({ [c]: {} }, {}, { '/usr/bin': { uid: ME } }))).toBe(c);
+    // 链接目标所在目录可写 → 拒绝,即便候选所在目录合规
+    const p = probeOf(
+      { '/opt/real/git': {} },
+      { [c]: '/opt/real/git' },
+      { '/opt/real': { mode: 0o040777 } },
+    );
+    expect(await canonicalGit(c, p)).toBeNull();
   });
 
   it('import 本身不读盘:探针只在调用 resolveGitPath 时被使用', async () => {

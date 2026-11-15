@@ -3,7 +3,7 @@
  *  - {@link makeStagedSource}:`StagedSource` —— 暂存提案 = `counts.json` 的暂存 run(口径与 `pending.ts` 的 `stagedRuns` **同一份**:未 tainted、证据非空、全部归属 P)
  *    逐个按 `loadRunEntries` 的口径装载;任一失败**抛错**(不跳过坏 run 去「尽量」);
  *  - {@link makeSignalLookup}:`SignalLookup` —— 信号库月文件逐行过 `SignalSchema`,任一行不合规整体失败(抛错,不返回「少几条」冒充成功);按 `sig_id` 只回命中的;
- *  - {@link makePresetSource}:`PresetSource` —— 预置技能(包内 payload 里 `kind=skill` 的条目,`source=package`)的比对形;读失败 / 形状不合规**抛错**,绝不返回空。
+ *  - {@link makePresetSource}:`PresetSource` —— 预置技能(包内 payload 里 `kind=skill` 的条目,`source=package`)的比对形;同 id 比对形不同的副本全部保留(完全相同的才合并);读失败 / 形状不合规**抛错**,绝不返回空。
  * 全部只读(read-fs);工厂创建与 import 不读盘,只有调用端口方法才读。
  */
 import { parse as parseYaml } from 'yaml';
@@ -126,25 +126,30 @@ export function presetOf(text: string): DedupeTarget {
   return { id: name.trim(), do: description.trim(), why: body };
 }
 
+const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+
+/**
+ * 同名技能在多个 agent 下各有一份渲染。下游(`overlapsPreset` / G4 近重复)只把预置当**一组比对目标**逐个 `findDuplicate`,
+ * `id` 仅用作 `duplicateOf` 标签、不做键查找,所以同 id 可以有多条目标。因此**不按 id 取第一份**(那会让只与被丢弃副本高度重叠的候选漏过):
+ * 比对形(id + do + why)完全相同的副本合并为一条,**不同的全部保留**;顺序按 (id, do, why) 码元序,确定。
+ */
 export function makePresetSource(d: { payload(): Promise<PresetPayload> }): PresetSource {
   return {
     async presets() {
       const p = await d.payload();
-      const byId = new Map<string, DedupeTarget>();
-      // 同名技能在多个 agent 下各有一份渲染:按 payload_path 升序取第一份(确定性;不是「任选」)
-      const files = [...p.manifest.files].sort((a, b) =>
-        a.payload_path < b.payload_path ? -1 : 1,
-      );
-      for (const f of files) {
+      const byForm = new Map<string, DedupeTarget>();
+      for (const f of p.manifest.files) {
         if (f.kind !== 'skill') continue;
         // 只收 SKILL.md(skill 目录里的其它文件不是预置技能的主体)
         if (!f.payload_path.endsWith('/SKILL.md')) continue;
         const text = p.contents.get(f.payload_path);
         if (text === undefined) throw new PresetError('content_missing');
         const t = presetOf(text);
-        if (!byId.has(t.id)) byId.set(t.id, t);
+        byForm.set(JSON.stringify([t.id, t.do, t.why]), t);
       }
-      return [...byId.values()].sort((a, b) => (a.id < b.id ? -1 : 1));
+      return [...byForm.values()].sort(
+        (a, b) => cmp(a.id, b.id) || cmp(a.do, b.do) || cmp(a.why, b.why),
+      );
     },
   };
 }
