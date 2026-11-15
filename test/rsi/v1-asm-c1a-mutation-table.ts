@@ -3298,6 +3298,20 @@ export const V1_ASM_C1A_MUTATIONS: readonly V1AsmC1aMutation[] = [
     expectRed: ['无初始脏标记、普通脏写挂起中首次调用', 'settleSafety'],
     mustKill: ['无初始脏标记、普通脏写挂起中首次调用'],
   },
+  {
+    id: 'cand_source_read_unguarded',
+    clause: 'M2c 取 cand.source 本身抛错必须按来源缺失处理(不逸出成 rejection)',
+    edits: [
+      swap(
+        'src/rsi/personal/stage/growth.ts',
+        '      source: snapshotSource(rawSource),',
+        '      source: snapshotSource(c.source),',
+      ),
+    ],
+    tests: ['rsi/stage/c1-growth.test.ts'],
+    expectRed: ['cand.source 本身读取抛错', 'M2b:来源快照每个字段只读一次'],
+    mustKill: ['cand.source 本身读取抛错'],
+  },
 ];
 
 /** 由主代理整表执行变异后回填 */

@@ -1720,6 +1720,34 @@ describe('M2b:来源快照每个字段只读一次(校验对象 = 快照对象)'
       );
     }
   });
+  it('cand.source 本身读取抛错(getter / Proxy)→ 来源缺失 → source_unknown(不是 rejection);正常来源的对照通过 G6', async () => {
+    const { round } = await openBoth();
+    let reads = 0;
+    const withGetter = Object.defineProperty({ ...cand() }, 'source', {
+      enumerable: true,
+      get(): never {
+        reads += 1;
+        throw new Error('source unreadable');
+      },
+    });
+    expect(await deny(round, reqOf('grant', withGetter as never), readers())).toBe(
+      'source_unknown',
+    );
+    expect(reads).toBe(1);
+    const trapped = new Proxy(
+      { ...cand() },
+      {
+        get(target, key, recv): unknown {
+          if (key === 'source') throw new Error('trap');
+          return Reflect.get(target, key, recv);
+        },
+      },
+    );
+    expect(await deny(round, reqOf('grant', trapped as never), readers())).toBe('source_unknown');
+    // 对照:同一请求换成可读的合法来源,不再是 source_unknown
+    expect(await deny(round, reqOf('grant', cand()), readers())).not.toBe('source_unknown');
+  });
+
   it('候选 id / 内容哈希取校验后的值:getter 二次读取变化不进入快照与 pass', async () => {
     const { round } = await openBoth();
     let n = 0;

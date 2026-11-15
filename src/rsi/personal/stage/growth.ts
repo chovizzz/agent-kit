@@ -430,6 +430,13 @@ function snapshotReq(req: GrowthReq): GrowthReq {
   const { op, cand } = readReq(req);
   if (!('cand' in op) || cand === null) return Object.freeze({ op: op.cap }) as GrowthReq;
   const c = cand as { lifecycle?: unknown; source?: unknown };
+  // 取 `cand.source` 本身也可能抛(getter / Proxy):与来源子字段同一口径——读不到 = 来源缺失,不让它逸出成整步故障
+  let rawSource: unknown;
+  try {
+    rawSource = c.source;
+  } catch {
+    rawSource = null;
+  }
   return Object.freeze({
     op: op.cap,
     cand: Object.freeze({
@@ -437,7 +444,7 @@ function snapshotReq(req: GrowthReq): GrowthReq {
       id: op.cand.id,
       content_sha256: op.cand.content_sha256,
       lifecycle: c.lifecycle,
-      source: snapshotSource(c.source),
+      source: snapshotSource(rawSource),
     }),
   }) as unknown as GrowthReq;
 }
