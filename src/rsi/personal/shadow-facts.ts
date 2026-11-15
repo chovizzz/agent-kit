@@ -12,7 +12,7 @@ import type {
   PersonalLifecycleRecord,
 } from '../../contracts/rsi-personal.js';
 import { RsiLockError } from '../lock-error.js';
-import type { FactsProvider, ReadySinceRecovery, WorkingStore } from './candidate-ports.js';
+import type { FactsProvider, ReadySinceRecovery, WorkingStore } from './candidate-port-types.js';
 import {
   countShadow,
   firstReadyDay,

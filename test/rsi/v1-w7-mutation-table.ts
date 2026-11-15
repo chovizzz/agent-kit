@@ -48,6 +48,8 @@ const HC = `${P}harm-chain.ts`;
 const LK = 'src/rsi/lock.ts';
 const PL = `${P}personal-lock.ts`;
 const PM = 'src/rsi/canary/pause-marker.ts';
+/** `parsePauseMarker` 在装配块 A 段拆到只读模块(代码原样,锚点跟随) */
+const PMR = 'src/rsi/canary/pause-marker-read.ts';
 const PR = 'src/rsi/canary/permit-read.ts';
 const TE = `${P}terminal-effects.ts`;
 const TT = `${P}transition-table.ts`;
@@ -2305,7 +2307,7 @@ export const V1_W7_MUTATIONS: readonly V1W7Mutation[] = [
     // 条目 id 沿用旧名(不删条目):现在解出的是实例标识 id,不是 at
     clause:
       'W0-23 B 内容里的实例标识 id 由 parsePauseMarker 解出(比较对象);丢掉 = 证据永远不等,残留 B 永远复活码',
-    edits: [swap(PM, 'id: okId ? id : null,', 'id: null,')],
+    edits: [swap(PMR, 'id: okId ? id : null,', 'id: null,')],
     tests: [T_PM, T_BR],
     expectRed: [
       'parsePauseMarker:各形态',

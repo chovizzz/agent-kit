@@ -11,7 +11,7 @@ import * as path from 'node:path';
 import { RSI_AGENT_IDS, RSI_SNAPSHOT_DYNAMIC_NAME_RE } from '../contracts/rsi.js';
 import type { IoContext } from '../io/paths.js';
 import { MAX_LINE_BYTES, lstat, openStreamSafe, readDir } from '../io/read-fs.js';
-import { SignalStoreError } from './state-store.js';
+import { SignalStoreError } from './store-error.js';
 
 export type MonthStoreKind = 'signals' | 'sessions';
 

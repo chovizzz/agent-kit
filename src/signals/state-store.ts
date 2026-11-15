@@ -18,14 +18,13 @@ import type { IoContext } from '../io/paths.js';
 import { lstat, readText } from '../io/read-fs.js';
 import { chmod, createExclusive, mkdirp, rename, writeFile } from '../io/safe-fs.js';
 import { SaltError, ephemeralSalt, readSaltFile, type SaltRead } from './salt-read.js';
+import { SignalStoreError } from './store-error.js';
 
 // D5:盐的读取规则只有一份(`salt-read.ts`);`SaltError` 以它为准,这里 re-export 保持既有 import 路径
 export { SaltError };
 
-/** 信号库里有无法解析的行:库已带病,不再往里追加(fail-closed)。 */
-export class SignalStoreError extends Error {
-  readonly code = 'SIGNALS_STORE_CORRUPT';
-}
+// 错误类拆在 `store-error.ts`(读侧的月文件扫描只需要它,不该因此把本文件的写出口拉进闭包);再导出,既有 import 路径不变
+export { SignalStoreError };
 
 /**
  * 写点钩子(R20-A2 B4c2,B3b-4 / D16):**每个写操作之前**调用一次(`op` 是稳定的短名,`absPath` 是要改的路径);钩子抛错 = 该写点之后零写入。

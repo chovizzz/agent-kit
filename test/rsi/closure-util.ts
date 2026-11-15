@@ -1,6 +1,6 @@
 /**
  * 只读命令的静态审计工具(B3a;零写入第三层):用 TypeScript 编译器 API 取 import 传递闭包与每个文件里出现的**标识符**(不含注释)。
- * 说明符来源:静态 import / `export … from` / `import x = require()` / 动态 `import()`(字面量取说明符;非字面量记为违规 `dynamic:`)/ `require()` 调用。
+ * 说明符来源:静态 import / `export … from`(含 `export * from`)/ `import x = require()` / 动态 `import()`(字面量取说明符;非字面量记为违规 `dynamic:`)/ `require()` 调用 / 成员形式 `x.require()` 与 `createRequire(...)`(记为违规)。
  * `includeTypes = false` 只算运行时依赖(跳过 `import type` 与 `export type … from` 整句;内联 `type` 修饰的说明符不跳过——偏保守);
  * `true` 再把类型导入也算进来(更保守)。`virtual` 里的文件(键为相对仓库根的路径)用给定源码,不读盘。
  */
@@ -65,6 +65,20 @@ function scan(file: string, source: string, includeTypes: boolean): Scan {
       n.expression.text === 'require'
     ) {
       dynamic.push(`${file}:require()`);
+    } else if (
+      ts.isCallExpression(n) &&
+      ts.isPropertyAccessExpression(n.expression) &&
+      n.expression.name.text === 'require'
+    ) {
+      // `module.require('x')` / `process.mainModule.require('x')` 之类的成员调用
+      dynamic.push(`${file}:.require()`);
+    } else if (
+      ts.isCallExpression(n) &&
+      ts.isIdentifier(n.expression) &&
+      n.expression.text === 'createRequire'
+    ) {
+      // `createRequire(import.meta.url)('x')`:拿到一个 require 再调用,说明符绕过静态闭包
+      dynamic.push(`${file}:createRequire()`);
     }
     ts.forEachChild(n, visit);
   };
