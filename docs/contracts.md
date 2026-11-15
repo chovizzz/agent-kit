@@ -6993,6 +6993,18 @@ W8b(命令面的写命令:`pause` / `resume` / `clear --write` / `veto` / `rollb
 14. **取代关系**:①R21-11.3 / R21-11.4 的位置(`veto.json` / `tombstones.json` → `effects.json#blacklist` / `#tombstones`);②W0-22 第 8 条「边界元数据留待将来」一句(→ `audit-compaction.json`);③W0-23 第 3 条 / W0-22 第 14 条「同一持久化步骤」(→ 账原子、审计最终一致)。**扩**:R21-12.10(`idem_key`、同键规则、水位线)与 W0-25 `veto` 行(有类型的失败原因)、R20-5.1 锁矩阵的 R21 细化条目(§21.18 第 41 条「R20-5.1 锁矩阵」,已在该条的写入方清单里同步追加 `effects.json` 与 `audit-compaction.json` 的写者 = 持 `rsi/lock` 者;审计 `audit.jsonl` 的写者 = 持 `personal/lock` 的追加器,同一事务内一并持 `rsi/lock`)。**未改**:W0-23 其余条款、已发布迁移、R21-11.1 冷却天数与口径、R21-11.2 近似指纹生命周期、M11 上限。
 15. **三个生效时点**:①格式定义生效 = 本订正 + schema 合并(B1a,无写入);②首次生产写入 = 提相位到 V1a 的 PR(B 合并本身因相位 0 惰性);③消费者切换 = D 合并(ingest / G4 改读账)。**实现归属**:B1a = 事务协调器、账存储、审计追加器、`SealGuard` 区域注册表、schema、码表、谓词(`src/rsi/store/**`、`src/contracts/rsi-store.ts`);B1b = `Compactor`、真 `ReconcileSource` 适配器、report 读 compaction;B2 = 命令接线、`CommandLocks`、`candidate-apply.ts` 取时挂点;C = `candidate-step.ts` 取时挂点、worker 派生扫描。
 
+#### W0-28 近似指纹(near_fp)算法与参数草案(2026-11-15;R21-11.2;装配块 D 段 D1a)
+
+**状态:草案条目,阈值与 Unicode 口径未冻结**(冻结归 D3-nf,须在提相位之前;冻结前 `NEAR_ALGO.frozen = false`)。本条只写 near_fp 的算法与参数,**不删 R21-11.2 的 `[V1]` 义务**;D 段其余订正(purge 改写、`creationReady`、bootstrap 授权等)另列于本号的后续条目,合并前再核编号(W9 = W0-27、D = W0-28、C = W0-29)。
+
+1. **性质**:近似指纹是**启发式防线**,抓扩写、前后缀、模板填充,**抓不住改写**;不以它门控候选创建(撤销凭据照常立即写;含 `near_fp` 的 keyed effects 批次在能力非 `ready` 时先 `deferred`,不写 `[]` 占位)。
+2. **算法 `rsi-near-v1`**:①规范化 = NFKC → 小写;②token:码点区间 U+3040–30FF、U+3400–4DBF、U+4E00–9FFF、U+F900–FAFF、U+20000–2FFFF 内的字符**每字一个 token**,其余按 `\p{L}\p{N}` 连续段成词,其它字符(含下划线)为分隔符;③shingle = 相邻 3 个 token(以 U+001F 连接),token 不足 3 个 → 空集;④哈希 = `HMAC-SHA256(fp.key, "rsi-near-v1" ‖ 0x00 ‖ shingle)` 取前 4 字节(8 位小写十六进制);⑤被否决内容的 `near_fp` = 全部哈希去重升序后的**最小 64 个**(`Hex(8)[]`,≤ 64 项,与 `RsiBlacklistItem.near_fp` 一致);⑥输入上限 262144 个码元,超过即拒绝(不截断)。
+3. **匹配**:候选侧取**完整**哈希集合;`coverage = |near_fp ∩ 候选集合| / |near_fp|`(不对称),`coverage ≥ 阈值` 视为命中。阈值是显式参数(有限数,区间 (0, 1]),`near_fp = []`(`exact_only`:文本不足 3 个 token)**只做精确 `fp_hmac` 比较**,从不被当作「已有近似保护」。草案阈值 0.5 **仅是草案值**。
+4. **精确指纹**:`fp_hmac` = `HMAC-SHA256(fp.key, 规范化正文)` 前 16 位(规范化正文 = `do\nwhy\nverify`);`fp.key` = `.state/rsi/fp.key`,0600、32 字节随机、首建经 `createExclusive`(持 `rsi/lock`)。**已存在但无效(长度错 / 权限宽于 0600 / 链接 / 非普通文件)→ 拒绝并保留原状,绝不覆盖重建**(重建会使账里全部 `fp_hmac` 失效);密钥内容不进日志、错误、`--json`。
+5. **能力四态**(`unwired` / `key_unavailable` / `algo_unfrozen` / `ready`,按此顺序判定):`ready` 当且仅当产生方已装配 ∧ `fp.key` 可读 ∧ `NEAR_ALGO.frozen === true`(严格);任何增影响 op 与提相位清单读同一个判定结果,不各自补例外。缺它时 `shadow_to_canary` 保持不可启用(该门禁归能力表 / D2)。
+6. **待冻结项(D3-nf)**:阈值(依语料实测;语料评估脚本 `scripts/near-fp-corpus.mjs` 只输出 case id 与统计);`\p{L}\p{N}` 与 NFKC 依赖运行时 Unicode 版本,冻结时须钉住版本或改为显式表;32 位哈希的碰撞预算;旧账兼容规则(账里区分不了 `exact_only` 与「旧账未计算」,故只保证「近似保护只对产生于能力 `ready` 之后的否决生效」)。
+7. **不承诺**:对改写、翻译、同义替换的拦截;对哈希碰撞的零误报(8 位哈希 × 64 项草图下,误命中概率只在阈值附近有意义,以语料实测为准)。
+
 #### W0 订正的合法 / 错误示例
 
 (各 schema 的带标记示例紧随其后,由 `test/contracts/examples.test.ts` 自动覆盖。)

@@ -346,6 +346,8 @@ const SUBPROCESS_TESTS = [
   'test/rsi/proc/confirm-helper.ts',
   // 装配块 A 段:空写入根(KIT_WRITE_ROOTS=:)下真子进程跑只读适配器的支撑(vite 打包 asm-a-entry 后用 node 跑)
   'test/rsi/proc/asm-a-helper.ts',
+  // 装配块 D1a:语料评估启动器 scripts/near-fp-corpus.mjs 的真子进程冒烟(语料为测试合成的临时文件)
+  'test/rsi/d1a/near-corpus-launcher.test.ts',
   'test/build/bundle-artifact.test.ts',
   // D-AU3:真实构建 + 真实 npm pack 的支撑与发布前门禁脚本的子进程测试
   'test/build/real-pack-helper.ts',
