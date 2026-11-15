@@ -185,7 +185,7 @@ export function evaluateCorpus(cases: readonly CorpusCase[], opts: EvalOptions =
   const evaluable = cases.filter((c) => !tooLong(c));
   const shingleCount = new Map(evaluable.map((c) => [c.id, nearShingles(c.vetoed).length]));
   const exactOnlyIds = evaluable.filter((c) => shingleCount.get(c.id) === 0).map((c) => c.id);
-  const usable = cases.filter((c) => (shingleCount.get(c.id) as number) > 0);
+  const usable = evaluable.filter((c) => (shingleCount.get(c.id) as number) > 0);
   const truncatedIds = usable
     .filter((c) => (shingleCount.get(c.id) as number) > NEAR_SKETCH_SIZE)
     .map((c) => c.id);

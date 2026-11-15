@@ -1,6 +1,6 @@
 /**
  * `FactsProvider` 的组合层(D1a):在窄只读端口之上,用 `facts-pure.ts` 的纯计算拼出 `gateFacts` / `promoteFacts`,另给 `holdFacts()`。
- * 失败语义(同 `shadow-facts.ts`):任一端口读失败 / 来源提案已不在暂存 / 草稿与记录对不上 / **工作副本与权威记录的 id、来源不一致 / 暂存材料已不是创建时那份 / 信号端口混入未请求的信号** → **整体 `null`**(步骤据此 fail-closed:
+ * 失败语义(同 `shadow-facts.ts`):任一端口读失败 / 来源提案已不在暂存 / 草稿与记录对不上 / **工作副本与权威记录的 id、来源不一致 / 暂存规则文件已不是创建时那份 / 信号端口混入未请求的信号** → **整体 `null`**(步骤据此 fail-closed:
  * 闸走 internal、推进清零排队),从不当作「干净」;**锁丢失(`RsiLockError`)原样传播**,不映射为 `null`。
  * `promoteFacts` 的 `sessions` / `hits` 恒 0(计数由 `withShadowCounts` 装饰器覆盖;未装饰时 0 会话 = 不推进)。
  * `clusterBusy` / `slot_occupied` 不在这里(锁内由步骤自己算,M13-4)。
@@ -50,8 +50,10 @@ export function makeFactsProvider(d: FactsProviderDeps): FactsProviderD1a {
 
   /**
    * 事实主体的唯一来源:**权威记录**的 `source_proposal`(创建时写入、不可变)。工作副本只是缓存,必须与记录逐项一致,
-   * 否则整体 `null`(不让工作副本选择安全事实的主体)。同时核对:暂存区里恰好一份匹配、它仍是创建时的那份材料、
+   * 否则整体 `null`(不让工作副本选择安全事实的主体)。同时核对:暂存区里恰好一份匹配、它的**规则文件**仍是创建时的那份(id / content_sha256)、
    * 信号端口只返回被请求的 sig(不得混入别的提案的证据)。
+   * **已知缺口(如实,须 owner 拍板)**:提案的**证据列表**(`proposal.evidence`)不在候选 id / content_sha256 里,权威记录也没存它的摘要(只有 `cluster_signature`),
+   * 所以「规则文件不变、仅把暂存提案的证据换成另一份且聚类签名相同」在 D1a 无法识别。彻底堵上需要创建时在记录里持久化证据摘要(记录 schema 加法 = 契约变更),不在 D1a 范围。
    */
   async function source(
     rec: PersonalLifecycleRecord,

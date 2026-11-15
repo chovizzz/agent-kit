@@ -1,6 +1,6 @@
 /**
  * `FactsProvider`(含 `holdFacts`)契约套件:假件与真组合层**同跑**。
- * 契约:默认世界给出手写期望;任一**依赖的**读端口读失败 → `null`;**不依赖的**端口失败不影响结果(正向对照);
+ * 契约:默认世界给出手写期望;工作副本与权威记录的 id / 来源对不上 → `null`(来源绑定,验收评审高项);任一**依赖的**读端口读失败 → `null`;**不依赖的**端口失败不影响结果(正向对照);
  * `lock_lost` 对每个依赖端口都原样传播(不吞成 `null`);`holdFacts` 恒为两码 `unavailable`、每次返回新对象;输出不含测试密钥。
  */
 import { describe, expect, it } from 'vitest';
@@ -69,6 +69,19 @@ export function runFactsContract(name: string, make: MakeFacts): void {
         });
       }
     }
+
+    it('来源绑定:工作副本的 id / 来源与权威记录对不上 → 两个方法都是 null;一致则等于手写期望(正向对照)', async () => {
+      const w = makeWorld();
+      const p = make(w, null);
+      const badId = { ...w.wc, id: `ra_${'d'.repeat(12)}` };
+      const badSource = { ...w.wc, source: { ...w.wc.source, proposal_id: '2026-11-05-999' } };
+      for (const wc of [badId, badSource]) {
+        expect(await p.gateFacts(w.rec, wc)).toBeNull();
+        expect(await p.promoteFacts(w.rec, wc)).toBeNull();
+      }
+      expect(await p.gateFacts(w.rec, w.wc)).toEqual(expectedGate(w));
+      expect(await p.promoteFacts(w.rec, w.wc)).toEqual(expectedPromote(w));
+    });
 
     it('holdFacts:budget_high_legacy / cost_high_legacy 恒 unavailable(只少一道熔断,不放行);每次返回新对象', () => {
       const w = makeWorld();

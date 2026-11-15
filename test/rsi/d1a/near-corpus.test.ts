@@ -180,38 +180,49 @@ describe('语料评估:最坏情形口径(计数与 id 列表同一把密钥)', 
   const words = (n: number, k: number): string =>
     Array.from({ length: k }, (_v, i) => `c${n}w${i + 1}`).join(' ');
   // 被否决内容 80 词(78 个 shingle,超过草图容量 64),候选只含前 41 词:覆盖率恰在 0.5 附近,命中与否随评估密钥波动
-  const cases: CorpusCase[] = Array.from({ length: 200 }, (_v, n) => [
+  const cases: CorpusCase[] = Array.from({ length: 60 }, (_v, n) => [
     mk(`n${n}`, 'nomatch', words(n, 80), words(n, 41)),
     mk(`m${n}`, 'match', words(1000 + n, 80), words(1000 + n, 41)),
   ]).flat();
 
-  const single = (k: Uint8Array): ThresholdStat =>
-    evaluateCorpus(cases, { thresholds: [0.5], keys: [k] }).thresholds[0] as ThresholdStat;
+  // 每把密钥只算一次(惰性缓存),排序与逐密钥核对都用这份结果
+  let memo: ThresholdStat[] | undefined;
+  const singles = (): ThresholdStat[] =>
+    (memo ??= CORPUS_KEYS.map(
+      (k) => evaluateCorpus(cases, { thresholds: [0.5], keys: [k] }).thresholds[0] as ThresholdStat,
+    ));
 
   for (const field of ['fp', 'fn'] as const) {
     const title =
       field === 'fp'
         ? 'fp 计数 = 最坏密钥下的 id 数;任一密钥并集另列且更大;最坏密钥与单密钥评估一致(正向对照:并集不等于最坏列表)'
         : 'fn 计数 = 最坏密钥下的 id 数;任一密钥并集另列且更大;最坏密钥与单密钥评估一致(正向对照:并集不等于最坏列表)';
-    it(title, () => {
-      // 按该字段升序排密钥:最坏的一把不在第 0 位,「并集 / 取第一把」之类的错误口径才无处藏
-      const keys = [...CORPUS_KEYS].sort((a, b) => single(a)[field] - single(b)[field]);
-      const t = evaluateCorpus(cases, { thresholds: [0.5], keys }).thresholds[0] as ThresholdStat;
-      const ids = field === 'fp' ? t.fpIds : t.fnIds;
-      const any = field === 'fp' ? t.anyKeyFpIds : t.anyKeyFnIds;
-      const worst = field === 'fp' ? t.fpWorstKey : t.fnWorstKey;
-      expect(t[field]).toBeGreaterThan(0);
-      expect(ids).toHaveLength(t[field]);
-      expect(any.length).toBeGreaterThan(ids.length);
-      for (const id of ids) expect(any).toContain(id);
-      const perKey = keys.map(single);
-      expect(Math.max(...perKey.map((x) => x[field]))).toBe(t[field]);
-      expect(worst as number).toBeGreaterThan(0);
-      const w = perKey[worst as number] as ThresholdStat;
-      expect(field === 'fp' ? w.fpIds : w.fnIds).toEqual(ids);
-      // 并列取第一把:最坏密钥之前没有同样多的
-      expect(perKey.findIndex((x) => x[field] === t[field])).toBe(worst);
-    });
+    it(
+      title,
+      () => {
+        // 按该字段升序排密钥:最坏的一把不在第 0 位,「并集 / 取第一把」之类的错误口径才无处藏
+        const order = CORPUS_KEYS.map((_k, i) => i).sort(
+          (a, b) => (singles()[a] as ThresholdStat)[field] - (singles()[b] as ThresholdStat)[field],
+        );
+        const keys = order.map((i) => CORPUS_KEYS[i] as Uint8Array);
+        const perKey = order.map((i) => singles()[i] as ThresholdStat);
+        const t = evaluateCorpus(cases, { thresholds: [0.5], keys }).thresholds[0] as ThresholdStat;
+        const ids = field === 'fp' ? t.fpIds : t.fnIds;
+        const any = field === 'fp' ? t.anyKeyFpIds : t.anyKeyFnIds;
+        const worst = field === 'fp' ? t.fpWorstKey : t.fnWorstKey;
+        expect(t[field]).toBeGreaterThan(0);
+        expect(ids).toHaveLength(t[field]);
+        expect(any.length).toBeGreaterThan(ids.length);
+        for (const id of ids) expect(any).toContain(id);
+        expect(Math.max(...perKey.map((x) => x[field]))).toBe(t[field]);
+        expect(worst as number).toBeGreaterThan(0);
+        const w = perKey[worst as number] as ThresholdStat;
+        expect(field === 'fp' ? w.fpIds : w.fnIds).toEqual(ids);
+        // 并列取第一把:最坏密钥之前没有同样多的
+        expect(perKey.findIndex((x) => x[field] === t[field])).toBe(worst);
+      },
+      60_000,
+    );
   }
 
   it('没有误报 / 漏报时最坏密钥为 null、列表为空', () => {

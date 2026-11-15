@@ -1014,8 +1014,8 @@ export const V1_ASM_D1A_MUTATIONS: readonly V1AsmD1aMutation[] = [
     edits: [
       swap(
         'test/tools/near-fp-corpus.ts',
-        'const usable = cases.filter((c) => (shingleCount.get(c.id) as number) > 0);',
-        'const usable = cases;',
+        'const usable = evaluable.filter((c) => (shingleCount.get(c.id) as number) > 0);',
+        'const usable = evaluable;',
       ),
     ],
     tests: ['rsi/d1a/near-corpus.test.ts'],

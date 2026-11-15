@@ -3,6 +3,10 @@
  * 每条不变量都有负向用例与同世界下的正向对照。
  */
 import { describe, expect, it } from 'vitest';
+import type {
+  CandidateWorkingCopy,
+  PersonalLifecycleRecord,
+} from '../../../src/contracts/rsi-personal.js';
 import type { RsiBlacklistItem, RsiEffectsLedger } from '../../../src/contracts/rsi-store.js';
 import { RsiLockError } from '../../../src/rsi/lock-error.js';
 import { makeFactsProvider } from '../../../src/rsi/personal/facts/facts-provider.js';
@@ -31,9 +35,21 @@ function fakeFacts(w: FactsWorld, failure: Failure): FactsProviderD1a {
     }
     return true;
   };
+  // 同一份契约:工作副本与权威记录的 id / 来源对不上 → null(假件不能比真件宽松)
+  const bound = (rec: PersonalLifecycleRecord, wc: CandidateWorkingCopy): boolean => {
+    const sp = rec.source_proposal;
+    return (
+      sp !== null &&
+      sp !== undefined &&
+      wc.id === rec.id &&
+      wc.source.run_id === sp.run_id &&
+      wc.source.proposal_id === sp.proposal_id
+    );
+  };
   return {
-    gateFacts: async () => ((await gate('gate')) ? expectedGate(w) : null),
-    promoteFacts: async () => ((await gate('promote')) ? expectedPromote(w) : null),
+    gateFacts: async (rec, wc) => (bound(rec, wc) && (await gate('gate')) ? expectedGate(w) : null),
+    promoteFacts: async (rec, wc) =>
+      bound(rec, wc) && (await gate('promote')) ? expectedPromote(w) : null,
     holdFacts: () => ({ budget_high_legacy: 'unavailable', cost_high_legacy: 'unavailable' }),
   };
 }

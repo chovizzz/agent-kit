@@ -36,7 +36,7 @@ export function parseHead(text: string, relPath: string): ParsedHead | null {
 }
 
 /**
- * 暂存提案是否就是权威记录创建时的那一份:按 `buildDraft` 同口径(改写 origin → 解析 → 正文 sha256)重算候选 id 与 content_sha256,
+ * 暂存提案的**规则文件**是否就是权威记录创建时的那一份(**不含证据列表**,见 `facts-provider.ts` 的已知缺口):按 `buildDraft` 同口径(改写 origin → 解析 → 正文 sha256)重算候选 id 与 content_sha256,
  * 与记录的**不可变**字段比较。不依赖信号与指纹(所以 `promoteFacts` 也能用);解析不了 = 不匹配。
  */
 export function stagedMatchesRecord(
