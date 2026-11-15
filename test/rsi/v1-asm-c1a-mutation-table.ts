@@ -3284,6 +3284,20 @@ export const V1_ASM_C1A_MUTATIONS: readonly V1AsmC1aMutation[] = [
     ],
     mustKill: ['候选 id / 内容哈希取校验后的值'],
   },
+  {
+    id: 'first_call_ignores_inflight_dirty_write',
+    clause: 'M4c 首次调用时在途的脏写(尚未置脏)不能报 settled',
+    edits: [
+      swap(
+        'src/rsi/personal/stage/settle.ts',
+        "if (!st.dirtyInFlight) return Promise.resolve({ kind: 'settled', swept: false });",
+        "if (true) return Promise.resolve({ kind: 'settled', swept: false });",
+      ),
+    ],
+    tests: ['rsi/stage/c1-settle.test.ts'],
+    expectRed: ['无初始脏标记、普通脏写挂起中首次调用', 'settleSafety'],
+    mustKill: ['无初始脏标记、普通脏写挂起中首次调用'],
+  },
 ];
 
 /** 由主代理整表执行变异后回填 */

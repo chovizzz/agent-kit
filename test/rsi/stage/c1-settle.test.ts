@@ -578,3 +578,42 @@ describe('settleSafety · M4b:在途的外部脏写与遗留的后台写', () =>
     expect(round.safetyDirty.kinds()).toEqual(['revocation']);
   });
 });
+
+describe('settleSafety · M4c:首次调用时已有脏写在途', () => {
+  it('无初始脏标记、普通脏写挂起中首次调用 → unsettled(不是 settled),且不算已扫过:写完成后仍可扫这一次', async () => {
+    const { round } = await openBoth();
+    let finish!: () => void;
+    const gate = new Promise<void>((r) => {
+      finish = r;
+    });
+    const w = round.writeAdapter('state_pause_flag', () => gate)();
+    const p = sweepPorts(round);
+    const budget = createRoundBudget(round, { startRollbackLimit: 3 });
+    expect(await settleSafety(round, p, budget)).toEqual({
+      kind: 'unsettled',
+      reason: 'safety_not_settled',
+      faults: [],
+    });
+    expect(p.calls).toEqual([]); // 不与在途的写冲突:不启动扫尾
+    finish();
+    await w;
+    expect(round.safetyDirty.kinds()).toEqual(['state_pause_flag']);
+    // 写完成后,脏标记置位 → 本轮仍可扫这一次(注意本轮已标未决,结果为 settled 的扫尾不会清除未决)
+    expect(await settleSafety(round, p, budget)).toEqual({ kind: 'settled', swept: true });
+    expect(p.calls).toEqual(['enforceMute', 'reconcileCaches', 'verifyMuted']);
+  });
+  it('正向对照:在途的是非脏种类的写(审计补行)→ 仍是零调用 settled', async () => {
+    const { round } = await openBoth();
+    let finish!: () => void;
+    const gate = new Promise<void>((r) => {
+      finish = r;
+    });
+    const w = round.writeAdapter('audit_append', () => gate)();
+    const p = sweepPorts(round);
+    expect(
+      await settleSafety(round, p, createRoundBudget(round, { startRollbackLimit: 3 })),
+    ).toEqual({ kind: 'settled', swept: false });
+    finish();
+    await w;
+  });
+});

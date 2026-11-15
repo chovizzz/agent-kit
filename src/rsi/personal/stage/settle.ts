@@ -115,7 +115,7 @@ export function createRoundBudget(
 
 // ---------- settleSafety ----------
 /**
- * 扫尾端口。契约:端口**返回(兑现)之前**必须已完成它发起的全部写(未 await 的延迟 / 后台写不受保证:`runAsSweep` 的上下文令牌在端口兑现后失效,
+ * 扫尾端口。契约:端口**返回(兑现)之前**必须已完成它发起的全部写(未 await 的延迟 / 后台写不受保证:`runAsSweep` 的上下文令牌在端口兑现后失效,尽力防御定时器等遗留任务;违约端口在兑现同刻排下的微任务不在保证内,
  * 之后发起的写按普通写处理)。
  */
 export interface SweepPorts {
@@ -152,7 +152,7 @@ const dirtyNow = (st: {
  * 每轮至多**真正扫尾一次**(状态在回合上:未开始 / 进行中 / 已完成):
  *  - 进行中再调用(含扫尾端口的同步前缀重入)→ 返回**同一个** Promise(先建好共享 Promise 再启动扫尾,不暴露占位值);
  *  - 已扫过再调用 → 不再扫:先前的结果(含 rejection)原样返回——失败后不能靠再调一次重来,脏标记保持置位;先前 `settled` 而其后又出现新的脏写 → `unsettled`(不重扫);
- *  - 第一次调用时脏标记为空 → `settled`(零调用,且**不算**已扫过:其后真有脏写时仍可扫这一次)。
+ *  - 第一次调用时脏标记为空 → `settled`(零调用,且**不算**已扫过:其后真有脏写时仍可扫这一次);但有会置脏的写**在途**(脏标记尚未置位)时 → `unsettled`(不启动扫尾、不算已扫过)。
  */
 export function settleSafety(
   round: AnyRound,
@@ -170,7 +170,12 @@ export function settleSafety(
     markRoundUnsettled(round, 'safety_not_settled');
     return Promise.resolve({ kind: 'unsettled', reason: 'safety_not_settled', faults: [] });
   }
-  if (st.dirty.size === 0) return Promise.resolve({ kind: 'settled', swept: false }); // 零调用
+  if (st.dirty.size === 0) {
+    if (!st.dirtyInFlight) return Promise.resolve({ kind: 'settled', swept: false }); // 零调用
+    // 会置脏的写在途(脏标记尚未置位):不能报 settled;不启动扫尾(与在途的写冲突),也不算已扫过——写完成后仍可扫这一次
+    markRoundUnsettled(round, 'safety_not_settled');
+    return Promise.resolve({ kind: 'unsettled', reason: 'safety_not_settled', faults: [] });
+  }
   let resolve!: (r: SettleResult) => void;
   let reject!: (e: unknown) => void;
   const running = new Promise<SettleResult>((res, rej) => {
