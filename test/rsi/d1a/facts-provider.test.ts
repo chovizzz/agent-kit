@@ -345,3 +345,160 @@ describe('gateFacts:注入的 fingerprint 依赖失败', () => {
     expect(e).toBe(lost);
   });
 });
+
+describe('组合层的来源绑定:每个候选的事实只来自它自己的来源提案与 run(R21 验收评审 高项)', () => {
+  const RUN_B = 'run-20261105T000000Z-bbb';
+  const PROP_B = '2026-11-05-002';
+  /** 世界 A(来源 run A 被标记 tainted)与世界 B(干净提案,同证据 → 同工具聚类签名);读端口同时暴露两份暂存提案 */
+  function twoProposals() {
+    const a = makeWorld();
+    a.runTainted = true;
+    const b = makeWorld({ runId: RUN_B, proposalId: PROP_B });
+    const base = readersOf(a);
+    const readers = {
+      ...base,
+      staged: { list: async () => [a.sp, b.sp] },
+      taint: {
+        runTainted: async (runId: string) => {
+          a.calls.runTaintAsks.push(runId);
+          return runId === a.wc.source.run_id;
+        },
+        purgeJournalPresent: async () => false,
+      },
+    };
+    const provider = makeFactsProvider({ readers, fingerprint: fingerprintOf, now: () => NOW });
+    return { a, b, provider, readers };
+  }
+
+  it('高项复现:工作副本 id=A 但 source 改成干净提案 B → 两个方法都是 null,不得产出 tainted:false 的事实', async () => {
+    const { a, b, provider } = twoProposals();
+    expect(b.rec.id).not.toBe(a.rec.id);
+    expect(b.wc.cluster_signature).toEqual(a.wc.cluster_signature);
+    const forged = { ...a.wc, source: { ...b.wc.source } };
+    expect(await provider.promoteFacts(a.rec, forged)).toBeNull();
+    expect(await provider.gateFacts(a.rec, forged)).toBeNull();
+    // 正向对照:真实工作副本在同一世界里得到 A 自己的事实(来源 run A 带 TAINTED → tainted:true)
+    const real = await provider.promoteFacts(a.rec, a.wc);
+    expect(real?.tainted).toBe(true);
+    expect(real?.evidence_valid).toBe(true);
+    expect(a.calls.runTaintAsks.every((r) => r === a.wc.source.run_id)).toBe(true);
+  });
+
+  it('工作副本 id 与权威记录 id 不同 → null;一致则非 null(正向对照)', async () => {
+    const { a, provider } = twoProposals();
+    const other = { ...a.wc, id: `ra_${'d'.repeat(12)}` };
+    expect(await provider.promoteFacts(a.rec, other)).toBeNull();
+    expect(await provider.gateFacts(a.rec, other)).toBeNull();
+    expect(await provider.promoteFacts(a.rec, a.wc)).not.toBeNull();
+  });
+
+  it('权威记录没有 source_proposal(旧版 / null)→ 两个方法都是 null,不以工作副本的来源代替', async () => {
+    const { a, provider } = twoProposals();
+    expect(await provider.promoteFacts({ ...a.rec, source_proposal: null }, a.wc)).toBeNull();
+    expect(await provider.gateFacts({ ...a.rec, source_proposal: null }, a.wc)).toBeNull();
+    const noField = { ...a.rec };
+    delete noField.source_proposal;
+    expect(await provider.promoteFacts(noField, a.wc)).toBeNull();
+    expect(await provider.promoteFacts(a.rec, a.wc)).not.toBeNull();
+  });
+
+  it('权威记录的来源与工作副本的来源不一致(记录指向 B、副本指向 A)→ null', async () => {
+    const { a, b, provider } = twoProposals();
+    const recPointsB = { ...a.rec, source_proposal: { ...b.wc.source } };
+    expect(await provider.promoteFacts(recPointsB, a.wc)).toBeNull();
+    expect(await provider.gateFacts(recPointsB, a.wc)).toBeNull();
+  });
+
+  it('暂存材料在创建后被换了内容(同 run / 提案 id,规则正文不同)→ promoteFacts = null(不拼旧 HEAD 与新暂存);未改则非 null', async () => {
+    const a = makeWorld();
+    const changed = {
+      ...a.sp,
+      ruleText: a.sp.ruleText.replace('检查命令退出码', '检查命令返回值'),
+    };
+    expect(changed.ruleText).not.toBe(a.sp.ruleText);
+    const readers = { ...readersOf(a), staged: { list: async () => [changed] } };
+    const provider = makeFactsProvider({ readers, fingerprint: fingerprintOf, now: () => NOW });
+    expect(await provider.promoteFacts(a.rec, a.wc)).toBeNull();
+    expect(await realOf(a).promoteFacts(a.rec, a.wc)).not.toBeNull();
+  });
+
+  it('暂存区里同一 (run, 提案 id) 出现两份 → 歧义,null;一份则非 null', async () => {
+    const a = makeWorld();
+    const readers = { ...readersOf(a), staged: { list: async () => [a.sp, a.sp] } };
+    const provider = makeFactsProvider({ readers, fingerprint: fingerprintOf, now: () => NOW });
+    expect(await provider.promoteFacts(a.rec, a.wc)).toBeNull();
+    expect(await provider.gateFacts(a.rec, a.wc)).toBeNull();
+    expect(await realOf(a).promoteFacts(a.rec, a.wc)).not.toBeNull();
+  });
+
+  it('同一 run 里另有别的提案(提案 id 不同)→ 只认记录指向的那一份,非 null;(run, 提案 id) 两个维度都要匹配', async () => {
+    const a = makeWorld();
+    const sibling = makeWorld({ proposalId: '2026-11-05-777' });
+    expect(sibling.sp.runId).toBe(a.sp.runId);
+    const readers = { ...readersOf(a), staged: { list: async () => [sibling.sp, a.sp] } };
+    const provider = makeFactsProvider({ readers, fingerprint: fingerprintOf, now: () => NOW });
+    expect((await provider.promoteFacts(a.rec, a.wc))?.current_content_sha256).toBe(
+      a.rec.content_sha256,
+    );
+    const otherRun = makeWorld({ runId: RUN_B });
+    const readers2 = { ...readersOf(a), staged: { list: async () => [otherRun.sp, a.sp] } };
+    const p2 = makeFactsProvider({ readers: readers2, fingerprint: fingerprintOf, now: () => NOW });
+    expect(await p2.promoteFacts(a.rec, a.wc)).not.toBeNull();
+  });
+
+  it('信号端口多返回了未被请求的信号(别的提案的证据)→ null;只返回被请求的则非 null', async () => {
+    const a = makeWorld();
+    const foreign = toolSignal(9, '2026-11-02', 9);
+    const base = readersOf(a);
+    const readers = {
+      ...base,
+      signals: {
+        getMany: async (sigs: readonly string[]) => [
+          ...(await base.signals.getMany(sigs)),
+          foreign,
+        ],
+      },
+    };
+    const provider = makeFactsProvider({ readers, fingerprint: fingerprintOf, now: () => NOW });
+    expect(await provider.promoteFacts(a.rec, a.wc)).toBeNull();
+    expect(await provider.gateFacts(a.rec, a.wc)).toBeNull();
+    expect(await realOf(a).promoteFacts(a.rec, a.wc)).not.toBeNull();
+  });
+
+  it('信号端口把同一个信号返回两次 → null(重复也算读不全 / 读乱)', async () => {
+    const a = makeWorld();
+    const base = readersOf(a);
+    const readers = {
+      ...base,
+      signals: {
+        getMany: async (sigs: readonly string[]) => {
+          const got = await base.signals.getMany(sigs);
+          return [...got, ...got];
+        },
+      },
+    };
+    const provider = makeFactsProvider({ readers, fingerprint: fingerprintOf, now: () => NOW });
+    expect(await provider.promoteFacts(a.rec, a.wc)).toBeNull();
+    expect(await provider.gateFacts(a.rec, a.wc)).toBeNull();
+    expect(await realOf(a).gateFacts(a.rec, a.wc)).not.toBeNull();
+  });
+
+  it('锁丢失仍原样抛(绑定检查没有把它吞成 null)', async () => {
+    const a = makeWorld();
+    const lost = new RsiLockError('lock_lost');
+    const readers = {
+      ...readersOf(a),
+      staged: {
+        list: async () => {
+          throw lost;
+        },
+      },
+    };
+    const provider = makeFactsProvider({ readers, fingerprint: fingerprintOf, now: () => NOW });
+    const e = await provider.promoteFacts(a.rec, a.wc).then(
+      () => undefined,
+      (x: unknown) => x,
+    );
+    expect(e).toBe(lost);
+  });
+});

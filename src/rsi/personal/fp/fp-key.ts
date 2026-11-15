@@ -2,7 +2,7 @@
  * `FpKeyPort` 的真实现(`.state/rsi/fp.key`;R21-11.2):0600、32 字节随机、首建 `createExclusive`(持 `rsi/lock`)。
  *  - `read()`:只读(不建目录、不 chmod);句柄级安全读取(不跟随链接、普通文件、`nlink == 1`、属主与权限 ≤ 0600、上限 33 字节);
  *    缺失 → `absent`;长度 ≠ 32 / 不安全 → `invalid`;返回的 key 是副本;
- *  - `ensure(held)`:**第一行**复核锁(目录准备也是写);已存在有效 → `exists`;已存在但无效 → 抛 {@link FpKeyInvalidError},**不覆盖**;
+ *  - `ensure(held)`:**第一行**复核锁(目录准备也是写);已存在有效 → 补文件与父目录 fsync 后 `exists`(首建的目录同步失败后重试走这里,保证同样成立);已存在但无效 → 抛 {@link FpKeyInvalidError},**不覆盖**;
  *    缺失 → 首建;`EEXIST`(并发首建)→ 重读一次:有效 = `exists`,否则抛 {@link FpKeyInvalidError}。
  * 错误文本固定,不含密钥内容。工厂创建与 import 不读盘。
  * 残余(如实):首建在 `createExclusive` 与写入之间崩溃会留下空文件 = `invalid`,本端口**不自动清理**(重建会使账里的 `fp_hmac` 失效),需人工处置。
@@ -13,7 +13,7 @@ import * as path from 'node:path';
 import { RSI_FILE_MODE } from '../../../contracts/rsi.js';
 import type { IoContext } from '../../../io/paths.js';
 import { readFileSafe } from '../../../io/read-fs.js';
-import { createExclusiveSynced, fsyncDir } from '../../../io/safe-fs.js';
+import { createExclusiveDurable, createExclusiveSynced, fsyncDir } from '../../../io/safe-fs.js';
 import { RSI_FILE_OWNER, rsiDirReadonly } from '../../lock-read.js';
 import { rsiDir } from '../../rsi-dir.js';
 import type { FpKeyPort, FpKeyRead } from './fp-ports.js';
@@ -51,13 +51,22 @@ export function makeFpKeyPort(d: FpKeyPortDeps): FpKeyPort {
     return { kind: 'ok', key: Uint8Array.from(r.bytes) };
   }
 
+  /**
+   * `exists` 的持久化确认:已存在的有效 key 也补一次文件 fsync 与父目录 fsync(失败 → 抛错,不返回 `exists`)。
+   * 这样「首建时目录同步失败 → 抛错 → 调用方重试」的恢复路径与首建路径有同样的保证:`ensure` 成功返回 = key 的文件与目录项都已落盘。
+   * 传入的 data 是刚读到的同一把 key:`createExclusiveDurable` 对已存在文件不覆盖、只同步;极端下文件在读与同步之间消失(持锁时不应发生)也只会按**同一把 key** 重建。
+   */
+  async function confirmDurable(dir: string, key: Uint8Array): Promise<'created' | 'exists'> {
+    return createExclusiveDurable(d.io, path.join(dir, FP_KEY_FILE), key, RSI_FILE_MODE);
+  }
+
   async function ensure(held: {
     rsi: { assertHeld(): Promise<void> };
   }): Promise<'created' | 'exists'> {
     await held.rsi.assertHeld();
     const dir = await rsiDir(d.io);
     const cur = await read();
-    if (cur.kind === 'ok') return 'exists';
+    if (cur.kind === 'ok') return confirmDurable(dir, cur.key);
     if (cur.kind === 'invalid') throw new FpKeyInvalidError();
     const key = (d.randomKey ?? ((): Uint8Array => Uint8Array.from(randomBytes(FP_KEY_BYTES))))();
     if (key.length !== FP_KEY_BYTES) throw new FpKeyInvalidError();
@@ -68,7 +77,7 @@ export function makeFpKeyPort(d: FpKeyPortDeps): FpKeyPort {
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
       const again = await read();
-      if (again.kind === 'ok') return 'exists';
+      if (again.kind === 'ok') return confirmDurable(dir, again.key);
       throw new FpKeyInvalidError();
     }
     await fsyncDir(d.io, dir);

@@ -170,3 +170,78 @@ describe('FpKeyPort 真实现:文件与目录', () => {
     expect(await exists(path.join(w.state, 'rsi', 'fp.key'))).toBe(false);
   });
 });
+
+describe('FpKeyPort 真实现:持久化确认(首建的目录同步失败后重试)', () => {
+  const rigAudit = async (prefix: string) => {
+    const w = await newWork(prefix);
+    const ops: string[] = [];
+    const fail = { dirSync: false };
+    const io = {
+      ...w.io,
+      writeAudit: (op: string) => {
+        ops.push(op);
+        if (op === 'fsyncDir' && fail.dirSync) throw new Error('injected fsyncDir failure');
+      },
+    };
+    return {
+      w,
+      ops,
+      fail,
+      port: makeFpKeyPort({ io, randomKey: () => Uint8Array.from(TEST_KEY) }),
+    };
+  };
+
+  it('首建时父目录 fsync 失败 → ensure 抛错、key 文件保留;重试返回 exists 前文件与父目录 fsync 都再执行一次(不跳过)', async () => {
+    const r = await rigAudit('d1a-fpkey-dirsync-');
+    r.fail.dirSync = true;
+    await expect(r.port.ensure(heldOk())).rejects.toThrowError('injected fsyncDir failure');
+    expect((await r.port.read()).kind).toBe('ok');
+    r.ops.length = 0;
+    r.fail.dirSync = false;
+    expect(await r.port.ensure(heldOk())).toBe('exists');
+    const synced = r.ops.filter((o) => o === 'syncFile' || o === 'fsyncDir');
+    expect(synced).toEqual(['syncFile', 'fsyncDir']);
+    // 内容没变(重试不重新生成 key)
+    expect(
+      Buffer.from(await readBytes(path.join(r.w.state, 'rsi', 'fp.key'))).toString('hex'),
+    ).toBe(TEST_KEY_HEX);
+  });
+
+  it('重试路径上父目录 fsync 仍失败 → ensure 继续抛错(不返回 exists);恢复后成功(正向对照)', async () => {
+    const r = await rigAudit('d1a-fpkey-dirsync2-');
+    await r.port.ensure(heldOk());
+    r.fail.dirSync = true;
+    await expect(r.port.ensure(heldOk())).rejects.toThrowError('injected fsyncDir failure');
+    r.fail.dirSync = false;
+    expect(await r.port.ensure(heldOk())).toBe('exists');
+  });
+
+  it('并发首建的败者(EEXIST 后重读有效)同样补文件与目录 fsync', async () => {
+    const w = await newWork('d1a-fpkey-racedur-');
+    const file = path.join(w.state, 'rsi', 'fp.key');
+    const ops: string[] = [];
+    const io = { ...w.io, writeAudit: (op: string) => void ops.push(op) };
+    const port = makeFpKeyPort({
+      io,
+      beforeCreate: async () => {
+        await writeFile(w.io, file, Uint8Array.from(TEST_KEY), { mode: 0o600 });
+      },
+    });
+    expect(await port.ensure(heldOk())).toBe('exists');
+    expect(ops.filter((o) => o === 'syncFile' || o === 'fsyncDir')).toEqual([
+      'syncFile',
+      'fsyncDir',
+    ]);
+  });
+
+  it('无效 key 仍不覆盖、也不触发 fsync(现有策略保留)', async () => {
+    const r = await rigAudit('d1a-fpkey-invalid-keep-');
+    await r.port.ensure(heldOk());
+    const file = path.join(r.w.state, 'rsi', 'fp.key');
+    await writeFile(r.w.io, file, Uint8Array.from([1, 2, 3]), { mode: 0o600 });
+    r.ops.length = 0;
+    await expect(r.port.ensure(heldOk())).rejects.toBeInstanceOf(FpKeyInvalidError);
+    expect(r.ops.filter((o) => o === 'syncFile' || o === 'fsyncDir')).toEqual([]);
+    expect(Array.from(await readBytes(file))).toEqual([1, 2, 3]);
+  });
+});

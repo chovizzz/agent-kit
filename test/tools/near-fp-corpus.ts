@@ -7,11 +7,16 @@
  * `match` = 应被近似指纹拦下(扩写 / 前后缀 / 模板填充);`nomatch` = 不应拦(无关内容 / 同主题但独立的规则)。
  * 输出只含 case id 与统计,**绝不输出文本内容**(id 与文件名同样会被输出:语料提供者不得把正文放进 id / 文件名)。
  * 统计**依赖密钥**:被否决内容超过 64 个不同 shingle 时,最小 64 个哈希取决于密钥(换密钥会换抽样,覆盖率与命中率随之波动)。
- * 所以每个用例用多把公开、确定性的评估密钥各算一遍(`CORPUS_KEYS`),阈值统计取**最坏情形**(命中取最小、误报取最大),阈值建议按最坏情形给;
+ * 所以每个用例用多把公开、确定性的评估密钥各算一遍(`CORPUS_KEYS`),阈值统计取**评估密钥集合内的最坏值**(命中取最小、误报取最大),阈值建议按它给;
+ * 这**不是**所有生产密钥的风险上界。计数与 id 列表同一口径:`fpIds` / `fnIds` 是达到最坏计数的那把密钥(并列取第一把,`fpWorstKey` / `fnWorstKey` 为其序号)下的 id,
+ * 所以 `fp === fpIds.length`;任一密钥下出现过的 id 并集另列 `anyKeyFpIds` / `anyKeyFnIds`(显式命名,不与计数混用)。
  * 覆盖率分布用第一把密钥;存在超过 64 个 shingle 的被否决内容时报 `bottom_k_truncation_key_dependent`。评估密钥与生产 `fp.key` 无关,不读真实密钥。
+ * 输入长度:任一侧(含 exact-only 用例)超过 `NEAR_MAX_INPUT_CHARS` 的用例**一律先于评估**判为「无法评估」:不进统计、只列 id(`unevaluableIds`)、
+ * 警告 `unevaluable_input_too_long`,命令行退出 2;从不抛未处理异常、不输出异常对象与正文。
  */
 import {
   NEAR_ALGO,
+  NEAR_MAX_INPUT_CHARS,
   assertNearThreshold,
   NEAR_SKETCH_SIZE,
   nearCoverage,
@@ -110,8 +115,16 @@ export interface ThresholdStat {
   tn: number;
   hitRate: number | null;
   fpRate: number | null;
+  /** 漏掉(match 未命中)最多的那把评估密钥下的 id;`fn === fnIds.length`(并列取第一把密钥) */
   fnIds: string[];
+  /** 误报最多的那把评估密钥下的 id;`fp === fpIds.length` */
   fpIds: string[];
+  /** 达到最坏计数的密钥序号(0 起);计数为 0 时为 null */
+  fnWorstKey: number | null;
+  fpWorstKey: number | null;
+  /** 任一评估密钥下出现过的 id 并集(不对应计数) */
+  anyKeyFnIds: string[];
+  anyKeyFpIds: string[];
 }
 export interface CoverageSummary {
   n: number;
@@ -125,6 +138,8 @@ export interface CorpusReport {
   counts: { match: number; nomatch: number };
   /** 被否决内容不足 3 个 token(`near_fp = []`):近似匹配无从谈起,不计入阈值统计 */
   exactOnlyIds: string[];
+  /** 任一侧输入超过 `NEAR_MAX_INPUT_CHARS` 的用例:无法评估,不计入统计(只列 id) */
+  unevaluableIds: string[];
   coverage: { match: CoverageSummary; nomatch: CoverageSummary };
   thresholds: ThresholdStat[];
   /** 评估所用密钥数(阈值统计取这些密钥下的最坏情形) */
@@ -163,8 +178,13 @@ export function evaluateCorpus(cases: readonly CorpusCase[], opts: EvalOptions =
   }
   const keys = opts.keys ?? CORPUS_KEYS;
   if (keys.length === 0) throw new RangeError('at least one evaluation key is required');
-  const shingleCount = new Map(cases.map((c) => [c.id, nearShingles(c.vetoed).length]));
-  const exactOnlyIds = cases.filter((c) => shingleCount.get(c.id) === 0).map((c) => c.id);
+  // 长度检查先于一切评估,两侧都查(含 exact-only 用例):超长 = 无法评估,而不是抛错或因另一侧短而被悄悄放过
+  const tooLong = (c: CorpusCase): boolean =>
+    c.vetoed.length > NEAR_MAX_INPUT_CHARS || c.candidate.length > NEAR_MAX_INPUT_CHARS;
+  const unevaluableIds = cases.filter(tooLong).map((c) => c.id);
+  const evaluable = cases.filter((c) => !tooLong(c));
+  const shingleCount = new Map(evaluable.map((c) => [c.id, nearShingles(c.vetoed).length]));
+  const exactOnlyIds = evaluable.filter((c) => shingleCount.get(c.id) === 0).map((c) => c.id);
   const usable = cases.filter((c) => (shingleCount.get(c.id) as number) > 0);
   const truncatedIds = usable
     .filter((c) => (shingleCount.get(c.id) as number) > NEAR_SKETCH_SIZE)
@@ -189,25 +209,42 @@ export function evaluateCorpus(cases: readonly CorpusCase[], opts: EvalOptions =
     let tn = Number.POSITIVE_INFINITY;
     let fn = 0;
     let fp = 0;
+    let fnWorstKey: number | null = null;
+    let fpWorstKey: number | null = null;
+    let fnWorst: string[] = [];
+    let fpWorst: string[] = [];
     const fnSet = new Set<string>();
     const fpSet = new Set<string>();
-    for (const rows of perKey) {
+    for (const [ki, rows] of perKey.entries()) {
       let kTp = 0;
       let kFn = 0;
       let kFp = 0;
       let kTn = 0;
+      const kFnIds: string[] = [];
+      const kFpIds: string[] = [];
       for (const s of rows) {
         const hit = nearMatches(s.near, s.cand, t);
         if (s.label === 'match') {
           if (hit) kTp++;
           else {
             kFn++;
+            kFnIds.push(s.id);
             fnSet.add(s.id);
           }
         } else if (hit) {
           kFp++;
+          kFpIds.push(s.id);
           fpSet.add(s.id);
         } else kTn++;
+      }
+      // 最坏密钥:严格更大才替换(并列取第一把),id 列表随它走,与计数同一口径
+      if (kFn > fn) {
+        fnWorstKey = ki;
+        fnWorst = kFnIds;
+      }
+      if (kFp > fp) {
+        fpWorstKey = ki;
+        fpWorst = kFpIds;
       }
       tp = Math.min(tp, kTp);
       tn = Math.min(tn, kTn);
@@ -222,8 +259,12 @@ export function evaluateCorpus(cases: readonly CorpusCase[], opts: EvalOptions =
       tn,
       hitRate: nMatch === 0 ? null : tp / nMatch,
       fpRate: nNo === 0 ? null : fp / nNo,
-      fnIds: usable.filter((c) => fnSet.has(c.id)).map((c) => c.id),
-      fpIds: usable.filter((c) => fpSet.has(c.id)).map((c) => c.id),
+      fnIds: fnWorst,
+      fpIds: fpWorst,
+      fnWorstKey,
+      fpWorstKey,
+      anyKeyFnIds: usable.filter((c) => fnSet.has(c.id)).map((c) => c.id),
+      anyKeyFpIds: usable.filter((c) => fpSet.has(c.id)).map((c) => c.id),
     };
   });
   // 建议:误报率 ≤ maxFpRate 的阈值里取命中率最高者;并列取最高阈值(离误报边界最远)
@@ -249,6 +290,7 @@ export function evaluateCorpus(cases: readonly CorpusCase[], opts: EvalOptions =
   if (nNo === 0) warnings.push('no_nomatch_cases');
   if (recommendation === null) warnings.push('no_threshold_within_max_fp_rate');
   if (exactOnlyIds.length > 0) warnings.push('exact_only_cases_excluded');
+  if (unevaluableIds.length > 0) warnings.push('unevaluable_input_too_long');
   if (truncatedIds.length > 0) warnings.push('bottom_k_truncation_key_dependent');
   return {
     algo: {
@@ -261,6 +303,7 @@ export function evaluateCorpus(cases: readonly CorpusCase[], opts: EvalOptions =
     truncatedIds,
     counts: { match: nMatch, nomatch: nNo },
     exactOnlyIds,
+    unevaluableIds,
     coverage: { match: summarize(cov('match')), nomatch: summarize(cov('nomatch')) },
     thresholds: stats,
     recommendation,
@@ -280,12 +323,16 @@ export function formatReport(r: CorpusReport): string {
     `cases ${r.cases}: match ${r.counts.match}, nomatch ${r.counts.nomatch}, exact_only excluded ${r.exactOnlyIds.length}${r.exactOnlyIds.length > 0 ? ` [${r.exactOnlyIds.join(', ')}]` : ''}`,
   );
   L.push(
-    `eval keys ${r.keys} (worst case across keys); bottom-k truncated (key-dependent) ${r.truncatedIds.length}${r.truncatedIds.length > 0 ? ` [${r.truncatedIds.join(', ')}]` : ''}`,
+    `eval keys ${r.keys} (worst case within this key set, not a bound for production keys); bottom-k truncated (key-dependent) ${r.truncatedIds.length}${r.truncatedIds.length > 0 ? ` [${r.truncatedIds.join(', ')}]` : ''}`,
   );
   for (const k of ['match', 'nomatch'] as const) {
     const c = r.coverage[k];
     L.push(`coverage ${k}: n=${c.n} min=${f4(c.min)} median=${f4(c.median)} max=${f4(c.max)}`);
   }
+  if (r.unevaluableIds.length > 0)
+    L.push(
+      `unevaluable (input too long, excluded) ${r.unevaluableIds.length} [${r.unevaluableIds.join(', ')}]`,
+    );
   L.push('threshold    tp   fn   fp   tn  hit_rate  fp_rate');
   for (const s of r.thresholds) {
     L.push(
@@ -293,8 +340,12 @@ export function formatReport(r: CorpusReport): string {
     );
   }
   for (const s of r.thresholds) {
-    if (s.fpIds.length > 0)
-      L.push(`false positives @${s.threshold.toFixed(2)}: ${s.fpIds.join(', ')}`);
+    if (s.fpIds.length > 0) {
+      const extra = s.anyKeyFpIds.filter((id) => !s.fpIds.includes(id));
+      L.push(
+        `false positives @${s.threshold.toFixed(2)} (worst key #${s.fpWorstKey}): ${s.fpIds.join(', ')}${extra.length > 0 ? `; also at other keys: ${extra.join(', ')}` : ''}`,
+      );
+    }
   }
   L.push(
     r.recommendation === null
@@ -314,7 +365,10 @@ export interface CliIo {
 const USAGE =
   'usage: near-fp-corpus <corpus-dir> [--thresholds 0.3,0.5,0.7] [--max-fp-rate 0] [--json]\n';
 
-/** 退出码:0 完成;2 用法错 / 语料不合规(含 0 条用例)。不抛(除 `io.readCorpus` 自身的读失败,调用方处理) */
+/**
+ * 退出码(稳定):0 完成;2 用法错 / 语料不合规(含 0 条用例、语料目录读失败、存在超长而无法评估的用例)。
+ * 语料内容不会让它抛:读目录失败映射成固定文案,超长用例走「无法评估」;不输出异常对象 / 堆栈 / 正文,报告只含 case id。
+ */
 export async function runCorpusCli(argv: readonly string[], io: CliIo): Promise<number> {
   let dir: string | undefined;
   let thresholds: number[] | undefined;
@@ -357,7 +411,14 @@ export async function runCorpusCli(argv: readonly string[], io: CliIo): Promise<
     io.err(USAGE);
     return 2;
   }
-  const parsed = parseCorpus(await io.readCorpus(dir));
+  let files: { name: string; text: string }[];
+  try {
+    files = await io.readCorpus(dir);
+  } catch {
+    io.err('corpus directory could not be read\n');
+    return 2;
+  }
+  const parsed = parseCorpus(files);
   if (parsed.errors.length > 0) {
     io.err(`${parsed.errors.map((e) => `corpus error: ${e}`).join('\n')}\n`);
     return 2;
@@ -366,10 +427,17 @@ export async function runCorpusCli(argv: readonly string[], io: CliIo): Promise<
     io.err('corpus has no cases\n');
     return 2;
   }
+  // 输入长度 / 类型已在 evaluateCorpus 内先行判定(超长 = unevaluable),参数在上面已校验;这里不会因语料内容抛
   const report = evaluateCorpus(parsed.cases, {
     ...(thresholds !== undefined ? { thresholds } : {}),
     maxFpRate,
   });
   io.out(json ? `${JSON.stringify(report, null, 2)}\n` : formatReport(report));
+  if (report.unevaluableIds.length > 0) {
+    io.err(
+      `corpus has ${report.unevaluableIds.length} unevaluable case(s) (input too long): ${report.unevaluableIds.join(', ')}\n`,
+    );
+    return 2;
+  }
   return 0;
 }

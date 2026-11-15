@@ -1,6 +1,6 @@
 /**
  * `FactsProvider` 的组合层(D1a):在窄只读端口之上,用 `facts-pure.ts` 的纯计算拼出 `gateFacts` / `promoteFacts`,另给 `holdFacts()`。
- * 失败语义(同 `shadow-facts.ts`):任一端口读失败 / 来源提案已不在暂存 / 草稿与记录对不上 → **整体 `null`**(步骤据此 fail-closed:
+ * 失败语义(同 `shadow-facts.ts`):任一端口读失败 / 来源提案已不在暂存 / 草稿与记录对不上 / **工作副本与权威记录的 id、来源不一致 / 暂存材料已不是创建时那份 / 信号端口混入未请求的信号** → **整体 `null`**(步骤据此 fail-closed:
  * 闸走 internal、推进清零排队),从不当作「干净」;**锁丢失(`RsiLockError`)原样传播**,不映射为 `null`。
  * `promoteFacts` 的 `sessions` / `hits` 恒 0(计数由 `withShadowCounts` 装饰器覆盖;未装饰时 0 会话 = 不推进)。
  * `clusterBusy` / `slot_occupied` 不在这里(锁内由步骤自己算,M13-4)。
@@ -23,6 +23,7 @@ import {
   evidenceValidOf,
   holdFactsLegacy,
   parseHead,
+  stagedMatchesRecord,
   taintedOf,
   tombstonedOf,
   type SignalVerdict,
@@ -47,16 +48,35 @@ export function makeFactsProvider(d: FactsProviderDeps): FactsProviderD1a {
   if (d.near !== undefined) assertNearThreshold(d.near.threshold);
   const r = d.readers;
 
+  /**
+   * 事实主体的唯一来源:**权威记录**的 `source_proposal`(创建时写入、不可变)。工作副本只是缓存,必须与记录逐项一致,
+   * 否则整体 `null`(不让工作副本选择安全事实的主体)。同时核对:暂存区里恰好一份匹配、它仍是创建时的那份材料、
+   * 信号端口只返回被请求的 sig(不得混入别的提案的证据)。
+   */
   async function source(
+    rec: PersonalLifecycleRecord,
     wc: CandidateWorkingCopy,
-  ): Promise<{ sp: StagedProposal; signals: Signal[] } | null> {
+  ): Promise<{ sp: StagedProposal; signals: Signal[]; runId: string } | null> {
+    const auth = rec.source_proposal;
+    if (auth === null || auth === undefined) return null;
+    if (wc.id !== rec.id) return null;
+    if (wc.source.run_id !== auth.run_id || wc.source.proposal_id !== auth.proposal_id) return null;
     return guarded(async () => {
-      const sp = (await r.staged.list()).find(
-        (s) => s.runId === wc.source.run_id && s.proposal.id === wc.source.proposal_id,
+      const hits = (await r.staged.list()).filter(
+        (s) => s.runId === auth.run_id && s.proposal.id === auth.proposal_id,
       );
-      if (sp === undefined) return null;
-      const signals = await r.signals.getMany(sp.proposal.evidence.map((e) => e.sig));
-      return { sp, signals };
+      const sp = hits[0];
+      if (hits.length !== 1 || sp === undefined) return null;
+      if (!stagedMatchesRecord(sp, rec)) return null;
+      const asked = sp.proposal.evidence.map((e) => e.sig);
+      const signals = await r.signals.getMany(asked);
+      const allowed = new Set(asked);
+      const seen = new Set<string>();
+      for (const s of signals) {
+        if (!allowed.has(s.sig_id) || seen.has(s.sig_id)) return null;
+        seen.add(s.sig_id);
+      }
+      return { sp, signals, runId: auth.run_id };
     });
   }
 
@@ -71,7 +91,7 @@ export function makeFactsProvider(d: FactsProviderDeps): FactsProviderD1a {
     rec: PersonalLifecycleRecord,
     wc: CandidateWorkingCopy,
   ): Promise<GateOut | null> {
-    const src = await source(wc);
+    const src = await source(rec, wc);
     if (src === null) return null;
     // 草稿构建会调用注入的 fingerprint(可能抛错 / 返回非法值):同属读失败,一并受 guarded 保护(锁丢失仍原样抛)
     return guarded(async () => {
@@ -103,7 +123,7 @@ export function makeFactsProvider(d: FactsProviderDeps): FactsProviderD1a {
     rec: PersonalLifecycleRecord,
     wc: CandidateWorkingCopy,
   ): Promise<PromoteOut | null> {
-    const src = await source(wc);
+    const src = await source(rec, wc);
     if (src === null) return null;
     return guarded(async () => {
       const relPath = rec.target_paths[0];
@@ -116,7 +136,7 @@ export function makeFactsProvider(d: FactsProviderDeps): FactsProviderD1a {
       const verdictOf = await verdicts(src.signals);
       const items = evidenceItemsOf(src.sp.proposal, src.signals, verdictOf);
       const ledger = await r.ledger.read();
-      const runTainted = await r.taint.runTainted(wc.source.run_id);
+      const runTainted = await r.taint.runTainted(src.runId);
       const purgeJournalPresent = await r.taint.purgeJournalPresent();
       return {
         config_valid: policy.config_valid,

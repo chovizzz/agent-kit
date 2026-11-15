@@ -3,6 +3,7 @@
  * 子进程启动器的冒烟用例在 `near-corpus-launcher.test.ts`(单独文件,红了不拖累本文件的判读)。
  */
 import { describe, expect, it } from 'vitest';
+import { NEAR_MAX_INPUT_CHARS } from '../../../src/rsi/personal/fp/near-algo.js';
 import {
   CORPUS_KEYS,
   DEFAULT_THRESHOLDS,
@@ -12,6 +13,7 @@ import {
   runCorpusCli,
   type CliIo,
   type CorpusCase,
+  type ThresholdStat,
 } from '../../tools/near-fp-corpus.js';
 
 const A = 'Always run the unit tests before pushing any code to the shared repository';
@@ -174,6 +176,94 @@ describe('语料评估:统计与阈值建议', () => {
   });
 });
 
+describe('语料评估:最坏情形口径(计数与 id 列表同一把密钥)', () => {
+  const words = (n: number, k: number): string =>
+    Array.from({ length: k }, (_v, i) => `c${n}w${i + 1}`).join(' ');
+  // 被否决内容 80 词(78 个 shingle,超过草图容量 64),候选只含前 41 词:覆盖率恰在 0.5 附近,命中与否随评估密钥波动
+  const cases: CorpusCase[] = Array.from({ length: 200 }, (_v, n) => [
+    mk(`n${n}`, 'nomatch', words(n, 80), words(n, 41)),
+    mk(`m${n}`, 'match', words(1000 + n, 80), words(1000 + n, 41)),
+  ]).flat();
+
+  const single = (k: Uint8Array): ThresholdStat =>
+    evaluateCorpus(cases, { thresholds: [0.5], keys: [k] }).thresholds[0] as ThresholdStat;
+
+  for (const field of ['fp', 'fn'] as const) {
+    const title =
+      field === 'fp'
+        ? 'fp 计数 = 最坏密钥下的 id 数;任一密钥并集另列且更大;最坏密钥与单密钥评估一致(正向对照:并集不等于最坏列表)'
+        : 'fn 计数 = 最坏密钥下的 id 数;任一密钥并集另列且更大;最坏密钥与单密钥评估一致(正向对照:并集不等于最坏列表)';
+    it(title, () => {
+      // 按该字段升序排密钥:最坏的一把不在第 0 位,「并集 / 取第一把」之类的错误口径才无处藏
+      const keys = [...CORPUS_KEYS].sort((a, b) => single(a)[field] - single(b)[field]);
+      const t = evaluateCorpus(cases, { thresholds: [0.5], keys }).thresholds[0] as ThresholdStat;
+      const ids = field === 'fp' ? t.fpIds : t.fnIds;
+      const any = field === 'fp' ? t.anyKeyFpIds : t.anyKeyFnIds;
+      const worst = field === 'fp' ? t.fpWorstKey : t.fnWorstKey;
+      expect(t[field]).toBeGreaterThan(0);
+      expect(ids).toHaveLength(t[field]);
+      expect(any.length).toBeGreaterThan(ids.length);
+      for (const id of ids) expect(any).toContain(id);
+      const perKey = keys.map(single);
+      expect(Math.max(...perKey.map((x) => x[field]))).toBe(t[field]);
+      expect(worst as number).toBeGreaterThan(0);
+      const w = perKey[worst as number] as ThresholdStat;
+      expect(field === 'fp' ? w.fpIds : w.fnIds).toEqual(ids);
+      // 并列取第一把:最坏密钥之前没有同样多的
+      expect(perKey.findIndex((x) => x[field] === t[field])).toBe(worst);
+    });
+  }
+
+  it('没有误报 / 漏报时最坏密钥为 null、列表为空', () => {
+    const r = evaluateCorpus([mk('m', 'match', A, A), mk('n', 'nomatch', A, UNRELATED)], {
+      thresholds: [0.5],
+    });
+    const t = r.thresholds[0] as ThresholdStat;
+    expect([t.fp, t.fn, t.fpWorstKey, t.fnWorstKey, t.fpIds, t.fnIds]).toEqual([
+      0,
+      0,
+      null,
+      null,
+      [],
+      [],
+    ]);
+  });
+});
+
+describe('语料评估:超长输入按「无法评估」计入', () => {
+  const LONG = 'a'.repeat(NEAR_MAX_INPUT_CHARS + 1);
+  const bad: CorpusCase[] = [
+    mk('u_vetoed', 'match', LONG, A),
+    mk('u_cand', 'match', A, LONG),
+    mk('u_exact_cand', 'nomatch', 'a b', LONG),
+  ];
+  const good: CorpusCase[] = [
+    mk('ok_edge', 'match', A, 'a'.repeat(NEAR_MAX_INPUT_CHARS)),
+    mk('ok_plain', 'nomatch', A, UNRELATED),
+  ];
+
+  it('两侧都查(含 exact-only 用例):不抛、列 id、不进统计;恰好等于上限的正向对照可评估', () => {
+    const r = evaluateCorpus([...bad, ...good], { thresholds: [0.5] });
+    expect(r.unevaluableIds).toEqual(['u_vetoed', 'u_cand', 'u_exact_cand']);
+    expect(r.exactOnlyIds).toEqual([]);
+    expect(r.cases).toBe(5);
+    expect(r.counts).toEqual({ match: 1, nomatch: 1 });
+    expect(r.warnings).toContain('unevaluable_input_too_long');
+    const clean = evaluateCorpus(good, { thresholds: [0.5] });
+    expect(clean.unevaluableIds).toEqual([]);
+    expect(clean.warnings).not.toContain('unevaluable_input_too_long');
+  });
+
+  it('报告只含 case id,不含正文', () => {
+    const text = formatReport(evaluateCorpus([...bad, ...good], { thresholds: [0.5] }));
+    expect(text).toContain(
+      'unevaluable (input too long, excluded) 3 [u_vetoed, u_cand, u_exact_cand]',
+    );
+    expect(text).not.toContain('aaaaaaaaaa');
+    expect(text.length).toBeLessThan(4000);
+  });
+});
+
 describe('语料解析', () => {
   const line = (o: Record<string, unknown>): string => JSON.stringify(o);
   const good = { id: 'c1', label: 'match', vetoed: 'v', candidate: 'c', kind: 'expansion' };
@@ -289,5 +379,42 @@ describe('命令行(进程内,注入 IO)', () => {
     const empty = await run(['d'], '\n\n');
     expect(empty.code).toBe(2);
     expect(empty.err).toBe('corpus has no cases\n');
+  });
+
+  it('超长输入:仍输出报告(stdout),stderr 只含 case id,退出 2;同一语料去掉超长用例 → 退出 0(正向对照)', async () => {
+    const LONG = 'a'.repeat(NEAR_MAX_INPUT_CHARS + 1);
+    const withLong = [
+      mk('u1', 'match', LONG, A),
+      mk('u2', 'match', 'a b', LONG),
+      mk('m', 'match', A, EXPANDED),
+      mk('n', 'nomatch', A, REWRITE),
+    ]
+      .map((c) => JSON.stringify(c))
+      .join('\n');
+    const r = await run(['d', '--thresholds', '0.5'], withLong);
+    expect(r.code).toBe(2);
+    expect(r.out).toContain('unevaluable (input too long, excluded) 2 [u1, u2]');
+    expect(r.err).toBe('corpus has 2 unevaluable case(s) (input too long): u1, u2\n');
+    expect(r.err + r.out).not.toContain('aaaaaaaaaa');
+    const json = await run(['d', '--json', '--thresholds', '0.5'], withLong);
+    expect(json.code).toBe(2);
+    expect((JSON.parse(json.out) as { unevaluableIds: string[] }).unevaluableIds).toEqual([
+      'u1',
+      'u2',
+    ]);
+    expect((await run(['d', '--thresholds', '0.5'])).code).toBe(0);
+  });
+
+  it('语料目录读失败 → 退出 2,固定文案,不回显异常内容', async () => {
+    let err = '';
+    const code = await runCorpusCli(['d'], {
+      readCorpus: async () => {
+        throw new Error('ENOENT /secret/path SECRET-BODY');
+      },
+      out: () => undefined,
+      err: (s) => (err += s),
+    });
+    expect(code).toBe(2);
+    expect(err).toBe('corpus directory could not be read\n');
   });
 });

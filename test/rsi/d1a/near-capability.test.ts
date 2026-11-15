@@ -7,6 +7,9 @@ import { NEAR_ALGO, makeNearFpProducer } from '../../../src/rsi/personal/fp/near
 import {
   decideNearFpCapability,
   makeNearFpCapability,
+  makeNearFpCapabilitySource,
+  nearFpDenial,
+  nearFpReady,
   type NearFpCapabilityInput,
 } from '../../../src/rsi/personal/fp/near-capability.js';
 import type { FpKeyPort, FpKeyRead } from '../../../src/rsi/personal/fp/fp-ports.js';
@@ -147,5 +150,93 @@ describe('makeNearFpCapability(装配工厂:现读 key)', () => {
     expect((await frozen()).state).toBe('key_unavailable');
     kind = 'ok';
     expect((await frozen()).state).toBe('ready');
+  });
+});
+
+describe('能力判定的操作级快照:一次取、多个消费者共用', () => {
+  const flipping = () => {
+    const st = { kind: 'ok' as FpKeyRead['kind'], reads: 0 };
+    const fpKey = keyPort(async () => {
+      st.reads++;
+      return st.kind === 'ok' ? { kind: 'ok', key: TEST_KEY } : ({ kind: st.kind } as FpKeyRead);
+    });
+    return { st, fpKey };
+  };
+
+  it('对照:裸 verdict 函数两次调用之间 key 变了 → 两个消费者结论不同(这正是要避免的分歧)', async () => {
+    const { st, fpKey } = flipping();
+    const cap = makeNearFpCapability({ producer, fpKey, algo: frozenAlgo });
+    const a = await cap();
+    st.kind = 'invalid';
+    const b = await cap();
+    expect([a.state, b.state]).toEqual(['ready', 'key_unavailable']);
+  });
+
+  it('快照:取一次(只读一次 key),两个消费者对同一快照结论一致,即使之后 key 变了', async () => {
+    const { st, fpKey } = flipping();
+    const src = makeNearFpCapabilitySource({ producer, fpKey, algo: frozenAlgo });
+    const snap = await src.snapshot();
+    expect(st.reads).toBe(1);
+    st.kind = 'invalid';
+    expect(nearFpReady(snap)).toBe(true);
+    expect(nearFpDenial(snap)).toBeNull();
+    expect(st.reads).toBe(1);
+    // 下一次操作重新取快照,看到新结论(不是全局缓存)
+    const next = await src.snapshot();
+    expect(st.reads).toBe(2);
+    expect([nearFpReady(next), nearFpDenial(next)]).toEqual([
+      false,
+      { code: 'near_fp_unavailable', state: 'key_unavailable', reason: 'key_invalid' },
+    ]);
+  });
+
+  it('消费者对非 ready 快照给出带状态与原因的拒绝;nearFpReady 与 nearFpDenial 恒一致(四态全覆盖)', async () => {
+    const cases: [Parameters<typeof makeNearFpCapabilitySource>[0], string, string][] = [
+      [
+        { fpKey: keyPort(async () => ({ kind: 'ok', key: TEST_KEY })), algo: frozenAlgo },
+        'unwired',
+        'producer_unwired',
+      ],
+      [{ producer, algo: frozenAlgo }, 'key_unavailable', 'key_absent'],
+      [
+        {
+          producer,
+          fpKey: keyPort(async () => ({ kind: 'ok', key: TEST_KEY })),
+          algo: { ...frozenAlgo, frozen: false },
+        },
+        'algo_unfrozen',
+        'algo_unfrozen',
+      ],
+    ];
+    for (const [deps, state, reason] of cases) {
+      const snap = await makeNearFpCapabilitySource(deps).snapshot();
+      expect(nearFpReady(snap)).toBe(false);
+      expect(nearFpDenial(snap)).toEqual({ code: 'near_fp_unavailable', state, reason });
+    }
+    const ok = await makeNearFpCapabilitySource({
+      producer,
+      fpKey: keyPort(async () => ({ kind: 'ok', key: TEST_KEY })),
+      algo: frozenAlgo,
+    }).snapshot();
+    expect([nearFpReady(ok), nearFpDenial(ok)]).toEqual([true, null]);
+  });
+
+  it('快照是冻结的值对象:改写会抛 / 不生效;不含密钥', async () => {
+    const { fpKey } = flipping();
+    const snap = await makeNearFpCapabilitySource({ producer, fpKey, algo: frozenAlgo }).snapshot();
+    expect(Object.isFrozen(snap)).toBe(true);
+    expect(() => {
+      (snap as { state: string }).state = 'unwired';
+    }).toThrow();
+    expect(snap.state).toBe('ready');
+    expect(leaksValue(snap)).toBe(false);
+  });
+
+  it('生产常量:快照恒为 algo_unfrozen,两个消费者都拒绝', async () => {
+    const { fpKey } = flipping();
+    const snap = await makeNearFpCapabilitySource({ producer, fpKey }).snapshot();
+    expect(snap).toEqual({ state: 'algo_unfrozen', reason: 'algo_unfrozen' });
+    expect(nearFpReady(snap)).toBe(false);
+    expect(nearFpDenial(snap)?.reason).toBe('algo_unfrozen');
   });
 });

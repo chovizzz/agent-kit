@@ -13,7 +13,8 @@ import type { RsiEffectsLedger } from '../../../contracts/rsi-store.js';
 import { cooldownActive, utcDay } from '../../../contracts/rsi-store.js';
 import type { Signal } from '../../../contracts/signal.js';
 import { nearMatches, type NearHasher } from '../fp/near-algo.js';
-import { deriveClusterSignature } from '../candidate-source.js';
+import { deriveClusterSignature, rewriteOrigin, type StagedProposal } from '../candidate-source.js';
+import { candidateId } from '../ids.js';
 import type { ClusterSignature, EvidenceAttribution, GateEvidenceItem } from '../gate-types.js';
 import type { HoldFacts } from './facts-ports.js';
 
@@ -32,6 +33,24 @@ export function parseHead(text: string, relPath: string): ParsedHead | null {
   const a = parseAtom(text, relPath).atom;
   if (a === undefined) return null;
   return { sha256: a.sha256, body: `${a.body.do}\n${a.body.why}\n${a.body.verify}` };
+}
+
+/**
+ * 暂存提案是否就是权威记录创建时的那一份:按 `buildDraft` 同口径(改写 origin → 解析 → 正文 sha256)重算候选 id 与 content_sha256,
+ * 与记录的**不可变**字段比较。不依赖信号与指纹(所以 `promoteFacts` 也能用);解析不了 = 不匹配。
+ */
+export function stagedMatchesRecord(
+  sp: StagedProposal,
+  rec: { id: string; content_sha256: string },
+): boolean {
+  const content = rewriteOrigin(sp.ruleText);
+  if (content === undefined) return false;
+  const stored = parseAtom(content, 'personal/candidate.md').atom;
+  if (stored === undefined) return false;
+  return (
+    stored.sha256 === rec.content_sha256 &&
+    candidateId(sp.runId, sp.proposal.id, stored.sha256) === rec.id
+  );
 }
 
 export interface SignalVerdict {

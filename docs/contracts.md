@@ -6995,14 +6995,21 @@ W8b(命令面的写命令:`pause` / `resume` / `clear --write` / `veto` / `rollb
 
 #### W0-28 近似指纹(near_fp)算法与参数草案(2026-11-15;R21-11.2;装配块 D 段 D1a)
 
-**状态:草案条目,阈值与 Unicode 口径未冻结**(冻结归 D3-nf,须在提相位之前;冻结前 `NEAR_ALGO.frozen = false`)。本条只写 near_fp 的算法与参数,**不删 R21-11.2 的 `[V1]` 义务**;D 段其余订正(purge 改写、`creationReady`、bootstrap 授权等)另列于本号的后续条目,合并前再核编号(W9 = W0-27、D = W0-28、C = W0-29)。
+**状态:草案条目,阈值与 Unicode 口径未冻结**(冻结归 D3-nf,须在提相位之前;冻结前 `NEAR_ALGO.frozen = false`)。D 段其余订正(purge 改写、`creationReady`、bootstrap 授权等)另列于本号的后续条目,合并前再核编号(W9 = W0-27、D = W0-28、C = W0-29)。
+
+**与 R21-11.2 的取代关系(逐句)**:原文 R21-11.2 `[V1]`「**文本指纹**:规范化正文的 HMAC-SHA256(本机密钥 `.state/rsi/fp.key`,0600,32 字节随机,首建经 `createExclusive`)+ 近似指纹(固定 shingle 参数,常量);与冷却同期失效;只在本机,永不进投稿、日志、`--json`(只出前 8 位用于人工对照)」。
+
+- **订正(仅此一处替换)**:「近似指纹(固定 shingle 参数,常量)」这半句由第 2、3 条**具体化并取代**为算法 `rsi-near-v1` 及其参数(阈值为待冻结的显式参数,不是「常量」)。
+- **补充(不替换原句)**:第 4 条补「首建」的持久化与无效处置(文件与父目录 fsync;`exists` 返回前同样补做;无效不覆盖);第 5 条补能力四态与增影响门禁;第 1、6 条补 `deferred` 与待冻结项。这些是新增义务,不改变原句其余部分。
+- **保留不变**:R21-11.2 的 `[V1]` 义务整体保留——精确指纹(`fp_hmac` = 规范化正文的 HMAC 前 16 位)、本机密钥 `fp.key` 0600 / 32 字节、「与冷却同期失效」、「只在本机,永不进投稿、日志、`--json`」;以及对**旧账**的义务:`near_fp = []` 的旧项仍按 `fp_hmac` / `content_sha256` / `candidate_id` **精确匹配**拒绝,「只保证 `ready` 之后产生的否决具备近似保护」**不免除**旧账的精确匹配义务(该精确匹配已由 D1a 的 `FactsProvider.blacklisted` 实现,其生产接线归 D3)。
+- **生效条件与实现归属**:第 1 条 `deferred` 分层 → D3(veto 写路径,能力非 `ready` 时生效);第 5 条增影响门禁 → D2(`growthGuard` / `GrowthDeny.near_fp_unavailable`),提相位清单 → D3-nf;第 5 条的判定结果取**操作级快照**(见该条)。本条在 D3-nf 冻结之前不生效于生产(`NEAR_ALGO.frozen = false`,相位 0)。
 
 1. **性质**:近似指纹是**启发式防线**,抓扩写、前后缀、模板填充,**抓不住改写**;不以它门控候选创建(撤销凭据照常立即写;含 `near_fp` 的 keyed effects 批次在能力非 `ready` 时先 `deferred`,不写 `[]` 占位)。
 2. **算法 `rsi-near-v1`**:①规范化 = NFKC → 小写;②token:码点区间 U+3040–30FF、U+3400–4DBF、U+4E00–9FFF、U+F900–FAFF、U+20000–2FFFF 内的字符**每字一个 token**,其余按 `\p{L}\p{N}` 连续段成词,其它字符(含下划线)为分隔符;③shingle = 相邻 3 个 token(以 U+001F 连接),token 不足 3 个 → 空集;④哈希 = `HMAC-SHA256(fp.key, "rsi-near-v1" ‖ 0x00 ‖ shingle)` 取前 4 字节(8 位小写十六进制);⑤被否决内容的 `near_fp` = 全部哈希去重升序后的**最小 64 个**(`Hex(8)[]`,≤ 64 项,与 `RsiBlacklistItem.near_fp` 一致);⑥输入上限 262144 个码元,超过即拒绝(不截断)。
 3. **匹配**:候选侧取**完整**哈希集合;`coverage = |near_fp ∩ 候选集合| / |near_fp|`(不对称),`coverage ≥ 阈值` 视为命中。阈值是显式参数(有限数,区间 (0, 1]),`near_fp = []`(`exact_only`:文本不足 3 个 token)**只做精确 `fp_hmac` 比较**,从不被当作「已有近似保护」。草案阈值 0.5 **仅是草案值**。
-4. **精确指纹**:`fp_hmac` = `HMAC-SHA256(fp.key, 规范化正文)` 前 16 位(规范化正文 = `do\nwhy\nverify`);`fp.key` = `.state/rsi/fp.key`,0600、32 字节随机、首建经 `createExclusive`(持 `rsi/lock`)。**已存在但无效(长度错 / 权限宽于 0600 / 链接 / 非普通文件)→ 拒绝并保留原状,绝不覆盖重建**(重建会使账里全部 `fp_hmac` 失效);密钥内容不进日志、错误、`--json`。
-5. **能力四态**(`unwired` / `key_unavailable` / `algo_unfrozen` / `ready`,按此顺序判定):`ready` 当且仅当产生方已装配 ∧ `fp.key` 可读 ∧ `NEAR_ALGO.frozen === true`(严格);任何增影响 op 与提相位清单读同一个判定结果,不各自补例外。缺它时 `shadow_to_canary` 保持不可启用(该门禁归能力表 / D2)。
-6. **待冻结项(D3-nf)**:阈值(依语料实测;语料评估脚本 `scripts/near-fp-corpus.mjs` 只输出 case id 与统计);`\p{L}\p{N}` 与 NFKC 依赖运行时 Unicode 版本,冻结时须钉住版本或改为显式表;32 位哈希的碰撞预算;旧账兼容规则(账里区分不了 `exact_only` 与「旧账未计算」,故只保证「近似保护只对产生于能力 `ready` 之后的否决生效」)。
+4. **精确指纹**:`fp_hmac` = `HMAC-SHA256(fp.key, 规范化正文)` 前 16 位(规范化正文 = `do\nwhy\nverify`);`fp.key` = `.state/rsi/fp.key`,0600、32 字节随机、首建经 `createExclusive`(持 `rsi/lock`)。**已存在但无效(长度错 / 权限宽于 0600 / 链接 / 非普通文件)→ 拒绝并保留原状,绝不覆盖重建**(重建会使账里全部 `fp_hmac` 失效);密钥内容不进日志、错误、`--json`。**持久化**:`ensure` 成功返回(`created` 与 `exists` 都是)之前,key 文件与其父目录都已 fsync;首建时目录同步失败而抛错、调用方重试走 `exists` 路径时同样补做,不得因「文件已存在」跳过(否则可能掉电后留下用该 key 写的指纹而丢了 key 的目录项)。
+5. **能力四态**(`unwired` / `key_unavailable` / `algo_unfrozen` / `ready`,按此顺序判定):`ready` 当且仅当产生方已装配 ∧ `fp.key` 可读 ∧ `NEAR_ALGO.frozen === true`(严格);任何增影响 op 与提相位清单读同一个判定结果,不各自补例外。**「同一个结果」是操作级快照**:每个命令 / 提相位检查 / 增影响操作只取**一次**能力快照(`NearFpCapabilitySource.snapshot()`),把这个冻结值传给该操作的所有消费者(`nearFpDenial` / `nearFpReady` 是对快照的纯函数),消费者不得各自重读 key 或重新判定;快照不跨操作缓存,也不替代持久写前的复核(D2 的 `requireGrowth`)。缺它时 `shadow_to_canary` 保持不可启用(该门禁归能力表 / D2)。
+6. **待冻结项(D3-nf)**:阈值(依语料实测;语料评估脚本 `scripts/near-fp-corpus.mjs` 只输出 case id 与统计;阈值统计取评估密钥集合内的最坏值,不是所有生产密钥的上界;任一侧超过输入上限的用例按「无法评估」列 id、不进统计,退出码 2);`\p{L}\p{N}` 与 NFKC 依赖运行时 Unicode 版本,冻结时须钉住版本或改为显式表;32 位哈希的碰撞预算;旧账兼容规则(账里区分不了 `exact_only` 与「旧账未计算」,故只保证「近似保护只对产生于能力 `ready` 之后的否决生效」)。
 7. **不承诺**:对改写、翻译、同义替换的拦截;对哈希碰撞的零误报(8 位哈希 × 64 项草图下,误命中概率只在阈值附近有意义,以语料实测为准)。
 
 #### W0 订正的合法 / 错误示例

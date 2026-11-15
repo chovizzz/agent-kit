@@ -6,7 +6,7 @@
  *
  * 语料:目录下每个 `*.jsonl`(不递归),每行 {"id","label":"match"|"nomatch","vetoed","candidate","kind"?}。
  * 只输出 case id 与统计,不输出文本。仓库里不含任何真实语料;语料由 owner 离线准备,不要提交进仓库。
- * 退出码:0 完成;2 用法错 / 语料不合规。
+ * 退出码:0 完成;2 用法错 / 语料不合规(含目录读失败、有超长而无法评估的用例,后者仍输出只含 id 的报告)。不输出堆栈 / 正文。
  * 实现:本脚本只做目录读取与进程拉起(以 `--experimental-strip-types` 加解析钩子子进程加载 TS 评估器),评估逻辑在 `test/tools/near-fp-corpus.ts`。
  */
 import { spawnSync } from 'node:child_process';
