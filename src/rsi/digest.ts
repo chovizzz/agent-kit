@@ -64,6 +64,14 @@ import {
   type Reservation,
   type SlotDeps,
 } from './digest-slots.js';
+import {
+  makeCooldownFilter,
+  readCooldown,
+  reportOf,
+  type ClusterCooldownFilter,
+  type CooldownPort,
+  type CooldownReport,
+} from './digest-cooldown.js';
 import { createExcludeMatcher } from './exclude-match.js';
 import { RsiSnapshotBusyError, failExit } from './exit.js';
 import { RsiLockError } from './lock-error.js';
@@ -272,6 +280,8 @@ export interface Selection {
   evidenceDropped: number;
   /** 因此没有证据了的簇数(并入 `truncated.clusters_dropped`) */
   clustersEmptied: number;
+  /** 因处在冷却中(R21-11.1)而不提的簇数(只数本来会被提的簇;并入 `truncated.clusters_dropped`) */
+  cooldownDropped: number;
 }
 
 export interface SelectedCluster {
@@ -305,15 +315,23 @@ export function selectClustersScreened(
   kept: readonly LoadedSignal[],
   currentKey: string,
   screen: EvidenceScreen,
+  cooled?: ClusterCooldownFilter,
 ): Selection {
   const clusters = buildClusters(classifySignals(kept));
   let evidenceDropped = 0;
   let clustersEmptied = 0;
+  let cooldownDropped = 0;
   const rows = clusters.map((c) => {
     const eligible = c.members.filter((s) => isEvidenceEligible(s) && !hasMark(s.excerpt_redacted));
     const mine = eligible
       .filter((s) => s.project_key === currentKey)
       .sort((a, b) => (a.sig_id < b.sig_id ? -1 : a.sig_id > b.sig_id ? 1 : 0));
+    // R21-11.1:冷却中的聚类不进 digest。用**原始**成员算聚类 id(先于路径中和 / 单条闸,与候选签名的来源一致),
+    // 并在 5 簇截断之前丢弃(冷却簇不占名额)。只数「本来会被提」的簇
+    if (cooled?.(c.members, eligible) === true) {
+      if (mine.length >= 1) cooldownDropped++;
+      return { id: c.id, kind: c.kind as string, current: [] as LoadedSignal[], other: 0 };
+    }
     const current = mine.flatMap((s) => {
       const r = screen(s);
       if (r === null) evidenceDropped++;
@@ -331,7 +349,7 @@ export function selectClustersScreened(
       current: r.current.slice(0, RSI_DIGEST_MAX_EVIDENCE_PER_CLUSTER),
       other: r.other,
     }));
-  return { selected, evidenceDropped, clustersEmptied };
+  return { selected, evidenceDropped, clustersEmptied, cooldownDropped };
 }
 
 export interface DigestBody {
@@ -406,6 +424,13 @@ export interface RunDigestDeps {
   randomHex?: (bytes: number) => string;
   /** 命名点:`digest:after_read`(读完快照后)、`digest:before_final`(最终复核之前)、`digest:before_publish`(发布之前) */
   hooks?: { point?(name: string): Promise<void> | void };
+  /**
+   * 冷却端口(R21-11.1;见 `digest-cooldown.ts`)。**未注入 = 本构建没有冷却账可读 = 不过滤**(与改前一致;生产适配器归装配 C 段);
+   * 注入后读不到冷却事实 → fail-closed:一个簇也不提。
+   */
+  cooldown?: CooldownPort;
+  /** 测试 / 装配缝:本次冷却过滤的结构化结果(不进 digest 输出) */
+  onCooldown?(report: CooldownReport): void;
 }
 
 interface Out {
@@ -523,6 +548,9 @@ async function digest(
     let selected: SelectedCluster[] = [];
     let evidenceDropped = 0;
     let clustersEmptied = 0;
+    let cooldownDropped = 0;
+    // 冷却事实只读一次(R21-11.1);读失败 → 过滤器恒真(全部不提),原因进 onCooldown
+    const coolRead = p0.reason === 'ok' ? await readCooldown(deps.cooldown, now) : null;
     // 路径中和的根与禁止值(整份输出的闸也用同一份 forbidden)
     const pathRoots = await resolveLabeledRoots(env, {
       stateDir: io.stateDir,
@@ -548,16 +576,22 @@ async function digest(
       }
       classBaseline = [...classOf.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1));
       const kept = loaded.filter((s) => classOf.get(s.project_key) === 'P');
-      const sel = selectClustersScreened(kept, p0.key, (s) => {
-        // R20-16.11-a:先中和路径,中和后仍过不了泄漏闸的这一条丢弃(pass2 命中不在此处理,留给整份复扫)
-        const excerpt = neutralizePaths(s.excerpt_redacted, pathRoots);
-        return evidencePassesLeakGate(excerpt, forbidden)
-          ? { ...s, excerpt_redacted: excerpt }
-          : null;
-      });
+      const sel = selectClustersScreened(
+        kept,
+        p0.key,
+        (s) => {
+          // R20-16.11-a:先中和路径,中和后仍过不了泄漏闸的这一条丢弃(pass2 命中不在此处理,留给整份复扫)
+          const excerpt = neutralizePaths(s.excerpt_redacted, pathRoots);
+          return evidencePassesLeakGate(excerpt, forbidden)
+            ? { ...s, excerpt_redacted: excerpt }
+            : null;
+        },
+        makeCooldownFilter(deps.cooldown, coolRead),
+      );
       selected = sel.selected;
       evidenceDropped = sel.evidenceDropped;
       clustersEmptied = sel.clustersEmptied;
+      cooldownDropped = sel.cooldownDropped;
     }
     const digestId = `d_${(deps.randomHex ?? ((n: number): string => randomBytes(n).toString('hex')))(8)}`;
     const expiresAt = new Date(now.getTime() + RSI_DIGEST_TTL_MS).toISOString();
@@ -568,8 +602,9 @@ async function digest(
       reason: p0.reason,
       selected: p0.reason === 'ok' ? selected : [],
       evidenceDropped,
-      clustersEmptied,
+      clustersEmptied: clustersEmptied + cooldownDropped,
     });
+    deps.onCooldown?.(reportOf(deps.cooldown, coolRead, cooldownDropped));
 
     // 输出复扫:整份文本 pass2 + 路径泄漏闸(R20-16.11 ①)
     let clean = false;

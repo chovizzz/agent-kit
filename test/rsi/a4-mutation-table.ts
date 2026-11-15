@@ -99,8 +99,9 @@ export const A4_MUTATIONS: readonly A4Mutation[] = [
       {
         file: 'src/rsi/digest.ts',
         // A4 订正 #8 后组装入口改为 selectClustersScreened;变异语义不变:聚类吃未剔除 X / U 的 `loaded`
-        anchor: 'const sel = selectClustersScreened(kept, p0.key, (s) => {',
-        replacement: 'const sel = selectClustersScreened(loaded, p0.key, (s) => {',
+        // D4 加了第 4 个实参(冷却过滤器),prettier 把调用拆成多行:锚点只跟着换行,变异语义不变
+        anchor: 'const sel = selectClustersScreened(\n        kept,',
+        replacement: 'const sel = selectClustersScreened(\n        loaded,',
       },
     ],
     tests: [DIGEST],

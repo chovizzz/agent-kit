@@ -7,6 +7,8 @@
  * 集合:
  *  - 暂存 run(R20-17.1):`counts.staged` 里证据非空、全部归属「采集中」(P)、未 tainted 的 run(归属由调用方给的 `classify` 每次现算,R20-4.6);
  *  - 待审 run(R20-17.2):暂存 ∧ `report.json` 过 `ReflectRunReportSchema` ∧ `report.run_id` 等于目录名 ∧ 不在 `dismissed.json`;
+ *    + D4(R21-3.8「已成候选的提案不再算待审」):还要有剩余提案——`proposals − (report 暂存的提案编号 ∩ 工作副本 source 的 proposal_id) > 0`(`pending-converted.ts`);
+ *    部分转化的 run 仍待审、`proposals` 变为剩余数;工作副本读不了 = 转化未知 = 不扣减;
  *  - 待通知 run(R20-17.3):待审 ∧ `report.mode = ingest` ∧ 不在 `notice.json` 的已通知集合。
  * 读取协议(R20-17.4):`reflect/` 直接子项至多 1000 个、名字升序;每个 `report.json` 经 `readFileSafe`(不跟随链接、普通文件、`nlink = 1`、≤ 1 MiB);
  * 单次扫描总读取 ≤ 16 MiB;超出一律返回 `known: false`,**不得当作零或空集合**(R20-17.4a)。错误只映射稳定原因,不记录原始异常文本。
@@ -25,6 +27,13 @@ import {
 } from '../contracts/rsi.js';
 import { readDir, readFileSafe, statDirSafe } from '../io/read-fs.js';
 import { RSI_FILE_OWNER } from './lock-read.js';
+import {
+  readConvertedProposals,
+  convertedCount,
+  type ConvertedLimits,
+  type ConvertedProposals,
+  type ConvertedState,
+} from './pending-converted.js';
 import { RsiSnapshotError } from './snapshot-read.js';
 
 export type Classify = (key: string) => 'P' | 'X' | 'U';
@@ -49,6 +58,11 @@ export type PendingScan =
       /** `reflect/` 下非点开头的真实目录数(含全部 mode;R20-17.17 的 run 上限口径) */
       runDirs: number;
       dirNames: ReadonlySet<string>;
+      /**
+       * 「已成候选的提案不计待审」(R21-3.8)的数据源状态:只有 `ok` 才做了扣减;`unsafe` / `truncated` / `budget` = 转化未知,**未扣减**(与改前一致,噪音方向);
+       * `missing` = 没有候选工作副本目录(扣减 0)。`pending` / `toNotify` 里的 `proposals` 是**扣减后的剩余数**。
+       */
+      converted: ConvertedState;
     }
   | { known: false; reason: ScanUnknownReason; runDirs: number };
 
@@ -139,6 +153,8 @@ export interface ScanDeps {
   over?: () => boolean;
   /** 测试缝:覆盖上限 */
   limits?: { maxEntries?: number; maxTotalBytes?: number; maxReportBytes?: number };
+  /** 测试缝:覆盖「已成候选」工作副本读取的上限(与 `limits` 互不影响) */
+  convertedLimits?: ConvertedLimits;
 }
 
 /** 暂存 run(R20-17.1):未 tainted、证据非空、全部归属 P */
@@ -171,6 +187,8 @@ export async function scanPending(input: ScanInput, deps: ScanDeps = {}): Promis
   const staged = stagedRuns(input.staged, input.classify);
   const pending: RunRef[] = [];
   const toNotify: RunRef[] = [];
+  /** 过了全部旧口径(R20-17.2)的待审候选;「已成候选」的扣减在循环之后做(失败 / 超预算时原样回退到旧口径) */
+  const open: { run: RunRef; mode: string; ids: readonly string[] }[] = [];
   let unreadable = 0;
   let total = 0;
   for (const run of staged) {
@@ -190,9 +208,11 @@ export async function scanPending(input: ScanInput, deps: ScanDeps = {}): Promis
       continue;
     }
     let mode: string | null = null;
+    let ids: readonly string[] = [];
     try {
       const p = ReflectRunReportSchema.safeParse(JSON.parse(r.bytes.toString('utf8')));
       if (p.success && p.data.run_id === run.runId) mode = p.data.mode;
+      if (mode !== null && p.success) ids = p.data.staged; // 本 run 真实暂存的提案编号(扣减只认它们)
     } catch {
       mode = null;
     }
@@ -201,10 +221,39 @@ export async function scanPending(input: ScanInput, deps: ScanDeps = {}): Promis
       continue;
     }
     if (input.dismissed.has(run.runId)) continue;
-    pending.push(run);
-    if (mode === 'ingest' && input.notified !== null && !input.notified.has(run.runId)) {
-      toNotify.push(run);
+    open.push({ run, mode, ids });
+  }
+  // 已成候选的提案(R21-3.8 工作副本的 `source`),读失败 / 超预算 = 转化未知 = 不扣减(结果与旧口径逐项相同,见 pending-converted.ts)。
+  // 放在旧口径扫描**之后**:时间预算耗尽时回退为旧结果,而不是让整个扫描变 unknown;字节预算与报告读取共用同一个总量上限(R20-17.4)
+  const left = Math.max(0, maxTotal - total);
+  const converted: ConvertedProposals =
+    open.length === 0
+      ? { state: 'missing', byRun: new Map(), unreadable: 0 }
+      : await readConvertedProposals(path.join(input.stateDir, 'rsi'), {
+          ...(deps.over !== undefined ? { over: deps.over } : {}),
+          limits: {
+            ...deps.convertedLimits,
+            maxTotalBytes: Math.min(deps.convertedLimits?.maxTotalBytes ?? left, left),
+          },
+        });
+  for (const o of open) {
+    const rest = Math.max(0, o.run.proposals - convertedCount(converted, o.run.runId, o.ids));
+    // 每个提案都已成候选:不再待审(R21-3.8)。`proposals = 0` 的 run 本来就没有可扣的,保持改前行为(仍待审)
+    if (rest === 0 && o.run.proposals > 0) continue;
+    const ref: RunRef = rest === o.run.proposals ? o.run : { runId: o.run.runId, proposals: rest };
+    pending.push(ref);
+    if (o.mode === 'ingest' && input.notified !== null && !input.notified.has(o.run.runId)) {
+      toNotify.push(ref);
     }
   }
-  return { known: true, staged, pending, toNotify, unreadable, runDirs, dirNames };
+  return {
+    known: true,
+    staged,
+    pending,
+    toNotify,
+    unreadable,
+    runDirs,
+    dirNames,
+    converted: converted.state,
+  };
 }
