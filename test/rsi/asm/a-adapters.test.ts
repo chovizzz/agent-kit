@@ -8,6 +8,7 @@ import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { RsiRevocationLine } from '../../../src/contracts/rsi-personal.js';
 import { RSI_AUTO_PAUSE_REASONS } from '../../../src/contracts/rsi.js';
+import { readText } from '../../../src/io/read-fs.js';
 import * as safe from '../../../src/io/safe-fs.js';
 import {
   makePeekRecord,
@@ -35,6 +36,7 @@ import { canaryDoc, makeCanaryWorld } from '../canary/w5-fixture.js';
 import { makeWorld as makeHomeWorld } from '../personal/repo-helpers.js';
 import { rec } from '../personal/transition-fixture.js';
 import { baseState } from '../ro-fixture.js';
+import { REPO_ROOT } from '../../helpers/tmp.js';
 import { newWorld, sha } from '../../sync/world.js';
 
 // ---------------------------------------------------------------------------
@@ -185,7 +187,7 @@ describe('撤销凭据读(只读适配器)与写侧 homeRevocationReader 同一�
 // B 标记读
 // ---------------------------------------------------------------------------
 describe('B 标记只读端口与写侧端口 read 同一语义', () => {
-  it('缺失 = null;合法 / 不认识的内容 = 与写侧端口相同的解析;类型上只有 read;读错误(非 ENOENT)抛错,绝不是 null', async () => {
+  it('缺失 = null;合法 / 不认识的内容 = 与写侧端口相同的解析;类型上只有 read;读错误(非 ENOENT)抛错,绝不是 null;悬空 / 有效符号链接也抛错', async () => {
     const w = await makeCanaryWorld('asm-a-marker-');
     const reader = makeBreakerMarkerReader(w.rsi);
     const writer = makeBreakerMarkerPort(w.io, w.rsi, () => new Date('2026-11-15T00:00:00Z'));
@@ -213,6 +215,25 @@ describe('B 标记只读端口与写侧端口 read 同一语义', () => {
       expect(await reader.read(), body).toEqual(await writer.read());
       expect(await reader.read(), body).not.toBeNull();
     }
+
+    // 读侧比写侧更严:符号链接(悬空链接跟随读会报 ENOENT,不能据此说「没有标记」;有效链接也不跟随)→ 抛错。写侧端口对悬空链接返回 null,这里有意不对拍
+    const dangling = await makeCanaryWorld('asm-a-marker-dl-');
+    await safe.symlink(
+      dangling.io,
+      path.join(dangling.dir, 'nowhere'),
+      path.join(dangling.rsi, 'AUTO_PAUSE_BREAKER'),
+    );
+    await expect(makeBreakerMarkerReader(dangling.rsi).read()).rejects.toThrow();
+    const linked = await makeCanaryWorld('asm-a-marker-ln-');
+    await safe.writeFile(linked.io, path.join(linked.dir, 'real-marker'), '{"by":"user"}', {
+      mode: 0o600,
+    });
+    await safe.symlink(
+      linked.io,
+      path.join(linked.dir, 'real-marker'),
+      path.join(linked.rsi, 'AUTO_PAUSE_BREAKER'),
+    );
+    await expect(makeBreakerMarkerReader(linked.rsi).read()).rejects.toThrow();
 
     // 读错误:路径是目录 → 两边都抛错(不是 null / 不是「不存在」)
     await safe.remove(w.io, file);
@@ -247,7 +268,7 @@ describe('StagedSource:暂存提案来源', () => {
         io: {} as never,
         staged: async () => entries as never,
         classify: async (k: string) => cls[k] ?? 'U',
-        loadEntries: async (_io: never, runId: string) => {
+        loadEntries: async (_io: unknown, runId: string) => {
           loadedRuns.push(runId);
           return loaded(runId) as never;
         },
@@ -274,7 +295,7 @@ describe('StagedSource:暂存提案来源', () => {
     const { d } = deps([entry('run-a'), entry('run-b')], { p_a: 'P' });
     const failing = {
       ...d,
-      loadEntries: async (_io: never, runId: string) => {
+      loadEntries: async (_io: unknown, runId: string) => {
         if (runId === 'run-b') throw new Error('corrupt run');
         return loaded(runId) as never;
       },
@@ -347,6 +368,14 @@ describe('SignalLookup:按 sig_id 取信号', () => {
     const none = await makeCanaryWorld('asm-a-sig-none-');
     expect(await makeSignalLookup({ io: none.io }).getMany([sigId(1)])).toEqual([]);
   });
+  it('已枚举的月文件打开前消失(scan 返回 null)→ 整体抛错,不当成「这些 id 不存在」(正向对照:scan 返回文件号时成功)', async () => {
+    const w = await makeCanaryWorld('asm-a-sig-vanish-');
+    const list = async (): Promise<string[]> => ['/x/202611.jsonl'];
+    const vanished = makeSignalLookup({ io: w.io, list, scan: async () => null });
+    await expect(vanished.getMany([sigId(1)])).rejects.toThrow();
+    const present = makeSignalLookup({ io: w.io, list, scan: async () => ({}) as never });
+    expect(await present.getMany([sigId(1)])).toEqual([]);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -405,6 +434,27 @@ describe('PresetSource:预置技能的比对形', () => {
       makePresetSource({ payload: () => Promise.reject(new Error('no payload')) }).presets(),
     ).rejects.toThrow('no payload');
     expect(presetOf(SKILL_MD('s', 'd')).id).toBe('s');
+  });
+  it('frontmatter 按 YAML 取真实值:折叠多行标量、引号;空值 / 非字符串 / 非映射 / 坏 YAML → 抛错;包内真实技能文件可解析', async () => {
+    const folded = presetOf(
+      '---\nname: review\ndescription: >\n  Review code changes\n  and find regressions.\n---\nbody\n',
+    );
+    expect(folded.do).toBe('Review code changes and find regressions.');
+    expect(presetOf('---\nname: "q: r"\ndescription: \'d: e\'\n---\nbody\n')).toMatchObject({
+      id: 'q: r',
+      do: 'd: e',
+    });
+    for (const bad of [
+      '---\nname: s\ndescription: ""\n---\nbody\n',
+      '---\nname: 5\ndescription: d\n---\nbody\n',
+      '---\n- a\n- b\n---\nbody\n',
+      '---\nname: s\ndescription: [x\n---\nbody\n',
+    ]) {
+      expect(() => presetOf(bad), bad).toThrow();
+    }
+    const real = presetOf(await readText(path.join(REPO_ROOT, 'skills/commit-checklist/SKILL.md')));
+    expect(real.id).toBe('commit-checklist');
+    expect(real.do.startsWith('提交或汇报完成前')).toBe(true);
   });
 });
 

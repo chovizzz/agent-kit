@@ -6,6 +6,7 @@
  *  - {@link makePresetSource}:`PresetSource` —— 预置技能(包内 payload 里 `kind=skill` 的条目,`source=package`)的比对形;读失败 / 形状不合规**抛错**,绝不返回空。
  * 全部只读(read-fs);工厂创建与 import 不读盘,只有调用端口方法才读。
  */
+import { parse as parseYaml } from 'yaml';
 import type { RsiCounts } from '../../../contracts/rsi.js';
 import { SignalSchema, type Signal } from '../../../contracts/signal.js';
 import type { IoContext } from '../../../io/paths.js';
@@ -48,23 +49,41 @@ export function makeStagedSource(d: StagedSourceDeps): StagedSource {
   };
 }
 
-export function makeSignalLookup(d: { io: IoContext }): SignalLookup {
+export interface SignalLookupDeps {
+  io: IoContext;
+  /** 测试缝:缺省 `listMonthFiles` / `scanMonthFile`(信号库月文件的受限只读扫描) */
+  list?: typeof listMonthFiles;
+  scan?: typeof scanMonthFile;
+}
+
+export function makeSignalLookup(d: SignalLookupDeps): SignalLookup {
+  const list = d.list ?? listMonthFiles;
+  const scan = d.scan ?? scanMonthFile;
   return {
     async getMany(sigs) {
       if (sigs.length === 0) return [];
       const wanted = new Set(sigs);
       const found = new Map<string, Signal>();
-      for (const file of await listMonthFiles(d.io, 'signals')) {
-        await scanMonthFile(file, (_raw, value) => {
+      for (const file of await list(d.io, 'signals')) {
+        const id = await scan(file, (_raw, value) => {
           const p = SignalSchema.safeParse(value);
           if (!p.success) return false;
           if (wanted.has(p.data.sig_id)) found.set(p.data.sig_id, p.data);
           return true;
         });
+        // 已枚举的月文件在打开前消失(`scan` 返回 null):查询只完成了一部分,不能当成「这些 sig_id 不存在」
+        if (id === null) throw new SignalLookupError('month_file_vanished');
       }
       return [...found.values()].sort((a, b) => (a.sig_id < b.sig_id ? -1 : 1));
     },
   };
+}
+
+class SignalLookupError extends Error {
+  readonly code = 'RSI_SIGNAL_LOOKUP';
+  constructor(what: string) {
+    super(`signal lookup: ${what}`);
+  }
 }
 
 /** 包内 payload 的最小形状(`LoadedPayload` 的子集;装配处用 `loadPayload` 注入) */
@@ -81,22 +100,30 @@ class PresetError extends Error {
 }
 
 const SKILL_RE = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/;
+const nonEmpty = (v: unknown): v is string => typeof v === 'string' && v.trim() !== '';
 
-/** 一份 SKILL.md → 比对形:`id` = frontmatter `name`,`do` = `description`,`why` = 正文;缺任一项 → 抛错 */
+/**
+ * 一份 SKILL.md → 比对形:`id` = frontmatter `name`,`do` = `description`,`why` = 正文。
+ * frontmatter 用 YAML 解析(折叠 / 保留多行标量、引号都取到真实值);`name` / `description` 必须是非空字符串、正文非空,否则抛错(不返回部分事实)。
+ */
 export function presetOf(text: string): DedupeTarget {
   const m = SKILL_RE.exec(text.replace(/\r\n/g, '\n'));
   if (m === null) throw new PresetError('no_frontmatter');
-  const field = (k: string): string | undefined => {
-    const hit = new RegExp(`^${k}:[ \\t]*(.+)$`, 'm').exec(m[1] as string);
-    return hit?.[1]?.trim();
-  };
-  const name = field('name');
-  const description = field('description');
+  let fm: unknown;
+  try {
+    fm = parseYaml(m[1] as string);
+  } catch {
+    throw new PresetError('frontmatter_yaml');
+  }
+  if (typeof fm !== 'object' || fm === null || Array.isArray(fm)) {
+    throw new PresetError('frontmatter_shape');
+  }
+  const { name, description } = fm as Record<string, unknown>;
   const body = (m[2] as string).trim();
-  if (name === undefined || description === undefined || body === '') {
+  if (!nonEmpty(name) || !nonEmpty(description) || body === '') {
     throw new PresetError('skill_shape');
   }
-  return { id: name, do: description, why: body };
+  return { id: name.trim(), do: description.trim(), why: body };
 }
 
 export function makePresetSource(d: { payload(): Promise<PresetPayload> }): PresetSource {

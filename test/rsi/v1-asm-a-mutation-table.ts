@@ -5,7 +5,7 @@
  * 执行方式同 W5 / W6 / W7 / W8:验证机私有检出里 cp 备份 → 按锚点替换(每个锚点在对应文件里**恰好出现一次**)→ 跑 `tests` → 失败集合非空、全部命中 `expectRed`、
  * `mustKill` 每项至少命中一个、没有 skipped → cp 还原并逐文件 sha256 核对。**不用 git checkout / stash 还原**。
  * 本文件只写表与每条变异期望红的测试名(`expectRed` 是杀手测试名里的字面子串);变异由主代理 / 验证机执行,结果记进 `V1_ASM_A_RESULTS`(与表**同序**;未执行时留空)。变异 id 用短的下划线词。
- * 不在本表的点(如实记录):读 / 写分文件的「原样搬迁」由 `a-zero-write.test.ts` 的同一对象断言与既有 W5 / W7 / judge 测试覆盖,不另设变异;
+ * 不在本表的点(如实记录):读 / 写分文件的搬迁(ledger / pause-marker / judge store / signals store-error / candidate 端口类型)只有「再导出兼容性」断言(`a-zero-write.test.ts`),搬迁后行为不变由基线 diff 核对与既有 W5 / W7 / judge 行为用例承担,不另设变异;
  * `entry_not_probed`(登记路径落在写入表外)没有可构造的夹具,未设变异;`resolveGitPath` 的文件名预检(`path.basename(candidate)`)被 realpath 文件名检查等价覆盖,未设变异。
  */
 export interface Edit {
@@ -340,12 +340,12 @@ export const V1_ASM_A_MUTATIONS: readonly V1AsmAMutation[] = [
   },
   {
     id: 'preset_shape_loose',
-    clause: '预置技能:缺 description 不再抛错',
+    clause: '预置技能:缺 description / 空值 / 非字符串不再抛错',
     edits: [
       swap(
         'src/rsi/personal/read/step-sources.ts',
-        "  if (name === undefined || description === undefined || body === '') {",
-        '  if (name === undefined && description === undefined) {',
+        "  if (!nonEmpty(name) || !nonEmpty(description) || body === '') {",
+        "  if (!nonEmpty(name) || body === '') {",
       ),
     ],
     tests: ['rsi/asm/a-adapters.test.ts'],
@@ -354,6 +354,52 @@ export const V1_ASM_A_MUTATIONS: readonly V1AsmAMutation[] = [
     ],
     mustKill: [
       '读失败 / 形状不合规 → 抛错,绝不返回空:内容缺失、没有 frontmatter、缺 name / description / 正文',
+    ],
+  },
+  {
+    id: 'preset_yaml_naive',
+    clause: '预置技能:frontmatter 退回按行取值(折叠多行标量读成字面 `>`)',
+    edits: [
+      swap(
+        'src/rsi/personal/read/step-sources.ts',
+        '    fm = parseYaml(m[1] as string);',
+        "    fm = Object.fromEntries((m[1] as string).split('\\n').map((l) => [l.split(':')[0], (l.split(':')[1] ?? '').trim()]));",
+      ),
+    ],
+    tests: ['rsi/asm/a-adapters.test.ts'],
+    expectRed: ['frontmatter 按 YAML 取真实值'],
+    mustKill: ['frontmatter 按 YAML 取真实值'],
+  },
+  {
+    id: 'signal_vanished_ignored',
+    clause: '信号查询:已枚举的月文件打开前消失被忽略(查询只完成一部分却成功)',
+    edits: [
+      swap(
+        'src/rsi/personal/read/step-sources.ts',
+        "        if (id === null) throw new SignalLookupError('month_file_vanished');\n",
+        '',
+      ),
+    ],
+    tests: ['rsi/asm/a-adapters.test.ts'],
+    expectRed: ['已枚举的月文件打开前消失(scan 返回 null)→ 整体抛错'],
+    mustKill: ['已枚举的月文件打开前消失(scan 返回 null)→ 整体抛错'],
+  },
+  {
+    id: 'marker_nonregular_accepted',
+    clause: 'B 标记读:符号链接 / 非普通文件不再被拒(悬空链接被读成「不存在」)',
+    edits: [
+      swap(
+        'src/rsi/canary/pause-marker-read.ts',
+        '        if (!st.isFile() || st.isSymbolicLink()) throw new MarkerUnsafeError();\n',
+        '',
+      ),
+    ],
+    tests: ['rsi/asm/a-adapters.test.ts'],
+    expectRed: [
+      '缺失 = null;合法 / 不认识的内容 = 与写侧端口相同的解析;类型上只有 read;读错误(非 ENOENT)抛错',
+    ],
+    mustKill: [
+      '缺失 = null;合法 / 不认识的内容 = 与写侧端口相同的解析;类型上只有 read;读错误(非 ENOENT)抛错',
     ],
   },
   {
@@ -608,8 +654,8 @@ export const V1_ASM_A_MUTATIONS: readonly V1AsmAMutation[] = [
     edits: [
       swap(
         'src/rsi/canary/pause-marker-read.ts',
-        "import { readText } from '../../io/read-fs.js';",
-        "import { readText } from '../../io/read-fs.js';\nimport { createExclusiveDurable } from '../../io/safe-fs.js';\nexport const asmProbe = createExclusiveDurable;",
+        "import { lstat, readText } from '../../io/read-fs.js';",
+        "import { lstat, readText } from '../../io/read-fs.js';\nimport { createExclusiveDurable } from '../../io/safe-fs.js';\nexport const asmProbe = createExclusiveDurable;",
       ),
     ],
     tests: ['rsi/asm/a-zero-write.test.ts'],

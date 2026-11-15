@@ -2,7 +2,7 @@
  * 装配块 A 段:读侧组合根与只读适配器的静态零写入证据(import 闭包;现有 zero-write / import-closure 断言一个字未动,这里只**新增**入口)。
  *  - 每个新入口(运行时依赖与含类型依赖两种口径):闭包不含写出口 / 锁 / 子进程出口 / 含写出口的原模块,没有写类标识符、动态 import / require,外部依赖只在白名单内,`node:fs` 只经 read-fs;
  *  - 对照:被拆的原模块(ledger / pause-marker / judge store / state-store)闭包**确实**含 safe-fs(审计工具不是空转);含写出口的虚拟入口被报出;
- *  - 拆分是原样搬迁:原模块再导出的函数与读侧模块里的是同一个对象;
+ *  - 拆分后的再导出兼容性:原模块再导出的函数与读侧模块里的是同一个对象(**只证明既有 import 路径仍指向同一实现,不证明搬迁行为不变**——行为不变由基线 diff 核对与既有 W5 / W7 / judge 行为用例承担);
  *  - eslint:读根文件 import 写模块即红(真实 eslint 夹具),同一代码放在未登记文件里不红(负对照)。
  * 读 / 写组合入口互不穿越:读根的闭包里没有 `commands.ts` / `deps-write.ts` / `write/**`。
  */
@@ -153,7 +153,7 @@ describe('读侧组合根与只读适配器:import 闭包(运行时依赖与含�
   });
 });
 
-describe('拆分是原样搬迁:原模块再导出的就是读侧模块里的同一个对象', () => {
+describe('拆分后的再导出兼容性:原模块再导出的就是读侧模块里的同一个对象', () => {
   it('readLedger / parseLedger / parsePauseMarker / loadRunEntries / loadRun / SignalStoreError / 候选读端口类型文件的再导出', async () => {
     const ledger = await import('../../../src/rsi/canary/ledger.js');
     const ledgerRead = await import('../../../src/rsi/canary/ledger-read.js');

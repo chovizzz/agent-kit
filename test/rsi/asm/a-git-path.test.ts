@@ -69,17 +69,11 @@ describe('resolveGitPath', () => {
     expect(await acceptableGit('/usr/bin/gitx', probeOf({ '/usr/bin/gitx': {} }))).toBe(false);
   });
 
-  it('全部解析不到 → null(保持未装配);不读 PATH:PATH 里放一个合规的 git 也不影响结果', async () => {
+  it('全部解析不到 → null(保持未装配);只探测固定候选(不查 PATH:合规的 git 放在别处也不影响结果)', async () => {
     const probe = probeOf({ '/somewhere/else/git': {} });
-    const prev = process.env['PATH'];
-    process.env['PATH'] = '/somewhere/else';
-    try {
-      expect(await resolveGitPath({ probe })).toBeNull();
-      expect(probe.stats.every((p) => GIT_PATH_CANDIDATES.includes(p))).toBe(true);
-    } finally {
-      if (prev === undefined) delete process.env['PATH'];
-      else process.env['PATH'] = prev;
-    }
+    expect(await resolveGitPath({ probe })).toBeNull();
+    expect(probe.stats.length).toBeGreaterThan(0);
+    expect(probe.stats.every((p) => GIT_PATH_CANDIDATES.includes(p))).toBe(true);
   });
 
   it('import 本身不读盘:探针只在调用 resolveGitPath 时被使用', async () => {
