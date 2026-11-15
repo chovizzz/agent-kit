@@ -141,7 +141,7 @@ describe('D4 冷却:ok 集合的资源边界与受控遍历(M1;超限 → unavai
 
   it('条数:恰好 10000 → ok;10001 → unavailable(too_large)', async () => {
     const at = await read(ids(COOLDOWN_MAX_IDS));
-    expect(at.kind === 'ok' && at.active.size).toBe(COOLDOWN_MAX_IDS);
+    expect(at?.kind === 'ok' && at.active.size).toBe(COOLDOWN_MAX_IDS);
     expect(await read(ids(COOLDOWN_MAX_IDS + 1))).toEqual({
       kind: 'unavailable',
       why: 'too_large',
@@ -149,7 +149,7 @@ describe('D4 冷却:ok 集合的资源边界与受控遍历(M1;超限 → unavai
   });
 
   it('单个 id:恰好 256 字节 → ok;257 字节 → too_large;按 UTF-8 字节而不是字符数(129 个 é = 258 字节)', async () => {
-    expect((await read(new Set(['a'.repeat(256)]))).kind).toBe('ok');
+    expect((await read(new Set(['a'.repeat(256)])))?.kind).toBe('ok');
     expect(await read(new Set(['a'.repeat(257)]))).toEqual({
       kind: 'unavailable',
       why: 'too_large',
@@ -157,14 +157,14 @@ describe('D4 冷却:ok 集合的资源边界与受控遍历(M1;超限 → unavai
     const wide = new Set(['é'.repeat(129)]);
     expect([...wide][0]?.length).toBe(129);
     expect(await read(wide)).toEqual({ kind: 'unavailable', why: 'too_large' });
-    expect((await read(new Set(['é'.repeat(128)]))).kind).toBe('ok'); // 256 字节,对照
+    expect((await read(new Set(['é'.repeat(128)])))?.kind).toBe('ok'); // 256 字节,对照
   });
 
   it('累计字节:4096 个 256 字节的 id(恰好 1 MiB)→ ok;4097 个 → too_large(条数与单个都没超)', async () => {
     const mk = (n: number): Set<string> =>
       new Set(Array.from({ length: n }, (_, i) => String(i).padStart(COOLDOWN_MAX_ID_BYTES, 'x')));
     const at = await read(mk(4096));
-    expect(at.kind === 'ok' && at.active.size).toBe(4096);
+    expect(at?.kind === 'ok' && at.active.size).toBe(4096);
     expect(await read(mk(4097))).toEqual({ kind: 'unavailable', why: 'too_large' });
   });
 
