@@ -1029,8 +1029,52 @@ export const V1_ASM_A_RESULTS: readonly V1AsmAResult[] = [
     restored: true,
   },
   {
+    // killedBy 只列日志里完整的 2 条:验证机步骤日志单行约 780 字节截断,实际红 4 条(同一断言在其余读入口上的同名用例)
+    id: 'closure_staged_store',
+    failed: 4,
+    skipped: 0,
+    killedBy: [
+      '读侧组合根与只读适配器:import 闭包(运行时依赖与含类型依赖两种口径) src/rsi/assemble-read.ts(运行时依赖):不含写出口 / 锁 / 子进程出口 / 含写出口的原模块,无写类标识符,无动态 import,外部依赖在白名单内',
+      '读侧组合根与只读适配器:import 闭包(运行时依赖与含类型依赖两种口径) src/rsi/assemble-read.ts(含类型依赖):不含写出口 / 锁 / 子进程出口 / 含写出口的原模块,无写类标识符,无动态 import,外部依赖在白名单内',
+    ],
+    restored: true,
+  },
+  {
+    // killedBy 只列日志里完整的 2 条:验证机步骤日志单行约 780 字节截断,实际红 4 条(同一断言在其余读入口上的同名用例)
+    id: 'closure_analysis_ledger',
+    failed: 4,
+    skipped: 0,
+    killedBy: [
+      '读侧组合根与只读适配器:import 闭包(运行时依赖与含类型依赖两种口径) src/rsi/assemble-read.ts(运行时依赖):不含写出口 / 锁 / 子进程出口 / 含写出口的原模块,无写类标识符,无动态 import,外部依赖在白名单内',
+      '读侧组合根与只读适配器:import 闭包(运行时依赖与含类型依赖两种口径) src/rsi/assemble-read.ts(含类型依赖):不含写出口 / 锁 / 子进程出口 / 含写出口的原模块,无写类标识符,无动态 import,外部依赖在白名单内',
+    ],
+    restored: true,
+  },
+  {
     id: 'closure_attribution_lock',
     failed: 2,
+    skipped: 0,
+    killedBy: [
+      '读侧组合根与只读适配器:import 闭包(运行时依赖与含类型依赖两种口径) src/rsi/assemble-read.ts(运行时依赖):不含写出口 / 锁 / 子进程出口 / 含写出口的原模块,无写类标识符,无动态 import,外部依赖在白名单内',
+      '读侧组合根与只读适配器:import 闭包(运行时依赖与含类型依赖两种口径) src/rsi/assemble-read.ts(含类型依赖):不含写出口 / 锁 / 子进程出口 / 含写出口的原模块,无写类标识符,无动态 import,外部依赖在白名单内',
+    ],
+    restored: true,
+  },
+  {
+    // killedBy 只列日志里完整的 2 条:验证机步骤日志单行约 780 字节截断,实际红 6 条(同一断言在其余读入口上的同名用例)
+    id: 'closure_scan_state_store',
+    failed: 6,
+    skipped: 0,
+    killedBy: [
+      '读侧组合根与只读适配器:import 闭包(运行时依赖与含类型依赖两种口径) src/rsi/assemble-read.ts(运行时依赖):不含写出口 / 锁 / 子进程出口 / 含写出口的原模块,无写类标识符,无动态 import,外部依赖在白名单内',
+      '读侧组合根与只读适配器:import 闭包(运行时依赖与含类型依赖两种口径) src/rsi/assemble-read.ts(含类型依赖):不含写出口 / 锁 / 子进程出口 / 含写出口的原模块,无写类标识符,无动态 import,外部依赖在白名单内',
+    ],
+    restored: true,
+  },
+  {
+    // killedBy 只列日志里完整的 2 条:验证机步骤日志单行约 780 字节截断,实际红 4 条(同一断言在其余读入口上的同名用例)
+    id: 'closure_marker_safe_fs',
+    failed: 4,
     skipped: 0,
     killedBy: [
       '读侧组合根与只读适配器:import 闭包(运行时依赖与含类型依赖两种口径) src/rsi/assemble-read.ts(运行时依赖):不含写出口 / 锁 / 子进程出口 / 含写出口的原模块,无写类标识符,无动态 import,外部依赖在白名单内',
