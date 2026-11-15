@@ -78,6 +78,9 @@ describe('W9a 判官裁决判定:来源与读失败的取值表', () => {
       { ...LINK, extra: 1 },
       { run_id: '../x', proposal_id: PID },
       { run_id: RUN, proposal_id: '' },
+      { run_id: RUN, proposal_id: 'p1' },
+      { run_id: RUN, proposal_id: '../x' },
+      { run_id: RUN, proposal_id: '2026-11-09-0011' },
       { run_id: RUN },
       'run-x',
       [RUN, PID],
@@ -126,6 +129,11 @@ describe('W9a 判官裁决判定:来源与读失败的取值表', () => {
       { kind: 'ok', proposal: {}, rule: 'text' },
       { kind: 'ok', proposal: {} },
       { kind: 'ok', proposal: {}, rule: { target: 1, text: 'x' } },
+      // 信封不完整:缺 proposal / 缺 why / why 类型不对 = 端口违约,不是磁盘上的内容错误(不得落进不阻增影响的 invalid)
+      { kind: 'ok', rule: null },
+      { kind: 'invalid', why: 42 },
+      { kind: 'invalid' },
+      { kind: 'unreadable' },
     ];
     for (const g of garbage) {
       expect(pick(await noneOf(g)), JSON.stringify(g)).toEqual({
@@ -159,7 +167,7 @@ describe('W9a 判官裁决判定:来源与读失败的取值表', () => {
     for (const [read, want] of table) expect(pick(await noneOf(read)), read.kind).toEqual(want);
   });
 
-  it('读超时 → unreadable(timeout),signal 被中止;迟到的结果被丢弃(不影响返回值)', async () => {
+  it('读超时 → unreadable(timeout),signal 被中止;迟到的结果不产生未处理的拒绝', async () => {
     let late!: (r: JudgeSourceRead) => void;
     let sig!: AbortSignal;
     const src = fakeSource(
@@ -178,8 +186,15 @@ describe('W9a 判官裁决判定:来源与读失败的取值表', () => {
     });
     expect(sig.aborted).toBe(true);
     // 迟到的「可信」结果不会改变已经返回的结论,也不会产生未处理的拒绝
+    const rejections: unknown[] = [];
+    const onRej = (e: unknown): void => {
+      rejections.push(e);
+    };
+    process.on('unhandledRejection', onRej);
     late(okRead(sessionJudged({ verdict: 'reject' })));
     await new Promise((r) => setTimeout(r, 10));
+    process.off('unhandledRejection', onRej);
+    expect(rejections).toEqual([]);
     // 对照:预算内返回的同一结果是信号
     const quick = await evaluateJudgeSignal(
       LINK,
@@ -188,6 +203,22 @@ describe('W9a 判官裁决判定:来源与读失败的取值表', () => {
       { budgetMs: 2000 },
     );
     expect(quick.kind).toBe('signal');
+  });
+});
+
+describe('W9a 判官裁决判定:墙钟预算', () => {
+  it('同步工作占住事件循环、定时器来不及触发时,超预算的结论也不予采信(unreadable / timeout);预算内同一结果是信号', async () => {
+    const slow = fakeSource(() => {
+      const t0 = performance.now();
+      while (performance.now() - t0 < 60) {
+        // 故意占住事件循环,模拟同步解析 / 校验超时
+      }
+      return okRead(sessionJudged({ verdict: 'reject' }));
+    });
+    const s = await evaluateJudgeSignal(LINK, slow, env, { budgetMs: 20 });
+    expect(s).toMatchObject({ kind: 'none', reason: 'unreadable', why: 'timeout' });
+    const ok = await evaluateJudgeSignal(LINK, slow, env, { budgetMs: 2000 });
+    expect(ok.kind).toBe('signal');
   });
 });
 

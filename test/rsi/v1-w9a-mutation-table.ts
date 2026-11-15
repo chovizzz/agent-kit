@@ -627,7 +627,7 @@ export const V1_W9A_MUTATIONS: readonly V1W9AMutation[] = [
     edits: [
       swap(
         'src/rsi/personal/read/judge-source.ts',
-        "      if (!PROPOSAL_ID_RE.test(proposalId)) return { kind: 'invalid', why: 'proposal_id_shape' };\n",
+        "      if (!PROPOSAL_ID_RE.test(proposalId)) return bad('proposal_id_shape');\n",
         '',
       ),
     ],
@@ -641,8 +641,8 @@ export const V1_W9A_MUTATIONS: readonly V1W9AMutation[] = [
     edits: [
       swap(
         'src/rsi/personal/read/judge-source.ts',
-        "if (!y.ok) return { kind: 'invalid', why: 'yaml' };",
-        "if (!y.ok) return bad('yaml');",
+        "fail = { kind: 'invalid', why: 'yaml' };",
+        "fail = bad('yaml');",
       ),
     ],
     tests: ['rsi/personal/judge-source.test.ts'],
@@ -669,7 +669,7 @@ export const V1_W9A_MUTATIONS: readonly V1W9AMutation[] = [
     edits: [
       swap(
         'src/rsi/personal/read/judge-source.ts',
-        '      if (!fileSame(propIdent, await fileIdent(propFile))) return racy();\n',
+        '      if (!fileSame(propIdent, propNow)) return racy();\n',
         '',
       ),
     ],
@@ -683,8 +683,8 @@ export const V1_W9A_MUTATIONS: readonly V1W9AMutation[] = [
     edits: [
       swap(
         'src/rsi/personal/read/judge-source.ts',
-        '        if (!fileSame(ruleIdent, await fileIdent(path.join(rulesDir, `${target}.md`)))) {',
-        '        if (false) {',
+        '        if (!fileSame(ruleIdent, ruleNow)) return racy();\n',
+        '',
       ),
     ],
     tests: ['rsi/personal/judge-source.test.ts'],
@@ -763,8 +763,8 @@ export const V1_W9A_MUTATIONS: readonly V1W9AMutation[] = [
       ),
       swap(
         'src/rsi/personal/read/judge-source.ts',
-        "      if (aborted()) return bad('timeout');\n\n      return { kind: 'ok', proposal: value, rule };",
-        "      return { kind: 'ok', proposal: value, rule };",
+        "      if (aborted()) return bad('timeout');\n\n      return fail ?? { kind: 'ok', proposal: value, rule };",
+        "      return fail ?? { kind: 'ok', proposal: value, rule };",
       ),
     ],
     tests: ['rsi/personal/judge-source.test.ts'],
@@ -1045,6 +1045,100 @@ export const V1_W9A_MUTATIONS: readonly V1W9AMutation[] = [
       'W0-27 订正正文',
     ],
     mustKill: ['JUDGE_IGNORE_REASONS 恰为契约的 8 个原因'],
+  },
+  {
+    id: 'link_proposal_id_shape_unchecked',
+    clause: 'W0-27 来源链接损坏(proposal_id 不是 YYYY-MM-DD-NNN)= 读不出,阻增影响',
+    edits: [
+      swap(
+        'src/rsi/personal/judge-signal.ts',
+        "typeof pid !== 'string' || !PROPOSAL_ID_RE.test(pid)",
+        "typeof pid !== 'string' || pid.length < 1",
+      ),
+    ],
+    tests: ['rsi/personal/judge-signal.test.ts'],
+    expectRed: ['source_proposal 损坏(多键 / 非法 run_id', 'W9a 判官裁决判定'],
+    mustKill: ['source_proposal 损坏(多键 / 非法 run_id'],
+  },
+  {
+    id: 'port_envelope_proposal_unchecked',
+    clause: 'W0-27 端口返回非法值 = unreadable(缺 proposal 的 ok 信封)',
+    edits: [
+      swap('src/rsi/personal/judge-signal.ts', "      if (!('proposal' in r)) return null;\n", ''),
+    ],
+    tests: ['rsi/personal/judge-signal.test.ts'],
+    expectRed: ['端口抛错 / 返回非法形状 → unreadable', 'W9a 判官裁决判定'],
+    mustKill: ['端口抛错 / 返回非法形状 → unreadable'],
+  },
+  {
+    id: 'port_envelope_why_unchecked',
+    clause: 'W0-27 端口返回非法值 = unreadable(why 缺失 / 类型不对)',
+    edits: [
+      swap(
+        'src/rsi/personal/judge-signal.ts',
+        "return typeof r['why'] === 'string' ? { kind: r['kind'], why: r['why'] } : null;",
+        "return { kind: r['kind'], why: String(r['why']) };",
+      ),
+    ],
+    tests: ['rsi/personal/judge-signal.test.ts'],
+    expectRed: ['端口抛错 / 返回非法形状 → unreadable', 'W9a 判官裁决判定'],
+    mustKill: ['端口抛错 / 返回非法形状 → unreadable'],
+  },
+  {
+    id: 'budget_clock_unchecked',
+    clause: 'W0-27 2 秒预算:同步工作超预算的结论不予采信',
+    edits: [
+      swap(
+        'src/rsi/personal/judge-signal.ts',
+        "    if (r.kind !== 'none' && performance.now() - started > budgetMs) return unreadable('timeout');\n",
+        '',
+      ),
+    ],
+    tests: ['rsi/personal/judge-signal.test.ts'],
+    expectRed: ['同步工作占住事件循环、定时器来不及触发时', 'W9a 判官裁决判定'],
+    mustKill: ['同步工作占住事件循环、定时器来不及触发时'],
+  },
+  {
+    id: 'run_id_shape_unchecked',
+    clause: 'W0-27 来源链接损坏(run_id 路径穿越)在任何读取之前拒绝',
+    edits: [
+      swap(
+        'src/rsi/personal/read/judge-source.ts',
+        "      if (!RunIdSchema.safeParse(runId).success) return bad('run_id_shape');\n",
+        '',
+      ),
+    ],
+    tests: ['rsi/personal/judge-source.test.ts'],
+    expectRed: ['提案 id 形状不对(含 ../ 穿越)', 'W9a 读适配器', '端口契约套件'],
+    mustKill: ['提案 id 形状不对(含 ../ 穿越)'],
+  },
+  {
+    id: 'invalid_content_skips_recheck',
+    clause: 'W0-27 一致性协议:内容类失败路径同样读后核对',
+    edits: [
+      swap(
+        'src/rsi/personal/read/judge-source.ts',
+        "fail = { kind: 'invalid', why: 'yaml' };",
+        "return { kind: 'invalid', why: 'yaml' };",
+      ),
+    ],
+    tests: ['rsi/personal/judge-source.test.ts'],
+    expectRed: ['内容类失败路径同样做读后核对', 'W9a 读适配器', '端口契约套件'],
+    mustKill: ['内容类失败路径同样做读后核对'],
+  },
+  {
+    id: 'recheck_io_as_missing',
+    clause: 'W0-27 一致性协议:复核时 lstat 失败(非 ENOENT)= 读不出',
+    edits: [
+      swap(
+        'src/rsi/personal/read/judge-source.ts',
+        "return (e as NodeJS.ErrnoException).code === 'ENOENT' ? null : 'error';",
+        'return null;',
+      ),
+    ],
+    tests: ['rsi/personal/judge-source.test.ts'],
+    expectRed: ['复核时文件 lstat 失败不是 ENOENT', 'W9a 读适配器', '端口契约套件'],
+    mustKill: ['复核时文件 lstat 失败不是 ENOENT'],
   },
 ];
 

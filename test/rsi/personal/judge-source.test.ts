@@ -8,7 +8,15 @@ import { describe, expect, it } from 'vitest';
 import type { RsiCounts } from '../../../src/contracts/rsi.js';
 import type { IoContext } from '../../../src/io/paths.js';
 import { lstat } from '../../../src/io/read-fs.js';
-import { hardlink, mkdirp, remove, rename, symlink, writeFile } from '../../../src/io/safe-fs.js';
+import {
+  chmod,
+  hardlink,
+  mkdirp,
+  remove,
+  rename,
+  symlink,
+  writeFile,
+} from '../../../src/io/safe-fs.js';
 import {
   evaluateJudgeSignal,
   type JudgeSourceRead,
@@ -215,18 +223,31 @@ describe('W9a 读适配器:安全读取与失败分类(R20-18.34 ②)', () => {
     expect(why(await readOf(w2))).toBe('rule_too_large');
   });
 
-  it('YAML 无法解析 / 不是对象 → invalid(内容类);提案 id 形状不对(含 ../ 穿越)→ invalid 且不读任何文件', async () => {
+  it('YAML 无法解析 / 不是对象 → invalid(内容类);提案 id 形状不对(含 ../ 穿越)→ unreadable(来源链接损坏),在任何读取之前拒绝(归属没被调用)', async () => {
     const w1 = await world({ proposal: 'a: [unclosed\n' });
     expect(await readOf(w1)).toEqual({ kind: 'invalid', why: 'yaml' });
     const w2 = await world({ proposal: '- a\n- b\n' });
     expect(await readOf(w2)).toEqual({ kind: 'invalid', why: 'not_object' });
     const w3 = await world();
+    let attributed = 0;
+    const counting = source(w3, {
+      attribution: async () => {
+        attributed++;
+        return P_ATTR;
+      },
+    });
     for (const bad of ['p1', '../x', '2026-11-09-001/../..', '2026-11-09-0011', '']) {
-      const r = await source(w3).read(RUN, bad, ctl());
-      expect(r, bad).toEqual({ kind: 'invalid', why: 'proposal_id_shape' });
+      const r = await counting.read(RUN, bad, ctl());
+      expect(r, bad).toEqual({ kind: 'unreadable', why: 'proposal_id_shape' });
     }
-    // 对照:形状合法的 id 照常读取
-    expect((await source(w3).read(RUN, PID, ctl())).kind).toBe('ok');
+    expect(await counting.read('../escape', PID, ctl())).toEqual({
+      kind: 'unreadable',
+      why: 'run_id_shape',
+    });
+    expect(attributed).toBe(0);
+    // 对照:形状合法的 id 照常读取(归属被调用)
+    expect((await counting.read(RUN, PID, ctl())).kind).toBe('ok');
+    expect(attributed).toBeGreaterThan(0);
   });
 
   it('规则:文件不存在 / rules 目录不存在 → rule = null(由 ⑤ 判 rule_changed);规则是链接 / rules 目录是链接 → unreadable', async () => {
@@ -315,6 +336,38 @@ describe('W9a 读适配器:一致性协议与预算(读期间被换 → unreadab
       });
     }, 'race');
   });
+
+  it('内容类失败路径同样做读后核对:坏 YAML / 非对象在读期间被换 → race(不是稳定的 invalid);不换仍是 invalid(正向对照)', async () => {
+    for (const [bad, kind] of [
+      ['a: [unclosed\n', 'yaml'],
+      ['- a\n- b\n', 'not_object'],
+    ] as const) {
+      const w = await world({ proposal: bad });
+      expect(await readOf(w)).toEqual({ kind: 'invalid', why: kind });
+      const r = await readOf(w, {
+        seam: {
+          afterReads: () =>
+            writeFile(w.fx, w.propFile, `${bad}# changed underneath\n`, { mode: 0o644 }),
+        },
+      });
+      expect(r, kind).toEqual({ kind: 'unreadable', why: 'race' });
+    }
+  });
+
+  it.skipIf(process.getuid?.() === 0)(
+    '复核时文件 lstat 失败不是 ENOENT(EACCES)→ unreadable(recheck_io),不折叠成「没变」;规则确实缺失时仍是 rule = null(正向对照)',
+    async () => {
+      const w = await world({ rule: null });
+      expect(await readOf(w)).toMatchObject({ kind: 'ok', rule: null });
+      const rulesDir = path.join(w.runDir, 'rules', 'personal');
+      try {
+        const r = await readOf(w, { seam: { afterReads: () => chmod(w.fx, rulesDir, 0o600) } });
+        expect(r).toEqual({ kind: 'unreadable', why: 'recheck_io' });
+      } finally {
+        await chmod(w.fx, rulesDir, 0o755);
+      }
+    },
+  );
 
   it('目录被整体换走、子项原样挪回(子项身份不变)→ race:只有目录自身的身份核对能发现(run 目录 / reflect 目录各一)', async () => {
     await race(async (w) => {
@@ -500,7 +553,7 @@ describe.each([
     expect(await kindOf({ ...GOOD, proposal: 'bad_yaml' })).toMatchObject({ kind: 'invalid' });
   });
 
-  it('signal 已中止 → unreadable(timeout);永不抛错', async () => {
+  it('signal 已中止 → unreadable(timeout)', async () => {
     expect(await kindOf(GOOD, ctl({ aborted: true }))).toEqual({
       kind: 'unreadable',
       why: 'timeout',

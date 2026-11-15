@@ -26,6 +26,9 @@ import { ProposalSchema, type JudgeRecord, type Proposal } from '../../contracts
 import type { SideEvidence, VendorIssue } from '../../contracts/vendor.js';
 import { canonicalJson } from '../../io/canonical-json.js';
 
+/** 暂存提案 id(R20-18.33:`YYYY-MM-DD-NNN`;权威 schema 只要求非空 ≤ 128,形状在这里收紧,坏值 = 来源链接损坏) */
+const PROPOSAL_ID_RE = /^\d{4}-\d{2}-\d{2}-\d{3}$/;
+
 /** 单次评估的读预算(毫秒;超时 = `unreadable`) */
 export const JUDGE_READ_BUDGET_MS = 2000;
 
@@ -129,8 +132,10 @@ function shapeOf(raw: unknown): JudgeSourceRead | null {
       return { kind: r['kind'] };
     case 'unreadable':
     case 'invalid':
-      return { kind: r['kind'], why: typeof r['why'] === 'string' ? r['why'] : 'unspecified' };
+      // 信封必须完整:缺 `why` / 类型不对是端口违约(unreadable),不是磁盘上的内容错误
+      return typeof r['why'] === 'string' ? { kind: r['kind'], why: r['why'] } : null;
     case 'ok': {
+      if (!('proposal' in r)) return null;
       const rule = r['rule'];
       if (rule === null) return { kind: 'ok', proposal: r['proposal'], rule: null };
       if (typeof rule !== 'object' || rule === undefined) return null;
@@ -153,6 +158,7 @@ async function readBudgeted(
   proposalId: string,
   budgetMs: number,
 ): Promise<JudgeSourceRead | JudgeNone> {
+  const started = performance.now();
   const ctl = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<JudgeNone>((resolve) => {
@@ -170,7 +176,10 @@ async function readBudgeted(
     }
   })();
   try {
-    return await Promise.race([read, timeout]);
+    const r = await Promise.race([read, timeout]);
+    // 同步工作(解析 / 校验)占住事件循环时定时器来不及触发:返回前再用单调时钟核对一次,超预算的结论不予采信
+    if (r.kind !== 'none' && performance.now() - started > budgetMs) return unreadable('timeout');
+    return r;
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }
@@ -289,7 +298,7 @@ function parseLink(link: unknown): { run_id: string; proposal_id: string } | nul
   const run = o['run_id'];
   const pid = o['proposal_id'];
   if (typeof run !== 'string' || !RunIdSchema.safeParse(run).success) return null;
-  if (typeof pid !== 'string' || pid.length < 1 || pid.length > 128) return null;
+  if (typeof pid !== 'string' || !PROPOSAL_ID_RE.test(pid)) return null;
   return { run_id: run, proposal_id: pid };
 }
 

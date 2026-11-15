@@ -16,7 +16,7 @@
  */
 import * as path from 'node:path';
 import { parseRestrictedYaml } from '../../../atoms/frontmatter.js';
-import { KebabIdSchema } from '../../../contracts/common.js';
+import { KebabIdSchema, RunIdSchema } from '../../../contracts/common.js';
 import type { RsiCounts } from '../../../contracts/rsi.js';
 import {
   lstat,
@@ -102,6 +102,9 @@ export function makeProposalJudgeSource(deps: JudgeSourceDeps): ProposalJudgeSou
           : 'excluded';
       };
 
+      // 调用方给的坏 id / run id(路径穿越等)= 来源链接损坏:在任何读取之前拒绝,归读不出
+      if (!RunIdSchema.safeParse(runId).success) return bad('run_id_shape');
+      if (!PROPOSAL_ID_RE.test(proposalId)) return bad('proposal_id_shape');
       if (aborted()) return bad('timeout');
       // ① 目录:`reflect/` 与 run 目录必须是真实目录(O_DIRECTORY | O_NOFOLLOW)
       const dReflect = await statDirSafe(reflect, { owner: OWNER });
@@ -117,7 +120,6 @@ export function makeProposalJudgeSource(deps: JudgeSourceDeps): ProposalJudgeSou
       if (aborted()) return bad('timeout');
 
       // ② 提案(采集中的 run 里提案目录 / 文件缺失 = 读不出,不是「无裁决」)
-      if (!PROPOSAL_ID_RE.test(proposalId)) return { kind: 'invalid', why: 'proposal_id_shape' };
       const dProp = await statDirSafe(propDir, { owner: OWNER });
       if (dProp.kind === 'missing') return bad('proposals_dir_missing');
       if (dProp.kind === 'unsafe') return bad(`proposals_dir_${dProp.why}`);
@@ -131,20 +133,25 @@ export function makeProposalJudgeSource(deps: JudgeSourceDeps): ProposalJudgeSou
         size: pr.meta.size,
         mtimeMs: pr.meta.mtimeMs,
       };
+      // 内容类失败先记下、不提前返回:读后一致性核对对所有路径一视同仁(读到一半被换的半份 YAML 不得被当成稳定的内容错误)
+      let fail: JudgeSourceRead | null = null;
+      let value: unknown = null;
       const y = parseRestrictedYaml(
         pr.bytes.toString('utf8'),
         `proposals/${proposalId}.yaml`,
         'JUDGE_PROPOSAL_YAML',
       );
-      if (!y.ok) return { kind: 'invalid', why: 'yaml' };
-      const value: unknown = y.value;
-      if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-        return { kind: 'invalid', why: 'not_object' };
+      if (!y.ok) {
+        fail = { kind: 'invalid', why: 'yaml' };
+      } else if (typeof y.value !== 'object' || y.value === null || Array.isArray(y.value)) {
+        fail = { kind: 'invalid', why: 'not_object' };
+      } else {
+        value = y.value;
       }
       if (aborted()) return bad('timeout');
 
       // ② 规则:`rules/personal/<targets[0]>.md`(目标名取不出就不读,③ 会拒绝这份提案)
-      const targets = (value as Record<string, unknown>)['targets'];
+      const targets = fail === null ? (value as Record<string, unknown>)['targets'] : undefined;
       const target =
         Array.isArray(targets) &&
         targets.length === 1 &&
@@ -193,25 +200,28 @@ export function makeProposalJudgeSource(deps: JudgeSourceDeps): ProposalJudgeSou
       if (!dirSame(dProp, await again(propDir), true)) return racy();
       if (dRulesTop !== null && !dirSame(dRulesTop, await again(rulesTop), false)) return racy();
       if (dRules !== null && !dirSame(dRules, await again(rulesDir), true)) return racy();
-      const fileIdent = async (p: string): Promise<Ident | null> => {
+      // 文件身份:只有 ENOENT 算「不存在」;其余错误(EACCES / EIO / ENOTDIR …)是读不出,不得折叠成「没变」
+      const fileIdent = async (p: string): Promise<Ident | null | 'error'> => {
         try {
           const s = await lstat(p);
           return { dev: s.dev, ino: s.ino, size: s.size, mtimeMs: s.mtimeMs };
-        } catch {
-          return null;
+        } catch (e) {
+          return (e as NodeJS.ErrnoException).code === 'ENOENT' ? null : 'error';
         }
       };
-      if (!fileSame(propIdent, await fileIdent(propFile))) return racy();
+      const propNow = await fileIdent(propFile);
+      if (propNow === 'error') return bad('recheck_io');
+      if (!fileSame(propIdent, propNow)) return racy();
       if (target !== null && dRules !== null && dRules.kind === 'ok') {
-        if (!fileSame(ruleIdent, await fileIdent(path.join(rulesDir, `${target}.md`)))) {
-          return racy();
-        }
+        const ruleNow = await fileIdent(path.join(rulesDir, `${target}.md`));
+        if (ruleNow === 'error') return bad('recheck_io');
+        if (!fileSame(ruleIdent, ruleNow)) return racy();
       }
       const second = await attribute();
       if (second !== 'consumable') return second === 'excluded' ? racy() : second;
       if (aborted()) return bad('timeout');
 
-      return { kind: 'ok', proposal: value, rule };
+      return fail ?? { kind: 'ok', proposal: value, rule };
     },
   };
 }
