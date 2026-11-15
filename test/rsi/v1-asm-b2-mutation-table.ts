@@ -290,7 +290,11 @@ export const V1_ASM_B2_MUTATIONS: readonly V1AsmB2Mutation[] = [
     id: 'state_write_creates_missing',
     clause: 'state.json 缺失 / 不合规拒写',
     edits: [
-      { file: 'src/rsi/canary/state-port.ts', anchor: "doc.kind !== 'ok'", replacement: 'false' },
+      {
+        file: 'src/rsi/canary/state-port.ts',
+        anchor: "dir === null || doc.kind !== 'ok'",
+        replacement: 'false',
+      },
     ],
     tests: ['rsi/asm/b-commands-real.test.ts'],
     expectRed: ['PauseStatePort:读改写保留其它键'],

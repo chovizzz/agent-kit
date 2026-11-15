@@ -148,6 +148,8 @@ describe('veto 命令级(真 git + 假 HOME + 真存储核)', () => {
     const r = await run('veto', [ID], portsOf(w, a));
     expect(r.code).toBe(3);
     expect(r.err).toContain('cause=sealed_interval');
+    expect(r.err).toContain('entry=not_committed');
+    expect(r.err).not.toContain('authority=');
     expect(r.err).toContain('RSI_FAIL_CLOSED reason=audit_invalid');
     expect(git(w, ['rev-parse', 'HEAD'])).toBe(head);
     expect((await recordOf(w)).lifecycle).toBe('shadow');

@@ -8,7 +8,7 @@
  *  - `peekRecord(s)` / `recordedSha` 的**锁外读**用 A 段的只读适配器;**git 路径在生产里不装配**(`gitPath` 缺省 = 未装配 → 读恒 `invalid`,契约 W0-22 第 6 条:`.git` 收紧 0700 之前保持未装配,归 D),
  *    所以相位提升后 `veto` / `rollback --to` 在锁外预读处仍 fail-closed(退 3),直到 D 合并;
  *  - **不提供 `consumers`**(账的消费方归 D):`rsi veto` 因此不报完整成功。
- * **工厂创建不读盘、不建目录、不取锁**;所有 I/O 在端口方法被调用时才发生。
+ * **工厂创建不写盘、不建目录、不取锁**(只做 `owner_repo_fp` 的 realpath / stat 只读解析);其余 I/O 在端口方法被调用时才发生。
  */
 import { ownerRepoFingerprint, personalHome } from './personal/home-state.js';
 import type { IoContext } from '../io/paths.js';
@@ -29,7 +29,7 @@ import { RsiLockError, type RsiLockErrorKind } from './lock-error.js';
 import { acquireRsiLock } from './lock.js';
 import { rsiDirReadonly, type RsiLockDeps } from './lock-read.js';
 import { makeCacheCleanup } from './personal/cache-cleanup.js';
-import type { PersonalRepoDeps, StepHook } from './personal/commit.js';
+import { inspectPersonalRepo, type PersonalRepoDeps, type StepHook } from './personal/commit.js';
 import { personalRepoStore } from './personal/candidate-repo.js';
 import type { PersonalLocks } from './personal/commit.js';
 import { isSealedInterval, type EntrySeal } from './personal/entry-stamp.js';

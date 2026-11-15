@@ -62,7 +62,8 @@ export function makePauseStatePort(d: StatePortDeps): PauseStatePort {
     async read(): Promise<AutoPauseState> {
       const doc = parseRsiStateDoc(await readRaw(d.rsiDir, STATE_FILE));
       if (doc.kind === 'absent') return NO_PAUSE;
-      if (doc.kind === 'invalid') throw new RsiFailClosedError('state_invalid');
+      // `confirm` 记录不合规(`confirm_schema_invalid`)同样 fail-closed:整份合法才读 / 才写
+      if (doc.kind !== 'ok') throw new RsiFailClosedError('state_invalid');
       return toAutoPause(doc.state);
     },
     async write(s: AutoPauseState): Promise<void> {
