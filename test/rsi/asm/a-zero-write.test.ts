@@ -189,8 +189,11 @@ describe('eslint:读侧组合根 / 只读适配器 import 写出口即红;未登
       "import { writeFile } from '../io/safe-fs.js';\nexport const w = writeFile;\n",
       "import { runSync } from '../io/exec.js';\nexport const w = runSync;\n",
       "import { acquireRsiLock } from './lock.js';\nexport const w = acquireRsiLock;\n",
+      "import { acquireRsiLock } from '../rsi/lock.js';\nexport const w = acquireRsiLock;\n",
       "import { appendLedgerLine } from './canary/ledger.js';\nexport const w = appendLedgerLine;\n",
+      "import { appendLedgerLine } from '../rsi/canary/ledger.js';\nexport const w = appendLedgerLine;\n",
       "import { writeProposal } from '../judge/store.js';\nexport const w = writeProposal;\n",
+      "import { commitPersonal } from './personal/commit.js';\nexport const w = commitPersonal;\n",
     ];
     for (const code of bad) {
       expect((await lintAs(code, 'src/rsi/assemble-read.ts')).length, code).toBeGreaterThan(0);

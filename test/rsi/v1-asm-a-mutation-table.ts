@@ -683,7 +683,7 @@ export const V1_ASM_A_MUTATIONS: readonly V1AsmAMutation[] = [
   {
     id: 'eslint_ledger_not_forbidden',
     clause: 'eslint:读根文件可 import 含写出口的 canary/ledger.ts',
-    edits: [swap('eslint.config.js', "  '**/canary/ledger.js',\n", '')],
+    edits: [swap('eslint.config.js', "  '**/ledger.js',\n", '')],
     tests: ['rsi/asm/a-zero-write.test.ts'],
     expectRed: ['safe-fs / exec / 锁 / 含写出口的原模块:读根文件红'],
     mustKill: ['safe-fs / exec / 锁 / 含写出口的原模块:读根文件红'],
