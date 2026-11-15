@@ -16,6 +16,7 @@ import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 import { existsSync, readTextSync, realpathSync } from '../../src/io/read-fs.js';
 import { REPO_ROOT } from '../helpers/tmp.js';
+import { SLOW_TEST_TIMEOUT_MS } from '../../vitest.config.js';
 
 const ROOT = realpathSync(REPO_ROOT);
 
@@ -78,7 +79,18 @@ const REAL_ENTRY_CANDIDATES: readonly string[] = [
 
 type Virtual = Readonly<Record<string, string>>;
 
-function specifiersOf(file: string, source: string): string[] {
+/** 同一份源码只解析一次(说明符与文件名无关):~25 个入口的闭包大面积重叠,不缓存时单测在负载高的验证机上贴着 20s 超时线 */
+const SPEC_CACHE = new Map<string, readonly string[]>();
+
+function specifiersOf(file: string, source: string): readonly string[] {
+  const hit = SPEC_CACHE.get(source);
+  if (hit !== undefined) return hit;
+  const out = parseSpecifiers(file, source);
+  SPEC_CACHE.set(source, out);
+  return out;
+}
+
+function parseSpecifiers(file: string, source: string): string[] {
   const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const out: string[] = [];
   const visit = (n: ts.Node): void => {
@@ -230,14 +242,18 @@ describe('R20-1.1 import 闭包:从各入口分别起算', () => {
     });
   }
 
-  it('随块生效:src/rsi/ 下已存在的真实入口文件同样要求闭包干净', () => {
-    const present = REAL_ENTRY_CANDIDATES.filter((f) => existsSync(path.join(ROOT, f)));
-    for (const f of present) {
-      const c = closureOf([f]);
-      expect(c.unresolved, f).toEqual([]);
-      expect(violations(c), f).toEqual([]);
-    }
-  });
+  it(
+    '随块生效:src/rsi/ 下已存在的真实入口文件同样要求闭包干净',
+    () => {
+      const present = REAL_ENTRY_CANDIDATES.filter((f) => existsSync(path.join(ROOT, f)));
+      for (const f of present) {
+        const c = closureOf([f]);
+        expect(c.unresolved, f).toEqual([]);
+        expect(violations(c), f).toEqual([]);
+      }
+    },
+    SLOW_TEST_TIMEOUT_MS,
+  ); // 逐个入口起算整张闭包(已缓存解析);验证机高负载时贴着默认 20s 线,放宽的只是时限,断言不变
 });
 
 describe('闭包检查器自身的对照(证明上面的"干净"不是检查器漏看)', () => {
