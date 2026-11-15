@@ -2,6 +2,7 @@
  * W9a 判官裁决读端口的生产适配器(`read/judge-source.ts`;contracts R20-18.34 ① ②、R20-18.36、W0-27):真实文件系统(KIT_TMP 下的临时目录)上的归属判定、安全读取、
  * 失败分类、一致性协议(读期间被换 → unreadable)、2 秒预算与零写入;端口契约套件同时跑「适配器」与「内存参照实现」,保证两者错误语义一致(假件与生产同契约)。
  */
+import { unlink } from 'node:fs/promises';
 import * as path from 'node:path';
 import { stringify } from 'yaml';
 import { describe, expect, it } from 'vitest';
@@ -101,6 +102,15 @@ const readOf = (w: W, over: Partial<JudgeSourceDeps> = {}, c = ctl()): Promise<J
 
 const why = (r: JudgeSourceRead): string | null =>
   r.kind === 'unreadable' || r.kind === 'invalid' ? r.why : null;
+/**
+ * 目录位置上的符号链接:`statDirSafe` 用 `O_NOFOLLOW | O_DIRECTORY` 打开,各平台对「目录符号链接」的错误码不同
+ * (Linux / BSD 可能给 ELOOP → `link`,macOS 给 ENOTDIR → `not_regular`)。语义是同一个:不跟随、`unreadable`;
+ * 所以只认这两种原因,且必须是 `unreadable`(不是 `ok` / `run_gone` / `run_excluded`)。
+ */
+const dirLinkWhy = (r: JudgeSourceRead, prefix: string): string[] => {
+  expect(r.kind).toBe('unreadable');
+  return [`${prefix}_link`, `${prefix}_not_regular`];
+};
 
 describe('W9a 读适配器:归属(R20-18.34 ①)', () => {
   it('采集中的 run:读到解析后的提案与规则文本;经纯判定得到信号(端到端正向对照)', async () => {
@@ -134,14 +144,20 @@ describe('W9a 读适配器:归属(R20-18.34 ①)', () => {
     const moved = `${w.runDir}-real`;
     await rename(w.fx, w.runDir, moved);
     await symlink(w.fx, moved, w.runDir);
-    expect(why(await readOf(w))).toBe('run_dir_link');
+    {
+      const r = await readOf(w);
+      expect(dirLinkWhy(r, 'run_dir')).toContain(why(r));
+    }
     await remove(w.fx, w.runDir);
     await rename(w.fx, moved, w.runDir);
     expect((await readOf(w)).kind).toBe('ok');
     const movedReflect = `${w.reflect}-real`;
     await rename(w.fx, w.reflect, movedReflect);
     await symlink(w.fx, movedReflect, w.reflect);
-    expect(why(await readOf(w))).toBe('reflect_dir_link');
+    {
+      const r = await readOf(w);
+      expect(dirLinkWhy(r, 'reflect_dir')).toContain(why(r));
+    }
   });
 
   it('TAINTED 标记存在 → run_excluded;标记不安全(是目录 / 符号链接)→ unreadable(读不出标记不得当作没被污染);无标记 → 可读', async () => {
@@ -202,7 +218,8 @@ describe('W9a 读适配器:安全读取与失败分类(R20-18.34 ②)', () => {
     await remove(w.fx, w.propFile);
     await hardlink(w.fx, real, w.propFile);
     expect(why(await readOf(w))).toBe('proposal_hardlink');
-    await remove(w.fx, w.propFile);
+    // safe-fs 的 remove / rename 拒绝处理 nlink > 1 的目标:夹具直接 unlink 这个多余的名字
+    await unlink(w.propFile);
     await rename(w.fx, real, w.propFile);
     expect((await readOf(w)).kind).toBe('ok');
   });
@@ -265,7 +282,10 @@ describe('W9a 读适配器:安全读取与失败分类(R20-18.34 ②)', () => {
     const rulesReal = path.join(w3.dir, 'rules-real');
     await rename(w3.fx, path.join(w3.runDir, 'rules'), rulesReal);
     await symlink(w3.fx, rulesReal, path.join(w3.runDir, 'rules'));
-    expect(why(await readOf(w3))).toBe('rules_dir_link');
+    {
+      const r = await readOf(w3);
+      expect(dirLinkWhy(r, 'rules_dir')).toContain(why(r));
+    }
   });
 
   it('提案 targets 取不出(多目标 / 非 kebab)→ 不读规则,rule = null;交给 ③ 拒绝', async () => {

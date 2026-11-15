@@ -76,7 +76,7 @@ for (const includeTypes of [false, true]) {
       expect(c.unresolved).toEqual([]);
       expect(externalSpecs(c).filter((e) => !['node:crypto', 'zod'].includes(e))).toEqual([]);
       expect(
-        [...c.files].filter((f) => f.startsWith('src/') && !f.startsWith('src/contracts/')),
+        [...c.files].filter((f) => f.startsWith('src/') && !f.startsWith('src/contracts/')).sort(),
       ).toEqual([JUDGE_SIGNAL, 'src/io/canonical-json.ts'].sort());
     });
 
@@ -92,11 +92,14 @@ for (const includeTypes of [false, true]) {
           (e) =>
             !['node:crypto', 'node:fs', 'node:fs/promises', 'node:path', 'yaml', 'zod'].includes(e),
         ),
-      ).toEqual([]);
+      ).toEqual(includeTypes ? ['node:os'] : []);
+      // 含类型口径下的 node:os 只来自 `import type { IoContext } from io/paths`(lock-read / snapshot-read 的类型导入);运行时口径里没有
+      expect(importersOf(c, 'node:os')).toEqual(includeTypes ? ['src/io/paths.ts'] : []);
       for (const spec of ['node:fs', 'node:fs/promises']) {
         expect(importersOf(c, spec).filter((f) => f !== 'src/io/read-fs.ts')).toEqual([]);
       }
-      expect(c.files.has(JUDGE_SIGNAL)).toBe(true);
+      // judge-source 对 judge-signal 只有 `import type`(端口类型):运行时口径里没有它,含类型口径里才有
+      expect(c.files.has(JUDGE_SIGNAL)).toBe(includeTypes);
     });
 
     it('judge-verdict.ts(展示映射):同样没有禁用文件;闭包含 judge-signal(展示与消费同一份判定)', () => {
@@ -145,8 +148,18 @@ describe('W9a 闭包闸:负向对照(往真实入口加一条禁用 import,检�
   });
 
   it('动态 import / require 绕过也被看见', () => {
-    const v = inject(JUDGE_SIGNAL, "export const lazy = () => import('../../io/safe-fs.js');");
-    expect(closureOf([JUDGE_SIGNAL], { virtual: v }).dynamic.length).toBeGreaterThan(0);
+    // 字面量 `import('…')`:工具把它当静态说明符解析,禁用文件进入闭包 → bad() 变红
+    const lit = inject(JUDGE_SIGNAL, "export const lazy = () => import('../../io/safe-fs.js');");
+    expect(bad(closureOf([JUDGE_SIGNAL], { virtual: lit })).length).toBeGreaterThan(0);
+    // 非字面量 `import(x)` / 任意 `require()`:无法静态解析 → 记入 dynamic → 闭包检查变红
+    const nonLit = inject(JUDGE_SIGNAL, 'export const lazy2 = (m: string) => import(m);');
+    expect(closureOf([JUDGE_SIGNAL], { virtual: nonLit }).dynamic.length).toBeGreaterThan(0);
+    const req = inject(JUDGE_SIGNAL, "export const lazy3 = () => require('../../io/safe-fs.js');");
+    expect(closureOf([JUDGE_SIGNAL], { virtual: req }).dynamic.length).toBeGreaterThan(0);
+    // 对照:不注入则两项都干净
+    const clean = closureOf([JUDGE_SIGNAL]);
+    expect(clean.dynamic).toEqual([]);
+    expect(bad(clean)).toEqual([]);
   });
 });
 
