@@ -58,9 +58,9 @@ const deny = async (
   round: BothRound,
   req: GrowthReq,
   r: GrowthReaders,
-  stage: GrowthStage | undefined = STAGE_ALL,
+  stage: GrowthStage | null = STAGE_ALL, // null = 没有 stage(传给 evaluateGrowth 的是 undefined;不能用 undefined 触发默认值)
 ): Promise<string> => {
-  const v = await evaluateGrowth(round, req, r, stage);
+  const v = await evaluateGrowth(round, req, r, stage ?? undefined);
   if (isGrowthPass(v)) return 'PASS';
   return (v as { code: string }).code;
 };
@@ -237,15 +237,13 @@ describe('growth_stage_missing_op_growth_unwired(先于任何其它码,零 reade
     async (op) => {
       const { round } = await openBoth();
       for (const stage of [
-        undefined,
+        null,
         { ops: new Set<never>() },
         { ops: new Set(GROWTH_OPS.filter((o) => o !== op)) },
         { ops: [...GROWTH_OPS] as unknown as ReadonlySet<never> },
       ]) {
         const r = readers({ capability: () => Promise.resolve({ ready: false }) });
-        expect(await deny(round, reqOf(op), r, stage as GrowthStage | undefined)).toBe(
-          'growth_unwired',
-        );
+        expect(await deny(round, reqOf(op), r, stage as GrowthStage | null)).toBe('growth_unwired');
         expect(r.calls).toEqual([]);
       }
       // 正向对照:ops 含本 op → 通过

@@ -210,7 +210,7 @@ describe('其它类型钉子', () => {
       void sp.tripAndMute(['no_observation', 'kit_major_changed']); // 正向对照:合法
       // @ts-expect-error 个人侧熔断码不可传入仅 rsi 锁的 tripAndMute
       void sp.tripAndMute(['rollback_storm']);
-      // @ts-expect-error 同上
+      // @ts-expect-error 第二个个人侧码同样不可传入
       void sp.tripAndMute(['personal_repo_invalid']);
     };
     expect(typeof proofs).toBe('function');

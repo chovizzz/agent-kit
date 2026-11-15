@@ -365,23 +365,8 @@ describe('3 授权类型(C 为唯一来源)', () => {
       | 'extra'
       | 'externalVeto'
     >();
-    for (const k of [
-      'capability',
-      'config',
-      'state',
-      'repo',
-      'barrier',
-      'taint',
-      'purge',
-      'judge',
-      'throttle',
-      'locks',
-      'admission',
-      'extra',
-      'externalVeto',
-    ] as const) {
-      expectTypeOf<Parameters<GrowthReaders[typeof k]>[0]>().toEqualTypeOf<BothRound>();
-    }
+    // 每个读方法的第一个参数都是 BothRound(无参缓存读法不存在)
+    expectTypeOf<Parameters<GrowthReaders[keyof GrowthReaders]>[0]>().toEqualTypeOf<BothRound>();
     expect(true).toBe(true);
   });
   it('事实类型 / 拒绝子集', () => {
