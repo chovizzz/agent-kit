@@ -188,7 +188,11 @@ export function createBackend(fs: StoreFs, clock: () => Date): StoreBackend {
         throw new StoreError('compaction_unsupported', 'gen_not_sequential');
       // 与读侧同一份语义校验(I1:through 须早于今日)——不得写出下一次读取就拒绝的文件;I4:水位线不回退
       decodeCompaction(Buffer.from(canonicalJson(next), 'utf8'), today());
-      if (cur?.through != null && (next.through === null || next.through < cur.through)) {
+      if (
+        cur?.through !== undefined &&
+        cur.through !== null &&
+        (next.through === null || next.through < cur.through)
+      ) {
         throw new StoreError('compaction_unsupported', 'through_regressed');
       }
       await atomicReplace(RSI_AUDIT_COMPACTION_FILE, canonicalJson(next), assertHeld);

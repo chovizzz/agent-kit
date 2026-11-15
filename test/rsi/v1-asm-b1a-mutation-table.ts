@@ -791,13 +791,7 @@ export const V1_ASM_B1A_MUTATIONS: readonly V1AsmB1aMutation[] = [
   {
     id: 'compaction_regress_allowed',
     clause: 'W0-26 §7 水位线不回退',
-    edits: [
-      swap(
-        'src/rsi/store/backend.ts',
-        'if (cur?.through != null && (next.through === null || next.through < cur.through)) {',
-        'if (false) {',
-      ),
-    ],
+    edits: [swap('src/rsi/store/backend.ts', 'cur.through !== null &&', 'false &&')],
     tests: ['rsi/store/backend.test.ts'],
     expectRed: ['writeCompaction 与读侧同一份语义'],
     mustKill: ['writeCompaction 与读侧同一份语义'],
