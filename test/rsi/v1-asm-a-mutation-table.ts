@@ -287,6 +287,8 @@ export const V1_ASM_A_MUTATIONS: readonly V1AsmAMutation[] = [
     ],
     tests: ['rsi/asm/a-adapters.test.ts'],
     expectRed: [
+      '检查之后、打开之前被换成悬空符号链接',
+      '检查之后、打开之前被换成指向有效文件的符号链接',
       '权限过宽 / 硬链接 / 超限',
       '缺失 = null;合法 / 不认识的内容 = 与写侧端口相同的解析;类型上只有 read;读错误(非 ENOENT)抛错',
     ],
@@ -476,7 +478,10 @@ export const V1_ASM_A_MUTATIONS: readonly V1AsmAMutation[] = [
       ),
     ],
     tests: ['rsi/asm/a-adapters.test.ts'],
-    expectRed: ['登记表不合规、条目路径是符号链接 → 抛错(unavailable),绝不落成 clean'],
+    expectRed: [
+      '只剩一个标记(缺 end / 缺 begin)= 块损坏',
+      '登记表不合规、条目路径是符号链接 → 抛错(unavailable),绝不落成 clean',
+    ],
     mustKill: ['登记表不合规、条目路径是符号链接 → 抛错(unavailable),绝不落成 clean'],
   },
   {
@@ -925,7 +930,7 @@ export const V1_ASM_A_MUTATIONS: readonly V1AsmAMutation[] = [
       ),
     ],
     tests: ['rsi/asm/a-closure-util.test.ts'],
-    expectRed: ['运行时依赖:静态 import', '仅类型依赖', '经中间模块的传递'],
+    expectRed: ['相对说明符解析不到', '运行时依赖:静态 import', '仅类型依赖', '经中间模块的传递'],
     mustKill: ['运行时依赖:静态 import', '经中间模块的传递'],
   },
   {
