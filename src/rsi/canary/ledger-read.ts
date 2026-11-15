@@ -3,7 +3,10 @@
  * 句柄级安全读取、逐行 schema,任一行不合规 → `invalid`(不跳过坏行去「尽量」统计);文件不存在 = `absent`。写侧(追加 / stop 行)仍在 `ledger.ts`。
  */
 import * as path from 'node:path';
-import { RsiCanaryLedgerLineSchema, type RsiCanaryLedgerLine } from '../../contracts/rsi-personal.js';
+import {
+  RsiCanaryLedgerLineSchema,
+  type RsiCanaryLedgerLine,
+} from '../../contracts/rsi-personal.js';
 import { readFileSafe } from '../../io/read-fs.js';
 import { RSI_FILE_OWNER } from '../lock-read.js';
 import { CANARY_FILES } from './files.js';
