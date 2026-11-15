@@ -28,6 +28,9 @@ import {
 
 declare const roundBrand: unique symbol;
 
+/** 写适配器只包装异步函数(返回 Promise):包装后一定是异步的,同步实现会让调用方漏 `await`、误判写入与 `gen` 推进已完成 */
+export type AsyncFn = (...args: never[]) => Promise<unknown>;
+
 /** `safetyDirty` 的只读视图(置位 / 清零只在本模块与 `settle.ts` 内部) */
 export interface SafetyDirtyView {
   isDirty(): boolean;
@@ -43,7 +46,7 @@ export interface BothRound {
   unsettled(): readonly UnsettledReason[];
   readonly safetyDirty: SafetyDirtyView;
   /** 包装一个写端口方法:单飞(嵌套 / 并发 = `RoundInternalError`)、`finally` 无条件推进 `gen` */
-  writeAdapter<K extends WriteKind, F>(kind: K, impl: F): F;
+  writeAdapter<K extends WriteKind, F extends AsyncFn>(kind: K, impl: F): F;
   readonly [roundBrand]: 'both';
 }
 
@@ -54,7 +57,7 @@ export interface RsiOnlyRound {
   gen(): number;
   unsettled(): readonly UnsettledReason[];
   readonly safetyDirty: SafetyDirtyView;
-  writeAdapter<K extends WriteKind, F>(kind: K, impl: F): F;
+  writeAdapter<K extends WriteKind, F extends AsyncFn>(kind: K, impl: F): F;
   readonly [roundBrand]: 'rsi_only';
 }
 
@@ -127,8 +130,10 @@ function makeInternals(form: 'both' | 'rsi_only'): RoundInternals {
   };
 }
 
-function writeAdapterOf(st: RoundInternals): <K extends WriteKind, F>(kind: K, impl: F) => F {
-  return function writeAdapter<K extends WriteKind, F>(kind: K, impl: F): F {
+function writeAdapterOf(
+  st: RoundInternals,
+): <K extends WriteKind, F extends AsyncFn>(kind: K, impl: F) => F {
+  return function writeAdapter<K extends WriteKind, F extends AsyncFn>(kind: K, impl: F): F {
     if (!WRITE_KIND_SET.has(kind))
       throw new RoundInternalError(`unknown_write_kind:${String(kind)}`);
     if (typeof impl !== 'function') throw new RoundInternalError('write_impl_not_function');

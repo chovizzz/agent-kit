@@ -10,6 +10,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
 import type { RsiLockHandle } from '../../../src/rsi/lock.js';
 import type { PersonalLockHandle } from '../../../src/rsi/personal/personal-lock.js';
 import type { JudgeGrowthVerdict } from '../../../src/rsi/personal/judge-slot.js';
+import { createRoundBudget } from '../../../src/rsi/personal/stage/settle.js';
 import {
   evaluateGrowth,
   requireGrowth,
@@ -160,6 +161,8 @@ describe('候选类 op 强制带候选(省略 = 类型错误)', () => {
 describe('其它类型钉子', () => {
   it('WriteKind / UnsettledReason 的取值受限', () => {
     const proofs = (r: BothRound): void => {
+      // @ts-expect-error 同步实现不可包装(包装后一定是异步,类型必须如实)
+      void r.writeAdapter('effects', () => 42);
       // @ts-expect-error 未知写种类
       void r.writeAdapter('nope', () => Promise.resolve());
       // @ts-expect-error 未决原因的模板受 WriteKind 约束
@@ -187,6 +190,16 @@ describe('其它类型钉子', () => {
       | 'bootstrap'
       | 'admission'
     >();
+  });
+
+  it('持两锁的回合必须给 startRollbackLimit(类型必填);rsi-only 回合不需要', () => {
+    const proofs = (both: BothRound, busy: RsiOnlyRound): void => {
+      // @ts-expect-error 持两锁的回合缺 startRollbackLimit
+      void createRoundBudget(both);
+      void createRoundBudget(both, { startRollbackLimit: 3 }); // 正向对照
+      void createRoundBudget(busy); // rsi-only 不需要
+    };
+    expect(typeof proofs).toBe('function');
   });
 
   it('rsi-only 的 tripAndMute 只收 RsiOnlyTripReason:个人侧码在类型上不可传入', () => {

@@ -18,6 +18,7 @@ import type {
   JudgeSlots,
 } from '../../../src/rsi/personal/judge-slot.js';
 import type { PersonalFault, PersonalFaultCode } from '../../../src/rsi/personal/stage/errors.js';
+import type { FallbackTrack } from '../../../src/rsi/personal/stage/fallback.js';
 import type {
   AdmissionFact,
   BarrierDeny,
@@ -104,12 +105,12 @@ describe('运行期导出清单(多一个 / 少一个符号都红;GrowthPass 的
       'GROWTH_DENY_CODES',
       'GROWTH_OPS',
       'OP_CHECK_PROFILE',
+      'checkGrowthVeto',
       'evaluateGrowth',
       'growthDenied',
       'isGrowthPass',
       'opOfReq',
       'requireGrowth',
-      'requireGrowthFresh',
       'sameOp',
     ]);
   });
@@ -288,6 +289,16 @@ describe('2 错误域 / 写适配器 / 回合', () => {
   });
 });
 
+describe('2b 兜底协调器的状态', () => {
+  it('FallbackTrack 四个字段(pending 是单飞的共享 Promise)', () => {
+    expectTypeOf<K<FallbackTrack>>().toEqualTypeOf<
+      'pCompleted' | 'fallbackTried' | 'fb' | 'pending'
+    >();
+    expectTypeOf<FallbackTrack['pending']>().toEqualTypeOf<Promise<FallbackReport | null> | null>();
+    expect(true).toBe(true);
+  });
+});
+
 describe('3 授权类型(C 为唯一来源)', () => {
   it('GrowthOp / GrowthReq / GrowthVerdict / GrowthPass', () => {
     expectTypeOf<GrowthOp['cap']>().toEqualTypeOf<
@@ -311,7 +322,7 @@ describe('3 授权类型(C 为唯一来源)', () => {
     >();
     expect(true).toBe(true);
   });
-  it('evaluateGrowth / requireGrowth / requireGrowthFresh 的签名', async () => {
+  it('evaluateGrowth / requireGrowth / checkGrowthVeto 的签名', async () => {
     const m = await import('../../../src/rsi/personal/stage/growth.js');
     expectTypeOf(m.evaluateGrowth).toEqualTypeOf<
       (
@@ -324,7 +335,7 @@ describe('3 授权类型(C 为唯一来源)', () => {
     expectTypeOf(m.requireGrowth).toEqualTypeOf<
       (pass: GrowthPass, round: BothRound, op: GrowthOp) => void
     >();
-    expectTypeOf(m.requireGrowthFresh).toEqualTypeOf<
+    expectTypeOf(m.checkGrowthVeto).toEqualTypeOf<
       (
         pass: GrowthPass,
         round: BothRound,
@@ -333,7 +344,7 @@ describe('3 授权类型(C 为唯一来源)', () => {
       ) => Promise<void>
     >();
     expect(m.requireGrowth.length).toBe(3);
-    expect(m.requireGrowthFresh.length).toBe(4);
+    expect(m.checkGrowthVeto.length).toBe(4);
     expect(m.evaluateGrowth.length).toBe(4);
   });
   it('GrowthStage { ops };GrowthReaders 每个方法必收 round(无参缓存读法不存在)', () => {

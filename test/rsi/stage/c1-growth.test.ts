@@ -1,5 +1,5 @@
 /**
- * C1a:增影响授权——`evaluateGrowth` 的纯判定(按 op 的检查子集、优先级、fail-closed)、`GrowthPass` 的一次性与 `gen` 失效、`requireGrowth` / `requireGrowthFresh`。
+ * C1a:增影响授权——`evaluateGrowth` 的纯判定(按 op 的检查子集、优先级、fail-closed)、`GrowthPass` 的一次性与 `gen` 失效、`requireGrowth` / `checkGrowthVeto`。
  * 每条不变量一个负向用例 + 一个正向对照;期望值由测试自己手写(不从被测的表里派生)。
  */
 import { describe, expect, it } from 'vitest';
@@ -22,7 +22,7 @@ import {
   isGrowthPass,
   opOfReq,
   requireGrowth,
-  requireGrowthFresh,
+  checkGrowthVeto,
   sameOp,
   type GrowthOp,
   type GrowthPass,
@@ -47,6 +47,12 @@ async function pass(round: BothRound, req: GrowthReq, r = readers()): Promise<Gr
   const v = await evaluateGrowth(round, req, r, STAGE_ALL);
   if (!isGrowthPass(v)) throw new Error(`expected pass, got ${JSON.stringify(v)}`);
   return v;
+}
+/** 铸造 + 现读外部否决事实(无否决):D 的合法写序 evaluateGrowth → checkGrowthVeto → 写(内含 requireGrowth) */
+async function readyPass(round: BothRound, req: GrowthReq): Promise<GrowthPass> {
+  const p = await pass(round, req);
+  await checkGrowthVeto(p, round, opOfReq(req), readers());
+  return p;
 }
 const deny = async (
   round: BothRound,
@@ -127,6 +133,7 @@ describe('冻结的取值', () => {
       'unsettled',
       'vetoed',
       'veto_unreadable',
+      'veto_not_checked',
     ]);
   });
 
@@ -1052,7 +1059,7 @@ describe('requireGrowth:一次性、gen 失效、op / nonce / 回合绑定', () 
 
   it('合法一次消费;同一 pass 第二次 → already_used(一个 pass 至多服务一次写)', async () => {
     const { round } = await openBoth();
-    const p = await pass(round, reqOf('candidate_create'));
+    const p = await readyPass(round, reqOf('candidate_create'));
     expect(() => requireGrowth(p, round, CREATE)).not.toThrow();
     expect(() => requireGrowth(p, round, CREATE)).toThrow(StaleGrowth);
     try {
@@ -1079,7 +1086,7 @@ describe('requireGrowth:一次性、gen 失效、op / nonce / 回合绑定', () 
     const again = await openBoth(); // 同一组 nonce,不同回合对象
     const p2 = await pass(a.round, reqOf('candidate_create'));
     expect(reasonOf(() => requireGrowth(p2, again.round, CREATE))).toBe('round_mismatch');
-    const p3 = await pass(a.round, reqOf('candidate_create'));
+    const p3 = await readyPass(a.round, reqOf('candidate_create'));
     expect(reasonOf(() => requireGrowth(p3, a.round, CREATE))).toBe('NO_THROW'); // 正向对照
   });
 
@@ -1104,7 +1111,7 @@ describe('requireGrowth:一次性、gen 失效、op / nonce / 回合绑定', () 
 
   it('op_mismatch_refused:换候选 id / 换 sha / 换能力 / 候选类 pass 换成非候选 op', async () => {
     const { round } = await openBoth();
-    const mk = (): Promise<GrowthPass> => pass(round, reqOf('grant', cand()));
+    const mk = (): Promise<GrowthPass> => readyPass(round, reqOf('grant', cand()));
     const base = { cap: 'grant', cand: { id: 'cand-1', content_sha256: 'a'.repeat(64) } } as const;
     for (const wrong of [
       { cap: 'grant', cand: { id: 'cand-2', content_sha256: 'a'.repeat(64) } },
@@ -1136,7 +1143,7 @@ describe('requireGrowth:一次性、gen 失效、op / nonce / 回合绑定', () 
 
   it('强转 / 展开拷贝造出的 pass → not_minted(登记表只认本模块铸造的对象)', async () => {
     const { round } = await openBoth();
-    const real = await pass(round, reqOf('candidate_create'));
+    const real = await readyPass(round, reqOf('candidate_create'));
     const forged = {
       rsiNonce: round.rsiNonce,
       personalNonce: round.personalNonce,
@@ -1172,7 +1179,7 @@ describe('requireGrowth:一次性、gen 失效、op / nonce / 回合绑定', () 
 
   it('legit_authorized_write_not_self_invalidated:授权写内 requireGrowth 成功,写完 gen 前进;同一 pass 不能服务第二次写;新写需新 pass', async () => {
     const { round } = await openBoth();
-    const p = await pass(round, reqOf('candidate_create'));
+    const p = await readyPass(round, reqOf('candidate_create'));
     const written: string[] = [];
     const write = round.writeAdapter('candidate_record', async () => {
       requireGrowth(p, round, CREATE); // 适配器内、紧贴提交边界:gen 仍是铸造时的值
@@ -1191,11 +1198,11 @@ describe('requireGrowth:一次性、gen 失效、op / nonce / 回合绑定', () 
     expect(written).toEqual(['w1']);
     // 新 pass 对应新 gen(需先确认本轮没有被第二次写失败置为未决:此处用另一回合演示合法的第二次授权写)
     const w2 = await openBoth({ rsi: 'cccc3333cccc3333', personal: 'dddd4444dddd4444' });
-    const q1 = await pass(w2.round, reqOf('candidate_create'));
+    const q1 = await readyPass(w2.round, reqOf('candidate_create'));
     await w2.round.writeAdapter('candidate_record', async () =>
       requireGrowth(q1, w2.round, CREATE),
     )();
-    const q2 = await pass(w2.round, reqOf('candidate_create'));
+    const q2 = await readyPass(w2.round, reqOf('candidate_create'));
     expect(q2.gen).toBe(1);
     await w2.round.writeAdapter('candidate_record', async () =>
       requireGrowth(q2, w2.round, CREATE),
@@ -1205,7 +1212,7 @@ describe('requireGrowth:一次性、gen 失效、op / nonce / 回合绑定', () 
   });
 });
 
-describe('requireGrowthFresh:消费前现读外部否决事实', () => {
+describe('checkGrowthVeto:消费前现读外部否决事实(requireGrowth 的前置;同步入口绕不过现读)', () => {
   const CREATE: GrowthOp = { cap: 'candidate_create' };
   const reasonOfAsync = async (f: () => Promise<void>): Promise<string> => {
     try {
@@ -1215,16 +1222,42 @@ describe('requireGrowthFresh:消费前现读外部否决事实', () => {
     }
     return 'NO_THROW';
   };
+  const reasonOfSync = (f: () => void): string => {
+    try {
+      f();
+    } catch (e) {
+      return e instanceof StaleGrowth ? e.reason : `OTHER:${String(e)}`;
+    }
+    return 'NO_THROW';
+  };
 
-  it('无否决 → 消费成功(之后同一 pass already_used)', async () => {
+  it('require_without_veto_check_refused:铸造后没经 checkGrowthVeto 就消费 → veto_not_checked(并作废);经过现读 → 通过(正向对照)', async () => {
+    const { round } = await openBoth();
+    const raw = await pass(round, reqOf('candidate_create'));
+    expect(reasonOfSync(() => requireGrowth(raw, round, CREATE))).toBe('veto_not_checked');
+    expect(reasonOfSync(() => requireGrowth(raw, round, CREATE))).toBe('already_used');
+    const ready = await readyPass(round, reqOf('candidate_create'));
+    expect(reasonOfSync(() => requireGrowth(ready, round, CREATE))).toBe('NO_THROW');
+  });
+
+  it('外部事实在 pass 铸造之后才出现(无持久写,gen 不变)→ 现读命中,消费被拒:同步入口无法绕过', async () => {
+    const { round } = await openBoth();
+    const p = await pass(round, reqOf('candidate_create'));
+    const vetoed = readers({
+      externalVeto: () => Promise.resolve({ vetoed: true, why: 'marker' }),
+    });
+    expect(await reasonOfAsync(() => checkGrowthVeto(p, round, CREATE, vetoed))).toBe('vetoed');
+    expect(reasonOfSync(() => requireGrowth(p, round, CREATE))).toBe('already_used');
+  });
+
+  it('无否决 → 记录现读通过;读到的 pass 仍只能消费一次', async () => {
     const { round } = await openBoth();
     const p = await pass(round, reqOf('candidate_create'));
     const r = readers();
-    expect(await reasonOfAsync(() => requireGrowthFresh(p, round, CREATE, r))).toBe('NO_THROW');
+    expect(await reasonOfAsync(() => checkGrowthVeto(p, round, CREATE, r))).toBe('NO_THROW');
     expect(r.calls).toEqual(['externalVeto']);
-    expect(await reasonOfAsync(() => requireGrowthFresh(p, round, CREATE, readers()))).toBe(
-      'already_used',
-    );
+    expect(reasonOfSync(() => requireGrowth(p, round, CREATE))).toBe('NO_THROW');
+    expect(reasonOfSync(() => requireGrowth(p, round, CREATE))).toBe('already_used');
   });
 
   it('铸造 pass 后出现 B/U / 暂停 / 凭据命中 → vetoed 且 pass 作废', async () => {
@@ -1232,10 +1265,8 @@ describe('requireGrowthFresh:消费前现读外部否决事实', () => {
     for (const why of ['marker', 'auto_pause', 'flags', 'credential'] as const) {
       const p = await pass(round, reqOf('candidate_create'));
       const r = readers({ externalVeto: () => Promise.resolve({ vetoed: true, why }) });
-      expect(await reasonOfAsync(() => requireGrowthFresh(p, round, CREATE, r)), why).toBe(
-        'vetoed',
-      );
-      expect(await reasonOfAsync(() => requireGrowthFresh(p, round, CREATE, readers()))).toBe(
+      expect(await reasonOfAsync(() => checkGrowthVeto(p, round, CREATE, r)), why).toBe('vetoed');
+      expect(await reasonOfAsync(() => checkGrowthVeto(p, round, CREATE, readers()))).toBe(
         'already_used',
       );
     }
@@ -1250,18 +1281,14 @@ describe('requireGrowthFresh:消费前现读外部否决事实', () => {
     ]) {
       const p = await pass(round, reqOf('candidate_create'));
       const r = readers({ externalVeto: bad as never });
-      expect(await reasonOfAsync(() => requireGrowthFresh(p, round, CREATE, r))).toBe(
+      expect(await reasonOfAsync(() => checkGrowthVeto(p, round, CREATE, r))).toBe(
         'veto_unreadable',
       );
     }
     const p = await pass(round, reqOf('candidate_create'));
     const lost = readers({ externalVeto: () => Promise.reject(new PersonalLockLost()) });
-    expect(await reasonOfAsync(() => requireGrowthFresh(p, round, CREATE, lost))).toBe(
-      'OTHER:Error',
-    );
-    expect(await reasonOfAsync(() => requireGrowthFresh(p, round, CREATE, readers()))).toBe(
-      'already_used',
-    );
+    expect(await reasonOfAsync(() => checkGrowthVeto(p, round, CREATE, lost))).toBe('OTHER:Error');
+    expect(reasonOfSync(() => requireGrowth(p, round, CREATE))).toBe('already_used');
   });
 
   it('已经 stale(gen 变了)→ 不读否决事实(同步校验先失败),作废', async () => {
@@ -1269,11 +1296,19 @@ describe('requireGrowthFresh:消费前现读外部否决事实', () => {
     const p = await pass(round, reqOf('candidate_create'));
     await round.writeAdapter('audit_append', () => Promise.resolve())();
     const r = readers();
-    expect(await reasonOfAsync(() => requireGrowthFresh(p, round, CREATE, r))).toBe('gen_changed');
+    expect(await reasonOfAsync(() => checkGrowthVeto(p, round, CREATE, r))).toBe('gen_changed');
     expect(r.calls).toEqual([]);
   });
 
-  it('现读期间发生了写 → 消费时 gen_changed(读在消费之前、紧贴消费,但不能掩盖读与消费之间的写)', async () => {
+  it('现读通过之后、消费之前发生了写 → 消费时 gen_changed(现读不能掩盖其后的写)', async () => {
+    const { round } = await openBoth();
+    const p = await pass(round, reqOf('candidate_create'));
+    await checkGrowthVeto(p, round, CREATE, readers());
+    await round.writeAdapter('audit_append', () => Promise.resolve())();
+    expect(reasonOfSync(() => requireGrowth(p, round, CREATE))).toBe('gen_changed');
+  });
+
+  it('现读期间发生了写 → 消费时 gen_changed(现读标记绑定读时的 gen)', async () => {
     const { round } = await openBoth();
     const p = await pass(round, reqOf('candidate_create'));
     const r = readers({
@@ -1282,6 +1317,102 @@ describe('requireGrowthFresh:消费前现读外部否决事实', () => {
         return { vetoed: false as const };
       },
     });
-    expect(await reasonOfAsync(() => requireGrowthFresh(p, round, CREATE, r))).toBe('gen_changed');
+    // 读期间 gen 前进:pass 已过时,消费必拒(不论现读结果)
+    await reasonOfAsync(() => checkGrowthVeto(p, round, CREATE, r));
+    expect(reasonOfSync(() => requireGrowth(p, round, CREATE))).not.toBe('NO_THROW');
+  });
+});
+
+describe('请求快照:检查对象与获准对象不可分叉', () => {
+  it('评估期间调用方改写原请求对象(换候选 / 改 id / 改来源)→ reader 看到的与 pass 绑定的都是调用时的快照', async () => {
+    const { round } = await openBoth();
+    const original = cand({ id: 'cand-A', content_sha256: 'a'.repeat(64) });
+    const req = { op: 'grant', cand: original } as { op: 'grant'; cand: ReturnType<typeof cand> };
+    const seen: string[] = [];
+    const r = readers({
+      locks: async () => {
+        // 等待锁检查期间,调用方通过可变别名把请求换成候选 B 并改写来源
+        req.cand = cand({ id: 'cand-B', content_sha256: 'b'.repeat(64) });
+        (original as { id: string }).id = 'cand-MUTATED';
+        (original as { source: unknown }).source = null;
+        await Promise.resolve();
+      },
+      taint: (_r, q) => {
+        seen.push(`taint:${(q as { cand: { id: string } }).cand.id}`);
+        return Promise.resolve({
+          capabilityReady: true,
+          scan: 'ok' as const,
+          rescanRequired: false,
+          rescanned: false,
+          candidate: 'clean' as const,
+        });
+      },
+      judge: (_r, q) => {
+        seen.push(`judge:${q.cand.id}`);
+        return Promise.resolve({ ok: true as const });
+      },
+    });
+    const v = await evaluateGrowth(round, req, r, STAGE_ALL);
+    expect(isGrowthPass(v)).toBe(true);
+    expect(seen).toEqual(['taint:cand-A', 'judge:cand-A']);
+    if (isGrowthPass(v)) {
+      expect(v.op).toEqual({
+        cap: 'grant',
+        cand: { id: 'cand-A', content_sha256: 'a'.repeat(64) },
+      });
+    }
+  });
+
+  it('reader 收到的请求是冻结的快照(不能被 reader 改写)', async () => {
+    const { round } = await openBoth();
+    let frozen = false;
+    const r = readers({
+      judge: (_r, q) => {
+        frozen = Object.isFrozen(q) && Object.isFrozen(q.cand);
+        return Promise.resolve({ ok: true as const });
+      },
+    });
+    await evaluateGrowth(round, reqOf('grant'), r, STAGE_ALL);
+    expect(frozen).toBe(true);
+  });
+
+  it('畸形的来源(非对象)按「来源缺失」处理 → source_unknown', async () => {
+    const { round } = await openBoth();
+    const bad = cand({ source: 'oops' as never });
+    expect(await deny(round, reqOf('grant', bad), readers())).toBe('source_unknown');
+  });
+});
+
+describe('G6 对畸形事实 fail-closed(逐字段)', () => {
+  const base = {
+    capabilityReady: true,
+    scan: 'ok',
+    rescanRequired: false,
+    rescanned: false,
+    candidate: 'clean',
+  };
+  const mk = (over: Record<string, unknown>) =>
+    readers({ taint: () => Promise.resolve({ ...base, ...over } as never) });
+  it('G6 事实非布尔 / 缺键 / 非法枚举 → 拒绝(不被解释成「不要求重扫」)', async () => {
+    const { round } = await openBoth();
+    for (const [name, over, code] of [
+      ['rescanRequired 非布尔', { rescanRequired: 'yes' }, 'taint_unavailable'],
+      ['rescanRequired 缺键', { rescanRequired: undefined }, 'taint_unavailable'],
+      ['rescanned 非布尔', { rescanned: 1 }, 'taint_unavailable'],
+      ['rescanned 缺键', { rescanned: undefined }, 'taint_unavailable'],
+      ['scan 非法枚举', { scan: 'maybe' }, 'taint_unavailable'],
+      ['capabilityReady 非布尔', { capabilityReady: 'true' }, 'taint_unavailable'],
+      ['candidate 非法枚举', { candidate: 'fine' }, 'source_unknown'],
+    ] as const) {
+      expect(await deny(round, reqOf('grant'), mk(over)), name).toBe(code);
+      if (!name.startsWith('candidate')) {
+        // 创建不消费候选字段,只消费扫描 / 重扫字段
+        expect(await deny(round, reqOf('candidate_create'), mk(over)), `create:${name}`).not.toBe(
+          'PASS',
+        );
+      }
+    }
+    // 正向对照:合法事实通过
+    expect(await deny(round, reqOf('grant'), mk({}))).toBe('PASS');
   });
 });

@@ -61,7 +61,7 @@ describe('settleSafety', () => {
     expect(p.calls).toEqual(['enforceMute', 'reconcileCaches', 'verifyMuted']);
     expect(round.safetyDirty.isDirty()).toBe(false);
     const again = await settleSafety(round, p, budget);
-    expect(again).toEqual({ kind: 'settled', swept: false });
+    expect(again).toEqual({ kind: 'settled', swept: true }); // 已扫过:原样返回先前结果,不再扫
     expect(p.calls.length).toBe(3);
     expect(budget.used('enforceMute')).toBe(1);
     expect(budget.used('reconcileCaches')).toBe(1);
@@ -89,7 +89,7 @@ describe('settleSafety', () => {
     expect(await settleSafety(round, p, budget)).toEqual({ kind: 'settled', swept: true });
     expect(round.safetyDirty.isDirty()).toBe(false);
     expect(round.gen()).toBe(3); // gen 照常推进(1 次脏写 + 2 次扫尾写)
-    expect(await settleSafety(round, p, budget)).toEqual({ kind: 'settled', swept: false });
+    expect(await settleSafety(round, p, budget)).toEqual({ kind: 'settled', swept: true });
     // 正向对照:扫尾之外同一种写会置脏
     await dirty(round);
     expect(round.safetyDirty.isDirty()).toBe(true);
@@ -233,5 +233,72 @@ describe('settleSafety', () => {
     const pb = sweepPorts(b.round);
     await settleSafety(b.round, pb, createRoundBudget(b.round, { startRollbackLimit: 1 }));
     expect(pb.calls.length).toBe(3);
+  });
+
+  it('settle_once_per_round_failure_not_retried:失败后再调用 → 不再扫(先前的未决结果原样返回,脏标记保持置位),端口与预算都不再被动用', async () => {
+    const { round } = await openBoth();
+    await dirty(round);
+    const budget = createRoundBudget(round, { startRollbackLimit: 3 });
+    const p = sweepPorts(round, {
+      verifyMuted: () => {
+        p.calls.push('verifyMuted');
+        return Promise.resolve({ ok: false, why: 'unreadable' });
+      },
+    });
+    const first = await settleSafety(round, p, budget);
+    expect(first.kind).toBe('unsettled');
+    const second = await settleSafety(round, p, budget);
+    expect(second).toBe(first); // 同一个结果对象
+    // 用一个全新的预算 + 全新的端口也绕不过:状态在回合上
+    const p2 = sweepPorts(round);
+    const third = await settleSafety(
+      round,
+      p2,
+      createRoundBudget(round, { startRollbackLimit: 3 }),
+    );
+    expect(third).toBe(first);
+    expect(p2.calls).toEqual([]);
+    expect(p.calls.length).toBe(3);
+    expect(budget.used('enforceMute')).toBe(1);
+    expect(round.safetyDirty.isDirty()).toBe(true);
+  });
+
+  it('settle_concurrent_call_shares_in_flight_result:进行中再调用 → 等同一个结果(不会因脏标记已被取走而提前报 settled)', async () => {
+    const { round } = await openBoth();
+    await dirty(round);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const p = sweepPorts(round, {
+      enforceMute: async () => {
+        p.calls.push('enforceMute');
+        await gate;
+        return { mute: 'unreliable', fault: 'mute_unreliable' };
+      },
+    });
+    const budget = createRoundBudget(round, { startRollbackLimit: 3 });
+    const a = settleSafety(round, p, budget);
+    const b = settleSafety(round, p, budget);
+    expect(b).toBe(a);
+    release();
+    const [ra, rb] = await Promise.all([a, b]);
+    expect(ra.kind).toBe('unsettled'); // 第二个调用方也看到最终的失败,而不是「settled」
+    expect(rb).toBe(ra);
+    expect(p.calls.filter((c) => c === 'enforceMute').length).toBe(1);
+  });
+
+  it('首次调用时脏标记为空不算「已扫过」:其后真有脏写时仍可扫这一次;扫完成功后再出现新的脏写 → unsettled(不重扫)', async () => {
+    const { round } = await openBoth();
+    const budget = createRoundBudget(round, { startRollbackLimit: 3 });
+    const p = sweepPorts(round);
+    expect(await settleSafety(round, p, budget)).toEqual({ kind: 'settled', swept: false });
+    expect(p.calls).toEqual([]);
+    await dirty(round);
+    expect(await settleSafety(round, p, budget)).toEqual({ kind: 'settled', swept: true });
+    expect(p.calls.length).toBe(3);
+    await dirty(round); // 扫尾之后又出现脏写
+    const late = await settleSafety(round, p, budget);
+    expect(late).toEqual({ kind: 'unsettled', reason: 'safety_not_settled', faults: [] });
+    expect(p.calls.length).toBe(3); // 没有第二次扫尾
+    expect(round.unsettled()).toContain('safety_not_settled');
   });
 });

@@ -12,7 +12,13 @@
  */
 import { RoundInternalError, classify, type PersonalFault } from './errors.js';
 import type { MutedVerdict, EnforceResult, StepOutcome } from './ports.js';
-import { markRoundUnsettled, roundInternals, type AnyRound } from './round.js';
+import {
+  markRoundUnsettled,
+  roundInternals,
+  type AnyRound,
+  type BothRound,
+  type RsiOnlyRound,
+} from './round.js';
 
 // ---------- RoundBudget ----------
 export const BUDGET_PORTS = Object.freeze([
@@ -58,6 +64,12 @@ export interface RoundBudget {
   limit(port: BudgetPort): number;
 }
 
+/** 持两锁的回合**必须**给 `startRollbackLimit`(类型即必填;运行期再校验);rsi-only 回合不需要 */
+export function createRoundBudget(
+  round: BothRound,
+  opts: { readonly startRollbackLimit: number },
+): RoundBudget;
+export function createRoundBudget(round: RsiOnlyRound): RoundBudget;
 export function createRoundBudget(
   round: AnyRound,
   opts: { readonly startRollbackLimit?: number } = {},
@@ -114,13 +126,58 @@ export type SettleResult =
 
 type StepRun = 'ok' | 'not_ok' | { readonly rethrow: unknown };
 
-export async function settleSafety(
+interface SweepRecord {
+  running: Promise<SettleResult>;
+  result: SettleResult | null;
+}
+const sweeps = new WeakMap<object, SweepRecord>();
+
+/**
+ * 每轮至多**真正扫尾一次**(状态在回合上:未开始 / 进行中 / 已完成):
+ *  - 进行中再调用 → 返回**同一个** Promise(不会因脏标记已被取走而提前报 `settled`);
+ *  - 已扫过再调用 → 不再扫:先前的结果是 `unsettled` 就原样返回(失败后不能靠再调一次重来,脏标记保持置位);先前 `settled` 而其后又出现新的脏写 → `unsettled`(不重扫);
+ *  - 第一次调用时脏标记为空 → `settled`(零调用,且**不算**已扫过:其后真有脏写时仍可扫这一次)。
+ */
+export function settleSafety(
   round: AnyRound,
   ports: SweepPorts,
   budget: RoundBudget,
 ): Promise<SettleResult> {
   const st = roundInternals(round);
-  if (st.dirty.size === 0) return { kind: 'settled', swept: false }; // 零调用
+  const prev = sweeps.get(round);
+  if (prev !== undefined) {
+    if (prev.result === null) return prev.running;
+    if (prev.result.kind === 'unsettled') return Promise.resolve(prev.result);
+    if (st.dirty.size === 0) return Promise.resolve(prev.result);
+    markRoundUnsettled(round, 'safety_not_settled');
+    return Promise.resolve({ kind: 'unsettled', reason: 'safety_not_settled', faults: [] });
+  }
+  if (st.dirty.size === 0) return Promise.resolve({ kind: 'settled', swept: false }); // 零调用
+  const rec: SweepRecord = {
+    running: Promise.resolve({ kind: 'settled', swept: false }),
+    result: null,
+  };
+  sweeps.set(round, rec);
+  rec.running = sweepOnce(round, ports, budget).then(
+    (r) => {
+      rec.result = r;
+      return r;
+    },
+    (e: unknown) => {
+      // rsi 失锁上抛:本轮不再有「可重试」的扫尾(脏标记已放回,调用方按失锁结束)
+      rec.result = { kind: 'unsettled', reason: 'safety_not_settled', faults: [] };
+      throw e;
+    },
+  );
+  return rec.running;
+}
+
+async function sweepOnce(
+  round: AnyRound,
+  ports: SweepPorts,
+  budget: RoundBudget,
+): Promise<SettleResult> {
+  const st = roundInternals(round);
   const snapshot = st.takeDirty(); // 此刻清零(先于任何扫尾调用)
   const faults: PersonalFault[] = [];
   const attempt = async (port: BudgetPort | null, f: () => Promise<boolean>): Promise<StepRun> => {

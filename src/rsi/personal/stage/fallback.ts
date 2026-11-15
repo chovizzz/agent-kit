@@ -24,13 +24,16 @@ export interface FallbackTrack {
   pCompleted: boolean;
   /** 兜底已被调用过(单飞) */
   fallbackTried: boolean;
-  /** 兜底结果;null = 未调用(跳过) */
+  /** 兜底结果;null = 未调用(跳过)或仍在进行 */
   fb: FallbackReport | null;
+  /** 进行中的兜底(单飞的共享 Promise):第二个入口**等同一个结果**,不能在兜底未完成时拿到 null 就去 `finish` */
+  pending: Promise<FallbackReport | null> | null;
 }
 export const newFallbackTrack = (): FallbackTrack => ({
   pCompleted: false,
   fallbackTried: false,
   fb: null,
+  pending: null,
 });
 
 export type FallbackSkipReason =
@@ -65,8 +68,9 @@ export function fallbackSkipReason(input: {
 }
 
 /**
- * 唯一调用点。返回本次(或此前已存的)`track.fb`;跳过时返回 `track.fb`(可能为 null)。永不抛。
- * `already_tried` 时**读同一个 `track.fb`**,不再调用——所以 `aborted(rsi_lock_lost)` 在两条入口下都导致「不调 finish」。
+ * 唯一调用点。返回本次(或此前已存的)兜底结果;跳过时返回 `track.fb`(可能为 null)。永不抛。
+ * **单飞 + 共享结果**:已调用过(`fallbackTried`)时**等同一个进行中的 Promise**(不再调用)——所以 `aborted(rsi_lock_lost)` 在两条入口(catch 与 P 违约包装层)下
+ * 即使并发进入,也都拿到最终的 `aborted` 而导致「不调 finish」,第二个入口不会在兜底未完成时拿到 null 就先去 `finish`。
  */
 export async function runFallbackOnce(input: {
   readonly track: FallbackTrack;
@@ -76,15 +80,20 @@ export async function runFallbackOnce(input: {
   readonly outcome: RsiOutcome;
 }): Promise<FallbackReport | null> {
   const { track, stage, ctx } = input;
+  if (track.fallbackTried) return track.pending ?? track.fb;
   if (fallbackSkipReason(input) !== null || stage === undefined) return track.fb;
   track.fallbackTried = true; // 先置位再调用:兜底内的任何重入都看到「已调用」
-  try {
-    track.fb = await stage.safetyFallback(ctx);
-  } catch (e) {
-    track.fb = isRsiLockLost(e)
-      ? { kind: 'aborted', why: 'rsi_lock_lost' }
-      : { kind: 'threw', name: e instanceof Error ? e.name : typeof e };
-  }
+  const run = async (): Promise<FallbackReport | null> => {
+    try {
+      return await stage.safetyFallback(ctx);
+    } catch (e) {
+      return isRsiLockLost(e)
+        ? { kind: 'aborted', why: 'rsi_lock_lost' }
+        : { kind: 'threw', name: e instanceof Error ? e.name : typeof e };
+    }
+  };
+  track.pending = run();
+  track.fb = await track.pending;
   return track.fb;
 }
 

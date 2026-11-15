@@ -191,10 +191,16 @@ describe('fallbackSkipReason(纯判定;表驱动)', () => {
   });
   it('pCompleted / fallbackTried / 无 stage / 无资格 / eligible 抛错 → 各自的原因', () => {
     expect(
-      fallbackSkipReason({ ...base, track: { pCompleted: true, fallbackTried: false, fb: null } }),
+      fallbackSkipReason({
+        ...base,
+        track: { pCompleted: true, fallbackTried: false, fb: null, pending: null },
+      }),
     ).toBe('p_completed');
     expect(
-      fallbackSkipReason({ ...base, track: { pCompleted: false, fallbackTried: true, fb: null } }),
+      fallbackSkipReason({
+        ...base,
+        track: { pCompleted: false, fallbackTried: true, fb: null, pending: null },
+      }),
     ).toBe('already_tried');
     expect(fallbackSkipReason({ ...base, stage: undefined })).toBe('no_stage');
     expect(fallbackSkipReason({ ...base, stage: { eligible: () => false } })).toBe('ineligible');
@@ -244,6 +250,29 @@ describe('runFallbackOnce(单飞协调器;永不抛)', () => {
     expect(viaCatch).toBe(viaP);
   });
 
+  it('fallback_concurrent_entries_share_in_flight_result:并发入口等同一个进行中的兜底(不会拿到 null 就先去 finish);最终 aborted 对两个入口都禁止 finish', async () => {
+    let release!: (r: FallbackReport) => void;
+    const gate = new Promise<FallbackReport>((r) => (release = r));
+    const s = stageOf(() => gate);
+    const t = newFallbackTrack();
+    const viaP = run(s, t); // P 违约包装层(进行中)
+    const viaCatch = run(s, t); // catch 同时进入
+    let settled = false;
+    void viaCatch.then(() => (settled = true));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).toBe(false); // 第二个入口没有提前返回
+    expect(t.fb).toBeNull();
+    release({ kind: 'aborted', why: 'rsi_lock_lost' });
+    const [a, b] = await Promise.all([viaP, viaCatch]);
+    expect(s.calls).toBe(1); // 实际兜底只调用一次
+    expect(a).toEqual({ kind: 'aborted', why: 'rsi_lock_lost' });
+    expect(b).toBe(a);
+    // 两个入口据此得出同一个收尾计划:都不调 finish
+    expect(planAfterFallback('io_error', a).callFinish).toBe(false);
+    expect(planAfterFallback('io_error', b).callFinish).toBe(false);
+  });
+
   it('跳过:零写入类 / rsi 失锁 / pCompleted / 无 stage / 无资格 → 不调用,返回 track.fb(null)', async () => {
     const s = stageOf(() => Promise.resolve({ kind: 'muted' }));
     for (const outcome of FALLBACK_SKIP_OUTCOMES)
@@ -251,7 +280,9 @@ describe('runFallbackOnce(单飞协调器;永不抛)', () => {
     expect(
       await run(s, newFallbackTrack(), { original: new RsiLockError('lock_lost') }),
     ).toBeNull();
-    expect(await run(s, { pCompleted: true, fallbackTried: false, fb: null })).toBeNull();
+    expect(
+      await run(s, { pCompleted: true, fallbackTried: false, fb: null, pending: null }),
+    ).toBeNull();
     expect(await run(undefined)).toBeNull();
     expect(await run(stageOf(() => Promise.resolve({ kind: 'muted' }), false))).toBeNull();
     expect(s.calls).toBe(0);

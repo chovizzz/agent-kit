@@ -1,7 +1,7 @@
 /**
  * §21 V1 装配块 C1a——**增影响授权**(C v2 §8;D v4 §3.2 / §3.3 与之合一,**这是唯一一套** `GrowthPass` / `requireGrowth` / `gen`):
  * `GrowthPass`(一次性品牌值,绑两把锁 nonce、写代数 `gen` 与获准操作)、`GrowthOp` / `GrowthReq`、`GrowthVerdict`、`GrowthDeny`、`GrowthStage`、
- * `evaluateGrowth`(纯判定,所有事实经 `GrowthReaders` 当次现读)、按 op 的检查子集表 `OP_CHECK_PROFILE`、`requireGrowth` / `requireGrowthFresh`。
+ * `evaluateGrowth`(纯判定,所有事实经 `GrowthReaders` 当次现读)、按 op 的检查子集表 `OP_CHECK_PROFILE`、`requireGrowth` / `checkGrowthVeto`。
  * 冻结:合并后改动 = 回主代理(`c1-freeze.test.ts`)。**本块不接线**:没有任何生产调用方;D 在 D1b / D2 注入读端口并装配 `GrowthStage`。
  *
  * 安全性质(每条都有负向用例与变异锚点):
@@ -57,6 +57,8 @@ export type CandidateReq = Extract<GrowthReq, { cand: TaintCandidate }>;
 interface PassRecord {
   readonly round: BothRound;
   used: boolean;
+  /** `checkGrowthVeto` 成功时的 `gen`(null = 尚未现读外部否决事实);`requireGrowth` 要求它等于消费时的 `gen` */
+  vetoClearAtGen: number | null;
 }
 const minted = new WeakMap<object, PassRecord>();
 
@@ -361,7 +363,7 @@ function mint(round: BothRound, op: GrowthOp, gen: number): GrowthPass {
           },
     ),
   }) as unknown as GrowthPass;
-  minted.set(pass, { round, used: false });
+  minted.set(pass, { round, used: false, vetoClearAtGen: null });
   return pass;
 }
 
@@ -390,6 +392,35 @@ export function opOfReq(req: GrowthReq): GrowthOp {
     throw new RoundInternalError('bad_request');
   }
   return { cap: op, cand: { id: c.id, content_sha256: c.content_sha256 } };
+}
+
+/**
+ * 请求快照:在首次异步边界之前复制并校验完整请求(候选身份 / 来源 / 谱系字段),profile、全部 reader 与铸造统一使用快照——
+ * 调用方持有的可变别名在评估期间被改写(`req.cand` 换成别的候选)既不会让检查对象与获准对象分叉,也看不到(快照冻结)。畸形请求 = `RoundInternalError('bad_request')`。
+ */
+function snapshotReq(req: GrowthReq): GrowthReq {
+  const op = opOfReq(req);
+  if (!('cand' in op)) return Object.freeze({ op: op.cap }) as GrowthReq;
+  const c = (req as CandidateReq).cand;
+  const s = c.source as unknown;
+  const source =
+    typeof s === 'object' && s !== null
+      ? Object.freeze({
+          run_id: (s as { run_id: string }).run_id,
+          proposal_id: (s as { proposal_id: string }).proposal_id,
+        })
+      : s === undefined
+        ? undefined
+        : null; // 非对象的来源(畸形)按「来源缺失」处理,绝不当成有来源
+  return Object.freeze({
+    op: op.cap,
+    cand: Object.freeze({
+      id: c.id,
+      content_sha256: c.content_sha256,
+      lifecycle: c.lifecycle,
+      source,
+    }),
+  }) as GrowthReq;
 }
 
 export function sameOp(a: GrowthOp, b: GrowthOp): boolean {
@@ -486,7 +517,11 @@ function stepsOf(
       if (f.scan === 'unavailable') return 'taint_unavailable';
       if (f.scan === 'pending') return 'taint_pending';
       if (f.scan !== 'ok') return 'taint_unavailable';
-      if (f.rescanRequired === true && f.rescanned !== true) return 'taint_pending';
+      // 跨信任边界:消费的布尔字段必须就是布尔(缺键 / 非布尔 = 事实不可信 = 拒绝,不得被解释成「不要求重扫」)
+      if (typeof f.rescanRequired !== 'boolean' || typeof f.rescanned !== 'boolean') {
+        return 'taint_unavailable';
+      }
+      if (f.rescanRequired && !f.rescanned) return 'taint_pending';
       if (p.G6 === 'rescan') return null;
       switch (f.candidate) {
         case 'clean':
@@ -563,12 +598,13 @@ export async function evaluateGrowth(
   readers: GrowthReaders,
   stage: GrowthStage | undefined,
 ): Promise<GrowthVerdict> {
-  const op = opOfReq(req);
+  const snap = snapshotReq(req);
+  const op = opOfReq(snap);
   const st = roundInternals(round);
   if (st.form !== 'both') throw new RoundInternalError('round_not_both');
   if (st.inFlight !== 0) throw new RoundInternalError('mint_while_write_in_flight');
   const ops = stage?.ops;
-  if (!(ops instanceof Set) || !ops.has(req.op)) return growthDenied('growth_unwired');
+  if (!(ops instanceof Set) || !ops.has(snap.op)) return growthDenied('growth_unwired');
   const genAtStart = st.gen;
   const lockCheck = async (): Promise<GrowthDeny | null> => {
     try {
@@ -578,11 +614,11 @@ export async function evaluateGrowth(
       return denyFromThrown(e, 'G10');
     }
   };
-  const profile = OP_CHECK_PROFILE[req.op];
+  const profile = OP_CHECK_PROFILE[snap.op];
   const pre = profile.G10 === 'on' ? await lockCheck() : null;
   if (pre !== null) return growthDenied(pre);
   if (st.unsettled.length > 0) return growthDenied('unsettled');
-  for (const s of stepsOf(round, req, readers, profile)) {
+  for (const s of stepsOf(round, snap, readers, profile)) {
     let code: GrowthDeny | null;
     try {
       code = await s.run();
@@ -600,7 +636,12 @@ export async function evaluateGrowth(
 }
 
 // ---------- requireGrowth ----------
-function staleReason(pass: GrowthPass, round: BothRound, op: GrowthOp): StaleGrowthReason | null {
+function staleReason(
+  pass: GrowthPass,
+  round: BothRound,
+  op: GrowthOp,
+  needVetoMark: boolean,
+): StaleGrowthReason | null {
   const rec = minted.get(pass);
   if (rec === undefined) return 'not_minted';
   if (rec.used) return 'already_used';
@@ -611,6 +652,7 @@ function staleReason(pass: GrowthPass, round: BothRound, op: GrowthOp): StaleGro
   if (pass.gen !== round.gen()) return 'gen_changed';
   if (!sameOp(pass.op, op)) return 'op_mismatch';
   if (round.unsettled().length > 0) return 'unsettled';
+  if (needVetoMark && rec.vetoClearAtGen !== round.gen()) return 'veto_not_checked';
   return null;
 }
 
@@ -620,28 +662,18 @@ function voidPass(pass: GrowthPass): void {
 }
 
 /**
- * 一次性消费(每个不可逆写的提交边界前调;D v4 §3.5 第 6 步)。**成败都使 pass 作废**(至多服务一次写)。
- * 抛 `StaleGrowth`:非本模块铸造 / 已用过 / nonce 不等 / 非同一回合 / `gen` 已变 / op 不等(换候选或换能力)/ 回合未决。
- * 同步纯检查:不做 I/O。外部否决事实(B / U、auto_pause、标志、候选凭据)的现读见 `requireGrowthFresh`。
+ * 外部否决事实的**现读**(B / U 标记、`state.auto_pause` 与标志、该候选的撤销凭据命中):D v4 §3.5 第 5 步。**消费的前置**:
+ * `requireGrowth` 只认「同一个 `gen` 上已经过本函数现读且无否决」的 pass(否则 `veto_not_checked`),所以同步入口绕不过现读——不存在「缺检查版」的授权入口。
+ * 先做不消费的同步校验(失败 = 作废并抛);再读;读抛错 / 非法值 → `veto_unreadable`;`vetoed: true` → `vetoed`;三者都使 pass 作废。`lock_lost` 类错误原样上抛(pass 同样作废)。
+ * 读与消费之间若有写,`gen` 变化 → 消费时 `gen_changed`(现读不能掩盖其后的写)。
  */
-export function requireGrowth(pass: GrowthPass, round: BothRound, op: GrowthOp): void {
-  const why = staleReason(pass, round, op);
-  voidPass(pass);
-  if (why !== null) throw new StaleGrowth(why);
-}
-
-/**
- * `requireGrowth` 的「消费前现读」版(与设计稿 §8.1 的措辞对齐:「并现读 B/U、state.auto_pause 与标志、该候选凭据命中」;同步签名的 `requireGrowth`
- * 做不了 I/O,所以现读放在本函数,**读在消费之前、紧贴消费**):先做同步校验(失败 = 作废并抛),再 `externalVeto` 现读,最后 `requireGrowth` 消费。
- * 读抛错 / 非法值 → `veto_unreadable`;`vetoed: true` → `vetoed`;两者都使 pass 作废。`lock_lost` 类错误原样上抛(pass 同样作废)。
- */
-export async function requireGrowthFresh(
+export async function checkGrowthVeto(
   pass: GrowthPass,
   round: BothRound,
   op: GrowthOp,
   readers: Pick<GrowthReaders, 'externalVeto'>,
 ): Promise<void> {
-  const early = staleReason(pass, round, op);
+  const early = staleReason(pass, round, op, false);
   if (early !== null) {
     voidPass(pass);
     throw new StaleGrowth(early);
@@ -663,5 +695,18 @@ export async function requireGrowthFresh(
     voidPass(pass);
     throw new StaleGrowth('vetoed');
   }
-  requireGrowth(pass, round, op);
+  const rec = minted.get(pass);
+  if (rec === undefined || rec.used) throw new StaleGrowth('already_used'); // 读期间被并发消费
+  rec.vetoClearAtGen = round.gen();
+}
+
+/**
+ * 一次性消费(每个不可逆写的提交边界前调;D v4 §3.5 第 6 步)。**成败都使 pass 作废**(至多服务一次写)。
+ * 抛 `StaleGrowth`:非本模块铸造 / 已用过 / nonce 不等 / 非同一回合 / `gen` 已变 / op 不等(换候选或换能力)/ 回合未决 / 本 gen 上未经 `checkGrowthVeto`。
+ * 同步纯检查,不做 I/O(外部否决事实的现读在 `checkGrowthVeto`,它是本函数的前置)。
+ */
+export function requireGrowth(pass: GrowthPass, round: BothRound, op: GrowthOp): void {
+  const why = staleReason(pass, round, op, true);
+  voidPass(pass);
+  if (why !== null) throw new StaleGrowth(why);
 }

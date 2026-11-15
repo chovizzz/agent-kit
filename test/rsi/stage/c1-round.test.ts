@@ -242,7 +242,7 @@ describe('写适配器:单飞 + finally 无条件推进 gen', () => {
     expect(() => round.writeAdapter('nope' as never, () => Promise.resolve())).toThrow(
       /unknown_write_kind:nope/,
     );
-    expect(() => round.writeAdapter('trip', 42)).toThrow(/write_impl_not_function/);
+    expect(() => round.writeAdapter('trip', 42 as never)).toThrow(/write_impl_not_function/);
   });
 });
 
@@ -301,7 +301,8 @@ describe('判决 latch:单调只加严', () => {
 describe('RoundBudget:每轮端口调用上限', () => {
   it('持两锁的回合没给 startRollbackLimit(或非正整数)→ 拒绝构造(fail-closed,无缺省值)', async () => {
     const { round } = await openBoth();
-    expect(() => createRoundBudget(round)).toThrow(/start_rollback_limit_required/);
+    const loose = createRoundBudget as unknown as (r: unknown, o?: unknown) => unknown;
+    expect(() => loose(round)).toThrow(/start_rollback_limit_required/);
     for (const n of [0, -1, 1.5, Number.NaN]) {
       expect(() => createRoundBudget(round, { startRollbackLimit: n })).toThrow(
         /start_rollback_limit_required/,
