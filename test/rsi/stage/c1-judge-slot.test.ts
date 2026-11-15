@@ -252,19 +252,19 @@ describe('checkJudgeGrowth:跨信任边界的运行期包装(永不抛) · M3:�
     await expect(checkJudgeGrowth(proxy, rec(SRC))).resolves.toEqual(IND);
     // 正向对照:getter 只读一次、`this` 是槽本身
     let reads = 0;
-    let receiver: unknown = null;
+    const receivers: unknown[] = [];
     const slot = {
       get check() {
         reads += 1;
         return function (this: unknown) {
-          receiver = this;
+          receivers.push(this);
           return Promise.resolve({ ok: true as const });
         };
       },
     } as unknown as JudgeGrowthSlot;
     expect(await checkJudgeGrowth(slot, rec(SRC))).toEqual({ ok: true });
     expect(reads).toBe(1);
-    expect(receiver).toBe(slot);
+    expect(receivers).toEqual([slot]);
   });
   it('check 不是函数(未装配)仍是 judge_unavailable,与「读取抛错」的 judge_indeterminate 区分', async () => {
     const slot = { check: 5 } as unknown as JudgeGrowthSlot;
