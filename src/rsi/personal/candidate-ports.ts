@@ -97,4 +97,6 @@ export type StepHalt =
   | 'revocations_invalid'
   | 'commit_failed'
   | 'candidate_invalid'
-  | 'lock_lost';
+  | 'lock_lost'
+  /** 事件时刻落在已封存区间(W0-26 第 9 条):源提交之前拒绝,零写入;时钟恢复后重跑 */
+  | 'sealed_interval';

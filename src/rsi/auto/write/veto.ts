@@ -69,6 +69,8 @@ const haltExit = (ctx: RsiEarlyContext, r: Extract<ApplyResult, { kind: 'halt' }
     case 'commit_failed':
     case 'lock_lost':
       return failClosed(ctx, 'internal');
+    case 'sealed_interval':
+      return failClosed(ctx, 'audit_invalid');
   }
 };
 
@@ -183,6 +185,7 @@ async function directVeto(
     },
     env: d.env,
     now: d.now,
+    ...(d.seal !== undefined ? { seal: d.seal } : {}),
   };
   const r = await applyEvent(ad, rec, event);
   if (r.kind === 'halt') return haltExit(ctx, r);
