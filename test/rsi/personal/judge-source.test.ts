@@ -2,7 +2,6 @@
  * W9a 判官裁决读端口的生产适配器(`read/judge-source.ts`;contracts R20-18.34 ① ②、R20-18.36、W0-27):真实文件系统(KIT_TMP 下的临时目录)上的归属判定、安全读取、
  * 失败分类、一致性协议(读期间被换 → unreadable)、2 秒预算与零写入;端口契约套件同时跑「适配器」与「内存参照实现」,保证两者错误语义一致(假件与生产同契约)。
  */
-import { unlink } from 'node:fs/promises';
 import * as path from 'node:path';
 import { stringify } from 'yaml';
 import { describe, expect, it } from 'vitest';
@@ -204,9 +203,9 @@ describe('W9a 读适配器:归属(R20-18.34 ①)', () => {
 describe('W9a 读适配器:安全读取与失败分类(R20-18.34 ②)', () => {
   it('采集中的 run 里提案目录 / 文件缺失 → unreadable(无从判断是否曾有 reject),不是 invalid', async () => {
     const w = await world({ proposal: null });
-    expect(why(await readOf(w))).toBe('proposal_missing');
+    expect(await readOf(w)).toMatchObject({ kind: 'unreadable', why: 'proposal_missing' });
     await remove(w.fx, path.join(w.runDir, 'proposals'));
-    expect(why(await readOf(w))).toBe('proposals_dir_missing');
+    expect(await readOf(w)).toMatchObject({ kind: 'unreadable', why: 'proposals_dir_missing' });
   });
 
   it('提案是符号链接 / 硬链接(nlink > 1)→ unreadable;对照:普通文件可读', async () => {
@@ -218,10 +217,8 @@ describe('W9a 读适配器:安全读取与失败分类(R20-18.34 ②)', () => {
     await remove(w.fx, w.propFile);
     await hardlink(w.fx, real, w.propFile);
     expect(why(await readOf(w))).toBe('proposal_hardlink');
-    // safe-fs 的 remove / rename 拒绝处理 nlink > 1 的目标:夹具直接 unlink 这个多余的名字
-    await unlink(w.propFile);
-    await rename(w.fx, real, w.propFile);
-    expect((await readOf(w)).kind).toBe('ok');
+    // 对照:普通文件可读(safe-fs 的 remove / rename 拒绝处理 nlink > 1 的目标,所以对照用一个全新的世界)
+    expect((await readOf(await world())).kind).toBe('ok');
   });
 
   it('64 KiB 上限:恰好 65536 字节可读,多 1 字节 → unreadable(too_large);规则文件同口径', async () => {
