@@ -6,7 +6,7 @@
  * - 无子命令 / 未知子命令 → 退出 2,stderr 只有 `RSI_USAGE reason=unknown_subcommand`(不回显输入)。
  * - P0 子命令各一个入口文件 `src/rsi/<name>.ts`(理由:`test/rsi/import-closure.test.ts` 的真实入口候选表已按这些路径登记,文件一建出就自动纳入
  *   「入口闭包不含 llm-exec / reflect 后端 / net / 启动器」断言)。P1 预留子命令(should-continue)不建文件,在这里退 64。
- * - §21 W8:`auto` / `veto` / `rollback` / `report` / `show` 经 `src/rsi/auto/entry.ts` 做二级路由与能力闸(相位未到期 = 桩);`routeRsi` 不变(`--write` 分流在 entry 里,不走本表)。
+ * - §21 W8:`auto` / `veto` / `rollback` / `report` / `show` 经 `src/rsi/auto/commands.ts`(装配:读侧 `entry.ts` + 写侧 `write/`)做二级路由与能力闸(相位未到期 = 桩);`routeRsi` 不变(`--write` 分流在 entry 里,不走本表)。
  * - 桩:退出 64,stderr 只有 `RSI_NOT_IMPLEMENTED subcommand=<规范名>`,stdout 为空。多余参数不影响(桩不解析参数)。
  * - R20-A2 B5-0:两个会写盘的变体要放进独立入口文件(`status.ts` / `projects.ts` 属只读闭包),分发器按 argv 里**精确 token** 路由({@link routeRsi}):
  *   `status` 带 `--ack` → `status-ack.ts`;`projects` **同时**带 `--rebuild-index` 与 `--write` → `projects-rebuild.ts`。路由是纯函数,只看 token 在不在,
@@ -21,7 +21,7 @@ import {
   rollbackSubcommand,
   showSubcommand,
   vetoSubcommand,
-} from '../rsi/auto/entry.js';
+} from '../rsi/auto/commands.js';
 import { subcommand as confirm } from '../rsi/confirm.js';
 import { subcommand as digest } from '../rsi/digest.js';
 import { subcommand as dismiss } from '../rsi/dismiss.js';

@@ -23,6 +23,7 @@ import { getRealHome } from '../io/paths.js';
 import { readFileSafe, statDirSafe } from '../io/read-fs.js';
 import { parseFlags } from './args.js';
 import { attribute, type AttributionProbe } from './attribution.js';
+import { autoStatusKeys, offAutoKeys, type AutoStatusKeys } from './auto/read/status-keys.js';
 import { buildRsiPolicy, type RsiConfigOn } from './config.js';
 import { failExit } from './exit.js';
 import { currentCursorFingerprint } from './l0/fingerprint.js';
@@ -53,7 +54,7 @@ export interface RsiStatusDeps {
 
 type Agents = { id: RsiAgentId; status: 'ok' | 'not_evaluated'; reason: string | null }[];
 
-export interface StatusDoc {
+export interface StatusDoc extends AutoStatusKeys {
   state: string;
   reason: string | null;
   first_armed: boolean;
@@ -118,6 +119,7 @@ export interface StatusDoc {
 
 function offDoc(reason: string): StatusDoc {
   return {
+    ...offAutoKeys(),
     state: 'off',
     reason,
     first_armed: false,
@@ -433,6 +435,12 @@ export async function buildStatusDoc(
   if (await indexRebuildRequired(io, data)) warnings.push('index_rebuild_required');
 
   return {
+    ...(await autoStatusKeys({
+      autoTable: config.auto,
+      stateDoc: data.stateDoc,
+      io,
+      now,
+    })),
     state: st.state,
     reason: st.collectBlocked,
     first_armed: st.firstArmed,

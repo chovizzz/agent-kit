@@ -6,7 +6,10 @@
  * 本文件只写表与每条变异期望红的测试名(`expectRed` 是杀手测试名里的字面子串;参数化用例只取模板之外的固定片段);变异由主代理执行,
  * 结果记进 `V1_W8_RESULTS`(W8a 实装块不执行变异,故留空)。变异 id 用短的下划线词。
  *
- * 不在本表的点(如实记录):写命令(pause / resume / clear --write / rebase-baseline / veto / rollback --write)的处理函数与端口契约的写侧(W8b);
+ * W8b 追加(本表后共 58 条:W8b 首版 43 条,接手后新增 12 条〔读写分文件 / resume 自动解除码 / 缩减入口配置不可信 / rollback --to 的 yes 与 STALE / veto 重试〕,再加 `rsi status` 追加键 3 条;id 前缀 pause_ / resume_ / clear_ / out_ / veto_ / rbk_ / rebase_ / status_ / 预检 / 生产组装):写命令的处理函数(pause 不拿锁 / 不覆盖 / 只碰 U;resume 的线性化与指纹、结果行、顺序;
+ * clear 的锁序与枚举失败、已完成项先输出;veto 的 deferred 不判 unknown_id、终态只写黑名单、持锁后重读;rollback --to 的 by / reason / 逆序 / 三把锁 / 矛盾记录先于写入;rebase 的确认与持锁复判;未接线预检零写入)。
+ * W8a + W8b 的结果由主代理整表重跑后统一回填(作业 r21w8b-mut4 @a485734:148 条全杀)。
+ * 不在本表的点(如实记录):端口契约的写侧由 `port-contract.test.ts` 的套件覆盖,不是变异;
  * 零写入的层 ②(`KIT_WRITE_ROOTS=:` 子进程)与 (c):相位 0 下经 `main()` 的新命令全是桩,子进程辅助脚本不能注入相位(见 `zero-write.test.ts` 头注);
  * journal 完整性错误「不被消除」的身份单列(`uniq:` 键)只由退出码相同的用例间接覆盖,不单列变异。
  */
@@ -1278,9 +1281,946 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
     expectRed: ['forbiddenExtra 不静默丢项'],
     mustKill: ['forbiddenExtra 不静默丢项'],
   },
+  {
+    id: 'pause_takes_lock',
+    clause: 'R21-12.2 pause 不拿锁',
+    edits: [
+      swap(
+        'src/rsi/auto/write/pause.ts',
+        "const marker = await (p.userMarker as NonNullable<WritePorts['userMarker']>)();",
+        "const marker = await (p.locks as NonNullable<WritePorts['locks']>).withLocks('rsi_personal_sync', async () => (p.userMarker as NonNullable<WritePorts['userMarker']>)());",
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: [
+      'pause 创建 U:不拿锁、不要 TTY、只碰 U',
+      '全部未接线(只有 userMarker 与 config):除 pause 外每个写命令退 3 零写入;pause 恰好写 U 一个文件',
+    ],
+    mustKill: ['pause 创建 U:不拿锁、不要 TTY、只碰 U'],
+  },
+  {
+    id: 'pause_overwrites',
+    clause: 'R21-12.2 pause 已存在不覆盖',
+    edits: [
+      swap(
+        'src/rsi/auto/write/pause.ts',
+        'const r = await marker.ensureUser();',
+        "let r = await marker.ensureUser();\n  if (r === 'exists') {\n    await marker.remove(await marker.snapshot());\n    r = await marker.ensureUser();\n  }",
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: ['pause 已存在时不覆盖'],
+    mustKill: ['pause 已存在时不覆盖'],
+  },
+  {
+    id: 'pause_touches_state',
+    clause: 'R21-12.2 pause 只碰 U',
+    edits: [
+      swap(
+        'src/rsi/auto/write/pause.ts',
+        'const r = await marker.ensureUser();',
+        'const r = await marker.ensureUser();\n  await p.pauseState?.write({ reasons: [], diverged: false, owner_changed: false });',
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: [
+      'pause 创建 U:不拿锁、不要 TTY、只碰 U',
+      'pause 已存在时不覆盖:输出「已暂停(已存在)」,退 0,实例不变',
+    ],
+    mustKill: ['pause 创建 U:不拿锁、不要 TTY、只碰 U'],
+  },
+  {
+    id: 'pause_off_runs',
+    clause: 'R21-12.2 / W0-22 第 4 条 off 退 4',
+    edits: [
+      swap(
+        'src/rsi/auto/write/pause.ts',
+        "if (!(await (p.config as NonNullable<WritePorts['config']>)()).rsiOn) return notRun(ctx, 'off');",
+        'void p.config;',
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: ['pause 在 [rsi] 关闭时退 4 off'],
+    mustKill: ['pause 在 [rsi] 关闭时退 4 off'],
+  },
+  {
+    id: 'resume_no_evidence',
+    clause: 'W0-23 第 1 条 清到无剩余码的写入带解除证据',
+    edits: [
+      swap(
+        'src/rsi/auto/write/resume.ts',
+        'next = await stampReleaseEvidence(ports.breaker, next);',
+        'next = { ...next };',
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: [
+      'resume 清掉条件已不成立的人工码,写解除证据',
+      'resume 在无剩余码、U 与 B 都不在时才输出 RESUMED(退 0)',
+      'resume 自动解除码条件已不成立:本次一并清掉(带解除证据),不退 1;B 在 → PENDING 且证据写 B 的 id',
+    ],
+    mustKill: ['resume 清掉条件已不成立的人工码,写解除证据'],
+  },
+  {
+    id: 'resume_clears_holding',
+    clause: 'R21-10.4 只清条件已不成立的码',
+    edits: [
+      swap(
+        'src/rsi/auto/write/resume.ts',
+        'const r = computeResume(s0, (c) => holds.has(c));',
+        'const r = computeResume(s0, () => false);',
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: [
+      'resume 不清仍成立的码',
+      'resume 与人工码同在:自动解除码条件已不成立的清掉,仍成立的人工码保留并退 1(已清的照实列出,不写证据)',
+    ],
+    mustKill: ['resume 不清仍成立的码'],
+  },
+  {
+    id: 'resume_no_bump',
+    clause: 'W0-22 第 1 条 bump 入口代',
+    edits: [swap('src/rsi/auto/write/resume.ts', 'await ports.marks.bump();', 'void ports.marks;')],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: [
+      'resume 清掉条件已不成立的人工码,写解除证据',
+      'resume 的顺序:先写 state',
+      'resume 指纹为空(快照时没有 U)永不删:步骤 ② 之后新建的 U′ 保留,结果行 BLOCKED user_paused new=yes,退 1',
+      'resume 指纹不符(步骤 ② 之后 U 被换实例)保留并报 changed;U′ 与 B 同在时追加 breaker_marker=pending',
+      'resume 中途失败:已落盘的先输出(已完成:cleared=…),再退 3,可重跑',
+    ],
+    mustKill: ['resume 清掉条件已不成立的人工码,写解除证据'],
+  },
+  {
+    id: 'resume_empty_stamp_deletes',
+    clause: 'W0-22 第 1 条 指纹为空永不删 U',
+    edits: [
+      swap('src/rsi/auto/write/resume.ts', "if (uTok !== 'none') {", 'if (true) {'),
+      swap(
+        'src/rsi/auto/write/resume.ts',
+        'uOut = await um.remove(uTok);',
+        "uOut = await um.remove(uTok === 'none' ? await um.snapshot() : uTok);",
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: ['resume 指纹为空(快照时没有 U)永不删'],
+    mustKill: ['resume 指纹为空(快照时没有 U)永不删'],
+  },
+  {
+    id: 'resume_mismatch_deletes',
+    clause: 'W0-22 第 1 条 指纹不符保留',
+    edits: [
+      swap(
+        'src/rsi/auto/write/resume.ts',
+        'uOut = await um.remove(uTok);',
+        'uOut = await um.remove(await um.snapshot());',
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: ['resume 指纹不符(步骤 ② 之后 U 被换实例)保留并报 changed'],
+    mustKill: ['resume 指纹不符(步骤 ② 之后 U 被换实例)保留并报 changed'],
+  },
+  {
+    id: 'resume_touches_breaker',
+    clause: 'W0-22 第 1 条 resume 不碰 B',
+    edits: [
+      swap(
+        'src/rsi/auto/write/resume.ts',
+        'const b1 = await ports.breaker.read();',
+        'await (ports.breaker as unknown as { remove(): Promise<boolean> }).remove();\n      const b1 = await ports.breaker.read();',
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: [
+      'resume 清掉条件已不成立的人工码,写解除证据',
+      'resume 自动解除码条件已不成立:本次一并清掉(带解除证据),不退 1;B 在 → PENDING 且证据写 B 的 id',
+      'resume 的顺序:先写 state(带证据),再 bump,最后删 U',
+      'resume 指纹不符(步骤 ② 之后 U 被换实例)保留并报 changed;U′ 与 B 同在时追加 breaker_marker=pending',
+      'resume --json:追加 paused 与 request_done(PENDING 行:paused=true,request_done=true)',
+    ],
+    mustKill: ['resume 清掉条件已不成立的人工码,写解除证据'],
+  },
+  {
+    id: 'resume_result_mismatch',
+    clause: 'W0-22 第 2 条 R 空 + B 在不得输出 RESUMED',
+    edits: [
+      swap(
+        'src/rsi/auto/write/resume.ts',
+        'const bPending = b1 !== null;',
+        'const bPending = false;',
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: [
+      'resume 清掉条件已不成立的人工码,写解除证据',
+      'resume --json:追加 paused 与 request_done',
+      'resume 自动解除码条件已不成立:本次一并清掉(带解除证据),不退 1;B 在 → PENDING 且证据写 B 的 id',
+      'resume 指纹不符(步骤 ② 之后 U 被换实例)保留并报 changed;U′ 与 B 同在时追加 breaker_marker=pending',
+    ],
+    mustKill: ['resume 清掉条件已不成立的人工码,写解除证据'],
+  },
+  {
+    id: 'resume_diverged_dropped',
+    clause: 'W0-22 第 1 条 remaining 判据含 diverged',
+    edits: [
+      swap(
+        'src/rsi/auto/write/resume.ts',
+        "if (s1.diverged) remaining.add('personal_repo_diverged');",
+        'void s1.diverged;',
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: ['resume 不碰 diverged / owner_changed'],
+    mustKill: ['resume 不碰 diverged / owner_changed'],
+  },
+  {
+    id: 'resume_order_swapped',
+    clause: 'W0-22 第 1 条 顺序 state → bump → U',
+    edits: [
+      swap('src/rsi/auto/write/resume.ts', 'await ports.marks.bump();', "done.push('noop');"),
+      swap('src/rsi/auto/write/resume.ts', '// ⑦ 读回(不碰 B)', 'await ports.marks.bump();'),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: [
+      'resume 的顺序:先写 state(带证据),再 bump,最后删 U',
+      'resume 指纹不符(步骤 ② 之后 U 被换实例)保留并报 changed;U′ 与 B 同在时追加 breaker_marker=pending',
+    ],
+    mustKill: ['resume 的顺序:先写 state(带证据),再 bump,最后删 U'],
+  },
+  {
+    id: 'resume_user_not_in_r',
+    clause: 'W0-22 第 2 条 U 在则不得 RESUMED',
+    edits: [
+      swap(
+        'src/rsi/auto/write/resume.ts',
+        "if (u1 !== 'none') remaining.add('user_paused');",
+        'void u1;',
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: [
+      'resume 指纹为空(快照时没有 U)永不删',
+      'resume 指纹不符(步骤 ② 之后 U 被换实例)保留并报 changed',
+    ],
+    mustKill: ['resume 指纹为空(快照时没有 U)永不删'],
+  },
+  {
+    id: 'resume_two_locks',
+    clause: 'R21-10.4 resume 取三把锁',
+    edits: [
+      swap(
+        'src/rsi/auto/write/resume.ts',
+        "ports.locks.withLocks('rsi_personal_sync'",
+        "ports.locks.withLocks('personal_sync'",
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: [
+      'resume 清掉条件已不成立的人工码,写解除证据',
+      'resume 在无剩余码、U 与 B 都不在时才输出 RESUMED(退 0)',
+      'resume 不清仍成立的码:退 1,逐行 BLOCKED,不写证据,已清的码照实列出',
+      'resume 自动解除码条件仍成立(重查命中):保留在 state 里,BLOCKED 行带 auto_release=yes,退 1,不写 state,不输出 RESUMED',
+      'resume 自动解除码条件已不成立:本次一并清掉(带解除证据),不退 1;B 在 → PENDING 且证据写 B 的 id',
+      'resume 与人工码同在:自动解除码条件已不成立的清掉,仍成立的人工码保留并退 1(已清的照实列出,不写证据)',
+      'resume 重查没覆盖的自动解除码(no_observation / cost_high_legacy / isolation_unverified)条件无从判定:按仍成立处理,保留,退 1',
+      'resume 不碰 diverged / owner_changed:退 1,提示 rebase-baseline,按码表顺序',
+      'resume 的顺序:先写 state(带证据),再 bump,最后删 U',
+      'resume 指纹为空(快照时没有 U)永不删:步骤 ② 之后新建的 U′ 保留,结果行 BLOCKED user_paused new=yes,退 1',
+      'resume 指纹不符(步骤 ② 之后 U 被换实例)保留并报 changed;U′ 与 B 同在时追加 breaker_marker=pending',
+      'resume:U 存在时历史遗留的 state 码 user_paused 一并清;U 不存在时它仍算剩余(不得谎报 RESUMED)',
+      'resume 中途失败:已落盘的先输出(已完成:cleared=…),再退 3,可重跑',
+      'resume --json:追加 paused 与 request_done(PENDING 行:paused=true,request_done=true)',
+    ],
+    mustKill: ['resume 清掉条件已不成立的人工码,写解除证据'],
+  },
+  {
+    id: 'clear_takes_rsi_lock',
+    clause: 'R21-9.5 缩减入口只拿 personal → sync',
+    edits: [
+      swap(
+        'src/rsi/auto/write/clear-write.ts',
+        "locks.withLocks('personal_sync'",
+        "locks.withLocks('rsi_personal_sync'",
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: ['clear 撤销成功:退 0,RSI_CLEAR_DONE 先逐行输出'],
+    mustKill: ['clear 撤销成功:退 0,RSI_CLEAR_DONE 先逐行输出'],
+  },
+  {
+    id: 'clear_off_short_circuit',
+    clause: 'R21-9.5 clear 不走 off 短路',
+    edits: [
+      swap(
+        'src/rsi/auto/write/clear-write.ts',
+        "const bad = precheck(ctx, p, REQUIRED_PORTS['auto clear']);",
+        "const bad = precheck(ctx, p, REQUIRED_PORTS['auto clear']) ?? ((await p.config?.())?.rsiOn === false ? 4 : null);",
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: ['clear 撤销成功:退 0,RSI_CLEAR_DONE 先逐行输出'],
+    mustKill: ['clear 撤销成功:退 0,RSI_CLEAR_DONE 先逐行输出'],
+  },
+  {
+    id: 'clear_enum_ignored',
+    clause: 'W0-22 第 3 条 枚举失败(含部分成功后)不得退 0',
+    edits: [
+      swap(
+        'src/rsi/auto/write/clear-write.ts',
+        'enumerationFailed: report.unavailable !== null,',
+        'enumerationFailed: false,',
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: ['clear 仓库读不出(deferred 且无只读记录)'],
+    mustKill: ['clear 仓库读不出(deferred 且无只读记录)'],
+  },
+  {
+    id: 'out_failure_first',
+    clause: 'W0-22 第 3 条 已完成的撤销先输出',
+    edits: [
+      swap(
+        'src/rsi/auto/write/outcome-output.ts',
+        'for (const l of r.info) ctx.stderr(`${l}\\n`);',
+        'for (const l of r.errors) ctx.stderr(`${l}\\n`);',
+      ),
+      swap(
+        'src/rsi/auto/write/outcome-output.ts',
+        'for (const l of r.errors) ctx.stderr(`${l}\\n`);\n  // 处置文案',
+        'for (const l of r.info) ctx.stderr(`${l}\\n`);\n  // 处置文案',
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: ['journal 完整性错误(不带身份)不被另一份 journal 的 complete 消除'],
+    mustKill: ['journal 完整性错误(不带身份)不被另一份 journal 的 complete 消除'],
+  },
+  {
+    id: 'veto_deferred_unknown_id',
+    clause: 'W0-22 第 3 条 / R21-12.6 deferred 不得判 unknown_id',
+    edits: [
+      swap(
+        'src/rsi/auto/write/veto.ts',
+        "if (peek.kind !== 'ok') return failClosed(ctx, 'personal_repo_invalid');",
+        "if (peek.kind !== 'ok') return usage(ctx, 'unknown_id');",
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: ['veto 仓库 deferred / invalid 时不得判 unknown_id'],
+    mustKill: ['veto 仓库 deferred / invalid 时不得判 unknown_id'],
+  },
+  {
+    id: 'veto_no_reread',
+    clause: '写命令持锁后重读记录再判',
+    edits: [
+      swap(
+        'src/rsi/auto/write/veto.ts',
+        'const cur = await d.store.read(a.id);',
+        'const cur = peek;',
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: ['veto 持锁后重读记录再判'],
+    mustKill: ['veto 持锁后重读记录再判'],
+  },
+  {
+    id: 'veto_terminal_rolls_back',
+    clause: 'R21-12.6 已终态只写黑名单',
+    edits: [
+      swap(
+        'src/rsi/auto/write/veto.ts',
+        'if (isTerminalLifecycle(rec.lifecycle) || DIRECT.has(rec.lifecycle)) {',
+        'if (DIRECT.has(rec.lifecycle)) {',
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: [
+      'veto 已终态候选只写黑名单',
+      'veto 持锁后重读记录再判:锁外读到的是 canary,持锁时已是终态 → 只写黑名单,不新开回滚',
+      'veto 终态候选(原理由 cleared)的黑名单 E1 deferred:退非零、不输出成功行;恢复扫描不会补;重跑且落地正常 → 退 0,黑名单恰好一条',
+      'veto 迟到事件没施加、事务已走完且黑名单 E1 deferred:同样退非零(不静默退 0);重跑落地正常 → 退 0',
+    ],
+    mustKill: ['veto 已终态候选只写黑名单'],
+  },
+  {
+    id: 'veto_wrong_source',
+    clause: 'W0-17 veto 的来源 by=veto',
+    edits: [swap('src/rsi/auto/write/veto.ts', "by: 'veto',", "by: 'clear',")],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: ['veto 已部署候选:startRollback(kind=rollback, reason=vetoed, by=veto)'],
+    mustKill: ['veto 已部署候选:startRollback(kind=rollback, reason=vetoed, by=veto)'],
+  },
+  {
+    id: 'veto_off_ignored',
+    clause: 'W0-22 第 4 条 veto 在 [rsi] 关闭时退 4',
+    edits: [
+      swap(
+        'src/rsi/auto/write/veto.ts',
+        "if (!(await (p.config as NonNullable<WritePorts['config']>)()).rsiOn) return notRun(ctx, 'off');",
+        'void p.config;',
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: ['veto 参数 / 环境:非 TTY 退 2;[rsi] 关闭退 4 off'],
+    mustKill: ['veto 参数 / 环境:非 TTY 退 2;[rsi] 关闭退 4 off'],
+  },
+  {
+    id: 'veto_lift_ignored',
+    clause: 'R21-12.6 --lift 只解除黑名单',
+    edits: [swap('src/rsi/auto/write/veto.ts', 'if (a.lift) {', 'if (false) {')],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: ['veto --lift 只调黑名单解除端口'],
+    mustKill: ['veto --lift 只调黑名单解除端口'],
+  },
+  {
+    id: 'veto_e2_not_landed',
+    clause: 'W0-22 第 9 条 终态批次 E2 整批落地',
+    edits: [
+      swap(
+        'src/rsi/auto/write/veto.ts',
+        'const batch = await landTerminalEffects(d.keyedEffects, r.next);',
+        "const batch = 'none' as const;",
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: ['veto 未部署(shadow)候选'],
+    mustKill: ['veto 未部署(shadow)候选'],
+  },
+  {
+    id: 'veto_e1_not_landed',
+    clause: 'W0-22 第 9 条 终态上只写黑名单(E1)',
+    edits: [
+      swap(
+        'src/rsi/auto/write/veto.ts',
+        'landed.push(await d.keyedEffects.applyOnce(vetoEffectKey(e), [e]));',
+        'void e;',
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: [
+      'veto 已终态候选只写黑名单',
+      'veto 较晚事件首次没施加、但事务随即走完(记录已按原理由进终态):不再新开空事务,改走终态 veto → 退 0,只落黑名单(不静默丢 veto)',
+      'veto 终态候选(原理由 cleared)的黑名单 E1 deferred:退非零、不输出成功行;恢复扫描不会补;重跑且落地正常 → 退 0,黑名单恰好一条',
+      'veto 迟到事件没施加、事务已走完且黑名单 E1 deferred:同样退非零(不静默退 0);重跑落地正常 → 退 0',
+    ],
+    mustKill: ['veto 已终态候选只写黑名单'],
+  },
+  {
+    id: 'rbk_wrong_source',
+    clause: 'W0-20 rollback --to 的来源',
+    edits: [swap('src/rsi/auto/write/rollback-write.ts', "by: 'rollback_to',", "by: 'clear',")],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: [
+      'rollback --to:by=rollback_to、reason=cleared,按生效逆序',
+      'rollback --to 日期严格大于:进入日等于 D 的不纳入',
+      'rollback --to 日期不可知的候选单列纳入并展示(计数分开),排在日期可知者之后',
+    ],
+    mustKill: ['rollback --to:by=rollback_to、reason=cleared,按生效逆序'],
+  },
+  {
+    id: 'rbk_wrong_reason',
+    clause: 'W0-20 rollback_to 只用 cleared',
+    edits: [
+      swap('src/rsi/auto/write/rollback-write.ts', "reason: 'cleared',", "reason: 'vetoed',"),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: [
+      'rollback --to:by=rollback_to、reason=cleared,按生效逆序',
+      'rollback --to 日期严格大于:进入日等于 D 的不纳入',
+      'rollback --to 日期不可知的候选单列纳入并展示(计数分开),排在日期可知者之后',
+    ],
+    mustKill: ['rollback --to:by=rollback_to、reason=cleared,按生效逆序'],
+  },
+  {
+    id: 'rbk_order_flipped',
+    clause: 'R21-12.7 按生效逆序',
+    edits: [
+      swap(
+        'src/rsi/auto/write/rollback-write.ts',
+        'for (const c of [...sel.candidates, ...sel.dateUnknown]) {',
+        'for (const c of [...sel.candidates].reverse().concat(sel.dateUnknown)) {',
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: [
+      'rollback --to:by=rollback_to、reason=cleared,按生效逆序',
+      'rollback --to 日期不可知的候选单列纳入并展示(计数分开),排在日期可知者之后',
+    ],
+    mustKill: ['rollback --to:by=rollback_to、reason=cleared,按生效逆序'],
+  },
+  {
+    id: 'rbk_unknown_excluded',
+    clause: 'W0-22 第 4 条 日期不可知候选不得静默排除',
+    edits: [
+      swap(
+        'src/rsi/auto/write/rollback-write.ts',
+        'for (const c of [...sel.candidates, ...sel.dateUnknown]) {',
+        'for (const c of sel.candidates) {',
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: ['rollback --to 日期不可知的候选单列纳入并展示'],
+    mustKill: ['rollback --to 日期不可知的候选单列纳入并展示'],
+  },
+  {
+    id: 'rbk_off_exit_zero',
+    clause: 'W0-22 第 4 条 off 退 4',
+    edits: [
+      swap(
+        'src/rsi/auto/write/rollback-write.ts',
+        'return ExitCode.NOT_RUN;',
+        'return ExitCode.OK;',
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: ['rollback --to:[rsi] 关闭退 4 off 并提示改用 auto clear'],
+    mustKill: ['rollback --to:[rsi] 关闭退 4 off 并提示改用 auto clear'],
+  },
+  {
+    id: 'rbk_two_locks',
+    clause: 'R21-12.7 三把锁',
+    edits: [
+      swap(
+        'src/rsi/auto/write/rollback-write.ts',
+        "locks.withLocks('rsi_personal_sync'",
+        "locks.withLocks('personal_sync'",
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: ['rollback --to:by=rollback_to、reason=cleared,按生效逆序'],
+    mustKill: ['rollback --to:by=rollback_to、reason=cleared,按生效逆序'],
+  },
+  {
+    id: 'rbk_invalid_after_write',
+    clause: 'W0-22 第 4 条 矛盾记录在任何写入之前退 3',
+    edits: [
+      swap(
+        'src/rsi/auto/write/rollback-write.ts',
+        "if (sel0.invalid.length > 0) return failClosed(ctx, 'candidate_invalid');",
+        'void sel0.invalid;',
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: ['rollback --to 记录自相矛盾'],
+    mustKill: ['rollback --to 记录自相矛盾'],
+  },
+  {
+    id: 'rebase_no_confirm',
+    clause: 'R21-12.5 输入 yes 才改写',
+    edits: [
+      swap(
+        'src/rsi/auto/write/rebase.ts',
+        "if (raw === undefined || raw.replace(/\\r$/, '') !== 'yes') {",
+        'if (false) {',
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: [
+      '拒绝(非 yes / EOF)退 1 RSI_CONFIRM_DECLINED',
+      '没有「已改写」事实就不清标志:本来没分叉且状态里也没有标志 → 退 4;有标志但 head 并未改写(记录与 HEAD 不符)→ 仍退 4,不动标志;仍分叉 → 走正常确认流程',
+    ],
+    mustKill: ['拒绝(非 yes / EOF)退 1 RSI_CONFIRM_DECLINED'],
+  },
+  {
+    id: 'rebase_non_diverged_runs',
+    clause: 'R21-12.5 其它情形退 4 not_diverged',
+    edits: [
+      swap('src/rsi/auto/write/rebase.ts', "if (v0.kind === 'not_diverged') {", 'if (false) {'),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: [
+      '非分叉 / 非换主情形退 4 not_diverged',
+      'head 写完后崩溃(清标志之前):重跑不被 not_diverged 短路,持锁后收尾清 diverged 标志 → 退 0,不再改写 head',
+      'pause state 写失败(head 已改写):重跑同样收尾清标志;换主(--adopt-owner)同形',
+      '没有「已改写」事实就不清标志:本来没分叉且状态里也没有标志 → 退 4;有标志但 head 并未改写(记录与 HEAD 不符)→ 仍退 4,不动标志;仍分叉 → 走正常确认流程',
+      '收尾只认原始情形 ok:参数与情形不匹配(分叉 + --adopt-owner / 换主不带)即使残留事实齐全也退 4、零写入、不取锁',
+      '收尾的持锁重判:锁外 ok、持锁后变成与参数不匹配的情形 / 后置条件不再成立 / 标志已消失 → 都退 4,不清标志',
+    ],
+    mustKill: ['非分叉 / 非换主情形退 4 not_diverged'],
+  },
+  {
+    id: 'rebase_no_recheck',
+    clause: '写命令持锁后重读记录再判(rebase)',
+    edits: [
+      swap(
+        'src/rsi/auto/write/rebase.ts',
+        'if (v1.kind !== v0.kind || v1.head !== v0.head) {',
+        'if (false) {',
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: ['持锁后重判:确认之后 HEAD 变了'],
+    mustKill: ['持锁后重判:确认之后 HEAD 变了'],
+  },
+  {
+    id: 'rebase_label_dropped',
+    clause: 'R21-12.5 / R21-1.9 展示带标签',
+    edits: [swap('src/rsi/auto/write/rebase.ts', '      RSI_AUTO_LABEL,', "      'rebase',")],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: ['分叉:展示带标签的相对路径清单'],
+    mustKill: ['分叉:展示带标签的相对路径清单'],
+  },
+  {
+    id: 'rebase_paths_unsanitized',
+    clause: 'R21-12 输出边界 路径过清洗',
+    edits: [swap('src/rsi/auto/write/rebase.ts', 'cleanPath(x)', 'x')],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: ['路径清单过清洗:控制字符被替换'],
+    mustKill: ['路径清单过清洗:控制字符被替换'],
+  },
+  {
+    id: 'rebase_flag_kept',
+    clause: 'R21-10.3 rebase 后清 diverged',
+    edits: [
+      swap(
+        'src/rsi/auto/write/rebase.ts',
+        "if (kind === 'baseline' && st.diverged) await pauseState.write({ ...st, diverged: false });",
+        'void st;',
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: [
+      '分叉:展示带标签的相对路径清单',
+      'head 写完后崩溃(清标志之前):重跑不被 not_diverged 短路,持锁后收尾清 diverged 标志 → 退 0,不再改写 head',
+    ],
+    mustKill: ['分叉:展示带标签的相对路径清单'],
+  },
+  {
+    id: 'precheck_skipped',
+    clause: 'W0-22 第 8 节 未接线预检零写入',
+    edits: [
+      swap(
+        'src/rsi/auto/write/common.ts',
+        "return missingPorts(p, need).length === 0 ? null : failClosed(ctx, 'internal');",
+        'return null;',
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: ['退 3 internal;没有取锁、没有任何写入', '全部未接线(只有 userMarker 与 config)'],
+    mustKill: ['退 3 internal;没有取锁、没有任何写入'],
+  },
+  {
+    id: 'ports_before_args',
+    clause: '参数 / TTY 校验先于端口装配',
+    edits: [
+      swap(
+        'src/rsi/auto/write/index.ts',
+        'run(ctx, rest, () => factory(ctx));',
+        'run(ctx, rest, ((g) => () => g)(await factory(ctx)));',
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: [
+      '参数 / TTY 校验先于端口装配',
+      'resume 参数 / 环境:非 TTY 退 2 零写入;锁被占用退 4 locked 零写入;[rsi] 关闭退 4 off',
+    ],
+    mustKill: ['参数 / TTY 校验先于端口装配'],
+  },
+  {
+    id: 'prod_wires_locks',
+    clause: 'W8b 生产组装只接用户标记端口',
+    edits: [
+      swap(
+        'src/rsi/auto/deps-write.ts',
+        "config: async () => ({ rsiOn: cfg.status === 'on' }),",
+        "config: async () => ({ rsiOn: cfg.status === 'on' }),\n    locks: {} as never,",
+      ),
+    ],
+    tests: ['rsi/auto/port-contract.test.ts'],
+    expectRed: ['字段 = config / userMarker / outputForbidden'],
+    mustKill: ['字段 = config / userMarker / outputForbidden'],
+  },
+  {
+    id: 'entry_imports_write',
+    clause: 'W8b 读写分文件:读侧入口 entry.ts 的静态闭包不含写处理函数 / 写出口',
+    edits: [
+      swap(
+        'src/rsi/auto/entry.ts',
+        "import type { RsiEarlyContext } from '../types.js';",
+        "import type { RsiEarlyContext } from '../types.js';\nimport { makeWriteHandlers } from './write/index.js';\nexport const leakedWrite = makeWriteHandlers;",
+      ),
+    ],
+    tests: ['rsi/auto/zero-write.test.ts'],
+    expectRed: ['生产入口 entry.ts 的传递闭包'],
+    mustKill: ['生产入口 entry.ts 的传递闭包'],
+  },
+  {
+    id: 'clear_untrusted_blocked',
+    clause: 'R21-9.5 缩减入口在配置不可信时仍要完成 HOME 侧撤销(不得改回 fail-closed)',
+    edits: [
+      swap(
+        'src/rsi/auto/deps-write.ts',
+        "  const gitDir = path.join(getRealHome(env), ...PERSONAL_GIT_DIR_REL.split('/'));\n  if (cfg.status !== 'on') {",
+        "  const gitDir = path.join(getRealHome(env), ...PERSONAL_GIT_DIR_REL.split('/'));\n  if (cfg.status === 'off' && !LEGIT_OFF.has(cfg.reason)) {\n    throw new RsiFailClosedError(untrustedReason(cfg.reason));\n  }\n  if (cfg.status !== 'on') {",
+      ),
+    ],
+    tests: ['rsi/auto/write-untrusted-config.test.ts'],
+    expectRed: ['配置不可信时 auto clear --write(缩减入口)照常完成 HOME 侧撤销'],
+    mustKill: ['配置不可信时 auto clear --write(缩减入口)照常完成 HOME 侧撤销'],
+  },
+  {
+    id: 'clear_prints_paths',
+    clause:
+      'R21-9.5 缩减入口的输出只含 id / 枚举 / 计数,不含路径(配置不可信时泄漏闸禁止集合不完整,靠这条兜底)',
+    edits: [
+      swap(
+        'src/rsi/auto/write/clear-write.ts',
+        '      outcomeCounts(report.outcomes),',
+        "      outcomeCounts(report.outcomes) + ' ' + (p.outputForbidden ?? []).join(' '),",
+      ),
+    ],
+    tests: ['rsi/auto/write-untrusted-config.test.ts'],
+    expectRed: ['配置不可信时 auto clear --write(缩减入口)照常完成 HOME 侧撤销'],
+    mustKill: ['配置不可信时 auto clear --write(缩减入口)照常完成 HOME 侧撤销'],
+  },
+  {
+    id: 'other_writes_fail_open',
+    clause: '配置不可信时除 clear 外的写命令保持 fail-closed(放宽只对缩减入口)',
+    edits: [
+      swap(
+        'src/rsi/auto/deps-write.ts',
+        "  if (cfg.status === 'off' && !LEGIT_OFF.has(cfg.reason)) {\n    throw new RsiFailClosedError(untrustedReason(cfg.reason));\n  }\n  const open = cfg.status === 'on' ? await openRsiIo(ctx) : null;",
+        "  const open = cfg.status === 'on' ? await openRsiIo(ctx) : null;",
+      ),
+    ],
+    tests: ['rsi/auto/write-untrusted-config.test.ts'],
+    expectRed: ['配置不可信时其余写命令仍 fail-closed'],
+    mustKill: ['配置不可信时其余写命令仍 fail-closed'],
+  },
+  {
+    id: 'rbk_invalid_locked',
+    clause: 'W0-22 第 4 条 持锁后重读仍要先判矛盾记录(取锁前出现的不得被当作可回滚)',
+    edits: [
+      swap(
+        'src/rsi/auto/write/rollback-write.ts',
+        "if (sel.invalid.length > 0) return failClosed(ctx, 'candidate_invalid');",
+        'void sel.invalid;',
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: ['rollback --to 持锁后重读发现矛盾记录'],
+    mustKill: ['rollback --to 持锁后重读发现矛盾记录'],
+  },
+  {
+    id: 'rbk_no_confirm',
+    clause: 'W0-25 rollback --to --write 展示两节后要求 yes(批量、用户可见)',
+    edits: [
+      swap(
+        'src/rsi/auto/write/rollback-write.ts',
+        "if (raw === undefined || raw.replace(/\\r$/, '') !== 'yes') {",
+        'if (false) {',
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: ['rollback --to 展示两节后要求 yes'],
+    mustKill: ['rollback --to 展示两节后要求 yes'],
+  },
+  {
+    id: 'rbk_lock_before_confirm',
+    clause: 'W0-25 拒绝时不取锁(确认先于取锁,不在持锁时等人输入)',
+    edits: [
+      swap(
+        'src/rsi/auto/write/rollback-write.ts',
+        "    ctx.stderr('RSI_CONFIRM_DECLINED\\n');\n    return ExitCode.CHECK_FAILED;",
+        "    await locks.withLocks('rsi_personal_sync', async () => undefined);\n    ctx.stderr('RSI_CONFIRM_DECLINED\\n');\n    return ExitCode.CHECK_FAILED;",
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: ['rollback --to 展示两节后要求 yes'],
+    mustKill: ['rollback --to 展示两节后要求 yes'],
+  },
+  {
+    id: 'rbk_no_stale',
+    clause: 'W0-25 持锁后重选与展示不一致 → RSI_CONFIRM_STALE',
+    edits: [
+      swap(
+        'src/rsi/auto/write/rollback-write.ts',
+        'if (shownKeys.length !== nowKeys.length || shownKeys.some((k, n) => k !== nowKeys[n])) {',
+        'if (false) {',
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: ['rollback --to 持锁后重读重选'],
+    mustKill: ['rollback --to 持锁后重读重选'],
+  },
+  {
+    id: 'veto_no_late_retry',
+    clause: 'W7 约定:较晚事件首次没施加(lateEventNotApplied)时命令重试一次',
+    edits: [
+      swap(
+        'src/rsi/auto/write/veto.ts',
+        '      out = await startRollback(d, req);',
+        '      void req;',
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: ['veto 复用在途 txn 时较晚的 veto 事件首次没施加'],
+    mustKill: ['veto 复用在途 txn 时较晚的 veto 事件首次没施加'],
+  },
+  {
+    id: 'veto_late_complete_lost',
+    clause:
+      'W7 约定:较晚事件没施加而事务已走完 → 命令改走终态 veto(落黑名单),不新开空事务静默丢 veto',
+    edits: [
+      swap(
+        'src/rsi/auto/write/veto.ts',
+        "      if (out.status === 'complete') {",
+        '      if (false) {',
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: [
+      'veto 较晚事件首次没施加、但事务随即走完',
+      'veto 迟到事件没施加、事务已走完且黑名单 E1 deferred:同样退非零(不静默退 0);重跑落地正常 → 退 0',
+    ],
+    mustKill: ['veto 较晚事件首次没施加、但事务随即走完'],
+  },
+  {
+    id: 'veto_e1_deferred_ok',
+    clause: 'W0-25 终态 veto 的黑名单 E1 deferred 不得退 0(恢复扫描补不出这次否决)',
+    edits: [
+      swap(
+        'src/rsi/auto/write/veto.ts',
+        "if (r.kind === 'noop' && landed.includes('deferred') && rec.terminal_reason !== 'vetoed') {",
+        'if (false) {',
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: [
+      'veto 终态候选(原理由 cleared)的黑名单 E1 deferred',
+      'veto 迟到事件没施加、事务已走完且黑名单 E1 deferred:同样退非零(不静默退 0);重跑落地正常 → 退 0',
+    ],
+    mustKill: ['veto 终态候选(原理由 cleared)的黑名单 E1 deferred'],
+  },
+  {
+    id: 'veto_no_lock_lost_check',
+    clause: 'candidate-apply 的 lockLost 约定:丢锁后不得再调 E2 / 审计出口',
+    edits: [
+      swap(
+        'src/rsi/auto/write/veto.ts',
+        "if (r.lockLost === true) throw new RsiLockError('lock_lost');",
+        'void RsiLockError;',
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: ['veto 转移已提交但丢锁(lockLost)'],
+    mustKill: ['veto 转移已提交但丢锁(lockLost)'],
+  },
+  {
+    id: 'rebase_resume_unconditional',
+    clause: 'W0-25 rebase 收尾只在「head 已改写」可验证时清标志(不得对 classify=ok 无条件清)',
+    edits: [
+      swap(
+        'src/rsi/auto/write/rebase.ts',
+        'return flagged && (await rb.headRewritten(residueKind));',
+        'return flagged;',
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: [
+      '没有「已改写」事实就不清标志',
+      '收尾的持锁重判:锁外 ok、持锁后变成与参数不匹配的情形 / 后置条件不再成立 / 标志已消失 → 都退 4,不清标志',
+    ],
+    mustKill: ['没有「已改写」事实就不清标志'],
+  },
+  {
+    id: 'rebase_resume_missing',
+    clause: 'W0-25 rebase 改完 head 后崩溃的重跑须能收尾清标志(不被 not_diverged 短路)',
+    edits: [
+      swap(
+        'src/rsi/auto/write/rebase.ts',
+        "if (s0.kind !== 'ok' || !(await hasResidue())) return notRun(ctx, 'not_diverged');",
+        "return notRun(ctx, 'not_diverged');",
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: [
+      'head 写完后崩溃(清标志之前)',
+      'pause state 写失败(head 已改写):重跑同样收尾清标志;换主(--adopt-owner)同形',
+    ],
+    mustKill: ['head 写完后崩溃(清标志之前)'],
+  },
+  {
+    id: 'rebase_resume_param_mismatch',
+    clause: 'W0-25 rebase 收尾只认原始情形 ok(参数与情形不匹配不得收尾)',
+    edits: [
+      swap(
+        'src/rsi/auto/write/rebase.ts',
+        "if (s0.kind !== 'ok' || !(await hasResidue())) return notRun(ctx, 'not_diverged');",
+        "if (!(await hasResidue())) return notRun(ctx, 'not_diverged');",
+      ),
+      swap(
+        'src/rsi/auto/write/rebase.ts',
+        "if (again.kind !== 'ok' || !(await hasResidue())) return notRun(ctx, 'not_diverged');",
+        "if (!(await hasResidue())) return notRun(ctx, 'not_diverged');",
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: [
+      '收尾只认原始情形 ok',
+      '收尾的持锁重判:锁外 ok、持锁后变成与参数不匹配的情形 / 后置条件不再成立 / 标志已消失 → 都退 4,不清标志',
+    ],
+    mustKill: ['收尾只认原始情形 ok'],
+  },
+  {
+    id: 'rebase_resume_no_recheck',
+    clause: 'W0-25 rebase 收尾须持锁后重判三条事实(锁外探测不作数)',
+    edits: [
+      swap(
+        'src/rsi/auto/write/rebase.ts',
+        "if (again.kind !== 'ok' || !(await hasResidue())) return notRun(ctx, 'not_diverged');",
+        'void again;',
+      ),
+    ],
+    tests: ['rsi/auto/write-commands.test.ts'],
+    expectRed: ['收尾的持锁重判'],
+    mustKill: ['收尾的持锁重判'],
+  },
+  {
+    id: 'status_inert_changed',
+    clause: 'R21-13.1 V2+ 的键给惰性值(exec = not_available)',
+    edits: [
+      swap('src/rsi/auto/read/status-keys.ts', "    exec: 'not_available',", "    exec: 'off',"),
+    ],
+    tests: ['rsi/status-auto-keys.test.ts'],
+    expectRed: [
+      '[rsi] 关闭(off):惰性值',
+      'on 而没有视图(missing):V1 的视图派生键是 null(绝不显示成全零);[rsi.auto] 启用与 profile 如实报告,相位低于 V3 时 profile_effective 恒 lite',
+    ],
+    mustKill: ['[rsi] 关闭(off):惰性值'],
+  },
+  {
+    id: 'status_missing_view_zero',
+    clause: 'W0-22 第 7 条 视图缺失时派生键为 null,绝不显示成全零',
+    edits: [
+      swap(
+        'src/rsi/auto/read/status-keys.ts',
+        '    pipeline: v?.pipeline ?? null,',
+        '    pipeline: v?.pipeline ?? { states: {}, last30d: { rejected: 0, rolled_back: 0, expired: 0, retired: 0 } },',
+      ),
+    ],
+    tests: ['rsi/status-auto-keys.test.ts'],
+    expectRed: ['on 而没有视图(missing)', '损坏的视图'],
+    mustKill: ['on 而没有视图(missing)'],
+  },
+  {
+    id: 'status_user_marker_ignored',
+    clause: 'R21-13.1 / W0-22 第 7 条 paused 与 pause_reasons 里 user_paused 按 U 的存在性补',
+    edits: [
+      swap(
+        'src/rsi/auto/read/status-keys.ts',
+        "  if (user) reasons.push('user_paused');",
+        '  void user;',
+      ),
+    ],
+    tests: ['rsi/status-auto-keys.test.ts'],
+    expectRed: ['暂停:U 文件存在'],
+    mustKill: ['暂停:U 文件存在'],
+  },
 ];
 
-/** 实测结果:r21w8a-mut4 @f38f6c9(86 条) */
+/** 实测结果:待主代理整表重跑后回填(W8a 86 条 + W8b 58 条) */
+/** 实测结果:r21w8b-mut4 @a485734 */
 export const V1_W8_RESULTS: readonly V1W8Result[] = [
   {
     id: 'gate_skipped',
@@ -1297,7 +2237,7 @@ export const V1_W8_RESULTS: readonly V1W8Result[] = [
     failed: 1,
     skipped: 0,
     killedBy: [
-      '能力闸 相位够了:读命令跑到处理函数(端口只构造一次);写命令仍接到「未实现」桩(W8b 替换),不构造端口',
+      '能力闸 相位够了:读命令跑到处理函数(端口只构造一次);写命令仍接到「未实现」桩(处理函数表里没有该规范名时),不构造端口',
     ],
     restored: true,
   },
@@ -2130,6 +3070,647 @@ export const V1_W8_RESULTS: readonly V1W8Result[] = [
     skipped: 0,
     killedBy: [
       '禁止集合(端口 outputForbidden) forbiddenExtra 不静默丢项:配置 on 而没有 io / 缺状态目录 / 缺仓库根 → 抛 fail-closed;explicitRoot 是唯一可选来源',
+    ],
+    restored: true,
+  },
+  {
+    id: 'pause_takes_lock',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'rsi auto pause(R21-12.2):独占创建用户暂停文件 pause 创建 U:不拿锁、不要 TTY、只碰 U(不写 state、不 bump、不碰熔断标记)',
+      '未接线预检:缺任一必需端口 → 退 3 internal,任何写入之前(零写入,pause 除外) 全部未接线(只有 userMarker 与 config):除 pause 外每个写命令退 3 零写入;pause 恰好写 U 一个文件',
+    ],
+    restored: true,
+  },
+  {
+    id: 'pause_overwrites',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi auto pause(R21-12.2):独占创建用户暂停文件 pause 已存在时不覆盖:输出「已暂停(已存在)」,退 0,实例不变',
+    ],
+    restored: true,
+  },
+  {
+    id: 'pause_touches_state',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'rsi auto pause(R21-12.2):独占创建用户暂停文件 pause 创建 U:不拿锁、不要 TTY、只碰 U(不写 state、不 bump、不碰熔断标记)',
+      'rsi auto pause(R21-12.2):独占创建用户暂停文件 pause 已存在时不覆盖:输出「已暂停(已存在)」,退 0,实例不变',
+    ],
+    restored: true,
+  },
+  {
+    id: 'pause_off_runs',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi auto pause(R21-12.2):独占创建用户暂停文件 pause 在 [rsi] 关闭时退 4 off,不写 U;未知参数退 2',
+    ],
+    restored: true,
+  },
+  {
+    id: 'resume_no_evidence',
+    failed: 3,
+    skipped: 0,
+    killedBy: [
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 清掉条件已不成立的人工码,写解除证据,bump,按指纹删 U;B 在 → PENDING 退 0,不得输出 RESUMED,不碰 B',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 在无剩余码、U 与 B 都不在时才输出 RESUMED(退 0)',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 自动解除码条件已不成立:本次一并清掉(带解除证据),不退 1;B 在 → PENDING 且证据写 B 的 id',
+    ],
+    restored: true,
+  },
+  {
+    id: 'resume_clears_holding',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 不清仍成立的码:退 1,逐行 BLOCKED,不写证据,已清的码照实列出',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 与人工码同在:自动解除码条件已不成立的清掉,仍成立的人工码保留并退 1(已清的照实列出,不写证据)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'resume_no_bump',
+    failed: 5,
+    skipped: 0,
+    killedBy: [
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 清掉条件已不成立的人工码,写解除证据,bump,按指纹删 U;B 在 → PENDING 退 0,不得输出 RESUMED,不碰 B',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 的顺序:先写 state(带证据),再 bump,最后删 U',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 指纹为空(快照时没有 U)永不删:步骤 ② 之后新建的 U′ 保留,结果行 BLOCKED user_paused new=yes,退 1',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 指纹不符(步骤 ② 之后 U 被换实例)保留并报 changed;U′ 与 B 同在时追加 breaker_marker=pending',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 中途失败:已落盘的先输出(已完成:cleared=…),再退 3,可重跑',
+    ],
+    restored: true,
+  },
+  {
+    id: 'resume_empty_stamp_deletes',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 指纹为空(快照时没有 U)永不删:步骤 ② 之后新建的 U′ 保留,结果行 BLOCKED user_paused new=yes,退 1',
+    ],
+    restored: true,
+  },
+  {
+    id: 'resume_mismatch_deletes',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 指纹不符(步骤 ② 之后 U 被换实例)保留并报 changed;U′ 与 B 同在时追加 breaker_marker=pending',
+    ],
+    restored: true,
+  },
+  {
+    id: 'resume_touches_breaker',
+    failed: 5,
+    skipped: 0,
+    killedBy: [
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 清掉条件已不成立的人工码,写解除证据,bump,按指纹删 U;B 在 → PENDING 退 0,不得输出 RESUMED,不碰 B',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 自动解除码条件已不成立:本次一并清掉(带解除证据),不退 1;B 在 → PENDING 且证据写 B 的 id',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 的顺序:先写 state(带证据),再 bump,最后删 U',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 指纹不符(步骤 ② 之后 U 被换实例)保留并报 changed;U′ 与 B 同在时追加 breaker_marker=pending',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume --json:追加 paused 与 request_done(PENDING 行:paused=true,request_done=true)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'resume_result_mismatch',
+    failed: 4,
+    skipped: 0,
+    killedBy: [
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 清掉条件已不成立的人工码,写解除证据,bump,按指纹删 U;B 在 → PENDING 退 0,不得输出 RESUMED,不碰 B',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 自动解除码条件已不成立:本次一并清掉(带解除证据),不退 1;B 在 → PENDING 且证据写 B 的 id',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 指纹不符(步骤 ② 之后 U 被换实例)保留并报 changed;U′ 与 B 同在时追加 breaker_marker=pending',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume --json:追加 paused 与 request_done(PENDING 行:paused=true,request_done=true)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'resume_diverged_dropped',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 不碰 diverged / owner_changed:退 1,提示 rebase-baseline,按码表顺序',
+    ],
+    restored: true,
+  },
+  {
+    id: 'resume_order_swapped',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 的顺序:先写 state(带证据),再 bump,最后删 U',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 指纹不符(步骤 ② 之后 U 被换实例)保留并报 changed;U′ 与 B 同在时追加 breaker_marker=pending',
+    ],
+    restored: true,
+  },
+  {
+    id: 'resume_user_not_in_r',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 指纹为空(快照时没有 U)永不删:步骤 ② 之后新建的 U′ 保留,结果行 BLOCKED user_paused new=yes,退 1',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 指纹不符(步骤 ② 之后 U 被换实例)保留并报 changed;U′ 与 B 同在时追加 breaker_marker=pending',
+    ],
+    restored: true,
+  },
+  {
+    id: 'resume_two_locks',
+    failed: 14,
+    skipped: 0,
+    killedBy: [
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 清掉条件已不成立的人工码,写解除证据,bump,按指纹删 U;B 在 → PENDING 退 0,不得输出 RESUMED,不碰 B',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 在无剩余码、U 与 B 都不在时才输出 RESUMED(退 0)',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 不清仍成立的码:退 1,逐行 BLOCKED,不写证据,已清的码照实列出',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 自动解除码条件仍成立(重查命中):保留在 state 里,BLOCKED 行带 auto_release=yes,退 1,不写 state,不输出 RESUMED',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 自动解除码条件已不成立:本次一并清掉(带解除证据),不退 1;B 在 → PENDING 且证据写 B 的 id',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 与人工码同在:自动解除码条件已不成立的清掉,仍成立的人工码保留并退 1(已清的照实列出,不写证据)',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 重查没覆盖的自动解除码(no_observation / cost_high_legacy / isolation_unverified)条件无从判定:按仍成立处理,保留,退 1',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 不碰 diverged / owner_changed:退 1,提示 rebase-baseline,按码表顺序',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 的顺序:先写 state(带证据),再 bump,最后删 U',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 指纹为空(快照时没有 U)永不删:步骤 ② 之后新建的 U′ 保留,结果行 BLOCKED user_paused new=yes,退 1',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 指纹不符(步骤 ② 之后 U 被换实例)保留并报 changed;U′ 与 B 同在时追加 breaker_marker=pending',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume:U 存在时历史遗留的 state 码 user_paused 一并清;U 不存在时它仍算剩余(不得谎报 RESUMED)',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 中途失败:已落盘的先输出(已完成:cleared=…),再退 3,可重跑',
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume --json:追加 paused 与 request_done(PENDING 行:paused=true,request_done=true)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'clear_takes_rsi_lock',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi auto clear --write(R21-12.4 / R21-9.5 缩减入口):只拿 personal → sync clear 撤销成功:退 0,RSI_CLEAR_DONE 先逐行输出,只拿 personal → sync(不取 rsi/lock),不要求 [rsi] 可用',
+    ],
+    restored: true,
+  },
+  {
+    id: 'clear_off_short_circuit',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi auto clear --write(R21-12.4 / R21-9.5 缩减入口):只拿 personal → sync clear 撤销成功:退 0,RSI_CLEAR_DONE 先逐行输出,只拿 personal → sync(不取 rsi/lock),不要求 [rsi] 可用',
+    ],
+    restored: true,
+  },
+  {
+    id: 'clear_enum_ignored',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi auto clear --write(R21-12.4 / R21-9.5 缩减入口):只拿 personal → sync clear 仓库读不出(deferred 且无只读记录):没有处理任何新候选,退 3 personal_repo_invalid,不写凭据',
+    ],
+    restored: true,
+  },
+  {
+    id: 'out_failure_first',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '输出归并(emitOutcomes):完整性先于归并、同身份才消除、已完成项先输出 journal 完整性错误(不带身份)不被另一份 journal 的 complete 消除:退 3 txn_invalid',
+    ],
+    restored: true,
+  },
+  {
+    id: 'veto_deferred_unknown_id',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判 veto 仓库 deferred / invalid 时不得判 unknown_id:退 3(不是 2),零写入',
+    ],
+    restored: true,
+  },
+  {
+    id: 'veto_no_reread',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判 veto 持锁后重读记录再判:锁外读到的是 canary,持锁时已是终态 → 只写黑名单,不新开回滚',
+    ],
+    restored: true,
+  },
+  {
+    id: 'veto_terminal_rolls_back',
+    failed: 4,
+    skipped: 0,
+    killedBy: [
+      'rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判 veto 已终态候选只写黑名单:记录不动,没有 journal,没有撤销凭据',
+      'rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判 veto 持锁后重读记录再判:锁外读到的是 canary,持锁时已是终态 → 只写黑名单,不新开回滚',
+      'rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判 veto 终态候选(原理由 cleared)的黑名单 E1 deferred:退非零、不输出成功行;恢复扫描不会补;重跑且落地正常 → 退 0,黑名单恰好一条',
+      'rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判 veto 迟到事件没施加、事务已走完且黑名单 E1 deferred:同样退非零(不静默退 0);重跑落地正常 → 退 0',
+    ],
+    restored: true,
+  },
+  {
+    id: 'veto_wrong_source',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判 veto 已部署候选:startRollback(kind=rollback, reason=vetoed, by=veto),三把锁,黑名单落 E1 键',
+    ],
+    restored: true,
+  },
+  {
+    id: 'veto_off_ignored',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判 veto 参数 / 环境:非 TTY 退 2;[rsi] 关闭退 4 off;缺 id 退 2 unknown_arg;零写入',
+    ],
+    restored: true,
+  },
+  {
+    id: 'veto_lift_ignored',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判 veto --lift 只调黑名单解除端口:记录与 journal 不动',
+    ],
+    restored: true,
+  },
+  {
+    id: 'veto_e2_not_landed',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判 veto 未部署(shadow)候选:引擎 veto 事件直接 rejected(vetoed),终态批次 E2 整批落地,不写撤销凭据',
+    ],
+    restored: true,
+  },
+  {
+    id: 'veto_e1_not_landed',
+    failed: 4,
+    skipped: 0,
+    killedBy: [
+      'rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判 veto 已终态候选只写黑名单:记录不动,没有 journal,没有撤销凭据',
+      'rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判 veto 较晚事件首次没施加、但事务随即走完(记录已按原理由进终态):不再新开空事务,改走终态 veto → 退 0,只落黑名单(不静默丢 veto)',
+      'rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判 veto 终态候选(原理由 cleared)的黑名单 E1 deferred:退非零、不输出成功行;恢复扫描不会补;重跑且落地正常 → 退 0,黑名单恰好一条',
+      'rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判 veto 迟到事件没施加、事务已走完且黑名单 E1 deferred:同样退非零(不静默退 0);重跑落地正常 → 退 0',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rbk_wrong_source',
+    failed: 3,
+    skipped: 0,
+    killedBy: [
+      'rsi rollback --to <日期> --write(R21-12.7 / W0-22 第 4 条) rollback --to:by=rollback_to、reason=cleared,按生效逆序(进入 canary 晚者在前),三把锁',
+      'rsi rollback --to <日期> --write(R21-12.7 / W0-22 第 4 条) rollback --to 日期严格大于:进入日等于 D 的不纳入',
+      'rsi rollback --to <日期> --write(R21-12.7 / W0-22 第 4 条) rollback --to 日期不可知的候选单列纳入并展示(计数分开),排在日期可知者之后',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rbk_wrong_reason',
+    failed: 3,
+    skipped: 0,
+    killedBy: [
+      'rsi rollback --to <日期> --write(R21-12.7 / W0-22 第 4 条) rollback --to:by=rollback_to、reason=cleared,按生效逆序(进入 canary 晚者在前),三把锁',
+      'rsi rollback --to <日期> --write(R21-12.7 / W0-22 第 4 条) rollback --to 日期严格大于:进入日等于 D 的不纳入',
+      'rsi rollback --to <日期> --write(R21-12.7 / W0-22 第 4 条) rollback --to 日期不可知的候选单列纳入并展示(计数分开),排在日期可知者之后',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rbk_order_flipped',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'rsi rollback --to <日期> --write(R21-12.7 / W0-22 第 4 条) rollback --to:by=rollback_to、reason=cleared,按生效逆序(进入 canary 晚者在前),三把锁',
+      'rsi rollback --to <日期> --write(R21-12.7 / W0-22 第 4 条) rollback --to 日期不可知的候选单列纳入并展示(计数分开),排在日期可知者之后',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rbk_unknown_excluded',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi rollback --to <日期> --write(R21-12.7 / W0-22 第 4 条) rollback --to 日期不可知的候选单列纳入并展示(计数分开),排在日期可知者之后',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rbk_off_exit_zero',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi rollback --to <日期> --write(R21-12.7 / W0-22 第 4 条) rollback --to:[rsi] 关闭退 4 off 并提示改用 auto clear;坏日期退 2;非 TTY 退 2;零写入',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rbk_two_locks',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi rollback --to <日期> --write(R21-12.7 / W0-22 第 4 条) rollback --to:by=rollback_to、reason=cleared,按生效逆序(进入 canary 晚者在前),三把锁',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rbk_invalid_after_write',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi rollback --to <日期> --write(R21-12.7 / W0-22 第 4 条) rollback --to 记录自相矛盾(无进入 canary 记录且没有丢弃转移):在任何写入之前退 3 candidate_invalid',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rebase_no_confirm',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'rsi auto rebase-baseline(R21-12.5):只在分叉 / 换主可用,确认后才改写 拒绝(非 yes / EOF)退 1 RSI_CONFIRM_DECLINED,零写入、不取锁',
+      'rsi auto rebase-baseline(R21-12.5):只在分叉 / 换主可用,确认后才改写 没有「已改写」事实就不清标志:本来没分叉且状态里也没有标志 → 退 4;有标志但 head 并未改写(记录与 HEAD 不符)→ 仍退 4,不动标志;仍分叉 → 走正常确认流程',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rebase_non_diverged_runs',
+    failed: 6,
+    skipped: 0,
+    killedBy: [
+      'rsi auto rebase-baseline(R21-12.5):只在分叉 / 换主可用,确认后才改写 head 写完后崩溃(清标志之前):重跑不被 not_diverged 短路,持锁后收尾清 diverged 标志 → 退 0,不再改写 head',
+      'rsi auto rebase-baseline(R21-12.5):只在分叉 / 换主可用,确认后才改写 pause state 写失败(head 已改写):重跑同样收尾清标志;换主(--adopt-owner)同形',
+      'rsi auto rebase-baseline(R21-12.5):只在分叉 / 换主可用,确认后才改写 没有「已改写」事实就不清标志:本来没分叉且状态里也没有标志 → 退 4;有标志但 head 并未改写(记录与 HEAD 不符)→ 仍退 4,不动标志;仍分叉 → 走正常确认流程',
+      'rsi auto rebase-baseline(R21-12.5):只在分叉 / 换主可用,确认后才改写 收尾只认原始情形 ok:参数与情形不匹配(分叉 + --adopt-owner / 换主不带)即使残留事实齐全也退 4、零写入、不取锁',
+      'rsi auto rebase-baseline(R21-12.5):只在分叉 / 换主可用,确认后才改写 收尾的持锁重判:锁外 ok、持锁后变成与参数不匹配的情形 / 后置条件不再成立 / 标志已消失 → 都退 4,不清标志',
+      'rsi auto rebase-baseline(R21-12.5):只在分叉 / 换主可用,确认后才改写 非分叉 / 非换主情形退 4 not_diverged(不提示、不取锁、不写);换主必须 --adopt-owner,分叉不接受 --adopt-owner',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rebase_no_recheck',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi auto rebase-baseline(R21-12.5):只在分叉 / 换主可用,确认后才改写 持锁后重判:确认之后 HEAD 变了 → RSI_CONFIRM_STALE(退 1)零写入;不再分叉 → 退 4 not_diverged',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rebase_label_dropped',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi auto rebase-baseline(R21-12.5):只在分叉 / 换主可用,确认后才改写 分叉:展示带标签的相对路径清单,输入 yes 才改写 head.json,并清 diverged 标志;三把锁',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rebase_paths_unsanitized',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi auto rebase-baseline(R21-12.5):只在分叉 / 换主可用,确认后才改写 路径清单过清洗:控制字符被替换,不能伪造行',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rebase_flag_kept',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'rsi auto rebase-baseline(R21-12.5):只在分叉 / 换主可用,确认后才改写 分叉:展示带标签的相对路径清单,输入 yes 才改写 head.json,并清 diverged 标志;三把锁',
+      'rsi auto rebase-baseline(R21-12.5):只在分叉 / 换主可用,确认后才改写 head 写完后崩溃(清标志之前):重跑不被 not_diverged 短路,持锁后收尾清 diverged 标志 → 退 0,不再改写 head',
+    ],
+    restored: true,
+  },
+  {
+    id: 'precheck_skipped',
+    failed: 10,
+    skipped: 0,
+    killedBy: [
+      '未接线预检:缺任一必需端口 → 退 3 internal,任何写入之前(零写入,pause 除外) resume:缺 userMarker → 退 3 internal;没有取锁、没有任何写入',
+      '未接线预检:缺任一必需端口 → 退 3 internal,任何写入之前(零写入,pause 除外) resume:缺 breaker → 退 3 internal;没有取锁、没有任何写入',
+      '未接线预检:缺任一必需端口 → 退 3 internal,任何写入之前(零写入,pause 除外) resume:缺 pauseState → 退 3 internal;没有取锁、没有任何写入',
+      '未接线预检:缺任一必需端口 → 退 3 internal,任何写入之前(零写入,pause 除外) resume:缺 holds → 退 3 internal;没有取锁、没有任何写入',
+      '未接线预检:缺任一必需端口 → 退 3 internal,任何写入之前(零写入,pause 除外) resume:缺 marks → 退 3 internal;没有取锁、没有任何写入',
+      '未接线预检:缺任一必需端口 → 退 3 internal,任何写入之前(零写入,pause 除外) clear --write:缺 clearDeps → 退 3 internal;没有取锁、没有任何写入',
+      '未接线预检:缺任一必需端口 → 退 3 internal,任何写入之前(零写入,pause 除外) rebase-baseline:缺 pauseState → 退 3 internal;没有取锁、没有任何写入',
+      '未接线预检:缺任一必需端口 → 退 3 internal,任何写入之前(零写入,pause 除外) veto:缺 rollbackDeps → 退 3 internal;没有取锁、没有任何写入',
+      '未接线预检:缺任一必需端口 → 退 3 internal,任何写入之前(零写入,pause 除外) rollback --to --write:缺 locks → 退 3 internal;没有取锁、没有任何写入',
+      '未接线预检:缺任一必需端口 → 退 3 internal,任何写入之前(零写入,pause 除外) rollback --to --write:缺 rollbackDeps → 退 3 internal;没有取锁、没有任何写入',
+    ],
+    restored: true,
+  },
+  {
+    id: 'ports_before_args',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'rsi auto resume(R21-12.3 / W0-22 第 1、2 条 / W0-23):线性化与结果表 resume 参数 / 环境:非 TTY 退 2 零写入;锁被占用退 4 locked 零写入;[rsi] 关闭退 4 off',
+      '未接线预检:缺任一必需端口 → 退 3 internal,任何写入之前(零写入,pause 除外) 参数 / TTY 校验先于端口装配:坏参数、非 TTY 不会构造端口',
+    ],
+    restored: true,
+  },
+  {
+    id: 'prod_wires_locks',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '生产写组装 productionWritePorts:只接了用户标记端口,其余一律缺失(未接线) 字段 = config / userMarker / outputForbidden;[rsi] 无配置 = 合法关闭(rsiOn=false)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'entry_imports_write',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '③ ④ 静态:业务读侧的 import 闭包(运行时依赖与含类型依赖两种口径) 生产入口 entry.ts 的传递闭包(运行时与含类型两种口径):除 deps / entry 自己、exec.ts(runGitClosed)与适配器外,不含任何写出口 / 锁 / 回滚写模块',
+    ],
+    restored: true,
+  },
+  {
+    id: 'clear_untrusted_blocked',
+    failed: 8,
+    skipped: 0,
+    killedBy: [
+      '配置不可信时 auto clear --write(缩减入口)照常完成 HOME 侧撤销 cfg_parse:撤销完成(退 0),只拿 personal → sync 锁,stdout / stderr 不含候选正文、仓库根 / 状态目录 / [rsi] repo 路径',
+      '配置不可信时 auto clear --write(缩减入口)照常完成 HOME 侧撤销 cfg_parse:仓库读不出时退 3 personal_repo_invalid(归并规则不因配置不可信而变),不写凭据',
+      '配置不可信时 auto clear --write(缩减入口)照常完成 HOME 侧撤销 cfg_schema:撤销完成(退 0),只拿 personal → sync 锁,stdout / stderr 不含候选正文、仓库根 / 状态目录 / [rsi] repo 路径',
+      '配置不可信时 auto clear --write(缩减入口)照常完成 HOME 侧撤销 cfg_schema:仓库读不出时退 3 personal_repo_invalid(归并规则不因配置不可信而变),不写凭据',
+      '配置不可信时 auto clear --write(缩减入口)照常完成 HOME 侧撤销 repo_invalid:撤销完成(退 0),只拿 personal → sync 锁,stdout / stderr 不含候选正文、仓库根 / 状态目录 / [rsi] repo 路径',
+      '配置不可信时 auto clear --write(缩减入口)照常完成 HOME 侧撤销 repo_invalid:仓库读不出时退 3 personal_repo_invalid(归并规则不因配置不可信而变),不写凭据',
+      '配置不可信时 auto clear --write(缩减入口)照常完成 HOME 侧撤销 cfg_perm:撤销完成(退 0),只拿 personal → sync 锁,stdout / stderr 不含候选正文、仓库根 / 状态目录 / [rsi] repo 路径',
+      '配置不可信时 auto clear --write(缩减入口)照常完成 HOME 侧撤销 cfg_perm:仓库读不出时退 3 personal_repo_invalid(归并规则不因配置不可信而变),不写凭据',
+    ],
+    restored: true,
+  },
+  {
+    id: 'clear_prints_paths',
+    failed: 8,
+    skipped: 0,
+    killedBy: [
+      '配置不可信时 auto clear --write(缩减入口)照常完成 HOME 侧撤销 cfg_parse:撤销完成(退 0),只拿 personal → sync 锁,stdout / stderr 不含候选正文、仓库根 / 状态目录 / [rsi] repo 路径',
+      '配置不可信时 auto clear --write(缩减入口)照常完成 HOME 侧撤销 cfg_parse:仓库读不出时退 3 personal_repo_invalid(归并规则不因配置不可信而变),不写凭据',
+      '配置不可信时 auto clear --write(缩减入口)照常完成 HOME 侧撤销 cfg_schema:撤销完成(退 0),只拿 personal → sync 锁,stdout / stderr 不含候选正文、仓库根 / 状态目录 / [rsi] repo 路径',
+      '配置不可信时 auto clear --write(缩减入口)照常完成 HOME 侧撤销 cfg_schema:仓库读不出时退 3 personal_repo_invalid(归并规则不因配置不可信而变),不写凭据',
+      '配置不可信时 auto clear --write(缩减入口)照常完成 HOME 侧撤销 repo_invalid:撤销完成(退 0),只拿 personal → sync 锁,stdout / stderr 不含候选正文、仓库根 / 状态目录 / [rsi] repo 路径',
+      '配置不可信时 auto clear --write(缩减入口)照常完成 HOME 侧撤销 repo_invalid:仓库读不出时退 3 personal_repo_invalid(归并规则不因配置不可信而变),不写凭据',
+      '配置不可信时 auto clear --write(缩减入口)照常完成 HOME 侧撤销 cfg_perm:撤销完成(退 0),只拿 personal → sync 锁,stdout / stderr 不含候选正文、仓库根 / 状态目录 / [rsi] repo 路径',
+      '配置不可信时 auto clear --write(缩减入口)照常完成 HOME 侧撤销 cfg_perm:仓库读不出时退 3 personal_repo_invalid(归并规则不因配置不可信而变),不写凭据',
+    ],
+    restored: true,
+  },
+  {
+    id: 'other_writes_fail_open',
+    failed: 4,
+    skipped: 0,
+    killedBy: [
+      '配置不可信时其余写命令仍 fail-closed(退 3,stdout 零字节,零写入) cfg_parse:5 个写命令都退 3 RSI_FAIL_CLOSED reason=cfg_parse',
+      '配置不可信时其余写命令仍 fail-closed(退 3,stdout 零字节,零写入) cfg_schema:5 个写命令都退 3 RSI_FAIL_CLOSED reason=cfg_schema',
+      '配置不可信时其余写命令仍 fail-closed(退 3,stdout 零字节,零写入) repo_invalid:5 个写命令都退 3 RSI_FAIL_CLOSED reason=repo_invalid',
+      '配置不可信时其余写命令仍 fail-closed(退 3,stdout 零字节,零写入) cfg_perm:5 个写命令都退 3 RSI_FAIL_CLOSED reason=cfg_perm',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rbk_invalid_locked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi rollback --to <日期> --write(R21-12.7 / W0-22 第 4 条) rollback --to 持锁后重读发现矛盾记录:退 3 candidate_invalid,零写入(展示时没有、取锁前出现)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rbk_no_confirm',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi rollback --to <日期> --write(R21-12.7 / W0-22 第 4 条) rollback --to 展示两节后要求 yes:拒绝(非 yes / EOF)退 1 RSI_CONFIRM_DECLINED,零写入、不取锁',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rbk_lock_before_confirm',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi rollback --to <日期> --write(R21-12.7 / W0-22 第 4 条) rollback --to 展示两节后要求 yes:拒绝(非 yes / EOF)退 1 RSI_CONFIRM_DECLINED,零写入、不取锁',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rbk_no_stale',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi rollback --to <日期> --write(R21-12.7 / W0-22 第 4 条) rollback --to 持锁后重读重选:展示之后清单变了(新增候选)→ RSI_CONFIRM_STALE 退 1,零写入;清单不变则照常',
+    ],
+    restored: true,
+  },
+  {
+    id: 'veto_no_late_retry',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判 veto 复用在途 txn 时较晚的 veto 事件首次没施加(lateEventNotApplied):重试一次,第二次正常 → 退 0,记录进 vetoed,不报 late_event_not_applied',
+    ],
+    restored: true,
+  },
+  {
+    id: 'veto_late_complete_lost',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判 veto 较晚事件首次没施加、但事务随即走完(记录已按原理由进终态):不再新开空事务,改走终态 veto → 退 0,只落黑名单(不静默丢 veto)',
+      'rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判 veto 迟到事件没施加、事务已走完且黑名单 E1 deferred:同样退非零(不静默退 0);重跑落地正常 → 退 0',
+    ],
+    restored: true,
+  },
+  {
+    id: 'veto_e1_deferred_ok',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判 veto 终态候选(原理由 cleared)的黑名单 E1 deferred:退非零、不输出成功行;恢复扫描不会补;重跑且落地正常 → 退 0,黑名单恰好一条',
+      'rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判 veto 迟到事件没施加、事务已走完且黑名单 E1 deferred:同样退非零(不静默退 0);重跑落地正常 → 退 0',
+    ],
+    restored: true,
+  },
+  {
+    id: 'veto_no_lock_lost_check',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判 veto 转移已提交但丢锁(lockLost):立即结束(退 3 lock_lost),E2 与审计出口调用次数为 0;恢复扫描随后补出效果',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rebase_resume_unconditional',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'rsi auto rebase-baseline(R21-12.5):只在分叉 / 换主可用,确认后才改写 没有「已改写」事实就不清标志:本来没分叉且状态里也没有标志 → 退 4;有标志但 head 并未改写(记录与 HEAD 不符)→ 仍退 4,不动标志;仍分叉 → 走正常确认流程',
+      'rsi auto rebase-baseline(R21-12.5):只在分叉 / 换主可用,确认后才改写 收尾的持锁重判:锁外 ok、持锁后变成与参数不匹配的情形 / 后置条件不再成立 / 标志已消失 → 都退 4,不清标志',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rebase_resume_missing',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'rsi auto rebase-baseline(R21-12.5):只在分叉 / 换主可用,确认后才改写 head 写完后崩溃(清标志之前):重跑不被 not_diverged 短路,持锁后收尾清 diverged 标志 → 退 0,不再改写 head',
+      'rsi auto rebase-baseline(R21-12.5):只在分叉 / 换主可用,确认后才改写 pause state 写失败(head 已改写):重跑同样收尾清标志;换主(--adopt-owner)同形',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rebase_resume_param_mismatch',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'rsi auto rebase-baseline(R21-12.5):只在分叉 / 换主可用,确认后才改写 收尾只认原始情形 ok:参数与情形不匹配(分叉 + --adopt-owner / 换主不带)即使残留事实齐全也退 4、零写入、不取锁',
+      'rsi auto rebase-baseline(R21-12.5):只在分叉 / 换主可用,确认后才改写 收尾的持锁重判:锁外 ok、持锁后变成与参数不匹配的情形 / 后置条件不再成立 / 标志已消失 → 都退 4,不清标志',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rebase_resume_no_recheck',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi auto rebase-baseline(R21-12.5):只在分叉 / 换主可用,确认后才改写 收尾的持锁重判:锁外 ok、持锁后变成与参数不匹配的情形 / 后置条件不再成立 / 标志已消失 → 都退 4,不清标志',
+    ],
+    restored: true,
+  },
+  {
+    id: 'status_inert_changed',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'rsi status --json:R21-13.1 追加键 [rsi] 关闭(off):惰性值,V1 的视图派生键全是 null,auto 未启用 / 未暂停,phase 取当前相位',
+      'rsi status --json:R21-13.1 追加键 on 而没有视图(missing):V1 的视图派生键是 null(绝不显示成全零);[rsi.auto] 启用与 profile 如实报告,相位低于 V3 时 profile_effective 恒 lite',
+    ],
+    restored: true,
+  },
+  {
+    id: 'status_missing_view_zero',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'rsi status --json:R21-13.1 追加键 on 而没有视图(missing):V1 的视图派生键是 null(绝不显示成全零);[rsi.auto] 启用与 profile 如实报告,相位低于 V3 时 profile_effective 恒 lite',
+      'rsi status --json:R21-13.1 追加键 损坏的视图(不是 JSON / 过不了 schema):派生键 null,命令仍退 0',
+    ],
+    restored: true,
+  },
+  {
+    id: 'status_user_marker_ignored',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rsi status --json:R21-13.1 追加键 暂停:U 文件存在 → paused 且 pause_reasons 含 user_paused;state 的熔断码与 diverged 如实带出;B 单独存在也算 paused',
     ],
     restored: true,
   },
