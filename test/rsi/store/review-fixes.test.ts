@@ -479,6 +479,58 @@ describe('M3 没有新状态的批也能裁过期冷却 / 水位线覆盖的 app
   });
 });
 
+// ---------- 第 2 轮验收评审:recoverThrough 本次调用内的身份表 / userVeto 的 maintenanceOnly ----------
+describe.each(KINDS)('R2 recoverThrough 同次调用内的同键冲突 / userVeto 维护性写入(%s)', (kind) => {
+  const EV = '2026-11-10T08:00:00.000Z';
+  const W = '2026-11-14';
+  const expiredCool = { cluster_id: 'old', kind: 'expired', days: 30, at: AT_OLD } as const;
+
+  it('recover_same_call_key_conflict_after_satisfied:同一次恢复里第一批(键 K,状态已满足)之后同键异内容的第二批 = 该批 effects_key_conflict,账字节不变;对照:同键同内容 / 异键异内容都正常', async () => {
+    const w = await makeWorld(kind);
+    await w.store.sink.applyOnce('base', [tomb()], meta()); // ID 的墓碑已存在:K 的第一批状态已满足
+    const before = await w.bytes(FILES.effects);
+    const A = { key: 'K', effects: [tomb(ID)], meta: meta(EV) };
+    const B = { key: 'K', effects: [tomb(ID2)], meta: meta(EV) };
+    expect(await w.store.recovery.recoverThrough(W, [A, B])).toEqual([
+      { batch_id: 'K', state: 'satisfied' },
+      { batch_id: 'K', state: 'ledger_not_committed', cause: 'effects_key_conflict' },
+    ]);
+    expect(await w.bytes(FILES.effects)).toEqual(before); // 零写入:冲突的批没有悄悄建立 ID2 的墓碑
+    // 对照 1:同键同内容两次 = 都 satisfied,仍零写
+    expect(await w.store.recovery.recoverThrough(W, [A, { ...A }])).toEqual([
+      { batch_id: 'K', state: 'satisfied' },
+      { batch_id: 'K', state: 'satisfied' },
+    ]);
+    expect(await w.bytes(FILES.effects)).toEqual(before);
+    // 对照 2:换一个键(同样的内容 B)= 正常提交,说明上面的拒绝来自同键冲突而不是 B 本身
+    expect(await w.store.recovery.recoverThrough(W, [A, { ...B, key: 'K2' }])).toEqual([
+      { batch_id: 'K', state: 'satisfied' },
+      { batch_id: 'K2', state: 'ledger_committed' },
+    ]);
+  });
+
+  it('user_veto_maintenance_only_reports_satisfied:否决自身已满足、只有维护性写入(过期冷却被裁)= ledger:satisfied 但账确实被写(satisfied ≠ 零写盘);对照:全新否决 = committed', async () => {
+    const w = await makeWorld(kind);
+    expect(await w.store.userVeto.veto(ID, SHA, meta())).toEqual({
+      ledger: 'committed',
+      audit: 'not_applicable',
+    });
+    const l = await ledgerOf(w);
+    await seed(w, FILES.effects, canonicalJson({ ...l, cooldowns: [expiredCool] }));
+    const before = await w.bytes(FILES.effects);
+    expect(await w.store.userVeto.veto(ID, SHA, meta())).toEqual({
+      ledger: 'satisfied',
+      audit: 'not_applicable',
+    });
+    const after = await ledgerOf(w);
+    expect([after.gen, after.cooldowns]).toEqual([l.gen + 1, []]); // 维护性提交确实落盘
+    expect(await w.bytes(FILES.effects)).not.toEqual(before);
+    const settled = await w.bytes(FILES.effects);
+    expect((await w.store.userVeto.veto(ID, SHA, meta())).ledger).toBe('satisfied'); // 再来一次:零写
+    expect(await w.bytes(FILES.effects)).toEqual(settled);
+  });
+});
+
 // ---------- L1:契约文字 ----------
 describe('L1 W0-26 第 14 条对 R20-5.1 锁矩阵的扩展已落到原表', () => {
   it('§21.18 第 41 条的写入方清单含 effects.json / audit-compaction.json;W0-26 第 14 条用条款名引用、不再用行号', async () => {

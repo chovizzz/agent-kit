@@ -106,7 +106,12 @@ export class FakeLock implements LockCap {
     readonly name: string,
     private readonly log: string[],
     readonly path?: string,
+    readonly kind?: 'rsi' | 'personal',
   ) {}
+  /** 与真实句柄同一契约:无副作用预检(空槽或已是同一个屏障才可挂) */
+  canAttachReleaseGate(gate: { beforeRelease(): Promise<void> }): boolean {
+    return this.gate === undefined || this.gate === gate;
+  }
   attachReleaseGate(gate: { beforeRelease(): Promise<void> }): void {
     if (this.gate !== undefined && this.gate !== gate) throw new RsiLockError('internal');
     this.gate = gate;
@@ -303,8 +308,18 @@ export async function makeWorld(kind: FsKind, opts: WorldOptions = {}): Promise<
       (await readDir(rsi)).map((e) => e.name).filter((n) => n.endsWith('.tmp'));
   }
   const fs = opts.wrap === undefined ? raw : opts.wrap(raw);
-  const rsiLock = new FakeLock('rsi', log);
-  const personalLock = new FakeLock('personal', log);
+  // 真实世界按生产形状装配:`fs.root` + 两把锁都带 path 与锁种类(rsi = <root>/lock,personal 在 root 之外);
+  // 包装器(故障注入等)必须保留 `root`——没有转发就补上(原地定义,不换对象,`hits` / `calls` 等包装器自带成员保留)。
+  // 内存世界两者都不带(假件形状),装配照旧走「都不声明」分支。
+  let rsiPath: string | undefined;
+  let personalPath: string | undefined;
+  if (raw.root !== undefined) {
+    rsiPath = path.join(raw.root, 'lock');
+    personalPath = path.join(dir, 'home', 'rsi-personal', 'lock');
+    if (fs.root === undefined) Object.defineProperty(fs, 'root', { value: raw.root });
+  }
+  const rsiLock = new FakeLock('rsi', log, rsiPath, 'rsi');
+  const personalLock = new FakeLock('personal', log, personalPath, 'personal');
   const clockFn = (): Date => new Date(clock.iso);
   const store = assembleRsiStore({
     fs,

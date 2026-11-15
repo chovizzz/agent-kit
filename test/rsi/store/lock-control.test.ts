@@ -4,13 +4,13 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import { exists } from '../../../src/io/read-fs.js';
-import { RsiLockError } from '../../../src/rsi/lock-error.js';
 import { acquireRsiLock } from '../../../src/rsi/lock.js';
 import { acquirePersonalLock } from '../../../src/rsi/personal/personal-lock.js';
 import { rsiDir } from '../../../src/rsi/rsi-dir.js';
 import { StoreError } from '../../../src/rsi/store/errors.js';
 import { safeStoreFs, type StoreFs } from '../../../src/rsi/store/fs-port.js';
 import type { HeldStore } from '../../../src/rsi/store/ports.js';
+import { SealRegistry } from '../../../src/rsi/store/seal.js';
 import { assembleRsiStore } from '../../../src/rsi/store/store.js';
 import { makeWorld as makePersonalWorld } from '../personal/repo-helpers.js';
 import {
@@ -182,8 +182,8 @@ describe('H1 LockCap 的 root / 锁种类 / acquisition 校验', () => {
   const mk = (rsiPath?: string, personalPath?: string, root?: string) => {
     const log: string[] = [];
     const fs: StoreFs = root === undefined ? new MemFs() : withRoot(new MemFs(), root);
-    const rsi = new FakeLock('rsi', log, rsiPath);
-    const personal = new FakeLock('personal', log, personalPath);
+    const rsi = new FakeLock('rsi', log, rsiPath, 'rsi');
+    const personal = new FakeLock('personal', log, personalPath, 'personal');
     return { fs, rsi, personal, log };
   };
   const assemble = (x: ReturnType<typeof mk>) =>
@@ -253,17 +253,161 @@ describe('H1 LockCap 的 root / 锁种类 / acquisition 校验', () => {
     expect(await mismatch(() => assemble(x))).toBeUndefined();
   });
 
-  it('句柄已挂了别的屏障 = 拒绝(同一句柄只接受同一个屏障),不静默覆盖', async () => {
+  it('句柄已挂了别的屏障 = 拒绝(同一句柄只接受同一个屏障;预检先于占用,不静默覆盖),原因钉在 release_gate_taken;对照:屏障槽空的假件可装配', async () => {
     const x = mk();
-    x.rsi.attachReleaseGate({ beforeRelease: async () => undefined });
-    let err: unknown;
+    const foreign = { beforeRelease: async (): Promise<void> => undefined };
+    x.rsi.attachReleaseGate(foreign);
+    expect(await mismatch(() => assemble(x))).toBe('release_gate_taken');
+    expect(x.personal.canAttachReleaseGate({ beforeRelease: async () => undefined })).toBe(true); // 另一把没被动过
+    expect(await mismatch(() => assemble(mk()))).toBeUndefined();
+  });
+});
+
+describe('R2 真实句柄的锁种类身份 / 屏障原子占用 / 区域注册表随 acquisition 共享', () => {
+  const detailOf = (fn: () => unknown): string | undefined => {
     try {
-      assemble(x);
+      fn();
     } catch (e) {
-      err = e;
+      if (e instanceof StoreError && e.code === 'lock_cap_mismatch') return e.detail;
+      throw e;
     }
-    expect(err).toBeInstanceOf(RsiLockError);
-    expect((err as RsiLockError).kind).toBe('internal');
+    return undefined;
+  };
+  const probe = { beforeRelease: async (): Promise<void> => undefined };
+
+  it('real_rsi_lock_cannot_pose_as_personal:另一个项目的真实 rsi 锁当 personal 装配 = personal_kind(锁种类是正向验证,不是「不在当前 root 下」);对照:真实 personal 句柄可装配;拒绝后两把句柄都没被挂屏障', async () => {
+    const pwA = await makePersonalWorld('lc-kind-a-');
+    const pwB = await makePersonalWorld('lc-kind-b-');
+    const rsiA = await acquireRsiLock(pwA.io);
+    const rsiB = await acquireRsiLock(pwB.io); // 先取两把 rsi 锁,再取 personal(反向取锁有守卫)
+    const persA = await acquirePersonalLock(pwA.h);
+    try {
+      const fsA = safeStoreFs(pwA.io, await rsiDir(pwA.io));
+      expect(rsiB.path.startsWith(`${fsA.root as string}/`)).toBe(false); // 旧的「不在 root 下」检查确实拦不住它
+      expect(detailOf(() => assembleRsiStore({ fs: fsA, rsi: rsiA, personal: rsiB }))).toBe(
+        'personal_kind',
+      );
+      expect(rsiA.canAttachReleaseGate?.(probe)).toBe(true);
+      expect(rsiB.canAttachReleaseGate?.(probe)).toBe(true);
+      // 角色互换(personal 句柄当 rsi)同样拒绝
+      expect(detailOf(() => assembleRsiStore({ fs: fsA, rsi: persA, personal: rsiA }))).toBe(
+        'rsi_kind',
+      );
+      // 对照:真实 rsi + 真实 personal 可装配
+      expect(
+        detailOf(() => assembleRsiStore({ fs: fsA, rsi: rsiA, personal: persA })),
+      ).toBeUndefined();
+    } finally {
+      await persA.release();
+      await rsiB.release();
+      await rsiA.release();
+    }
+  });
+
+  it('kind_must_match_role:带 path / root 的真实形状里锁种类缺失 = rsi_kind / personal_kind;声明了但与角色不符 = 同码;假件(无 path / root)声明了错的种类也拒绝', async () => {
+    const ROOT = '/repo/.state/rsi';
+    const PERSONAL = '/home/u/.local/state/agent-kit/rsi-personal/lock';
+    const mkLocks = (rsiKind?: 'rsi' | 'personal', personalKind?: 'rsi' | 'personal') => {
+      const log: string[] = [];
+      return {
+        fs: withRoot(new MemFs(), ROOT),
+        rsi: new FakeLock('rsi', log, `${ROOT}/lock`, rsiKind),
+        personal: new FakeLock('personal', log, PERSONAL, personalKind),
+      };
+    };
+    const asm = (x: ReturnType<typeof mkLocks>) => () => assembleRsiStore(x);
+    expect(detailOf(asm(mkLocks('rsi', 'personal')))).toBeUndefined(); // 对照
+    expect(detailOf(asm(mkLocks('rsi', undefined)))).toBe('personal_kind'); // 真实形状必须自报
+    expect(detailOf(asm(mkLocks(undefined, 'personal')))).toBe('rsi_kind');
+    expect(detailOf(asm(mkLocks('rsi', 'rsi')))).toBe('personal_kind'); // 另一把 rsi 冒充
+    expect(detailOf(asm(mkLocks('personal', 'personal')))).toBe('rsi_kind');
+    // 假件:没声明 = 不查(对照);声明错了 = 拒绝
+    const log: string[] = [];
+    expect(
+      detailOf(() =>
+        assembleRsiStore({
+          fs: new MemFs(),
+          rsi: new FakeLock('r', log, undefined, 'personal'),
+          personal: new FakeLock('p', log, undefined, 'personal'),
+        }),
+      ),
+    ).toBe('rsi_kind');
+  });
+
+  it('gate_install_is_atomic:personal 句柄已被别的屏障占着 → 装配被拒(release_gate_taken)且 rsi 句柄没被动过;换一个新取的 personal 后能重新装配、事务与释放正常(对照:半绑定下重试会被 rsi 句柄拒绝)', async () => {
+    const pw = await makePersonalWorld('lc-atomic-');
+    const rsiH = await acquireRsiLock(pw.io);
+    const persH = await acquirePersonalLock(pw.h);
+    const fs = safeStoreFs(pw.io, await rsiDir(pw.io));
+    let persH2: Awaited<ReturnType<typeof acquirePersonalLock>> | undefined;
+    try {
+      persH.attachReleaseGate?.({ beforeRelease: async () => undefined }); // 别的合法调用先占了 personal 的屏障槽
+      expect(detailOf(() => assembleRsiStore({ fs, rsi: rsiH, personal: persH }))).toBe(
+        'release_gate_taken',
+      );
+      expect(rsiH.canAttachReleaseGate?.(probe)).toBe(true); // 拒绝零副作用:rsi 句柄的屏障槽仍空
+      await persH.release(); // 外来屏障放行,personal 锁释放
+      persH2 = await acquirePersonalLock(pw.h);
+      const store = assembleRsiStore({ fs, rsi: rsiH, personal: persH2 });
+      expect(await store.held.transaction(async () => 'ok')).toBe('ok');
+      await store.held.release();
+      expect(await exists(rsiH.path)).toBe(false);
+    } finally {
+      await persH.release();
+      await persH2?.release();
+      await rsiH.release();
+    }
+  });
+
+  it('registry_shared_per_acquisition:同一对句柄装配两次共用同一张区域注册表(A 开的区域 B 看得见);为同一 acquisition 配另一张表 = registry_conflict 且那张表不被绑定;别的 acquisition 互不影响', async () => {
+    const w = await makeWorld('mem');
+    const second = assembleOver(w);
+    expect(second.registry).toBe(w.store.registry);
+    const region = await w.store.seal.open(w.personal);
+    const regionOpen = (): string | undefined => {
+      try {
+        second.registry.assertNoOpenRegion();
+      } catch (e) {
+        if (e instanceof StoreError) return e.code;
+        throw e;
+      }
+      return undefined;
+    };
+    expect(regionOpen()).toBe('region_open');
+    region.close();
+    expect(regionOpen()).toBeUndefined(); // 对照:区域关闭后放行
+    // 别的 acquisition 有自己的注册表:这边开区域不影响它
+    const other = await makeWorld('mem');
+    const r2 = await w.store.seal.open(w.personal);
+    expect(() => other.store.registry.assertNoOpenRegion()).not.toThrow();
+    r2.close();
+    // 同一 acquisition 配另一张表 = 拒绝;被拒的表没有被绑定(还能给全新的 acquisition 用)
+    const fresh = new SealRegistry();
+    expect(
+      detailOf(() =>
+        assembleRsiStore({ fs: w.fs, rsi: w.rsi, personal: w.personal, registry: fresh }),
+      ),
+    ).toBe('registry_conflict');
+    const log: string[] = [];
+    expect(() =>
+      assembleRsiStore({
+        fs: new MemFs(),
+        rsi: new FakeLock('r', log),
+        personal: new FakeLock('p', log),
+        registry: fresh,
+      }),
+    ).not.toThrow();
+    // 对照:显式传入同一张 = 可装配
+    expect(
+      detailOf(() =>
+        assembleRsiStore({
+          fs: w.fs,
+          rsi: w.rsi,
+          personal: w.personal,
+          registry: w.store.registry,
+        }),
+      ),
+    ).toBeUndefined();
   });
 });
 

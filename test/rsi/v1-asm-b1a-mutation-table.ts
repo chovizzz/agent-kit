@@ -1123,8 +1123,8 @@ export const V1_ASM_B1A_MUTATIONS: readonly V1AsmB1aMutation[] = [
     edits: [
       swap(
         'src/rsi/store/ledger-merge.ts',
-        '  applyBatch(w, key, effects, meta, intent, opts);',
-        "  if (applyBatch(w, key, effects, meta, intent, opts) === 'satisfied') return { kind: 'satisfied' };",
+        '  const own = applyBatch(w, key, effects, meta, intent, opts);',
+        "  const own = applyBatch(w, key, effects, meta, intent, opts);\n  if (own === 'satisfied') return { kind: 'satisfied' };",
       ),
     ],
     tests: ['rsi/store/review-fixes.test.ts'],
@@ -1149,6 +1149,128 @@ export const V1_ASM_B1A_MUTATIONS: readonly V1AsmB1aMutation[] = [
     tests: ['rsi/store/review-fixes.test.ts'],
     expectRed: ['recoverThrough 全部 satisfied 时也提交维护性变化'],
     mustKill: ['recoverThrough 全部 satisfied 时也提交维护性变化'],
+  },
+  {
+    id: 'personal_kind_not_checked',
+    clause: 'W0-26 §12 锁种类身份:另一把真实 rsi 锁不能冒充 personal(第 2 轮评审高)',
+    edits: [
+      swap(
+        'src/rsi/store/lock-control.ts',
+        "if (personal.kind !== undefined && personal.kind !== 'personal') throw mismatch('personal_kind');",
+        '',
+      ),
+    ],
+    tests: ['rsi/store/lock-control.test.ts'],
+    expectRed: ['real_rsi_lock_cannot_pose_as_personal', 'kind_must_match_role'],
+    mustKill: ['real_rsi_lock_cannot_pose_as_personal', 'kind_must_match_role'],
+  },
+  {
+    id: 'real_shape_kind_not_required',
+    clause: 'W0-26 §12 锁种类身份:真实形状(path / root 已声明)下句柄必须自报种类',
+    edits: [
+      swap(
+        'src/rsi/store/lock-control.ts',
+        "if (personal.kind === undefined) throw mismatch('personal_kind'); // 正向验证:真实 personal 句柄必须自报 personal",
+        '',
+      ),
+    ],
+    tests: ['rsi/store/lock-control.test.ts'],
+    expectRed: ['kind_must_match_role'],
+    mustKill: ['kind_must_match_role'],
+  },
+  {
+    id: 'rsi_kind_not_checked',
+    clause: 'W0-26 §12 锁种类身份:rsi 角色同样验种类',
+    edits: [
+      swap(
+        'src/rsi/store/lock-control.ts',
+        "if (rsi.kind !== undefined && rsi.kind !== 'rsi') throw mismatch('rsi_kind');",
+        '',
+      ),
+    ],
+    tests: ['rsi/store/lock-control.test.ts'],
+    expectRed: ['real_rsi_lock_cannot_pose_as_personal', 'kind_must_match_role'],
+    mustKill: ['kind_must_match_role'],
+  },
+  {
+    id: 'recover_seen_table_dropped',
+    clause: 'W0-26 §2 recoverThrough:本次调用内的同键异内容冲突(第 2 轮评审中)',
+    edits: [
+      swap(
+        'src/rsi/store/ledger-merge.ts',
+        'if (seen !== undefined && seen !== hash) throw new EffectsKeyConflict(`key:${key}`);',
+        '',
+      ),
+    ],
+    tests: ['rsi/store/review-fixes.test.ts'],
+    expectRed: ['recover_same_call_key_conflict_after_satisfied'],
+    mustKill: ['recover_same_call_key_conflict_after_satisfied'],
+  },
+  {
+    id: 'recover_seen_table_not_shared',
+    clause: 'W0-26 §2 recoverThrough:身份表覆盖全部批次(每批新建一张 = 等于没有)',
+    edits: [
+      swap(
+        'src/rsi/store/ledger-merge.ts',
+        'const callOpts: PlanOptions = { ...opts, seenKeys: opts.seenKeys ?? new Map<string, string>() };',
+        'const callOpts: PlanOptions = { ...opts };',
+      ),
+    ],
+    tests: ['rsi/store/review-fixes.test.ts'],
+    expectRed: ['recover_same_call_key_conflict_after_satisfied'],
+    mustKill: ['recover_same_call_key_conflict_after_satisfied'],
+  },
+  {
+    id: 'registry_not_shared_per_acquisition',
+    clause: 'W0-26 §12 区域注册表随 acquisition 共享(第 2 轮评审中)',
+    edits: [
+      swap(
+        'src/rsi/store/lock-control.ts',
+        'const chosen = registry ?? candidate ?? new SealRegistry();',
+        'const chosen = candidate ?? new SealRegistry();',
+      ),
+    ],
+    tests: ['rsi/store/lock-control.test.ts'],
+    expectRed: ['registry_shared_per_acquisition'],
+    mustKill: ['registry_shared_per_acquisition'],
+  },
+  {
+    id: 'registry_conflict_not_rejected',
+    clause: 'W0-26 §12 为同一 acquisition 配另一张注册表 = 拒绝',
+    edits: [
+      swap(
+        'src/rsi/store/lock-control.ts',
+        'if (candidate !== undefined && registry !== null && candidate !== registry) {',
+        'if (false) {',
+      ),
+    ],
+    tests: ['rsi/store/lock-control.test.ts'],
+    expectRed: ['registry_shared_per_acquisition'],
+    mustKill: ['registry_shared_per_acquisition'],
+  },
+  {
+    id: 'gate_precheck_skipped',
+    clause: 'W0-26 §12 释放屏障原子占用:先无副作用预检再挂(第 2 轮评审中)',
+    edits: [
+      swap('src/rsi/store/lock-control.ts', 'if (taken(rsi) || taken(personal)) {', 'if (false) {'),
+    ],
+    tests: ['rsi/store/lock-control.test.ts'],
+    expectRed: ['gate_install_is_atomic', '句柄已挂了别的屏障 = 拒绝'],
+    mustKill: ['gate_install_is_atomic'],
+  },
+  {
+    id: 'user_veto_maintenance_reports_committed',
+    clause: 'W0-26 §4 userVeto 只有维护性写入时报 satisfied(与 applyOnce 一致;第 2 轮评审中)',
+    edits: [
+      swap(
+        'src/rsi/store/apply-once.ts',
+        "ledger: plan.maintenanceOnly === true ? 'satisfied' : 'committed',\n          audit: 'not_applicable',",
+        "ledger: 'committed',\n          audit: 'not_applicable',",
+      ),
+    ],
+    tests: ['rsi/store/review-fixes.test.ts'],
+    expectRed: ['user_veto_maintenance_only_reports_satisfied'],
+    mustKill: ['user_veto_maintenance_only_reports_satisfied'],
   },
 ];
 

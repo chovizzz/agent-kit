@@ -247,7 +247,11 @@ export function createUserVetoPort(deps: ApplyDeps): UserVetoPort {
         }
         if (plan.kind === 'satisfied') return { ledger: 'satisfied', audit: 'not_applicable' };
         await p.ledgerWrite.commit(plan.next);
-        return { ledger: 'committed', audit: 'not_applicable' };
+        // 与 `applyOnce` 一致:只有维护性写入(过期冷却 / 水位线覆盖的 applied)而否决自身已满足 = `satisfied`。`satisfied` 表示效果已满足,**不等于零写盘**
+        return {
+          ledger: plan.maintenanceOnly === true ? 'satisfied' : 'committed',
+          audit: 'not_applicable',
+        };
       });
     },
     async lift(id, contentSha256, at) {
