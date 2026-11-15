@@ -911,4 +911,727 @@ export const V1_ASM_D4_MUTATIONS: readonly V1AsmD4Mutation[] = [
 ];
 
 /** 执行变异后回填(与 `V1_ASM_D4_MUTATIONS` 同序);未执行时为空 */
-export const V1_ASM_D4_RESULTS: readonly V1AsmD4Result[] = [];
+/** 实测结果:r21asmd4-mut5 @00e0c63(javis):72 条全部被杀 */
+export const V1_ASM_D4_RESULTS: readonly V1AsmD4Result[] = [
+  {
+    id: 'pend_no_deduction',
+    failed: 10,
+    skipped: 0,
+    killedBy: [
+      'D4 A6:待审不计已成候选的提案 部分转化:仍待审,proposals 变为剩余数(待审与待通知一致)',
+      'D4 A6:待审不计已成候选的提案 全部转化:run 不再待审、不再待通知(但仍是暂存 run);其它 run 的副本不影响本 run',
+      'D4 A6:待审不计已成候选的提案 counts 的提案数与报告暂存编号(去重)个数不一致 → 该 run 转化未知,不扣减(不隐藏未转化的提案);基数一致才扣(对照)',
+      'D4 A6:待审不计已成候选的提案 报告暂存编号里有重复:即使去重个数恰好等于 counts 的提案数也不扣(重复编号 = 报告不可信);对照:无重复时扣减',
+      'D4 A6:待审不计已成候选的提案 工作副本的 source 指向本 run、但提案编号不属于它(误写 / 伪造)→ 不扣减真实提案;对照:编号属于它则扣减',
+      'D4 A6:时间 / 字节预算耗尽 → 回退为旧口径的结果,而不是整个扫描 unknown 转化读取阶段时间预算用尽:扫描仍 known,待审 / 待通知 = 未扣减的旧结果,converted=budget;预算充足时才扣减(对照)',
+      'D4 A6:时间 / 字节预算耗尽 → 回退为旧口径的结果,而不是整个扫描 unknown 字节预算与报告读取共用同一个总量上限:报告读完只剩 10 字节 → budget、不扣减;余量充足 → 扣减(对照)',
+      'D4 A6:读失败 = 转化未知 = 不扣减(噪音方向,绝不当作已转化) 候选目录权限过宽(不安全)→ converted=unsafe,整个 run 仍待审;恢复权限后扣减(对照)',
+      'D4 A6:读失败 = 转化未知 = 不扣减(噪音方向,绝不当作已转化) 坏文件(非 JSON / schema 不过 / 文件名与 id 不符 / 过大)不参与扣减并计入 unreadable;好文件照常扣减',
+      'D4 A6:零写入与通知口径 提醒(notice):RSI_PROPOSALS_READY 的 proposals= 是剩余数;全部转化后什么都不提示、不记账',
+    ],
+    restored: true,
+  },
+  {
+    id: 'pend_partial_as_done',
+    failed: 7,
+    skipped: 0,
+    killedBy: [
+      'D4 A6:待审不计已成候选的提案 部分转化:仍待审,proposals 变为剩余数(待审与待通知一致)',
+      'D4 A6:待审不计已成候选的提案 counts 的提案数与报告暂存编号(去重)个数不一致 → 该 run 转化未知,不扣减(不隐藏未转化的提案);基数一致才扣(对照)',
+      'D4 A6:时间 / 字节预算耗尽 → 回退为旧口径的结果,而不是整个扫描 unknown 转化读取阶段时间预算用尽:扫描仍 known,待审 / 待通知 = 未扣减的旧结果,converted=budget;预算充足时才扣减(对照)',
+      'D4 A6:时间 / 字节预算耗尽 → 回退为旧口径的结果,而不是整个扫描 unknown 字节预算与报告读取共用同一个总量上限:报告读完只剩 10 字节 → budget、不扣减;余量充足 → 扣减(对照)',
+      'D4 A6:读失败 = 转化未知 = 不扣减(噪音方向,绝不当作已转化) 候选目录权限过宽(不安全)→ converted=unsafe,整个 run 仍待审;恢复权限后扣减(对照)',
+      'D4 A6:读失败 = 转化未知 = 不扣减(噪音方向,绝不当作已转化) 坏文件(非 JSON / schema 不过 / 文件名与 id 不符 / 过大)不参与扣减并计入 unreadable;好文件照常扣减',
+      'D4 A6:零写入与通知口径 提醒(notice):RSI_PROPOSALS_READY 的 proposals= 是剩余数;全部转化后什么都不提示、不记账',
+    ],
+    restored: true,
+  },
+  {
+    id: 'pend_zero_proposals_dropped',
+    failed: 1,
+    skipped: 0,
+    killedBy: ['D4 A6:待审不计已成候选的提案 proposals = 0 的 run 保持改前行为(仍待审)'],
+    restored: true,
+  },
+  {
+    id: 'pend_notice_uses_total',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'D4 A6:待审不计已成候选的提案 部分转化:仍待审,proposals 变为剩余数(待审与待通知一致)',
+      'D4 A6:零写入与通知口径 提醒(notice):RSI_PROPOSALS_READY 的 proposals= 是剩余数;全部转化后什么都不提示、不记账',
+    ],
+    restored: true,
+  },
+  {
+    id: 'pend_pending_uses_total',
+    failed: 6,
+    skipped: 0,
+    killedBy: [
+      'D4 A6:待审不计已成候选的提案 部分转化:仍待审,proposals 变为剩余数(待审与待通知一致)',
+      'D4 A6:待审不计已成候选的提案 counts 的提案数与报告暂存编号(去重)个数不一致 → 该 run 转化未知,不扣减(不隐藏未转化的提案);基数一致才扣(对照)',
+      'D4 A6:时间 / 字节预算耗尽 → 回退为旧口径的结果,而不是整个扫描 unknown 转化读取阶段时间预算用尽:扫描仍 known,待审 / 待通知 = 未扣减的旧结果,converted=budget;预算充足时才扣减(对照)',
+      'D4 A6:时间 / 字节预算耗尽 → 回退为旧口径的结果,而不是整个扫描 unknown 字节预算与报告读取共用同一个总量上限:报告读完只剩 10 字节 → budget、不扣减;余量充足 → 扣减(对照)',
+      'D4 A6:读失败 = 转化未知 = 不扣减(噪音方向,绝不当作已转化) 候选目录权限过宽(不安全)→ converted=unsafe,整个 run 仍待审;恢复权限后扣减(对照)',
+      'D4 A6:读失败 = 转化未知 = 不扣减(噪音方向,绝不当作已转化) 坏文件(非 JSON / schema 不过 / 文件名与 id 不符 / 过大)不参与扣减并计入 unreadable;好文件照常扣减',
+    ],
+    restored: true,
+  },
+  {
+    id: 'pend_state_not_reported',
+    failed: 7,
+    skipped: 0,
+    killedBy: [
+      'D4 A6:待审不计已成候选的提案 正向对照:没有候选副本 → 整个 run 待审、待通知,proposals 是原数',
+      'D4 A6:待审不计已成候选的提案 没有待审 run(没有暂存 run / 暂存 run 都已忽略)时不读候选目录(即使它不安全也不影响)',
+      'D4 A6:时间 / 字节预算耗尽 → 回退为旧口径的结果,而不是整个扫描 unknown 转化读取阶段时间预算用尽:扫描仍 known,待审 / 待通知 = 未扣减的旧结果,converted=budget;预算充足时才扣减(对照)',
+      'D4 A6:时间 / 字节预算耗尽 → 回退为旧口径的结果,而不是整个扫描 unknown 字节预算与报告读取共用同一个总量上限:报告读完只剩 10 字节 → budget、不扣减;余量充足 → 扣减(对照)',
+      'D4 A6:读失败 = 转化未知 = 不扣减(噪音方向,绝不当作已转化) 候选目录权限过宽(不安全)→ converted=unsafe,整个 run 仍待审;恢复权限后扣减(对照)',
+      'D4 A6:读失败 = 转化未知 = 不扣减(噪音方向,绝不当作已转化) 候选目录是符号链接 → unsafe,不跟随',
+      'D4 A6:读失败 = 转化未知 = 不扣减(噪音方向,绝不当作已转化) `.state/rsi` 本身是指向外部目录的符号链接(外部目录与其 candidates/ 都是 0700、副本合法)→ unsafe,不跟随;对照:同一份外部内容作为真实 rsi 目录时可扣减',
+    ],
+    restored: true,
+  },
+  {
+    id: 'pend_reads_without_staged',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'D4 A6:待审不计已成候选的提案 没有待审 run(没有暂存 run / 暂存 run 都已忽略)时不读候选目录(即使它不安全也不影响)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'conv_other_run_deducted',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'D4 A6:待审不计已成候选的提案 全部转化:run 不再待审、不再待通知(但仍是暂存 run);其它 run 的副本不影响本 run',
+    ],
+    restored: true,
+  },
+  {
+    id: 'pend_cardinality_unchecked',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'D4 A6:待审不计已成候选的提案 counts 的提案数与报告暂存编号(去重)个数不一致 → 该 run 转化未知,不扣减(不隐藏未转化的提案);基数一致才扣(对照)',
+      'D4 A6:待审不计已成候选的提案 报告暂存编号里有重复:即使去重个数恰好等于 counts 的提案数也不扣(重复编号 = 报告不可信);对照:无重复时扣减',
+    ],
+    restored: true,
+  },
+  {
+    id: 'conv_foreign_id_deducted',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'D4 A6:待审不计已成候选的提案 proposals = 0 的 run 保持改前行为(仍待审)',
+      'D4 A6:待审不计已成候选的提案 工作副本的 source 指向本 run、但提案编号不属于它(误写 / 伪造)→ 不扣减真实提案;对照:编号属于它则扣减',
+    ],
+    restored: true,
+  },
+  {
+    id: 'pend_total_budget_unshared',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'D4 A6:时间 / 字节预算耗尽 → 回退为旧口径的结果,而不是整个扫描 unknown 字节预算与报告读取共用同一个总量上限:报告读完只剩 10 字节 → budget、不扣减;余量充足 → 扣减(对照)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'conv_unsafe_dir_read',
+    failed: 3,
+    skipped: 0,
+    killedBy: [
+      'D4 A6:待审不计已成候选的提案 没有待审 run(没有暂存 run / 暂存 run 都已忽略)时不读候选目录(即使它不安全也不影响)',
+      'D4 A6:读失败 = 转化未知 = 不扣减(噪音方向,绝不当作已转化) 候选目录权限过宽(不安全)→ converted=unsafe,整个 run 仍待审;恢复权限后扣减(对照)',
+      'D4 A6:读失败 = 转化未知 = 不扣减(噪音方向,绝不当作已转化) 候选目录是符号链接 → unsafe,不跟随',
+    ],
+    restored: true,
+  },
+  {
+    id: 'conv_truncated_partial',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'D4 A6:读失败 = 转化未知 = 不扣减(噪音方向,绝不当作已转化) 条目数超过上限 → truncated,不给部分结果(一份都不扣);上限内 → ok(对照)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'conv_byte_budget_ignored',
+    failed: 3,
+    skipped: 0,
+    killedBy: [
+      'D4 A6:时间 / 字节预算耗尽 → 回退为旧口径的结果,而不是整个扫描 unknown 字节预算与报告读取共用同一个总量上限:报告读完只剩 10 字节 → budget、不扣减;余量充足 → 扣减(对照)',
+      'D4 A6:读失败 = 转化未知 = 不扣减(噪音方向,绝不当作已转化) 总字节预算 / 调用方时间预算用尽 → budget,不给部分结果',
+      'D4 A6:读失败 = 转化未知 = 不扣减(噪音方向,绝不当作已转化) 读取上限在读之前按剩余总量设置:文件恰好等于剩余量 → ok;少 1 字节 → budget(不是坏文件);第二个文件无剩余 → budget',
+    ],
+    restored: true,
+  },
+  {
+    id: 'conv_cap_overrun_as_bad_file',
+    failed: 3,
+    skipped: 0,
+    killedBy: [
+      'D4 A6:时间 / 字节预算耗尽 → 回退为旧口径的结果,而不是整个扫描 unknown 字节预算与报告读取共用同一个总量上限:报告读完只剩 10 字节 → budget、不扣减;余量充足 → 扣减(对照)',
+      'D4 A6:读失败 = 转化未知 = 不扣减(噪音方向,绝不当作已转化) 总字节预算 / 调用方时间预算用尽 → budget,不给部分结果',
+      'D4 A6:读失败 = 转化未知 = 不扣减(噪音方向,绝不当作已转化) 读取上限在读之前按剩余总量设置:文件恰好等于剩余量 → ok;少 1 字节 → budget(不是坏文件);第二个文件无剩余 → budget',
+    ],
+    restored: true,
+  },
+  {
+    id: 'conv_time_budget_ignored',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'D4 A6:时间 / 字节预算耗尽 → 回退为旧口径的结果,而不是整个扫描 unknown 转化读取阶段时间预算用尽:扫描仍 known,待审 / 待通知 = 未扣减的旧结果,converted=budget;预算充足时才扣减(对照)',
+      'D4 A6:读失败 = 转化未知 = 不扣减(噪音方向,绝不当作已转化) 总字节预算 / 调用方时间预算用尽 → budget,不给部分结果',
+    ],
+    restored: true,
+  },
+  {
+    id: 'conv_name_id_unchecked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'D4 A6:读失败 = 转化未知 = 不扣减(噪音方向,绝不当作已转化) 坏文件(非 JSON / schema 不过 / 文件名与 id 不符 / 过大)不参与扣减并计入 unreadable;好文件照常扣减',
+    ],
+    restored: true,
+  },
+  {
+    id: 'closure_pending_converted_writes',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'D4 静态:A6 读侧只读(pending.ts 闭包含新的 pending-converted.ts) pending.ts / pending-converted.ts(运行时依赖):不含写出口 / 锁 / 子进程,无写标识符,无动态 import,node:fs 只由 read-fs.ts 引入',
+      'D4 静态:A6 读侧只读(pending.ts 闭包含新的 pending-converted.ts) pending.ts / pending-converted.ts(含类型依赖):不含写出口 / 锁 / 子进程,无写标识符,无动态 import,node:fs 只由 read-fs.ts 引入',
+    ],
+    restored: true,
+  },
+  {
+    id: 'cd_filter_disabled',
+    failed: 8,
+    skipped: 0,
+    killedBy: [
+      'D4 冷却:取舍里的位置(selectClustersScreened;冷却簇不占 5 簇名额) 冷却中的最大簇被丢弃且先于 5 簇截断:原本被挤掉的 1 条簇补位;cooldownDropped 计 1',
+      'D4 冷却:取舍里的位置(selectClustersScreened;冷却簇不占 5 簇名额) 只数「本来会被提」的簇:只有其它项目有证据的冷却簇不计数(它本来就不入选);同一簇两种证据口径只数一次',
+      'D4 冷却:取舍里的位置(selectClustersScreened;冷却簇不占 5 簇名额) cooldownDropped 口径 = 冷却前具备初始证据的簇(不是精确的反事实):证据本来会被单条闸全部丢掉的冷却簇也计 1,且不进单条闸;对照:不冷却时它们走 clustersEmptied',
+      'D4 冷却:取舍里的位置(selectClustersScreened;冷却簇不占 5 簇名额) 读不到冷却事实(unavailable)→ 一个簇也不提,6 个本来会被提的簇全部计入 cooldownDropped',
+      'D4 冷却:取舍里的位置(selectClustersScreened;冷却簇不占 5 簇名额) 冷却丢弃发生在单条闸之前:被冷却的簇不增加 evidenceDropped / clustersEmptied',
+      'D4 冷却:runDigest 接线(假端口;真实世界、真实配置) 命中冷却的簇不进摘要(文本不出现),计入 truncated.clusters_dropped;另一个簇照常',
+      'D4 冷却:runDigest 接线(假端口;真实世界、真实配置) 读不到冷却事实(端口 unavailable)→ fail-closed:空摘要 reason=no_clusters,两个簇都计入丢弃,退出码仍 0',
+      'D4 冷却:runDigest 接线(假端口;真实世界、真实配置) 端口抛错 → 同样 fail-closed,原因 source_threw(异常文本不外泄)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'cd_drop_not_counted',
+    failed: 7,
+    skipped: 0,
+    killedBy: [
+      'D4 冷却:取舍里的位置(selectClustersScreened;冷却簇不占 5 簇名额) 冷却中的最大簇被丢弃且先于 5 簇截断:原本被挤掉的 1 条簇补位;cooldownDropped 计 1',
+      'D4 冷却:取舍里的位置(selectClustersScreened;冷却簇不占 5 簇名额) 只数「本来会被提」的簇:只有其它项目有证据的冷却簇不计数(它本来就不入选);同一簇两种证据口径只数一次',
+      'D4 冷却:取舍里的位置(selectClustersScreened;冷却簇不占 5 簇名额) cooldownDropped 口径 = 冷却前具备初始证据的簇(不是精确的反事实):证据本来会被单条闸全部丢掉的冷却簇也计 1,且不进单条闸;对照:不冷却时它们走 clustersEmptied',
+      'D4 冷却:取舍里的位置(selectClustersScreened;冷却簇不占 5 簇名额) 读不到冷却事实(unavailable)→ 一个簇也不提,6 个本来会被提的簇全部计入 cooldownDropped',
+      'D4 冷却:runDigest 接线(假端口;真实世界、真实配置) 命中冷却的簇不进摘要(文本不出现),计入 truncated.clusters_dropped;另一个簇照常',
+      'D4 冷却:runDigest 接线(假端口;真实世界、真实配置) 读不到冷却事实(端口 unavailable)→ fail-closed:空摘要 reason=no_clusters,两个簇都计入丢弃,退出码仍 0',
+      'D4 冷却:runDigest 接线(假端口;真实世界、真实配置) 端口抛错 → 同样 fail-closed,原因 source_threw(异常文本不外泄)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'cd_count_not_rendered',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'D4 冷却:runDigest 接线(假端口;真实世界、真实配置) 命中冷却的簇不进摘要(文本不出现),计入 truncated.clusters_dropped;另一个簇照常',
+      'D4 冷却:runDigest 接线(假端口;真实世界、真实配置) 读不到冷却事实(端口 unavailable)→ fail-closed:空摘要 reason=no_clusters,两个簇都计入丢弃,退出码仍 0',
+    ],
+    restored: true,
+  },
+  {
+    id: 'cd_port_not_threaded',
+    failed: 3,
+    skipped: 0,
+    killedBy: [
+      'D4 冷却:runDigest 接线(假端口;真实世界、真实配置) 命中冷却的簇不进摘要(文本不出现),计入 truncated.clusters_dropped;另一个簇照常',
+      'D4 冷却:runDigest 接线(假端口;真实世界、真实配置) 读不到冷却事实(端口 unavailable)→ fail-closed:空摘要 reason=no_clusters,两个簇都计入丢弃,退出码仍 0',
+      'D4 冷却:runDigest 接线(假端口;真实世界、真实配置) 端口抛错 → 同样 fail-closed,原因 source_threw(异常文本不外泄)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'cd_read_without_clusters',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'D4 冷却:runDigest 接线(假端口;真实世界、真实配置) 项目被排除(没有可提的簇)→ 已注入的端口不被调用,报告 skipped;摘要 reason=project_excluded',
+    ],
+    restored: true,
+  },
+  {
+    id: 'cd_unavailable_open',
+    failed: 4,
+    skipped: 0,
+    killedBy: [
+      'D4 冷却:簇过滤器(纯) 端口读不到(unavailable)→ 所有簇都在冷却中,与簇内容无关',
+      'D4 冷却:取舍里的位置(selectClustersScreened;冷却簇不占 5 簇名额) 读不到冷却事实(unavailable)→ 一个簇也不提,6 个本来会被提的簇全部计入 cooldownDropped',
+      'D4 冷却:runDigest 接线(假端口;真实世界、真实配置) 读不到冷却事实(端口 unavailable)→ fail-closed:空摘要 reason=no_clusters,两个簇都计入丢弃,退出码仍 0',
+      'D4 冷却:runDigest 接线(假端口;真实世界、真实配置) 端口抛错 → 同样 fail-closed,原因 source_threw(异常文本不外泄)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'cd_throw_as_unwired',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'D4 冷却:读冷却事实(readCooldown 永不抛错) 端口抛错 / 返回形状不对(ok 但 active 不是 Set、未知 kind)→ unavailable,不当成「没有冷却」',
+      'D4 冷却:runDigest 接线(假端口;真实世界、真实配置) 端口抛错 → 同样 fail-closed,原因 source_threw(异常文本不外泄)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'cd_invalid_result_as_empty',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'D4 冷却:读冷却事实(readCooldown 永不抛错) 端口报告 unavailable:带稳定短码原样保留;短码不合格式(路径 / 异常文本)→ invalid_result',
+      'D4 冷却:读冷却事实(readCooldown 永不抛错) 端口抛错 / 返回形状不对(ok 但 active 不是 Set、未知 kind)→ unavailable,不当成「没有冷却」',
+    ],
+    restored: true,
+  },
+  {
+    id: 'cd_set_check_dropped',
+    failed: 4,
+    skipped: 0,
+    killedBy: [
+      'D4 冷却:读冷却事实(readCooldown 永不抛错) 端口抛错 / 返回形状不对(ok 但 active 不是 Set、未知 kind)→ unavailable,不当成「没有冷却」',
+      'D4 冷却:ok 集合的资源边界与受控遍历(M1;超限 → unavailable/too_large,不当成「没有命中」) 条数:恰好 10000 → ok;10001 → unavailable(too_large)',
+      'D4 冷却:ok 集合的资源边界与受控遍历(M1;超限 → unavailable/too_large,不当成「没有命中」) 适配器覆盖迭代器 / size 的 Set 子类:读的是真实内容(不调用被覆盖的迭代器),也不能靠谎报 size 绕过上限',
+      'D4 冷却:ok 集合的资源边界与受控遍历(M1;超限 → unavailable/too_large,不当成「没有命中」) 非原生 Set(Proxy / 鸭子类型 / 数组)→ invalid_result;对照:原生 Set 同内容 ok',
+    ],
+    restored: true,
+  },
+  {
+    id: 'cd_element_unchecked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'D4 冷却:ok 集合的内容校验(不只看 Set 外壳) 元素必须是非空字符串(Set<number> / Set<object> / 混合 / 含空串)→ unavailable,不当成「没有命中」',
+    ],
+    restored: true,
+  },
+  {
+    id: 'cd_active_aliased',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'D4 冷却:ok 集合的资源边界与受控遍历(M1;超限 → unavailable/too_large,不当成「没有命中」) 适配器覆盖迭代器 / size 的 Set 子类:读的是真实内容(不调用被覆盖的迭代器),也不能靠谎报 size 绕过上限',
+      'D4 冷却:ok 集合的内容校验(不只看 Set 外壳) 合法集合被复制:适配器读完后再改它,不影响本次结果',
+    ],
+    restored: true,
+  },
+  {
+    id: 'cd_why_unchecked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'D4 冷却:读冷却事实(readCooldown 永不抛错) 端口报告 unavailable:带稳定短码原样保留;短码不合格式(路径 / 异常文本)→ invalid_result',
+    ],
+    restored: true,
+  },
+  {
+    id: 'cd_id_error_not_cooled',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'D4 冷却:簇过滤器(纯) 聚类 id 算不出(null)→ 该簇不在冷却账里(不可能被提成过候选);算 id 抛错 → 按冷却中处理(fail-closed)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'cd_eligible_group_ignored',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'D4 冷却:簇过滤器(纯) 命中判定:全部成员的 id 或可作证据成员的 id 任一在冷却集合里 → 冷却;都不在 → 不冷却(对照);空集合 → 不冷却',
+    ],
+    restored: true,
+  },
+  {
+    id: 'cd_today_wrong_day',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'D4 冷却:读冷却事实(readCooldown 永不抛错) 把「今天」按 UTC 日传给端口(带偏移的时间按 UTC 折算;UTC 日界两侧不同)',
+      'D4 冷却:runDigest 接线(假端口;真实世界、真实配置) 正向对照:接线但冷却集合为空 → 与未接线输出相同;端口收到的是 UTC 今天',
+    ],
+    restored: true,
+  },
+  {
+    id: 'view_marks_no_expiry',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'D4 view 构造:protection_marks(90 个 UTC 日后移除;至多 64 条保留最新) 第 90 个 UTC 日当天移除、前一天仍保留(边界);标记不依赖候选状态',
+      'D4 view 构造:坏输入不外抛 标记 / 转移里的时间戳无法解析(日期运算抛错)→ input_invalid,不外抛;对照:合法时间戳产出',
+    ],
+    restored: true,
+  },
+  {
+    id: 'view_marks_boundary_off_by_one',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'D4 view 构造:protection_marks(90 个 UTC 日后移除;至多 64 条保留最新) 第 90 个 UTC 日当天移除、前一天仍保留(边界);标记不依赖候选状态',
+    ],
+    restored: true,
+  },
+  {
+    id: 'view_marks_keep_first_dup',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'D4 view 构造:protection_marks(90 个 UTC 日后移除;至多 64 条保留最新) 同 (id, mark) 只留最新;同一候选的两种标记各保留;按 at 降序、同刻按 id',
+    ],
+    restored: true,
+  },
+  {
+    id: 'view_marks_key_ignores_mark',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'D4 view 构造:protection_marks(90 个 UTC 日后移除;至多 64 条保留最新) 同 (id, mark) 只留最新;同一候选的两种标记各保留;按 at 降序、同刻按 id',
+    ],
+    restored: true,
+  },
+  {
+    id: 'view_marks_oldest_first',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'D4 view 构造:protection_marks(90 个 UTC 日后移除;至多 64 条保留最新) 同 (id, mark) 只留最新;同一候选的两种标记各保留;按 at 降序、同刻按 id',
+      'D4 view 构造:protection_marks(90 个 UTC 日后移除;至多 64 条保留最新) 至多 64 条:恰好 64 条不截断;65 条保留最新的 64 条(最老的被截)并置 protection_marks_truncated',
+    ],
+    restored: true,
+  },
+  {
+    id: 'view_marks_truncated_unflagged',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'D4 view 构造:protection_marks(90 个 UTC 日后移除;至多 64 条保留最新) 至多 64 条:恰好 64 条不截断;65 条保留最新的 64 条(最老的被截)并置 protection_marks_truncated',
+    ],
+    restored: true,
+  },
+  {
+    id: 'view_rolling_truncated_unflagged',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'D4 view 构造:rolling_back(停住候选清单) 至多 64 条:恰好 64 条不截断;65 条保留最久的 64 条并置 rolling_back_truncated',
+    ],
+    restored: true,
+  },
+  {
+    id: 'view_rolling_unsorted',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'D4 view 构造:夹具自检与基础形状 输出与记录输入顺序无关(确定性)',
+      'D4 view 构造:rolling_back(停住候选清单) rolling_back 与 retiring 都列;entered_at 取进入当前状态的最后一次 lifecycle 转移;origin_reason / target_terminal 来自 rollback;最久的在前',
+    ],
+    restored: true,
+  },
+  {
+    id: 'view_entered_first_wins',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'D4 view 构造:rolling_back(停住候选清单) rolling_back 与 retiring 都列;entered_at 取进入当前状态的最后一次 lifecycle 转移;origin_reason / target_terminal 来自 rollback;最久的在前',
+    ],
+    restored: true,
+  },
+  {
+    id: 'view_entered_any_dim',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'D4 view 构造:rolling_back(停住候选清单) rolling_back 与 retiring 都列;entered_at 取进入当前状态的最后一次 lifecycle 转移;origin_reason / target_terminal 来自 rollback;最久的在前',
+    ],
+    restored: true,
+  },
+  {
+    id: 'view_entry_unknown_skipped',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'D4 view 构造:rolling_back(停住候选清单) 找不到进入当前状态的转移(历史被截断)→ 不产出(rolling_back_entry_unknown),不编造时间;补上转移即可产出(对照)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'view_canary_stats_zero_filled',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'D4 view 构造:canary(缺统计不写成 0) 有 canary 但没有它的分组计数 → 不产出(canary_stats_missing);别的候选的计数不能顶替',
+    ],
+    restored: true,
+  },
+  {
+    id: 'view_canary_ambiguous_picked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'D4 view 构造:canary(缺统计不写成 0) 同时有两个 canary(不变量被破坏)→ 不产出(canary_ambiguous),不挑一个',
+    ],
+    restored: true,
+  },
+  {
+    id: 'view_input_throws',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'D4 view 构造:候选 id 必须唯一(重复记录不得放大聚合) 同一 id 的两条记录(非 canary、终态均可)→ input_invalid;对照:不同 id 时各计一次',
+      'D4 view 构造:坏输入不外抛 标记 / 转移里的时间戳无法解析(日期运算抛错)→ input_invalid,不外抛;对照:合法时间戳产出',
+    ],
+    restored: true,
+  },
+  {
+    id: 'view_window_30_not_29',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'D4 view 构造:last30d 窗口(今天及前 29 个 UTC 日;只数进入终态的转移) 边界:今天 / 前 29 日计入;前 30 日 / 未来日不计;非终态转移、deploy 维度转移不计',
+    ],
+    restored: true,
+  },
+  {
+    id: 'view_future_day_counted',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'D4 view 构造:last30d 窗口(今天及前 29 个 UTC 日;只数进入终态的转移) 边界:今天 / 前 29 日计入;前 30 日 / 未来日不计;非终态转移、deploy 维度转移不计',
+    ],
+    restored: true,
+  },
+  {
+    id: 'view_schema_unchecked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'D4 view 构造:出口校验(不合 schema 不产出) 预算越界 / 负数 / 非十六进制 oid / 非整数计数 → schema_invalid;正向对照:合法值产出',
+    ],
+    restored: true,
+  },
+  {
+    id: 'closure_view_build_writes',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'D4 静态:view 构造是纯函数;冷却纯逻辑不依赖候选源 view-build.ts 的闭包(含类型)没有写出口 / 锁 / 子进程,无写标识符,外部依赖只有 zod / crypto / path',
+    ],
+    restored: true,
+  },
+  {
+    id: 'vw_no_revalidate',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'D4 view 写端口(真实目录;持 rsi/lock;读侧 interpretView 读回) 视图不合 schema(跨信任边界再校验)→ invalid_view,零写入;对照:同一端口写合法视图成功',
+      'D4 view 写端口(真实目录;持 rsi/lock;读侧 interpretView 读回) 违规视图报 invalid_view(不是 write_failed):校验通过之后才会走到序列化,二者原因码不同;对照:合法视图成功',
+    ],
+    restored: true,
+  },
+  {
+    id: 'vw_parse_throws',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'D4 view 写端口(真实目录;持 rsi/lock;读侧 interpretView 读回) 视图对象本身读取即抛错(奇异对象)→ invalid_view,不外抛,零写入',
+    ],
+    restored: true,
+  },
+  {
+    id: 'vw_no_precheck_lock',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'D4 view 写端口(真实目录;持 rsi/lock;读侧 interpretView 读回) 写前就丢锁 → lock_lost,不创建文件;已有旧视图则原样不动',
+      'D4 view 写端口(真实目录;持 rsi/lock;读侧 interpretView 读回) 写的中途(临时文件已建、rename 之前)丢锁 → 旧视图原样不动;RsiLockError(lock_lost) 报 lock_lost,其它错误报 write_failed',
+    ],
+    restored: true,
+  },
+  {
+    id: 'vw_lock_not_rechecked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'D4 view 写端口(真实目录;持 rsi/lock;读侧 interpretView 读回) 写的中途(临时文件已建、rename 之前)丢锁 → 旧视图原样不动;RsiLockError(lock_lost) 报 lock_lost,其它错误报 write_failed',
+    ],
+    restored: true,
+  },
+  {
+    id: 'vw_lock_lost_as_failed',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'D4 view 写端口(真实目录;持 rsi/lock;读侧 interpretView 读回) 写的中途(临时文件已建、rename 之前)丢锁 → 旧视图原样不动;RsiLockError(lock_lost) 报 lock_lost,其它错误报 write_failed',
+    ],
+    restored: true,
+  },
+  {
+    id: 'vw_tmp_left_behind',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'D4 view 写端口(真实目录;持 rsi/lock;读侧 interpretView 读回) rename 失败(目标位置是非空目录)→ write_failed;临时文件被清掉,旧内容(目录)原样不动,不抛错',
+    ],
+    restored: true,
+  },
+  {
+    id: 'pend_dup_ids_counted',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'D4 A6:待审不计已成候选的提案 报告暂存编号里有重复:即使去重个数恰好等于 counts 的提案数也不扣(重复编号 = 报告不可信);对照:无重复时扣减',
+    ],
+    restored: true,
+  },
+  {
+    id: 'conv_rsi_link_followed',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'D4 A6:读失败 = 转化未知 = 不扣减(噪音方向,绝不当作已转化) `.state/rsi` 本身是指向外部目录的符号链接(外部目录与其 candidates/ 都是 0700、副本合法)→ unsafe,不跟随;对照:同一份外部内容作为真实 rsi 目录时可扣减',
+    ],
+    restored: true,
+  },
+  {
+    id: 'conv_state_dir_unchecked',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'D4 A6:读失败 = 转化未知 = 不扣减(噪音方向,绝不当作已转化) `.state/rsi` 本身是指向外部目录的符号链接(外部目录与其 candidates/ 都是 0700、副本合法)→ unsafe,不跟随;对照:同一份外部内容作为真实 rsi 目录时可扣减',
+      'D4 A6:读失败 = 转化未知 = 不扣减(噪音方向,绝不当作已转化) `.state/rsi` 不存在 → missing(扣减 0,不是 unsafe);rsi 目录权限过宽 → unsafe',
+    ],
+    restored: true,
+  },
+  {
+    id: 'cd_too_many_ids',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'D4 冷却:ok 集合的资源边界与受控遍历(M1;超限 → unavailable/too_large,不当成「没有命中」) 条数:恰好 10000 → ok;10001 → unavailable(too_large)',
+      'D4 冷却:ok 集合的资源边界与受控遍历(M1;超限 → unavailable/too_large,不当成「没有命中」) 适配器覆盖迭代器 / size 的 Set 子类:读的是真实内容(不调用被覆盖的迭代器),也不能靠谎报 size 绕过上限',
+    ],
+    restored: true,
+  },
+  {
+    id: 'cd_id_bytes_unbounded',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'D4 冷却:ok 集合的资源边界与受控遍历(M1;超限 → unavailable/too_large,不当成「没有命中」) 单个 id:恰好 256 字节 → ok;257 字节 → too_large;按 UTF-8 字节而不是字符数(129 个 é = 258 字节)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'cd_total_bytes_unbounded',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'D4 冷却:ok 集合的资源边界与受控遍历(M1;超限 → unavailable/too_large,不当成「没有命中」) 累计字节:4096 个 256 字节的 id(恰好 1 MiB)→ ok;4097 个 → too_large(条数与单个都没超)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'cd_bytes_as_chars',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'D4 冷却:ok 集合的资源边界与受控遍历(M1;超限 → unavailable/too_large,不当成「没有命中」) 单个 id:恰好 256 字节 → ok;257 字节 → too_large;按 UTF-8 字节而不是字符数(129 个 é = 258 字节)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'cd_overridable_iter',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'D4 冷却:ok 集合的资源边界与受控遍历(M1;超限 → unavailable/too_large,不当成「没有命中」) 适配器覆盖迭代器 / size 的 Set 子类:读的是真实内容(不调用被覆盖的迭代器),也不能靠谎报 size 绕过上限',
+    ],
+    restored: true,
+  },
+  {
+    id: 'cd_size_overridable',
+    failed: 3,
+    skipped: 0,
+    killedBy: [
+      'D4 冷却:读冷却事实(readCooldown 永不抛错) 端口抛错 / 返回形状不对(ok 但 active 不是 Set、未知 kind)→ unavailable,不当成「没有冷却」',
+      'D4 冷却:ok 集合的资源边界与受控遍历(M1;超限 → unavailable/too_large,不当成「没有命中」) 适配器覆盖迭代器 / size 的 Set 子类:读的是真实内容(不调用被覆盖的迭代器),也不能靠谎报 size 绕过上限',
+      'D4 冷却:ok 集合的资源边界与受控遍历(M1;超限 → unavailable/too_large,不当成「没有命中」) 非原生 Set(Proxy / 鸭子类型 / 数组)→ invalid_result;对照:原生 Set 同内容 ok',
+    ],
+    restored: true,
+  },
+  {
+    id: 'vb_dropped_rejects',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'D4 view 构造:历史不可见时拒绝重建(不把「看不见」写成确定的 0 / null) transitions_dropped > 0 本身不拒绝重建(终态进入转移是最后追加的条目,截不掉):终态 / 非终态记录照常产出确定计数;对照:截断且进入转移缺失 → history_incomplete',
+    ],
+    restored: true,
+  },
+  {
+    id: 'vb_terminal_entry_unchecked',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'D4 view 构造:历史不可见时拒绝重建(不把「看不见」写成确定的 0 / null) transitions_dropped > 0 本身不拒绝重建(终态进入转移是最后追加的条目,截不掉):终态 / 非终态记录照常产出确定计数;对照:截断且进入转移缺失 → history_incomplete',
+      'D4 view 构造:历史不可见时拒绝重建(不把「看不见」写成确定的 0 / null) 终态记录里找不到进入该终态的 lifecycle 转移 → history_incomplete(last_rollback 不能写成 null);对照:补上转移即可产出',
+    ],
+    restored: true,
+  },
+  {
+    id: 'vb_history_flag_ignored',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'D4 view 构造:历史不可见时拒绝重建(不把「看不见」写成确定的 0 / null) transitions_dropped > 0 本身不拒绝重建(终态进入转移是最后追加的条目,截不掉):终态 / 非终态记录照常产出确定计数;对照:截断且进入转移缺失 → history_incomplete',
+      'D4 view 构造:历史不可见时拒绝重建(不把「看不见」写成确定的 0 / null) 终态记录里找不到进入该终态的 lifecycle 转移 → history_incomplete(last_rollback 不能写成 null);对照:补上转移即可产出',
+    ],
+    restored: true,
+  },
+  {
+    id: 'vb_dup_ids_allowed',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'D4 view 构造:候选 id 必须唯一(重复记录不得放大聚合) 同一 id 的两条记录(非 canary、终态均可)→ input_invalid;对照:不同 id 时各计一次',
+    ],
+    restored: true,
+  },
+  {
+    id: 'vw_reason_unchecked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'D4 view 写端口(真实目录;持 rsi/lock;读侧 interpretView 读回) 写端口的封闭枚举复核(schema 里是开放字符串的三处;不改已冻结的 AutoViewSchema) last_rollback.reason / rolling_back[].origin_reason 不在转移原因码枚举里(如绝对路径 / 用户名)→ invalid_view,零写入;对照:合法原因码写成功',
+    ],
+    restored: true,
+  },
+  {
+    id: 'vw_states_keys_unchecked',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'D4 view 写端口(真实目录;持 rsi/lock;读侧 interpretView 读回) 写端口的封闭枚举复核(schema 里是开放字符串的三处;不改已冻结的 AutoViewSchema) pipeline.states 的键不是生命周期状态集合(多一个键 / 少一个键 / 换成路径)→ invalid_view;对照:完整键集写成功',
+    ],
+    restored: true,
+  },
+];
