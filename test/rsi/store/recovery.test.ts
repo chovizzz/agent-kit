@@ -17,6 +17,7 @@ import {
   SHA2,
   cool,
   faulty,
+  fullAuditText,
   hex16,
   jsonLine,
   makeWorld,
@@ -55,8 +56,7 @@ const rejects = async (p: Promise<unknown>): Promise<StoreError> => {
   }
   throw new Error('expected rejection');
 };
-const fullAudit = (): string =>
-  Array.from({ length: 20000 }, (_, i) => jsonLine(trow(hex16(i + 0x100000)))).join('');
+const fullAudit = (): string => fullAuditText();
 
 describe.each(KINDS)('recoverThrough 契约(%s)', (kind) => {
   it('recover_through_rejects_event_after_W:任一批事件日 > W → 整个调用 out_of_range,零写入;事件日 == W 通过(边界对照)', async () => {

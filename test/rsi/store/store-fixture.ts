@@ -339,3 +339,12 @@ export const compactionDoc = (through: string | null, gen = 1) => ({
   through,
   months: {},
 });
+
+let fullAuditCache: string | null = null;
+/** 20000 行(审计硬线)的合法审计文件;键从 0x100000 起,不与测试里常用的 hex16(1..) 冲突。进程内只构造一次 */
+export function fullAuditText(): string {
+  fullAuditCache ??= Array.from({ length: 20000 }, (_, i) =>
+    jsonLine(trow(hex16(i + 0x100000))),
+  ).join('');
+  return fullAuditCache;
+}

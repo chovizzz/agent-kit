@@ -18,8 +18,8 @@ import {
   auditEffect,
   cool,
   faulty,
+  fullAuditText,
   hex16,
-  jsonLine,
   makeWorld,
   markEffect,
   meta,
@@ -59,8 +59,7 @@ const rejects = async (p: Promise<unknown>): Promise<StoreError> => {
   }
   throw new Error('expected rejection');
 };
-const fullAudit = (n = 20000): string =>
-  Array.from({ length: n }, (_, i) => jsonLine(trow(hex16(i + 0x100000)))).join('');
+const fullAudit = (): string => fullAuditText();
 
 describe.each(KINDS)('applyOnce 契约(%s)', (kind) => {
   it('三层结果:首次 = committed,同键同内容 = satisfied 且文件字节不变、不写 tmp', async () => {
