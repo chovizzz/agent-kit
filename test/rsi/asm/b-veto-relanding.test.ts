@@ -86,7 +86,7 @@ describe('veto_relands_after_lift', () => {
     expect(second.code, second.err).toBe(0);
     expect(second.out).toContain('result=blacklist_only effects=already');
     expect(sink.bl.get(M)).toBe('active');
-    expect(sink.intentCalls).toBe(1); // 第二次由命令补调了用户意图端口(满足,不改变状态)
+    expect(sink.intentCalls).toBe(2); // 每次命令恰好一次用户意图调用:第一次是引擎产出的 E1(veto: 键),第二次由命令补调(已满足,不改变状态)
   });
 
   it('回滚路径:在途回滚(记录 rolling_back,veto 条目与 E1 已落)被 lift 后再 veto → 黑名单重新生效', async () => {
