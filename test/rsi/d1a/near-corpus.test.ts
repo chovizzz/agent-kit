@@ -166,7 +166,7 @@ describe('语料评估:统计与阈值建议', () => {
       { thresholds: [0.5, 0.6] },
     );
     const text = formatReport(r);
-    expect(text).toContain('false positives @0.50: n_prefix_like');
+    expect(text).toMatch(/^false positives @0\.50 \(worst key #\d+\): n_prefix_like$/m);
     expect(text).toContain('recommendation: threshold 0.60');
     for (const secret of [A, PREFIX, 'unit tests', 'repository'])
       expect(text).not.toContain(secret);
