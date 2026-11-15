@@ -1,0 +1,94 @@
+/**
+ * 装配块 A 段「空写入根」子进程用例的作业体:同一份代码既在进程内跑(基准),也被 `asm-a-entry.ts` 打包后在真子进程里跑
+ * (`KIT_WRITE_ROOTS=:` = 写入根集合为空,safe-fs 一律拒写)。读作业对**真实**只读适配器(`assembleReadAdapters`)逐端口取值,把每个结果(或错误名)收成一个对象;
+ * 写探针(对照)直接用 safe-fs 写一次,证明「空写入根」确实在起作用。
+ * 子进程里不读 `process.env`:全部由作业给(与 ro-entry 同法);git 路径解析 = `null`(未装配),spawn 间谍一旦被调用就记下来并抛错。
+ */
+import * as path from 'node:path';
+import { mkdirp } from '../../../src/io/safe-fs.js';
+import { getRealHome } from '../../../src/io/paths.js';
+import { createRsiIoContext } from '../../../src/rsi/io.js';
+import { assembleReadAdapters } from '../../../src/rsi/assemble-read.js';
+
+export interface AsmAJob {
+  kind: 'read' | 'write_probe';
+  env: Record<string, string>;
+  cwd: string;
+  repo: string;
+}
+
+export type AsmAResult = Record<string, unknown>;
+
+const never = (): never => {
+  throw new Error('redactor must not be used by the read job');
+};
+
+/** 一个端口调用 → `{ ok: 值 }` 或 `{ err: 错误名 }`(值必须可 JSON 化) */
+async function take(f: () => Promise<unknown>): Promise<unknown> {
+  try {
+    return { ok: await f() };
+  } catch (e) {
+    return {
+      err: e instanceof Error ? `${e.name}:${(e as { code?: string }).code ?? ''}` : 'throw',
+    };
+  }
+}
+
+export async function runAsmAJob(
+  job: AsmAJob,
+  audit?: { op: string; path: string }[],
+): Promise<AsmAResult> {
+  const io = createRsiIoContext({
+    repo: job.repo,
+    env: job.env,
+    cwd: job.cwd,
+    ...(audit !== undefined
+      ? { writeAudit: (op: string, p: string) => void audit.push({ op, path: p }) }
+      : {}),
+  });
+  if (job.kind === 'write_probe') {
+    return {
+      probe: await take(async () => {
+        await mkdirp(io, path.join(io.stateDir, 'asm-a-probe'), 0o700);
+        return true;
+      }),
+    };
+  }
+  const home = getRealHome(job.env);
+  const spawnCalls: string[] = [];
+  const a = assembleReadAdapters({
+    io,
+    home,
+    rsiDir: path.join(io.stateDir, 'rsi'),
+    gitDir: path.join(home, '.local/share/agent-kit/personal/.git'),
+    cfg: { excludeDirs: [], excludeNames: [] },
+    redactor: { pass2: never },
+    gitPath: async () => null,
+    gitSpawn: () => {
+      spawnCalls.push('spawn');
+      throw new Error('spawn must not be called');
+    },
+    payload: async () => ({ manifest: { files: [] }, contents: new Map() }),
+  });
+  const since = '2026-11-01T00:00:00Z';
+  const out: AsmAResult = {
+    recorded: await take(() => a.recorded.readCommit('a'.repeat(40))),
+    peekRecords: await take(() => a.peekRecords()),
+    peekRecord: await take(() => a.peekRecord('ra_0123456789ab')),
+    recordedSha: await take(() => a.recordedSha('ra_0123456789ab')),
+    revocations: await take(() => a.revocations.read()),
+    breaker: await take(() => a.breaker.read()),
+    staged: await take(() => a.staged.list()),
+    signals: await take(() => a.signals.getMany(['sig_0000000000000001'])),
+    presets: await take(() => a.presets.presets()),
+    ledger: await take(() => a.analysis.ledger()),
+    stats: await take(() => a.analysis.stats(since)),
+    analysisSignals: await take(() => a.analysis.signals(since)),
+    c4Bytes: await take(() => a.analysis.c4Bytes()),
+    collectedThrough: await take(() => a.analysis.collectedThrough()),
+    payloadDrift: await take(() => a.analysis.payloadDrift()),
+    classify: await take(() => a.analysis.classify('p_0000000000000000')),
+    spawnCalls,
+  };
+  return out;
+}
