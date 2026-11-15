@@ -16,7 +16,7 @@ import {
 import { AuditKeyConflict, StoreError } from '../../../src/rsi/store/errors.js';
 import type { DerivedRow, RecoveryBatch } from '../../../src/rsi/store/ports.js';
 import { emptyLedger } from './b1b-fixture.js';
-import { ID, SHA, cool, hex16, meta, tomb, trow, veto } from './store-fixture.js';
+import { ID, ID2, SHA, cool, hex16, meta, tomb, trow, veto } from './store-fixture.js';
 
 const TODAY = '2026-11-15';
 const evalRow = (at: string): RsiAuditLine => ({ at, kind: 'evaluation', id: ID });
@@ -87,8 +87,8 @@ describe('checkBatch(P1 账判据:按状态判,不按键判)', () => {
   });
 
   it('同 id 墓碑已在 = 满足;不在 = 不满足(正向对照)', () => {
-    expect(checkBatch(tombLedger() as never, batch([tomb()]), TODAY, null)).toEqual({ ok: true });
-    expect(checkBatch(emptyLedger(), batch([tomb()]), TODAY, null)).toEqual({
+    expect(checkBatch(tombLedger() as never, batch([tomb()]), TODAY)).toEqual({ ok: true });
+    expect(checkBatch(emptyLedger(), batch([tomb()]), TODAY)).toEqual({
       ok: false,
       cause: 'compact_blocked',
     });
@@ -110,19 +110,70 @@ describe('checkBatch(P1 账判据:按状态判,不按键判)', () => {
         },
       ],
     };
-    expect(checkBatch(l, batch([veto(ID, SHA)]), TODAY, null)).toEqual({ ok: true });
-    expect(checkBatch(emptyLedger(), batch([veto(ID, SHA)]), TODAY, null).ok).toBe(false);
+    expect(checkBatch(l, batch([veto(ID, SHA)]), TODAY)).toEqual({ ok: true });
+    expect(checkBatch(emptyLedger(), batch([veto(ID, SHA)]), TODAY).ok).toBe(false);
+    // 别的候选 / 别的内容的项不算
+    const other = {
+      ...l,
+      blacklist: [{ ...(l.blacklist[0] as (typeof l.blacklist)[number]), candidate_id: ID2 }],
+    };
+    expect(checkBatch(other, batch([veto(ID, SHA)]), TODAY).ok).toBe(false);
   });
 
   it('冷却:at + days ≤ 今日(已过期被裁)= 满足;仍生效而账里没有 = 不满足', () => {
     const expired = batch([cool('cl-1', 'expired', 30)], '2026-10-16T00:00:00.000Z'); // 10-16 + 30 = 11-15 == 今日
-    expect(checkBatch(emptyLedger(), expired, TODAY, null)).toEqual({ ok: true });
+    expect(checkBatch(emptyLedger(), expired, TODAY)).toEqual({ ok: true });
     const active = batch([cool('cl-1', 'expired', 30)], '2026-10-17T00:00:00.000Z'); // + 30 = 11-16 > 今日
-    expect(checkBatch(emptyLedger(), active, TODAY, null).ok).toBe(false);
+    expect(checkBatch(emptyLedger(), active, TODAY).ok).toBe(false);
+  });
+
+  it('按状态判不按键判:账里有该批的键而状态不满足 = 不满足;没有键而状态已满足 = 满足(键被裁 / 被丢不影响)', () => {
+    const keyed = {
+      ...emptyLedger(1),
+      applied: [
+        { key: 'terminal:x', event_at: '2026-10-02T08:00:00.000Z', batch_sha256: 'a'.repeat(64) },
+      ],
+    };
+    expect(checkBatch(keyed, batch([tomb()]), TODAY).ok).toBe(false); // 键在,墓碑不在
+    expect(checkBatch(tombLedger() as never, batch([tomb()]), TODAY)).toEqual({ ok: true }); // 键不在,墓碑在
+  });
+
+  it('冷却:账里的项 at 更晚且 days 不小 = 满足;at 更早 / days 更小 = 不满足(会被重放改写)', () => {
+    const at = '2026-10-20T00:00:00.000Z';
+    const item = (iat: string, days: number) => ({
+      ...emptyLedger(1),
+      cooldowns: [{ cluster_id: 'cl-1', kind: 'expired' as const, days, at: iat }],
+    });
+    const b = batch([cool('cl-1', 'expired', 30)], at);
+    expect(checkBatch(item(at, 30), b, TODAY)).toEqual({ ok: true });
+    expect(checkBatch(item('2026-10-25T00:00:00.000Z', 30), b, TODAY)).toEqual({ ok: true });
+    expect(checkBatch(item('2026-10-19T00:00:00.000Z', 30), b, TODAY).ok).toBe(false);
+    expect(checkBatch(item(at, 29), b, TODAY).ok).toBe(false);
+  });
+
+  it('元信息 / 效果形状不合规 = 不满足并带 cause(不抛、不当作满足)', () => {
+    const noFp = {
+      key: 'k',
+      effects: [veto(ID, SHA)],
+      meta: { event_at: '2026-10-02T08:00:00.000Z' },
+    };
+    expect(checkBatch(emptyLedger(), noFp as never, TODAY)).toEqual({
+      ok: false,
+      cause: 'effects_meta_missing',
+    });
+    const bogus = {
+      key: 'k',
+      effects: [{ type: 'commit_lifecycle', id: ID }],
+      meta: meta('2026-10-02T08:00:00.000Z'),
+    };
+    expect(checkBatch(emptyLedger(), bogus as never, TODAY)).toEqual({
+      ok: false,
+      cause: 'unsupported_effect',
+    });
   });
 
   it('同 id 异内容的墓碑 = 不满足并带 effects_key_conflict(不抛)', () => {
-    expect(checkBatch(tombLedger('expired') as never, batch([tomb()]), TODAY, null)).toEqual({
+    expect(checkBatch(tombLedger('expired') as never, batch([tomb()]), TODAY)).toEqual({
       ok: false,
       cause: 'effects_key_conflict',
     });

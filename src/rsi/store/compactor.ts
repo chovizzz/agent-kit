@@ -161,7 +161,7 @@ export function createCompactor(deps: CompactorDeps): Compactor {
     const batches: readonly RecoveryBatch[] = await reconcile.batchesThrough(target);
     const derived = await reconcile.derivedThrough(target);
     const entries = await reconcile.entriesThrough(target);
-    const unsatisfied = batches.filter((b) => !checkBatch(snap.ledger, b, today, wOld).ok);
+    const unsatisfied = batches.filter((b) => !checkBatch(snap.ledger, b, today).ok);
     if (unsatisfied.length > 0) {
       const res = await deps.recovery.recoverThrough(target, unsatisfied);
       const bad = res.filter((r) => r.state === 'ledger_not_committed');
@@ -184,7 +184,7 @@ export function createCompactor(deps: CompactorDeps): Compactor {
       const au = await loadAudit(p);
       const ledger = await p.ledgerWrite.read();
       const failed = batches
-        .map((b) => ({ b, c: checkBatch(ledger, b, today, wOld) }))
+        .map((b) => ({ b, c: checkBatch(ledger, b, today) }))
         .flatMap((x) => (x.c.ok ? [] : [{ batch_id: x.b.key, cause: x.c.cause }]));
       if (failed.length > 0) return blocked((failed[0] as { cause: StoreCause }).cause, failed);
       const count = countInterval({

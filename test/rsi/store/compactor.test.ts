@@ -458,6 +458,21 @@ describe.each(KINDS)('compact_blocked 与零写入拒绝(%s)', (kind) => {
     expect((await w.bytes(FILES.audit))?.toString('utf8')).toBe(jsonLine(RECENT));
   });
 
+  it('compact_refused_until_first_audit_attempt_ends:区域 stamp 并源提交后、首次审计追加尝试结束前压缩 = region_open;appendKeyed(first) 后区域自动关闭,压缩可推进', async () => {
+    const w = await basic(kind);
+    const region = await w.s.seal.open(w.personal);
+    const at = '2026-11-15T10:00:00.000Z';
+    region.stampFirst(() => new Date(at));
+    region.markSourceCommitted();
+    expect((await rejects(w.compactor.compact({ through: W }))).code).toBe('region_open');
+    expect(region.state).toBe('source_committed');
+    const row = trow(hex16(0x91), at);
+    expect(await w.s.appender.appendKeyed([row], { kind: 'first', region })).toEqual(['appended']);
+    expect(region.state).toBe('closed');
+    expect(await w.compactor.compact({ through: W })).toMatchObject({ kind: 'advanced' });
+    expect((await w.bytes(FILES.audit))?.toString('utf8')).toBe(jsonLine(RECENT) + jsonLine(row));
+  });
+
   it('Compactor 只有 compact:拿不到 applyOnce / recoverThrough 等写入口', async () => {
     const w = await makeCWorld(kind);
     expect(Object.keys(w.s.compactor)).toEqual(['compact']);

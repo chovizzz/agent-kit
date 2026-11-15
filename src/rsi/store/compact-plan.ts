@@ -11,6 +11,7 @@
 import type { RsiAuditLine } from '../../contracts/rsi-personal.js';
 import {
   addUtcDays,
+  cooldownActive,
   utcDay,
   type RsiAuditCompaction,
   type RsiAuditMonth,
@@ -21,8 +22,14 @@ import {
 import { RsiAuditLineSchema } from '../../contracts/rsi-personal.js';
 import { sameRowForKey } from './audit-classify.js';
 import { AuditKeyConflict, StoreError } from './errors.js';
-import { beginWorking, finalize } from './ledger-merge.js';
-import { planLedgerBatch } from './ledger-plan.js';
+import {
+  beginWorking,
+  checkMeta,
+  finalize,
+  partitionEffects,
+  type CheckedMeta,
+  type LedgerEffect,
+} from './ledger-merge.js';
 import type { DerivedRow, ReconcileEntry, RecoveryBatch } from './ports.js';
 
 /** 触发参数(第 2 版 §1;契约原无,W0-26 定):年龄 365 天;条数 > 18000 时推进到剩余 ≤ 15000 */
@@ -68,22 +75,52 @@ export function pickTarget(
 export type BatchCheck = { ok: true } | { ok: false; cause: StoreCause };
 
 /**
- * 逐批纯判据「效果已被满足或被合法后继状态覆盖」:与 `applyOnce` / `recoverThrough` 共用 `planLedgerBatch`(账语义只有一份),**按状态判,不按键判**。
- * `satisfied` = 满足;`commit` = 需补账(`state_unsatisfied`,交给恢复);容量不够 / 冲突 = 不满足并带原因。
+ * 逐批纯判据「效果已被满足或被合法后继状态覆盖」:**只看账里的状态,不看 `applied` 键**(键只作冲突检测,可被裁 / 可被丢;键在不在与「保护是否成立」无关)。
+ *  - 黑名单:同 `(id, sha)` 的项存在(**含已 lifted**:lifted 即历史 veto 已处理,不复活);
+ *  - 墓碑:同 id 的项存在且 `(terminal, reason)` 相同;存在但不同 = 冲突(`effects_key_conflict`);
+ *  - 冷却:该批的事件时间 `at + days` 已不生效(`!cooldownActive`,已过期被裁),**或**同 `(cluster_id, kind)` 项 `at` ≥ 批内 `at` 且 `days` ≥ 批内 `days`;
+ *  元信息 / 效果形状不合规照样抛的 `StoreError` 在这里转成「不满足 + cause」(交给恢复端口复核并上报,绝不当作满足)。
  */
-export function checkBatch(
-  ledger: RsiEffectsLedger,
-  b: RecoveryBatch,
-  today: UtcDay,
-  wOld: UtcDay | null,
-): BatchCheck {
+export function checkBatch(ledger: RsiEffectsLedger, b: RecoveryBatch, today: UtcDay): BatchCheck {
   try {
-    const r = planLedgerBatch(ledger, b.key, b.effects, b.meta, { today, watermark: wOld });
-    if (r.kind === 'satisfied') return { ok: true };
-    return { ok: false, cause: r.kind === 'commit' ? 'compact_blocked' : r.cause };
+    const effects = partitionEffects(b.effects).ledger;
+    const m = checkMeta(effects, b.meta);
+    for (const e of effects) {
+      const c = effectState(ledger, e, m, today);
+      if (c !== 'ok') return { ok: false, cause: c };
+    }
+    return { ok: true };
   } catch (e) {
     if (e instanceof StoreError) return { ok: false, cause: e.code };
     throw e;
+  }
+}
+
+function effectState(
+  l: RsiEffectsLedger,
+  e: LedgerEffect,
+  m: CheckedMeta,
+  today: UtcDay,
+): 'ok' | StoreCause {
+  switch (e.type) {
+    case 'blacklist_veto':
+      return l.blacklist.some(
+        (x) => x.candidate_id === e.id && x.content_sha256 === e.content_sha256,
+      )
+        ? 'ok'
+        : 'compact_blocked';
+    case 'write_tombstone': {
+      const t = l.tombstones.find((x) => x.id === e.id);
+      if (t === undefined) return 'compact_blocked';
+      return t.terminal === e.terminal && t.reason === e.reason ? 'ok' : 'effects_key_conflict';
+    }
+    case 'start_cooldown': {
+      if (!cooldownActive({ at: m.event_at, days: e.days }, today)) return 'ok';
+      const c = l.cooldowns.find((x) => x.cluster_id === e.cluster_id && x.kind === e.kind);
+      return c !== undefined && Date.parse(c.at) >= Date.parse(m.event_at) && c.days >= e.days
+        ? 'ok'
+        : 'compact_blocked';
+    }
   }
 }
 

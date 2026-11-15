@@ -134,7 +134,7 @@ const P2_FAULTS: readonly [string, Crash][] = [
 
 describe.each(KINDS)('P2 提交点之前失败(%s)', (kind) => {
   it.each(P2_FAULTS)(
-    '%s:抛 store_io;压缩文件不存在、审计字节不变、tmp 已清;重启后恢复不再调、与对照世界相同、gen = 1',
+    'compact_recovery_then_p2_fail_retry_converges:%s:抛 store_io;压缩文件不存在、审计字节不变、tmp 已清;重启后恢复不再调、与对照世界相同、gen = 1',
     async (_n, crash) => {
       const final = await control(kind);
       const { w, fs, initial } = await build(kind, [crash]);
@@ -188,7 +188,7 @@ const P3_FAULTS: readonly [string, Crash][] = [
 
 describe.each(KINDS)('P3 失败:提交点已过,不抛,记入 cleanup(%s)', (kind) => {
   it.each(P3_FAULTS)(
-    '%s:advanced + cleanup.audit=pending(P4 照做);审计残留行原样;重启后续删且 months / gen 不变、不重算增量',
+    'p3_resume_does_not_recount:%s:advanced + cleanup.audit=pending(P4 照做);审计残留行原样;重启后续删且 months / gen 不变、不重算增量',
     async (_n, crash) => {
       const final = await control(kind);
       const { w, fs, initial } = await build(kind, [crash]);
