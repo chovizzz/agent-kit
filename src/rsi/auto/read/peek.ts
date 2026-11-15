@@ -10,7 +10,7 @@
  */
 import { RSI_SNAPSHOT_BUSY } from '../../../contracts/rsi.js';
 import type { PersonalLifecycleRecord } from '../../../contracts/rsi-personal.js';
-import type { RecordRead, RepoRead } from '../../personal/candidate-ports.js';
+import type { RecordRead, RepoRead } from '../../personal/candidate-port-types.js';
 import type { AutoReadPorts } from './ports.js';
 import { readVerifiedRecords } from './records-view.js';
 

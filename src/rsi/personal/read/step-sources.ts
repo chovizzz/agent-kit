@@ -13,7 +13,7 @@ import { loadRunEntries, type RunEntries } from '../../../judge/store-read.js';
 import type { DedupeTarget } from '../../../reflect/dedupe.js';
 import { listMonthFiles, scanMonthFile } from '../../../signals/store-scan.js';
 import { stagedRuns } from '../../pending.js';
-import type { PresetSource, SignalLookup, StagedSource } from '../candidate-ports.js';
+import type { PresetSource, SignalLookup, StagedSource } from '../candidate-port-types.js';
 
 type StagedEntry = RsiCounts['staged'][number];
 

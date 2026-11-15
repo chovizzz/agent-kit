@@ -37,7 +37,7 @@ import type {
   RevocationReader,
   SignalLookup,
   StagedSource,
-} from './personal/candidate-ports.js';
+} from './personal/candidate-port-types.js';
 import type { BreakerMarkerPort } from './personal/breaker.js';
 import type { PersonalLifecycleRecord } from '../contracts/rsi-personal.js';
 import { makeShadowObserver } from './personal/shadow-observe.js';

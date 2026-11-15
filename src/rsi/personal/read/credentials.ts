@@ -5,7 +5,7 @@
  */
 import type { HomeReadPort, RawRead } from '../../auto/read/ports.js';
 import { parseRevocations } from '../../canary/permit-read.js';
-import type { RevocationReader } from '../candidate-ports.js';
+import type { RevocationReader } from '../candidate-port-types.js';
 
 export function makeRevocationReadAdapter(
   home: Pick<HomeReadPort, 'revocations'>,
