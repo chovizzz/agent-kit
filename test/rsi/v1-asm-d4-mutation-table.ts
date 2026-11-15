@@ -51,7 +51,7 @@ const T_CLOS = 'rsi/d4/d4-closure.test.ts';
 
 /**
  * 每个杀手测试文件里的全部用例名(字面子串)。**expectRed 取「变异专属用例 ∪ 其杀手测试文件的全部用例」**(宽),原因:单点变异会连带打红同文件里
- * 其它带对应断言的用例(含对照分支),57 条逐一手推容易漏,漏了就是实跑时的「计划外红」;装配 A 段同样补宽过一轮。**必杀(mustKill)保持最小**,
+ * 其它带对应断言的用例(含对照分支),72 条逐一手推容易漏,漏了就是实跑时的「计划外红」;装配 A 段同样补宽过一轮。**必杀(mustKill)保持最小**,
  * 只列该变异专属的用例。由 `m()` 合并,不手写。
  */
 const RED_BY_TEST: Readonly<Record<string, readonly string[]>> = {
@@ -761,7 +761,13 @@ export const V1_ASM_D4_MUTATIONS: readonly V1AsmD4Mutation[] = [
   m(
     'pend_dup_ids_counted',
     'A6:report 暂存编号重复 = 报告不可信,即使去重个数 = counts 也不扣',
-    [swap(PEND, 'o.ids.length === new Set(o.ids).size && ', '')],
+    [
+      swap(
+        PEND,
+        'o.ids.length === new Set(o.ids).size && o.ids.length === o.run.proposals',
+        'new Set(o.ids).size === o.run.proposals',
+      ),
+    ],
     [T_PEND],
     ['报告暂存编号里有重复:即使去重个数恰好等于 counts 的提案数也不扣'],
   ),

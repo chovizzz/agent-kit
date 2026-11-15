@@ -2,10 +2,12 @@
  * A6「待审」不计已成候选的提案(契约 §21.3 R21-3.7 / R21-3.8 段末:「已成候选的提案不再算 A6『待审』」;D4 / 设计稿 verify_r21-asm-d-design.md §7)。
  *
  * 数据源 = 候选**工作副本** `.state/rsi/candidates/<id>.json` 的 `source`(`{run_id, proposal_id}`,R21-3.8;不读私有仓库的权威记录,那要起 git 子进程)。
- * **source 真实性(已核实,origin/main)**:工作副本只在权威记录提交成功之后才写——创建路径 `personal/candidate-step.ts`(`store.commit` 返回 `committed` 之后才 `newWorkingCopy` + `working.put`,约 340–365 行),
- * 转移路径 `personal/candidate-apply.ts`(`store.commit` 成功之后才 `working.put`,约 99–110 行,文件头注释同序),缺副本重建路径 `candidate-step.ts` ③(只从刚读到的权威记录的 `source_proposal` 重建);
- * `source` 创建后不改(其余路径只 `{...wc}` 展开补丁)。main 上没有「权威记录未提交就先落盘」的路径,所以这里**不再**核对权威记录(那要起 git 子进程)。
- * 残余:`WorkingStore.put` 的生产实现不在 main(只有端口),装配时必须保持「提交后才写」的顺序;副本在权威记录被清除 / 仓库回退后可能仍在——此时该提案确实曾转为候选,不再算待审。
+ * **source 真实性(已核实,origin/main db6332b)**:工作副本只在权威记录提交成功之后才写——创建路径 `personal/candidate-step.ts`:`store.commit` 在 341 行,`status !== 'committed'` 即 halt 在 347 行,
+ * 其后 362 行才 `newWorkingCopy`、364 行才 `working.put`;转移路径 `personal/candidate-apply.ts`:`store.commit` 95 行、非 committed 即 halt 104 行、109 行才 `working.put`(文件头注释同序);
+ * 缺副本重建路径 `candidate-step.ts` 278–304 行(只从刚读到的权威记录的 `source_proposal` 重建)。全仓只有 `candidate-record.ts` 91 行(newWorkingCopy)与 113 行(rebuildWorkingCopy)两处构造 `source`,
+ * 其余 `put` 都是在已有副本上 `{...wc}` 展开补丁,`source` 创建后不改。main 上没有「权威记录未提交就先落盘」的路径,所以这里**不再**核对权威记录(那要起 git 子进程)。
+ * 残余:`WorkingStore.put` 的生产实现不在 main(只有端口),装配时必须保持「提交后才写」的顺序;副本在权威记录被清除 / 仓库回退后可能仍在——此时该提案确实曾转为候选,不再算待审;
+ * `(run_id, proposal_id)` 在 run 目录被清理后被重用的情形未查到。
  * 工作副本没有删除路径(终态后仍在,至少到 `repo_removal_deferred` 收口);丢失只会让提案重回待审——这是**噪音方向**,不是安全方向。
  * 因此本读取器的读失败一律映射为「转化未知」:**不扣减**(与今天的行为相同),并留下稳定原因,绝不抛错、不返回 `known:false`(那会改变 hint / status / D17 现有输出)。
  *
