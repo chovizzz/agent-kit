@@ -48,7 +48,11 @@ export type SafeUnsafeWhy =
 
 export type SafeReadResult =
   | { kind: 'ok'; bytes: Buffer; meta: SafeMeta }
-  | { kind: 'missing' }
+  | {
+      kind: 'missing';
+      /** 句柄打开之后、fstat 之前该 inode 被 unlink(`nlink == 0`)。只说明**旧 inode** 已脱离目录树,不说明路径现在不存在(可能已被新文件替换)——要区分的调用方据此重读 */
+      unlinked?: true;
+    }
   | { kind: 'unsafe'; why: SafeUnsafeWhy };
 
 export interface SafeReadOptions {
@@ -58,6 +62,8 @@ export interface SafeReadOptions {
   owner?: OwnerPolicy;
   /** 测试缝:调用后紧接着 open。用来演练「检查之后、读取之前被换成符号链接 / FIFO」 */
   beforeOpen?: () => Promise<void> | void;
+  /** 测试缝:open 成功之后、fstat 之前调用。用来演练「打开后被新文件替换(旧 inode 失链)」 */
+  afterOpen?: () => Promise<void> | void;
 }
 
 function currentUid(): number | undefined {
@@ -133,9 +139,11 @@ export async function readFileSafe(path: string, opts: SafeReadOptions): Promise
     return openFailure(e);
   }
   try {
+    await opts.afterOpen?.();
     const st = await h.stat();
-    // 打开之后、fstat 之前被别人 unlink(锁释放 / 回收):nlink 为 0,等同「文件已不存在」,不是硬链接
-    if (st.isFile() && st.nlink === 0) return { kind: 'missing' };
+    // 打开之后、fstat 之前被别人 unlink(锁释放 / 回收):nlink 为 0。对「文件没了就是没了」的读者等同不存在;
+    // 带上 unlinked 标记,让「路径可能已被新文件替换」的读者(熔断标记)自己重读,不把旧 inode 失链当成路径不存在。
+    if (st.isFile() && st.nlink === 0) return { kind: 'missing', unlinked: true };
     const why = checkMeta(st, 'file', opts.owner);
     if (why !== undefined) return { kind: 'unsafe', why };
     if (st.size > opts.maxBytes) return { kind: 'unsafe', why: 'too_large' };

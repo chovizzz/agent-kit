@@ -23,7 +23,9 @@ type Work =
   | { ok: true; head: string | null; records: PersonalLifecycleRecord[] }
   | { ok: false; reason: string };
 
-export async function readVerifiedRecords(p: AutoReadPorts): Promise<VerifiedRecords> {
+export async function readVerifiedRecords(
+  p: Pick<AutoReadPorts, 'home' | 'recorded'>,
+): Promise<VerifiedRecords> {
   const o = await confirmContent<Work>(p.home, async (snap) => {
     const rr = await readRecordedRecords(p.recorded, snap.headText);
     if (rr.kind === 'retry') return { kind: 'retry' };

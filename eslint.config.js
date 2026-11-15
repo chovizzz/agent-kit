@@ -344,6 +344,8 @@ const SUBPROCESS_TESTS = [
   'test/rsi/proc/ro-helper.ts',
   // R20 A2 B5b:confirm 拒绝路径零写入的真子进程支撑(vite 打包 confirm-entry 后用 node 跑 main())
   'test/rsi/proc/confirm-helper.ts',
+  // 装配块 A 段:空写入根(KIT_WRITE_ROOTS=:)下真子进程跑只读适配器的支撑(vite 打包 asm-a-entry 后用 node 跑)
+  'test/rsi/proc/asm-a-helper.ts',
   'test/build/bundle-artifact.test.ts',
   // D-AU3:真实构建 + 真实 npm pack 的支撑与发布前门禁脚本的子进程测试
   'test/build/real-pack-helper.ts',
@@ -359,6 +361,67 @@ const SUBPROCESS_TESTS = [
   // R21 W7 H3:熔断标记遇到已存在的 FIFO 的拒绝路径;Node 没有建 FIFO 的 API,只能起 mkfifo(只落在 makeTempDir 的临时目录)
   'test/rsi/rollback/w7-pause-marker.test.ts',
 ];
+
+/**
+ * §21 装配块 A 段:读侧组合根与只读适配器(`src/rsi/assemble-read.ts` 等)不得 import 写出口 / 锁 / 子进程出口 / 含写出口的原模块
+ * (它们的读侧已拆到 `*-read.ts`)。其余限制照旧(`restrictions` 的全部项 + `denyRunSync` / `denyRunGitClosed`),只**追加**一个 pattern,不放宽任何一项。
+ * flat config 后面的同名规则整条替换前面的,所以这里在 `restrictions()` 的结果上追加。负对照在 `test/rsi/asm/a-zero-write.test.ts`(真实 eslint 夹具)。
+ */
+const READ_ROOT_FILES = [
+  'src/rsi/assemble-read.ts',
+  'src/rsi/analysis/source-ports.ts',
+  'src/rsi/auto/git-path.ts',
+  'src/rsi/auto/read/peek.ts',
+  'src/rsi/personal/read/credentials.ts',
+  'src/rsi/personal/read/step-sources.ts',
+  'src/rsi/canary/pause-marker-read.ts',
+  'src/rsi/canary/ledger-read.ts',
+  'src/judge/store-read.ts',
+];
+// 同目录 / 上一级的相对写法(`./lock.js`、`../lock.js`)不含路径前缀,所以不带目录段的文件名用「任意目录下的该文件名」形式(与 `lock-read.js` / `ledger-read.js` 等读侧同族文件名不冲突)
+const READ_ROOT_FORBIDDEN_MODULES = [
+  '**/io/safe-fs.js',
+  '**/io/home-fs.js',
+  '**/io/exec.js',
+  '**/lock.js',
+  '**/with-lock.js',
+  '**/rsi-dir.js',
+  '**/rsi/snapshot.js',
+  './snapshot.js',
+  '../snapshot.js',
+  '**/home-state.js',
+  '**/commit.js',
+  '**/personal-lock.js',
+  '**/rollback-ports.js',
+  '**/rollback-repo.js',
+  '**/pause-marker.js',
+  '**/ledger.js',
+  '**/canary-writer.js',
+  '**/judge/store.js',
+  './store.js',
+  '**/state-store.js',
+];
+function readRootRestrictions() {
+  const base = restrictions({ denyRunSync: true, denyRunGitClosed: true });
+  const [level, opts] = base['no-restricted-imports'];
+  return {
+    ...base,
+    'no-restricted-imports': [
+      level,
+      {
+        ...opts,
+        patterns: [
+          ...opts.patterns,
+          {
+            group: READ_ROOT_FORBIDDEN_MODULES,
+            message:
+              '§21 装配块 A 段:读侧组合根 / 只读适配器不得 import 写出口、锁、子进程出口或含写出口的原模块(读侧在 *-read.ts)。',
+          },
+        ],
+      },
+    ],
+  };
+}
 
 export default tseslint.config(
   {
@@ -398,6 +461,7 @@ export default tseslint.config(
   },
   // §21 W0-24:受限只读 git 适配器的 spawn 出口 `runGitClosed` 只在部署组装处(deps.ts)引用;适配器本身(personal/read/)拿注入的 spawn。
   { files: ['src/rsi/auto/deps.ts'], rules: restrictions({ denyRunSync: true }) },
+  { files: READ_ROOT_FILES, rules: readRootRestrictions() },
   { files: ['src/io/safe-fs.ts', 'src/io/read-fs.ts'], rules: restrictions({ allowFs: true }) },
   { files: ['src/io/paths.ts'], rules: restrictions({ allowEnv: true }) },
   { files: ['src/io/exec.ts'], rules: restrictions({ allowCp: true }) },
