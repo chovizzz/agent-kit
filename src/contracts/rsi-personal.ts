@@ -475,6 +475,11 @@ export const RsiAuditLineSchema = z.strictObject({
   at: IsoTimestampSchema,
   kind: z.enum(RSI_AUDIT_KINDS),
   id: z.string().min(1).max(128),
+  /**
+   * 事件身份(§21.24 W0-26:可选字段,无存量故不版本化):产生这一行的转移条目的 `idem_key`(与 `transitions[].idem_key` 同值)。
+   * 「`kind=transition` 行与保护标记行必带」是**写侧**规则(审计追加器校验),不是 schema refine:读侧对无键行容忍。
+   */
+  idem_key: Hex(16).optional(),
   dim: z.enum(['lifecycle', 'deploy', 'rollback']).optional(),
   agent: RsiAgentSchema.optional(),
   from: z.string().min(1).max(64).optional(),

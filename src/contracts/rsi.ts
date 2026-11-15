@@ -115,6 +115,9 @@ export const RSI_FAIL_CLOSED_REASONS = Object.freeze([
   // §21 W0-22 第 3 条(R21-12.4 / R21-12.9 / R21-13.3):撤销凭据不合规、审计文件缺失或损坏而账显示曾有转移
   'revocations_invalid',
   'audit_invalid',
+  // §21 W0-26(装配块 B 段):effects 账 / 审计到达硬线而拒绝写入
+  'effects_full',
+  'audit_full',
 ] as const);
 /** 顶层(0)信息行(R20-17.23):只在提醒条件下写 stderr,不改退出码 */
 export const RSI_INFO_LINE_CODES = Object.freeze([

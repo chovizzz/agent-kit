@@ -3710,17 +3710,17 @@ agent-kit __rsi --background          (内部入口,不进 --help、不在 COMMA
 
 **稳定码总表(R20-3.0;实现从 `src/contracts/rsi.ts` 的一份枚举生成,测试断言文档与枚举一致)** (订正见 §20.14 B3 订正 B3b-3、B3c-7) (订正见 §20.14 B4 订正 #1)
 
-| 类别                                    | 码                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | 退出 |
-| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---- |
-| `RSI_USAGE reason=`                     | `unknown_subcommand`、`unknown_arg`、`missing:--agent`、`bad_agent`、`mode_conflict`、`not_tty`、`paths_requires_tty`、`write_requires_mode`、`bad_path`、`root_mismatch`、`missing:--digest`、`missing:--json`、`missing:--owner`、`bad_date`、`unknown_id`、`bad_marker`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | 2    |
-| `RSI_NOT_RUN reason=`                   | `off`、`stopped`、`collect_blocked`、`locked`、`locked_over_ttl`、`not_confirmed`、`no_journal`、`binding_changed`、`purge_pending`、`digest_backlog`、`policy_changed`、`rate_limited`、`run_not_pending`、`dismiss_full`、`run_scan_incomplete`、`not_diverged`、`phase_not_available`、`ticket_expired`、`no_runtime`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | 4    |
-| 顶层(4)                                 | `RSI_SNAPSHOT_BUSY`、`RSI_EXEC_NOT_RUN`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | 4    |
-| 顶层(1)                                 | `RSI_RUN_TAINTED`、`RSI_RUN_ATTRIBUTION_UNKNOWN`、`RSI_PURGE_NOT_EXCLUDED`、`RSI_CONFIRM_DECLINED`、`RSI_CONFIRM_STALE`、`RSI_HOOKS_DECLINED`、`RSI_INGEST_TOO_LARGE`、`RSI_STAGING_FULL`、`RSI_INGEST_REJECTED`、`RSI_AUTO_RESUME_BLOCKED`、`RSI_CONTRIB_DEGRADED`、`RSI_EXEC_DECLINED`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | 1    |
-| 顶层(0)(信息行,stderr,不改退出码)       | `RSI_PROPOSALS_READY`、`RSI_COLLECTION_STARTED`、`RSI_MANUAL`、`RSI_CLEAR_DONE`、`RSI_AUTO_RESUMED`、`RSI_AUTO_RESUME_PENDING`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | 0    |
-| `RSI_HOOKS_NOT_RUN reason=`             | `locked`、`agent_not_installed`、`restore_not_latest`、`shape_unverified`、`config_unparsable`、`config_shape_unsupported`、`config_not_canonical`、`foreign_kit_entry`、`ambiguous_entry`、`conflicting_shape_unowned`、`stale_plan`、`config_changed_during_write`、`config_changed_since_install`、`txn_residue_unknown`、`duplicate_in_local`、`duplicate_check_failed`、`agent_dir_overridden`、`residue_not_discardable`                                                                                                                                                                                                                                                                                                                                                                                                         | 4    |
-| `RSI_HOOKS_WARN reason=`                | `prune_incomplete`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | 0    |
-| `RSI_FAIL_CLOSED reason=`               | 配置:`cfg_symlink`、`cfg_owner`、`cfg_perm`、`cfg_not_regular`、`cfg_too_large`、`cfg_unreadable`、`cfg_parse`、`cfg_schema`、`repo_invalid`、`overlay_invalid`、`exclude_invalid`;状态:`state_invalid`、`state_dir_unsafe`、`index_invalid`、`cursor_invalid`、`counts_invalid`、`snapshot_invalid`、`journal_invalid`、`signal_store_corrupt`、`salt_invalid`、`redactor_init`、`staging_too_large`、`staging_unsafe_entry`;运行:`lock_lost`、`write_denied`、`purge_incomplete`、`output_leak`、`stdin_unreadable`、`internal`;kit 钩子(A5):`hooks_target_unsafe`、`hooks_backup_invalid`、`hooks_ledger_invalid`;记账(A6):`dismissed_invalid`;个人层(§21 W0-12):`personal_repo_invalid`、`candidate_invalid`、`ledger_line_invalid`、`txn_invalid`、`probe_error`;审计与撤销凭据(§21 W0-22):`revocations_invalid`、`audit_invalid` | 3    |
-| 计数码(不改退出码,只进 `--json` 与日志) | `RSI_FILE_TOO_LARGE`、`RSI_LIMIT_FILES`、`RSI_LIMIT_BYTES`、`RSI_LIMIT_TIME`、`RSI_LIMIT_DEPTH`、`RSI_LIMIT_ENTRIES`、`RSI_INDEX_FULL`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | —    |
+| 类别                                    | 码                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | 退出 |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---- |
+| `RSI_USAGE reason=`                     | `unknown_subcommand`、`unknown_arg`、`missing:--agent`、`bad_agent`、`mode_conflict`、`not_tty`、`paths_requires_tty`、`write_requires_mode`、`bad_path`、`root_mismatch`、`missing:--digest`、`missing:--json`、`missing:--owner`、`bad_date`、`unknown_id`、`bad_marker`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | 2    |
+| `RSI_NOT_RUN reason=`                   | `off`、`stopped`、`collect_blocked`、`locked`、`locked_over_ttl`、`not_confirmed`、`no_journal`、`binding_changed`、`purge_pending`、`digest_backlog`、`policy_changed`、`rate_limited`、`run_not_pending`、`dismiss_full`、`run_scan_incomplete`、`not_diverged`、`phase_not_available`、`ticket_expired`、`no_runtime`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | 4    |
+| 顶层(4)                                 | `RSI_SNAPSHOT_BUSY`、`RSI_EXEC_NOT_RUN`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | 4    |
+| 顶层(1)                                 | `RSI_RUN_TAINTED`、`RSI_RUN_ATTRIBUTION_UNKNOWN`、`RSI_PURGE_NOT_EXCLUDED`、`RSI_CONFIRM_DECLINED`、`RSI_CONFIRM_STALE`、`RSI_HOOKS_DECLINED`、`RSI_INGEST_TOO_LARGE`、`RSI_STAGING_FULL`、`RSI_INGEST_REJECTED`、`RSI_AUTO_RESUME_BLOCKED`、`RSI_CONTRIB_DEGRADED`、`RSI_EXEC_DECLINED`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | 1    |
+| 顶层(0)(信息行,stderr,不改退出码)       | `RSI_PROPOSALS_READY`、`RSI_COLLECTION_STARTED`、`RSI_MANUAL`、`RSI_CLEAR_DONE`、`RSI_AUTO_RESUMED`、`RSI_AUTO_RESUME_PENDING`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | 0    |
+| `RSI_HOOKS_NOT_RUN reason=`             | `locked`、`agent_not_installed`、`restore_not_latest`、`shape_unverified`、`config_unparsable`、`config_shape_unsupported`、`config_not_canonical`、`foreign_kit_entry`、`ambiguous_entry`、`conflicting_shape_unowned`、`stale_plan`、`config_changed_during_write`、`config_changed_since_install`、`txn_residue_unknown`、`duplicate_in_local`、`duplicate_check_failed`、`agent_dir_overridden`、`residue_not_discardable`                                                                                                                                                                                                                                                                                                                                                                                                                                                          | 4    |
+| `RSI_HOOKS_WARN reason=`                | `prune_incomplete`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | 0    |
+| `RSI_FAIL_CLOSED reason=`               | 配置:`cfg_symlink`、`cfg_owner`、`cfg_perm`、`cfg_not_regular`、`cfg_too_large`、`cfg_unreadable`、`cfg_parse`、`cfg_schema`、`repo_invalid`、`overlay_invalid`、`exclude_invalid`;状态:`state_invalid`、`state_dir_unsafe`、`index_invalid`、`cursor_invalid`、`counts_invalid`、`snapshot_invalid`、`journal_invalid`、`signal_store_corrupt`、`salt_invalid`、`redactor_init`、`staging_too_large`、`staging_unsafe_entry`;运行:`lock_lost`、`write_denied`、`purge_incomplete`、`output_leak`、`stdin_unreadable`、`internal`;kit 钩子(A5):`hooks_target_unsafe`、`hooks_backup_invalid`、`hooks_ledger_invalid`;记账(A6):`dismissed_invalid`;个人层(§21 W0-12):`personal_repo_invalid`、`candidate_invalid`、`ledger_line_invalid`、`txn_invalid`、`probe_error`;审计与撤销凭据(§21 W0-22):`revocations_invalid`、`audit_invalid`;存储容量(§21 W0-26):`effects_full`、`audit_full` | 3    |
+| 计数码(不改退出码,只进 `--json` 与日志) | `RSI_FILE_TOO_LARGE`、`RSI_LIMIT_FILES`、`RSI_LIMIT_BYTES`、`RSI_LIMIT_TIME`、`RSI_LIMIT_DEPTH`、`RSI_LIMIT_ENTRIES`、`RSI_INDEX_FULL`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | —    |
 
 > **冻结后订正 W0-12(2026-11-09;R21-12.9、§21.24)**:上表已并入 §21 的稳定码——`RSI_USAGE` 追加 `bad_date`、`unknown_id`、`bad_marker`;`RSI_NOT_RUN` 追加 `not_diverged`、`phase_not_available`、`ticket_expired`、`no_runtime`(`rate_limited` 早已在);顶层(1)追加 `RSI_AUTO_RESUME_BLOCKED`、`RSI_CONTRIB_DEGRADED`、`RSI_EXEC_DECLINED`;顶层(4)追加 `RSI_EXEC_NOT_RUN`;`RSI_FAIL_CLOSED` 追加个人层五码。这些码在对应期(V1a / V1b / V4 / V5 / V6a / V6b)之前只是枚举常量、没有发码路径。
 
@@ -5926,10 +5926,12 @@ agent-kit judge --confirm-reflector --run <run_id> [--proposal <id>]… --write 
 
 ### 21.11 防止重复提出
 
+> **冻结后订正 W0-26(2026-11-15,owner 选择框「批准单账」)**:黑名单 / 墓碑 / 冷却进同一个带版本号的 effects 账 `.state/rsi/effects.json`,取代下列 R21-11.3 / 11.4 的两个文件位置;指纹匹配、上限、永久性、仅 TTY `--lift` 等数据语义逐项保留。正文见 §21.24 W0-26。
+
 - R21-11.1 `[V1]` **聚类冷却**(UTC 日历):自动回滚 90 天、`expired` 30 天、`rejected` 连续 5 次 7 天;期间该聚类不进 digest。与 tainted 独立。
 - R21-11.2 `[V1]` **文本指纹**:规范化正文的 HMAC-SHA256(本机密钥 `.state/rsi/fp.key`,0600,32 字节随机,首建经 `createExclusive`)+ 近似指纹(固定 shingle 参数,常量);与冷却同期失效;只在本机,永不进投稿、日志、`--json`(只出前 8 位用于人工对照)。
-- R21-11.3 `[V1]` **用户否决**:`rsi veto <id>` 的指纹永久黑名单(`.state/rsi/veto.json`);只能前台 `rsi veto --lift <id>` 解除(TTY)。未部署候选直接 `rejected`,已部署候选进 `rolling_back`(R21-12.6)。
-- R21-11.4 `[V1]` **墓碑**:终态 id 进 `.state/rsi/tombstones.json`,ingest 与 G4 拒复用。
+- R21-11.3 `[V1]` **用户否决**:`rsi veto <id>` 的指纹永久黑名单(~~`.state/rsi/veto.json`~~ → `.state/rsi/effects.json` 的 `blacklist`,见 W0-26);只能前台 `rsi veto --lift <id>` 解除(TTY)。未部署候选直接 `rejected`,已部署候选进 `rolling_back`(R21-12.6)。
+- R21-11.4 `[V1]` **墓碑**:终态 id 进 ~~`.state/rsi/tombstones.json`~~ → `.state/rsi/effects.json` 的 `tombstones`(见 W0-26),ingest 与 G4 拒复用。
 - R21-11.5 `[V1]` **taint 扩展**(修订 R20-4.7,§21.18 第 15 条):证据项目被排除或 purge 命中 → `proposed` / `shadow` / `blocked` 候选直接 `rejected`(`tainted`);已部署候选进 `rolling_back`(`tainted`)。「立即生效」收窄为:下一次 hint 起不再注入、不再作新证据;静态撤销单独报告完成;已进模型上下文的收不回。
 - R21-11.6 `[V1]` `rsi purge --write` 额外对私有仓库做历史改写(重建 `rsi` 分支,去掉含命中候选的提交内容),并报告「备份与系统级快照不在 kit 管辖范围」。
 
@@ -6023,6 +6025,8 @@ agent-kit rsi exec-confirm <id>                                           [V6a]
 > **冻结后订正 W0-22(2026-11-12)**:稳定码追加(只列字面,代码落地归 W8):`RSI_FAIL_CLOSED reason=` 追加 `revocations_invalid`、`audit_invalid`;信息行 `RSI_MANUAL`、`RSI_CLEAR_DONE`、`RSI_AUTO_RESUME_PENDING` 登记为非错误信息行常量(不计入失败码表);`RSI_AUTO_RESUME_BLOCKED reason=` 的取值追加 `personal_repo_diverged`、`personal_owner_changed`、`user_paused`。正文见 §21.24 W0-22 第 2、3、12 条。
 
 - R21-12.10 `[V1]` **审计** `.state/rsi/audit.jsonl`(`RsiAuditLine`,0600):每个转移、每次同步、每次评估查看(含置换种子)、每次 E1 运行、每次投稿结果一行 `canonicalJsonLine` 的 `{at, kind, id, dim?, agent?, from?, to?, reason?, hashes?, counts?, seed?, exec?}`,其中 `exec` = `{started_at, ended_at, exit_code, duration_ms, cpu_ms, max_rss_kib, post_check: pass|undeclared_write|unchecked|error}`;无路径、无文本;保留 365 个 UTC 日、上限 20000 行,超出先按月汇总再删;分组账保留到候选终态后 90 个 UTC 日,之后只留聚合计数(修订 R20-7.1,§21.18 第 17 条)。
+
+> **冻结后订正 W0-26(2026-11-15)**:审计行追加可选字段 `idem_key`(事件身份);同键内容规则、水位线与压缩(`audit-compaction.json`)、「缺行只计入汇总」的保证范围见 §21.24 W0-26。`report` 退 0 仅表示「成功读取并汇总已观察审计」,不证明完整。
 
 > **冻结后订正 W0-22(2026-11-12)**:审计追加两个取值:`kind=reconcile` 且 `reason=protection_unknown`(回滚起因因转移截断丢失,已按保护方向补发 90 天冷却)与 `reason=protection_unclassified`(回滚记录自相矛盾,已按保护方向补发 90 天冷却);无新键、无枚举扩展。正文见 §21.24 W0-22 第 14 条。
 
@@ -6414,6 +6418,8 @@ v3.1 已把用户决定列全;以下是落契约时新发现的契约细节取�
 **冻结后订正 W0-23(2026-11-12,W7b 评审后的收尾订正)**:熔断标记的解除证据协议(`state.json.auto_pause.released_marker_id`:区分「触发窗口:标记已落盘、状态未写」与「解除窗口:状态已清码、标记未删」,防止已解除的码被残留标记补回);旧格式 journal 缺 `content_sha256` 的失败形状与 `cause`(`incomplete`、保留事务身份、`cause = manual_event_required`);W0-22 第 13、14 条与 R21-11.1「冷却至多一条」的字面核对结果(已有的不重复,只补缺)。**取代关系**:无取代;**扩** W0-21 B 的内容形状(追加实例标识 `id`;2026-11-13 修订:解除证据记 `id` 而非 `at`)、R21-10.1(标记补码的判据)、R21-10.4(解除写入须带证据)、W0-22 第 1 条第 ④ 步(resume 的状态写入须带证据)与第 13 条(旧格式 journal 的形状)。**未改**:`AUTO_PAUSE_BREAKER` 只建不改、已存在不覆盖;worker 任何路径不写、不删 `AUTO_PAUSE`;熔断码表与各码的解除方式;W0-22 第 14 条的保护标记与终态批次的落地方式(实现回到第 14 条字面:标记随 E2 同一批、同一键落地)。**实现归属**:W7b(`breaker.ts`、`pause-marker.ts`、`RsiStateSchema`);W8 的 resume 第 ④ 步照本订正写证据。
 
 **冻结后订正 W0-24(2026-11-13,W8a 落地订正)**:桩的规范名与 V4–V6 命令桩、`AutoView` 的具体键与带标记示例、两个常量、`RSI_FAIL_CLOSED reason=` 追加项与信息行并入 §20.3 总表、受限只读 git 适配器的 spawn 出口(`runGitClosed`)、`rsi auto status` 的 `stall` 取值。只扩展与补口径,不改既有条款。正文见 §21.24 W0-24。
+
+**冻结后订正 W0-26(2026-11-15,装配块 B 段存储核)**:effects 单账 `effects.json`(取代 R21-11.3 / 11.4 的 `veto.json` / `tombstones.json` 位置,数据语义逐项保留);审计行追加可选字段 `idem_key` 与同键内容规则;水位线 / 月度汇总文件 `audit-compaction.json`(取代 W0-22 第 8 条「边界元数据留待将来」一句)与「水位线及之前缺行只计入汇总」的保证范围;「同一持久化步骤」降为「账原子、审计最终一致」;`RSI_FAIL_CLOSED reason=` 追加 `effects_full`、`audit_full`。**取代关系**:见 §21.24 W0-26。**实现归属**:B1a(本订正,存储核与契约)、B1b(压缩 / 水位线推进)、B2(命令接线);相位 0 下全部惰性。
 
 **冻结后订正 W0-25(2026-11-13,W8b 写命令落地订正)**:`RSI_AUTO_RESUMED` / `RSI_AUTO_RESUME_PENDING` 并入信息行与总表、`RSI_AUTO_RESUME_BLOCKED reason=` 的取值常量、resume 剩余集合取读回值且条件已不成立的自动解除码一并清、veto 的 `unknown_id` 判定与持锁重读、`--lift`、rollback --to 的 `yes` 确认与持锁重选、rebase 的情形与持锁复判及标志重算归装配块、配置不可信时 `clear --write` 照常完成 HOME 侧撤销(其余写命令仍 fail-closed)、未接线预检。只扩展与补口径,不改既有条款。正文见 §21.24 W0-25。
 
@@ -6966,6 +6972,26 @@ W8b(命令面的写命令:`pause` / `resume` / `clear --write` / `veto` / `rollb
 - **`rsi veto` 的终态否决与丢锁(评审订正 2026-11-14)**:①候选已终态且原终态理由不是 `vetoed` 时,引擎 `veto` 事件是空操作,只落 E1 黑名单;恢复扫描的 E1 补做只扫 `rolling_back ∧ rollback.reason = vetoed`,**推不出这次否决**——所以 E1 落地 `deferred` 时命令退 1(W0-22 第 3 条「可重跑的未完成」那一档,不新增码)并输出信息行 `veto: id=… 否决未落地(黑名单落地推迟),请重跑 rsi veto`(过泄漏闸,不含成功行 `result=`);**不自动续做**(没有持久化否决意图)。重跑幂等:黑名单按 `(id, content_sha256)` 集合插入,成功后退 0、恰好一条。「较晚事件未施加且事务已走完」转入的终态 veto 同此。终态理由已是 `vetoed` 时恢复扫描能补,`effects=deferred` 仍退 0。②`applyEvent` 返回 `lockLost: true`(转移已提交)时,调用方在任何后续落地(E2、审计)之前立即结束,按丢锁约定抛 `lock_lost`(退 3 `RSI_FAIL_CLOSED reason=lock_lost`),效果交给已提交终态记录的恢复机制。W8b 里直接调 `applyEvent` 的只有 `veto`;`resume` / `pause` / `rebase-baseline` 不调引擎,`clear --write` / `rollback --to --write` 经 `startRollback`(其内部 `applyOne` 见 `lockLost` 即抛 `lock_lost`,调用方不吞)。
 - **`rebase-baseline` 崩溃后的重跑收尾(评审订正 2026-11-14)**:改写 `head.json` 成功、清标志前崩溃(或 `state.json` 写失败)后,重跑时情形已是「不分叉」。新增只读端口方法 `RebasePort.headRewritten(kind)`(`baseline`:`head.json` 记录的提交等于当前 HEAD;`owner`:记录的 `owner_repo_fp` 等于当前 `[rsi] repo` 指纹)。**仅当**「原始情形为 ok(`classify()` 的原始分类;参数与情形不匹配——分叉带 `--adopt-owner`、换主不带——不算,仍退 4 零写入) ∧ `headRewritten` 为真 ∧ 状态里仍留着对应标志」(锁外探测,**持锁后重判三条仍成立**)才只清该标志并退 0(输出 `rebase-baseline=done … resumed=yes`),不再改写 `head.json`、不再要求确认;kind 随 `--adopt-owner`(带 = `owner_changed`,不带 = `diverged`)。缺任一事实一律照旧退 4 `not_diverged`(含「本来没分叉且无标志」与「有标志但记录并未改写」);仍分叉走正常确认流程。没有新增 `head.json` 字段,判据全取自现有记录与当前 HEAD / 指纹。
 - **未接线预检**:写命令的端口缺失(未装配)= 退 3 `RSI_FAIL_CLOSED reason=internal`,在任何写入(含取锁)之前;参数 / TTY 校验先于端口装配。`rsi auto pause` 只依赖自带的用户标记端口,是「全部未接线则零写入」的唯一例外。生产组装本期只接了 `config`、用户标记端口与输出禁止集合;锁、`PauseStatePort`、`stillHolds`、`EntryMarks.bump`、`RollbackDeps` / `ClearDeps`、黑名单落地与解除、git 分类与 `head.json` 写入归后面的装配块。
+
+#### W0-26 装配块 B 段存储核订正(2026-11-15;R21-11.3、R21-11.4、R21-11.1、R21-12.10、W0-22 第 3、8、14 条、W0-23 第 3 条)
+
+装配块 B 段(拆 B1a 存储核 / B1b 压缩与水位线 / B2 命令接线)开工前的契约订正。**授权状态**:①effects 单账取代两个文件位置、②审计行加显式 `idem_key`(无存量证明成立,不版本化)、③压缩与水位线纳入 B 段、④「水位线及之前缺行只计入汇总」,均为 owner 2026-11-15 选择框授权;其余条款(新文件 `audit-compaction.json` 与 `report` 读取变化、`effects_full` / `audit_full` 入枚举、`gen` 排序与 `user_veto` 覆盖 lift 的定义、R5 观察行折叠、`sealed_interval` 等 cause)为主代理批准,状态以合并时的评审记录为准。
+
+1. **effects 单账**:`.state/rsi/effects.json`(0600,写者 = 持 `rsi/lock` 者,`tmp + rename`)= `{schema_version: 1, gen, blacklist[], tombstones[], cooldowns[], applied[]}`(`RsiEffectsLedgerSchema`)。**取代** R21-11.3 的 `.state/rsi/veto.json` 与 R21-11.4 的 `.state/rsi/tombstones.json`(这两个文件本期无人写,也从未发布);`RsiVetoDoc` / `RsiTombstones` 作元素 schema 的来源保留。文件缺失 = 虚拟空账(`gen: 0`,合法);不合规 = `state_invalid`,读写均拒、不覆盖。**数据语义逐项保留**:黑名单项 `{candidate_id, content_sha256, fp_hmac(16 位), near_fp[≤64 个 8 位], at, vetoed_gen, lifted_at?, lifted_gen?}`,≤1000(含已解除),永久,仅 TTY `rsi veto --lift` 可解除;墓碑 `{id, terminal, reason, at}`,`id` 唯一、同 `id` 异内容 = `effects_key_conflict`,≤5000;冷却 `(cluster_id, kind)` 至多一条取更晚的 `at`,≤2000。消费(ingest / G4 / 候选创建按 `fp_hmac` 与 `near_fp` 拒绝、拒复用墓碑)归 D;`near_fp` 本期一律写 `[]`(无产生方;依赖近似否决保护的相位提升须等 D)。R21-11.2「近似指纹与冷却同期失效」本期不动。
+2. **账的提交协议**:一批效果 = 一个键(`terminal:<id>:<sha>`、`veto:<id>:<sha>` 等)。顺序固定:**验证(schema、批内同键异内容、墓碑冲突、键冲突)→ 合并 → 容量 → 审计预检 → 账 `rename` → 审计追加**,全在同一个事务内(§21.3 锁序 `rsi → personal → sync`,事务内先 `assertHeld`)。同键同内容 = `already`(`ledger: satisfied`);同键不同内容 = `effects_key_conflict`,**零写入**。账提交后只剩 I/O 失败:审计追加失败 = 「账已提交、审计待补」(`ledger: committed | satisfied`、`audit: pending`),不是错误;审计预检失败(`audit_full` 等)发生在账提交**之前**,账不动。`applyOnce` 的存储端结果只含 `ledger` 与 `audit` 两层;命令权威状态(记录 / 凭据 / HOME)由命令层组合,存储端不推断。
+3. **gen 排序,不用时间**:账级 `gen` 每次提交 +1(到 `Number.MAX_SAFE_INTEGER` 拒写,`gen_overflow`,不回绕);黑名单项的 `vetoed_gen ≤ gen`,有 lifted 时 `vetoed_gen < lifted_gen ≤ gen`,`lifted_at` 与 `lifted_gen` 同在同缺;违反 = `state_invalid`。写入带意图:`replay`(恢复 / 重放)项不存在则插入、存在(含 lifted)恒为空操作——**重放永不复活已解除的否决**;`user_veto`(只有命令装配持有的 `UserVetoPort`)不走 `already` 短路:项不存在 → 插入,存在未 lifted → 空操作,lifted → 清 `lifted_*` 并令 `vetoed_gen = gen`。**定义**:用户每执行一次 `rsi veto <id>` 即一次新的否决意图(TTY 交互动作),重试同一命令也算新意图,其后的 lift 可被它覆盖。`at` 仅展示;时钟回拨 / 同刻 / 未来时间均不影响。带 lifted 的项与墓碑永不被裁。
+4. **容量(参数,契约原无)**:`blacklist 1000`、`tombstones 5000`、`cooldowns 2000`、`applied 20000` 键、账文件规范化 UTF-8 ≤ 8 MiB;审计 20000 行(既有)。软线 = 90%(只挡增影响,归 C / D),硬线 = 100%。`applied` 只作冲突检测,**满则丢键不拒写**:合并整批效果得非键状态后先裁已过期冷却,非键状态超 8 MiB 或条数硬线 → `effects_full`(拒写);否则重选整个 `applied` 保留子集(本批新键在前,其后旧键按 `event_at` 降序、同刻按键字典序升序,取使条数与字节同时合规的最长前缀),旧键不得挤占新效果的空间。代价(如实):被丢弃键对应的「同键异内容冲突检测」失效,正确性靠状态幂等。永久对象(黑名单 / 墓碑)满是终态:增影响永久拒,保护写报「已提交待对账」,恢复只能靠契约改上限的新版本;**压缩不是无条件逃生口**:账容量满会使压缩前恢复返回 `ledger_not_committed(effects_full)` 而挡住推进。
+5. **冷却边界**:单一谓词 `cooldownActive(item, today) = utcDay(at) + days > today`(按 UTC 日历日加整数天);**过期 = 非 active**(`at + days ≤ today`);裁剪、压缩判据「已过期被裁」、`cooldown_active` 展示三处都用它。
+6. **审计 `idem_key` 与同键规则**(取代 R21-12.10 的无键口径):`RsiAuditLine` 追加可选字段 `idem_key`(Hex16,= 产生该行的转移条目的 `idem_key`)。**写侧**规则:`kind = transition` 行与保护标记行必带;文件内唯一;**同键内容比较包含 `at`**,不等 = `audit_key_conflict`,零写入;**唯一例外**是终态空操作观察行(判别式 `kind = transition ∧ dim = lifecycle ∧ from = to ∧ to ∈ 终态`),其比较排除 `at`(同 `(id, 状态, reason, sha)` 多次命令有意折叠为一行)。无键行(`evaluation` / `sync` 等观察行)只经 `appendObservation`,单次 `O_APPEND`,崩溃可丢、**重试可能重复**(不保证跨重试恰一次)。**无存量**:审计行的写者在已发布版本与 main 上不存在(npm 全部已发布版本无 `audit.jsonl` / `RsiAuditLine` / `rsi-personal`;main 上 `audit.jsonl` 生产写者为 0),故不版本化、不迁移;`veto.json` / `tombstones.json` 的无存量另证(全仓无写者)。
+7. **审计文件的坏态**(与追加器、压缩共用同一个 `classifyAuditFile`):合法 / **可恢复撕裂尾**(无结尾换行的片段,事务内修尾后再追加)/ 中间坏行 / 完整但 schema 非法的行 / 重复键。除撕裂尾外一律 fail-closed(`audit_invalid`,cause 分别为 `audit_bad_line` / `audit_dup_key`),零修改。压缩状态不受支持(`schema_version > 1`、`through` 非法或 ≥ 今日、`months` 不合规)→ 追加器与账写入全部拒绝(`compaction_unsupported`);文件缺失 = 无压缩(合法)。崩溃模型 = 进程崩溃(kill / OOM / 异常退出),**不含掉电**(不承诺文件与目录 fsync 顺序)。
+8. **水位线与审计明细保证**(owner 选择框「缺行只计入汇总」):①**水位线 W 之后**,每个转移(权威 lifecycle 条目对应的事件,含保护标记行)**最终**有唯一的 keyed 明细行(经派生扫描补行,允许落盘滞后,不允许永久缺失);②**W 及之前**,允许**从未落过明细**的事件只进月度汇总,**不再保证明细行曾经存在**,压缩只依据权威记录证明「区间内每个有权威源的事件要么已在文件、要么已计入汇总」;③月汇总 `months["YYYY-MM"] = {lines, deleted, derived_missing, by_kind, transition_by_to}`,`lines = deleted + derived_missing`,二者按事件身份(`idem_key`)去重,同一事件不同时计入;④**无权威源**的观察行(终态空操作行、无键观察行)不获得缺失恢复保证;⑤权威记录因 >256 条窗口截断而丢失的条目,契约既有豁免继续成立(计入 `transitions_dropped`,不计 `derived_missing`);⑥`rsi report` 退 0 仅表示「成功读取并汇总已观察审计」,不证明完整;压缩后区间计数的精度 = 月。`audit-compaction.json`(0600,`rsi + personal` 锁,`tmp + rename`)= `{schema_version: 1, gen, through, months}`,**取代** W0-22 第 8 条「边界元数据留待将来」一句(`report` 读取变化归 B1b);首次创建 `gen = 1`。**不检测**外部文件回滚 / 删除 / 「曾存在后丢失」(无跨运行持久锚点)。本期(B1a)只落 schema 与读写,推进算法与 `Compactor` 归 B1b。
+9. **新 keyed 事件不得落入已封存区间**:首次创建事件日 ≤ W 须在私有仓库提交前拒绝(零写入)。取时与封存校验同处受保护区域(`SealGuard` / `SealRegion`:`open → stamped → source_committed → audit_attempted → closed`,区域覆盖到首次审计追加尝试结束,期间压缩一律 `region_open`);追加器区分 `first`(区域内刚 stamp 的条目,返回类型不含 `compacted`,事件日 ≤ W 抛 `sealed_interval`)与 `replay`(派生扫描等:事件日 ≤ W 仅当 `ReconcileSource.resolve` 取回的权威事件与待写行 `idem_key / id / at / kind / dim / from / to / reason` **全部相等**才算 `compacted`,否则 `sealed_unknown_event`);无键行日 ≤ W → `clock_regressed`。**假设**:单主机单时钟(多主机共享私有仓库 / 主机时钟不同步未研究)。
+10. **「同一持久化步骤」降级**(取代 W0-23 第 3 条 / W0-22 第 14 条 / `rollback-ports.ts` 注释的字面):保护标记与冷却、墓碑**账原子、审计最终一致**——账是一次 `rename`,标记行在账提交后追加,失败则「已提交待补」由派生扫描收敛。这是一致性保证的**降低**,不是文字澄清。
+11. **码与退出码**:`RSI_FAIL_CLOSED reason=` 追加 `effects_full`、`audit_full`(退 3,并入 §20.3 总表与 `RSI_FAIL_CLOSED_REASONS`);`effects_key_conflict` / 账不合规 / `gen_overflow` → `state_invalid`;`audit_key_conflict` / 审计不合规 / 压缩不受支持 / `sealed_*` / `clock_regressed` → `audit_invalid`;其余 cause(`region_*`、`txn_*`、`out_of_range`、`effects_meta_missing` 等)→ `internal`。完整 cause 表是 `src/contracts/rsi-store.ts` 的 `RSI_STORE_CAUSES`。已合并 W8b 路径保持原行为:提交后落地失败仍是「已提交」信息行 + 退 3。
+12. **锁与事务**:全局锁序 `rsi → personal → sync` 不变且固定(`LockOrder` 只含有序组合,不暴露单独取锁);事务协调器把已持有的 `rsi + personal` 两把能力在整个临界区固定,写端口 `{ledgerWrite, auditAppend}` 绑定事务 token(事务结束即失效),协调器追踪每个已发起的写并在收尾前等待;`release()` 置 `closing` 后等在途事务,`release()` 若发生在**本把锁**的事务回调内则拒绝(`release_inside_transaction`),事务外或别的锁 / 事务上下文调用则等待。**威胁模型**:防工程误用(旧句柄、端口逃逸、释放 / 提交竞态、错 root),**不防**同进程恶意代码;跨进程残余同 R20-5.4:锁仅在持有者 pid 不存在、或内容损坏且超 10 秒时被回收,活着的持有者不被抢占;`assertHeld` 到 `rename` 之间的窗口只剩此残余。
+13. **混合版本**:不含 B 的任何构建都没有写 `effects.json` / `audit.jsonl` / `audit-compaction.json` 的路径(相位 0 下全部 RSI 写命令被相位闸挡在桩之前,`runPersonalStep` 无生产调用方);相位提升后**不得**与早于 B 的构建同机混跑写命令,提相位 PR 清单含「核对部署的最低版本」。
+14. **取代关系**:①R21-11.3 / R21-11.4 的位置(`veto.json` / `tombstones.json` → `effects.json#blacklist` / `#tombstones`);②W0-22 第 8 条「边界元数据留待将来」一句(→ `audit-compaction.json`);③W0-23 第 3 条 / W0-22 第 14 条「同一持久化步骤」(→ 账原子、审计最终一致)。**扩**:R21-12.10(`idem_key`、同键规则、水位线)与 W0-25 `veto` 行(有类型的失败原因)、R20-5.1 第 41 行(追加 `effects.json` 与 `audit-compaction.json` 的写者 = 持 `rsi/lock` 者)。**未改**:W0-23 其余条款、已发布迁移、R21-11.1 冷却天数与口径、R21-11.2 近似指纹生命周期、M11 上限。
+15. **三个生效时点**:①格式定义生效 = 本订正 + schema 合并(B1a,无写入);②首次生产写入 = 提相位到 V1a 的 PR(B 合并本身因相位 0 惰性);③消费者切换 = D 合并(ingest / G4 改读账)。**实现归属**:B1a = 事务协调器、账存储、审计追加器、`SealGuard` 区域注册表、schema、码表、谓词(`src/rsi/store/**`、`src/contracts/rsi-store.ts`);B1b = `Compactor`、真 `ReconcileSource` 适配器、report 读 compaction;B2 = 命令接线、`CommandLocks`、`candidate-apply.ts` 取时挂点;C = `candidate-step.ts` 取时挂点、worker 派生扫描。
 
 #### W0 订正的合法 / 错误示例
 
@@ -7761,6 +7787,117 @@ W8b(命令面的写命令:`pause` / `resume` / `clear --write` / `veto` / `rollb
     "reasons": ["not_a_reason"],
     "diverged": false,
     "owner_changed": false
+  }
+}
+```
+
+`RsiEffectsLedger` 合法(一条黑名单、一条墓碑、一条冷却与一个已应用键;`gen` 不小于各项的 `vetoed_gen`):
+
+<!-- example:valid schema=RsiEffectsLedger -->
+
+```json
+{
+  "schema_version": 1,
+  "gen": 3,
+  "blacklist": [
+    {
+      "candidate_id": "ra_0123456789ab",
+      "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "fp_hmac": "0123456789abcdef",
+      "near_fp": [],
+      "at": "2026-11-15T08:00:00.000Z",
+      "vetoed_gen": 1
+    }
+  ],
+  "tombstones": [
+    {
+      "id": "ra_0123456789ab",
+      "terminal": "rejected",
+      "reason": "vetoed",
+      "at": "2026-11-15T08:00:00.000Z"
+    }
+  ],
+  "cooldowns": [
+    {
+      "cluster_id": "cluster-a",
+      "kind": "auto_rollback",
+      "days": 90,
+      "at": "2026-11-15T08:00:00.000Z"
+    }
+  ],
+  "applied": [
+    {
+      "key": "terminal:ra_0123456789ab:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "event_at": "2026-11-15T08:00:00.000Z",
+      "batch_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  ]
+}
+```
+
+`RsiEffectsLedger` 错误:黑名单项带 `lifted_at` 而缺 `lifted_gen`(二者须同在同缺,状态 = `state_invalid`,读写均拒):
+
+<!-- example:invalid schema=RsiEffectsLedger -->
+
+```json
+{
+  "schema_version": 1,
+  "gen": 3,
+  "blacklist": [
+    {
+      "candidate_id": "ra_0123456789ab",
+      "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "fp_hmac": "0123456789abcdef",
+      "near_fp": [],
+      "at": "2026-11-15T08:00:00.000Z",
+      "vetoed_gen": 1,
+      "lifted_at": "2026-11-15T09:00:00.000Z"
+    }
+  ],
+  "tombstones": [],
+  "cooldowns": [],
+  "applied": []
+}
+```
+
+`RsiAuditCompaction` 合法(水位线 2026-10-31,汇总满足 `lines = deleted + derived_missing`):
+
+<!-- example:valid schema=RsiAuditCompaction -->
+
+```json
+{
+  "schema_version": 1,
+  "gen": 1,
+  "through": "2026-10-31",
+  "months": {
+    "2026-10": {
+      "lines": 3,
+      "deleted": 2,
+      "derived_missing": 1,
+      "by_kind": { "transition": 3 },
+      "transition_by_to": { "shadow": 3 }
+    }
+  }
+}
+```
+
+`RsiAuditCompaction` 错误:`lines` 不等于 `deleted + derived_missing`(状态 = `compaction_unsupported`,追加器与账写入全部拒绝):
+
+<!-- example:invalid schema=RsiAuditCompaction -->
+
+```json
+{
+  "schema_version": 1,
+  "gen": 1,
+  "through": "2026-10-31",
+  "months": {
+    "2026-10": {
+      "lines": 5,
+      "deleted": 2,
+      "derived_missing": 1,
+      "by_kind": { "transition": 5 },
+      "transition_by_to": {}
+    }
   }
 }
 ```
