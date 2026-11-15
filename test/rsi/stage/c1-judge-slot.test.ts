@@ -264,7 +264,8 @@ describe('checkJudgeGrowth:跨信任边界的运行期包装(永不抛) · M3:�
     } as unknown as JudgeGrowthSlot;
     expect(await checkJudgeGrowth(slot, rec(SRC))).toEqual({ ok: true });
     expect(reads).toBe(1);
-    expect(receivers).toEqual([slot]);
+    expect(receivers[0]).toBe(slot);
+    expect(receivers.length).toBe(1);
   });
   it('check 不是函数(未装配)仍是 judge_unavailable,与「读取抛错」的 judge_indeterminate 区分', async () => {
     const slot = { check: 5 } as unknown as JudgeGrowthSlot;
