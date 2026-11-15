@@ -300,11 +300,13 @@ describe('B 标记读:句柄级安全读取(检查与读取之间被替换不能
     expect(await reader.read()).not.toBeNull();
     await safe.hardlink(w.io, file, path.join(w.dir, 'alias-marker'));
     await expect(reader.read()).rejects.toThrow(/\(hardlink\)/);
-    await safe.remove(w.io, path.join(w.dir, 'alias-marker'));
-    expect(await reader.read()).not.toBeNull();
-    await safe.remove(w.io, file);
-    await safe.writeFile(w.io, file, 'x'.repeat(70 * 1024), { mode: 0o600 });
-    await expect(reader.read()).rejects.toThrow(/\(too_large\)/);
+    // 超限另起一个世界:safe-fs 的 remove 自己就拒绝动硬链接(nlink>1),上面那份留着不清。
+    const big = await markerWorld('asm-a-marker-big-');
+    const bigReader = makeBreakerMarkerReader(big.w.rsi);
+    expect(await bigReader.read()).not.toBeNull();
+    await safe.remove(big.w.io, big.file);
+    await safe.writeFile(big.w.io, big.file, 'x'.repeat(70 * 1024), { mode: 0o600 });
+    await expect(bigReader.read()).rejects.toThrow(/\(too_large\)/);
   });
 });
 
