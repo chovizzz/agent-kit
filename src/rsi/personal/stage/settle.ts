@@ -126,16 +126,20 @@ export type SettleResult =
 
 type StepRun = 'ok' | 'not_ok' | { readonly rethrow: unknown };
 
+type SweepOutcome =
+  | { readonly kind: 'result'; readonly result: SettleResult }
+  /** rsi 失锁等上抛:终态就是这次 rejection,之后每次调用都得到同一个 rejection(不降级成普通 unsettled) */
+  | { readonly kind: 'rejected'; readonly error: unknown };
 interface SweepRecord {
-  running: Promise<SettleResult>;
-  result: SettleResult | null;
+  readonly running: Promise<SettleResult>;
+  outcome: SweepOutcome | null;
 }
 const sweeps = new WeakMap<object, SweepRecord>();
 
 /**
  * 每轮至多**真正扫尾一次**(状态在回合上:未开始 / 进行中 / 已完成):
- *  - 进行中再调用 → 返回**同一个** Promise(不会因脏标记已被取走而提前报 `settled`);
- *  - 已扫过再调用 → 不再扫:先前的结果是 `unsettled` 就原样返回(失败后不能靠再调一次重来,脏标记保持置位);先前 `settled` 而其后又出现新的脏写 → `unsettled`(不重扫);
+ *  - 进行中再调用(含扫尾端口的同步前缀重入)→ 返回**同一个** Promise(先建好共享 Promise 再启动扫尾,不暴露占位值);
+ *  - 已扫过再调用 → 不再扫:先前的结果(含 rejection)原样返回——失败后不能靠再调一次重来,脏标记保持置位;先前 `settled` 而其后又出现新的脏写 → `unsettled`(不重扫);
  *  - 第一次调用时脏标记为空 → `settled`(零调用,且**不算**已扫过:其后真有脏写时仍可扫这一次)。
  */
 export function settleSafety(
@@ -146,30 +150,34 @@ export function settleSafety(
   const st = roundInternals(round);
   const prev = sweeps.get(round);
   if (prev !== undefined) {
-    if (prev.result === null) return prev.running;
-    if (prev.result.kind === 'unsettled') return Promise.resolve(prev.result);
-    if (st.dirty.size === 0) return Promise.resolve(prev.result);
+    const o = prev.outcome;
+    if (o === null) return prev.running;
+    if (o.kind === 'rejected') return Promise.reject(o.error);
+    if (o.result.kind === 'unsettled') return Promise.resolve(o.result);
+    if (st.dirty.size === 0) return Promise.resolve(o.result);
     markRoundUnsettled(round, 'safety_not_settled');
     return Promise.resolve({ kind: 'unsettled', reason: 'safety_not_settled', faults: [] });
   }
   if (st.dirty.size === 0) return Promise.resolve({ kind: 'settled', swept: false }); // 零调用
-  const rec: SweepRecord = {
-    running: Promise.resolve({ kind: 'settled', swept: false }),
-    result: null,
-  };
+  let resolve!: (r: SettleResult) => void;
+  let reject!: (e: unknown) => void;
+  const running = new Promise<SettleResult>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  const rec: SweepRecord = { running, outcome: null };
   sweeps.set(round, rec);
-  rec.running = sweepOnce(round, ports, budget).then(
-    (r) => {
-      rec.result = r;
-      return r;
+  void sweepOnce(round, ports, budget).then(
+    (result) => {
+      rec.outcome = { kind: 'result', result };
+      resolve(result);
     },
-    (e: unknown) => {
-      // rsi 失锁上抛:本轮不再有「可重试」的扫尾(脏标记已放回,调用方按失锁结束)
-      rec.result = { kind: 'unsettled', reason: 'safety_not_settled', faults: [] };
-      throw e;
+    (error: unknown) => {
+      rec.outcome = { kind: 'rejected', error };
+      reject(error);
     },
   );
-  return rec.running;
+  return running;
 }
 
 async function sweepOnce(

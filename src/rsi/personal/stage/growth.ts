@@ -57,8 +57,10 @@ export type CandidateReq = Extract<GrowthReq, { cand: TaintCandidate }>;
 interface PassRecord {
   readonly round: BothRound;
   used: boolean;
-  /** `checkGrowthVeto` 成功时的 `gen`(null = 尚未现读外部否决事实);`requireGrowth` 要求它等于消费时的 `gen` */
+  /** `checkGrowthVeto` 成功时的 `gen`(null = 尚未现读 / 正在现读);`requireGrowth` 要求它等于消费时的 `gen` */
   vetoClearAtGen: number | null;
+  /** 一次 `checkGrowthVeto` 正在进行:此间不可消费,也不可再开第二次(并发 / 重复现读 = 误用,作废) */
+  checking: boolean;
 }
 const minted = new WeakMap<object, PassRecord>();
 
@@ -363,7 +365,7 @@ function mint(round: BothRound, op: GrowthOp, gen: number): GrowthPass {
           },
     ),
   }) as unknown as GrowthPass;
-  minted.set(pass, { round, used: false, vetoClearAtGen: null });
+  minted.set(pass, { round, used: false, vetoClearAtGen: null, checking: false });
   return pass;
 }
 
@@ -678,26 +680,44 @@ export async function checkGrowthVeto(
     voidPass(pass);
     throw new StaleGrowth(early);
   }
-  let v: VetoFact;
-  try {
-    v = await readers.externalVeto(round, op);
-  } catch (e) {
-    voidPass(pass);
-    if (e instanceof PersonalLockLost || isRsiLockLost(e)) throw e;
-    throw new StaleGrowth('veto_unreadable');
-  }
-  const o = v as { vetoed?: unknown } | null;
-  if (typeof o !== 'object' || o === null || (o.vetoed !== false && o.vetoed !== true)) {
-    voidPass(pass);
-    throw new StaleGrowth('veto_unreadable');
-  }
-  if (o.vetoed === true) {
-    voidPass(pass);
-    throw new StaleGrowth('vetoed');
-  }
   const rec = minted.get(pass);
-  if (rec === undefined || rec.used) throw new StaleGrowth('already_used'); // 读期间被并发消费
-  rec.vetoClearAtGen = round.gen();
+  if (rec === undefined) throw new StaleGrowth('not_minted');
+  if (rec.checking) {
+    // 并发 / 重复现读:不让「进行中的新检查」与旧的成功标记并存——作废
+    voidPass(pass);
+    throw new StaleGrowth('veto_check_in_flight');
+  }
+  rec.vetoClearAtGen = null; // 重新现读先撤销旧标记:检查进行期间不可消费
+  rec.checking = true;
+  try {
+    let v: VetoFact;
+    try {
+      // 读的对象是**冻结的 pass.op**(已与调用方参数核对一致),不是调用方持有的可变参数——跨 await 不会身份分叉
+      v = await readers.externalVeto(round, pass.op);
+    } catch (e) {
+      voidPass(pass);
+      if (e instanceof PersonalLockLost || isRsiLockLost(e)) throw e;
+      throw new StaleGrowth('veto_unreadable');
+    }
+    const o = v as { vetoed?: unknown } | null;
+    if (typeof o !== 'object' || o === null || (o.vetoed !== false && o.vetoed !== true)) {
+      voidPass(pass);
+      throw new StaleGrowth('veto_unreadable');
+    }
+    if (o.vetoed === true) {
+      voidPass(pass);
+      throw new StaleGrowth('vetoed');
+    }
+    // 发布标记前重新校验:读期间 pass 被消费 / gen 变了 / 回合变未决 → 作废并抛,绝不盖章
+    const late = staleReason(pass, round, pass.op, false);
+    if (late !== null) {
+      voidPass(pass);
+      throw new StaleGrowth(late);
+    }
+    rec.vetoClearAtGen = round.gen();
+  } finally {
+    rec.checking = false;
+  }
 }
 
 /**

@@ -1315,9 +1315,98 @@ describe('checkGrowthVeto:消费前现读外部否决事实(requireGrowth 的前
         return { vetoed: false as const };
       },
     });
-    // 读期间 gen 前进:pass 已过时,消费必拒(不论现读结果)
-    await reasonOfAsync(() => checkGrowthVeto(p, round, CREATE, r));
-    expect(reasonOfSync(() => requireGrowth(p, round, CREATE))).not.toBe('NO_THROW');
+    // 读期间 gen 前进:pass 已过时,现读本身就拒(不盖章),消费同样拒
+    expect(await reasonOfAsync(() => checkGrowthVeto(p, round, CREATE, r))).toBe('gen_changed');
+    expect(reasonOfSync(() => requireGrowth(p, round, CREATE))).toBe('already_used');
+  });
+});
+
+describe('checkGrowthVeto 的跨 await 身份与重入', () => {
+  const CREATE: GrowthOp = { cap: 'candidate_create' };
+  const reasonOfAsync = async (f: () => Promise<void>): Promise<string> => {
+    try {
+      await f();
+    } catch (e) {
+      return e instanceof StaleGrowth ? e.reason : `OTHER:${(e as Error).name}`;
+    }
+    return 'NO_THROW';
+  };
+  const reasonOfSync = (f: () => void): string => {
+    try {
+      f();
+    } catch (e) {
+      return e instanceof StaleGrowth ? e.reason : `OTHER:${String(e)}`;
+    }
+    return 'NO_THROW';
+  };
+
+  it('veto_reader_gets_frozen_pass_op:读的是冻结的 pass.op,调用方在 await 期间改写自己持有的 op 不影响读的对象', async () => {
+    const { round } = await openBoth();
+    const p = await pass(round, reqOf('grant'));
+    const op = { cap: 'grant', cand: { id: 'cand-1', content_sha256: 'a'.repeat(64) } } as {
+      cap: 'grant';
+      cand: { id: string; content_sha256: string };
+    };
+    let seen: GrowthOp | null = null;
+    const r = readers({
+      externalVeto: async (_r, o) => {
+        op.cand.id = 'cand-B'; // 调用方的可变别名在 await 期间被改写
+        seen = o;
+        await Promise.resolve();
+        return { vetoed: false as const };
+      },
+    });
+    await checkGrowthVeto(
+      p,
+      round,
+      { cap: 'grant', cand: { id: 'cand-1', content_sha256: 'a'.repeat(64) } },
+      r,
+    );
+    expect(seen).toBe(p.op);
+    expect(Object.isFrozen(seen)).toBe(true);
+    expect((seen as unknown as { cand: { id: string } }).cand.id).toBe('cand-1');
+    // 被改写的 op(cand-B)消费 → op 不等
+    expect(reasonOfSync(() => requireGrowth(p, round, op))).toBe('op_mismatch');
+  });
+
+  it('veto_recheck_invalidates_old_mark:第二次现读进行期间旧标记失效(不可消费);第二次最终 veto → 作废', async () => {
+    const { round } = await openBoth();
+    const p = await pass(round, reqOf('candidate_create'));
+    await checkGrowthVeto(p, round, CREATE, readers()); // 第一次:通过,盖章
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const slow = readers({
+      externalVeto: async () => {
+        await gate;
+        return { vetoed: true as const, why: 'marker' as const };
+      },
+    });
+    const second = checkGrowthVeto(p, round, CREATE, slow);
+    // 第二次悬而未决时,旧标记已撤销:此刻消费被拒(并作废)
+    expect(reasonOfSync(() => requireGrowth(p, round, CREATE))).toBe('veto_not_checked');
+    release();
+    expect(await reasonOfAsync(() => second)).toBe('vetoed');
+    expect(reasonOfSync(() => requireGrowth(p, round, CREATE))).toBe('already_used');
+  });
+
+  it('veto_check_in_flight:并发的两次现读 → 第二次拒绝并作废;第一次随后也因 pass 已作废而拒(绝不盖章)', async () => {
+    const { round } = await openBoth();
+    const p = await pass(round, reqOf('candidate_create'));
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const slow = readers({
+      externalVeto: async () => {
+        await gate;
+        return { vetoed: false as const };
+      },
+    });
+    const first = checkGrowthVeto(p, round, CREATE, slow);
+    expect(await reasonOfAsync(() => checkGrowthVeto(p, round, CREATE, readers()))).toBe(
+      'veto_check_in_flight',
+    );
+    release();
+    expect(await reasonOfAsync(() => first)).toBe('already_used');
+    expect(reasonOfSync(() => requireGrowth(p, round, CREATE))).toBe('already_used');
   });
 });
 

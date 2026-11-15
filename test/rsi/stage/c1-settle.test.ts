@@ -301,4 +301,45 @@ describe('settleSafety', () => {
     expect(p.calls.length).toBe(3); // 没有第二次扫尾
     expect(round.unsettled()).toContain('safety_not_settled');
   });
+
+  it('settle_rejection_is_terminal:首次扫尾遇 rsi 失锁上抛 → 之后每次调用都得到同一个 rejection(不降级成普通 unsettled),端口零调用', async () => {
+    const { round } = await openBoth();
+    await dirty(round);
+    const lost = new RsiLockError('lock_lost');
+    const p = sweepPorts(round, {
+      enforceMute: () => {
+        p.calls.push('enforceMute');
+        return Promise.reject(lost);
+      },
+    });
+    const budget = createRoundBudget(round, { startRollbackLimit: 3 });
+    await expect(settleSafety(round, p, budget)).rejects.toBe(lost);
+    const p2 = sweepPorts(round);
+    await expect(
+      settleSafety(round, p2, createRoundBudget(round, { startRollbackLimit: 3 })),
+    ).rejects.toBe(lost);
+    await expect(settleSafety(round, p, budget)).rejects.toBe(lost);
+    expect(p2.calls).toEqual([]);
+    expect(p.calls).toEqual(['enforceMute']);
+  });
+
+  it('settle_sync_prefix_reentry_shares_final_result:扫尾端口的同步前缀重入 settleSafety → 拿到的是最终的共享结果,不是占位的「已收敛」', async () => {
+    const { round } = await openBoth();
+    await dirty(round);
+    const budget = createRoundBudget(round, { startRollbackLimit: 3 });
+    let inner: Promise<unknown> | undefined;
+    const p = sweepPorts(round, {
+      enforceMute: () => {
+        p.calls.push('enforceMute');
+        inner = settleSafety(round, p, budget); // 同步前缀内重入
+        return Promise.resolve({ mute: 'unreliable', fault: 'mute_unreliable' });
+      },
+    });
+    const outer = settleSafety(round, p, budget);
+    expect(inner).toBe(outer);
+    const r = await outer;
+    expect(r.kind).toBe('unsettled'); // 最终失败,而不是重入者先看到的 settled
+    expect(await inner).toBe(r);
+    expect(p.calls.filter((c) => c === 'enforceMute').length).toBe(1);
+  });
 });

@@ -273,6 +273,32 @@ describe('runFallbackOnce(单飞协调器;永不抛)', () => {
     expect(planAfterFallback('io_error', b).callFinish).toBe(false);
   });
 
+  it('fallback_reentry_from_sync_prefix_sees_pending:兜底实现的同步前缀重入协调器 → 拿到进行中的共享结果,不是 null', async () => {
+    let inner: Promise<FallbackReport | null> | undefined;
+    const t = newFallbackTrack();
+    const s: TestStage = {
+      calls: 0,
+      eligible: () => true,
+      safetyFallback: () => {
+        s.calls += 1;
+        // 同步前缀内重入同一个 track(两条入口共用协调器)
+        inner = runFallbackOnce({
+          track: t,
+          stage: s,
+          ctx: CTX,
+          original: new Error('e'),
+          outcome: 'io_error',
+        });
+        return Promise.resolve({ kind: 'aborted', why: 'rsi_lock_lost' });
+      },
+    };
+    const outer = await run(s, t);
+    expect(inner).toBeDefined();
+    expect(await inner).toEqual({ kind: 'aborted', why: 'rsi_lock_lost' }); // 不是 null
+    expect(outer).toEqual({ kind: 'aborted', why: 'rsi_lock_lost' });
+    expect(s.calls).toBe(1);
+  });
+
   it('跳过:零写入类 / rsi 失锁 / pCompleted / 无 stage / 无资格 → 不调用,返回 track.fb(null)', async () => {
     const s = stageOf(() => Promise.resolve({ kind: 'muted' }));
     for (const outcome of FALLBACK_SKIP_OUTCOMES)

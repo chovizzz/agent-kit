@@ -40,6 +40,7 @@ export const STALE_GROWTH_REASONS = Object.freeze([
   'vetoed',
   'veto_unreadable',
   'veto_not_checked',
+  'veto_check_in_flight',
 ] as const);
 export type StaleGrowthReason = (typeof STALE_GROWTH_REASONS)[number];
 

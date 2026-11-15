@@ -82,19 +82,24 @@ export async function runFallbackOnce(input: {
   const { track, stage, ctx } = input;
   if (track.fallbackTried) return track.pending ?? track.fb;
   if (fallbackSkipReason(input) !== null || stage === undefined) return track.fb;
-  track.fallbackTried = true; // 先置位再调用:兜底内的任何重入都看到「已调用」
-  const run = async (): Promise<FallbackReport | null> => {
-    try {
-      return await stage.safetyFallback(ctx);
-    } catch (e) {
-      return isRsiLockLost(e)
-        ? { kind: 'aborted', why: 'rsi_lock_lost' }
-        : { kind: 'threw', name: e instanceof Error ? e.name : typeof e };
-    }
-  };
-  track.pending = run();
-  track.fb = await track.pending;
-  return track.fb;
+  // 先发布共享 Promise、再执行实现:`safetyFallback` 的同步前缀若重入本协调器,看到的是进行中的 pending(不是 null)。
+  // (实现若 await 自己重入拿到的结果 = 自等待,属实现违约,不在此处理)
+  let publish!: (r: FallbackReport | null) => void;
+  track.pending = new Promise<FallbackReport | null>((resolve) => {
+    publish = resolve;
+  });
+  track.fallbackTried = true;
+  let report: FallbackReport;
+  try {
+    report = await stage.safetyFallback(ctx);
+  } catch (e) {
+    report = isRsiLockLost(e)
+      ? { kind: 'aborted', why: 'rsi_lock_lost' }
+      : { kind: 'threw', name: e instanceof Error ? e.name : typeof e };
+  }
+  track.fb = report;
+  publish(report);
+  return report;
 }
 
 export interface FollowUpPlan {

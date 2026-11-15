@@ -727,8 +727,8 @@ export const V1_ASM_C1A_MUTATIONS: readonly V1AsmC1aMutation[] = [
     edits: [
       swap(
         'src/rsi/personal/stage/growth.ts',
-        '    v = await readers.externalVeto(round, op);',
-        '    v = { vetoed: false };',
+        'v = await readers.externalVeto(round, pass.op);',
+        'v = { vetoed: false };',
       ),
     ],
     tests: ['rsi/stage/c1-growth.test.ts'],
@@ -755,8 +755,8 @@ export const V1_ASM_C1A_MUTATIONS: readonly V1AsmC1aMutation[] = [
     edits: [
       swap(
         'src/rsi/personal/stage/growth.ts',
-        "    if (e instanceof PersonalLockLost || isRsiLockLost(e)) throw e;\n    throw new StaleGrowth('veto_unreadable');",
-        '    if (e instanceof PersonalLockLost || isRsiLockLost(e)) throw e;\n    v = { vetoed: false };',
+        "      if (e instanceof PersonalLockLost || isRsiLockLost(e)) throw e;\n      throw new StaleGrowth('veto_unreadable');",
+        '      if (e instanceof PersonalLockLost || isRsiLockLost(e)) throw e;\n      v = { vetoed: false };',
       ),
     ],
     tests: ['rsi/stage/c1-growth.test.ts'],
@@ -989,13 +989,7 @@ export const V1_ASM_C1A_MUTATIONS: readonly V1AsmC1aMutation[] = [
   {
     id: 'fallback_not_marked_tried',
     clause: 'C v2 §2 失败的兜底也算已调用',
-    edits: [
-      swap(
-        'src/rsi/personal/stage/fallback.ts',
-        '  track.fallbackTried = true; // 先置位再调用:兜底内的任何重入都看到「已调用」\n',
-        '',
-      ),
-    ],
+    edits: [swap('src/rsi/personal/stage/fallback.ts', '  track.fallbackTried = true;\n', '')],
     tests: ['rsi/stage/c1-fallback.test.ts'],
     expectRed: ['失败的兜底也算已调用', 'fallback_single_shot_after_p_contract_violation'],
     mustKill: ['失败的兜底也算已调用'],
@@ -1034,8 +1028,8 @@ export const V1_ASM_C1A_MUTATIONS: readonly V1AsmC1aMutation[] = [
     edits: [
       swap(
         'src/rsi/personal/stage/fallback.ts',
-        '      return isRsiLockLost(e)\n',
-        '      return false\n',
+        '    report = isRsiLockLost(e)\n',
+        '    report = false\n',
       ),
     ],
     tests: ['rsi/stage/c1-fallback.test.ts'],
@@ -1292,15 +1286,108 @@ export const V1_ASM_C1A_MUTATIONS: readonly V1AsmC1aMutation[] = [
     id: 'sweep_concurrent_returns_settled',
     clause: 'Pi1 P2-4 进行中再调用等同一个结果',
     edits: [
-      swap(
-        'src/rsi/personal/stage/settle.ts',
-        '    if (prev.result === null) return prev.running;\n',
-        '',
-      ),
+      swap('src/rsi/personal/stage/settle.ts', '    if (o === null) return prev.running;\n', ''),
     ],
     tests: ['rsi/stage/c1-settle.test.ts'],
     expectRed: ['settle_concurrent_call_shares_in_flight_result'],
     mustKill: ['settle_concurrent_call_shares_in_flight_result'],
+  },
+  {
+    id: 'veto_reader_gets_caller_op',
+    clause: 'Pi2 F1 现读的对象是冻结的 pass.op(不是调用方的可变参数)',
+    edits: [
+      swap(
+        'src/rsi/personal/stage/growth.ts',
+        'v = await readers.externalVeto(round, pass.op);',
+        'v = await readers.externalVeto(round, op);',
+      ),
+    ],
+    tests: ['rsi/stage/c1-growth.test.ts'],
+    expectRed: ['veto_reader_gets_frozen_pass_op'],
+    mustKill: ['veto_reader_gets_frozen_pass_op'],
+  },
+  {
+    id: 'veto_mark_not_cleared_on_recheck',
+    clause: 'Pi2 F1 重新现读先撤销旧标记',
+    edits: [
+      swap(
+        'src/rsi/personal/stage/growth.ts',
+        '  rec.vetoClearAtGen = null; // 重新现读先撤销旧标记:检查进行期间不可消费\n',
+        '',
+      ),
+    ],
+    tests: ['rsi/stage/c1-growth.test.ts'],
+    expectRed: ['veto_recheck_invalidates_old_mark'],
+    mustKill: ['veto_recheck_invalidates_old_mark'],
+  },
+  {
+    id: 'veto_check_concurrent_allowed',
+    clause: 'Pi2 F1 并发现读 = 误用,作废',
+    edits: [swap('src/rsi/personal/stage/growth.ts', '  if (rec.checking) {', '  if (false) {')],
+    tests: ['rsi/stage/c1-growth.test.ts'],
+    expectRed: ['veto_check_in_flight:并发的两次现读'],
+    mustKill: ['veto_check_in_flight:并发的两次现读'],
+  },
+  {
+    id: 'veto_late_stale_not_checked',
+    clause: 'Pi2 F1 发布标记前重新校验(读期间 gen 变了不盖章)',
+    edits: [
+      swap(
+        'src/rsi/personal/stage/growth.ts',
+        '    const late = staleReason(pass, round, pass.op, false);\n    if (late !== null) {\n      voidPass(pass);\n      throw new StaleGrowth(late);\n    }\n',
+        '',
+      ),
+    ],
+    tests: ['rsi/stage/c1-growth.test.ts'],
+    expectRed: ['现读期间发生了写 → 消费时 gen_changed'],
+    mustKill: ['现读期间发生了写 → 消费时 gen_changed'],
+  },
+  {
+    id: 'sweep_rejection_downgraded',
+    clause: 'Pi2 F2 rsi 失锁的 rejection 是终态,之后调用不降级',
+    edits: [
+      swap(
+        'src/rsi/personal/stage/settle.ts',
+        "    if (o.kind === 'rejected') return Promise.reject(o.error);\n",
+        '',
+      ),
+    ],
+    tests: ['rsi/stage/c1-settle.test.ts'],
+    expectRed: ['settle_rejection_is_terminal'],
+    mustKill: ['settle_rejection_is_terminal'],
+  },
+  {
+    id: 'sweep_registered_after_start',
+    clause: 'Pi2 F4 先登记共享 Promise 再启动扫尾',
+    edits: [
+      swap(
+        'src/rsi/personal/stage/settle.ts',
+        '  sweeps.set(round, rec);\n  void sweepOnce(',
+        '  void sweepOnce(',
+      ),
+      swap(
+        'src/rsi/personal/stage/settle.ts',
+        '  return running;\n}\n',
+        '  sweeps.set(round, rec);\n  return running;\n}\n',
+      ),
+    ],
+    tests: ['rsi/stage/c1-settle.test.ts'],
+    expectRed: ['settle_sync_prefix_reentry_shares_final_result'],
+    mustKill: ['settle_sync_prefix_reentry_shares_final_result'],
+  },
+  {
+    id: 'fallback_pending_published_late',
+    clause: 'Pi2 F3 先发布共享 Promise 再执行兜底',
+    edits: [
+      swap(
+        'src/rsi/personal/stage/fallback.ts',
+        '  track.pending = new Promise<FallbackReport | null>((resolve) => {\n    publish = resolve;\n  });\n',
+        '  publish = () => undefined;\n',
+      ),
+    ],
+    tests: ['rsi/stage/c1-fallback.test.ts'],
+    expectRed: ['fallback_reentry_from_sync_prefix_sees_pending'],
+    mustKill: ['fallback_reentry_from_sync_prefix_sees_pending'],
   },
 ];
 
