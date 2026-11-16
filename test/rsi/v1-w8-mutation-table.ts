@@ -2081,8 +2081,8 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
     edits: [
       swap(
         'src/rsi/auto/write/veto.ts',
-        "if (r.kind === 'noop' && landed.includes('deferred') && rec.terminal_reason !== 'vetoed') {",
-        'if (false) {',
+        "  if (\n    r.kind === 'noop' &&\n    landed.includes('deferred') &&\n    (rec.terminal_reason !== 'vetoed' || ensureDeferred)\n  ) {",
+        '  if (false) {',
       ),
     ],
     tests: ['rsi/auto/write-commands.test.ts'],
