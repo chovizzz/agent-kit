@@ -64,7 +64,11 @@ export const V1_ASM_B1A_MUTATIONS: readonly V1AsmB1aMutation[] = [
       ),
     ],
     tests: ['rsi/store/ledger-plan.test.ts', 'rsi/store/apply-once.test.ts'],
-    expectRed: ['replay 不复活已解除的否决', 'lift_replay_after_prune_noop'],
+    expectRed: [
+      'replay 不复活已解除的否决',
+      'lift_replay_after_prune_noop',
+      'replay_paths_cannot_reach_user_veto_intent:applyOnce / recoverThrough 没有 intent 参数',
+    ],
     mustKill: ['replay 不复活已解除的否决'],
   },
   {
@@ -72,7 +76,11 @@ export const V1_ASM_B1A_MUTATIONS: readonly V1AsmB1aMutation[] = [
     clause: 'W0-26 §3 user_veto 不走 already',
     edits: [swap('src/rsi/store/ledger-merge.ts', "  if (intent === 'replay') {", '  if (true) {')],
     tests: ['rsi/store/apply-once.test.ts'],
-    expectRed: ['user_veto_skips_already_shortcircuit'],
+    expectRed: [
+      'user_veto_skips_already_shortcircuit',
+      'lift_then_new_user_veto_effective_under_clock_regress:事件时间倒退时仍按 gen 生效',
+      'replay_paths_cannot_reach_user_veto_intent:applyOnce / recoverThrough 没有 intent 参数',
+    ],
     mustKill: ['user_veto_skips_already_shortcircuit'],
   },
   {
@@ -128,7 +136,10 @@ export const V1_ASM_B1A_MUTATIONS: readonly V1AsmB1aMutation[] = [
       ),
     ],
     tests: ['rsi/store/ledger-plan.test.ts'],
-    expectRed: ['applied_count_full_drops_keys_not_rejects'],
+    expectRed: [
+      'applied_count_full_drops_keys_not_rejects',
+      'applied_retention_order_deterministic:同刻旧键按键字典序升序保留,丢最后一个',
+    ],
     mustKill: ['applied_count_full_drops_keys_not_rejects'],
   },
   {
@@ -142,7 +153,11 @@ export const V1_ASM_B1A_MUTATIONS: readonly V1AsmB1aMutation[] = [
       ),
     ],
     tests: ['rsi/store/ledger-plan.test.ts'],
-    expectRed: ['applied_count_full_drops_keys_not_rejects', '字节超限丢键不拒写'],
+    expectRed: [
+      'applied_count_full_drops_keys_not_rejects',
+      '字节超限丢键不拒写',
+      'applied_retention_order_deterministic:同刻旧键按键字典序升序保留,丢最后一个',
+    ],
     mustKill: ['applied_count_full_drops_keys_not_rejects'],
   },
   {
@@ -229,6 +244,11 @@ export const V1_ASM_B1A_MUTATIONS: readonly V1AsmB1aMutation[] = [
     expectRed: [
       'dropped_key_replay_still_idempotent',
       'veto → committed;再 veto(未 lifted)= satisfied 且不写',
+      '墓碑同 id 异 (terminal, reason) = 冲突;同内容 = 空操作保留最早 at',
+      'replay 不复活已解除的否决(含键被裁后);对照:未解除时 replay 为空操作',
+      'cold_replay_cooldown_not_restarted:已过期的事件重放不插入新冷却(zero write);对照:仍 active 则插入',
+      '同 (cluster_id, kind) 取更晚的 at;更早的重放 = 空操作',
+      'non_key_state_over_limit_rejected:黑名单 1000 满再加新项 = not_committed(effects_full);同一项已在则 satisfied(对照)',
     ],
     mustKill: ['dropped_key_replay_still_idempotent'],
   },
@@ -243,7 +263,10 @@ export const V1_ASM_B1A_MUTATIONS: readonly V1AsmB1aMutation[] = [
       ),
     ],
     tests: ['rsi/store/ledger-plan.test.ts'],
-    expectRed: ['event_at 不是 ISO 时间戳'],
+    expectRed: [
+      'event_at 不是 ISO 时间戳',
+      '账类效果缺 meta = effects_meta_missing(detail=meta);纯 tombstone 批缺 fp_hmac 照常(对照)',
+    ],
     mustKill: ['event_at 不是 ISO 时间戳'],
   },
   {
@@ -285,7 +308,11 @@ export const V1_ASM_B1A_MUTATIONS: readonly V1AsmB1aMutation[] = [
       ),
     ],
     tests: ['rsi/store/audit.test.ts'],
-    expectRed: ['audit_key_conflict_includes_at'],
+    expectRed: [
+      'audit_key_conflict_includes_at',
+      'r5_conflict_ignores_at:终态空操作行同键异 at = already;异 reason = 冲突',
+      '撕裂尾:追加前先修尾(丢弃片段),再追加;冲突时零写入(不修尾)',
+    ],
     mustKill: ['audit_key_conflict_includes_at'],
   },
   {
@@ -330,7 +357,11 @@ export const V1_ASM_B1A_MUTATIONS: readonly V1AsmB1aMutation[] = [
       ),
     ],
     tests: ['rsi/store/audit.test.ts', 'rsi/store/apply-once.test.ts'],
-    expectRed: ['audit_full:20000 行再追加', '审计满 + 账待提交'],
+    expectRed: [
+      'audit_full:20000 行再追加',
+      '审计满 + 账待提交',
+      '审计满 + 账已满足:ledger=satisfied、audit=pending、cause=audit_full(审计待补,不是错误)',
+    ],
     mustKill: ['audit_full:20000 行再追加'],
   },
   {
@@ -344,7 +375,11 @@ export const V1_ASM_B1A_MUTATIONS: readonly V1AsmB1aMutation[] = [
       ),
     ],
     tests: ['rsi/store/audit.test.ts'],
-    expectRed: ['撕裂尾:追加前先修尾'],
+    expectRed: [
+      '撕裂尾:追加前先修尾',
+      '部分写(写出一半后失败):文件留下撕裂尾;下一次追加先修尾,最终恰有一份新行、旧行不丢',
+      '撕裂尾修复时 rename 失败:抛 store_io、tmp 清理、文件仍是原样(撕裂尾)',
+    ],
     mustKill: ['撕裂尾:追加前先修尾'],
   },
   {
@@ -408,7 +443,11 @@ export const V1_ASM_B1A_MUTATIONS: readonly V1AsmB1aMutation[] = [
       ),
     ],
     tests: ['rsi/store/audit.test.ts'],
-    expectRed: ['r5_conflict_ignores_at'],
+    expectRed: [
+      'r5_conflict_ignores_at',
+      '同键内容规则:默认含 at;唯一例外是终态空操作行(排除 at);其它字段不同仍冲突',
+      'r5_exception_only_for_self_loop_terminal:真正进入终态的转移(from ≠ to)不适用排除 at 的例外——同键异 at = 冲突;对照:终态空操作行(from = to)异 at 视为同一行',
+    ],
     mustKill: ['r5_conflict_ignores_at'],
   },
   {
@@ -433,7 +472,10 @@ export const V1_ASM_B1A_MUTATIONS: readonly V1AsmB1aMutation[] = [
       ),
     ],
     tests: ['rsi/store/audit.test.ts'],
-    expectRed: ['中间坏行 / schema 非法行 / 空行 / 重复键'],
+    expectRed: [
+      '中间坏行 / schema 非法行 / 空行 / 重复键',
+      'audit_midfile_bad_failclosed:中间坏行 / 重复键 = fail-closed,文件逐字节不变;对照:干净文件可追加',
+    ],
     mustKill: ['中间坏行 / schema 非法行 / 空行 / 重复键'],
   },
   {
@@ -628,7 +670,14 @@ export const V1_ASM_B1A_MUTATIONS: readonly V1AsmB1aMutation[] = [
       ),
     ],
     tests: ['rsi/store/txn.test.ts'],
-    expectRed: ['release_waits_inflight_txn'],
+    expectRed: [
+      'release_waits_inflight_txn',
+      'release_inside_own_txn_rejected:本把锁事务回调内调用 release = release_inside_transaction(否则自锁)',
+      'release_inside_other_lock_txn_not_rejected:别的锁的事务回调内调用本把锁的 release 照常等待并完成',
+      'release 开始前已排队的事务照常执行(不是 closing 之后才进来的)',
+      'concurrent_release_single_promise:并发多次 release 共享同一个 promise,底层各释放一次',
+      'personal 释放失败时 rsi 仍被释放(finally)',
+    ],
     mustKill: ['release_waits_inflight_txn'],
   },
   {
@@ -692,7 +741,10 @@ export const V1_ASM_B1A_MUTATIONS: readonly V1AsmB1aMutation[] = [
       ),
     ],
     tests: ['rsi/store/ledger-plan.test.ts'],
-    expectRed: ['cooldown_equal_today_inactive_and_prunable'],
+    expectRed: [
+      'cooldown_equal_today_inactive_and_prunable',
+      '提交时裁已过期冷却;仍 active 的保留',
+    ],
     mustKill: ['cooldown_equal_today_inactive_and_prunable'],
   },
   {
@@ -820,7 +872,7 @@ export const V1_ASM_B1A_MUTATIONS: readonly V1AsmB1aMutation[] = [
       ),
     ],
     tests: ['rsi/store/backend.test.ts'],
-    expectRed: ['账 / 压缩文件含非法 UTF-8'],
+    expectRed: ['账 / 压缩文件含非法 UTF-8', '审计文件不是合法 UTF-8 = audit_bad_line(utf8)'],
     mustKill: ['账 / 压缩文件含非法 UTF-8'],
   },
   // ---- 验收评审修复(H1 / H2 / H3 / M1 / M2 / M3)的变异锚点 ----
@@ -839,6 +891,9 @@ export const V1_ASM_B1A_MUTATIONS: readonly V1AsmB1aMutation[] = [
       'same_acquisition_two_helds_serialized',
       'shared_closing_and_release',
       'real_handles_same_acquisition_serialized_and_raw_release_gated',
+      'raw_release_waits_for_paused_commit:提交暂停在 commitTmp 之前,外层调用原始 rsi.release() → 等事务提交完才真正释放;之后新事务 txn_closing',
+      'raw_release_inside_own_txn_rejected:事务回调内调用原始 release = release_inside_transaction(锁保持);对照:事务外同一调用正常释放',
+      'registry_shared_per_acquisition:同一对句柄装配两次共用同一张区域注册表(A 开的区域 B 看得见);为同一 acquisition 配另一张表 = registry_conflict 且那张表不被绑定;别的 acquisition 互不影响',
     ],
     mustKill: ['same_acquisition_two_helds_serialized', 'shared_closing_and_release'],
   },
@@ -851,6 +906,8 @@ export const V1_ASM_B1A_MUTATIONS: readonly V1AsmB1aMutation[] = [
       'raw_release_waits_for_paused_commit',
       'raw_release_inside_own_txn_rejected',
       'real_handles_same_acquisition_serialized_and_raw_release_gated',
+      'real_rsi_lock_cannot_pose_as_personal:另一个项目的真实 rsi 锁当 personal 装配 = personal_kind(锁种类是正向验证,不是「不在当前 root 下」);对照:真实 personal 句柄可装配;拒绝后两把句柄都没被挂屏障',
+      'gate_install_is_atomic:personal 句柄已被别的屏障占着 → 装配被拒(release_gate_taken)且 rsi 句柄没被动过;换一个新取的 personal 后能重新装配、事务与释放正常(对照:半绑定下重试会被 rsi 句柄拒绝)',
     ],
     mustKill: ['raw_release_waits_for_paused_commit'],
   },
@@ -1019,6 +1076,7 @@ export const V1_ASM_B1A_MUTATIONS: readonly V1AsmB1aMutation[] = [
       'noop_then_conflicting_content',
       'established_by_other_key_registers_identity',
       'lift_replay_after_prune_noop',
+      'registration_under_watermark_not_committed:事件日 ≤ 水位线的空操作批不登记(键本就会被裁)= satisfied 零写;对照:无水位线时登记',
     ],
     mustKill: ['noop_then_conflicting_content'],
   },
@@ -1047,7 +1105,11 @@ export const V1_ASM_B1A_MUTATIONS: readonly V1AsmB1aMutation[] = [
       ),
     ],
     tests: ['rsi/store/review-fixes.test.ts'],
-    expectRed: ['recover_through_does_not_register'],
+    expectRed: [
+      'recover_through_does_not_register',
+      'recover_same_call_key_conflict_after_satisfied:同一次恢复里第一批(键 K,状态已满足)之后同键异内容的第二批 = 该批 effects_key_conflict,账字节不变;对照:同键同内容 / 异键异内容都正常',
+      'recover_same_call_empty_batch_key_identity:同一次恢复里没有账类效果的批也占键身份——空批之后同键非空批、非空批之后同键空批都是 effects_key_conflict,账字节不变;对照:同键两个空批 / 空批后异键非空批都正常',
+    ],
     mustKill: ['recover_through_does_not_register'],
   },
   {
@@ -1091,16 +1153,27 @@ export const V1_ASM_B1A_MUTATIONS: readonly V1AsmB1aMutation[] = [
   },
   {
     id: 'registry_domain_unbound',
-    clause: 'W0-26 §9 注册表绑定 acquisition(M2)',
+    // 第 3 轮起装配先经 isBoundElsewhere 预检(lock-control.acquireLockControl / adoptRegistry),bindDomain 的抛错成了第二道:
+    // 单独拿掉它看不出差别,所以预检与 bindDomain 一起失效,才是「注册表不绑 acquisition」
+    clause: 'W0-26 §9 注册表绑定 acquisition(M2;预检与 bindDomain 两道一起失效)',
     edits: [
       swap(
         'src/rsi/store/seal.ts',
         'if (this.domain !== null && this.domain !== identity) {',
         'if (false) {',
       ),
+      swap(
+        'src/rsi/store/seal.ts',
+        '    return this.domain !== null && this.domain !== identity;',
+        '    return false;',
+      ),
     ],
-    tests: ['rsi/store/review-fixes.test.ts'],
-    expectRed: ['registry_bound_to_acquisition'],
+    tests: ['rsi/store/review-fixes.test.ts', 'rsi/store/lock-control.test.ts'],
+    expectRed: [
+      'registry_bound_to_acquisition',
+      'registry_foreign_first_assembly_no_binding',
+      'foreign_store_region_rejected',
+    ],
     mustKill: ['registry_bound_to_acquisition'],
   },
   {
@@ -1133,6 +1206,7 @@ export const V1_ASM_B1A_MUTATIONS: readonly V1AsmB1aMutation[] = [
       '满账(2000 条过期冷却)上的空操作批也能腾出条数',
       'watermark_covered_applied_pruned_by_noop_batch',
       'applyOnce 同键重放(already)也做维护提交',
+      'user_veto_maintenance_only_reports_satisfied:否决自身已满足、只有维护性写入(过期冷却被裁)= ledger:satisfied 但账确实被写(satisfied ≠ 零写盘);对照:全新否决 = committed',
     ],
     mustKill: ['expired_cooldown_pruned_by_noop_batch', 'applyOnce 同键重放(already)也做维护提交'],
   },
@@ -1203,7 +1277,10 @@ export const V1_ASM_B1A_MUTATIONS: readonly V1AsmB1aMutation[] = [
       ),
     ],
     tests: ['rsi/store/review-fixes.test.ts'],
-    expectRed: ['recover_same_call_key_conflict_after_satisfied'],
+    expectRed: [
+      'recover_same_call_key_conflict_after_satisfied',
+      'recover_same_call_empty_batch_key_identity:同一次恢复里没有账类效果的批也占键身份——空批之后同键非空批、非空批之后同键空批都是 effects_key_conflict,账字节不变;对照:同键两个空批 / 空批后异键非空批都正常',
+    ],
     mustKill: ['recover_same_call_key_conflict_after_satisfied'],
   },
   {
@@ -1217,7 +1294,10 @@ export const V1_ASM_B1A_MUTATIONS: readonly V1AsmB1aMutation[] = [
       ),
     ],
     tests: ['rsi/store/review-fixes.test.ts'],
-    expectRed: ['recover_same_call_key_conflict_after_satisfied'],
+    expectRed: [
+      'recover_same_call_key_conflict_after_satisfied',
+      'recover_same_call_empty_batch_key_identity:同一次恢复里没有账类效果的批也占键身份——空批之后同键非空批、非空批之后同键空批都是 effects_key_conflict,账字节不变;对照:同键两个空批 / 空批后异键非空批都正常',
+    ],
     mustKill: ['recover_same_call_key_conflict_after_satisfied'],
   },
   {
