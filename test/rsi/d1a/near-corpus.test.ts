@@ -296,7 +296,7 @@ describe('语料解析', () => {
   });
 
   it('非法行逐条报错,带「文件:行号」,不回显内容', () => {
-    const secret = 'SECRET-TEXT-VALUE';
+    const leaked = 'SECRET-TEXT-VALUE';
     const r = parseCorpus([
       {
         name: 'x.jsonl',
@@ -304,7 +304,7 @@ describe('语料解析', () => {
           '{not json',
           '[1]',
           line({ ...good, id: '' }),
-          line({ ...good, label: 'maybe', vetoed: secret }),
+          line({ ...good, label: 'maybe', vetoed: leaked }),
           line({ ...good, vetoed: 5 }),
           line({ ...good, kind: 3 }),
           line(good),
@@ -322,7 +322,7 @@ describe('语料解析', () => {
       'x.jsonl:8: duplicate id c1',
     ]);
     expect(r.cases.map((c) => c.id)).toEqual(['c1']);
-    expect(r.errors.join('\n')).not.toContain(secret);
+    expect(r.errors.join('\n')).not.toContain(leaked);
   });
 });
 

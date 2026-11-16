@@ -237,7 +237,7 @@ export function evaluateCorpus(cases: readonly CorpusCase[], opts: EvalOptions =
           fpSet.add(s.id);
         } else kTn++;
       }
-      // 最坏密钥:严格更大才替换(并列取第一把),id 列表随它走,与计数同一口径
+      // 最坏密钥(严格更大才替换,并列取第一把),id 列表随它走,与计数同一口径
       if (kFn > fn) {
         fnWorstKey = ki;
         fnWorst = kFnIds;
