@@ -1695,6 +1695,13 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
         'landed.push(await d.keyedEffects.applyOnce(vetoEffectKey(e), [e]));',
         'void e;',
       ),
+      // 复合变异:命令层 `guardUserVeto().ensure()` 在没调过 `veto:` 键时补调(`directVeto` 的终态 noop 分支),单独关掉引擎 E1 的落地会被补调掩盖(等价变异);
+      // 只关这一处补调(不动回滚路径的 ensure,免得多红表外用例),「只写黑名单」才失守
+      swap(
+        'src/rsi/auto/write/veto.ts',
+        "  if (r.kind === 'noop') {\n    const extra = await guard.ensure();\n",
+        "  if (r.kind === 'noop') {\n    const extra = null;\n",
+      ),
     ],
     tests: ['rsi/auto/write-commands.test.ts'],
     expectRed: [

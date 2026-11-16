@@ -901,6 +901,7 @@ export const V1_ASM_C1A_MUTATIONS: readonly V1AsmC1aMutation[] = [
     tests: ['rsi/stage/c1-growth.test.ts'],
     expectRed: [
       '铸造之后回合变未决',
+      'sealed_interval_after_mint_voids_pass',
       '冻结的取值',
       'growth_stage_missing_op_growth_unwired(先于任何其它码,零 reader 调用)',
       '按 op 的检查子集:reader 调用序列逐 op 钉死',
@@ -1074,6 +1075,7 @@ export const V1_ASM_C1A_MUTATIONS: readonly V1AsmC1aMutation[] = [
     tests: ['rsi/stage/c1-growth.test.ts'],
     expectRed: [
       '本轮未决 → unsettled',
+      'sealed_interval_halt_denies_growth_same_round',
       '冻结的取值',
       'growth_stage_missing_op_growth_unwired(先于任何其它码,零 reader 调用)',
       '按 op 的检查子集:reader 调用序列逐 op 钉死',

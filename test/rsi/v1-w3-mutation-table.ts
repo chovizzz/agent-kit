@@ -39,6 +39,7 @@ const RECORD = `${P}candidate-record.ts`;
 const REPO = `${P}candidate-repo.ts`;
 const TABLE = `${P}transition-table.ts`;
 const TRANS = `${P}transition.ts`;
+const TERMINAL_EFFECTS = `${P}terminal-effects.ts`;
 
 const T_STEP = 'rsi/personal/w3-step.test.ts';
 const T_GATES = 'rsi/personal/w3-gates.test.ts';
@@ -849,6 +850,14 @@ export const V1_W3_MUTATIONS: readonly V1W3Mutation[] = [
         file: TRANS,
         anchor: "event.kind === 'revocation_reconcile' && event.basis === 'veto'",
         replacement: 'false',
+      },
+      // 复合变异:W7b 起终态批次 E2(`terminalEffectsOf`)对 vetoed 终态同样写黑名单,而对账 veto 恒进终态,E1 被 E2 覆盖(单独关 E1 是等价变异);
+      // 两处同时失效,「veto 依据仍写指纹黑名单」才会失守
+      {
+        file: TERMINAL_EFFECTS,
+        anchor:
+          "out.push({ type: 'blacklist_veto', id: rec.id, content_sha256: rec.content_sha256 });",
+        replacement: 'void 0;',
       },
     ],
     tests: [T_RECON],
