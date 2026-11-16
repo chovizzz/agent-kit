@@ -353,3 +353,45 @@ export function gateFirstRead(
     },
   };
 }
+
+/**
+ * 编码后恰好 `bytes` 字节(UTF-8)的合法压缩文档:全零计数的 `by_kind` 键垫出体积(`lines = 0`,各和不变量成立),
+ * 40 字符的固定键 + 一个可变长度的键补齐余数。字节数由 `canonicalJson` 实测,不靠手算;凑不出就抛。
+ */
+export function paddedCompaction(
+  bytes: number,
+  o: { gen?: number; through?: string; month?: string } = {},
+): {
+  schema_version: 1;
+  gen: number;
+  through: string;
+  months: Record<string, unknown>;
+} {
+  const month = o.month ?? '2026-09';
+  const doc = (n: number, len: number): ReturnType<typeof paddedCompaction> => {
+    const byKind: Record<string, number> = {};
+    for (let i = 0; i < n; i++) byKind[`k${i.toString(16).padStart(39, '0')}`] = 0;
+    byKind['v'.repeat(len)] = 0;
+    return {
+      schema_version: 1,
+      gen: o.gen ?? 1,
+      through: o.through ?? '2026-11-01',
+      months: {
+        [month]: {
+          lines: 0,
+          deleted: 0,
+          derived_missing: 0,
+          by_kind: byKind,
+          transition_by_to: {},
+        },
+      },
+    };
+  };
+  const size = (n: number, len: number): number =>
+    Buffer.byteLength(canonicalJson(doc(n, len)), 'utf8');
+  const per = size(2, 1) - size(1, 1);
+  const n = Math.floor((bytes - size(0, 1)) / per);
+  const len = 1 + (bytes - size(n, 1));
+  if (len < 1 || len > 64 || size(n, len) !== bytes) throw new Error('cannot pad to exact size');
+  return doc(n, len);
+}

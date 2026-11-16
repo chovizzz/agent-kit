@@ -8,7 +8,8 @@
  */
 import type { RsiAuditCompaction } from '../../contracts/rsi-store.js';
 import { StoreError } from './errors.js';
-import type { TxnPorts } from './ports.js';
+import type { HeldStore, LedgerRecoveryPort, TxnPorts } from './ports.js';
+import type { SealRegistry } from './seal.js';
 
 export interface CompactionTxnPort {
   /** 文件缺失 = `null`;不受支持 → `compaction_unsupported` */
@@ -29,4 +30,33 @@ export function compactionPortOf(ports: TxnPorts): CompactionTxnPort {
   const c = compactionPorts.get(ports);
   if (c === undefined) throw new StoreError('txn_closed', 'not_a_transaction_port');
   return c;
+}
+
+/**
+ * 一次装配的私有关联:真实协调器(`HeldStore`)→ 它所属 acquisition 的区域注册表与恢复端口。
+ * `Compactor` 的压缩租约取自注册表,所以注册表必须来自协调器自己的装配,不能信调用方拼的字段(`{ ...store, registry: new SealRegistry() }` 会在空表上拿租约,绕过真实未关闭区域)。
+ * 仅 `assembleRsiStore` 绑定;`compactorOf` / `createCompactor` 校验。
+ */
+export interface CompactorAssembly {
+  registry: SealRegistry;
+  recovery: LedgerRecoveryPort;
+}
+const assemblies = new WeakMap<HeldStore, CompactorAssembly>();
+
+export function bindCompactorAssembly(held: HeldStore, a: CompactorAssembly): void {
+  assemblies.set(held, a);
+}
+
+/** 校验在任何 I/O 之前;`recovery` 不给 = 只验注册表(`createCompactor` 的恢复端口是可注入的测试接缝) */
+export function checkCompactorAssembly(
+  held: HeldStore,
+  registry: SealRegistry,
+  recovery?: LedgerRecoveryPort,
+): void {
+  const a = assemblies.get(held);
+  if (a === undefined) throw new StoreError('lock_cap_mismatch', 'compactor_unbound');
+  if (a.registry !== registry) throw new StoreError('lock_cap_mismatch', 'compactor_registry');
+  if (recovery !== undefined && a.recovery !== recovery) {
+    throw new StoreError('lock_cap_mismatch', 'compactor_recovery');
+  }
 }

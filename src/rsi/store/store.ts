@@ -23,6 +23,7 @@ import type {
   UserVetoPort,
 } from './ports.js';
 import { createSealGuard, type SealRegistry } from './seal.js';
+import { bindCompactorAssembly } from './compaction-port.js';
 import { acquireLockControl } from './lock-control.js';
 import { createHeldStore } from './txn.js';
 
@@ -75,11 +76,13 @@ export function assembleRsiStore(deps: RsiStoreDeps): RsiStore {
       ? { resolve: deps.reconcile.resolve.bind(deps.reconcile) }
       : {}),
   };
+  const recovery = createLedgerRecovery(apply);
+  bindCompactorAssembly(held, { registry, recovery });
   return {
     held,
     sink: createKeyedEffectSink(apply),
     userVeto: createUserVetoPort(apply),
-    recovery: createLedgerRecovery(apply),
+    recovery,
     appender: createAuditAppender({
       held,
       registry,

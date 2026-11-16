@@ -42,7 +42,7 @@ import type {
 import { unwiredReconcileSource } from './reconcile.js';
 import type { SealRegistry } from './seal.js';
 import type { RsiStore } from './store.js';
-import { compactionPortOf } from './compaction-port.js';
+import { checkCompactorAssembly, compactionPortOf } from './compaction-port.js';
 
 export interface CompactorDeps {
   /** 注意:必须是 `createHeldStore` 造出的协调器(压缩端口经 `compaction-port.ts` 的 `compactionPortOf` 取自它的事务端口);不是任意结构兼容的 `HeldStore` 都可替换——这是存储核内部装配 */
@@ -135,6 +135,8 @@ async function cleanupSteps(p: TxnPorts, w: UtcDay, today: UtcDay): Promise<Comp
 }
 
 export function createCompactor(deps: CompactorDeps): Compactor {
+  // 装配完整性(任何 I/O 之前):注册表必须是该协调器所属 acquisition 的那一张,否则租约检查落在别的表上
+  checkCompactorAssembly(deps.held, deps.registry);
   const reconcile = deps.reconcile ?? unwiredReconcileSource;
 
   const blocked = (
@@ -240,6 +242,8 @@ export function compactorOf(
   store: Pick<RsiStore, 'held' | 'registry' | 'recovery'>,
   opts: { source?: ReconcileSource; clock?: () => Date } = {},
 ): Compactor {
+  // 三件套必须取自同一次装配(held / registry / recovery 任一被替换或混用 = `lock_cap_mismatch`,零 I/O)
+  checkCompactorAssembly(store.held, store.registry, store.recovery);
   return createCompactor({
     held: store.held,
     registry: store.registry,

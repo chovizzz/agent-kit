@@ -10,11 +10,13 @@ import {
   RsiAuditCompactionSchema,
   type RsiEffectsLedger,
 } from '../../../src/contracts/rsi-store.js';
-import { decodeLedger } from '../../../src/rsi/store/backend.js';
-import { createCompactor } from '../../../src/rsi/store/compactor.js';
+import { COMPACTION_READ_MAX, decodeLedger } from '../../../src/rsi/store/backend.js';
+import { compactorOf, createCompactor } from '../../../src/rsi/store/compactor.js';
+import { SealRegistry } from '../../../src/rsi/store/seal.js';
 import { StoreError } from '../../../src/rsi/store/errors.js';
 import { RsiLockError } from '../../../src/rsi/lock-error.js';
 import type {
+  HeldStore,
   LedgerRecoveryPort,
   ReconcileSource,
   TxnPorts,
@@ -28,6 +30,7 @@ import {
   gateCommit,
   gateFirstRead,
   makeCWorld,
+  paddedCompaction,
   rec,
   rowOfEntry,
   seedAudit,
@@ -49,6 +52,8 @@ import {
   obsRow,
   rawAppend,
   seed,
+  expectSameBytes,
+  faulty,
   trow,
   veto,
   type FsKind,
@@ -87,6 +92,14 @@ async function basic(kind: FsKind): Promise<CWorld> {
   return w;
 }
 
+const seedPadded = async (w: CWorld, bytes: number): Promise<Buffer> => {
+  await seedCompaction(
+    w,
+    paddedCompaction(bytes, { gen: 1, through: '2026-09-15', month: '2026-08' }),
+  );
+  return (await w.bytes(FILES.compaction)) as Buffer;
+};
+
 describe.each(KINDS)('Compactor 推进(%s)', (kind) => {
   it('P1–P4 端到端:恢复补账 → 区间计数(文件行 deleted、缺失 derived_missing)→ 压缩文件 gen 1 → 审计去掉 ≤ W 行 → 账裁键;恢复在事务外只调一次', async () => {
     const w = await basic(kind);
@@ -118,6 +131,36 @@ describe.each(KINDS)('Compactor 推进(%s)', (kind) => {
     expect(l.blacklist.map((b) => b.candidate_id)).toEqual([ID]);
     expect(l.tombstones.map((t) => t.id)).toEqual([ID]);
     expect(await w.tmpFiles()).toEqual([]);
+  });
+
+  it('compaction_incremental_merge_over_limit_refused:增量合并后超过读取上限 = compaction_unsupported(too_large),P2 前拒绝:无 rename、旧压缩文件与审计字节不变;对照:余量足够则推进且结果 ≤ 上限', async () => {
+    const r = terminalRecord();
+    let calls: string[] = [];
+    const w = await makeCWorld(kind, {
+      records: [r],
+      wrap: (inner) => {
+        const f = faulty(inner, []);
+        calls = f.calls;
+        return f;
+      },
+    });
+    await seedAudit(w, [rowOfEntry(ID, r.transitions[0] as never), obsRow(OBS_AT), RECENT]);
+    const oldCompaction = await seedPadded(w, COMPACTION_READ_MAX - 50);
+    const oldAudit = await w.bytes(FILES.audit);
+    const e = await rejects(w.compactor.compact({ through: W }));
+    expect([e.code, e.detail]).toEqual(['compaction_unsupported', 'too_large']);
+    expect(calls.filter((c) => c === `commitTmp:${FILES.compaction}`)).toEqual([]);
+    expectSameBytes(await w.bytes(FILES.compaction), oldCompaction);
+    expectSameBytes(await w.bytes(FILES.audit), oldAudit);
+    expect(await w.tmpFiles()).toEqual([]);
+
+    const w2 = await makeCWorld(kind, { records: [r] });
+    await seedAudit(w2, [rowOfEntry(ID, r.transitions[0] as never), obsRow(OBS_AT), RECENT]);
+    await seedPadded(w2, COMPACTION_READ_MAX - 5000);
+    expect(await w2.compactor.compact({ through: W })).toMatchObject({ kind: 'advanced' });
+    const after = await w2.bytes(FILES.compaction);
+    expect(after !== null && after.length <= COMPACTION_READ_MAX).toBe(true);
+    expect(await w2.s.seal.open(w2.personal)).toBeDefined(); // 读得回:水位线可读,区域可开
   });
 
   it('已满足的批次不调恢复端口(只对 P1 判据未满足者调);再跑一次 = noop 且字节不变', async () => {
@@ -662,5 +705,94 @@ describe.each(KINDS)('旧批次重放安全(%s)', (kind) => {
       expect(e.code).toBe('sealed_unknown_event');
     }
     expect(await snap(w)).toEqual(before);
+  });
+});
+
+const codeOfSync = (fn: () => unknown): [string, string | undefined] => {
+  try {
+    fn();
+  } catch (e) {
+    if (e instanceof StoreError) return [e.code, e.detail];
+    throw e;
+  }
+  throw new Error('expected throw');
+};
+
+describe.each(KINDS)('compactorOf 装配完整性(%s)', (kind) => {
+  it('compactor_assembly_replaced_registry_refused:已有未关闭区域时,对象展开替换注册表 = lock_cap_mismatch(构造期拒绝,零 I/O、字节不变);对照:真装配照拒 region_open、区域关闭后照常压缩', async () => {
+    let calls: string[] = [];
+    const w = await makeCWorld(kind, {
+      records: [terminalRecord()],
+      wrap: (inner) => {
+        const f = faulty(inner, []);
+        calls = f.calls;
+        return f;
+      },
+    });
+    await seedAudit(w, [obsRow(OBS_AT), RECENT]);
+    const region = await w.s.seal.open(w.personal);
+    const before = await snap(w);
+    const n = calls.length;
+    const reads = w.records.reads;
+    const clock = (): Date => new Date(w.clock.iso);
+    const forged = { ...w.s, registry: new SealRegistry() };
+    expect(codeOfSync(() => compactorOf(forged, { source: w.source, clock }))).toEqual([
+      'lock_cap_mismatch',
+      'compactor_registry',
+    ]);
+    expect(
+      codeOfSync(() =>
+        createCompactor({
+          held: w.s.held,
+          registry: new SealRegistry(),
+          recovery: w.s.recovery,
+          clock,
+          reconcile: w.source,
+        }),
+      ),
+    ).toEqual(['lock_cap_mismatch', 'compactor_registry']);
+    expect(calls.length).toBe(n);
+    expect(w.records.reads).toBe(reads);
+    expect(await snap(w)).toEqual(before);
+    // 对照:真装配(共用注册表)租约生效
+    const genuine = compactorOf(w.s, { source: w.source, clock });
+    expect((await rejects(genuine.compact({ through: W }))).code).toBe('region_open');
+    expect(await snap(w)).toEqual(before);
+    region.close();
+    expect(await genuine.compact({ through: W })).toMatchObject({ kind: 'advanced' });
+  });
+
+  it('compactor_assembly_mixed_acquisitions_refused:混用两个 acquisition 的 held / registry / recovery,或传入非协调器造的 held = lock_cap_mismatch,字节不变', async () => {
+    const a = await makeCWorld(kind, { records: [terminalRecord()] });
+    const b = await makeCWorld(kind, { records: [terminalRecord()] });
+    await seedAudit(a, [obsRow(OBS_AT), RECENT]);
+    const before = await snap(a);
+    const clock = (): Date => new Date(a.clock.iso);
+    const mk = (s: Pick<typeof a.s, 'held' | 'registry' | 'recovery'>) => () =>
+      compactorOf(s, { source: a.source, clock });
+    expect(
+      codeOfSync(mk({ held: a.s.held, registry: b.s.registry, recovery: a.s.recovery })),
+    ).toEqual(['lock_cap_mismatch', 'compactor_registry']);
+    expect(
+      codeOfSync(mk({ held: b.s.held, registry: a.s.registry, recovery: a.s.recovery })),
+    ).toEqual(['lock_cap_mismatch', 'compactor_registry']);
+    expect(
+      codeOfSync(mk({ held: a.s.held, registry: a.s.registry, recovery: b.s.recovery })),
+    ).toEqual(['lock_cap_mismatch', 'compactor_recovery']);
+    const fake = { transaction: async () => undefined } as unknown as HeldStore;
+    expect(codeOfSync(mk({ held: fake, registry: a.s.registry, recovery: a.s.recovery }))).toEqual([
+      'lock_cap_mismatch',
+      'compactor_unbound',
+    ]);
+    expect(await snap(a)).toEqual(before);
+    // 对照:同一 acquisition 的三件套照常压缩
+    const ok = compactorOf(
+      { held: a.s.held, registry: a.s.registry, recovery: a.s.recovery },
+      {
+        source: a.source,
+        clock,
+      },
+    );
+    expect(await ok.compact({ through: W })).toMatchObject({ kind: 'advanced' });
   });
 });
