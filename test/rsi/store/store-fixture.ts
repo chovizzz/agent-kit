@@ -3,6 +3,7 @@
  * 假锁(`assertHeld` 丢锁 = `RsiLockError('lock_lost')`)、世界构造(`real` = 真 `safeStoreFs` + 临时目录;`mem` = 内存)。**不调用被测的合并 / 规划函数**:期望值由测试自己手写。
  */
 import * as path from 'node:path';
+import { expect } from 'vitest';
 import type { RsiAuditLine } from '../../../src/contracts/rsi-personal.js';
 import {
   RSI_AUDIT_COMPACTION_FILE,
@@ -382,6 +383,19 @@ export const compactionDoc = (through: string | null, gen = 1) => ({
   through,
   months: {},
 });
+
+/**
+ * 字节相等断言(大文件用)。**不要**对 MB 级 Buffer 用 `expect(...).toEqual(...)`:vitest 逐元素比较,2.5MB 要 ~26s(实测,seal),
+ * 一条用例比两次再叠加负载就撞 120s 超时。这里用 `Buffer.equals`(memcmp),失败时给长度与首个差异下标。
+ */
+export function expectSameBytes(actual: Buffer | null, expected: Buffer | null): void {
+  if (actual === null || expected === null) {
+    expect(actual === null).toBe(expected === null);
+    return;
+  }
+  expect(actual.length).toBe(expected.length);
+  expect(actual.equals(expected) ? -1 : actual.findIndex((b, i) => b !== expected[i])).toBe(-1);
+}
 
 let fullAuditCache: string | null = null;
 /** 20000 行(审计硬线)的合法审计文件;键从 0x100000 起,不与测试里常用的 hex16(1..) 冲突。进程内只构造一次 */
