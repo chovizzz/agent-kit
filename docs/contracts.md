@@ -5384,6 +5384,9 @@ agent-kit judge --confirm-reflector --run <run_id> [--proposal <id>]… --write 
 - R20-18.32a **N4 订正 #5(用户 2026-11-03 第三批拍板 Q-N4-9 = B;取代关系)**:用户拍板「kit 调起、厂商可证明的 `spawned` 裁决 `reject` / `injection_suspected` 也终止对应个人层候选」。据此:①**取代** R20-18.32 末句与 R20-18.25 ④ 里「只对 `session_confirmed`」的限定、R20-18.34 ④(「`judge.provenance = session_confirmed`」→ 「`session_confirmed` 与 `proven` 的 `spawned` 均可」)、忽略原因 `not_session_confirmed`(→ `not_verified`)、R20-18.38 矩阵的 `provenance` 取值、R20-18.39 的变异「`spawned` 记录被消费」(→「未通过校验 / 非 `proven` 的记录被消费」);R20-18.35 的转移、原因码、`terminal_reason` 优先级、幂等键(取信号的 `binding_sha256`;`spawned` 记录没有该字段时取 `sha256(canonicalJson(judge 记录))`,即整条记录的内容哈希,`--run-llm` 重评同一提案不会发生:`judge` 已存在则跳过)**不变**;②**不变**:仍只向终止方向——`accept` / `revise` / 任何 `overfit_risk` / 记录缺失 / 校验失败 / 非 `proven` 的 `spawned`,对候选零影响;机器闸 G0–G9 不读 `judge` 字段(R20-18.25 ②);③**为什么 `proven` 的 `spawned` 不要求配对**:终止信号只会让候选更早结束,其可信度门槛是「这条裁决确实由 kit 调起的某家厂商给出」(裁判侧 `proven`),不需要「与反思器跨厂商」——跨厂商是放行的前提,不是终止的前提;④`rsi show`(R20-18.37)对 `spawned` 的展示不变。
 - R20-18.33 **关联字段**:`PersonalLifecycleRecord`(R21-3.7)追加可选键 `source_proposal`:`null | {run_id, proposal_id}`(`strictObject`;`run_id` 过 `RunIdSchema`,`proposal_id` 为 `YYYY-MM-DD-NNN`)。**缺失 = `null` = 无关联 = 不消费、不展示**;只增字段不改既有字段(§1)。`.state/rsi/candidates/<id>.json` 工作副本镜像同键。**写入方**:仅 worker,在候选创建那一次提交(`(无) → proposed`,reason `ingested`,R21-4.1)里,由持调用方锁(R21-3.6:`personal/lock`,正常路径另持 `rsi/lock`;锁序 R21-3.3)的 `commitPersonal` 写入权威副本后再更新工作副本(R21-3.8 同步检查点);候选之后该键**不可变**。来源:**§21 没有逐字定义「暂存提案 → 候选」的创建步骤**(§21.18 第 3 行只说 ingest 后进闸队列)。本订正按**一提案一候选**写:worker 创建候选时读的就是 `.state/reflect/<run_id>/proposals/<proposal_id>.yaml`,其 `run_id` / `proposal_id` 已知;若实装中一提案可拆成多候选、或候选正文由聚类合成而非提案原文,则关联语义不成立,见待定夺 Q-N4-10;候选由其它来源产生(`extension_candidate`、`exec_manifest`、`contrib` 等)时为 `null`。**读取方**:worker(R20-18.34–18.35)与 `rsi show`(R20-18.37);`rsi report`、`rsi auto status`、hint、其它命令**不读**。旧记录:V1 尚未实装,理论上无存量记录;若出现无该键的记录,按 `null` 处理;旧版读到含该键的记录 → `strictObject` 拒 → `candidate_invalid`(安全阻断,与 R21-3.8 一致)。
 - R20-18.34 **自动入口读取该记录的只读协议**(唯一实现 `src/rsi/personal/judge-signal.ts`,纯读取 + 纯判定):输入 `source_proposal`,输出信号 `none | {kind: reject|injection, binding_sha256}` 与一个忽略原因(只进审计 `kind=judge_signal` 一行且**候选首次评估写一行基线(含结果为 `none` 的情形),此后仅在结果变化时写**,避免每 tick 刷屏;`kind=judge_signal` 登记进 `RsiAuditLine` 的 `kind` 封闭枚举(`src/contracts/rsi.ts`,与新原因码同提交)。`no_link | run_gone | run_excluded | unreadable | invalid | rule_changed | not_verified | not_tightening`(N4 订正 #5:原 `not_session_confirmed` 更名 `not_verified` = 记录既非通过校验的 `session_confirmed`、也非 `tier = proven` 的 `spawned`,含缺失 / 校验失败),封闭集合,只进审计的 `reason`,不写别处)。步骤,首个不满足即 `none`:①`reflect/<run_id>/` 是真实目录、无 `TAINTED` 标记,且该 run 的证据归属**按当前排除与索引现算**(R20-4.6)全部为「采集中」——被排除(X)、归属不明(U)、被 purge、被 taint、目录不存在的 run **一律不消费**;②读 `proposals/<proposal_id>.yaml` **只经既有只读安全读取器**(不跟随符号链接、普通文件、`nlink = 1`、属主为当前 uid、≤ 64 KiB,与 `pending.ts` 同族),不用 `src/judge/store.ts` 的读写原语;③`ProposalSchema` 解析通过,`id` 等于 `proposal_id`、`reflector.run_id` 等于 `run_id`、`layer = personal`;④记录来源与校验(**N4 订正 #5**,取代原「`judge.provenance = session_confirmed` 且通过 R20-18.18」):`judge.provenance = session_confirmed` 且通过 R20-18.18(含 `binding_sha256` 重算),**或** `judge.provenance` 为 `spawned`(含缺省)且 `vendor.ts` 的裁判侧证据 `tier = proven`(R20-18.17 规则 2:最后一跳 ok、`provider` = 最后一跳槽位、最后一跳厂商 = `judge.vendor`、`JUDGE_VENDOR_UNPROVEN` 复算通过;**只看裁判侧,不要求反思器侧层级**——终止信号不是放行,不需要配对);两者都是 `vendor.ts` 的纯函数(`judgeEvidence`),`judge-signal.ts` 不重写判据;⑤暂存规则文件 `rules/personal/<target>.md`(`<target>` = 提案唯一的 `targets[0]`;`judge` 与 `judge --ingest` 的装载约束都是 `op = add` 且 `targets.length = 1`,否则该提案不能被评审,见 `proposal_unsupported`)的 `ruleSha256` 等于 `judge.rule_sha256`(裁决评审的就是暂存里的这份文本);⑥`verdict = reject` 或 `injection_suspected = true`(否则 `not_tightening`)。**import 闭包**:只许 `src/contracts/**`、`src/rsi` 的只读读取器与归属判定;`ruleSha256`(唯一实现在 `src/lifecycle/checks.ts`,依赖 `src/io/canonical-text.ts`)作为**纯函数经依赖注入传入** `judge-signal.ts`,由调用方(worker 装配处)注入,模块自身不 import `src/lifecycle/**`;**禁止** `src/commands/judge-ingest.ts`、`src/judge/ingest/**`、`src/io/tty.ts`、`src/judge/store.ts` 的写原语、`safe-fs` 写 API(lint + import-closure 测试,R20-18.25 ① 同口径)。读取失败 / 超时 / 不可读一律视为 `none`(**只会少收紧,不会放行**;这不是闸,不适用「闸不可用则候选停住」,但也不得因此报错中断 worker)。该模块**零写入**:不改、不删、不 taint 暂存区(R20-4.7 的 taint 义务不新增)。
+
+> **冻结后订正 W0-27(2026-11-15)**:**取代**本条末句「读取失败 / 超时 / 不可读一律视为 `none`」的字面——转移侧结果仍是 `none`(只会少收紧、不改状态、不中断 worker、不报错),但判定把「读不出」与「确实没有裁决」分成不同取值,供增影响闸使用:**读不出**(运行期 IO 错、超时、读到一半被换、读端口未装配、端口返回非法值、`source_proposal` 自身损坏)的候选**本 tick**(同一次 worker tick)不得增影响(`shadow → canary`、授予);另有三种来源缺失同样拒绝本 tick 增影响(装配块 C 的 G6 口径):`source_proposal` 为 `null` / 缺失、来源 run 目录不存在(`run_gone`;`reflect --gc` 只删不含提案的 run,候选的来源 run 含提案,不该消失)、`TAINTED` 标记读不出。内容类失败(`invalid`:解析 / id / layer / 校验失败)、`rule_changed`、`not_verified`、`not_tightening`、`run_excluded` **不**阻增影响。⑤ 补口径:`spawned` 记录缺 `rule_sha256` 不算通过(`rule_changed`);规则文本无法哈希 → `invalid`;`op ≠ add` 或 `targets` 不是单目标 → `invalid`;`spawned` 记录没有 `binding_sha256`,取**解析后**整条记录(含缺省补上的 `provenance`)的规范 JSON 哈希,显式写与缺省写 `provenance` 结果相同。`ruleSha256` 的唯一实现搬到 `src/lifecycle/rule-hash.ts`(`checks.ts` 再导出,行为不变):`checks.ts` 的 import 闭包含写出口(经 `reflect/stage.ts` 的 `safe-fs`),读侧不得 import。正文见 §21.24 W0-27。
+
 - R20-18.35 **状态机的精确改动**(R21-4.1 追加,事件 `judge_reject`,由 worker 在每次 tick 对「非终态且 `source_proposal` 非 null」的候选评估;评估位于 G0–G7 之前且**不是闸**,不占 G 序列,不改 G7 退火名额):
   - `proposed | shadow | blocked → rejected`:守卫 = R20-18.34 给出非 `none` 信号;转移 reason `judge_reject`(`kind = reject`)或 `judge_injection`(`kind = injection`,两者同时成立取 `judge_injection`);`terminal_reason = judge_rejected`。无部署,直接终态。
   - `canary | adopted | stable → rolling_back`:同守卫;`target_terminal = rolled_back`;`terminal_reason = judge_rejected`;经 R21-9.1 四段(先停注入,R21-4.4)。
@@ -5393,9 +5396,18 @@ agent-kit judge --confirm-reflector --run <run_id> [--proposal <id>]… --write 
   - **新原因码**(封闭枚举,登记在 `src/contracts/rsi.ts`(转移 `reason` 与 `terminal_reason` 的 R21-4.6 枚举,与 R21-12.9 的稳定码枚举同一文件但各自一份),并出现在审计 `reason` 中):转移 `judge_reject`、`judge_injection`;终态 `judge_rejected`。终态候选的墓碑 / 冷却沿用 `rejected` 终态既有规则,**不写** `veto` 黑名单(R21-11.3)。
   - 每条新转移按 R21-4.5 各有「守卫为假不转移」「同一 `idem_key` 只转移一次」用例,每个非终态各一个「信号 + `veto` / taint 并发」用例。
 - R20-18.35a **与 R21-2.2 的关系**:`judge_reject` 属「减少影响」的终止类事件,与 `veto`、taint 同列——未开 `[rsi.auto] enabled`、`auto_paused`、`RSI_AUTO_PHASE` 不足时**照常执行**,不受暂停阻挡;`rolling_back`(`target_terminal = expired`)等已在回滚中的候选收到该事件时,`target_terminal` 按 R21-4.4a ① 升级为 `rolled_back`。
+
+> **冻结后订正 W0-27(2026-11-15)**:「照常执行」订正为:**不受** `[rsi.auto] enabled`、`auto_paused`、L0 节流阻挡(这几项只管增影响);phase 以引擎能力表为准(`transition_to_rejected` V1a、`rollback_four_phase` V1b)——phase 不足时没有任何候选能处于对应状态,无事可做。正文见 §21.24 W0-27。
+
 - R20-18.36 **隐私与 taint**:被排除、归属不明、purge、taint 的 run 不消费(R20-18.34 ①);候选已因本信号终止后,run 被 taint 时仍按 R21-11.5 的既有 taint 路径处理该候选,不再回读暂存区;worker 的评估不写暂存区、不拿比现有更多的锁。
 - R20-18.37 **展示(Q-N4-4 = B)**:`rsi show <id>`(§21 候选详情类展示面目前仅此一处)追加固定段「关联提案裁决」:`source_proposal` 非 null 时按 R20-18.34 ①②③ 读取,显示 `judge=none`(无裁决;R20-18.34 ① 不满足即 `run_gone` / `run_excluded` 时显示 `judge=none`,不暴露原因;②③ 的读取 / 解析失败、④ 的校验失败、⑤ `rule_changed` 都显示 `judge=invalid`;⑥ 不适用于展示)/ `judge=invalid`(解析或校验失败)/ 有裁决时 `judge_provenance`、`verdict`、`overfit`、`injection`;`session_confirmed` 另显示 `declared agent / vendor / model` 与 `SELF_REPORT_LABEL_JUDGE`,`spawned` 显示 `vendor / model` 与 `VENDOR_PROVEN_LABEL`;`source_proposal` 为 null 不出该段。输出只含枚举、id、token,过 R21-12 输出例外同口径的控制字符 / bidi 清洗与泄漏闸,**无路径、无 rationale / 证据 / `notes`**,带 R21-1.9 标签;`rsi report`、`rsi auto status` 不显示。展示读取失败只影响该段(`judge=invalid`),不改 `rsi show` 的退出码。
+
+> **冻结后订正 W0-27(2026-11-15,落地口径)**:`judge=none` / `judge=invalid` 与字段名按本条原文落地:无 `judge` 键、`run_gone` / `run_excluded` → `judge=none`;读取 / 解析 / 校验失败、`rule_changed`、读端口未装配或抛错 → `judge=invalid`(不另造 `unavailable` 取值);有裁决时 `judge_provenance` 取 `spawned` / `session_confirmed`,`overfit` 取 `low` / `medium` / `high`,`injection` 取 `true` / `false`;`declared` 是 `agent` / `vendor` / `model` 三项。展示与 worker 共用同一份 R20-18.34 ①–⑤ 判定,⑥ 不适用于展示(已校验的 `accept` 记录照常显示)。正文见 §21.24 W0-27。
+
 - R20-18.38 **验收(N4-2)**:信号表夹具——`{provenance: spawned proven / spawned 非 proven(厂商不可复算)/ session_confirmed 有效 / 无效 / 缺失} × {verdict: accept / revise / reject} × {injection: 真 / 假} × {layer: personal / team} × {关联: 有 / null / 旧记录无键} × {run: 正常 / X / U / purge / taint / 不存在} × {候选状态: proposed / shadow / blocked / canary / adopted / stable / rolling_back / retiring / 终态}`,逐格断言转移与原因码;`accept` / `revise` 记录存在与否,所有候选的转移序列与审计逐字节相同;`rule_sha256` 与暂存规则不符、`binding_sha256` 被改、记录被替换(`--replace`)各自的行为;同一 `idem_key` 重复评估只转移一次;信号与 `veto` / taint 并发;`judge-signal.ts` 零写入(写审计桩为 0)、import 闭包断言;`rsi show` 输出夹具(自报标记存在、无路径、泄漏闸命中 → `output_leak`)。
+
+> **冻结后订正 W0-27(2026-11-15)**:①「转移序列与审计逐字节相同」的比较域 = 转移与影响效果及**转移审计行**(权威记录、撤销凭据、注入 / 回滚产物、效果、转移条目);`judge_signal` 观察行与工作副本 `judge_seen` 不在比较域内(`accept` / `revise` 与无记录的忽略原因本就不同:`not_tightening` vs `not_verified`),另行断言。② 候选状态 `blocked` / `adopted` / `stable` / `retiring` 本期引擎没有转移行(`phase_not_available`):这些格子断言「引擎拒绝、worker 不中断」,不是「变 `rejected`」;生成矩阵时列出不可达格并写明预期拒绝原因。③ 变异表的实际位置:本条与 R20-18.39 写的 `test/judge/n4-mutation-table.ts` 不存在,N4 的表在 `test/rsi/n4-mutation-table.ts`;W9a 新增 `test/rsi/v1-w9a-mutation-table.ts`。正文见 §21.24 W0-27。
+
 - R20-18.39 **N4-2 必杀变异**(并入 `test/judge/n4-mutation-table.ts`):收紧消费被反用为放行(例如 `accept` 触发 `proposed → shadow` / 缩短计时);`accept` 或 `revise` 记录触发任何转移;关联字段缺失(null / 旧记录)时仍消费;被排除 / 归属不明 / purge / taint / 不存在的 run 仍消费;跳过 R20-18.18 校验(`binding_sha256` 不重算)仍消费;~~`spawned` 记录被消费~~ → **N4 订正 #5**:未通过校验 / 非 `proven` 的记录被消费(`spawned` 的 `JUDGE_VENDOR_UNPROVEN` / 最后一跳非 ok / `provider` 不符仍被消费;`session_confirmed` 的 `binding_sha256` 被改仍被消费),以及 `proven` 的 `spawned` 记录的 `accept` / `revise` 触发任何转移;`team` 层提案的记录被消费;`rule_sha256` 不核对;`rsi show` 丢「自报」标记、泄漏路径或绕过泄漏闸;自动入口 import 了 `judge-ingest` / `ingest/**` / `tty.ts`;`judge-signal.ts` 写暂存区;`judge_injection` 与 `judge_reject` 同时成立时取错码;`terminal_reason` 优先级里 `judge_rejected` 高于 `vetoed`;worker 改写已创建候选的 `source_proposal`(不可变性);`judge_reject` 评估被挪到闸之后或占用 G 序列。
 
 #### 20.18-7 验收与必须覆盖的变异点
@@ -5674,6 +5686,9 @@ agent-kit judge --confirm-reflector --run <run_id> [--proposal <id>]… --write 
 > **冻结后订正 N4-2(2026-11-03;§20.18-6a R20-18.33)**:上表 `PersonalLifecycleRecord` 追加可选键 `source_proposal`:`null | {run_id, proposal_id}`(候选 ↔ 暂存提案关联;缺失 = `null` = 不消费不展示;worker 在 `(无) → proposed` 那次提交里写入,之后不可变)。
 
 - R21-3.8 `[V1]` **权威副本与工作副本**:私有仓库的 `lifecycle/<id>.json` 是权威副本;`.state/rsi/candidates/<id>.json` 是工作副本(含 shadow 命中计数、证据归属、监视期的中间统计)。同步检查点:每次 `lifecycle` / `deploy` / `rollback` 维度的转移都经一次 `commitPersonal` 写入权威副本,写成功后才更新工作副本对应字段;工作副本的统计字段在两次转移之间可以领先。判定:权威副本领先于工作副本(崩溃于两步之间)→ 以权威副本为准续做;两者在转移历史上分叉(同一 `idem_key` 不同结果)→ `candidate_invalid`(安全阻断)。
+
+> **冻结后订正 W0-27(2026-11-15)**:工作副本追加可选键 `judge_seen = {result, binding, indeterminate}`(`strictObject`;`result` 取 R20-18.34 的 8 个忽略原因或 `judge_reject` / `judge_injection`;`binding` 为完整 64 位小写十六进制或 `null`;`indeterminate` 布尔),只用来决定是否再写一行 `judge_signal` 审计行(基线一行,之后「三元组任一不同」才写),**永不参与安全判定,也不用来跳过重读**;只增不改,缺失 = 从未评估;工作副本可重建,丢了只多一行基线。写入顺序:观察行追加成功之后才确认 `judge_seen`,确认时重读最新工作副本只改该键。正文见 §21.24 W0-27。
+
 - R21-3.9 `[V1]` **与 §18 不混用**(修订 §18,§21.18 第 4 条):`PersonalLifecycleRecord` 只出现在私有仓库;§18 的 `LifecycleRecord`、`attest` / `promote` / `retire` 只用于框架仓库自己的原子(人工路径)。现有代码对这一范围的实际强制是 `layer=personal` → 退出 2 `PERSONAL_LAYER_P2`(§18.2 不变),外加个人层产物从不写进框架仓库的 `rules/` 等目录;「只服务框架仓库」是范围声明,不是新增的仓库身份守卫。§18.5 理由码不变,`terminal_reason` 是独立枚举。
 - R21-3.10 `[V1]` **原子字段**:个人层规则 / 踩坑沿用 `AtomFrontmatter`,取 `layer=personal`、`origin=auto_rsi`、`strength=should`;踩坑另要求 `kind=fact`、`volatility=volatile` 与非空 `trigger`(若 `AtomFrontmatter` 无 `trigger` 字段,V1 schema 落地时**追加可选字段**,不改既有字段)。`origin=auto_rsi` 是唯一能让候选进本机 payload 的来源值。
 
@@ -6967,6 +6982,19 @@ W8b(命令面的写命令:`pause` / `resume` / `clear --write` / `veto` / `rollb
 - **`rebase-baseline` 崩溃后的重跑收尾(评审订正 2026-11-14)**:改写 `head.json` 成功、清标志前崩溃(或 `state.json` 写失败)后,重跑时情形已是「不分叉」。新增只读端口方法 `RebasePort.headRewritten(kind)`(`baseline`:`head.json` 记录的提交等于当前 HEAD;`owner`:记录的 `owner_repo_fp` 等于当前 `[rsi] repo` 指纹)。**仅当**「原始情形为 ok(`classify()` 的原始分类;参数与情形不匹配——分叉带 `--adopt-owner`、换主不带——不算,仍退 4 零写入) ∧ `headRewritten` 为真 ∧ 状态里仍留着对应标志」(锁外探测,**持锁后重判三条仍成立**)才只清该标志并退 0(输出 `rebase-baseline=done … resumed=yes`),不再改写 `head.json`、不再要求确认;kind 随 `--adopt-owner`(带 = `owner_changed`,不带 = `diverged`)。缺任一事实一律照旧退 4 `not_diverged`(含「本来没分叉且无标志」与「有标志但记录并未改写」);仍分叉走正常确认流程。没有新增 `head.json` 字段,判据全取自现有记录与当前 HEAD / 指纹。
 - **未接线预检**:写命令的端口缺失(未装配)= 退 3 `RSI_FAIL_CLOSED reason=internal`,在任何写入(含取锁)之前;参数 / TTY 校验先于端口装配。`rsi auto pause` 只依赖自带的用户标记端口,是「全部未接线则零写入」的唯一例外。生产组装本期只接了 `config`、用户标记端口与输出禁止集合;锁、`PauseStatePort`、`stillHolds`、`EntryMarks.bump`、`RollbackDeps` / `ClearDeps`、黑名单落地与解除、git 分类与 `head.json` 写入归后面的装配块。
 
+#### W0-27 W9 判官裁决读判定与读失败语义订正(2026-11-15;R20-18.34、R20-18.35a、R20-18.37、R20-18.38、R21-3.8)
+
+W9a(判官裁决的纯判定、读端口适配器、`rsi show` 段订正)落地时定下的口径。保留冻结原文,以已授权的 W0-27 订正明确覆盖下列条款(R20-18.34、R20-18.35a、R20-18.37、R20-18.38、R21-3.8);未列出的条款不变;owner 2026-11-15 限时授权下取推荐项(见项目决策记录)。
+
+- **读失败语义(取代 R20-18.34 末句字面)**:判定把结果分三类,转移侧一律 `none`:①**确实没有可消费裁决**(`run_excluded`、`not_verified`、`rule_changed`、`not_tightening`、内容类 `invalid`)——不阻增影响;②**读不出**(`unreadable`:运行期 IO 错、`readFileSafe` 判不安全 / 过大、采集中的 run 里提案目录或文件缺失、读到一半被换、2 秒预算超时(预算覆盖整次评估:端口读取与读后的 schema / `judgeEvidence` / `ruleSha256` / 记录哈希校验共用同一个单调时钟 deadline;同步工作占住事件循环、超预算才返回的结论同样不予采信,统一 `unreadable('timeout')` 并中止 controller;不承诺抢占同步 JS)、读端口未装配、端口返回非法值(信封缺必需键或类型不对);以及 `source_proposal` 自身损坏(含 `proposal_id` 不符 `YYYY-MM-DD-NNN`、`run_id` 不过 `RunIdSchema`)——权威记录是 `strictObject`,损坏整份已使仓库读取 fail-closed,判定入口再 `safeParse` 一次作防御层,失败记 `invalid` 但按读不出对待)——该候选本 tick 不得增影响;③**来源缺失**(`source_proposal` 为 `null` / 缺失、`run_gone`、`TAINTED` 标记读不出)——同样拒绝本 tick 增影响(装配块 C 的 G6 严格口径;`rsi auto status` 的 E6 验收相应写成「来源 run 含提案时不被 `reflect --gc` 删除」)。「本 tick」= 同一次 worker tick;拒绝增影响不改状态、不中断 worker、不写审计以外的任何东西。读失败**绝不**映射成通过或无风险。
+- **取值表**(`src/rsi/personal/judge-signal.ts`):结果 = `signal {verdict: reject | injection, binding_sha256, judge_provenance}` 或 `none {reason, display, growth}`;`reason` 严格取 R20-18.34 的 8 个值(不新增码);`display` 取 `none` / `invalid`(R20-18.37);`growth` 取 `no_source` / `source_gone` / `indeterminate` / `null`。逐项:`no_link` → `none` / `no_source`;`run_gone` → `none` / `source_gone`;`run_excluded` → `none` / `null`;`unreadable` → `invalid` / `indeterminate`;`invalid`(内容类)→ `invalid` / `null`,`source_proposal` 损坏例外(→ `indeterminate`);`not_verified` 无 `judge` 键 → `none` / `null`,校验失败 → `invalid` / `null`;`rule_changed` → `invalid` / `null`;`not_tightening` → `none` / `null`。有信号时增影响闸另按「信号待决」拒绝(终止转移落定之前)。
+- **`ruleSha256`**:唯一实现搬到 `src/lifecycle/rule-hash.ts`(只依赖 `node:crypto` 与 `io/canonical-text.ts`),`checks.ts` 再导出同名符号,调用方 import 路径与行为不变;`judge-signal.ts` 仍经注入取得它,不 import `src/lifecycle/**`。
+- **提案读取器**:单提案读取经 `readFileSafe`(`O_NOFOLLOW`、`nlink = 1`、属主 = 当前 uid、≤ 64 KiB),YAML 经 judge store 同一个受限解析器;不复用 `loadRunEntries`(一份坏提案会让整个 run 抛错)。一致性只承诺「变化可检出」:读前记下 run / `proposals/` / `rules/personal/` 目录与两个文件的身份,读后重 stat 并重做一次归属与 `TAINTED` 判定,不一致 → `unreadable`;末次回读同时重新核对文件的安全属性(普通文件、`nlink = 1`、属主 = 当前 uid、大小不超上限),读期间被加硬链接等不改身份元数据的变化 → `unreadable`;不承诺原子快照,检测不到同一 inode 内容被换回原样(同 UID 进程的既有残余,R21-1.8)。
+- **`judge_seen`(订正 R21-3.8)**:见 R21-3.8 后的订正引文;schema 在 `src/contracts/rsi-personal.ts`,取值常量在 `src/contracts/judge-signal.ts`。带标记示例见本节末。
+- **`rsi show` 段取值**:见 R20-18.37 后的订正引文。展示读端口 `makeJudgeVerdictPort`(`src/rsi/auto/read/judge-verdict.ts`)对同一份判定只做映射。
+- **R20-18.35a / R20-18.38**:见各自后的订正引文。
+- **未接线**:读端口的生产适配器(`src/rsi/personal/read/judge-source.ts`)与展示端口本期**不接进** `deps.ts` 的生产缺省(缺省仍恒 `unavailable`,展示为 `judge=invalid`);接线依赖装配块 A 段的读侧组合根。相位常量 `RSI_AUTO_PHASE` 保持 0。
+
 #### W0 订正的合法 / 错误示例
 
 (各 schema 的带标记示例紧随其后,由 `test/contracts/examples.test.ts` 自动覆盖。)
@@ -7593,6 +7621,88 @@ W8b(命令面的写命令:`pause` / `resume` / `clear --write` / `veto` / `rollb
     "bytes_injected": 0
   },
   "repo_removal_deferred": false
+}
+```
+
+`CandidateWorkingCopy` 合法(带 `judge_seen`:上一次评估为「忽略:`not_tightening`」,无 binding 信号):
+
+<!-- example:valid schema=CandidateWorkingCopy -->
+
+```json
+{
+  "schema_version": 1,
+  "id": "ra_0123456789ab",
+  "cluster_signature": {
+    "kind": "lesson",
+    "rep_tokens": ["fixture", "read", "test"]
+  },
+  "source": {
+    "run_id": "run-20261109-01",
+    "proposal_id": "p1"
+  },
+  "shadow": {
+    "sessions": 12,
+    "hits": 1,
+    "canary_ready_since": null,
+    "queued_since": null
+  },
+  "evidence": {
+    "sessions": ["s_0123456789abcdef"],
+    "days": ["2026-11-08"]
+  },
+  "stats": {
+    "sessions_observed": 12,
+    "sessions_treat": 0,
+    "sessions_control": 0,
+    "bytes_injected": 0
+  },
+  "repo_removal_deferred": false,
+  "judge_seen": {
+    "result": "not_tightening",
+    "binding": null,
+    "indeterminate": false
+  }
+}
+```
+
+`CandidateWorkingCopy` 错误(W0-27):`judge_seen.result` 不在封闭集合内(新原因码必须先进契约)。状态 = 工作副本不合规,阻断范围 = 该候选按权威副本重建(R21-3.8),原因码 `candidate_invalid`:
+
+<!-- example:invalid schema=CandidateWorkingCopy -->
+
+```json
+{
+  "schema_version": 1,
+  "id": "ra_0123456789ab",
+  "cluster_signature": {
+    "kind": "lesson",
+    "rep_tokens": ["fixture", "read", "test"]
+  },
+  "source": {
+    "run_id": "run-20261109-01",
+    "proposal_id": "p1"
+  },
+  "shadow": {
+    "sessions": 12,
+    "hits": 1,
+    "canary_ready_since": null,
+    "queued_since": null
+  },
+  "evidence": {
+    "sessions": ["s_0123456789abcdef"],
+    "days": ["2026-11-08"]
+  },
+  "stats": {
+    "sessions_observed": 12,
+    "sessions_treat": 0,
+    "sessions_control": 0,
+    "bytes_injected": 0
+  },
+  "repo_removal_deferred": false,
+  "judge_seen": {
+    "result": "judge_expired",
+    "binding": null,
+    "indeterminate": false
+  }
 }
 ```
 
