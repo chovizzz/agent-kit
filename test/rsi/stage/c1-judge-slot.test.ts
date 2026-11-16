@@ -285,7 +285,7 @@ describe('normalizeJudgeReport(run 返回值的运行期校验) · L2:halted 只
     halted: null,
     unavailable: false,
   };
-  it('未知 halted(任意字符串 / 原型链键)规范化为 candidate_invalid;七个合法值原样透传', () => {
+  it('未知 halted(任意字符串 / 原型链键)规范化为 candidate_invalid;八个合法值原样透传', () => {
     for (const h of ['brand_new', 'toString', 'constructor', '__proto__', '']) {
       expect(normalizeJudgeReport({ ...good, halted: h })?.halted, h).toBe('candidate_invalid');
     }
@@ -297,6 +297,7 @@ describe('normalizeJudgeReport(run 返回值的运行期校验) · L2:halted 只
       'commit_failed',
       'candidate_invalid',
       'lock_lost',
+      'sealed_interval',
     ]) {
       expect(normalizeJudgeReport({ ...good, halted: h })?.halted, h).toBe(h);
     }

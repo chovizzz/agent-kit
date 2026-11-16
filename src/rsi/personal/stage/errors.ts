@@ -124,8 +124,9 @@ export type HaltClass =
 const HALT_CLASS: Readonly<Record<StepHalt, HaltClass>> = Object.freeze({
   repo_absent: { kind: 'stop_step' },
   repo_deferred: { kind: 'stop_step' },
-  // B2(W0-26 第 9 条):取时落在已封存区间,源提交之前拒绝、零写入;时钟恢复后重跑即可,不涉及仓库完整性 → 只停本步
-  sealed_interval: { kind: 'stop_step' },
+  // B2(W0-26 第 9 条):取时落在已封存区间,源提交之前拒绝、零写入。不归 `stop_step`:那一类的前提是「增影响另由 G3 / G4 拒绝」,
+  // 而封存拒绝没有这样的替代屏障(同轮时钟恢复后,先前未完成的减影响步骤不会再被任何增影响检查看见)→ 停本步并使本轮 unsettled
+  sealed_interval: { kind: 'stop_step_unsettled', cause: 'sealed_interval' },
   repo_invalid: { kind: 'stop_step_unsettled', cause: 'repo_invalid' },
   revocations_invalid: { kind: 'stop_step_unsettled', cause: 'revocations_invalid' },
   commit_failed: { kind: 'stop_step_unsettled', cause: 'commit_failed' },

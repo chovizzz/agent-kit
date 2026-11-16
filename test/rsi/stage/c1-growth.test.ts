@@ -3,10 +3,12 @@
  * 每条不变量一个负向用例 + 一个正向对照;期望值由测试自己手写(不从被测的表里派生)。
  */
 import { describe, expect, it } from 'vitest';
+import type { StepHalt } from '../../../src/rsi/personal/candidate-ports.js';
 import { RsiLockError } from '../../../src/rsi/lock-error.js';
-import { UNAVAILABLE_JUDGE } from '../../../src/rsi/personal/judge-slot.js';
+import { UNAVAILABLE_JUDGE, normalizeJudgeReport } from '../../../src/rsi/personal/judge-slot.js';
 import {
   PersonalLockLost,
+  classifyHalt,
   RoundInternalError,
   STALE_GROWTH_REASONS,
   StaleGrowth,
@@ -942,6 +944,64 @@ describe('reader 抛错 / 返回非法值 → fail-closed(绝不放行)', () => 
     const other = await openBoth({ rsi: 'eeee5555eeee5555', personal: 'ffff6666ffff6666' });
     markRoundUnsettled(other.round, 'compaction_failed');
     expect(await deny(other.round, reqOf('bootstrap'), readers())).toBe('unsettled');
+  });
+});
+
+/**
+ * 步骤的 `StepHalt` 如何影响本轮增影响(D 的回合循环按此分派;C1a 只提供 `classifyHalt` 与 `markRoundUnsettled`,这里按同一规则模拟):
+ * `stop_step_unsettled` → 本轮 unsettled;`stop_step` 不动。
+ */
+function applyHalt(round: BothRound, h: StepHalt | null | undefined): void {
+  if (h === null || h === undefined) return;
+  const c = classifyHalt(h);
+  if (c.kind === 'stop_step_unsettled') markRoundUnsettled(round, `step_integrity:${c.cause}`);
+}
+
+describe('sealed_interval 的跨步骤屏障:减影响步骤被封存拒绝 → 本轮 unsettled → 同轮后续增影响被拒绝', () => {
+  it('sealed_interval_halt_denies_growth_same_round:步骤返回 sealed_interval(此后时钟恢复、不再有封存拒绝)→ 同轮后续每种增影响都 unsettled', async () => {
+    const { round } = await openBoth();
+    applyHalt(round, 'sealed_interval');
+    expect(round.unsettled()).toEqual(['step_integrity:sealed_interval']);
+    for (const op of GROWTH_OPS) {
+      const r = readers();
+      expect(await deny(round, reqOf(op), r), op).toBe('unsettled');
+      expect(r.calls, op).toEqual(['locks']);
+    }
+  });
+  it('sealed_interval_after_mint_voids_pass:铸造之后步骤才返回 sealed_interval → requireGrowth 拒绝(unsettled)', async () => {
+    const { round } = await openBoth();
+    const p = await readyPass(round, reqOf('candidate_create'));
+    applyHalt(round, 'sealed_interval');
+    let reason = 'NO_THROW';
+    try {
+      requireGrowth(p, round, { cap: 'candidate_create' });
+    } catch (e) {
+      reason = e instanceof StaleGrowth ? e.reason : `OTHER:${String(e)}`;
+    }
+    expect(reason).toBe('unsettled');
+  });
+  it('sealed_interval_via_judge_report:判官报告经 normalizeJudgeReport 保留原值,分派后同样 unsettled', async () => {
+    const rep = normalizeJudgeReport({
+      evaluated: 0,
+      transitioned: [],
+      blocked: [],
+      deferred: [],
+      halted: 'sealed_interval',
+      unavailable: false,
+    });
+    expect(rep?.halted).toBe('sealed_interval');
+    const { round } = await openBoth();
+    applyHalt(round, rep?.halted);
+    expect(await deny(round, reqOf('grant'), readers())).toBe('unsettled');
+  });
+  it('正向对照:repo_absent / repo_deferred(stop_step)不使本轮 unsettled,增影响照旧放行;无 halt 同理', async () => {
+    for (const h of ['repo_absent', 'repo_deferred', null] as const) {
+      const { round } = await openBoth();
+      applyHalt(round, h);
+      expect(round.unsettled(), String(h)).toEqual([]);
+      const v = await evaluateGrowth(round, reqOf('grant'), readers(), STAGE_ALL);
+      expect(isGrowthPass(v), String(h)).toBe(true);
+    }
   });
 });
 

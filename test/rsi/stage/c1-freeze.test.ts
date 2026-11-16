@@ -800,6 +800,7 @@ describe('导出函数 / 类型的签名冻结(互相可赋值即同形;readonly
         | 'step_integrity:revocations_invalid'
         | 'step_integrity:commit_failed'
         | 'step_integrity:candidate_invalid'
+        | 'step_integrity:sealed_interval'
         | `budget_exceeded:${string}`
         | 'lock_loss_unresolved'
       >
