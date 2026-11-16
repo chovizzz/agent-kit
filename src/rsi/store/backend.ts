@@ -51,8 +51,8 @@ export function decodeLedger(bytes: Buffer): RsiEffectsLedger {
   }
   const p = RsiEffectsLedgerSchema.safeParse(raw);
   if (p.success) return p.data;
-  const token = p.error.issues.map((i) => i.message).find((m) => REFINE_TOKENS.includes(m));
-  throw new StoreError('state_invalid', token ?? 'schema');
+  const refineCode = p.error.issues.map((i) => i.message).find((m) => REFINE_TOKENS.includes(m));
+  throw new StoreError('state_invalid', refineCode ?? 'schema');
 }
 
 export function encodeLedger(l: RsiEffectsLedger): string {
@@ -68,8 +68,8 @@ export function decodeCompaction(bytes: Buffer, today: string): RsiAuditCompacti
   }
   const p = RsiAuditCompactionSchema.safeParse(raw);
   if (!p.success) {
-    const token = p.error.issues.map((i) => i.message).find((m) => m.endsWith('_sum'));
-    throw new StoreError('compaction_unsupported', token ?? 'schema');
+    const refineCode = p.error.issues.map((i) => i.message).find((m) => m.endsWith('_sum'));
+    throw new StoreError('compaction_unsupported', refineCode ?? 'schema');
   }
   // I1:水位线必须早于今日(UTC)
   if (p.data.through !== null && p.data.through >= today) {

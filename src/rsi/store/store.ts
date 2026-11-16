@@ -22,7 +22,7 @@ import type {
   SealGuard,
   UserVetoPort,
 } from './ports.js';
-import { SealRegistry, createSealGuard } from './seal.js';
+import { createSealGuard, type SealRegistry } from './seal.js';
 import { acquireLockControl } from './lock-control.js';
 import { createHeldStore } from './txn.js';
 
@@ -54,15 +54,20 @@ export interface RsiStore {
 export function assembleRsiStore(deps: RsiStoreDeps): RsiStore {
   const clock = deps.clock ?? ((): Date => new Date());
   const backend = createBackend(deps.fs, clock);
+  // 区域注册表是 acquisition 的共享状态:同一对句柄的所有装配共用一张(传了另一张 = 拒绝;别的 acquisition 的表 = 拒绝)。
+  // 先于其余装配:注册表不可接受时整个装配零副作用(首次绑定连句柄都不占用)
+  const registry = acquireLockControl(
+    deps.rsi,
+    deps.personal,
+    deps.fs.root,
+    deps.registry,
+  ).adoptRegistry(deps.registry);
   const held = createHeldStore({
     rsi: deps.rsi,
     personal: deps.personal,
     backend,
     ...(deps.fs.root !== undefined ? { root: deps.fs.root } : {}),
   });
-  const registry = deps.registry ?? new SealRegistry();
-  // 区域 / 注册表绑定到 acquisition(同一对句柄 → 同一控制块,幂等);别的 acquisition 的注册表 = 拒绝
-  registry.bindDomain(acquireLockControl(deps.rsi, deps.personal, deps.fs.root).identity);
   const apply = {
     held,
     clock,

@@ -4,6 +4,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { RSI_AUTO_LABEL } from '../../../src/contracts/rsi.js';
+import { SELF_REPORT_LABEL_JUDGE, VENDOR_PROVEN_LABEL } from '../../../src/contracts/vendor.js';
 import { journalNameOf } from '../../../src/rsi/auto/read/stall.js';
 import { runShow } from '../../../src/rsi/auto/read/show.js';
 import { rec } from '../personal/transition-fixture.js';
@@ -281,19 +282,49 @@ describe('N4-2 关联提案裁决段(失败只影响该段)', () => {
     const w = withSource();
     w.judge = {
       kind: 'ok',
-      judge_provenance: 'self_report',
+      judge_provenance: 'session_confirmed',
       verdict: 'accept',
-      overfit: 'none',
-      injection: 'none',
-      declared: 'vendor\u0007x',
+      overfit: 'low',
+      injection: 'false',
+      identity: { kind: 'declared', agent: 'codex', vendor: 'vendor\u0007x', model: 'gpt-example' },
     };
     const r = await show(w);
     expect(r.code).toBe(0);
     expect(r.out).toContain(
-      '关联提案裁决: judge_provenance=self_report verdict=accept overfit=none injection=none',
+      '关联提案裁决: judge_provenance=session_confirmed verdict=accept overfit=low injection=false',
     );
-    expect(r.out).toContain('declared=vendor?x');
+    // W0-27 订正(契约 R20-18.37):declared 是 agent / vendor / model 三项,控制字符被清洗
+    expect(r.out).toContain('declared agent=codex vendor=vendor?x model=gpt-example');
     expect(r.out.split('\n').filter((l) => l === RSI_AUTO_LABEL).length).toBe(2);
+  });
+
+  it('自报记录带 SELF_REPORT_LABEL_JUDGE 而不带 VENDOR_PROVEN_LABEL;spawned 且 proven 反之,只显示 vendor / model(没有 declared)', async () => {
+    const a = withSource();
+    a.judge = {
+      kind: 'ok',
+      judge_provenance: 'session_confirmed',
+      verdict: 'reject',
+      overfit: 'high',
+      injection: 'true',
+      identity: { kind: 'declared', agent: 'pi', vendor: 'openai', model: 'gpt-example' },
+    };
+    const ra = (await show(a)).out.split('\n');
+    expect(ra).toContain(SELF_REPORT_LABEL_JUDGE);
+    expect(ra).not.toContain(VENDOR_PROVEN_LABEL);
+    const b = withSource();
+    b.judge = {
+      kind: 'ok',
+      judge_provenance: 'spawned',
+      verdict: 'reject',
+      overfit: 'low',
+      injection: 'false',
+      identity: { kind: 'proven', vendor: 'openai', model: 'gpt-example' },
+    };
+    const rb = (await show(b)).out.split('\n');
+    expect(rb).toContain(VENDOR_PROVEN_LABEL);
+    expect(rb).not.toContain(SELF_REPORT_LABEL_JUDGE);
+    expect(rb).toContain('vendor=openai model=gpt-example');
+    expect(rb.some((l) => l.startsWith('declared'))).toBe(false);
   });
 
   it('裁决读取不可用 / 抛错 → 只有该段是 unavailable,其余输出与退出码不变', async () => {
@@ -302,11 +333,14 @@ describe('N4-2 关联提案裁决段(失败只影响该段)', () => {
       w.judge = j;
       const r = await show(w);
       expect(r.code).toBe(0);
-      expect(r.out).toContain('关联提案裁决: unavailable');
+      expect(r.out).toContain('关联提案裁决: judge=invalid');
+      expect(r.out).not.toContain('unavailable');
       expect(r.out).toContain('| body');
     }
     const w = withSource();
     w.judge = { kind: 'absent' };
-    expect((await show(w)).out).toContain('关联提案裁决: none');
+    expect((await show(w)).out).toContain('关联提案裁决: judge=none');
+    w.judge = { kind: 'invalid' };
+    expect((await show(w)).out).toContain('关联提案裁决: judge=invalid');
   });
 });

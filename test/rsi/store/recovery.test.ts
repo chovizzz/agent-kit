@@ -17,6 +17,7 @@ import {
   SHA2,
   cool,
   faulty,
+  expectSameBytes,
   fullAuditText,
   hex16,
   jsonLine,
@@ -248,7 +249,7 @@ describe.each(KINDS)('recoverThrough 契约(%s)', (kind) => {
       batch('terminal:t', [tomb(), markEffect(hex16(8))]),
     ]);
     expect(res).toEqual([{ batch_id: 'terminal:t', state: 'ledger_committed' }]);
-    expect(await w.bytes(FILES.audit)).toEqual(auditBefore);
+    expectSameBytes(await w.bytes(FILES.audit), auditBefore);
     // 对照:同一输入经 applyOnce 在审计满时账不提交(预检失败)
     const w2 = await makeWorld(kind);
     await seed(w2, FILES.audit, fullAudit());

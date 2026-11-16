@@ -25,6 +25,10 @@ export class SealRegistry {
     }
     this.domain = identity;
   }
+  /** 无副作用预检:已绑给**另一次** acquisition?(`bindDomain` 会抛的同一条件) */
+  isBoundElsewhere(identity: symbol): boolean {
+    return this.domain !== null && this.domain !== identity;
+  }
   /** @internal */
   owns(r: RegionImpl): boolean {
     return r.registry === this;

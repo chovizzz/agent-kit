@@ -61,6 +61,10 @@ export interface RsiLockHandle {
   release(): Promise<void>;
   /** 存储核挂释放屏障(W0-26 第 12 条);同一句柄只接受同一个屏障。未使用时 `release()` 行为不变 */
   attachReleaseGate?(gate: ReleaseGate): void;
+  /** 无副作用预检:`attachReleaseGate(gate)` 会不会成功(存储核装配先预检两把句柄,再占用) */
+  canAttachReleaseGate?(gate: ReleaseGate): boolean;
+  /** 锁种类身份(`rsi` / `personal`):存储核按它正向验证角色,不靠「不在当前 root 下」推断 */
+  readonly kind?: 'rsi';
 }
 /** 本进程内已持有的锁(按真实路径);同一进程第二次获取同一把锁 = 编程错误(R20-5.4) */
 const heldInProcess = new Set<string>();
@@ -132,6 +136,8 @@ export async function acquireRsiLock(
         nonce: doc.nonce,
         assertHeld,
         attachReleaseGate: (gate) => gateSlot.attach(gate),
+        canAttachReleaseGate: (gate) => gateSlot.canAttach(gate),
+        kind: 'rsi',
         async release(): Promise<void> {
           if (released) return;
           await gateSlot.wait();

@@ -18,6 +18,7 @@ import {
   auditEffect,
   cool,
   faulty,
+  expectSameBytes,
   fullAuditText,
   hex16,
   makeWorld,
@@ -222,7 +223,7 @@ describe.each(KINDS)('applyOnce 契约(%s)', (kind) => {
     const r = await w.store.sink.applyOnce('terminal:t', [tomb(), markEffect(hex16(5))], meta());
     expect(r).toEqual({ ledger: 'not_committed', audit: 'not_applicable', cause: 'audit_full' });
     expect(await w.bytes(FILES.effects)).toBeNull();
-    expect(await w.bytes(FILES.audit)).toEqual(before);
+    expectSameBytes(await w.bytes(FILES.audit), before);
   });
 
   it('审计满 + 账已满足:ledger=satisfied、audit=pending、cause=audit_full(审计待补,不是错误)', async () => {

@@ -112,11 +112,12 @@ describe('§E 签名冻结(类型层)', () => {
     expect(cooldownActive({ at: '2026-10-16T00:00:00.000Z', days: 30 }, '2026-11-15')).toBe(false);
   });
 
-  it('验收评审的向后兼容扩展只加**可选**成员(已冻结端口的必选签名不变):LockCap.path / attachReleaseGate、StoreFs.root、AuditTextRead.torn;装配入口形参不变', () => {
+  it('验收评审的向后兼容扩展只加**可选**成员(已冻结端口的必选签名不变):LockCap.path / attachReleaseGate / canAttachReleaseGate / kind、StoreFs.root、AuditTextRead.torn;装配入口形参不变', () => {
     expectTypeOf<keyof LockCap>().toEqualTypeOf<
-      'assertHeld' | 'release' | 'path' | 'attachReleaseGate'
+      'assertHeld' | 'release' | 'path' | 'attachReleaseGate' | 'canAttachReleaseGate' | 'kind'
     >();
     expectTypeOf<LockCap['path']>().toEqualTypeOf<string | undefined>();
+    expectTypeOf<LockCap['kind']>().toEqualTypeOf<'rsi' | 'personal' | undefined>();
     // 只有两个必选成员的旧形状仍可赋给 LockCap(向后兼容:测试假件与存量句柄不必改)
     const legacy: LockCap = { assertHeld: async () => undefined, release: async () => undefined };
     expect(Object.keys(legacy)).toEqual(['assertHeld', 'release']);

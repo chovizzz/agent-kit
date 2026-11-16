@@ -3,6 +3,7 @@
  * 假锁(`assertHeld` 丢锁 = `RsiLockError('lock_lost')`)、世界构造(`real` = 真 `safeStoreFs` + 临时目录;`mem` = 内存)。**不调用被测的合并 / 规划函数**:期望值由测试自己手写。
  */
 import * as path from 'node:path';
+import { expect } from 'vitest';
 import type { RsiAuditLine } from '../../../src/contracts/rsi-personal.js';
 import {
   RSI_AUDIT_COMPACTION_FILE,
@@ -106,7 +107,12 @@ export class FakeLock implements LockCap {
     readonly name: string,
     private readonly log: string[],
     readonly path?: string,
+    readonly kind?: 'rsi' | 'personal',
   ) {}
+  /** 与真实句柄同一契约:无副作用预检(空槽或已是同一个屏障才可挂) */
+  canAttachReleaseGate(gate: { beforeRelease(): Promise<void> }): boolean {
+    return this.gate === undefined || this.gate === gate;
+  }
   attachReleaseGate(gate: { beforeRelease(): Promise<void> }): void {
     if (this.gate !== undefined && this.gate !== gate) throw new RsiLockError('internal');
     this.gate = gate;
@@ -194,6 +200,8 @@ export function faulty(
     return null;
   };
   return {
+    // 里氏替换:包装器保留底层的 `root`(真实装配的身份校验依赖它),不论是否经 `makeWorld` 的 `wrap`
+    ...(inner.root !== undefined ? { root: inner.root } : {}),
     hits,
     calls,
     async read(name, max) {
@@ -303,8 +311,23 @@ export async function makeWorld(kind: FsKind, opts: WorldOptions = {}): Promise<
       (await readDir(rsi)).map((e) => e.name).filter((n) => n.endsWith('.tmp'));
   }
   const fs = opts.wrap === undefined ? raw : opts.wrap(raw);
-  const rsiLock = new FakeLock('rsi', log);
-  const personalLock = new FakeLock('personal', log);
+  // 真实世界按生产形状装配:`fs.root` + 两把锁都带 path 与锁种类(rsi = <root>/lock,personal 在 root 之外);
+  // 包装器(故障注入等)必须保留 `root`——没有转发就补上(原地定义,不换对象,`hits` / `calls` 等包装器自带成员保留)。
+  // 内存世界两者都不带(假件形状),装配照旧走「都不声明」分支。
+  let rsiPath: string | undefined;
+  let personalPath: string | undefined;
+  if (raw.root !== undefined) {
+    rsiPath = path.join(raw.root, 'lock');
+    personalPath = path.join(dir, 'home', 'rsi-personal', 'lock');
+    if (fs.root === undefined) Object.defineProperty(fs, 'root', { value: raw.root });
+  }
+  const rsiLock = new FakeLock('rsi', log, rsiPath, rsiPath === undefined ? undefined : 'rsi');
+  const personalLock = new FakeLock(
+    'personal',
+    log,
+    personalPath,
+    personalPath === undefined ? undefined : 'personal',
+  );
   const clockFn = (): Date => new Date(clock.iso);
   const store = assembleRsiStore({
     fs,
@@ -360,6 +383,19 @@ export const compactionDoc = (through: string | null, gen = 1) => ({
   through,
   months: {},
 });
+
+/**
+ * 字节相等断言(大文件用)。**不要**对 MB 级 Buffer 用 `expect(...).toEqual(...)`:vitest 逐元素比较,2.5MB 要 ~26s(实测,seal),
+ * 一条用例比两次再叠加负载就撞 120s 超时。这里用 `Buffer.equals`(memcmp),失败时给长度与首个差异下标。
+ */
+export function expectSameBytes(actual: Buffer | null, expected: Buffer | null): void {
+  if (actual === null || expected === null) {
+    expect(actual === null).toBe(expected === null);
+    return;
+  }
+  expect(actual.length).toBe(expected.length);
+  expect(actual.equals(expected) ? -1 : actual.findIndex((b, i) => b !== expected[i])).toBe(-1);
+}
 
 let fullAuditCache: string | null = null;
 /** 20000 行(审计硬线)的合法审计文件;键从 0x100000 起,不与测试里常用的 hex16(1..) 冲突。进程内只构造一次 */
