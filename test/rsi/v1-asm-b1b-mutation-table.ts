@@ -1050,21 +1050,26 @@ export const V1_ASM_B1B_MUTATIONS: readonly V1AsmB1bMutation[] = [
     clause: 'compactor 与 seal 共用注册表',
     edits: [
       swap(
-        'src/rsi/store/store.ts',
-        '      held,\n      registry,\n      recovery,',
-        '      held,\n      registry: new SealRegistry(),\n      recovery,',
+        'src/rsi/store/compactor.ts',
+        "import type { SealRegistry } from './seal.js';",
+        "import { SealRegistry } from './seal.js';",
+      ),
+      swap(
+        'src/rsi/store/compactor.ts',
+        '    registry: store.registry,',
+        '    registry: new SealRegistry(),',
       ),
     ],
     tests: ['rsi/store/compactor.test.ts'],
     expectRed: [
-      'assembleRsiStore 装配的 compactor',
+      'compactorOf 造的 compactor',
       'Compactor 推进(',
       'compact_blocked 与零写入拒绝(',
       '压缩租约(P2 期间不许新开区域)',
       'compact_recovery_audit_full_ledger_pending_advances(内存世界;20000 行)',
       '旧批次重放安全(',
     ],
-    mustKill: ['assembleRsiStore 装配的 compactor'],
+    mustKill: ['compactorOf 造的 compactor'],
   },
   {
     id: 'report_residual_not_filtered',

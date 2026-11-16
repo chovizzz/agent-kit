@@ -13,7 +13,7 @@ import { ROOT } from '../closure-util.js';
 // 全仓 AST 扫描在负载高的验证机上较慢
 vi.setConfig({ testTimeout: 120_000 });
 
-const INTERNAL = ['rsi/store/ledger-merge', 'rsi/store/backend'];
+const INTERNAL = ['rsi/store/ledger-merge', 'rsi/store/backend', 'rsi/store/compaction-port'];
 const ALLOWED_PREFIXES = ['src/rsi/store/', 'test/rsi/store/'];
 
 async function walk(dir: string, out: string[] = []): Promise<string[]> {
@@ -119,7 +119,6 @@ describe('导出面', () => {
     const w = await makeWorld('mem');
     expect(Object.keys(w.store).sort()).toEqual([
       'appender',
-      'compactor',
       'held',
       'recovery',
       'registry',

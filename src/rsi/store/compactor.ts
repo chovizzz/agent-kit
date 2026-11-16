@@ -41,10 +41,11 @@ import type {
 } from './ports.js';
 import { unwiredReconcileSource } from './reconcile.js';
 import type { SealRegistry } from './seal.js';
-import { compactionPortOf } from './txn.js';
+import type { RsiStore } from './store.js';
+import { compactionPortOf } from './compaction-port.js';
 
 export interface CompactorDeps {
-  /** 注意:必须是 `createHeldStore` 造出的协调器(压缩端口经 `compactionPortOf` 取自它的事务端口);不是任意结构兼容的 `HeldStore` 都可替换——这是存储核内部装配 */
+  /** 注意:必须是 `createHeldStore` 造出的协调器(压缩端口经 `compaction-port.ts` 的 `compactionPortOf` 取自它的事务端口);不是任意结构兼容的 `HeldStore` 都可替换——这是存储核内部装配 */
   held: HeldStore;
   registry: SealRegistry;
   /** 缺省 = 未接线(`compact_unwired`) */
@@ -228,4 +229,22 @@ export function createCompactor(deps: CompactorDeps): Compactor {
       }
     },
   };
+}
+
+/**
+ * 从装配好的存储核造 `Compactor`(B1b):与 `seal` / `appender` **共用同一个区域注册表**,持锁句柄与恢复端口同取自该存储核。
+ * 不进 `assembleRsiStore` 的形参(冻结面:依赖键集合只有 `fs / rsi / personal / clock / reconcile / registry`),所以 `source` 在这里给。
+ * `clock` 须与装配存储核时给的同一个(缺省都是系统时钟)。
+ */
+export function compactorOf(
+  store: Pick<RsiStore, 'held' | 'registry' | 'recovery'>,
+  opts: { source?: ReconcileSource; clock?: () => Date } = {},
+): Compactor {
+  return createCompactor({
+    held: store.held,
+    registry: store.registry,
+    recovery: store.recovery,
+    clock: opts.clock ?? ((): Date => new Date()),
+    ...(opts.source !== undefined ? { reconcile: opts.source } : {}),
+  });
 }

@@ -6,7 +6,7 @@
 import type { PersonalLifecycleRecord, RsiAuditLine } from '../../../src/contracts/rsi-personal.js';
 import type { RsiEffectsLedger } from '../../../src/contracts/rsi-store.js';
 import { canonicalJson } from '../../../src/io/canonical-json.js';
-import { createCompactor, type Compactor } from '../../../src/rsi/store/compactor.js';
+import { compactorOf, createCompactor, type Compactor } from '../../../src/rsi/store/compactor.js';
 import type { StoreFs } from '../../../src/rsi/store/fs-port.js';
 import type { LedgerRecoveryPort, ReconcileSource } from '../../../src/rsi/store/ports.js';
 import {
@@ -106,8 +106,8 @@ export const rowOfEntry = (
 
 // ---------- 世界 ----------
 export interface CWorld extends World {
-  /** 带 `source` 的存储核(与 `w.store` 不同:后者无 source) */
-  s: RsiStore;
+  /** 带 `reconcile`(= source)的存储核,附 `compactorOf` 造的 `compactor`(与 `w.store` 不同:后者无 source、无 compactor) */
+  s: RsiStore & { compactor: Compactor };
   records: FakeRecords;
   source: ReconcileSource;
   compactor: Compactor;
@@ -126,12 +126,18 @@ export async function makeCWorld(kind: FsKind, o: CWorldOptions = {}): Promise<C
   const records = fakeRecords(o.records ?? []);
   const source = createReconcileSource({ records });
   const clock = (): Date => new Date(w.clock.iso);
-  const s = assembleRsiStore({
+  const base = assembleRsiStore({
     fs: w.fs,
     rsi: w.rsi,
     personal: w.personal,
     clock,
-    ...(o.unwired === true ? {} : { source }),
+    ...(o.unwired === true ? {} : { reconcile: source }),
+  });
+  const s = Object.assign(base, {
+    compactor: compactorOf(base, {
+      clock,
+      ...(o.unwired === true ? {} : { source }),
+    }),
   });
   const recoveryCalls: string[][] = [];
   const recovery: LedgerRecoveryPort = {

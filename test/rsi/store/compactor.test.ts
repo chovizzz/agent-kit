@@ -19,7 +19,7 @@ import type {
   ReconcileSource,
   TxnPorts,
 } from '../../../src/rsi/store/ports.js';
-import { compactionPortOf } from '../../../src/rsi/store/txn.js';
+import { compactionPortOf } from '../../../src/rsi/store/compaction-port.js';
 import {
   T_CREATE_AT,
   T_TERM_AT,
@@ -438,7 +438,7 @@ describe.each(KINDS)('compact_blocked 与零写入拒绝(%s)', (kind) => {
     expect(await snap(w)).toEqual(before);
   });
 
-  it('assembleRsiStore 装配的 compactor 接 source,且与 seal 共用区域注册表', async () => {
+  it('compactorOf 造的 compactor 接 source,且与 seal 共用区域注册表', async () => {
     const w = await basic(kind);
     const region = await w.s.seal.open(w.personal);
     expect((await rejects(w.s.compactor.compact({ through: W }))).code).toBe('region_open');

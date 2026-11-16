@@ -10,7 +10,6 @@
  */
 import { createAuditAppender } from './audit-appender.js';
 import { createBackend } from './backend.js';
-import { createCompactor, type Compactor } from './compactor.js';
 import { createKeyedEffectSink, createLedgerRecovery, createUserVetoPort } from './apply-once.js';
 import type { StoreFs } from './fs-port.js';
 import type {
@@ -33,10 +32,8 @@ export interface RsiStoreDeps {
   personal: LockCap;
   /** 缺省 `() => new Date()`;测试注入 */
   clock?: () => Date;
-  /** 水位线之下 replay 的权威事件取回(C 注入);缺省 = 未接线(`sealed_unknown_event`)。给了 `source` 时缺省取 `source.resolve` */
+  /** 水位线之下 replay 的权威事件取回(C 注入);缺省 = 未接线(`sealed_unknown_event`) */
   reconcile?: Pick<ReconcileSource, 'resolve'>;
-  /** 完整的权威记录读取端口(B1b 真适配器,C 注入);缺省 = 未接线,`Compactor.compact` 抛 `compact_unwired` */
-  source?: ReconcileSource;
   /** 与 `Compactor` 共享同一个注册表(B1b);缺省新建 */
   registry?: SealRegistry;
 }
@@ -50,8 +47,6 @@ export interface RsiStore {
   /** 只给 `Compactor` */
   recovery: LedgerRecoveryPort;
   appender: AuditAppender;
-  /** 压缩(B1b):只给持锁的 worker(C);与 `seal` 共用同一个区域注册表 */
-  compactor: Compactor;
   seal: SealGuard;
   registry: SealRegistry;
 }
@@ -73,25 +68,18 @@ export function assembleRsiStore(deps: RsiStoreDeps): RsiStore {
     backend,
     ...(deps.fs.root !== undefined ? { root: deps.fs.root } : {}),
   });
-  const resolver = deps.reconcile ?? deps.source;
   const apply = {
     held,
     clock,
-    ...(resolver !== undefined ? { resolve: resolver.resolve.bind(resolver) } : {}),
+    ...(deps.reconcile !== undefined
+      ? { resolve: deps.reconcile.resolve.bind(deps.reconcile) }
+      : {}),
   };
-  const recovery = createLedgerRecovery(apply);
   return {
     held,
     sink: createKeyedEffectSink(apply),
     userVeto: createUserVetoPort(apply),
-    recovery,
-    compactor: createCompactor({
-      held,
-      registry,
-      recovery,
-      clock,
-      ...(deps.source !== undefined ? { reconcile: deps.source } : {}),
-    }),
+    recovery: createLedgerRecovery(apply),
     appender: createAuditAppender({
       held,
       registry,
