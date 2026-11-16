@@ -442,6 +442,7 @@ export const V1_ASM_B2_MUTATIONS: readonly V1AsmB2Mutation[] = [
       'veto → lift → veto:黑名单重新生效',
       '对照:连续两次 veto(中间没有 lift)',
       '第三次 veto:黑名单项不再是 lifted',
+      '终态路径补调 deferred',
     ],
     mustKill: ['veto → lift → veto:黑名单重新生效', '第三次 veto:黑名单项不再是 lifted'],
   },
@@ -457,7 +458,7 @@ export const V1_ASM_B2_MUTATIONS: readonly V1AsmB2Mutation[] = [
       },
     ],
     tests: ['rsi/asm/b-veto-relanding.test.ts'],
-    expectRed: ['回滚路径(两把键都在、E1 不再出)', '回滚路径补调 deferred'],
+    expectRed: ['回滚路径(两把键都在、E1 不再出)', '回滚路径补调 deferred', '回滚路径:在途回滚'],
     mustKill: ['回滚路径(两把键都在、E1 不再出)'],
   },
   {
@@ -531,7 +532,10 @@ export const V1_ASM_B2_MUTATIONS: readonly V1AsmB2Mutation[] = [
       },
     ],
     tests: ['rsi/asm/b-rewrite-head-order.test.ts'],
-    expectRed: ['rewrite_head_no_yield_between_check_and_write'],
+    expectRed: [
+      'rewrite_head_no_yield_between_check_and_write',
+      'rewrite_head_lock_lost_during_read',
+    ],
     mustKill: ['rewrite_head_no_yield_between_check_and_write'],
   },
   {
@@ -547,7 +551,10 @@ export const V1_ASM_B2_MUTATIONS: readonly V1AsmB2Mutation[] = [
       },
     ],
     tests: ['rsi/asm/b-rewrite-head-order.test.ts'],
-    expectRed: ['rewrite_head_lock_lost_during_read'],
+    expectRed: [
+      'rewrite_head_lock_lost_during_read',
+      'rewrite_head_no_yield_between_check_and_write',
+    ],
     mustKill: ['rewrite_head_lock_lost_during_read'],
   },
   {
