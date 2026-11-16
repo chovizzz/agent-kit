@@ -1,4 +1,4 @@
-import { describe, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { classifyAuditFile } from '../../../src/rsi/store/audit-classify.js';
 import { RsiAuditLineSchema } from '../../../src/contracts/rsi-personal.js';
 import {
@@ -44,6 +44,10 @@ describe('perf diag', () => {
         w.store.sink.applyOnce('terminal:t', [tomb(), markEffect(hex16(5))], meta()),
       );
     }
+    const a = Buffer.from(text);
+    const b = Buffer.from(text);
+    await t('expect toEqual Buffer 2.5MB', () => expect(a).toEqual(b));
+    await t('Buffer.equals', () => expect(a.equals(b)).toBe(true));
     throw new Error(OUT.join(' | '));
   });
 });
