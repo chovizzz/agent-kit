@@ -50,6 +50,7 @@ import {
   RsiTombstonesSchema,
   RsiVetoDocSchema,
 } from '../../src/contracts/rsi-personal.js';
+import { RsiAuditCompactionSchema, RsiEffectsLedgerSchema } from '../../src/contracts/rsi-store.js';
 import {
   RsiAutoSchema,
   RsiBaseSchema,
@@ -114,6 +115,8 @@ export const SCHEMAS: Readonly<Record<string, ZodType>> = {
   RsiAuto: RsiAutoSchema,
   PersonalLifecycleRecord: PersonalLifecycleRecordSchema,
   AutoView: AutoViewSchema,
+  RsiEffectsLedger: RsiEffectsLedgerSchema,
+  RsiAuditCompaction: RsiAuditCompactionSchema,
   PersonalCommitJournal: PersonalCommitJournalSchema,
   PersonalHead: PersonalHeadSchema,
   PersonalTxn: PersonalTxnSchema,
