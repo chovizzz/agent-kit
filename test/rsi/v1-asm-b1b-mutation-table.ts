@@ -2678,8 +2678,8 @@ export const V1_ASM_B1B_RESULTS: readonly V1AsmB1bResult[] = [
     failed: 2,
     skipped: 0,
     killedBy: [
-      'compactorOf 装配完整性(mem) compactor_deps_swapped_after_construction_ignored:构造通过后改写调用方的 deps 对象(换注册表 / held / recovery)不影响 compactor——未关闭区域照拒 region_open,零 I/O、字节不变;区域关闭后同一 compactor 照常推进',
-      'compactorOf 装配完整性(real) compactor_deps_swapped_after_construction_ignored:构造通过后改写调用方的 deps 对象(换注册表 / held / recovery)不影响 compactor——未关闭区域照拒 region_open,零 I/O、字节不变;区域关闭后同一 compactor 照常推进',
+      'compactorOf 装配完整性(mem) compactor_deps_swapped_after_construction_ignored:构造通过后改写调用方的 deps 对象(换注册表 / held / recovery)不影响 compactor——未关闭区域照拒 region_open,零写入、字节不变(租约在 P4 事务内取,拒绝前的读取不算);区域关闭后同一 compactor 照常推进',
+      'compactorOf 装配完整性(real) compactor_deps_swapped_after_construction_ignored:构造通过后改写调用方的 deps 对象(换注册表 / held / recovery)不影响 compactor——未关闭区域照拒 region_open,零写入、字节不变(租约在 P4 事务内取,拒绝前的读取不算);区域关闭后同一 compactor 照常推进',
     ],
     restored: true,
   },
