@@ -576,4 +576,354 @@ export const V1_ASM_B2_MUTATIONS: readonly V1AsmB2Mutation[] = [
 ];
 
 /** 由主代理整表执行变异后回填 */
-export const V1_ASM_B2_RESULTS: readonly V1AsmB2Result[] = [];
+/** 实测结果:r21b2-mut-7b @188f92b(javis):34 条全部被杀 */
+export const V1_ASM_B2_RESULTS: readonly V1AsmB2Result[] = [
+  {
+    id: 'stamp_check_removed',
+    failed: 8,
+    skipped: 0,
+    killedBy: [
+      'SealGuard 挂点:applyEvent 的取时与封存校验 正向对照:时刻在水位线之后 → 转移提交,条目 at = 注入时钟,区域已关闭',
+      'SealGuard 挂点:applyEvent 的取时与封存校验 transition_entry_under_watermark_refused_before_commit:时刻 ≤ W → halt sealed_interval,仓库零提交、零审计、零效果',
+      'SealGuard 挂点:applyEvent 的取时与封存校验 create_boundary_W_vs_W_plus_1:W 当日拒、W+1 日过',
+      'SealGuard 挂点:applyEvent 的取时与封存校验 stale_now_captured_before_lock_refused:传入「锁外预取」的旧时刻(压缩推进后落在 ≤ W)也被拒,仓库不变',
+      'SealGuard 挂点:applyEvent 的取时与封存校验 compaction_between_stamp_and_commit_refused:stamp 之后、源提交期间压缩被 region_open 拒绝;结束后可压缩',
+      '终态记录上的空操作 × 封存区间:保护写不被阻断 protective_veto_lands_under_sealed_clock(引擎层):终态 veto 在封存时钟下仍产出 E1,无审计行,结果 noop',
+      '终态记录上的空操作 × 封存区间:保护写不被阻断 noop_row_sealed_dropped_with_report:终态记录上的 clear 空操作:封存时丢弃无键审计行并报 observationRowSealed',
+      '终态记录上的空操作 × 封存区间:保护写不被阻断 封存拒绝只对终态记录降级为 noop;非终态仍整体拒绝(不会因降级产生条目)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'region_not_closed',
+    failed: 7,
+    skipped: 0,
+    killedBy: [
+      'SealGuard 挂点:applyEvent 的取时与封存校验 正向对照:时刻在水位线之后 → 转移提交,条目 at = 注入时钟,区域已关闭',
+      'SealGuard 挂点:applyEvent 的取时与封存校验 transition_entry_under_watermark_refused_before_commit:时刻 ≤ W → halt sealed_interval,仓库零提交、零审计、零效果',
+      'SealGuard 挂点:applyEvent 的取时与封存校验 compaction_between_stamp_and_commit_refused:stamp 之后、源提交期间压缩被 region_open 拒绝;结束后可压缩',
+      'SealGuard 挂点:applyEvent 的取时与封存校验 每个分支之后区域都已关闭:提交后抛错(commit 拒绝)',
+      'SealGuard 挂点:applyEvent 的取时与封存校验 每个分支之后区域都已关闭:提交失败(commit_failed)',
+      'SealGuard 挂点:applyEvent 的取时与封存校验 每个分支之后区域都已关闭:引擎拒绝 / 记录已变(stale)',
+      '终态记录上的空操作 × 封存区间:保护写不被阻断 protective_veto_lands_under_sealed_clock(引擎层):终态 veto 在封存时钟下仍产出 E1,无审计行,结果 noop',
+    ],
+    restored: true,
+  },
+  {
+    id: 'sealed_noop_keeps_r5_row',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '终态记录上的空操作 × 封存区间:保护写不被阻断 noop_row_sealed_dropped_with_report:终态记录上的 clear 空操作:封存时丢弃无键审计行并报 observationRowSealed',
+    ],
+    restored: true,
+  },
+  {
+    id: 'sealed_nonterminal_downgrade',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'SealGuard 挂点:applyEvent 的取时与封存校验 transition_entry_under_watermark_refused_before_commit:时刻 ≤ W → halt sealed_interval,仓库零提交、零审计、零效果',
+      '终态记录上的空操作 × 封存区间:保护写不被阻断 封存拒绝只对终态记录降级为 noop;非终态仍整体拒绝(不会因降级产生条目)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'veto_seal_dropped',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'veto 命令级(真 git + 假 HOME + 真存储核) protective_veto_lands_under_sealed_clock:取时落在水位线之内 → 退 3 audit_invalid + 已提交待处理信息行;记录与 HEAD 不变,E1 黑名单已落;时钟恢复后重跑幂等完成',
+    ],
+    restored: true,
+  },
+  {
+    id: 'protective_e1_dropped',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'veto 命令级(真 git + 假 HOME + 真存储核) protective_veto_lands_under_sealed_clock:取时落在水位线之内 → 退 3 audit_invalid + 已提交待处理信息行;记录与 HEAD 不变,E1 黑名单已落;时钟恢复后重跑幂等完成',
+    ],
+    restored: true,
+  },
+  {
+    id: 'consumer_unwired_ignored',
+    failed: 3,
+    skipped: 0,
+    killedBy: [
+      'veto_consumer_unwired_not_success 终态候选(只写黑名单):账已提交但消费方未接线 → 退 1,stdout 含 consumer=unwired;对照:已接线退 0',
+      'veto_consumer_unwired_not_success 未部署候选(直接 rejected):账已提交但消费方未接线 → 退 1,stdout 含 consumer=unwired;对照:已接线退 0',
+      'veto_consumer_unwired_not_success 已部署候选(回滚):账已提交但消费方未接线 → 退 1,stdout 含 consumer=unwired;对照:已接线退 0',
+    ],
+    restored: true,
+  },
+  {
+    id: 'layers_no_upgrade',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'veto 命令级(真 git + 假 HOME + 真存储核) protective_veto_lands_under_sealed_clock:取时落在水位线之内 → 退 3 audit_invalid + 已提交待处理信息行;记录与 HEAD 不变,E1 黑名单已落;时钟恢复后重跑幂等完成',
+    ],
+    restored: true,
+  },
+  {
+    id: 'meta_event_at_now',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '元信息:持锁读记录现算,绝不取 now terminal: 键:event_at = 终态条目时间,fp_hmac = 记录的,near_fp = [];走 sink(replay)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'user_veto_never',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '元信息:持锁读记录现算,绝不取 now user_veto 路由:veto: 键上单项 blacklist_veto 走 userVeto;同样的 effect 放在 terminal: 键里走 sink(对照)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'user_veto_for_terminal_too',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      '元信息:持锁读记录现算,绝不取 now terminal: 键:event_at = 终态条目时间,fp_hmac = 记录的,near_fp = [];走 sink(replay)',
+      '元信息:持锁读记录现算,绝不取 now user_veto 路由:veto: 键上单项 blacklist_veto 走 userVeto;同样的 effect 放在 terminal: 键里走 sink(对照)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'meta_missing_swallowed',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '元信息:持锁读记录现算,绝不取 now 读不到 / 对不上 = 抛 effects_meta_missing(不映射成 deferred,零调用):记录不存在',
+    ],
+    restored: true,
+  },
+  {
+    id: 'audit_pending_collapsed',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'toLegacyResult:映射规则逐格 ledger=committed audit=pending → applied',
+      '三层信息不塌缩:收集器保留完整 {ledger, audit, cause} 账已提交而审计待补 → 旧枚举 applied(不是 deferred),收集器记 audit=pending',
+    ],
+    restored: true,
+  },
+  {
+    id: 'recorder_not_recorded',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      '三层信息不塌缩:收集器保留完整 {ledger, audit, cause} 账未提交(effects_full)→ 旧枚举 deferred,收集器记 reason=effects_full',
+      '三层信息不塌缩:收集器保留完整 {ledger, audit, cause} 账已提交而审计待补 → 旧枚举 applied(不是 deferred),收集器记 audit=pending',
+    ],
+    restored: true,
+  },
+  {
+    id: 'lock_order_reversed',
+    failed: 6,
+    skipped: 0,
+    killedBy: [
+      'CommandLocks:顺序 / 试锁 / 逆序释放 rsi_personal_sync:rsi → personal → sync 取,sync → personal → rsi 放',
+      'CommandLocks:顺序 / 试锁 / 逆序释放 试锁失败(rsi):fn 不执行,已拿到的逆序释放,错误原样抛出(RsiLockError locked)',
+      'CommandLocks:顺序 / 试锁 / 逆序释放 试锁失败(personal):fn 不执行,已拿到的逆序释放,错误原样抛出(RsiLockError locked)',
+      'CommandLocks:顺序 / 试锁 / 逆序释放 试锁失败(sync):fn 不执行,已拿到的逆序释放,错误原样抛出(RsiLockError locked)',
+      'CommandLocks:顺序 / 试锁 / 逆序释放 fn 抛错也逆序释放;释放失败不遮盖 fn 的错误(三把都尝试)',
+      'CommandLocks:顺序 / 试锁 / 逆序释放 fn 成功而释放失败:抛释放错误(不假装干净),其余仍释放',
+    ],
+    restored: true,
+  },
+  {
+    id: 'acquire_fail_leaks',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'CommandLocks:顺序 / 试锁 / 逆序释放 试锁失败(personal):fn 不执行,已拿到的逆序释放,错误原样抛出(RsiLockError locked)',
+      'CommandLocks:顺序 / 试锁 / 逆序释放 试锁失败(sync):fn 不执行,已拿到的逆序释放,错误原样抛出(RsiLockError locked)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'release_forward_order',
+    failed: 5,
+    skipped: 0,
+    killedBy: [
+      'CommandLocks:顺序 / 试锁 / 逆序释放 rsi_personal_sync:rsi → personal → sync 取,sync → personal → rsi 放',
+      'CommandLocks:顺序 / 试锁 / 逆序释放 personal_sync(缩减入口)不取 rsi;held.rsi = null',
+      'CommandLocks:顺序 / 试锁 / 逆序释放 试锁失败(sync):fn 不执行,已拿到的逆序释放,错误原样抛出(RsiLockError locked)',
+      'CommandLocks:顺序 / 试锁 / 逆序释放 fn 抛错也逆序释放;释放失败不遮盖 fn 的错误(三把都尝试)',
+      'CommandLocks:顺序 / 试锁 / 逆序释放 fn 成功而释放失败:抛释放错误(不假装干净),其余仍释放',
+    ],
+    restored: true,
+  },
+  {
+    id: 'outside_lock_allowed',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '锁绑定断言:assertInsideLocks 锁外 = 抛 RsiLockError internal;持锁期内(含 await 之后)可见当前持有者并复核两把锁',
+    ],
+    restored: true,
+  },
+  {
+    id: 'state_write_creates_missing',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '锁绑定端口与路由 PauseStatePort:读改写保留其它键、整份过 schema;state.json 缺失时拒写(不凭空创建);不合规 = state_invalid 拒写',
+    ],
+    restored: true,
+  },
+  {
+    id: 'bump_not_monotone',
+    failed: 1,
+    skipped: 0,
+    killedBy: ['锁绑定端口与路由 EntryMarks.bump 单调 +1;文件不合规 = state_invalid 且不覆盖'],
+    restored: true,
+  },
+  {
+    id: 'hold_snapshot_empty',
+    failed: 1,
+    skipped: 0,
+    killedBy: ['HoldFacts 没有数据源的三个码恒在快照里;仓库合法时 personal_repo_invalid 不在'],
+    restored: true,
+  },
+  {
+    id: 'store_not_registered',
+    failed: 4,
+    skipped: 0,
+    killedBy: [
+      'veto 命令级(真 git + 假 HOME + 真存储核) shadow 候选:记录 rejected、黑名单经新端口落账;消费方未接线 → 退 1 consumer=unwired;对照:已接线退 0',
+      'veto 命令级(真 git + 假 HOME + 真存储核) protective_veto_lands_under_sealed_clock:取时落在水位线之内 → 退 3 audit_invalid + 已提交待处理信息行;记录与 HEAD 不变,E1 黑名单已落;时钟恢复后重跑幂等完成',
+      '锁绑定端口与路由 veto_routed_to_new_sink:rollbackDeps 的带键出口落到存储核的账(不是旧 deferred),seal 已接;同一次持有里存储核可取',
+      'veto → lift → veto 重新生效(真存储核;评审第 1 轮 ①) 第三次 veto:黑名单项不再是 lifted(vetoed_gen 前进),输出 effects=applied;对照:连续两次 veto 第二次是 already 且账不变',
+    ],
+    restored: true,
+  },
+  {
+    id: 'sealed_event_not_recorded',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'veto 命令级(真 git + 假 HOME + 真存储核) protective_veto_lands_under_sealed_clock:取时落在水位线之内 → 退 3 audit_invalid + 已提交待处理信息行;记录与 HEAD 不变,E1 黑名单已落;时钟恢复后重跑幂等完成',
+    ],
+    restored: true,
+  },
+  {
+    id: 'git_wired_in_production',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'veto 命令级(真 git + 假 HOME + 真存储核) 生产未装配 git 路径:锁外预读恒 invalid(不是 unknown_id),veto 退 3 且零写入',
+    ],
+    restored: true,
+  },
+  {
+    id: 'stub_gate_removed_probe',
+    failed: 7,
+    skipped: 0,
+    killedBy: [
+      '生产惰性(相位 0) inert_at_phase0_pause:真入口退 64 桩,世界逐字节不变',
+      '生产惰性(相位 0) inert_at_phase0_resume:真入口退 64 桩,世界逐字节不变',
+      '生产惰性(相位 0) inert_at_phase0_clear_write:真入口退 64 桩,世界逐字节不变',
+      '生产惰性(相位 0) inert_at_phase0_rebase_baseline:真入口退 64 桩,世界逐字节不变',
+      '生产惰性(相位 0) inert_at_phase0_veto:真入口退 64 桩,世界逐字节不变',
+      '生产惰性(相位 0) inert_at_phase0_veto_lift:真入口退 64 桩,世界逐字节不变',
+      '生产惰性(相位 0) inert_at_phase0_rollback_to:真入口退 64 桩,世界逐字节不变',
+    ],
+    restored: true,
+  },
+  {
+    id: 'veto_noop_ensure_removed',
+    failed: 4,
+    skipped: 0,
+    killedBy: [
+      'veto → lift → veto 重新生效(真存储核;评审第 1 轮 ①) 第三次 veto:黑名单项不再是 lifted(vetoed_gen 前进),输出 effects=applied;对照:连续两次 veto 第二次是 already 且账不变',
+      'veto_relands_after_lift 终态(经引擎 veto 进 rejected):veto → lift → veto:黑名单重新生效,输出 effects=applied(不是 already)',
+      'veto_relands_after_lift 对照:连续两次 veto(中间没有 lift)→ 第二次确实是已满足:effects=already,黑名单仍生效',
+      'veto_relands_after_lift 终态路径补调 deferred(layers 缺省):lift 后再 veto,补调推迟 → 退 1 + 提示,黑名单仍 lifted(原理由即 vetoed 也不豁免);对照:补调正常 → 退 0 effects=applied',
+    ],
+    restored: true,
+  },
+  {
+    id: 'veto_rollback_ensure_removed',
+    failed: 3,
+    skipped: 0,
+    killedBy: [
+      'veto_relands_after_lift 回滚路径:在途回滚(记录 rolling_back,veto 条目与 E1 已落)被 lift 后再 veto → 黑名单重新生效',
+      'veto_relands_after_lift 回滚路径(两把键都在、E1 不再出):lift 后再 veto → 只靠补调重新生效,恰多一次用户意图调用,退 0',
+      'veto_relands_after_lift 回滚路径补调 deferred(layers 缺省、consumers 已接线):退 1 且有「否决未落地」提示,黑名单仍是 lifted;对照:补调 applied(上一条)/ already → 退 0',
+    ],
+    restored: true,
+  },
+  {
+    id: 'veto_rollback_deferred_not_nonzero',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'veto_relands_after_lift 回滚路径补调 deferred(layers 缺省、consumers 已接线):退 1 且有「否决未落地」提示,黑名单仍是 lifted;对照:补调 applied(上一条)/ already → 退 0',
+    ],
+    restored: true,
+  },
+  {
+    id: 'veto_direct_ensure_deferred_exempt',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'veto_relands_after_lift 终态路径补调 deferred(layers 缺省):lift 后再 veto,补调推迟 → 退 1 + 提示,黑名单仍 lifted(原理由即 vetoed 也不豁免);对照:补调正常 → 退 0 effects=applied',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rebase_post_write_check_removed',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'rebase_post_write_recheck baseline:写入之后 HEAD 又变(情形回到分叉)→ 退 1 RSI_CONFIRM_STALE,diverged 标志保持,不报 done;对照:没变 → 退 0 且清标志',
+      'rebase_post_write_recheck owner(--adopt-owner):写入之后仓库前提不成立(检视 invalid)→ 同样退 1 RSI_CONFIRM_STALE,owner_changed 标志保持',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rewrite_head_check_removed',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'rewritePersonalHead:复核紧贴写入 rewrite_head_recheck_after_lock_await:锁复核期间 HEAD 变了 → 抛 head_changed,head.json 不动',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rewrite_head_yield_before_write',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'rewritePersonalHead:复核紧贴写入 rewrite_head_no_yield_between_check_and_write:复核通过后不再让出,写入的就是复核时的 HEAD(head.json = 当前 HEAD)',
+      'rewritePersonalHead:复核紧贴写入 rewrite_head_lock_lost_during_read:读 head.json 期间句柄丢失 → 抛 lock_lost,head.json 零写入;对照:句柄一直有效 → 写入成功(锁复核恰 2 次:读前、读后)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rewrite_head_post_read_lock_recheck_removed',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'rewritePersonalHead:复核紧贴写入 rewrite_head_no_yield_between_check_and_write:复核通过后不再让出,写入的就是复核时的 HEAD(head.json = 当前 HEAD)',
+      'rewritePersonalHead:复核紧贴写入 rewrite_head_lock_lost_during_read:读 head.json 期间句柄丢失 → 抛 lock_lost,head.json 零写入;对照:句柄一直有效 → 写入成功(锁复核恰 2 次:读前、读后)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'holds_repo_invalid_folds_absent',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'HoldFacts 装配级(评审第 1 轮 ③):absent 与 invalid 分开 从未建仓 → 快照不含 personal_repo_invalid;对照:head.json 损坏 → 含',
+    ],
+    restored: true,
+  },
+];
