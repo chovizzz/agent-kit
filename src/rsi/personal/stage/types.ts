@@ -52,7 +52,7 @@ export type UnsettledReason =
   /** 压缩抛错 / 返回非法值(S2 照跑,但本轮拒绝增影响) */
   | 'compaction_failed'
   /** `StepHalt` 为仓库完整性类 / 权威状态不明(只停本步并使本轮未决) */
-  | `step_integrity:${Exclude<StepHalt, 'lock_lost' | 'repo_absent' | 'repo_deferred'>}`
+  | `step_integrity:${Exclude<StepHalt, 'lock_lost' | 'repo_absent' | 'repo_deferred' | 'sealed_interval'>}`
   /** 调用预算超限(`RoundBudget`;防循环) */
   | `budget_exceeded:${string}`
   /** `StepHalt='lock_lost'` 查不出是哪一把锁 */

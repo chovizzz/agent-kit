@@ -124,6 +124,8 @@ export type HaltClass =
 const HALT_CLASS: Readonly<Record<StepHalt, HaltClass>> = Object.freeze({
   repo_absent: { kind: 'stop_step' },
   repo_deferred: { kind: 'stop_step' },
+  // B2(W0-26 第 9 条):取时落在已封存区间,源提交之前拒绝、零写入;时钟恢复后重跑即可,不涉及仓库完整性 → 只停本步
+  sealed_interval: { kind: 'stop_step' },
   repo_invalid: { kind: 'stop_step_unsettled', cause: 'repo_invalid' },
   revocations_invalid: { kind: 'stop_step_unsettled', cause: 'revocations_invalid' },
   commit_failed: { kind: 'stop_step_unsettled', cause: 'commit_failed' },
