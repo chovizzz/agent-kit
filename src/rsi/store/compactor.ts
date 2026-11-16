@@ -91,7 +91,9 @@ interface AuditSnapshot {
 
 async function loadAudit(p: TxnPorts): Promise<AuditSnapshot> {
   const r = await p.auditAppend.readAudit();
-  const cls = classifyAuditFile(r.kind === 'missing' ? '' : r.text);
+  // 后端按字节切出撕裂尾:`text` 只含完整行,`torn` 标记其后还有尾部字节(与 `loadAuditState` 同一读法)
+  const cls =
+    r.kind === 'missing' ? classifyAuditFile('') : classifyAuditFile(r.text, r.torn === true);
   if (cls.kind === 'bad') throw new StoreError(cls.cause, `line:${cls.line}:${cls.detail}`);
   const good = cls.kind === 'ok' ? (r.kind === 'ok' ? r.text : '') : cls.goodText;
   return { cls, lines: good === '' ? [] : good.slice(0, -1).split('\n') };

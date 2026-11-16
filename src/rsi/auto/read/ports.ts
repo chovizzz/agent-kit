@@ -51,19 +51,30 @@ export interface HomeReadPort {
   journal(txnId: string): Promise<RawRead>;
 }
 
-/** N4-2「关联提案裁决」段的数据(读取失败只影响该段) */
+/**
+ * N4-2「关联提案裁决」段的数据(contracts R20-18.37、W0-27;读取失败只影响该段):
+ * `absent` → `judge=none`(无裁决);`invalid` → `judge=invalid`(读取 / 解析 / 校验失败);`unavailable`(端口未装配或抛错)→ 同样显示 `judge=invalid`,不另造取值;
+ * `ok` → 已通过 R20-18.34 ①–⑤ 的裁决记录:`session_confirmed` 带 `declared agent / vendor / model` 与 `SELF_REPORT_LABEL_JUDGE`,`spawned`(厂商由 kit 复算证明)带 `vendor / model` 与 `VENDOR_PROVEN_LABEL`。
+ */
+interface JudgeVerdictOkBase {
+  kind: 'ok';
+  verdict: string;
+  overfit: string;
+  injection: string;
+}
+
 export type JudgeVerdictRead =
   | { kind: 'absent' }
+  | { kind: 'invalid' }
   | { kind: 'unavailable' }
-  | {
-      kind: 'ok';
-      judge_provenance: string;
-      verdict: string;
-      overfit: string;
-      injection: string;
-      /** 自报记录的厂商 / 模型(没有 = null) */
-      declared: string | null;
-    };
+  | (JudgeVerdictOkBase & {
+      judge_provenance: 'session_confirmed';
+      identity: { kind: 'declared'; agent: string; vendor: string; model: string };
+    })
+  | (JudgeVerdictOkBase & {
+      judge_provenance: 'spawned';
+      identity: { kind: 'proven'; vendor: string; model: string };
+    });
 export interface JudgeVerdictPort {
   verdictFor(runId: string, proposalId: string): Promise<JudgeVerdictRead>;
 }

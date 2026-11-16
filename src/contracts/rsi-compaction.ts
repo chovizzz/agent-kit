@@ -68,8 +68,8 @@ export function parseCompactionText(text: string, today: string): CompactionPars
   }
   const p = RsiAuditCompactionSchema.safeParse(raw);
   if (!p.success) {
-    const token = p.error.issues.map((i) => i.message).find((m) => m.endsWith('_sum'));
-    return { ok: false, detail: token ?? 'schema' };
+    const refineCode = p.error.issues.map((i) => i.message).find((m) => m.endsWith('_sum'));
+    return { ok: false, detail: refineCode ?? 'schema' };
   }
   if (p.data.through !== null && p.data.through >= today) {
     return { ok: false, detail: 'through_not_before_today' };

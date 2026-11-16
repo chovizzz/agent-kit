@@ -6,11 +6,7 @@
  */
 import { randomBytes } from 'node:crypto';
 import * as path from 'node:path';
-import {
-  RSI_AUTO_PAUSE_REASONS,
-  RSI_FILE_MODE,
-  type RsiAutoPauseReason,
-} from '../../contracts/rsi.js';
+import { RSI_FILE_MODE } from '../../contracts/rsi.js';
 import { canonicalJson } from '../../io/canonical-json.js';
 import type { IoContext } from '../../io/paths.js';
 import { lstatBigint, readText } from '../../io/read-fs.js';
@@ -22,38 +18,12 @@ import type {
   UserMarkerStamp,
 } from '../personal/breaker.js';
 import { CANARY_FILES } from './files.js';
+import { parsePauseMarker } from './pause-marker-read.js';
 
-const REASONS: ReadonlySet<string> = new Set(RSI_AUTO_PAUSE_REASONS);
-/** B 的实例标识格式:16 位小写十六进制 */
-const MARKER_ID_RE = /^[0-9a-f]{16}$/;
+// 解析已拆到只读模块 `pause-marker-read.ts`(读侧闭包不含 safe-fs);再导出,既有调用点不变
+export { parsePauseMarker } from './pause-marker-read.js';
+
 const defaultNewId = (): string => randomBytes(8).toString('hex');
-
-export function parsePauseMarker(text: string): PauseMarker {
-  try {
-    const o = JSON.parse(text) as unknown;
-    if (typeof o === 'object' && o !== null) {
-      const by = (o as { by?: unknown }).by;
-      const reason = (o as { reason?: unknown }).reason;
-      const at = (o as { at?: unknown }).at;
-      if (by === 'user') return { by: 'user', reason: null, at: null, id: null };
-      if (by === 'breaker' && typeof reason === 'string' && REASONS.has(reason)) {
-        // `at` 只作展示 / 审计(不参与判定);`id` 是解除证据的比较对象:只认 16 位小写十六进制,缺失 / 格式不对 = 无 id(null)
-        const okAt = typeof at === 'string' && at !== '' && at.length <= 64;
-        const id = (o as { id?: unknown }).id;
-        const okId = typeof id === 'string' && MARKER_ID_RE.test(id);
-        return {
-          by: 'breaker',
-          reason: reason as RsiAutoPauseReason,
-          at: okAt ? at : null,
-          id: okId ? id : null,
-        };
-      }
-    }
-  } catch {
-    // 内容读不出:仍算存在(hint 只判存在)
-  }
-  return { by: 'unknown', reason: null, at: null, id: null };
-}
 
 /** `rsiDir` = 已确认安全的 `.state/rsi` 目录(与 `makePermitPort` 同一个) */
 export function makeBreakerMarkerPort(

@@ -31,7 +31,7 @@ import type {
   SealRegion,
   SourceLocator,
 } from './ports.js';
-import { beginAuditAttempt } from './seal.js';
+import { assertLinesStamped, beginAuditAttempt, type SealRegistry } from './seal.js';
 
 export interface AuditState {
   cls: GoodAuditClass;
@@ -42,7 +42,10 @@ export interface AuditState {
 /** 读审计文件 + 水位线:坏行 / 重复键 / 压缩不受支持 = 抛(fail-closed);撕裂尾不抛(`cls.kind === 'torn_tail'`) */
 export async function loadAuditState(port: AuditAppendPort): Promise<AuditState> {
   const read = await port.readAudit();
-  const cls = classifyAuditFile(read.kind === 'missing' ? '' : read.text);
+  const cls =
+    read.kind === 'missing'
+      ? classifyAuditFile('')
+      : classifyAuditFile(read.text, read.torn === true);
   if (cls.kind === 'bad') throw new StoreError(cls.cause, `line:${cls.line}:${cls.detail}`);
   const wm = (await port.readWatermark()).through;
   return { cls, wm };
@@ -122,6 +125,8 @@ const isProtectionMark = (r: RsiAuditLine): boolean =>
 
 export interface AuditAppenderDeps {
   held: HeldStore;
+  /** 本存储域的注册表:`first` 的区域必须由它创建(M2) */
+  registry: SealRegistry;
   /** 缺省 = 未接线:水位线之下的 replay 一律 `sealed_unknown_event` */
   resolve?: ReconcileSource['resolve'];
 }
@@ -143,11 +148,12 @@ export function createAuditAppender(deps: AuditAppenderDeps): AuditAppender {
     origin: { kind: 'first'; region: SealRegion } | { kind: 'replay'; source: SourceLocator },
   ): Promise<readonly AppendReplayResult[]> => {
     if (origin.kind === 'replay') return run(items, origin);
-    beginAuditAttempt(origin.region);
+    const region = beginAuditAttempt(origin.region, deps.registry);
     try {
+      assertLinesStamped(region, items);
       return await run(items, { kind: 'first' });
     } finally {
-      origin.region.close();
+      region.close();
     }
   };
 

@@ -62,6 +62,16 @@ describe('压缩后的审计口径', () => {
     expect(
       doc((await run(w, { from: '2026-11-10', to: '2026-11-13' })).out).request_before_observed,
     ).toBe(false);
+    // 审计里没有 W 之后的行(observed = null)时,只有水位线口径能给出该标志:起点 = W(含边界)→ true;起点晚于 W 一天 → false
+    const emptyAfter = makeWorld({ audit: { kind: 'ok', text: '' }, compaction: comp(1) });
+    const flagFor = async (from: string): Promise<[number, boolean | undefined, unknown]> => {
+      const r = await run(emptyAfter, { from, to: '2026-11-13' });
+      const j = doc(r.out);
+      return [r.code, j.request_before_observed, j.observed];
+    };
+    expect(await flagFor('2026-10-31')).toEqual([0, true, null]);
+    expect(await flagFor('2026-10-01')).toEqual([0, true, null]);
+    expect(await flagFor('2026-11-01')).toEqual([0, false, null]);
   });
 
   it('report_empty_after_compaction_exit0:W 非空时审计为空 / 缺失 = 退 0(不因「账显示曾有转移」误退 3);无压缩文件的同一情形仍退 3', async () => {
@@ -146,6 +156,20 @@ describe('gen 双读', () => {
         `cause=${cause}\n`,
         'RSI_FAIL_CLOSED reason=audit_invalid\n',
       ]);
+    }
+    // 只有第 2 次读(同一轮的第二次)失败、之后的读都成功:若实现吞掉第二次失败就会进入下一轮并成功(退 0)。必须在第 2 次读就退 3,且不再读第 3 次
+    for (const [second, cause] of cases) {
+      const w = makeWorld({
+        audit: { kind: 'ok', text },
+        compactionAt: (n) => (n === 2 ? second : comp(1)),
+      });
+      const r = await run(w);
+      expect([r.code, r.out, r.err]).toEqual([
+        3,
+        `cause=${cause}\n`,
+        'RSI_FAIL_CLOSED reason=audit_invalid\n',
+      ]);
+      expect(w.compactionReads).toBe(2);
     }
     // 对照:第二次读与第一次一致 → 成功
     const ok = makeWorld({ audit: { kind: 'ok', text }, compactionAt: () => comp(1) });

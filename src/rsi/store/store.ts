@@ -23,7 +23,8 @@ import type {
   SealGuard,
   UserVetoPort,
 } from './ports.js';
-import { SealRegistry, createSealGuard } from './seal.js';
+import { createSealGuard, type SealRegistry } from './seal.js';
+import { acquireLockControl } from './lock-control.js';
 import { createHeldStore } from './txn.js';
 
 export interface RsiStoreDeps {
@@ -58,8 +59,20 @@ export interface RsiStore {
 export function assembleRsiStore(deps: RsiStoreDeps): RsiStore {
   const clock = deps.clock ?? ((): Date => new Date());
   const backend = createBackend(deps.fs, clock);
-  const held = createHeldStore({ rsi: deps.rsi, personal: deps.personal, backend });
-  const registry = deps.registry ?? new SealRegistry();
+  // 区域注册表是 acquisition 的共享状态:同一对句柄的所有装配共用一张(传了另一张 = 拒绝;别的 acquisition 的表 = 拒绝)。
+  // 先于其余装配:注册表不可接受时整个装配零副作用(首次绑定连句柄都不占用)
+  const registry = acquireLockControl(
+    deps.rsi,
+    deps.personal,
+    deps.fs.root,
+    deps.registry,
+  ).adoptRegistry(deps.registry);
+  const held = createHeldStore({
+    rsi: deps.rsi,
+    personal: deps.personal,
+    backend,
+    ...(deps.fs.root !== undefined ? { root: deps.fs.root } : {}),
+  });
   const resolver = deps.reconcile ?? deps.source;
   const apply = {
     held,
@@ -81,6 +94,7 @@ export function assembleRsiStore(deps: RsiStoreDeps): RsiStore {
     }),
     appender: createAuditAppender({
       held,
+      registry,
       ...(apply.resolve !== undefined ? { resolve: apply.resolve } : {}),
     }),
     seal: createSealGuard({ registry, readWatermark: () => backend.readWatermark() }),

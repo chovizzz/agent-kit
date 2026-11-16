@@ -52,8 +52,8 @@ export function decodeLedger(bytes: Buffer): RsiEffectsLedger {
   }
   const p = RsiEffectsLedgerSchema.safeParse(raw);
   if (p.success) return p.data;
-  const token = p.error.issues.map((i) => i.message).find((m) => REFINE_TOKENS.includes(m));
-  throw new StoreError('state_invalid', token ?? 'schema');
+  const refineCode = p.error.issues.map((i) => i.message).find((m) => REFINE_TOKENS.includes(m));
+  throw new StoreError('state_invalid', refineCode ?? 'schema');
 }
 
 export function encodeLedger(l: RsiEffectsLedger): string {
@@ -144,8 +144,13 @@ export function createBackend(fs: StoreFs, clock: () => Date): StoreBackend {
       });
       if (r.kind === 'missing') return { kind: 'missing' };
       if (r.kind === 'unsafe') throw new StoreError('audit_bad_line', `unsafe:${r.why}`);
+      // 按**字节**找最后一个 LF:其前的完整行严格解码(非法 UTF-8 仍 fail-closed);其后的尾部字节是撕裂尾,不解码
+      // (短写可能停在多字节字符中间,整文件解码会让撕裂尾永远修不了)
+      const lf = r.bytes.lastIndexOf(0x0a);
+      const complete = r.bytes.subarray(0, lf + 1);
       try {
-        return { kind: 'ok', text: new TextDecoder('utf-8', { fatal: true }).decode(r.bytes) };
+        const text = strictUtf8(complete);
+        return lf + 1 < r.bytes.length ? { kind: 'ok', text, torn: true } : { kind: 'ok', text };
       } catch {
         throw new StoreError('audit_bad_line', 'utf8');
       }

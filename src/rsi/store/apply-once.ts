@@ -1,7 +1,8 @@
 /**
  * 账 + 审计的编排:`KeyedEffectSink.applyOnce`、`LedgerRecoveryPort.recoverThrough`、`UserVetoPort`(设计稿 v3 §A、§D.2、§D.3;§21.24 W0-26 第 2、3 条)。
  *
- * `applyOnce(key, effects, meta?)` 在**一个事务内**固定顺序:读账 / 审计 / 水位线 → **验证 → 合并 → 容量(账)→ 审计预检** → 账 `rename` → 审计追加。
+ * `applyOnce(key, effects, meta?)` 在**一个事务内**固定顺序:读账 / 审计 / 水位线 → **验证(账 + 审计:schema / 同键冲突 / 坏行 / 封存)→ 合并 → 容量(账、审计;容量结果最后才返回,M1)** → 账 `rename` → 审计追加。
+ * 状态已满足但键未登记的批也登记键并提交(H3,`registerSatisfiedKey`);没有状态变化时仍可形成维护性提交(删过期冷却 / 水位线覆盖的 applied,M3)。
  * 预检与提交之间不会被别的操作插入,所以账提交后只剩 I/O 失败;结果只有 `{ledger, audit}` 两层(命令层另组合 `authority`):
  *  - 容量(`effects_full` / 审计 `audit_full`)**不抛**,按「撤销优先」返回 `ledger: not_committed` + `cause`(账已满足而审计满 = `ledger: satisfied, audit: pending`);
  *  - 冲突 / 不合规 / 元信息缺失 / 压缩不受支持 **抛** `StoreError`(零写入);
@@ -70,21 +71,24 @@ export function createKeyedEffectSink(deps: ApplyDeps): KeyedEffectSink {
       }
       return deps.held.transaction(async (p): Promise<ApplyOnceResult> => {
         const wm = (await p.auditAppend.readWatermark()).through;
-        const opts: PlanOptions = { today: todayOf(deps.clock), watermark: wm };
+        // 状态已满足但身份未登记的批也登记键并提交(H3):否则同键异内容随后可直接成功
+        const opts: PlanOptions = {
+          today: todayOf(deps.clock),
+          watermark: wm,
+          registerSatisfiedKey: true,
+        };
 
-        // ① 验证 → 合并 → 容量(账)
+        // ① 验证(账:schema / 批内同键 / 墓碑 / 键冲突)→ 合并 → 容量;账容量是**返回值**,不是异常,所以先别返回
         let plan: PlanResult | null = null;
         if (lef.length > 0) {
           plan = planBatch(await p.ledgerWrite.read(), key, lef, meta, 'replay', opts);
-          if (plan.kind === 'not_committed') {
-            return { ledger: 'not_committed', audit: 'not_applicable', cause: plan.cause };
-          }
         }
-        const ledgerWillCommit = plan?.kind === 'commit';
 
-        // ② 审计预检(只读;账提交之前)
+        // ② 审计预检(只读;账提交之前)。**所有验证先于任何容量结果**(M1):审计 schema / 同键冲突 / 坏行 / 封存先抛,容量(账 / 审计)最后才返回,
+        //    所以调用方在不同容量状态下得到同一份完整性诊断
         let auditPlan: Awaited<ReturnType<typeof planKeyedAppend>> | null = null;
         let auditState: Awaited<ReturnType<typeof loadAuditState>> | null = null;
+        let auditFull = false;
         if (lines.length > 0) {
           auditState = await loadAuditState(p.auditAppend);
           try {
@@ -96,27 +100,36 @@ export function createKeyedEffectSink(deps: ApplyDeps): KeyedEffectSink {
             );
           } catch (e) {
             if (!(e instanceof StoreError) || e.code !== 'audit_full') throw e;
-            // 审计满:账还没提交 → 不提交(账提交后只剩 I/O 失败这一不变量);账已满足 → 审计待补
-            return ledgerWillCommit
-              ? { ledger: 'not_committed', audit: 'not_applicable', cause: 'audit_full' }
-              : {
-                  ledger: plan === null ? 'not_applicable' : 'satisfied',
-                  audit: 'pending',
-                  cause: 'audit_full',
-                };
+            auditFull = true;
           }
         }
 
-        // ③ 账 rename(提交点);失败抛错 = 零变更
+        // ③ 容量结果(撤销优先,不抛):账满 → 不提交;审计满 → 账要提交则不提交(账提交后只剩 I/O 失败这一不变量),账已满足则审计待补
+        if (plan !== null && plan.kind === 'not_committed') {
+          return { ledger: 'not_committed', audit: 'not_applicable', cause: plan.cause };
+        }
+        const ledgerWillCommit = plan?.kind === 'commit' && plan.maintenanceOnly !== true;
+        if (auditFull) {
+          return ledgerWillCommit
+            ? { ledger: 'not_committed', audit: 'not_applicable', cause: 'audit_full' }
+            : {
+                ledger: plan === null ? 'not_applicable' : 'satisfied',
+                audit: 'pending',
+                cause: 'audit_full',
+              };
+        }
+
+        // ④ 账 rename(提交点);失败抛错 = 零变更
         let ledgerLayer: LedgerLayer = 'not_applicable';
         if (plan !== null && plan.kind === 'commit') {
           await p.ledgerWrite.commit(plan.next);
-          ledgerLayer = 'committed';
+          // 只做了维护性提交(批次自己已满足)= 报批次自己的结论 satisfied,与 recoverThrough 一致
+          ledgerLayer = plan.maintenanceOnly === true ? 'satisfied' : 'committed';
         } else if (plan !== null) {
           ledgerLayer = 'satisfied';
         }
 
-        // ④ 审计追加;账已提交 / 已满足时失败 = 待补
+        // ⑤ 审计追加;账已提交 / 已满足时失败 = 待补
         if (auditPlan === null || auditState === null)
           return { ledger: ledgerLayer, audit: 'not_applicable' };
         try {
@@ -169,9 +182,11 @@ export function createLedgerRecovery(deps: ApplyDeps): LedgerRecoveryPort {
             results[idx] = { batch_id: b.key, state: 'ledger_not_committed', cause: e.code };
           }
         });
+        // 恢复处理的事件日 ≤ 即将推进的 W,其键推进后本就被裁:状态已满足的批不登记身份(`registerSatisfiedKey: false`,P1 判据 = 状态)
         const { outcomes, plan, planError } = planBatches(base, valid, {
           today: todayOf(deps.clock),
           watermark: wm,
+          registerSatisfiedKey: false,
         });
         let failCause: StoreCause | null = null;
         let committed = false;
@@ -224,6 +239,7 @@ export function createUserVetoPort(deps: ApplyDeps): UserVetoPort {
           {
             today: todayOf(deps.clock),
             watermark: wm,
+            registerSatisfiedKey: true,
           },
         );
         if (plan.kind === 'not_committed') {
@@ -231,7 +247,11 @@ export function createUserVetoPort(deps: ApplyDeps): UserVetoPort {
         }
         if (plan.kind === 'satisfied') return { ledger: 'satisfied', audit: 'not_applicable' };
         await p.ledgerWrite.commit(plan.next);
-        return { ledger: 'committed', audit: 'not_applicable' };
+        // 与 `applyOnce` 一致:只有维护性写入(过期冷却 / 水位线覆盖的 applied)而否决自身已满足 = `satisfied`。`satisfied` 表示效果已满足,**不等于零写盘**
+        return {
+          ledger: plan.maintenanceOnly === true ? 'satisfied' : 'committed',
+          audit: 'not_applicable',
+        };
       });
     },
     async lift(id, contentSha256, at) {

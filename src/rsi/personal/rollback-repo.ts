@@ -19,7 +19,11 @@ import {
   type PersonalLocks,
   type PersonalRepoDeps,
 } from './commit.js';
-import { PersonalLifecycleRecordSchema } from '../../contracts/rsi-personal.js';
+import {
+  PersonalLifecycleRecordSchema,
+  type PersonalLifecycleRecord,
+} from '../../contracts/rsi-personal.js';
+import type { RepoRead } from './candidate-ports.js';
 import { readHead, type PersonalHome } from './home-state.js';
 import { txnId } from './ids.js';
 import type { RepoRemoval, RepoRemovalResult } from './rollback-ports.js';
@@ -91,5 +95,38 @@ export function recordedShaReader(
     } catch {
       return null;
     }
+  };
+}
+
+/**
+ * `ClearDeps.recordedRecords` 的真实实现:私有仓库 `deferred`(人工分叉 / 属主变化)时,从 `head.json` 记录的提交里只读取全部候选记录(缩减入口仍要能列出候选并写撤销凭据,R21-9.3a / R21-9.5)。
+ * 任何一条记录读不出 / 不合规 / 文件名与 id 不一致 → 整个读取 `invalid`(不跳过坏记录)。
+ */
+export function recordedRecordsReader(
+  deps: PersonalRepoDeps,
+  locks: PersonalLocks,
+): () => Promise<RepoRead<PersonalLifecycleRecord[]>> {
+  return async () => {
+    const r = await readRecordedPersonalFiles(deps, locks, ['lifecycle']);
+    if (r.status === 'absent') return { kind: 'absent' };
+    if (r.status === 'deferred') return { kind: 'deferred', reason: r.reason, why: r.why };
+    if (r.status === 'invalid') return { kind: 'invalid', why: r.why };
+    const out: PersonalLifecycleRecord[] = [];
+    for (const f of r.files) {
+      const m = /^lifecycle\/([^/]+)\.json$/.exec(f.path);
+      let raw: unknown;
+      try {
+        raw = JSON.parse(f.content);
+      } catch {
+        return { kind: 'invalid', why: 'candidate_invalid' };
+      }
+      const p = PersonalLifecycleRecordSchema.safeParse(raw);
+      if (m === null || !p.success || p.data.id !== m[1]) {
+        return { kind: 'invalid', why: 'candidate_invalid' };
+      }
+      out.push(p.data);
+    }
+    out.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    return { kind: 'ok', head: r.head, value: out };
   };
 }

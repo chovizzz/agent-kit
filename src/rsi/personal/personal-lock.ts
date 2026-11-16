@@ -28,6 +28,7 @@ import {
 } from '../../io/home-fs.js';
 import { statDirSafe } from '../../io/read-fs.js';
 import { RsiLockError } from '../lock-error.js';
+import { createReleaseGateSlot, type ReleaseGate } from '../lock-gate.js';
 import { markPersonalLockHeld, unmarkPersonalLockHeld } from '../lock-order.js';
 import {
   defaultAlive,
@@ -49,8 +50,14 @@ export interface PersonalLockHandle {
   readonly nonce: string;
   /** 提交点前复核:锁文件的 nonce 仍是自己的;不是(被回收者夺走、被删、被换成链接)→ 抛 `RsiLockError('lock_lost')` */
   assertHeld(): Promise<void>;
-  /** 释放:仅当锁文件仍是自己的才删;已丢失则什么也不删。幂等。 */
+  /** 释放:仅当锁文件仍是自己的才删;已丢失则什么也不删。幂等。已挂释放屏障时先等屏障(拒绝 = 本次不释放) */
   release(): Promise<void>;
+  /** 存储核挂释放屏障(W0-26 第 12 条);同一句柄只接受同一个屏障。未使用时 `release()` 行为不变 */
+  attachReleaseGate?(gate: ReleaseGate): void;
+  /** 无副作用预检:`attachReleaseGate(gate)` 会不会成功(存储核装配先预检两把句柄,再占用) */
+  canAttachReleaseGate?(gate: ReleaseGate): boolean;
+  /** 锁种类身份(`rsi` / `personal`):存储核按它正向验证角色,不靠「不在当前 root 下」推断 */
+  readonly kind?: 'personal';
 }
 
 /** 本进程内已持有的锁(按路径);同一进程第二次获取同一把锁 = 编程错误 */
@@ -122,6 +129,7 @@ export async function acquirePersonalLock(
       heldInProcess.add(file);
       markPersonalLockHeld(file);
       let released = false;
+      const gateSlot = createReleaseGateSlot();
       return {
         path: file,
         nonce: doc.nonce,
@@ -131,7 +139,12 @@ export async function acquirePersonalLock(
             throw new RsiLockError('lock_lost');
           }
         },
+        attachReleaseGate: (gate) => gateSlot.attach(gate),
+        canAttachReleaseGate: (gate) => gateSlot.canAttach(gate),
+        kind: 'personal',
         async release(): Promise<void> {
+          if (released) return;
+          await gateSlot.wait();
           if (released) return;
           released = true;
           try {

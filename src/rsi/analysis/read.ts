@@ -12,7 +12,7 @@ import { SignalSchema, type Signal } from '../../contracts/signal.js';
 import type { IoContext } from '../../io/paths.js';
 import { listMonthFiles, scanMonthFile } from '../../signals/store-scan.js';
 import { treatText } from '../canary/canary-doc.js';
-import { readLedger } from '../canary/ledger.js';
+import { readLedger } from '../canary/ledger-read.js';
 import type { StatItem } from '../canary/marker-view.js';
 import type { AnalysisSource } from './run.js';
 

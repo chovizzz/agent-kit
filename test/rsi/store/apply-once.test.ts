@@ -18,6 +18,7 @@ import {
   auditEffect,
   cool,
   faulty,
+  expectSameBytes,
   fullAuditText,
   hex16,
   makeWorld,
@@ -222,7 +223,7 @@ describe.each(KINDS)('applyOnce 契约(%s)', (kind) => {
     const r = await w.store.sink.applyOnce('terminal:t', [tomb(), markEffect(hex16(5))], meta());
     expect(r).toEqual({ ledger: 'not_committed', audit: 'not_applicable', cause: 'audit_full' });
     expect(await w.bytes(FILES.effects)).toBeNull();
-    expect(await w.bytes(FILES.audit)).toEqual(before);
+    expectSameBytes(await w.bytes(FILES.audit), before);
   });
 
   it('审计满 + 账已满足:ledger=satisfied、audit=pending、cause=audit_full(审计待补,不是错误)', async () => {
@@ -415,11 +416,13 @@ describe.each(KINDS)('UserVetoPort 与 lift 语义(%s)', (kind) => {
     expect(await w.store.sink.applyOnce(`veto:${ID}:${SHA}`, [veto()], meta())).toMatchObject({
       ledger: 'satisfied',
     });
-    // 换键重放(模拟键被裁):状态层也不复活
+    // 换键重放(模拟键被裁):状态层也不复活;键未登记 → 只登记身份并提交(H3),否决状态不变
     expect(await w.store.sink.applyOnce('terminal:other', [veto()], meta())).toMatchObject({
-      ledger: 'satisfied',
+      ledger: 'committed',
     });
     expect((await item(w))?.lifted_gen).toBeDefined();
+    expect((await item(w))?.vetoed_gen).toBe(1);
+    expect((await ledgerOf(w)).applied.map((a) => a.key)).toContain('terminal:other');
   });
 
   it('user_veto_skips_already_shortcircuit:同键已记,lift 后用户再 veto 仍生效(清 lifted、vetoed_gen = 新 gen)', async () => {

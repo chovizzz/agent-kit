@@ -3,6 +3,7 @@
  * 假锁(`assertHeld` 丢锁 = `RsiLockError('lock_lost')`)、世界构造(`real` = 真 `safeStoreFs` + 临时目录;`mem` = 内存)。**不调用被测的合并 / 规划函数**:期望值由测试自己手写。
  */
 import * as path from 'node:path';
+import { expect } from 'vitest';
 import type { RsiAuditLine } from '../../../src/contracts/rsi-personal.js';
 import {
   RSI_AUDIT_COMPACTION_FILE,
@@ -11,6 +12,7 @@ import {
 } from '../../../src/contracts/rsi-store.js';
 import { canonicalJsonLine } from '../../../src/io/canonical-json.js';
 import { createIoContext, type IoContext } from '../../../src/io/paths.js';
+import { appendFileSynced, writeFile } from '../../../src/io/safe-fs.js';
 import { readDir } from '../../../src/io/read-fs.js';
 import { RsiLockError } from '../../../src/rsi/lock-error.js';
 import { createBackend, type StoreBackend } from '../../../src/rsi/store/backend.js';
@@ -99,15 +101,28 @@ export class FakeLock implements LockCap {
   held = true;
   releases = 0;
   asserts = 0;
+  /** 与真实句柄同一契约:挂上的释放屏障在 `release()` 真正动手前先等(同一句柄只接受同一个屏障) */
+  private gate: { beforeRelease(): Promise<void> } | undefined;
   constructor(
     readonly name: string,
     private readonly log: string[],
+    readonly path?: string,
+    readonly kind?: 'rsi' | 'personal',
   ) {}
+  /** 与真实句柄同一契约:无副作用预检(空槽或已是同一个屏障才可挂) */
+  canAttachReleaseGate(gate: { beforeRelease(): Promise<void> }): boolean {
+    return this.gate === undefined || this.gate === gate;
+  }
+  attachReleaseGate(gate: { beforeRelease(): Promise<void> }): void {
+    if (this.gate !== undefined && this.gate !== gate) throw new RsiLockError('internal');
+    this.gate = gate;
+  }
   async assertHeld(): Promise<void> {
     this.asserts++;
     if (!this.held) throw new RsiLockError('lock_lost');
   }
   async release(): Promise<void> {
+    await this.gate?.beforeRelease();
     this.log.push(`release:${this.name}`);
     this.held = false;
     this.releases++;
@@ -185,6 +200,8 @@ export function faulty(
     return null;
   };
   return {
+    // 里氏替换:包装器保留底层的 `root`(真实装配的身份校验依赖它),不论是否经 `makeWorld` 的 `wrap`
+    ...(inner.root !== undefined ? { root: inner.root } : {}),
     hits,
     calls,
     async read(name, max) {
@@ -252,6 +269,18 @@ export interface World {
   bytes(name: string): Promise<Buffer | null>;
 }
 
+/** 给任意 `StoreFs` 加上 `root`(委托其余方法;内存假件没有 root 时用来演示「锁带 path、fs 带 root」的真实装配形状) */
+export function withRoot(inner: StoreFs, root: string): StoreFs {
+  return {
+    root,
+    read: (n, m) => inner.read(n, m),
+    writeTmp: (n, t) => inner.writeTmp(n, t),
+    commitTmp: (n) => inner.commitTmp(n),
+    removeTmp: (n) => inner.removeTmp(n),
+    appendSynced: (n, t) => inner.appendSynced(n, t),
+  };
+}
+
 export interface WorldOptions {
   wrap?: (inner: StoreFs) => StoreFs;
   clockIso?: string;
@@ -282,8 +311,23 @@ export async function makeWorld(kind: FsKind, opts: WorldOptions = {}): Promise<
       (await readDir(rsi)).map((e) => e.name).filter((n) => n.endsWith('.tmp'));
   }
   const fs = opts.wrap === undefined ? raw : opts.wrap(raw);
-  const rsiLock = new FakeLock('rsi', log);
-  const personalLock = new FakeLock('personal', log);
+  // 真实世界按生产形状装配:`fs.root` + 两把锁都带 path 与锁种类(rsi = <root>/lock,personal 在 root 之外);
+  // 包装器(故障注入等)必须保留 `root`——没有转发就补上(原地定义,不换对象,`hits` / `calls` 等包装器自带成员保留)。
+  // 内存世界两者都不带(假件形状),装配照旧走「都不声明」分支。
+  let rsiPath: string | undefined;
+  let personalPath: string | undefined;
+  if (raw.root !== undefined) {
+    rsiPath = path.join(raw.root, 'lock');
+    personalPath = path.join(dir, 'home', 'rsi-personal', 'lock');
+    if (fs.root === undefined) Object.defineProperty(fs, 'root', { value: raw.root });
+  }
+  const rsiLock = new FakeLock('rsi', log, rsiPath, rsiPath === undefined ? undefined : 'rsi');
+  const personalLock = new FakeLock(
+    'personal',
+    log,
+    personalPath,
+    personalPath === undefined ? undefined : 'personal',
+  );
   const clockFn = (): Date => new Date(clock.iso);
   const store = assembleRsiStore({
     fs,
@@ -340,6 +384,19 @@ export const compactionDoc = (through: string | null, gen = 1) => ({
   months: {},
 });
 
+/**
+ * 字节相等断言(大文件用)。**不要**对 MB 级 Buffer 用 `expect(...).toEqual(...)`:vitest 逐元素比较,2.5MB 要 ~26s(实测,seal),
+ * 一条用例比两次再叠加负载就撞 120s 超时。这里用 `Buffer.equals`(memcmp),失败时给长度与首个差异下标。
+ */
+export function expectSameBytes(actual: Buffer | null, expected: Buffer | null): void {
+  if (actual === null || expected === null) {
+    expect(actual === null).toBe(expected === null);
+    return;
+  }
+  expect(actual.length).toBe(expected.length);
+  expect(actual.equals(expected) ? -1 : actual.findIndex((b, i) => b !== expected[i])).toBe(-1);
+}
+
 let fullAuditCache: string | null = null;
 /** 20000 行(审计硬线)的合法审计文件;键从 0x100000 起,不与测试里常用的 hex16(1..) 冲突。进程内只构造一次 */
 export function fullAuditText(): string {
@@ -347,4 +404,22 @@ export function fullAuditText(): string {
     jsonLine(trow(hex16(i + 0x100000))),
   ).join('');
   return fullAuditCache;
+}
+
+// ---------- 字节级播种(撕裂尾可停在多字节字符中间;`StoreFs` 端口只收字符串,所以直接写底层) ----------
+const absOf = async (w: World, name: string): Promise<string> =>
+  path.join(await rsiDir(w.io), name);
+
+/** 用任意字节覆盖 `name`(内存:直接放 Buffer;真文件:经 `safe-fs`) */
+export async function seedBytes(w: World, name: string, bytes: Uint8Array): Promise<void> {
+  if (w.kind === 'mem') (w.raw as MemFs).files.set(name, Buffer.from(bytes));
+  else await writeFile(w.io, await absOf(w, name), bytes, { mode: 0o600 });
+}
+
+/** 在 `name` 末尾追加任意字节(模拟停在字符中间的短写) */
+export async function rawAppendBytes(w: World, name: string, bytes: Uint8Array): Promise<void> {
+  if (w.kind === 'mem') {
+    const m = w.raw as MemFs;
+    m.files.set(name, Buffer.concat([m.files.get(name) ?? Buffer.alloc(0), Buffer.from(bytes)]));
+  } else await appendFileSynced(w.io, await absOf(w, name), bytes, 0o600);
 }
