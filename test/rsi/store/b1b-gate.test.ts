@@ -119,7 +119,7 @@ describe('B1b 合并后的生产惰性', () => {
     const c = closureOf(['src/rsi/inert-probe.ts'], {
       virtual: {
         'src/rsi/inert-probe.ts':
-          "import { assembleRsiStore } from './store/store.js';\nimport '../contracts/rsi-store.js';\nexport const x = assembleRsiStore;",
+          "import { assembleRsiStore } from './store/store.js';\nimport { compactorOf } from './store/compactor.js';\nimport '../contracts/rsi-store.js';\nexport const x = [assembleRsiStore, compactorOf];",
       },
     });
     expect(storeFiles(c.files)).toEqual(
@@ -127,6 +127,7 @@ describe('B1b 合并后的生产惰性', () => {
         'src/rsi/store/store.ts',
         'src/contracts/rsi-store.ts',
         'src/rsi/store/compactor.ts',
+        'src/rsi/store/compaction-port.ts',
       ]),
     );
   });
