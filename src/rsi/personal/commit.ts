@@ -588,7 +588,8 @@ export async function personalHeadRewritten(
 /**
  * 改写 `head.json`(持 `personal/lock`):`baseline` = 记录提交换成 `expectHead`(须仍是当前 HEAD,否则抛 `head_changed`);
  * `owner` = `owner_repo_fp` 换成当前 `[rsi] repo` 的指纹(`expectHead` 同样须仍是当前 HEAD)。其余字段原样保留。
- * **顺序**:所有 `await`(锁复核、读 `head.json`)都在前;最后一次 HEAD 复核(同步 `revParse`)紧贴 `writeHead`,二者之间没有让出点。
+ * **顺序**:开头锁复核 → `await readHead` → 备好写入内容 → **读后锁复核**(最后一个 `await`)→ 同步 HEAD 复核(`revParse`)→ `writeHead`;
+ * 提交前一定有一次晚于 `readHead` 的锁复核(读期间丢锁 → `lock_lost`,零写入),HEAD 复核与 `writeHead` 之间没有让出点(锁复核放在 HEAD 复核之前,不是之后)。
  * **并发边界(如实)**:`personal/lock` 只排除遵守项目锁的写者;不遵守项目锁的人工 git 操作与「复核 → 写入」之间仍有窗口,
  * 所以本函数**不保证**「HEAD 已变则零写入」——只保证:复核时 HEAD 已变则抛 `head_changed` 且零写入;写入后的一致性由调用方写后复核
  * (`rebase.ts`:写后情形不是 `ok` → 保持暂停、不清标志、不报完成)。
@@ -604,14 +605,14 @@ export async function rewritePersonalHead(
   if (hd.kind !== 'ok') throw new Error(`head_${hd.kind === 'invalid' ? hd.why : 'absent'}`);
   const now = deps.now ?? ((): Date => new Date());
   const git = createClosedGit(deps.h, statePath(deps.h, PERSONAL_STATE_FILES.emptyDir), now);
-  // 最后一次复核:紧贴写入,其后不再有 await 让出(锁复核已在上面做完)
+  // 写入内容先备好(同步):其后只剩「锁复核(await)→ 同步 HEAD 复核 → 写入」
+  const next = PersonalHeadSchema.parse({
+    schema_version: 1,
+    head: kind === 'baseline' ? expectHead : hd.value.head,
+    owner_repo_fp: kind === 'owner' ? deps.ownerRepoFp : hd.value.owner_repo_fp,
+  });
+  await assertLockHandles(locks); // 读后锁复核:读 head.json 期间丢锁 → lock_lost,零写入
+  // 最后一次复核:同步 revParse,紧贴写入,二者之间没有 await 让出
   if (revParse(git, 'HEAD^{commit}') !== expectHead) throw new Error('head_changed');
-  await writeHead(
-    deps.h,
-    PersonalHeadSchema.parse({
-      schema_version: 1,
-      head: kind === 'baseline' ? expectHead : hd.value.head,
-      owner_repo_fp: kind === 'owner' ? deps.ownerRepoFp : hd.value.owner_repo_fp,
-    }),
-  );
+  await writeHead(deps.h, next);
 }

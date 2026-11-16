@@ -380,6 +380,7 @@ export const V1_ASM_B2_MUTATIONS: readonly V1AsmB2Mutation[] = [
       'protective_veto_lands_under_sealed_clock:取时落在水位线之内',
       'veto_routed_to_new_sink',
       'veto_routed_to_new_sink',
+      '第三次 veto:黑名单项不再是 lifted',
     ],
     mustKill: ['veto_routed_to_new_sink'],
   },
@@ -446,17 +447,47 @@ export const V1_ASM_B2_MUTATIONS: readonly V1AsmB2Mutation[] = [
   },
   {
     id: 'veto_rollback_ensure_removed',
-    clause: '评审 R1 ①:回滚路径(在途回滚的重复 veto 事件)同样补调用户否决端口',
+    clause:
+      '评审 R1 ①:回滚路径同样补调用户否决端口。可达状态 = 在途回滚的记录已吃过「进入回滚」与「自环」两条 veto 事件(两把 idem 键都在,rollback.ts lateEventStatus / driveRecord 两处施加全是 duplicate_idem_key 空操作,E1 不再出)',
     edits: [
       {
         file: 'src/rsi/auto/write/veto.ts',
-        anchor: "if (out.status !== 'refused') await guard.ensure();",
-        replacement: 'void 0;',
+        anchor: "const extra = out.status !== 'refused' ? await guard.ensure() : null;",
+        replacement: 'const extra = null as KeyedEffectResult | null;',
       },
     ],
     tests: ['rsi/asm/b-veto-relanding.test.ts'],
-    expectRed: ['回滚路径:在途回滚'],
-    mustKill: ['回滚路径:在途回滚'],
+    expectRed: ['回滚路径(两把键都在、E1 不再出)', '回滚路径补调 deferred'],
+    mustKill: ['回滚路径(两把键都在、E1 不再出)'],
+  },
+  {
+    id: 'veto_rollback_deferred_not_nonzero',
+    clause: '验收评审 R2 ①:回滚分支补调返回 deferred → 退 1 + 未落地提示(不依赖可选的 p.layers)',
+    edits: [
+      {
+        file: 'src/rsi/auto/write/veto.ts',
+        anchor: "const unlanded = extra === 'deferred';",
+        replacement: 'const unlanded = false as boolean;',
+      },
+    ],
+    tests: ['rsi/asm/b-veto-relanding.test.ts'],
+    expectRed: ['回滚路径补调 deferred'],
+    mustKill: ['回滚路径补调 deferred'],
+  },
+  {
+    id: 'veto_direct_ensure_deferred_exempt',
+    clause:
+      '验收评审 R2 ①(核对 directVeto):终态 noop 补调 deferred 时,「原理由 vetoed」的豁免不适用(恢复推不出 lift 之后的用户意图)→ 退 1',
+    edits: [
+      {
+        file: 'src/rsi/auto/write/veto.ts',
+        anchor: "(rec.terminal_reason !== 'vetoed' || ensureDeferred)",
+        replacement: "(rec.terminal_reason !== 'vetoed')",
+      },
+    ],
+    tests: ['rsi/asm/b-veto-relanding.test.ts'],
+    expectRed: ['终态路径补调 deferred'],
+    mustKill: ['终态路径补调 deferred'],
   },
   {
     id: 'rebase_post_write_check_removed',
@@ -491,18 +522,33 @@ export const V1_ASM_B2_MUTATIONS: readonly V1AsmB2Mutation[] = [
   {
     id: 'rewrite_head_yield_before_write',
     clause:
-      '评审 R1 ②:最后一次 HEAD 复核与 head.json 写入之间没有让出点(旧实现的复核后还 await 一次锁复核)',
+      '评审 R1 ②:最后一次 HEAD 复核与 head.json 写入之间没有让出点(旧实现的复核后还 await 一次锁复核;变异 = 在复核与写入之间再插一次锁复核)',
     edits: [
       {
         file: 'src/rsi/personal/commit.ts',
-        anchor: "head: kind === 'baseline' ? expectHead : hd.value.head,",
-        replacement:
-          "head: (await assertLockHandles(locks), kind === 'baseline' ? expectHead : hd.value.head),",
+        anchor: 'await writeHead(deps.h, next);',
+        replacement: 'await assertLockHandles(locks);\n  await writeHead(deps.h, next);',
       },
     ],
     tests: ['rsi/asm/b-rewrite-head-order.test.ts'],
     expectRed: ['rewrite_head_no_yield_between_check_and_write'],
     mustKill: ['rewrite_head_no_yield_between_check_and_write'],
+  },
+  {
+    id: 'rewrite_head_post_read_lock_recheck_removed',
+    clause:
+      '验收评审 R2 ②:readHead 之后、HEAD 复核与写入之前必有一次锁复核(读期间丢锁 → lock_lost、head.json 零写入)',
+    edits: [
+      {
+        file: 'src/rsi/personal/commit.ts',
+        anchor:
+          'await assertLockHandles(locks); // 读后锁复核:读 head.json 期间丢锁 → lock_lost,零写入',
+        replacement: 'void 0;',
+      },
+    ],
+    tests: ['rsi/asm/b-rewrite-head-order.test.ts'],
+    expectRed: ['rewrite_head_lock_lost_during_read'],
+    mustKill: ['rewrite_head_lock_lost_during_read'],
   },
   {
     id: 'holds_repo_invalid_folds_absent',

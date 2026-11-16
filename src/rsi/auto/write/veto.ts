@@ -181,7 +181,10 @@ export async function runVeto(
       out = await startRollback(d, req);
     }
     // 复用在途事务而较晚的 veto 事件早已持久化(重复事件 = 空 effects)时,E1 不会再出现:用户这次显式的否决由命令自己保证(lift 之后再 veto 必须重新生效)
-    if (out.status !== 'refused') await guard.ensure();
+    // 补调结果显式并入退出判定:`deferred` = 用户这次否决没落地,不得退 0(不依赖可选的 `p.layers` 收集器)
+    // 触发状态(真实可达):在途回滚的记录已先后吃过「进入回滚」与「自环」两条 veto 事件(两把 idem 键都在),再来的 veto 事件两处施加全是重复空操作,E1 不会再出;lift 之后只有这次补调能让黑名单重新生效
+    const extra = out.status !== 'refused' ? await guard.ensure() : null;
+    const unlanded = extra === 'deferred';
     const late = out.status !== 'refused' ? out.lateEventNotApplied : undefined;
     return emitOutcomes(
       ctx,
@@ -191,8 +194,9 @@ export async function runVeto(
         `veto: id=${rec.id} lifecycle=${rec.lifecycle}`,
         outcomeCounts([out]),
         ...(late !== undefined ? [`late_event_not_applied=${late}`] : []),
+        ...(unlanded ? [`veto: id=${rec.id} 否决未落地(黑名单落地推迟),请重跑 rsi veto`] : []),
       ],
-      { forceNonZero: late !== undefined },
+      { forceNonZero: late !== undefined || unlanded },
     );
   });
   // 消费方未接线:黑名单写进账之后**不得报完整成功**(D 之前账没有读者,否决不生效);沿用 `failedVeto` 的退 1,输出 `consumer=unwired`
@@ -276,13 +280,20 @@ async function directVeto(
     }
   }
   // 终态上的空操作若是重复事件(`duplicate_idem_key`),引擎不产出 E1:命令补调(用户显式否决;lift 之后再 veto 靠它重新生效),结果并入 deferred / 三层判定
+  let ensureDeferred = false;
   if (r.kind === 'noop') {
     const extra = await guard.ensure();
     if (extra !== null) landed.push(extra);
+    ensureDeferred = extra === 'deferred';
   }
   // 终态记录上的空操作 veto:没有提交任何新事实,E1 黑名单一旦 deferred,恢复扫描(只扫 `rolling_back ∧ reason=vetoed`)推不出这次否决 →
-  // 不得退 0 宣告成功;退 1(可重跑的未完成)。重跑时黑名单按 `(id, sha)` 集合插入,幂等
-  if (r.kind === 'noop' && landed.includes('deferred') && rec.terminal_reason !== 'vetoed') {
+  // 不得退 0 宣告成功;退 1(可重跑的未完成)。重跑时黑名单按 `(id, sha)` 集合插入,幂等。
+  // 例外只给「原理由即 vetoed」且 deferred 的是引擎产出的 E1(终态批次恢复会补);命令补调(用户在 lift 之后的显式意图)deferred 时恢复推不出,一律退 1
+  if (
+    r.kind === 'noop' &&
+    landed.includes('deferred') &&
+    (rec.terminal_reason !== 'vetoed' || ensureDeferred)
+  ) {
     return failedVeto(ctx, p, rec.id);
   }
   const effects = landed.includes('deferred')
