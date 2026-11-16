@@ -19,6 +19,10 @@ export interface LockCap {
   readonly path?: string;
   /** 挂释放屏障(真实句柄有):句柄自己的 `release()` 也先经 acquisition 控制块。同一句柄只接受同一个屏障 */
   attachReleaseGate?(gate: { beforeRelease(): Promise<void> }): void;
+  /** 无副作用预检:`attachReleaseGate(gate)` 会不会成功。真实句柄必须有(装配先预检两把再占用,拒绝零副作用) */
+  canAttachReleaseGate?(gate: { beforeRelease(): Promise<void> }): boolean;
+  /** 锁种类身份(真实句柄有):装配按它正向验证 `rsi` / `personal` 角色(不是靠「不在 root 下」推断) */
+  readonly kind?: 'rsi' | 'personal';
 }
 /**
  * 需要的锁集合(与 `auto/write/ports.ts` 的 `LockOrder` 同一字面量集合,类型测试钉住):`personal_sync` = 缩减入口;`rsi_personal_sync` = 三把锁。

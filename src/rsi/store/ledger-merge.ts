@@ -43,6 +43,13 @@ export interface PlanOptions {
    * 缺省 `false` = 零写(压缩前恢复 `recoverThrough` 用:它处理的事件日 ≤ 即将推进的 W,键推进后本就被裁,无需登记)。
    */
   registerSatisfiedKey?: boolean;
+  /**
+   * **本次调用内**的身份表(`key → batch_sha256`;`planBatches` 缺省自建,覆盖本次的全部批次,**含状态已满足、不登记进 `applied` 的批**):
+   * 同键异内容 = `effects_key_conflict`(该批失败,零写入),所以本次输入内部不会让一个键对应两份内容。
+   * 只管**这一次调用**:`applied` 里没有的键不会跨调用留下身份(`registerSatisfiedKey: false` 的取舍),跨调用的窗口只靠调用方一次性传入同一次扫描的全部批次、
+   * 并在提交后推进水位线 W 来关闭(推进前失败 = 下次重试重新传入全部批次,仍受本表约束);本模块不声称更多。
+   */
+  seenKeys?: Map<string, string>;
 }
 
 export type PlanResult =
@@ -234,6 +241,9 @@ function mergeEffect(
   }
 }
 
+/** 空批(没有账类效果)在本次调用身份表里的身份:不是 64 位十六进制,不会与任何 `batchSha256` 相等 */
+const EMPTY_BATCH_IDENTITY = 'empty-batch';
+
 /**
  * 处理一个批次;`satisfied` = 无需写(键已满足 / 状态已满足且无需登记身份 / 没有账类效果),`changed` = Working 已合并(含「状态已满足、仅登记身份」)。
  * 任何校验失败抛错且**不改动 Working**。
@@ -246,9 +256,16 @@ export function applyBatch(
   intent: LedgerIntent,
   opts: PlanOptions,
 ): 'satisfied' | 'changed' {
-  if (effects.length === 0) return 'satisfied';
-  const m = checkMeta(effects, meta);
-  const hash = batchSha256(effects, m);
+  // 没有账类效果的批(含恢复时分离掉审计效果后为空的批)不校验 meta、不落账,但**仍参与本次调用内的身份表**:
+  // 身份取固定值(与任何非空批的指纹都不同),所以同一次调用里「空批 ↔ 同键非空批」无论先后都是冲突(第 3 轮评审中)
+  const empty = effects.length === 0;
+  const m = empty ? null : checkMeta(effects, meta);
+  const hash = m === null ? EMPTY_BATCH_IDENTITY : batchSha256(effects, m);
+  // 本次调用内的身份表:先于任何 `satisfied` 提前返回(状态已满足的批、空批也要记)
+  const seen = opts.seenKeys?.get(key);
+  if (seen !== undefined && seen !== hash) throw new EffectsKeyConflict(`key:${key}`);
+  opts.seenKeys?.set(key, hash);
+  if (m === null) return 'satisfied';
   if (intent === 'replay') {
     const have = findKey(w, key);
     if (have !== undefined) {
@@ -366,15 +383,17 @@ export function planBatches(
   const w = beginWorking(state);
   const outcomes: BatchOutcome[] = [];
   let anyChanged = false;
+  // 本次调用内的身份表覆盖全部批次(含 satisfied)
+  const callOpts: PlanOptions = { ...opts, seenKeys: opts.seenKeys ?? new Map<string, string>() };
   for (const b of batches) {
     try {
-      const r = applyBatch(w, b.key, b.effects, b.meta, 'replay', opts);
+      const r = applyBatch(w, b.key, b.effects, b.meta, 'replay', callOpts);
       // 前面的批次已改动 Working 时,本批的 `satisfied` 可能只是「依赖本次未提交的修改」:对 base 独立复核,
       // 不独立满足的按 `changed` 处理(提交失败时与前批同命运,不得报成「调用前已满足」)
       if (r === 'satisfied' && anyChanged && b.effects.length > 0) {
         const alone = beginWorking(state);
         try {
-          if (applyBatch(alone, b.key, b.effects, b.meta, 'replay', opts) === 'changed') {
+          if (applyBatch(alone, b.key, b.effects, b.meta, 'replay', callOpts) === 'changed') {
             outcomes.push({ state: 'changed' });
             continue;
           }

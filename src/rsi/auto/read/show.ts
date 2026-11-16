@@ -6,11 +6,12 @@
  * (命中退 3 `output_leak`,stdout 一个字节都不写);每处自动产出的正文 / 裁决段之前带 {@link RSI_AUTO_LABEL}(只引用常量,不复制字面)。
  * 一致性口径:有界一致性验证,输出带 `consistency=double-read`,**不**写「原子」「一致快照」;不稳定 → 退 4 `RSI_SNAPSHOT_BUSY`;读取失败 → 退 3。
  * `journal=`:`absent`(只表示该次读取下不存在,不推出「丢失」)/ `ok` / `invalid`(只写「按运行手册处置」,不含路径,不写「删除即可恢复」)。
- * N4-2「关联提案裁决」段:`source_proposal` 非 null 时读裁决记录,**失败只影响该段**(`unavailable`),不影响其余输出。
+ * N4-2「关联提案裁决」段:`source_proposal` 非 null 时读裁决记录,**失败只影响该段**(显示 `judge=invalid`),不影响其余输出;取值与标签见 `JudgeVerdictRead`(R20-18.37、W0-27)。
  */
 import { ExitCode } from '../../../contracts/exit-codes.js';
 import { RSI_AUTO_LABEL, RSI_SNAPSHOT_BUSY } from '../../../contracts/rsi.js';
 import type { PersonalLifecycleRecord } from '../../../contracts/rsi-personal.js';
+import { SELF_REPORT_LABEL_JUDGE, VENDOR_PROVEN_LABEL } from '../../../contracts/vendor.js';
 import { emitLines, type OutputSink } from '../../output.js';
 import { cleanName, cleanPath, type OutLine } from '../../sanitize.js';
 import { checkJournal, type JournalStatus } from './journal-check.js';
@@ -57,14 +58,21 @@ function bodyLines(text: string): OutLine[] {
 }
 
 function judgeLines(j: JudgeVerdictRead): OutLine[] {
-  if (j.kind === 'absent') return [{ head: '关联提案裁决: none' }];
-  if (j.kind === 'unavailable') return [{ head: '关联提案裁决: unavailable' }];
+  if (j.kind === 'absent') return [{ head: '关联提案裁决: judge=none' }];
+  // `unavailable`(端口未装配 / 抛错)与读取、解析、校验失败同样显示契约取值 `judge=invalid`
+  if (j.kind === 'invalid' || j.kind === 'unavailable') {
+    return [{ head: '关联提案裁决: judge=invalid' }];
+  }
   const f = (s: string): string => cleanName(s);
+  const id = j.identity;
   return [
     {
       head: `关联提案裁决: judge_provenance=${f(j.judge_provenance)} verdict=${f(j.verdict)} overfit=${f(j.overfit)} injection=${f(j.injection)}`,
     },
-    ...(j.declared === null ? [] : [{ head: `declared=${f(j.declared)}` }]),
+    id.kind === 'declared'
+      ? { head: `declared agent=${f(id.agent)} vendor=${f(id.vendor)} model=${f(id.model)}` }
+      : { head: `vendor=${f(id.vendor)} model=${f(id.model)}` },
+    { head: id.kind === 'declared' ? SELF_REPORT_LABEL_JUDGE : VENDOR_PROVEN_LABEL },
   ];
 }
 

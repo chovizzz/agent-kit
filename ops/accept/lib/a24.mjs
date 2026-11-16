@@ -69,6 +69,13 @@ export const MUTATIONS = [
     what: 'C6 不归一化(对原子全文直接取哈希,status / review_by 的改动会改哈希)',
     edits: [
       {
+        // W0-27:ruleSha256 搬到 rule-hash.ts 后 checks.ts 不再 import createHash,变异自带这条 import
+        file: 'src/lifecycle/checks.ts',
+        find: "import { addDays } from '../atoms/dates.js';",
+        replace:
+          "import { addDays } from '../atoms/dates.js';\nimport { createHash } from 'node:crypto';",
+      },
+      {
         file: 'src/lifecycle/checks.ts',
         find: '    now = ruleSha256(input.atomText);',
         replace: "    now = createHash('sha256').update(input.atomText, 'utf8').digest('hex');",

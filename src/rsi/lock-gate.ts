@@ -13,6 +13,8 @@ export interface ReleaseGate {
 
 export interface ReleaseGateSlot {
   attach(gate: ReleaseGate): void;
+  /** 无副作用预检:`attach(gate)` 会不会成功(空槽或已是同一个屏障)。装配两把句柄前先预检,再占用,避免半绑定 */
+  canAttach(gate: ReleaseGate): boolean;
   /** 释放路径调用:无屏障 = 立即返回 */
   wait(): Promise<void>;
 }
@@ -23,6 +25,9 @@ export function createReleaseGateSlot(): ReleaseGateSlot {
     attach(gate) {
       if (current !== undefined && current !== gate) throw new RsiLockError('internal');
       current = gate;
+    },
+    canAttach(gate) {
+      return current === undefined || current === gate;
     },
     async wait() {
       if (current !== undefined) await current.beforeRelease();
