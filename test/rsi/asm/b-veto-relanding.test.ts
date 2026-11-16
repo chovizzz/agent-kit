@@ -92,31 +92,15 @@ describe('veto_relands_after_lift', () => {
     expect(sink.intentCalls).toBe(2); // 每次命令恰好一次用户意图调用:第一次是引擎产出的 E1(veto: 键),第二次由命令补调(已满足,不改变状态)
   });
 
-  it('回滚路径:在途回滚(记录 rolling_back,veto 条目与 E1 已落)被 lift 后再 veto → 黑名单重新生效', async () => {
-    const w7 = world7();
-    const fx = makeFx(w7);
-    const sink = new IntentSink();
-    const ports = portsOf(fx, sink);
-    // 第一次 veto 在记录推进到 rolling_back 之后崩溃(E1 已经落地)
-    w7.crashAt('after:record_event');
-    await runWrite('veto', [ID], fx, { ports }).catch(() => undefined);
-    w7.crashAt(null);
-    expect(recordOf(w7).lifecycle).toBe('rolling_back');
-    expect(sink.intentCalls).toBeGreaterThanOrEqual(2); // 第二次 veto 的自环事件确实产出过 E1(夹具自检:此后两把键都在)
-    expect(sink.bl.get(M)).toBe('active');
-    expect(sink.lift(ID, SHA)).toBe('lifted');
-    // 再 veto:引擎对已有 veto 条目返回重复空操作,E1 不会再出现
-    const again = await runWrite('veto', [ID], fx, { ports });
-    expect(again.code, again.err).toBe(0);
-    expect(sink.bl.get(M)).toBe('active');
-  });
-
   /**
-   * 在途回滚「已吃过两条 veto 事件」的真实状态:第一次 veto 崩在进入回滚之后(enter 键已在),第二次 veto 经自环再崩一次(自环键也在)。
-   * 此后再来的 veto 事件两处施加(lateEventStatus / driveRecord)全是重复空操作,E1 不再出;返回此时的用户意图调用次数。
+   * 在途回滚的真实状态(诊断实测):第一次 veto 崩在 `after:record_event`(记录已进 rolling_back,E1 已落,intentCalls=1);
+   * 此后再来的 veto 事件(第二次命令的 lateEventStatus / driveRecord 两处施加)都命中既有 idem 键,是 duplicate_idem_key 空操作,E1 不再出。
+   * 注意:这一次若回滚走到终态,终态转移的 E2 黑名单会经 `veto:` 键再落(效果端口 apply 把所有 blacklist_veto 路由到该键),此时补调是冗余的;
+   * 补调(guard.ensure)只在「本次回滚没走到终态」时才是唯一落地者,所以最后一次 veto 用 repoMode=deferred(撤销完成、仓库移除推迟 → 记录仍 rolling_back)。
    */
-  async function inFlightWithBothKeys(): Promise<{
+  async function inFlight(): Promise<{
     fx: WriteFx;
+    w7: ReturnType<typeof world7>;
     sink: IntentSink;
     ports: WritePorts;
     calls: number;
@@ -127,50 +111,59 @@ describe('veto_relands_after_lift', () => {
     const ports = portsOf(fx, sink);
     w7.crashAt('after:record_event');
     await runWrite('veto', [ID], fx, { ports }).catch(() => undefined);
+    w7.crashAt(null);
     expect(recordOf(w7).lifecycle).toBe('rolling_back');
+    expect(sink.intentCalls).toBe(1); // 夹具自检:E1 只落过一次(进入回滚那次)
+    expect(sink.bl.get(M)).toBe('active');
+    return { fx, w7, sink, ports, calls: sink.intentCalls };
+  }
+
+  it('回滚路径:在途回滚(记录 rolling_back,veto 条目与 E1 已落)被 lift 后再 veto → 黑名单重新生效', async () => {
+    const { fx, w7, sink, ports } = await inFlight();
+    expect(sink.lift(ID, SHA)).toBe('lifted');
+    w7.repoMode.value = 'deferred'; // 本次回滚不走到终态:终态 E2 不会替补调落地
+    const again = await runWrite('veto', [ID], fx, { ports });
+    expect(again.code, again.err).toBe(0);
+    expect(recordOf(w7).lifecycle).toBe('rolling_back');
+    expect(sink.bl.get(M)).toBe('active');
+  });
+
+  it('回滚路径(两把键都在、E1 不再出):lift 后再 veto → 只靠补调重新生效,恰多一次用户意图调用,退 0', async () => {
+    const { fx, w7, sink, ports, calls } = await inFlight();
+    // 再吃一次崩溃:第二次 veto 的自环事件同样是重复空操作(实测:没有任何端口调用)
     w7.crashAt('after:record_event');
     await runWrite('veto', [ID], fx, { ports }).catch(() => undefined);
     w7.crashAt(null);
-    expect(recordOf(w7).lifecycle).toBe('rolling_back');
-    expect(sink.bl.get(M)).toBe('active');
+    expect(sink.intentCalls).toBe(calls);
     expect(sink.lift(ID, SHA)).toBe('lifted');
-    return { fx, sink, ports, calls: sink.intentCalls };
-  }
-
-  it('回滚路径(两把键都在、E1 不再出):lift 后再 veto → 只靠补调重新生效,恰多一次用户意图调用,退 0', async () => {
-    const { fx, sink, ports, calls } = await inFlightWithBothKeys();
+    w7.repoMode.value = 'deferred';
     const r = await runWrite('veto', [ID], fx, { ports });
     expect(r.code, r.err).toBe(0);
     expect(sink.bl.get(M)).toBe('active');
-    expect(sink.intentCalls).toBe(calls + 1); // 引擎两处施加都没产出 E1;唯一的一次调用 = 命令补调
-    expect(recordOf(fx.w7).lifecycle).toBe('rolled_back');
+    expect(sink.intentCalls).toBe(calls + 1); // 引擎两处施加都没产出 E1,回滚也没到终态;唯一的一次调用 = 命令补调
+    expect(recordOf(w7).lifecycle).toBe('rolling_back');
   });
 
   it('回滚路径补调 deferred(layers 缺省、consumers 已接线):退 1 且有「否决未落地」提示,黑名单仍是 lifted;对照:补调 applied(上一条)/ already → 退 0', async () => {
-    const { fx, sink, ports } = await inFlightWithBothKeys();
+    const { fx, w7, sink, ports } = await inFlight();
+    expect(sink.lift(ID, SHA)).toBe('lifted');
     expect(ports.layers).toBeUndefined();
     expect(ports.consumers).toBeDefined();
+    w7.repoMode.value = 'deferred';
     sink.deferIntent = true;
     const r = await runWrite('veto', [ID], fx, { ports });
     expect(r.code, r.err).toBe(1);
     expect(r.out).toContain('否决未落地');
     expect(sink.bl.get(M)).toBe('lifted');
-    // 重跑(落地恢复正常):事务已走完 → 终态路径补调 applied,退 0
+    // 重跑(落地恢复正常):补调 applied,退 0
     sink.deferIntent = false;
     const again = await runWrite('veto', [ID], fx, { ports });
     expect(again.code, again.err).toBe(0);
     expect(sink.bl.get(M)).toBe('active');
     // already:没有 lift,在途回滚上再 veto,补调是已满足
-    const w2 = world7();
-    const fx2 = makeFx(w2);
-    const sink2 = new IntentSink();
-    const ports2 = portsOf(fx2, sink2);
-    w2.crashAt('after:record_event');
-    await runWrite('veto', [ID], fx2, { ports: ports2 }).catch(() => undefined);
-    w2.crashAt('after:record_event');
-    await runWrite('veto', [ID], fx2, { ports: ports2 }).catch(() => undefined);
-    w2.crashAt(null);
-    const ok = await runWrite('veto', [ID], fx2, { ports: ports2 });
+    const o = await inFlight();
+    o.w7.repoMode.value = 'deferred';
+    const ok = await runWrite('veto', [ID], o.fx, { ports: o.ports });
     expect(ok.code, ok.err).toBe(0);
     expect(ok.out).not.toContain('否决未落地');
   });

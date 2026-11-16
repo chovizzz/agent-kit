@@ -448,7 +448,7 @@ export const V1_ASM_B2_MUTATIONS: readonly V1AsmB2Mutation[] = [
   {
     id: 'veto_rollback_ensure_removed',
     clause:
-      '评审 R1 ①:回滚路径同样补调用户否决端口。可达状态 = 在途回滚的记录已吃过「进入回滚」与「自环」两条 veto 事件(两把 idem 键都在,rollback.ts lateEventStatus / driveRecord 两处施加全是 duplicate_idem_key 空操作,E1 不再出)',
+      '评审 R1 ①:回滚路径同样补调用户否决端口。可达状态 = 在途回滚的记录已吃过 veto 事件(idem 条目已在,rollback.ts lateEventStatus / driveRecord 两处施加全是 duplicate_idem_key 空操作,E1 不再出),且本次回滚没走到终态(走到终态时 E2 的 blacklist_veto 经 veto: 键再落,补调冗余);夹具 = 一次崩在 after:record_event + 最后一次 veto 在 repoMode=deferred 下',
     edits: [
       {
         file: 'src/rsi/auto/write/veto.ts',

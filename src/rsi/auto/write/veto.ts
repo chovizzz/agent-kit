@@ -182,7 +182,7 @@ export async function runVeto(
     }
     // 复用在途事务而较晚的 veto 事件早已持久化(重复事件 = 空 effects)时,E1 不会再出现:用户这次显式的否决由命令自己保证(lift 之后再 veto 必须重新生效)
     // 补调结果显式并入退出判定:`deferred` = 用户这次否决没落地,不得退 0(不依赖可选的 `p.layers` 收集器)
-    // 触发状态(真实可达):在途回滚的记录已先后吃过「进入回滚」与「自环」两条 veto 事件(两把 idem 键都在),再来的 veto 事件两处施加全是重复空操作,E1 不会再出;lift 之后只有这次补调能让黑名单重新生效
+    // 触发状态(诊断实测可达):在途回滚的记录已吃过 veto 事件(idem 条目在),再来的 veto 事件两处施加全是重复空操作,E1 不会再出;若本次回滚又没走到终态(例如仓库移除推迟),终态 E2 的 veto: 键落地也不会发生,lift 之后只有这次补调能让黑名单重新生效。走到终态时补调是冗余但无害的防御(幂等)
     const extra = out.status !== 'refused' ? await guard.ensure() : null;
     const unlanded = extra === 'deferred';
     const late = out.status !== 'refused' ? out.lateEventNotApplied : undefined;
