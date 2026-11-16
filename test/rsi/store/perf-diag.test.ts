@@ -14,10 +14,11 @@ import {
   jsonLine,
 } from './store-fixture.js';
 
+const OUT: string[] = [];
 const t = async <T>(label: string, f: () => Promise<T> | T): Promise<T> => {
   const s = performance.now();
   const r = await f();
-  console.log(`DIAG ${label} ${(performance.now() - s).toFixed(0)}ms`);
+  OUT.push(`DIAG ${label} ${(performance.now() - s).toFixed(0)}ms`);
   return r;
 };
 
@@ -43,5 +44,6 @@ describe('perf diag', () => {
         w.store.sink.applyOnce('terminal:t', [tomb(), markEffect(hex16(5))], meta()),
       );
     }
+    throw new Error(OUT.join(' | '));
   });
 });
