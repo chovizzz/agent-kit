@@ -14,10 +14,12 @@
 import { PersonalHeadSchema } from '../../contracts/rsi-personal.js';
 import type { RsiAutoPauseReason } from '../../contracts/rsi.js';
 import {
+  PERSONAL_STATE_FILES,
   ensureEmptyDir,
   probeFirstTime,
   readHead,
   readJournal,
+  statePath,
   writeHead,
   type PersonalHome,
 } from './home-state.js';
@@ -41,6 +43,7 @@ import {
   PersonalGitError,
   revParse,
   type ClosedGit,
+  type RepoSituation,
 } from './repo-check.js';
 
 export type { PersonalLocks, StepHook } from './commit-journal.js';
@@ -504,4 +507,112 @@ export async function readRecordedPersonalFiles(
     }
     throw e;
   }
+}
+
+// ---------------------------------------------------------------------------
+// 只读检视与 head.json 改写(`rsi auto rebase-baseline` 的端口;`runSync` 的授权文件之一,所以 git 调用放在这里)
+// ---------------------------------------------------------------------------
+
+export type InspectResult =
+  /** 仓库从未建过 */
+  | { kind: 'absent' }
+  | { kind: 'invalid'; why: string }
+  | { kind: 'ok'; situation: RepoSituation; record: PersonalHeadRecord; head: string | null };
+type PersonalHeadRecord = { head: string; owner_repo_fp: string };
+
+/**
+ * **只读**检视(锁外也安全,`rebase-baseline` 的展示 / 复核用):不建任何目录(封闭 git 配置的空目录只引用路径、**不创建**)、不写 `head.json`、不恢复 journal、
+ * 全部 git 调用 `GIT_OPTIONAL_LOCKS=0`。有未处理的提交 journal = `invalid`(分类要先恢复,恢复要持锁:调用方先让一次持锁写入跑完);记录 / 结构不合规 = `invalid`。
+ * 与 `openPersonalRepo` 的差别正是上面几项(它会写);判定本身共用 `checkRepoStructure` + `classifyRepo`。
+ */
+export async function inspectPersonalRepo(deps: PersonalRepoDeps): Promise<InspectResult> {
+  const hd = await readHead(deps.h);
+  if (hd.kind === 'absent') {
+    return (await probeFirstTime(deps.h)) === 'first'
+      ? { kind: 'absent' }
+      : { kind: 'invalid', why: 'record_missing' };
+  }
+  if (hd.kind === 'invalid') return { kind: 'invalid', why: `head_${hd.why}` };
+  const jr = await readJournal(deps.h);
+  if (jr.kind === 'invalid') return { kind: 'invalid', why: `journal_${jr.why}` };
+  if (jr.kind === 'ok') return { kind: 'invalid', why: 'journal_pending' };
+  const now = deps.now ?? ((): Date => new Date());
+  const git = createClosedGit(deps.h, statePath(deps.h, PERSONAL_STATE_FILES.emptyDir), now);
+  const s = await checkRepoStructure(deps.h, git, deps.uid === undefined ? {} : { uid: deps.uid });
+  if (!s.ok) return { kind: 'invalid', why: s.why };
+  try {
+    const situation = await classifyRepo(git, hd.value, deps.ownerRepoFp);
+    return { kind: 'ok', situation, record: hd.value, head: revParse(git, 'HEAD^{commit}') };
+  } catch (e) {
+    if (e instanceof PersonalGitError) return { kind: 'invalid', why: 'git_read_failed' };
+    throw e;
+  }
+}
+
+/** `记录..HEAD` 的相对路径(只读;未清洗;git 读取失败 / 记录不可读 = 抛错) */
+export async function changedPathsSinceRecord(deps: PersonalRepoDeps): Promise<string[]> {
+  const hd = await readHead(deps.h);
+  if (hd.kind !== 'ok') throw new Error('head_unreadable');
+  const now = deps.now ?? ((): Date => new Date());
+  const git = createClosedGit(deps.h, statePath(deps.h, PERSONAL_STATE_FILES.emptyDir), now);
+  const out = gitMust(
+    git,
+    'diff',
+    [
+      'diff',
+      '--name-only',
+      '-z',
+      '--no-renames',
+      '--no-ext-diff',
+      '--no-textconv',
+      `${hd.value.head}..HEAD`,
+    ],
+    { readOnly: true },
+  );
+  return out.split('\0').filter((x) => x !== '');
+}
+
+/** `head.json` 当前是否满足改写的后置条件(只读;`baseline` = 记录的提交等于当前 HEAD;`owner` = 记录的 `owner_repo_fp` 等于当前指纹) */
+export async function personalHeadRewritten(
+  deps: PersonalRepoDeps,
+  kind: 'baseline' | 'owner',
+): Promise<boolean> {
+  const hd = await readHead(deps.h);
+  if (hd.kind !== 'ok') throw new Error(`head_${hd.kind === 'invalid' ? hd.why : 'absent'}`);
+  if (kind === 'owner') return hd.value.owner_repo_fp === deps.ownerRepoFp;
+  const now = deps.now ?? ((): Date => new Date());
+  const git = createClosedGit(deps.h, statePath(deps.h, PERSONAL_STATE_FILES.emptyDir), now);
+  return revParse(git, 'HEAD^{commit}') === hd.value.head;
+}
+
+/**
+ * 改写 `head.json`(持 `personal/lock`):`baseline` = 记录提交换成 `expectHead`(须仍是当前 HEAD,否则抛 `head_changed`);
+ * `owner` = `owner_repo_fp` 换成当前 `[rsi] repo` 的指纹(`expectHead` 同样须仍是当前 HEAD)。其余字段原样保留。
+ * **顺序**:开头锁复核 → `await readHead` → 备好写入内容 → **读后锁复核**(最后一个 `await`)→ 同步 HEAD 复核(`revParse`)→ `writeHead`;
+ * 提交前一定有一次晚于 `readHead` 的锁复核(读期间丢锁 → `lock_lost`,零写入),HEAD 复核与 `writeHead` 之间没有让出点(锁复核放在 HEAD 复核之前,不是之后)。
+ * **并发边界(如实)**:`personal/lock` 只排除遵守项目锁的写者;不遵守项目锁的人工 git 操作与「复核 → 写入」之间仍有窗口,
+ * 所以本函数**不保证**「HEAD 已变则零写入」——只保证:复核时 HEAD 已变则抛 `head_changed` 且零写入;写入后的一致性由调用方写后复核
+ * (`rebase.ts`:写后情形不是 `ok` → 保持暂停、不清标志、不报完成)。
+ */
+export async function rewritePersonalHead(
+  deps: PersonalRepoDeps,
+  locks: PersonalLocks,
+  kind: 'baseline' | 'owner',
+  expectHead: string,
+): Promise<void> {
+  await assertLockHandles(locks);
+  const hd = await readHead(deps.h);
+  if (hd.kind !== 'ok') throw new Error(`head_${hd.kind === 'invalid' ? hd.why : 'absent'}`);
+  const now = deps.now ?? ((): Date => new Date());
+  const git = createClosedGit(deps.h, statePath(deps.h, PERSONAL_STATE_FILES.emptyDir), now);
+  // 写入内容先备好(同步):其后只剩「锁复核(await)→ 同步 HEAD 复核 → 写入」
+  const next = PersonalHeadSchema.parse({
+    schema_version: 1,
+    head: kind === 'baseline' ? expectHead : hd.value.head,
+    owner_repo_fp: kind === 'owner' ? deps.ownerRepoFp : hd.value.owner_repo_fp,
+  });
+  await assertLockHandles(locks); // 读后锁复核:读 head.json 期间丢锁 → lock_lost,零写入
+  // 最后一次复核:同步 revParse,紧贴写入,二者之间没有 await 让出
+  if (revParse(git, 'HEAD^{commit}') !== expectHead) throw new Error('head_changed');
+  await writeHead(deps.h, next);
 }

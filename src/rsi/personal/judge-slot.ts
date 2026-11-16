@@ -87,6 +87,7 @@ const STEP_HALTS: Readonly<Record<StepHalt, true>> = Object.freeze({
   commit_failed: true,
   candidate_invalid: true,
   lock_lost: true,
+  sealed_interval: true,
 });
 
 /** 跨信任边界校验:只认 `{ok:true}` 与 `{ok:false, code ∈ 三码}`;其余 → null */

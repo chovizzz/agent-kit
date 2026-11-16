@@ -4,7 +4,10 @@
  * 流程:参数(2)→ TTY(2)→ 预检(3,零写入)→ `[rsi]` 关闭(4)→ 无锁只读判情形并展示 `记录..HEAD` 的相对路径清单(输出例外:清洗 + 泄漏闸 + `RSI_AUTO_LABEL`)→
  * 输入精确 `yes`(只去行尾 `\r`;EOF 算拒绝)才继续,否则退 1 `RSI_CONFIRM_DECLINED`、零写入 → 取锁 → **持锁后重判**(不再分叉 / 换主 → 退 4 `not_diverged`;HEAD 与展示时不同 → 退 1 `RSI_CONFIRM_STALE`,零写入)→
  * 重跑收尾:原始情形为 ok(不是「参数与情形不匹配」)、`head.json` 满足对应改写的后置条件({@link RebasePort.headRewritten})且状态里仍留着对应标志 → 持锁后重判三条仍成立才只清该标志(幂等续做;缺任一条一律照旧退 4 `not_diverged`)。
- * 改写 `head.json`(`baseline` 或 `owner`)→ 再清 `state.json.auto_pause` 里对应的 `diverged` / `owner_changed` 标志(先改记录后清标志:中途崩溃只会多停注入)。
+ * 改写 `head.json`(`baseline` 或 `owner`)→ **写后复核**(再判一次情形,非 `ok` = HEAD 在写入前后又变了 → 退 1 `RSI_CONFIRM_STALE`,保持暂停:不清标志、不报完成)→
+ * 再清 `state.json.auto_pause` 里对应的 `diverged` / `owner_changed` 标志(先改记录后清标志:中途崩溃只会多停注入)。
+ * 并发边界(如实):三把项目锁只排除遵守项目锁的写者;**不遵守项目锁的人工 git 操作**与「HEAD 复核 → 写 `head.json`」之间仍有极小窗口,本命令不实现与人工 git 的协调协议,
+ * 保证的是「写后复核不一致时不清暂停、不报完成」,而不是「HEAD 已变则零写入」。
  */
 import { ExitCode } from '../../../contracts/exit-codes.js';
 import { RSI_AUTO_LABEL } from '../../../contracts/rsi.js';
@@ -116,6 +119,12 @@ export async function runRebase(
       return ExitCode.CHECK_FAILED;
     }
     await rb.rewriteHead(v1.kind, v1.head);
+    // 写后复核:`head.json` 已落,但与不遵守项目锁的人工 git 之间没有互斥——写入前后 HEAD 若又变了,记录与现状不一致,
+    // 此时**不清暂停标志、不报完成**(保持暂停,重跑会再次判为分叉 / 换主);只有写后情形回到 `ok`(记录 = 当前 HEAD 且指纹一致)才清标志
+    if ((await rb.classify()).kind !== 'ok') {
+      ctx.stderr('RSI_CONFIRM_STALE\n');
+      return ExitCode.CHECK_FAILED;
+    }
     await clearFlag(v1.kind);
     return say(ctx, p, [`rebase-baseline=done kind=${v1.kind} head=${v1.head.slice(0, 12)}`]);
   });

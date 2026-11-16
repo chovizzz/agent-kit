@@ -34,6 +34,7 @@ import {
   landTerminalEffects,
   vetoEffectKey,
 } from './effects-recover.js';
+import type { EntrySeal } from './entry-stamp.js';
 import { PersonalStateError } from './home-state.js';
 import {
   PortNotWired,
@@ -126,6 +127,8 @@ export interface RollbackDeps extends ApplyDeps {
    * (`readRecordedPersonalFiles`)。结果必须与 `txn_id` 对得上才采信。新 journal 自带 `content_sha256`,不走这里。
    */
   recordedSha?: (candidateId: string) => Promise<string | null>;
+  /** 封存区域端口(W0-26 第 9 条):经 `applyDeps` 传给 `applyEvent`;生产命令装配必给,缩减入口(`rsi auto clear`)不给 */
+  seal?: EntrySeal;
   /** 崩溃注入 / 观测缝(测试);产品代码不传 */
   onStep?: (step: string) => void | Promise<void>;
 }
@@ -434,6 +437,7 @@ function haltCause(h: StepHalt): RollbackCause {
       return 'candidate_invalid';
     case 'commit_failed':
     case 'lock_lost':
+    case 'sealed_interval': // 时钟恢复后重跑即可(命令层另把封存拒绝升级为退 3,见 `write/layers.ts`)
       return 'retryable';
   }
 }
@@ -460,6 +464,7 @@ const applyDeps = (d: RollbackDeps): ApplyDeps => ({
   },
   env: d.env,
   now: d.now,
+  ...(d.seal !== undefined ? { seal: d.seal } : {}),
 });
 
 /** 经 W3 的 `applyEvent` 施加一个事件;提交后发现丢锁(`lockLost`)→ 立即抛 `lock_lost`,不再继续任何写出口(journal 留给新的持锁者续做) */

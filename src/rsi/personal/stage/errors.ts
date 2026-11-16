@@ -114,7 +114,11 @@ export type HaltClass =
   /** 只停本步,不使本轮 `unsettled`(仓库不存在 / 被延期:增影响由 G3 / G4 另行拒绝) */
   | { readonly kind: 'stop_step' }
   /** 仓库完整性 / 权威状态不明:只停本步并使本轮 `unsettled` */
-  | { readonly kind: 'stop_step_unsettled'; readonly cause: Exclude<StepHalt, 'lock_lost'> }
+  | {
+      readonly kind: 'stop_step_unsettled';
+      /** 不含 `repo_absent` / `repo_deferred`(它们是 `stop_step`);与 `UnsettledReason` 的 `step_integrity:*` 同集 */
+      readonly cause: Exclude<StepHalt, 'lock_lost' | 'repo_absent' | 'repo_deferred'>;
+    }
   /**
    * `StepHalt` 里只有一个 `lock_lost`,**区分不出是 rsi 锁还是个人锁**。不得默认当个人锁处理(那等于 rsi 失锁时继续写):
    * 调用方必须先 `resolveLockLoss`(`assertHeld` 两把锁);查不出是哪一把 → 按个人锁结束本轮并使本轮 `unsettled`。
@@ -124,6 +128,9 @@ export type HaltClass =
 const HALT_CLASS: Readonly<Record<StepHalt, HaltClass>> = Object.freeze({
   repo_absent: { kind: 'stop_step' },
   repo_deferred: { kind: 'stop_step' },
+  // B2(W0-26 第 9 条):取时落在已封存区间,源提交之前拒绝、零写入。不归 `stop_step`:那一类的前提是「增影响另由 G3 / G4 拒绝」,
+  // 而封存拒绝没有这样的替代屏障(同轮时钟恢复后,先前未完成的减影响步骤不会再被任何增影响检查看见)→ 停本步并使本轮 unsettled
+  sealed_interval: { kind: 'stop_step_unsettled', cause: 'sealed_interval' },
   repo_invalid: { kind: 'stop_step_unsettled', cause: 'repo_invalid' },
   revocations_invalid: { kind: 'stop_step_unsettled', cause: 'revocations_invalid' },
   commit_failed: { kind: 'stop_step_unsettled', cause: 'commit_failed' },

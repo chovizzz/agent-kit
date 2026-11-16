@@ -13,18 +13,28 @@ import { ROOT, closureOf } from '../closure-util.js';
 
 vi.setConfig({ testTimeout: 120_000 });
 
-const ENTRIES = [
-  'cli.ts',
-  'src/cli.ts',
-  'src/commands/rsi.ts',
+/**
+ * B2 改动(依据:设计稿 v3 §D.8「B 合并时在 B2 PR 内由 `inert_at_phase0_<entry>` 逐项重证」):写命令装配(`deps-write.ts` → `src/rsi/assemble-write.ts`)现在接入存储核,
+ * 所以写侧入口不再「闭包不含存储核」,而是「**只经** `assemble-write.ts` 到达存储核」+ 相位 0 下全部是桩(`test/rsi/asm/b-inert.test.ts` 逐入口证明)。
+ * 读侧 / worker / 个人步入口(C / D 才接线)仍断言**闭包不含存储核**,断言本身一字未改。
+ */
+const READ_SIDE_ENTRIES = [
   'src/rsi/poke.ts',
   'src/rsi/hint.ts',
   'src/rsi/worker.ts',
-  'src/rsi/auto/commands.ts',
   'src/rsi/auto/entry.ts',
-  'src/rsi/auto/deps-write.ts',
   'src/rsi/personal/candidate-step.ts',
 ].filter((f) => existsSync(path.join(ROOT, f)));
+const WRITE_SIDE_ENTRIES = [
+  'cli.ts',
+  'src/cli.ts',
+  'src/commands/rsi.ts',
+  'src/rsi/auto/commands.ts',
+  'src/rsi/auto/deps-write.ts',
+].filter((f) => existsSync(path.join(ROOT, f)));
+const ENTRIES = [...READ_SIDE_ENTRIES, ...WRITE_SIDE_ENTRIES];
+/** 写侧入口里唯一允许把存储核带进闭包的组合根 */
+const WRITE_ROOT = 'src/rsi/assemble-write.ts';
 
 const storeFiles = (files: Iterable<string>): string[] =>
   [...files].filter((f) => f.startsWith('src/rsi/store/') || f === 'src/contracts/rsi-store.ts');
@@ -35,10 +45,20 @@ describe('生产惰性(B1a)', () => {
     expect(closureOf(ENTRIES).files.size).toBeGreaterThan(50);
   });
 
-  it('生产入口的运行时 import 闭包不含存储核的任何模块', () => {
-    const c = closureOf(ENTRIES, { includeTypes: false });
+  it('读侧 / worker / 个人步入口的运行时 import 闭包不含存储核的任何模块', () => {
+    const c = closureOf(READ_SIDE_ENTRIES, { includeTypes: false });
     expect(storeFiles(c.files)).toEqual([]);
     expect(c.unresolved).toEqual([]);
+  });
+
+  it('写侧入口只经 assemble-write.ts 到达存储核(把组合根换成空模块后闭包不含存储核);组合根确实带进存储核', () => {
+    const virtual = { [WRITE_ROOT]: 'export {};' };
+    const cut = closureOf(WRITE_SIDE_ENTRIES, { includeTypes: false, virtual });
+    expect(storeFiles(cut.files)).toEqual([]);
+    expect(cut.unresolved).toEqual([]);
+    const real = closureOf(WRITE_SIDE_ENTRIES, { includeTypes: false });
+    expect(real.files.has(WRITE_ROOT)).toBe(true);
+    expect(storeFiles(real.files)).toContain('src/rsi/store/store.ts');
   });
 
   it('正向对照:虚拟入口 import 装配函数时,闭包含存储核(检查有效)', () => {

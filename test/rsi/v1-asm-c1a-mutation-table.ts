@@ -901,6 +901,7 @@ export const V1_ASM_C1A_MUTATIONS: readonly V1AsmC1aMutation[] = [
     tests: ['rsi/stage/c1-growth.test.ts'],
     expectRed: [
       '铸造之后回合变未决',
+      'sealed_interval_after_mint_voids_pass',
       '冻结的取值',
       'growth_stage_missing_op_growth_unwired(先于任何其它码,零 reader 调用)',
       '按 op 的检查子集:reader 调用序列逐 op 钉死',
@@ -1074,6 +1075,7 @@ export const V1_ASM_C1A_MUTATIONS: readonly V1AsmC1aMutation[] = [
     tests: ['rsi/stage/c1-growth.test.ts'],
     expectRed: [
       '本轮未决 → unsettled',
+      'sealed_interval_halt_denies_growth_same_round',
       '冻结的取值',
       'growth_stage_missing_op_growth_unwired(先于任何其它码,零 reader 调用)',
       '按 op 的检查子集:reader 调用序列逐 op 钉死',
@@ -3183,7 +3185,13 @@ export const V1_ASM_C1A_MUTATIONS: readonly V1AsmC1aMutation[] = [
   {
     id: 'halted_lock_lost_dropped',
     clause: 'L2 lock_lost 必须原样透传(分流入口)',
-    edits: [swap('src/rsi/personal/judge-slot.ts', '  lock_lost: true,\n});', '});')],
+    edits: [
+      swap(
+        'src/rsi/personal/judge-slot.ts',
+        '  lock_lost: true,\n  sealed_interval: true,\n});',
+        '  sealed_interval: true,\n});',
+      ),
+    ],
     tests: ['rsi/stage/c1-judge-slot.test.ts'],
     expectRed: [
       '未知 halted(任意字符串 / 原型链键)规范化为 candidate_invalid',
@@ -3315,7 +3323,8 @@ export const V1_ASM_C1A_MUTATIONS: readonly V1AsmC1aMutation[] = [
 ];
 
 /** 由主代理整表执行变异后回填 */
-/** 实测结果:r21c1am-mut3 @8df6d73(javis);126/126 被杀 */
+/** 实测结果:待主代理整表重跑后回填(sealed_interval 归类与锚点改动后清空) */
+/** 实测结果:r21b2-mut-c1a-14 @382f620(claw):126 条全部被杀 */
 export const V1_ASM_C1A_RESULTS: readonly V1AsmC1aResult[] = [
   {
     id: 'write_not_single_flight',
@@ -3663,9 +3672,10 @@ export const V1_ASM_C1A_RESULTS: readonly V1AsmC1aResult[] = [
   },
   {
     id: 'require_ignores_unsettled',
-    failed: 1,
+    failed: 2,
     skipped: 0,
     killedBy: [
+      'sealed_interval 的跨步骤屏障:减影响步骤被封存拒绝 → 本轮 unsettled → 同轮后续增影响被拒绝 sealed_interval_after_mint_voids_pass:铸造之后步骤才返回 sealed_interval → requireGrowth 拒绝(unsettled)',
       'requireGrowth:一次性、gen 失效、op / nonce / 回合绑定 铸造之后回合变未决(无写)→ unsettled(gen 没变也拒)',
     ],
     restored: true,
@@ -3714,10 +3724,11 @@ export const V1_ASM_C1A_RESULTS: readonly V1AsmC1aResult[] = [
   },
   {
     id: 'unsettled_not_checked_before_readers',
-    failed: 1,
+    failed: 2,
     skipped: 0,
     killedBy: [
       'reader 抛错 / 返回非法值 → fail-closed(绝不放行) 本轮未决 → unsettled(在逐项检查之前;只有前置锁检查)',
+      'sealed_interval 的跨步骤屏障:减影响步骤被封存拒绝 → 本轮 unsettled → 同轮后续增影响被拒绝 sealed_interval_halt_denies_growth_same_round:步骤返回 sealed_interval(此后时钟恢复、不再有封存拒绝)→ 同轮后续每种增影响都 unsettled',
     ],
     restored: true,
   },
@@ -4614,7 +4625,7 @@ export const V1_ASM_C1A_RESULTS: readonly V1AsmC1aResult[] = [
     failed: 1,
     skipped: 0,
     killedBy: [
-      'normalizeJudgeReport(run 返回值的运行期校验) · L2:halted 只产出合法 StepHalt 未知 halted(任意字符串 / 原型链键)规范化为 candidate_invalid;七个合法值原样透传',
+      'normalizeJudgeReport(run 返回值的运行期校验) · L2:halted 只产出合法 StepHalt 未知 halted(任意字符串 / 原型链键)规范化为 candidate_invalid;八个合法值原样透传',
     ],
     restored: true,
   },
@@ -4624,7 +4635,7 @@ export const V1_ASM_C1A_RESULTS: readonly V1AsmC1aResult[] = [
     skipped: 0,
     killedBy: [
       'normalizeJudgeReport(run 返回值的运行期校验) halted 合法字符串原样透传给 classifyHalt;未知 halted 值被 classifyHalt 按完整性不明处理',
-      'normalizeJudgeReport(run 返回值的运行期校验) · L2:halted 只产出合法 StepHalt 未知 halted(任意字符串 / 原型链键)规范化为 candidate_invalid;七个合法值原样透传',
+      'normalizeJudgeReport(run 返回值的运行期校验) · L2:halted 只产出合法 StepHalt 未知 halted(任意字符串 / 原型链键)规范化为 candidate_invalid;八个合法值原样透传',
     ],
     restored: true,
   },

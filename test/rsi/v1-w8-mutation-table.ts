@@ -1615,7 +1615,7 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
     edits: [
       swap(
         'src/rsi/auto/write/veto.ts',
-        'const cur = await d.store.read(a.id);',
+        'const cur = await d0.store.read(a.id);',
         'const cur = peek;',
       ),
     ],
@@ -1694,6 +1694,13 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
         'src/rsi/auto/write/veto.ts',
         'landed.push(await d.keyedEffects.applyOnce(vetoEffectKey(e), [e]));',
         'void e;',
+      ),
+      // 复合变异:命令层 `guardUserVeto().ensure()` 在没调过 `veto:` 键时补调(`directVeto` 的终态 noop 分支),单独关掉引擎 E1 的落地会被补调掩盖(等价变异);
+      // 只关这一处补调(不动回滚路径的 ensure,免得多红表外用例),「只写黑名单」才失守
+      swap(
+        'src/rsi/auto/write/veto.ts',
+        "  if (r.kind === 'noop') {\n    const extra = await guard.ensure();\n",
+        "  if (r.kind === 'noop') {\n    const extra = null;\n",
       ),
     ],
     tests: ['rsi/auto/write-commands.test.ts'],
@@ -2081,8 +2088,8 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
     edits: [
       swap(
         'src/rsi/auto/write/veto.ts',
-        "if (r.kind === 'noop' && landed.includes('deferred') && rec.terminal_reason !== 'vetoed') {",
-        'if (false) {',
+        "  if (\n    r.kind === 'noop' &&\n    landed.includes('deferred') &&\n    (rec.terminal_reason !== 'vetoed' || ensureDeferred)\n  ) {",
+        '  if (false) {',
       ),
     ],
     tests: ['rsi/auto/write-commands.test.ts'],
@@ -2220,7 +2227,8 @@ export const V1_W8_MUTATIONS: readonly V1W8Mutation[] = [
 ];
 
 /** 实测结果:待主代理整表重跑后回填(W8a 86 条 + W8b 58 条) */
-/** 实测结果:r21w8b-mut4 @a485734 */
+/** 实测结果:待主代理整表重跑后回填(B2 改动 veto.ts 的锚点后清空) */
+/** 实测结果:r21b2-mut-w8-14 @382f620(seal):148 条全部被杀 */
 export const V1_W8_RESULTS: readonly V1W8Result[] = [
   {
     id: 'gate_skipped',
@@ -3295,13 +3303,12 @@ export const V1_W8_RESULTS: readonly V1W8Result[] = [
   },
   {
     id: 'veto_terminal_rolls_back',
-    failed: 4,
+    failed: 3,
     skipped: 0,
     killedBy: [
       'rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判 veto 已终态候选只写黑名单:记录不动,没有 journal,没有撤销凭据',
       'rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判 veto 持锁后重读记录再判:锁外读到的是 canary,持锁时已是终态 → 只写黑名单,不新开回滚',
       'rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判 veto 终态候选(原理由 cleared)的黑名单 E1 deferred:退非零、不输出成功行;恢复扫描不会补;重跑且落地正常 → 退 0,黑名单恰好一条',
-      'rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判 veto 迟到事件没施加、事务已走完且黑名单 E1 deferred:同样退非零(不静默退 0);重跑落地正常 → 退 0',
     ],
     restored: true,
   },
@@ -3619,11 +3626,10 @@ export const V1_W8_RESULTS: readonly V1W8Result[] = [
   },
   {
     id: 'veto_late_complete_lost',
-    failed: 2,
+    failed: 1,
     skipped: 0,
     killedBy: [
       'rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判 veto 较晚事件首次没施加、但事务随即走完(记录已按原理由进终态):不再新开空事务,改走终态 veto → 退 0,只落黑名单(不静默丢 veto)',
-      'rsi veto(R21-12.6 / R21-11.3):三把锁,持锁后重读再判 veto 迟到事件没施加、事务已走完且黑名单 E1 deferred:同样退非零(不静默退 0);重跑落地正常 → 退 0',
     ],
     restored: true,
   },

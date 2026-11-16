@@ -14,6 +14,7 @@ import type { BreakerMarkerPort, PauseStatePort, UserMarkerPort } from '../../pe
 import type { RecordRead, RepoRead } from '../../personal/candidate-ports.js';
 import type { ClearDeps } from '../../personal/clear.js';
 import type { RollbackDeps } from '../../personal/rollback.js';
+import type { LayerRecorder } from '../../personal/effects-layers.js';
 import type { RsiEarlyContext } from '../../types.js';
 
 /** 写命令的处理函数(与 `AutoEntryDeps.write` 的值同形) */
@@ -92,6 +93,21 @@ export interface WritePorts {
   rebase?: RebasePort;
   /** 输出泄漏闸的额外禁止值(装配解析;HOME / `KIT_TMP` 由 `forbiddenPaths` 自己收) */
   outputForbidden?: readonly string[];
+  /**
+   * 命令结果的三层收集器(`personal/effects-layers.ts`):装配把它同时交给旧 → 新效果适配器与命令层;命令层据此在权威状态已提交之后报告「账未提交 / 审计待补 / 封存拒绝」并升级退出码。
+   * 缺省(测试假件)= 没有三层信息,行为与 W8b 一致。
+   */
+  layers?: LayerRecorder;
+  /**
+   * 账的**消费方**(D:ingest / G4 读账)是否已接线。**缺省 = 未接线**:`rsi veto` 把黑名单写进账之后**不得报完整成功**(消费方不读账,否决不生效),退 1 并输出 `consumer=unwired`。
+   * 由装配产物决定(没有环境变量开关);B2 的生产装配**不提供**它,D 合并后由 D 的装配提供。
+   */
+  consumers?: LedgerConsumers;
+}
+
+/** 账消费方已接线的凭证(只有 D 的装配会提供;B2 之后生产里没有任何实现) */
+export interface LedgerConsumers {
+  readonly ledgerRead: 'wired';
 }
 
 export type WritePortName = Exclude<keyof WritePorts, 'outputForbidden'>;

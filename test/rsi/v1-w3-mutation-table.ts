@@ -39,6 +39,7 @@ const RECORD = `${P}candidate-record.ts`;
 const REPO = `${P}candidate-repo.ts`;
 const TABLE = `${P}transition-table.ts`;
 const TRANS = `${P}transition.ts`;
+const TERMINAL_EFFECTS = `${P}terminal-effects.ts`;
 
 const T_STEP = 'rsi/personal/w3-step.test.ts';
 const T_GATES = 'rsi/personal/w3-gates.test.ts';
@@ -637,8 +638,8 @@ export const V1_W3_MUTATIONS: readonly V1W3Mutation[] = [
     edits: [
       {
         file: APPLY,
-        anchor: "await landEffects(d, res.effects);\n    return { kind: 'noop' };",
-        replacement: "return { kind: 'noop' };",
+        anchor: "      await landEffects(d, res.effects);\n      return { kind: 'noop' };",
+        replacement: "      return { kind: 'noop' };",
       },
     ],
     tests: [T_STEP],
@@ -850,6 +851,14 @@ export const V1_W3_MUTATIONS: readonly V1W3Mutation[] = [
         anchor: "event.kind === 'revocation_reconcile' && event.basis === 'veto'",
         replacement: 'false',
       },
+      // 复合变异:W7b 起终态批次 E2(`terminalEffectsOf`)对 vetoed 终态同样写黑名单,而对账 veto 恒进终态,E1 被 E2 覆盖(单独关 E1 是等价变异);
+      // 两处同时失效,「veto 依据仍写指纹黑名单」才会失守
+      {
+        file: TERMINAL_EFFECTS,
+        anchor:
+          "out.push({ type: 'blacklist_veto', id: rec.id, content_sha256: rec.content_sha256 });",
+        replacement: 'void 0;',
+      },
     ],
     tests: [T_RECON],
     expectRed: ['veto 依据仍写指纹黑名单效果'],
@@ -982,7 +991,8 @@ export const V1_W3_MUTATIONS: readonly V1W3Mutation[] = [
 ];
 
 /** 变异结果(由主代理在验证机执行后回填;W3 实装块不执行变异) */
-/** 实测结果:r21w3-mut5 @ seal,254db1c,61/61 被杀(24 条只是表外多红,已补 expectRed) */
+/** 实测结果:待主代理整表重跑后回填(B2 改动 candidate-apply.ts 的锚点后清空) */
+/** 实测结果:r21b2-mut-w3-14 @382f620(husky):61 条全部被杀 */
 export const V1_W3_RESULTS: readonly V1W3Result[] = [
   {
     id: 'm13-1-facts-forced-true',

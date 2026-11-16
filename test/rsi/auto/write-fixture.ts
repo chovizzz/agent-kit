@@ -323,6 +323,8 @@ export function makeFx(w7: World7 = world7()): WriteFx {
     },
     rebase,
     outputForbidden: [],
+    // B2:夹具模拟「账的消费方已接线(D 已合并)」的世界,既有 veto 用例的前提不变;未接线的行为见 test/rsi/asm/b-veto-consumer.test.ts
+    consumers: { ledgerRead: 'wired' },
   };
   return {
     ports,

@@ -94,6 +94,7 @@ describe('classifyHalt(StepHalt 的处置;lock_lost 不能默认当个人锁)', 
     const table: Record<StepHalt, unknown> = {
       repo_absent: { kind: 'stop_step' },
       repo_deferred: { kind: 'stop_step' },
+      sealed_interval: { kind: 'stop_step_unsettled', cause: 'sealed_interval' },
       repo_invalid: { kind: 'stop_step_unsettled', cause: 'repo_invalid' },
       revocations_invalid: { kind: 'stop_step_unsettled', cause: 'revocations_invalid' },
       commit_failed: { kind: 'stop_step_unsettled', cause: 'commit_failed' },

@@ -10,6 +10,9 @@ import { makeUserMarkerPort } from '../canary/pause-marker.js';
 import { loadRsiConfig } from '../config.js';
 import { rsiDir } from '../rsi-dir.js';
 import { openRsiIo } from '../services/open.js';
+import { assembleWriteAdapters } from '../assemble-write.js';
+import { resolveAllowedHome } from '../../sync/snapshot.js';
+import { RSI_AUTO_PHASE } from '../../contracts/rsi.js';
 import { RsiFailClosedError, type RsiEarlyContext } from '../types.js';
 import { LEGIT_OFF, PERSONAL_GIT_DIR_REL, forbiddenExtra, untrustedReason } from './deps.js';
 import { AutoUsageError } from './read/ports.js';
@@ -18,7 +21,7 @@ import * as path from 'node:path';
 
 export async function productionWritePorts(
   ctx: RsiEarlyContext,
-  opts: { now?: () => Date } = {},
+  opts: { now?: () => Date; phase?: number } = {},
 ): Promise<WritePorts> {
   const env = ctx.env;
   const cfg = await loadRsiConfig({ ...(env !== undefined ? { env } : {}) });
@@ -33,7 +36,23 @@ export async function productionWritePorts(
   const io = open !== null && open.kind === 'ready' ? open.ctx.io : null;
   const now = opts.now ?? ((): Date => new Date());
   const gitDir = path.join(getRealHome(env), ...PERSONAL_GIT_DIR_REL.split('/'));
+  // `[rsi]` 可用时接入写侧组合根(B2):锁 / 状态端口 / 回滚与清理依赖 / 否决解除 / rebase;**工厂不读盘、不建目录、不取锁**。
+  // 生产不传 gitPath(`.git` 收紧前保持未装配,归 D),不提供 `consumers`(账的消费方归 D)
+  let assembled: Awaited<ReturnType<typeof assembleWriteAdapters>> | null = null;
+  if (cfg.status === 'on' && io !== null) {
+    const homeReal = await resolveAllowedHome(getRealHome(env), io.tmpDir, env);
+    if (homeReal === undefined) throw new RsiFailClosedError('write_denied');
+    assembled = await assembleWriteAdapters({
+      io,
+      home: homeReal,
+      repoPath: cfg.repo,
+      env,
+      now,
+      phase: opts.phase ?? RSI_AUTO_PHASE,
+    });
+  }
   return {
+    ...(assembled !== null ? assembled.ports : {}),
     config: async () => ({ rsiOn: cfg.status === 'on' }),
     userMarker: async () => {
       // `[rsi]` 关闭时没有仓库 `.state`:调用方先判 `rsiOn`,这里不会被走到;走到就 fail-closed
@@ -50,7 +69,10 @@ export async function productionWritePorts(
  * 这不构成阻断,因为缩减入口的输出只含 id、枚举与计数(没有候选正文、没有路径)。其它写命令与全部只读命令走 {@link productionWritePorts} / `deps.ts`,配置不可信时仍 fail-closed。
  * 只接 `config`(恒按「`[rsi]` 是否 on」如实报告)与 `outputForbidden`;锁与 `ClearDeps` 同样归装配块。
  */
-export async function productionClearWritePorts(ctx: RsiEarlyContext): Promise<WritePorts> {
+export async function productionClearWritePorts(
+  ctx: RsiEarlyContext,
+  opts: { now?: () => Date; phase?: number } = {},
+): Promise<WritePorts> {
   const env = ctx.env;
   const cfg = await loadRsiConfig({ ...(env !== undefined ? { env } : {}) });
   const gitDir = path.join(getRealHome(env), ...PERSONAL_GIT_DIR_REL.split('/'));
@@ -69,7 +91,21 @@ export async function productionClearWritePorts(ctx: RsiEarlyContext): Promise<W
       outputForbidden: [...forbiddenExtra(ctx, null, null, gitDir), cfg.repo],
     };
   }
+  // 缩减入口只接锁(personal → sync)与 `ClearDeps`:不取 `rsi/lock`、不装存储核、不访问仓库 `.state`。
+  // `[rsi]` 关闭 / 不可信 / 仓库不可达时本入口仍未接线(没有可用的 IoContext;见交付汇报「问题」):退 3 internal,零写入
+  const homeReal = await resolveAllowedHome(getRealHome(env), open.ctx.io.tmpDir, env);
+  if (homeReal === undefined) throw new RsiFailClosedError('write_denied');
+  const assembled = await assembleWriteAdapters({
+    io: open.ctx.io,
+    home: homeReal,
+    repoPath: cfg.repo,
+    env,
+    now: opts.now ?? ((): Date => new Date()),
+    phase: opts.phase ?? RSI_AUTO_PHASE,
+  });
   return {
+    locks: assembled.ports.locks,
+    clearDeps: assembled.ports.clearDeps,
     config: async () => ({ rsiOn: true }),
     outputForbidden: forbiddenExtra(ctx, open.ctx.io, cfg.repo, gitDir),
   };
