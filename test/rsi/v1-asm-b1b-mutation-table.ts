@@ -1615,6 +1615,15 @@ export const V1_ASM_B1B_MUTATIONS: readonly V1AsmB1bMutation[] = [
     expectRed: ['compaction_write_at_read_limit', 'compaction_write_one_byte_over_limit_refused'],
     mustKill: ['compaction_write_at_read_limit'],
   },
+  {
+    id: 'compactor_deps_snapshot_dropped',
+    clause:
+      'createCompactor 校验与之后所有闭包用同一份依赖快照;调用方构造后改写自己的 deps 对象不影响 compactor(防构造期校验后的替换)',
+    edits: [swap('src/rsi/store/compactor.ts', 'Object.freeze({ ...input })', 'input')],
+    tests: ['rsi/store/compactor.test.ts'],
+    expectRed: ['compactor_deps_swapped_after_construction_ignored'],
+    mustKill: ['compactor_deps_swapped_after_construction_ignored'],
+  },
 ];
 
 /** 由主代理整表执行变异后回填(新增 6 条后整表重跑) */

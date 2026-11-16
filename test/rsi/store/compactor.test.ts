@@ -11,7 +11,11 @@ import {
   type RsiEffectsLedger,
 } from '../../../src/contracts/rsi-store.js';
 import { COMPACTION_READ_MAX, decodeLedger } from '../../../src/rsi/store/backend.js';
-import { compactorOf, createCompactor } from '../../../src/rsi/store/compactor.js';
+import {
+  compactorOf,
+  createCompactor,
+  type CompactorDeps,
+} from '../../../src/rsi/store/compactor.js';
 import { SealRegistry } from '../../../src/rsi/store/seal.js';
 import { StoreError } from '../../../src/rsi/store/errors.js';
 import { RsiLockError } from '../../../src/rsi/lock-error.js';
@@ -760,6 +764,42 @@ describe.each(KINDS)('compactorOf 装配完整性(%s)', (kind) => {
     expect(await snap(w)).toEqual(before);
     region.close();
     expect(await genuine.compact({ through: W })).toMatchObject({ kind: 'advanced' });
+  });
+
+  it('compactor_deps_swapped_after_construction_ignored:构造通过后改写调用方的 deps 对象(换注册表 / held / recovery)不影响 compactor——未关闭区域照拒 region_open,零 I/O、字节不变;区域关闭后同一 compactor 照常推进', async () => {
+    let calls: string[] = [];
+    const w = await makeCWorld(kind, {
+      records: [terminalRecord()],
+      wrap: (inner) => {
+        const f = faulty(inner, []);
+        calls = f.calls;
+        return f;
+      },
+    });
+    const other = await makeCWorld(kind, { records: [terminalRecord()] });
+    await seedAudit(w, [obsRow(OBS_AT), RECENT]);
+    const region = await w.s.seal.open(w.personal);
+    const before = await snap(w);
+    const otherBefore = await snap(other);
+    const clock = (): Date => new Date(w.clock.iso);
+    const deps: CompactorDeps = {
+      held: w.s.held,
+      registry: w.s.registry,
+      recovery: w.s.recovery,
+      clock,
+      reconcile: w.source,
+    };
+    const c = createCompactor(deps);
+    deps.registry = new SealRegistry();
+    deps.recovery = other.s.recovery;
+    const n = calls.length;
+    expect((await rejects(c.compact({ through: W }))).code).toBe('region_open');
+    expect(calls.slice(n).filter((x) => !x.startsWith('read:'))).toEqual([]);
+    expect(await snap(w)).toEqual(before);
+    region.close();
+    deps.held = other.s.held;
+    expect(await c.compact({ through: W })).toMatchObject({ kind: 'advanced' });
+    expect(await snap(other)).toEqual(otherBefore);
   });
 
   it('compactor_assembly_mixed_acquisitions_refused:混用两个 acquisition 的 held / registry / recovery,或传入非协调器造的 held = lock_cap_mismatch,字节不变', async () => {

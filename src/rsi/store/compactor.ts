@@ -134,7 +134,9 @@ async function cleanupSteps(p: TxnPorts, w: UtcDay, today: UtcDay): Promise<Comp
   return out;
 }
 
-export function createCompactor(deps: CompactorDeps): Compactor {
+export function createCompactor(input: CompactorDeps): Compactor {
+  // 依赖快照:校验与之后所有闭包用同一份冻结副本——调用方构造后改写自己的 deps 对象(换注册表 / held / recovery)不影响本 compactor
+  const deps: CompactorDeps = Object.freeze({ ...input });
   // 装配完整性(任何 I/O 之前):注册表必须是该协调器所属 acquisition 的那一张,否则租约检查落在别的表上
   checkCompactorAssembly(deps.held, deps.registry);
   const reconcile = deps.reconcile ?? unwiredReconcileSource;
