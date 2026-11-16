@@ -213,7 +213,7 @@ describe.each(['mem', 'real'] as const)('压缩文件读写共用一个字节上
     expect((await w.bytes(FILES.compaction))?.length).toBe(COMPACTION_READ_MAX);
     expect(await w.backend.readWatermark()).toEqual({ through: '2026-11-01', gen: 1 });
     expect((await w.backend.readCompaction())?.gen).toBe(1);
-  });
+  }, 120_000); // 8 MiB 文档:约 17 万键的规范化编码与 schema 校验各跑数遍,慢机上超过 20 s
 });
 
 describe('压缩文件写前容量检查', () => {
@@ -246,5 +246,5 @@ describe('压缩文件写前容量检查', () => {
       noop,
     );
     expect(await backend.readWatermark()).toEqual({ through: '2026-10-02', gen: 2 });
-  });
+  }, 120_000);
 });

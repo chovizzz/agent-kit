@@ -845,13 +845,7 @@ export const V1_ASM_B1A_MUTATIONS: readonly V1AsmB1aMutation[] = [
   {
     id: 'compaction_write_unchecked',
     clause: 'W0-26 §7 写入与读侧同一语义',
-    edits: [
-      swap(
-        'src/rsi/store/backend.ts',
-        "decodeCompaction(Buffer.from(canonicalJson(next), 'utf8'), today());",
-        ';',
-      ),
-    ],
+    edits: [swap('src/rsi/store/backend.ts', 'decodeCompaction(bytes, today());', ';')],
     tests: ['rsi/store/backend.test.ts'],
     expectRed: ['writeCompaction 与读侧同一份语义'],
     mustKill: ['writeCompaction 与读侧同一份语义'],

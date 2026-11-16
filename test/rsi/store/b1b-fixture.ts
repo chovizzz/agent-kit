@@ -4,7 +4,7 @@
  * 崩溃注入 `crashFs`(能在操作**完成之后**才抛,模拟「rename 已落、进程随后死」;还有半截 tmp)。**不调用被测的合并 / 规划函数**:期望字节由测试自己手写,或来自「不中断的对照世界」。
  */
 import type { PersonalLifecycleRecord, RsiAuditLine } from '../../../src/contracts/rsi-personal.js';
-import type { RsiEffectsLedger } from '../../../src/contracts/rsi-store.js';
+import type { RsiAuditCompaction, RsiEffectsLedger } from '../../../src/contracts/rsi-store.js';
 import { canonicalJson } from '../../../src/io/canonical-json.js';
 import { compactorOf, createCompactor, type Compactor } from '../../../src/rsi/store/compactor.js';
 import type { StoreFs } from '../../../src/rsi/store/fs-port.js';
@@ -361,12 +361,7 @@ export function gateFirstRead(
 export function paddedCompaction(
   bytes: number,
   o: { gen?: number; through?: string; month?: string } = {},
-): {
-  schema_version: 1;
-  gen: number;
-  through: string;
-  months: Record<string, unknown>;
-} {
+): RsiAuditCompaction {
   const month = o.month ?? '2026-09';
   const doc = (n: number, len: number): ReturnType<typeof paddedCompaction> => {
     const byKind: Record<string, number> = {};
