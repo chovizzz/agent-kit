@@ -608,6 +608,37 @@ export const V1_ASM_C2_MUTATIONS: readonly V1AsmC2Mutation[] = [
     expectRed: ['runS2P 顺序与「唯一一次」', 'halt 前缀:lock_lost(归属未明)'],
     mustKill: ['halt 前缀:lock_lost(归属未明)'],
   },
+  {
+    id: 'open_repo_recovers_bootstrap_when_refused',
+    clause:
+      '§8.4:openPersonalRepo 在 refuseBootstrapRecovery 下不恢复 bootstrap journal(后续读写路径也不删 / 不续)',
+    edits: [
+      {
+        file: 'src/rsi/personal/commit.ts',
+        anchor:
+          "    if (deps.refuseBootstrapRecovery === true) return invalid('bootstrap_pending');\n",
+        replacement: '',
+      },
+    ],
+    tests: ['rsi/c2/c2-refuse-bootstrap-recovery.test.ts', 'rsi/c2/c2-assemble-e2e.test.ts'],
+    expectRed: ['C2 refuseBootstrapRecovery', 's1_never_resumes_bootstrap_without_authorization'],
+    mustKill: ['C2 refuseBootstrapRecovery'],
+  },
+  {
+    id: 'asm_repo_deps_without_refuse',
+    clause:
+      '装配层的 repoDeps 恒带 refuseBootstrapRecovery(否则 S1 之后的步骤会删 planned journal)',
+    edits: [
+      {
+        file: 'src/rsi/assemble-personal.ts',
+        anchor: '      refuseBootstrapRecovery: true,\n',
+        replacement: '',
+      },
+    ],
+    tests: ['rsi/c2/c2-assemble-e2e.test.ts'],
+    expectRed: ['C2 生产装配(真 worker)', 's1_never_resumes_bootstrap_without_authorization'],
+    mustKill: ['s1_never_resumes_bootstrap_without_authorization'],
+  },
 ];
 
 /** 执行后由主代理回填(本块不执行变异) */

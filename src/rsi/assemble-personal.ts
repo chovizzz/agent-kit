@@ -455,6 +455,8 @@ export function makeBothPorts(
       h,
       ownerRepoFp: await ownerRepoFingerprint(ctx.sctx.config.repo),
       now: ctx.now,
+      // bootstrap 类 journal 在场:任何经 openPersonalRepo 的读写(权威副本 / 回滚移除 / 记录 sha)都不恢复它(见 commit.ts)
+      refuseBootstrapRecovery: true,
     };
     const locks: PersonalLocks = { personal: held, rsi: ctx.lock };
     // 存储核要真实 LockCap:个人锁用委托壳(assertHeld 转型成 PersonalLockLost;其余成员委托原始句柄)

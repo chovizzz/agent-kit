@@ -57,6 +57,12 @@ export interface PersonalRepoDeps {
   uid?: number;
   /** 崩溃注入 / 观测缝(测试);产品代码不传 */
   onStep?: StepHook;
+  /**
+   * C2 装配恒为 true:`openPersonalRepo` 遇到 bootstrap 类 journal(任一阶段)**不恢复**(不 `git init` / `update-ref` / 删 journal),直接 `invalid{bootstrap_pending}`。
+   * 经 `readPersonalFiles` / `commitPersonal` / `personalRepoStore` 等所有走 `openPersonalRepo` 的路径都被同一处挡住(S1 前置守卫只管 S1 第 1 项,挡不住后续读写)。
+   * D1b 换成 `complete_only` 模式后删除本开关。
+   */
+  refuseBootstrapRecovery?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -270,6 +276,7 @@ export async function openPersonalRepo(
   let journal = jr.kind === 'ok' ? jr.value : null;
 
   if (journal !== null && journal.kind === 'bootstrap') {
+    if (deps.refuseBootstrapRecovery === true) return invalid('bootstrap_pending');
     const r = await recoverBootstrap(c, journal);
     if (r.status === 'invalid') return invalid(r.why);
     journal = null; // created(已记录并删 journal)/ discarded(什么也没建)
