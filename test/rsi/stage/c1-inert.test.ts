@@ -65,13 +65,13 @@ const RUNTIME_WIRED: readonly string[] = [
   'monitoring.ts',
   'residual.ts',
   'settle.ts',
-].map((f) => `${STAGE_DIR}${f}`);
+]
+  .map((f) => `${STAGE_DIR}${f}`)
+  // C2 订正:S2P 第 4b 步(W9 槽 `run`)的返回值要经 `normalizeJudgeReport` 校验;judge-slot.ts 只有槽类型 / 缺省实现 / 运行期校验,不含判决逻辑
+  // (`UNAVAILABLE_JUDGE` / `checkJudgeGrowth` 只许出现在它自己里:见 c1b-closure 的调用点收敛)
+  .concat(['src/rsi/personal/judge-slot.ts']);
 /** 仅类型闭包另允许(只被 `import type` 引用;没有运行时代码) */
-const TYPE_ONLY_WIRED: readonly string[] = [
-  `${STAGE_DIR}ports.ts`,
-  `${STAGE_DIR}taint-types.ts`,
-  'src/rsi/personal/judge-slot.ts',
-];
+const TYPE_ONLY_WIRED: readonly string[] = [`${STAGE_DIR}ports.ts`, `${STAGE_DIR}taint-types.ts`];
 
 /** 严格入口:闭包里一个 stage 模块都不许有(只读 / 前台 / 候选步入口;C1b 起含 worker 与钩子入口——个人步经端口注入,不静态依赖) */
 const ENTRIES = [
