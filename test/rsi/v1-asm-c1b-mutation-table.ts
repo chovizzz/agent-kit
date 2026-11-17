@@ -209,13 +209,14 @@ export const V1_ASM_C1B_MUTATIONS: readonly V1AsmC1bMutation[] = [
   {
     id: 'summary_lock_loss_swallowed',
     clause:
-      'P 摘要日志写时发现 rsi 失锁 → 上抛(普通失败才吞)。复合变异:其后第一个写点(L0 预写 attempt 的 commitState)会再次发现失锁并上抛,返回值与上抛相同、遮住这道内层守卫,所以同时让「L0 未到期」分支恒进入(其后只有 finish 的 catch-all,失锁时返回 skipped_throttled + recorded=false)——内层守卫被去掉时结果不再是 lock_lost',
+      'P 摘要日志写时发现 rsi 失锁 → 上抛(普通失败才吞)。复合变异:其后 `resumeTaintWith` 的第一行(`assertLockBelongs`)与 L0 预写 attempt 的 commitState 会再次发现失锁并上抛,返回值与这里上抛相同、遮住这道内层守卫,所以同时去掉 taint 续做调用并让「L0 未到期」分支恒进入(其后只有 finish 的 catch-all,失锁时返回 skipped_throttled + recorded=false)——内层守卫被去掉时结果不再是 lock_lost',
     edits: [
       swap(
         WORKER,
         '    if (isRsiLockLost(e)) throw e;\n  }\n}\n\nexport function personalSummaryLine',
         '  }\n}\n\nexport function personalSummaryLine',
       ),
+      swap(WORKER, '    await resumeTaintWith(mctx, lock, hooks);\n', ''),
       swap(WORKER, 'if (!l0Due(s1.prev, nowMs())) {', 'if (true) {'),
     ],
     tests: [T_WORKER],
