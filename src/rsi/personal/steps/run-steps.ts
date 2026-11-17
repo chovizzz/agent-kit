@@ -8,7 +8,7 @@
 import type { PersonalFault } from '../stage/errors.js';
 import type { Compactor, RecoveryPort, SafetyPort } from '../stage/ports.js';
 import type { BothRound, RsiOnlyRound } from '../stage/round.js';
-import { createRoundBudget, settleSafety } from '../stage/settle.js';
+import { createRoundBudget, settleSafety, type RoundBudget } from '../stage/settle.js';
 import type { TripReason, UnsettledReason } from '../stage/types.js';
 import { runCompaction } from './compact-sched.js';
 import { runS1, type S1Flags } from './s1-recover.js';
@@ -35,13 +35,17 @@ export interface BothPorts {
   readonly compactor?: Compactor;
 }
 
+/** 持两锁回合的调用预算(`startRollback` 上限取 `START_ROLLBACK_LIMIT`;装配层在建端口前先建它,适配器内的 `startRollback` 按它记账) */
+export const bothBudgetOf = (round: BothRound): RoundBudget =>
+  createRoundBudget(round, { startRollbackLimit: START_ROLLBACK_LIMIT });
+
 export async function runBothSteps(a: {
   readonly ports: BothPorts;
   readonly round: BothRound;
+  readonly budget: RoundBudget;
   readonly l0DueNow: boolean;
 }): Promise<StepsResult> {
-  const { ports, round } = a;
-  const budget = createRoundBudget(round, { startRollbackLimit: START_ROLLBACK_LIMIT });
+  const { ports, round, budget } = a;
   const faults: PersonalFault[] = [];
   const unsettled: UnsettledReason[] = [];
   const logCodes: string[] = [];
@@ -103,8 +107,9 @@ export async function runBothSteps(a: {
 export async function runRsiOnlySteps(a: {
   readonly safety: SafetyPort;
   readonly round: RsiOnlyRound;
+  readonly budget: RoundBudget;
 }): Promise<StepsResult> {
-  const budget = createRoundBudget(a.round);
+  const budget = a.budget;
   const faults: PersonalFault[] = [];
   const unsettled: UnsettledReason[] = [];
   const ran: string[] = [];

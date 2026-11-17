@@ -26,7 +26,9 @@ import {
   type BothRound,
   type RsiOnlyRound,
 } from './round.js';
+import { createRoundBudget, type RoundBudget } from './settle.js';
 import {
+  bothBudgetOf,
   runBothSteps,
   runRsiOnlySteps,
   type BothPorts,
@@ -57,8 +59,8 @@ export interface PersonalStageDeps {
    * (持两锁:`both` 收本轮 `BothRound`,写端口经 `round.writeAdapter` 包装;忙 / 故障:`rsiOnly` 只给 rsi 侧 `SafetyPort`)。
    */
   steps?: {
-    both(ctx: PersonalCtx, round: BothRound): BothPorts;
-    rsiOnly(ctx: PersonalCtx, round: RsiOnlyRound): SafetyPort;
+    both(ctx: PersonalCtx, round: BothRound, budget: RoundBudget): BothPorts;
+    rsiOnly(ctx: PersonalCtx, round: RsiOnlyRound, budget: RoundBudget): SafetyPort;
     /** 读盘上最终的两个标志(给 `PersonalRound.flags`);读不出 = `null`(按未知处理,不臆测) */
     flags?(ctx: PersonalCtx): Promise<S1Flags | null>;
   };
@@ -145,17 +147,22 @@ export function createPersonalStage(deps: PersonalStageDeps): PersonalStage {
         if (deps.steps !== undefined && !lockLost) {
           let sr: StepsResult | null = null;
           try {
-            sr =
-              open.kind === 'both'
-                ? await runBothSteps({
-                    ports: deps.steps.both(ctx, open.round),
-                    round: open.round,
-                    l0DueNow,
-                  })
-                : await runRsiOnlySteps({
-                    safety: deps.steps.rsiOnly(ctx, open.round),
-                    round: open.round,
-                  });
+            if (open.kind === 'both') {
+              const budget = bothBudgetOf(open.round);
+              sr = await runBothSteps({
+                ports: deps.steps.both(ctx, open.round, budget),
+                round: open.round,
+                budget,
+                l0DueNow,
+              });
+            } else {
+              const budget = createRoundBudget(open.round);
+              sr = await runRsiOnlySteps({
+                safety: deps.steps.rsiOnly(ctx, open.round, budget),
+                round: open.round,
+                budget,
+              });
+            }
           } catch (e) {
             const c = classify(e);
             if (c.kind === 'rethrow') throw e;
