@@ -107,7 +107,9 @@ export async function runHookEntry(
       const f = await bridge.forward({ argv, home: getRealHome(env), env, timeoutMs: null });
       if (f.forwarded) return f.code;
       const { runWorker } = await import('./worker.js');
-      await runWorker({ env });
+      // 个人步的生产装配:与 worker 同时求值(两者的模块一次性载入,P 运行期间不再惰性加载安装树里的文件);相位 < V1a 或能力缺项时 `eligible()` 为假,worker 不进 P
+      const { assembleWorkerStage } = await import('./assemble-worker.js');
+      await runWorker({ env, personal: assembleWorkerStage() });
       return ExitCode.OK;
     }
     if (shape.hadGlobal) return ExitCode.OK;
