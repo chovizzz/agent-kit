@@ -142,7 +142,7 @@ export const V1_ASM_C2_MUTATIONS: readonly V1AsmC2Mutation[] = [
         file: 'src/rsi/personal/steps/s1-recover.ts',
         anchor:
           "if (h.kind === 'stop_step_unsettled') unsettled.push(`step_integrity:${h.cause}`);",
-        replacement: 'void 0;',
+        replacement: "if (h.kind === 'stop_step_unsettled') void 0;",
       },
     ],
     tests: ['rsi/c2/c2-steps-s1.test.ts'],
@@ -151,12 +151,13 @@ export const V1_ASM_C2_MUTATIONS: readonly V1AsmC2Mutation[] = [
   },
   {
     id: 's1_personal_lock_loss_continues',
-    clause: '个人锁丢失 → 结束个人轮,余下步骤不调',
+    clause:
+      '个人锁丢失 → 结束个人轮,余下步骤不调(复合:单改返回值是等价变异——ended 已让后续步骤跳过;同时去掉 ended 才可观测)',
     edits: [
       {
         file: 'src/rsi/personal/steps/s1-recover.ts',
         anchor: '        ended = true;\n        return false;',
-        replacement: '        ended = true;\n        return true;',
+        replacement: '        return true;',
       },
     ],
     tests: ['rsi/c2/c2-steps-s1.test.ts'],
