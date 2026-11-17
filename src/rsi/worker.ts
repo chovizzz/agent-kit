@@ -41,14 +41,6 @@ import { RsiLockError } from './lock-error.js';
 import { RSI_FILE_OWNER, makeIsAlive, rsiDirReadonly } from './lock-read.js';
 import { policyFingerprint } from './config.js';
 import { lockGate, type LockGateOptions } from './gate.js';
-import { isRsiLockLost } from './personal/stage/errors.js';
-import {
-  newFallbackTrack,
-  planAfterFallback,
-  runFallbackOnce,
-  type FallbackTrack,
-} from './personal/stage/fallback.js';
-import type { PersonalCtx, PersonalRound, PersonalStage } from './personal/stage/types.js';
 import { applyBreaker, breakerView, l0Due, windowIndex } from './services/breaker.js';
 import { commitUnderLockWith, recoverUnderLock } from './services/commit.js';
 import { hooksFromGate, readStateForWrite, writeStateFile } from './services/fixed-write.js';
@@ -70,6 +62,14 @@ import { RsiSnapshotError } from './snapshot-read.js';
 import { inspectSnapshot } from './snapshot.js';
 import { productionSnapshotValidator } from './validators.js';
 import { RsiFailClosedError, type RsiServiceCtx } from './types.js';
+import type {
+  PortFallbackTrack,
+  PortPersonalCtx,
+  PortRoundView,
+  PersonalRuntime,
+  WorkerPersonalPort,
+  WorkerPersonalStage,
+} from './worker-personal-port.js';
 
 type Env = Readonly<Record<string, string | undefined>>;
 
@@ -96,12 +96,21 @@ export interface RsiWorkerRunDeps {
   /**
    * 个人步(装配块 C1b):缺省 = 不存在,worker 与此前逐字节同行为。注入点只有两处:`recoverUnderLock` 之后的 P(`run`),与 catch 内的 `safetyFallback`;
    * 两处共用 `eligible()`(相位 < V1a 或能力缺项 → 都不进)。
+   * 依赖倒置:本文件只认叶子端口 `worker-personal-port.ts`(只有类型);个人步与兜底协调器的真实实现由 `assemble-worker.ts` 的 `bindWorkerPersonal` 装配,
+   * 经 `worker-entry.ts` 在部署组装处注入——所以钩子入口的闭包里没有任何个人层(stage)模块(D-AU)。
    */
-  personal?: PersonalStage;
+  personal?: WorkerPersonalPort;
 }
 
 /** 一次运行的记账:`logged` = 本轮在锁内追加过日志(结束时截断);其余是兜底协调器的状态(`pCompleted` / `fallbackTried` / `fb` / `pending`) */
-type Track = { logged: boolean } & FallbackTrack;
+type Track = { logged: boolean } & PortFallbackTrack;
+/** 无个人步时的占位记账(与 `newFallbackTrack()` 同形;不装配 = 协调器永不被调,字段恒为初值) */
+const INERT_FALLBACK_TRACK = (): PortFallbackTrack => ({
+  pCompleted: false,
+  fallbackTried: false,
+  fb: null,
+  pending: null,
+});
 
 /** worker 一次运行的结局(只给测试与日志用;进程退出码恒 0) */
 export type WorkerResult =
@@ -338,7 +347,10 @@ export async function runWorker(deps: RsiWorkerRunDeps = {}): Promise<WorkerResu
   try {
     // R20-16.12 ② 观察性作废:worker 读到会话授权非 ok / 策略指纹变过 → 删受影响的已发布 digest(尽力;锁序 rsi/lock → digests/lock)
     await invalidateAllAgents(io, env, now());
-    const track: Track = { logged: false, ...newFallbackTrack() };
+    const track: Track = {
+      logged: false,
+      ...(deps.personal?.runtime.newTrack() ?? INERT_FALLBACK_TRACK()),
+    };
     const r = await underLock(sctx, lock, env, deps, now, nowMs, track);
     // 截断放在本轮全部追加之后(Pi 代码评审 #5 / 复核 #2):只要本轮在锁内成功追加过日志就截断,结束时 ≤ 200 行;
     // 真正零业务写入的分支(锁内拒绝、不可记录)没有追加过,不碰日志
@@ -373,7 +385,8 @@ async function underLock(
   const mctx: RsiServiceCtx = { ...sctx, config: obs.config };
   const isAlive = deps.isAlive ?? makeIsAlive((pid, sig) => process.kill(pid, sig));
   const busy = await updateBusy(io.hostEnv['HOME'], isAlive);
-  const stage = deps.personal;
+  const stage = deps.personal?.stage;
+  const rt = deps.personal?.runtime;
   const personalOn = stage !== undefined && stageEligible(stage);
   // 个人步可用时,`update/lock` 持有期间仍要跑减影响维护(C v2 §6):返回推迟到 P 之后;不可用(含相位 0)= 原样早返回
   if (busy && !personalOn) {
@@ -385,13 +398,14 @@ async function underLock(
     const gateW = makeGate(lock, deps.run?.beforeWrite);
     const hooks = hooksFromGate(gateW);
     const recovered = await recoverUnderLock(mctx, lock, hooks);
-    if (personalOn && stage !== undefined) {
+    if (personalOn && stage !== undefined && rt !== undefined) {
       const round = await runPersonalStep(
         stage,
+        rt,
         { sctx: mctx, lock, obs, now, nowMs, updateBusy: busy },
         track,
       );
-      await appendPersonalSummary(mctx, lock, round, track);
+      await appendPersonalSummary(mctx, lock, round, track, rt);
       // purge 续做 / taint 续做仍让位给 update(与现状一致)
       if (busy) return finish(mctx, lock, 'skipped_update_busy', false, now, track);
     }
@@ -510,17 +524,23 @@ async function underLock(
     // 先固定原异常与由它算出的 outcome;兜底的结果永不改写它们(只进日志一行与测试可见的 `track.fb`)
     const original = e;
     const outcome = outcomeOfError(original);
+    // 没有个人步 = 不进协调器:收尾计划就是「用原 outcome 调 finish」(与未装配时逐字节同行为)
+    let plan: { outcome: RsiOutcome; callFinish: boolean; logCode: string | null } = {
+      outcome,
+      callFinish: true,
+      logCode: null,
+    };
     let fb = track.fb;
-    if (stage !== undefined) {
-      fb = await runFallbackOnce({
+    if (stage !== undefined && rt !== undefined) {
+      fb = await rt.runFallbackOnce({
         track,
         stage,
         ctx: { sctx: mctx, lock, now, nowMs, origin: 'recover_under_lock' },
         original,
         outcome,
       });
+      plan = rt.planAfterFallback(outcome, fb);
     }
-    const plan = planAfterFallback(outcome, fb);
     // 兜底中途失锁:零后续写入,outcome 仍是原异常的
     if (!plan.callFinish) return { kind: 'ran', outcome: plan.outcome, recorded: false };
     if (plan.logCode !== null) {
@@ -529,14 +549,15 @@ async function underLock(
         await commitLogOnly(mctx, lock, { action: 'failed', code: plan.logCode });
       } catch (err) {
         // 普通日志失败吞掉;写日志时发现 rsi 失锁 = 已知失锁,不再启动任何后续写
-        if (isRsiLockLost(err)) return { kind: 'ran', outcome: plan.outcome, recorded: false };
+        if (rt?.isLockLost(err) === true)
+          return { kind: 'ran', outcome: plan.outcome, recorded: false };
       }
     }
     return finish(mctx, lock, plan.outcome, halfOpen, now, track, true);
   }
 }
 
-function stageEligible(stage: PersonalStage): boolean {
+function stageEligible(stage: WorkerPersonalStage): boolean {
   try {
     return stage.eligible() === true;
   } catch {
@@ -549,15 +570,16 @@ function stageEligible(stage: PersonalStage): boolean {
  * 不再调、读同一个 `track.fb`)。`run` 一旦返回(含带 faults 的退化回合)即置 `pCompleted`:其后的抛点不再调兜底(S0 已先执行)。
  */
 async function runPersonalStep(
-  stage: PersonalStage,
-  ctx: PersonalCtx,
+  stage: WorkerPersonalStage,
+  rt: PersonalRuntime,
+  ctx: PortPersonalCtx,
   track: Track,
-): Promise<PersonalRound> {
-  let round: PersonalRound;
+): Promise<PortRoundView> {
+  let round: PortRoundView;
   try {
     round = await stage.run(ctx);
   } catch (e) {
-    await runFallbackOnce({
+    await rt.runFallbackOnce({
       track,
       stage,
       ctx: {
@@ -580,8 +602,9 @@ async function runPersonalStep(
 async function appendPersonalSummary(
   sctx: RsiServiceCtx,
   lock: RsiLockHandle,
-  round: PersonalRound,
+  round: PortRoundView,
   track: Track,
+  rt: PersonalRuntime,
 ): Promise<void> {
   const line = personalSummaryLine(round);
   if (line === null) return;
@@ -589,12 +612,12 @@ async function appendPersonalSummary(
     track.logged = true; // 先置位:追加可能已发生而随后的清单提交失败
     await commitLogOnly(sctx, lock, line);
   } catch (e) {
-    if (isRsiLockLost(e)) throw e;
+    if (rt.isLockLost(e)) throw e;
   }
 }
 
 export function personalSummaryLine(
-  round: PersonalRound,
+  round: PortRoundView,
 ): { action: 'skipped' | 'failed'; code: string } | null {
   const safety = round.faults.find((f) => f.detail?.startsWith('safety_fault:') === true);
   if (safety !== undefined && safety.detail !== undefined) {

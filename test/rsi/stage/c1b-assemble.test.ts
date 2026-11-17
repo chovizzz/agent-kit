@@ -19,6 +19,7 @@ import {
   DELIVERED_MILESTONES,
   PRODUCTION_CAPABILITY_TABLE,
   assembleWorkerStage,
+  bindWorkerPersonal,
   wiredFromTable,
 } from '../../../src/rsi/assemble-worker.js';
 import { makeBreakerMarkerPort } from '../../../src/rsi/canary/pause-marker.js';
@@ -92,14 +93,16 @@ describe('相位 / 能力资格', () => {
 function wd(
   f: TickFx,
   audit: { op: string; path: string }[],
-  over: Partial<RsiWorkerRunDeps> = {},
+  over: Omit<Partial<RsiWorkerRunDeps>, 'personal'> & { personal?: PersonalStage } = {},
 ): RsiWorkerRunDeps {
+  const { personal, ...rest } = over;
   return {
     env: f.env,
     writeAudit: (op, p) => void audit.push({ op, path: p }),
     now: () => new Date(T),
     nowMs: () => T,
-    ...over,
+    ...rest,
+    ...(personal === undefined ? {} : { personal: bindWorkerPersonal(personal) }),
   };
 }
 

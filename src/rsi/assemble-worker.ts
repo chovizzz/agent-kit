@@ -37,16 +37,37 @@ import {
 } from './personal/breaker.js';
 import { acquirePersonalLock } from './personal/personal-lock.js';
 import { personalHome } from './personal/home-state.js';
+import { isRsiLockLost } from './personal/stage/errors.js';
+import {
+  newFallbackTrack,
+  planAfterFallback,
+  runFallbackOnce,
+  type FallbackTrack,
+} from './personal/stage/fallback.js';
 import type { S0Ports, S0StateKind } from './personal/stage/ladder.js';
 import { createPersonalStage } from './personal/stage/personal-stage.js';
 import type { FallbackPorts, StateRead } from './personal/stage/ports.js';
-import type { FallbackCtx, PersonalCtx, PersonalStage } from './personal/stage/types.js';
+import type {
+  FallbackCtx,
+  FallbackReport,
+  PersonalCtx,
+  PersonalRound,
+  PersonalStage,
+} from './personal/stage/types.js';
 import { readRsiFixed } from './services/attribution.js';
 import { commitUnderLockWith } from './services/commit.js';
 import { readStateForWrite, writeStateFile } from './services/fixed-write.js';
 import { l0Due } from './services/breaker.js';
 import { parseRsiStateDoc } from './state.js';
 import { RsiFailClosedError, type RsiServiceCtx } from './types.js';
+import type {
+  PortFallbackCtx,
+  PortFallbackReport,
+  PortFallbackTrack,
+  PortPersonalCtx,
+  PortRoundView,
+  WorkerPersonalPort,
+} from './worker-personal-port.js';
 
 // ---------- 能力表 ----------
 /** 契约能力表(键 = `RSI_ASSEMBLY_CAPS` 全集)。C1b **没有交付任何契约能力**(审计补扫 / 恢复扫描 / 增长存储守卫 / 全产生者盖戳都在 C2 / D),全部为假;只有 `RSI_PRODUCTION_WIRED_CAPS` 才是门禁依据 */
@@ -282,4 +303,31 @@ export function assembleWorkerStage(d: AssembleWorkerDeps = {}): PersonalStage {
       return l0Due(r.prev, ctx.nowMs());
     },
   });
+}
+
+// ---------- 依赖倒置的装配点:真实个人步 + 真实兜底协调器 → worker 的叶子端口 ----------
+type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+type MustBeTrue<T extends true> = T;
+/** 编译期断言:叶子端口里的结构化视图与 C1a 冻结类型不得漂移(任一边改了,这里就编译失败) */
+export type PortDriftChecks = [
+  MustBeTrue<Same<FallbackTrack, PortFallbackTrack>>,
+  MustBeTrue<Same<FallbackReport, PortFallbackReport>>,
+  /** worker 交给个人步的 ctx 必须能当真实 ctx 用 */
+  MustBeTrue<[PortPersonalCtx] extends [PersonalCtx] ? true : false>,
+  MustBeTrue<[PortFallbackCtx] extends [FallbackCtx] ? true : false>,
+  /** 真实回合必须能被 worker 的只读视图读 */
+  MustBeTrue<[PersonalRound] extends [PortRoundView] ? true : false>,
+];
+
+/** 把个人步与真实协调器装成 worker 的 `personal` 注入物(`worker-entry.ts` 与测试共用;类型兼容由赋值检查保证) */
+export function bindWorkerPersonal(stage: PersonalStage): WorkerPersonalPort {
+  return {
+    stage,
+    runtime: {
+      newTrack: newFallbackTrack,
+      runFallbackOnce,
+      planAfterFallback,
+      isLockLost: isRsiLockLost,
+    },
+  };
 }

@@ -6,6 +6,7 @@
  */
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { bindWorkerPersonal } from '../../../src/rsi/assemble-worker.js';
 import { RsiLockError } from '../../../src/rsi/lock-error.js';
 import { exists, readText } from '../../../src/io/read-fs.js';
 import { mkdirp, writeFile } from '../../../src/io/safe-fs.js';
@@ -65,12 +66,16 @@ function stageOf(
   return { stage, rec };
 }
 
-function wd(f: TickFx, over: Partial<RsiWorkerRunDeps> = {}): RsiWorkerRunDeps {
+/** 测试注入的是 PersonalStage(含假件);这里经生产同一个 `bindWorkerPersonal` 绑上真实兜底协调器,与生产装配同一条路径 */
+type WdOver = Omit<Partial<RsiWorkerRunDeps>, 'personal'> & { personal?: PersonalStage };
+function wd(f: TickFx, over: WdOver = {}): RsiWorkerRunDeps {
+  const { personal, ...rest } = over;
   return {
     env: f.env,
     now: () => new Date(T),
     nowMs: () => T,
-    ...over,
+    ...rest,
+    ...(personal === undefined ? {} : { personal: bindWorkerPersonal(personal) }),
   };
 }
 

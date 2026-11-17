@@ -10,7 +10,7 @@
 import * as path from 'node:path';
 import { RSI_ASSEMBLY_CAPS } from '../../../src/contracts/rsi-phase-caps.js';
 import { createRsiIoContext } from '../../../src/rsi/io.js';
-import { assembleWorkerStage } from '../../../src/rsi/assemble-worker.js';
+import { assembleWorkerStage, bindWorkerPersonal } from '../../../src/rsi/assemble-worker.js';
 import { acquirePersonalLock } from '../../../src/rsi/personal/personal-lock.js';
 import { personalHome } from '../../../src/rsi/personal/home-state.js';
 import { runWorker, type RsiWorkerRunDeps } from '../../../src/rsi/worker.js';
@@ -58,7 +58,9 @@ async function main(): Promise<void> {
     writeAudit,
     now: () => new Date(job.nowMs),
     nowMs: () => job.nowMs,
-    personal: assembleWorkerStage({ phase: 1, wired: new Set<string>(RSI_ASSEMBLY_CAPS) }),
+    personal: bindWorkerPersonal(
+      assembleWorkerStage({ phase: 1, wired: new Set<string>(RSI_ASSEMBLY_CAPS) }),
+    ),
     ...(job.failRecover === true
       ? {
           run: {

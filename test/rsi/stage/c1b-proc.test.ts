@@ -12,7 +12,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { RSI_ASSEMBLY_CAPS } from '../../../src/contracts/rsi-phase-caps.js';
 import { exists, readText } from '../../../src/io/read-fs.js';
 import { writeFile } from '../../../src/io/safe-fs.js';
-import { assembleWorkerStage } from '../../../src/rsi/assemble-worker.js';
+import { assembleWorkerStage, bindWorkerPersonal } from '../../../src/rsi/assemble-worker.js';
 import { makeBreakerMarkerPort } from '../../../src/rsi/canary/pause-marker.js';
 import { acquirePersonalLock } from '../../../src/rsi/personal/personal-lock.js';
 import { personalHome } from '../../../src/rsi/personal/home-state.js';
@@ -123,7 +123,7 @@ describe('a. 真第二进程持 personal 锁(E3)', () => {
           env: f.env,
           now: () => new Date(T),
           nowMs: () => T,
-          personal: s.stage,
+          personal: bindWorkerPersonal(s.stage),
         }),
       );
       expect(r.kind).toBe('ran');
@@ -142,7 +142,12 @@ describe('a. 真第二进程持 personal 锁(E3)', () => {
       expect(ex.signal).toBe('SIGKILL');
       const s2 = spyStage();
       const r2 = await withRealHome(f, () =>
-        runWorker({ env: f.env, now: () => new Date(T), nowMs: () => T, personal: s2.stage }),
+        runWorker({
+          env: f.env,
+          now: () => new Date(T),
+          nowMs: () => T,
+          personal: bindWorkerPersonal(s2.stage),
+        }),
       );
       expect(r2.kind).toBe('ran');
       expect(s2.rounds[0]?.growth.kind).toBe('open');
