@@ -76,14 +76,21 @@ import type {
 } from './worker-personal-port.js';
 
 // ---------- 能力表 ----------
-/** 契约能力表(键 = `RSI_ASSEMBLY_CAPS` 全集)。C1b **没有交付任何契约能力**(审计补扫 / 恢复扫描 / 增长存储守卫 / 全产生者盖戳都在 C2 / D),全部为假;只有 `RSI_PRODUCTION_WIRED_CAPS` 才是门禁依据 */
+/**
+ * 契约能力表(键 = `RSI_ASSEMBLY_CAPS` 全集)。**只有「生产装配里确实注入了该端口实例」才为真**,且必须与契约导出的 `RSI_PRODUCTION_WIRED_CAPS` 逐项一致(测试核对):
+ *  - `worker_safety_skeleton`:P 点 + S0 阶梯 + 兜底协议 + 试锁状态机 + 写适配器 / `gen`(C1b 交付,本装配即其注入);
+ *  - `taint_scan`:S1 / S2P / 污染扫描 / 压缩调度的真实现(C2;`makeBothPorts` 注入);
+ *  - 其余(审计补扫 / 恢复扫描 / 增长存储守卫 / 全产生者盖戳 / 账消费 / 近似指纹产生方)在 D 及之后,全部为假 → 相位提升 PR 在齐全前必红。
+ */
 export const PRODUCTION_CAPABILITY_TABLE: Readonly<Record<RsiAssemblyCap, boolean>> = Object.freeze(
   {
     effects_ledger_write: false,
     audit_appender: false,
     audit_compaction: false,
+    worker_safety_skeleton: true,
     audit_sweep: false,
     recovery_scan: false,
+    taint_scan: true,
     growth_storage_guard: false,
     seal_stamp_all_producers: false,
     ledger_consume_ingest: false,
@@ -91,11 +98,6 @@ export const PRODUCTION_CAPABILITY_TABLE: Readonly<Record<RsiAssemblyCap, boolea
     near_fp_producer: false,
   },
 );
-
-/** 本块交付记录(**不是契约能力键**,不进 wired 集合、不影响相位门禁):C1b 交付 = P 点 + S0 + 兜底协议 + 试锁状态机 */
-export const DELIVERED_MILESTONES: Readonly<Record<string, boolean>> = Object.freeze({
-  worker_safety_skeleton: true,
-});
 
 /** 由契约能力表读出「已注入」的键集合(测试把它与契约导出的 `RSI_PRODUCTION_WIRED_CAPS` 逐项核对) */
 export function wiredFromTable(

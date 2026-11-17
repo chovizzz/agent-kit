@@ -16,7 +16,6 @@ import { RSI_AUTO_PHASE } from '../../../src/contracts/rsi.js';
 import { exists, readText } from '../../../src/io/read-fs.js';
 import { mkdirp, writeFile } from '../../../src/io/safe-fs.js';
 import {
-  DELIVERED_MILESTONES,
   PRODUCTION_CAPABILITY_TABLE,
   assembleWorkerStage,
   bindWorkerPersonal,
@@ -40,22 +39,22 @@ const T = Date.parse(NOW);
 const ALL_CAPS = new Set<string>(RSI_ASSEMBLY_CAPS);
 
 describe('production_capability_table_matches_delivered', () => {
-  it('契约能力表:键 = RSI_ASSEMBLY_CAPS 全集,全部为假(C1b 没有交付任何契约能力);推出的 wired 集合为空且与契约导出的生产集合一致', () => {
+  it('契约能力表:键 = RSI_ASSEMBLY_CAPS 全集;只有已交付的 worker_safety_skeleton / taint_scan 为真(C2),推出的 wired 集合与契约导出的生产集合一致', () => {
     expect(Object.keys(PRODUCTION_CAPABILITY_TABLE).sort()).toEqual([...RSI_ASSEMBLY_CAPS].sort());
-    for (const k of RSI_ASSEMBLY_CAPS) expect(PRODUCTION_CAPABILITY_TABLE[k], k).toBe(false);
-    expect([...wiredFromTable()]).toEqual([]);
+    const DELIVERED = new Set(['worker_safety_skeleton', 'taint_scan']);
+    for (const k of RSI_ASSEMBLY_CAPS)
+      expect(PRODUCTION_CAPABILITY_TABLE[k], k).toBe(DELIVERED.has(k));
+    expect([...wiredFromTable()].sort()).toEqual(['taint_scan', 'worker_safety_skeleton']);
     expect([...wiredFromTable()].sort()).toEqual([...RSI_PRODUCTION_WIRED_CAPS].sort());
-    expect(RSI_PRODUCTION_WIRED_CAPS.size).toBe(0);
-  });
-
-  it('本块交付记录是单独的表:键不在契约能力集合里,不影响相位门禁', () => {
-    expect(DELIVERED_MILESTONES).toEqual({ worker_safety_skeleton: true });
-    for (const k of Object.keys(DELIVERED_MILESTONES)) expect(ALL_CAPS.has(k)).toBe(false);
   });
 
   it('wiredFromTable 的变异对照:把某个键置真就会出现在集合里(表是读出能力的唯一来源)', () => {
     const t = { ...PRODUCTION_CAPABILITY_TABLE, audit_sweep: true };
-    expect([...wiredFromTable(t)]).toEqual(['audit_sweep']);
+    expect([...wiredFromTable(t)].sort()).toEqual([
+      'audit_sweep',
+      'taint_scan',
+      'worker_safety_skeleton',
+    ]);
   });
 
   it('生产装配在 V1a 相位 + 契约生产集合下不 eligible:提相位的 PR 在能力齐全之前必红(assertPhaseCaps 抛)', () => {
