@@ -23,7 +23,8 @@ import { evaluationSlotOccupied } from '../personal/transition-table.js';
 import { isTerminalLifecycle } from '../personal/transition-table.js';
 import { readLedger, appendStopLine } from './ledger.js';
 import { revocationRefOf } from './files.js';
-import { removeRsiFile, writeRsiFileAtomic, type HeldLock } from './atomic-write.js';
+import { writeRsiFileAtomic, type HeldLock } from './atomic-write.js';
+import { removeCanary } from './canary-mute.js';
 import { canaryDocProblem } from './canary-doc.js';
 import { CANARY_FILES, sha12Of } from './files.js';
 import { readCanaryDoc } from './permit-read.js';
@@ -198,27 +199,5 @@ export async function grantCanary(d: CanaryWriterDeps, g: GrantInput): Promise<G
   return { kind: 'written', doc: parsed.data };
 }
 
-/** `AUTO_PAUSE` / 熔断:置为不注入(`generation + 1`)。无现有有效文件 = 无事可做。返回是否写了 */
-export async function muteCanary(
-  d: Pick<CanaryWriterDeps, 'io' | 'rsiDir'> & { locks: { rsi: HeldLock } },
-): Promise<boolean> {
-  await d.locks.rsi.assertHeld();
-  const cur = await readCanaryDoc(d.rsiDir);
-  if (cur.kind !== 'ok') return false;
-  if (cur.value.agents_inject.length === 0) return false;
-  const next = CanaryDocSchema.parse({
-    ...cur.value,
-    agents_inject: [],
-    p_by_agent: {},
-    generation: cur.value.generation + 1,
-  });
-  await writeRsiFileAtomic(d.io, d.rsiDir, CANARY_FILES.canary, canonicalJson(next), [d.locks.rsi]);
-  return true;
-}
-
-/** 撤销路径清理:删除缓存文件(只收紧) */
-export async function removeCanary(
-  d: Pick<CanaryWriterDeps, 'io' | 'rsiDir'> & { locks: { rsi: HeldLock } },
-): Promise<void> {
-  await removeRsiFile(d.io, d.rsiDir, CANARY_FILES.canary, [d.locks.rsi]);
-}
+// `muteCanary` / `removeCanary` 已拆到 `canary-mute.ts`(装配块 C1b:worker 骨架的闭包不得含授予入口 `grantCanary`;本文件原样再导出,既有 import 路径不变)
+export { muteCanary, removeCanary } from './canary-mute.js';

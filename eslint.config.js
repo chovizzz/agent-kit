@@ -356,6 +356,9 @@ const SUBPROCESS_TESTS = [
   'test/build/publish-freeze.test.ts',
   // R20 A3:真实发布产物(vite 构建的 dist/cli.js)上的钩子入口四组合、stdin 不关闭、端到端起 worker
   'test/rsi/a3-dist.test.ts',
+  // 装配块 C1b:真第二进程持个人锁 / kill -9 崩溃点的子进程支撑(vite 打包 c1b-entry 后用 node 跑),与相位 0 下基线 dist vs 当前 dist 的真子进程字节快照(E7)
+  'test/rsi/proc/c1b-helper.ts',
+  'test/rsi/stage/c1b-e7-dist.test.ts',
   // D-AU1 / D-AU2:真实发布产物上的钩子转发到 current、poke 顺带调度 update(同 a3-dist 的办法)
   'test/rsi/hook-forward-dist.test.ts',
   // 回放用例 check.sh 的正负对照(bash 子进程,写入只落在 makeTempDir 的临时目录)

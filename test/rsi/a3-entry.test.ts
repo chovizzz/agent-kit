@@ -48,6 +48,47 @@ describe('runHookEntry:退出码与零输出', () => {
   });
 });
 
+describe('worker 运行器注入(D-AU:装配带写出口,不进 hook-entry 的闭包,由根入口注入)', () => {
+  const FORWARD_NO = {
+    forward: async () => ({ forwarded: false as const }),
+    scheduleUpdate: async () => 0,
+  };
+  it('注入的运行器收到 env 且只调一次;转发成功时不调用', async () => {
+    const seen: unknown[] = [];
+    const runWorker = async (env: unknown): Promise<void> => void seen.push(env);
+    const env = { PATH: '/usr/bin:/bin' };
+    expect(
+      await runHookEntry(['__rsi', '--background'], { env, bridge: FORWARD_NO, runWorker }),
+    ).toBe(0);
+    expect(seen).toEqual([env]);
+    const fwd = {
+      forward: async () => ({ forwarded: true as const, code: 7 }),
+      scheduleUpdate: async () => 0,
+    };
+    expect(await runHookEntry(['__rsi', '--background'], { env, bridge: fwd, runWorker })).toBe(7);
+    expect(seen).toHaveLength(1);
+  });
+  it('运行器抛错也退 0 无输出;根入口 cli.ts 与 src/cli.ts 都经 worker-entry 注入生产运行器', async () => {
+    const boom = async (): Promise<void> => {
+      throw new Error('x');
+    };
+    expect(
+      await runHookEntry(['__rsi', '--background'], {
+        env: { PATH: '/usr/bin:/bin' },
+        bridge: FORWARD_NO,
+        runWorker: boom,
+      }),
+    ).toBe(0);
+    for (const f of ['cli.ts', 'src/cli.ts']) {
+      const src = await readText(path.join(REPO_ROOT, f));
+      expect(src, f).toContain('worker-entry.js');
+      expect(src, f).toContain('runWorker');
+    }
+    const hook = await readText(path.join(REPO_ROOT, 'src/rsi/hook-entry.ts'));
+    expect(hook).not.toContain('assemble-worker');
+  });
+});
+
 describe('src/cli.ts main():__rsi 动态转交到 hook-entry(进程内调用与根入口一致)', () => {
   it('精确形状退 0、无输出;全局选项 / 多余参数退 2、无输出', async () => {
     const run = async (argv: string[]): Promise<{ code: number; out: string; err: string }> => {

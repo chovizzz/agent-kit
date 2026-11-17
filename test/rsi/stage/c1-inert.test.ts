@@ -2,6 +2,10 @@
  * C1a:**生产惰性**与架构边界的证明(照 B1a `inert.test.ts`)——C1a 合并后:
  *  ① 没有任何生产入口(含 `worker.ts` / `hook-entry.ts` / `hint.ts` / 命令入口)的 import 闭包含 `src/rsi/personal/stage/**` 或 `judge-slot.ts`
  *     (类型导入也不含:`includeTypes` 两档都查)——不接线、没有注入点;
+ *  **C1b 订正(接线后,依赖倒置)**:`worker.ts` 只依赖叶子端口 `worker-personal-port.ts`(只有类型),`hook-entry.ts` 不认识装配——这两个文件的闭包(含 `import type`)里 stage 模块为**零**(严格档);
+ *  个人步的真实装配只在 `assemble-worker.ts` / `worker-entry.ts`(只被根入口 `cli.ts` / `src/cli.ts` 经动态 `import()` 加载)。所以 ① 对「接线入口」细分为**两档白名单**:运行时闭包只允许 `RUNTIME_WIRED`(纯逻辑的 P 骨架),
+ *  类型闭包另允许 `TYPE_ONLY_WIRED`(只被 `import type` 引用);**其余一切 stage 模块**(`growth.ts` 增影响授权、`settle.ts`、`monitoring.ts`、`residual.ts`、判决槽 `judge-slot.ts` 的运行时)
+ *  在任一档的生产闭包里仍然禁止;`hint.ts` 与命令入口(只读 / 前台)仍是全禁。这不是删闸:被允许的模块逐个是纯逻辑(见下面的纯度检查),且禁区覆盖面按「非白名单即禁」计。
  *  ② 新模块顶层无副作用(只有声明;顶层初始化只允许冻结 / 空登记表的构造),且全部为纯逻辑:无 fs 写用法、不 import 任何写出口;
  *  ③ 依赖收敛:对锁句柄具体类型 / 存储核的依赖只在 `lock-identity.ts`(且不含 `src/rsi/store/**`);不复制 W9 判决逻辑(不 import judge 逻辑模块);
  *  ④ 回合内部状态只在 stage 目录内可达(`roundInternals` / `markRoundUnsettled` 的引用面);
@@ -23,9 +27,12 @@ const NEW_FILES: string[] = [
   'errors.ts',
   'fallback.ts',
   'growth.ts',
+  'ladder.ts',
   'lock-identity.ts',
   'monitoring.ts',
+  'personal-stage.ts',
   'ports.ts',
+  'residual.ts',
   'round.ts',
   'settle.ts',
   'taint-types.ts',
@@ -34,14 +41,42 @@ const NEW_FILES: string[] = [
   .map((f) => `${STAGE_DIR}${f}`)
   .concat(['src/rsi/personal/judge-slot.ts']);
 
-const ENTRIES = [
+/**
+ * 接线入口:闭包里允许出现白名单内的 stage 模块(`cli.ts` / `src/cli.ts` 经动态 `import()` 加载 worker-entry,所以也在内)。
+ * 注意:`worker.ts` / `hook-entry.ts` 不在此列(它们在下面的严格档:stage 模块为零)。
+ */
+const WIRED_ENTRIES = [
   'cli.ts',
   'src/cli.ts',
+  'src/rsi/assemble-worker.ts',
+  'src/rsi/worker-entry.ts',
+].filter((f) => existsSync(path.join(ROOT, f)));
+/** 运行时生产闭包里允许出现的 stage 模块(C1b 接线所需的纯逻辑) */
+const RUNTIME_WIRED: readonly string[] = [
+  'errors.ts',
+  'fallback.ts',
+  'ladder.ts',
+  'lock-identity.ts',
+  'personal-stage.ts',
+  'round.ts',
+  'types.ts',
+].map((f) => `${STAGE_DIR}${f}`);
+/** 仅类型闭包另允许(只被 `import type` 引用;没有运行时代码) */
+const TYPE_ONLY_WIRED: readonly string[] = [
+  `${STAGE_DIR}ports.ts`,
+  `${STAGE_DIR}taint-types.ts`,
+  'src/rsi/personal/judge-slot.ts',
+];
+
+/** 严格入口:闭包里一个 stage 模块都不许有(只读 / 前台 / 候选步入口;C1b 起含 worker 与钩子入口——个人步经端口注入,不静态依赖) */
+const ENTRIES = [
+  'src/rsi/worker.ts',
+  'src/rsi/hook-entry.ts',
+  'src/rsi/worker-personal-port.ts',
   'src/commands/rsi.ts',
   'src/rsi/poke.ts',
   'src/rsi/hint.ts',
-  'src/rsi/worker.ts',
-  'src/rsi/hook-entry.ts',
+  'src/commands/rsi.ts-placeholder',
   'src/rsi/auto/commands.ts',
   'src/rsi/auto/entry.ts',
   'src/rsi/auto/deps-write.ts',
@@ -58,19 +93,87 @@ describe('生产惰性(C1a)', () => {
       .map((e) => `${STAGE_DIR}${e.name}`)
       .sort();
     expect(real).toEqual(NEW_FILES.filter((f) => f.startsWith(STAGE_DIR)).sort());
-    expect(NEW_FILES.length).toBe(11);
+    expect(NEW_FILES.length).toBe(14);
     expect(NEW_FILES).toContain('src/rsi/personal/stage/growth.ts');
     expect(NEW_FILES).toContain('src/rsi/personal/judge-slot.ts');
-    expect(ENTRIES.length).toBeGreaterThanOrEqual(8);
+    expect(ENTRIES.length).toBeGreaterThanOrEqual(9);
+    expect(WIRED_ENTRIES.length).toBe(4);
   });
 
-  it('生产入口的 import 闭包不含新模块:运行时依赖与类型依赖两档都查', () => {
+  it('严格入口(只读 / 前台 / 候选步)的 import 闭包不含任何新模块:运行时依赖与类型依赖两档都查', () => {
     for (const includeTypes of [false, true]) {
       const c = closureOf(ENTRIES, { includeTypes });
       expect(c.files.size).toBeGreaterThan(50);
       expect([...c.files].filter(isNew), `includeTypes=${includeTypes}`).toEqual([]);
       expect(c.unresolved).toEqual([]);
     }
+  });
+
+  it('接线入口的闭包只含白名单内的 stage 模块:非白名单即禁(growth / settle / monitoring / residual / 判决槽运行时),两档分别查', () => {
+    const rt = closureOf(WIRED_ENTRIES, { includeTypes: false });
+    expect([...rt.files].filter(isNew).sort(), 'runtime').toEqual([...RUNTIME_WIRED].sort());
+    const ty = closureOf(WIRED_ENTRIES, { includeTypes: true });
+    expect([...ty.files].filter(isNew).sort(), 'types').toEqual(
+      [...RUNTIME_WIRED, ...TYPE_ONLY_WIRED].sort(),
+    );
+    expect(rt.unresolved).toEqual([]);
+    // 每个单入口也逐一核对(不靠并集掩盖某个入口多拉了模块)
+    for (const e of WIRED_ENTRIES) {
+      const one = closureOf([e], { includeTypes: false });
+      for (const f of [...one.files].filter(isNew))
+        expect(RUNTIME_WIRED, `${e} → ${f}`).toContain(f);
+    }
+  });
+
+  it('worker.ts / hook-entry.ts / 端口叶子文件逐个:闭包(含 import type)里 stage 模块为零,也不含个人层写出口 home-fs', () => {
+    for (const e of [
+      'src/rsi/worker.ts',
+      'src/rsi/hook-entry.ts',
+      'src/rsi/worker-personal-port.ts',
+    ]) {
+      expect(existsSync(path.join(ROOT, e)), e).toBe(true);
+      const c = closureOf([e], { includeTypes: true });
+      expect([...c.files].filter(isNew), e).toEqual([]);
+      expect(c.files.has('src/io/home-fs.ts'), e).toBe(false);
+      expect(c.files.has('src/rsi/personal/personal-lock.ts'), e).toBe(false);
+      expect(c.unresolved).toEqual([]);
+    }
+  });
+
+  it('正向对照:worker 若重新 import type 任一 stage 模块,同一检查必红(类型导入也把个人层写出口拖进闭包)', () => {
+    for (const spec of ['types', 'errors']) {
+      const c = closureOf(['src/rsi/inert-probe-worker.ts'], {
+        includeTypes: true,
+        virtual: {
+          'src/rsi/inert-probe-worker.ts': `import type * as S from './personal/stage/${spec}.js';\nexport type X = typeof S;`,
+        },
+      });
+      expect([...c.files].filter(isNew), spec).toContain(`${STAGE_DIR}${spec}.ts`);
+      expect(c.files.has('src/io/home-fs.ts'), spec).toBe(true);
+    }
+  });
+
+  it('assemble-worker.ts 的闭包确实带着个人层写出口(端口隔离不是空跑:被隔离的那一侧真有东西)', () => {
+    const c = closureOf(['src/rsi/assemble-worker.ts'], { includeTypes: true });
+    expect(c.files.has('src/io/home-fs.ts')).toBe(true);
+    expect(c.files.has('src/rsi/personal/stage/fallback.ts')).toBe(true);
+  });
+
+  it('正向对照:接线入口若多拉 growth.ts / settle.ts,白名单检查必红', () => {
+    const c = closureOf(['src/rsi/inert-probe-wired.ts'], {
+      includeTypes: false,
+      virtual: {
+        'src/rsi/inert-probe-wired.ts':
+          "import { evaluateGrowth } from './personal/stage/growth.js';\nimport { settleSafety } from './personal/stage/settle.js';\nexport const x = [evaluateGrowth, settleSafety];",
+      },
+    });
+    const extra = [...c.files].filter(isNew).filter((f) => !RUNTIME_WIRED.includes(f));
+    expect(extra).toEqual(
+      expect.arrayContaining([
+        'src/rsi/personal/stage/growth.ts',
+        'src/rsi/personal/stage/settle.ts',
+      ]),
+    );
   });
 
   it('正向对照:虚拟入口 import 授权模块 / 判决槽时,同一检查报出', () => {
@@ -88,11 +191,12 @@ describe('生产惰性(C1a)', () => {
     );
   });
 
-  it('worker.ts / hint.ts / hook-entry.ts 的源码没有提到新模块路径', () => {
-    for (const f of ['src/rsi/worker.ts', 'src/rsi/hint.ts', 'src/rsi/hook-entry.ts']) {
-      const src = readTextSync(path.join(ROOT, f));
-      expect(src, f).not.toMatch(/personal\/stage|judge-slot|PersonalStage/);
-    }
+  it('hint.ts 的源码没有提到新模块路径;worker.ts 的源码不提任何 stage 模块路径(只经端口)', () => {
+    const hint = readTextSync(path.join(ROOT, 'src/rsi/hint.ts'));
+    expect(hint).not.toMatch(/personal\/stage|judge-slot|PersonalStage/);
+    const worker = readTextSync(path.join(ROOT, 'src/rsi/worker.ts'));
+    expect(worker).not.toMatch(/personal\/stage|judge-slot/);
+    expect(importsOf('worker.ts', worker)).toContain('./worker-personal-port.js');
   });
 
   it('相位常量仍为 0(本块不提相位)', () => {
