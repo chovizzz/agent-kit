@@ -92,3 +92,38 @@ export async function writeRevocation(
   await appendRevocations(h, assertHeld, [line.data]);
   return 'written';
 }
+
+/**
+ * `writeRevocation` 的**回读版**(C2,新增;已发布的 `writeRevocation` 一字不动):幂等键相同时不再只说 `already_present`,
+ * 而是返回**已有那一行的 `by` / `reason`**,由调用方判定「同一来源的重放」还是「与已有凭据冲突」(污染撤销的冲突语义见 C v2 §7)。
+ * 同一份校验、同一把锁前置、同一个追加原语;**从不覆盖、从不追加第二行**:已有同键凭据时零写入。
+ */
+export type RevocationWriteDetailed =
+  { kind: 'written' } | { kind: 'already'; existing: { by: RevocationBy; reason: string } };
+
+export async function writeRevocationDetailed(
+  h: PersonalHome,
+  assertHeld: () => Promise<void>,
+  input: RsiRevocationLine,
+): Promise<RevocationWriteDetailed> {
+  const problem = revocationSourceProblem(input.by, input.reason);
+  if (problem === 'identity_changed') throw new RevocationWriteError('identity_changed');
+  if (problem !== null) throw new RevocationWriteError('reason_not_allowed');
+  const parsed = RsiRevocationLineSchema.safeParse(input);
+  if (!parsed.success) throw new RevocationWriteError('reason_not_allowed');
+  const want = parsed.data;
+  await assertHeld();
+  const cur = await readRevocations(h);
+  if (cur.kind === 'invalid') throw new PersonalStateError('revocations_invalid', cur.why);
+  const lines = cur.kind === 'ok' ? cur.value : [];
+  const same = lines.find(
+    (l) => sameCandidate(l, want) /* 幂等键 = (candidate_id, content_sha256) */,
+  );
+  if (same !== undefined)
+    return { kind: 'already', existing: { by: same.by, reason: same.reason } };
+  await appendRevocations(h, assertHeld, [want]);
+  return { kind: 'written' };
+}
+
+const sameCandidate = (a: RsiRevocationLine, b: RsiRevocationLine): boolean =>
+  a.candidate_id === b.candidate_id && a.content_sha256 === b.content_sha256;
