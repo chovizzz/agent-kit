@@ -39,7 +39,11 @@ class Collector {
     if (o.kind === 'incomplete' && o.why.startsWith(HALT_PREFIX)) {
       const h = classifyHalt(o.why.slice(HALT_PREFIX.length) as never);
       if (h.kind === 'stop_step_unsettled') this.unsettled.push(`step_integrity:${h.cause}`);
-      else if (h.kind === 'lock_lost_unresolved') this.unsettled.push('lock_loss_unresolved');
+      else if (h.kind === 'lock_lost_unresolved') {
+        // 归属未明(reduce-step 把 RsiLockError('lock_lost') 吞成 `halted`):停掉余下的写,personal-stage 之后 `resolveLockLoss`
+        this.unsettled.push('lock_loss_unresolved');
+        this.ended = true;
+      }
     }
     const f = faultOfOutcome(name, o);
     if (f !== null) this.faults.push(f);
@@ -129,10 +133,10 @@ export async function runS2P(p: {
             } catch (e) {
               if (!(e instanceof TaintApplyFailed)) throw e;
               // 凭据 / 回滚写失败:稳定码 + 失败候选 id(写适配器已使本轮 unsettled;下轮幂等重试)
-              c.faults.push({
-                code: 'step_halted',
-                detail: tagOf(`taint_apply_failed:${e.ids.join('+')}`),
-              });
+              // 每个失败 id 一条(`tagOf` 限 48 字符:拼成一条会截断真实 id,且分隔符与 id 内的 `_` 混淆)
+              for (const id of e.ids) {
+                c.faults.push({ code: 'step_halted', detail: tagOf(`taint_apply_failed:${id}`) });
+              }
               return undefined;
             }
           });

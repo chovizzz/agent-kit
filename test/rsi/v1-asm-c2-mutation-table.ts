@@ -594,6 +594,20 @@ export const V1_ASM_C2_MUTATIONS: readonly V1AsmC2Mutation[] = [
     expectRed: ['C2 生产装配(真 worker)', '私有仓库未建'],
     mustKill: ['私有仓库未建'],
   },
+  {
+    id: 's2_halt_lock_lost_not_ended',
+    clause: 'S2 步骤返回 halt:lock_lost(归属未明)→ 未决并结束个人轮,余下步骤零调用',
+    edits: [
+      {
+        file: 'src/rsi/personal/steps/s2-reduce.ts',
+        anchor: '        this.ended = true;\n      }\n    }\n    const f = faultOfOutcome',
+        replacement: '      }\n    }\n    const f = faultOfOutcome',
+      },
+    ],
+    tests: ['rsi/c2/c2-steps-s2.test.ts'],
+    expectRed: ['runS2P 顺序与「唯一一次」', 'halt 前缀:lock_lost(归属未明)'],
+    mustKill: ['halt 前缀:lock_lost(归属未明)'],
+  },
 ];
 
 /** 执行后由主代理回填(本块不执行变异) */

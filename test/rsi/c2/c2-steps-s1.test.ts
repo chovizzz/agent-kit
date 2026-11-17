@@ -190,6 +190,16 @@ describe('runS1', () => {
     ).rejects.toBeInstanceOf(RsiLockError);
   });
 
+  it('某项返回 halt:lock_lost(归属未明)→ 未决 lock_loss_unresolved 且结束个人轮:余下步骤零调用', async () => {
+    const { p, calls } = ports({
+      resumeRollbacks: async () => ({ kind: 'incomplete', why: 'halt:lock_lost' }),
+    });
+    const r = await runS1({ recovery: p, budget: await budgetOf() });
+    expect(r.unsettled).toContain('lock_loss_unresolved');
+    expect(r.ended).toBe(true);
+    expect(calls).toEqual(['repo']);
+  });
+
   it('个人锁丢失 → 结束个人轮(余下步骤不调);rsi 锁丢失 → 原样上抛', async () => {
     const lost = ports({
       resumeRollbacks: async () => {

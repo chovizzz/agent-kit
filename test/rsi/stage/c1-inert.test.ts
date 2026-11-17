@@ -3,8 +3,8 @@
  *  ① 没有任何生产入口(含 `worker.ts` / `hook-entry.ts` / `hint.ts` / 命令入口)的 import 闭包含 `src/rsi/personal/stage/**` 或 `judge-slot.ts`
  *     (类型导入也不含:`includeTypes` 两档都查)——不接线、没有注入点;
  *  **C1b 订正(接线后,依赖倒置)**:`worker.ts` 只依赖叶子端口 `worker-personal-port.ts`(只有类型),`hook-entry.ts` 不认识装配——这两个文件的闭包(含 `import type`)里 stage 模块为**零**(严格档);
- *  个人步的真实装配只在 `assemble-worker.ts` / `worker-entry.ts`(只被根入口 `cli.ts` / `src/cli.ts` 经动态 `import()` 加载)。所以 ① 对「接线入口」细分为**两档白名单**:运行时闭包只允许 `RUNTIME_WIRED`(纯逻辑的 P 骨架;C2 起含 settle / monitoring / residual),
- *  类型闭包另允许 `TYPE_ONLY_WIRED`(只被 `import type` 引用);**其余一切 stage 模块**(`growth.ts` 增影响授权、判决槽 `judge-slot.ts` 的运行时)
+ *  个人步的真实装配只在 `assemble-worker.ts` / `worker-entry.ts`(只被根入口 `cli.ts` / `src/cli.ts` 经动态 `import()` 加载)。所以 ① 对「接线入口」细分为**两档白名单**:运行时闭包只允许 `RUNTIME_WIRED`(纯逻辑的 P 骨架;C2 起含 settle / monitoring / residual 与 judge-slot.ts〔只有槽类型 / 缺省实现 / 运行期校验,其调用点由 c1b-closure 收敛〕),
+ *  类型闭包另允许 `TYPE_ONLY_WIRED`(只被 `import type` 引用);**其余一切 stage 模块**(`growth.ts` 增影响授权)
  *  在任一档的生产闭包里仍然禁止;`hint.ts` 与命令入口(只读 / 前台)仍是全禁。这不是删闸:被允许的模块逐个是纯逻辑(见下面的纯度检查),且禁区覆盖面按「非白名单即禁」计。
  *  ② 新模块顶层无副作用(只有声明;顶层初始化只允许冻结 / 空登记表的构造),且全部为纯逻辑:无 fs 写用法、不 import 任何写出口;
  *  ③ 依赖收敛:对锁句柄具体类型 / 存储核的依赖只在 `lock-identity.ts`(且不含 `src/rsi/store/**`);不复制 W9 判决逻辑(不 import judge 逻辑模块);

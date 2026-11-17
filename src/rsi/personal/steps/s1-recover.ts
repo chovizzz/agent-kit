@@ -67,7 +67,10 @@ export async function runS1(p: {
     if (o.kind === 'incomplete' && o.why.startsWith(HALT_PREFIX)) {
       const h = classifyHalt(o.why.slice(HALT_PREFIX.length) as never);
       if (h.kind === 'stop_step_unsettled') unsettled.push(`step_integrity:${h.cause}`);
-      else if (h.kind === 'lock_lost_unresolved') unsettled.push('lock_loss_unresolved');
+      else if (h.kind === 'lock_lost_unresolved') {
+        unsettled.push('lock_loss_unresolved');
+        ended = true; // 归属未明:停掉余下步骤,personal-stage 之后 `resolveLockLoss`
+      }
     }
     const f = faultOfOutcome(name, o);
     if (f !== null) faults.push(f);

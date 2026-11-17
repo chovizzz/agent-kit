@@ -282,13 +282,14 @@ describe('runS2P 顺序与「唯一一次」', () => {
     ).rejects.toBeInstanceOf(RsiLockError);
   });
 
-  it('halt 前缀:repo_invalid 类 → step_integrity 未决;lock_lost → 未决 lock_loss_unresolved', async () => {
+  it('halt 前缀:repo_invalid 类 → step_integrity 未决(不结束个人轮,后续步骤照跑)', async () => {
+    const log: string[] = [];
     const { w, b } = await budget();
     const r = await runS2P({
       ports: s2ports({
+        log,
         reduce: {
           reconcileRevocations: async () => ({ kind: 'incomplete', why: 'halt:repo_invalid' }),
-          expireCandidates: async () => ({ kind: 'incomplete', why: 'halt:lock_lost' }),
         },
       }),
       round: w.round,
@@ -297,7 +298,28 @@ describe('runS2P 顺序与「唯一一次」', () => {
       tripSeed: [],
     });
     expect(r.unsettled).toContain('step_integrity:repo_invalid');
+    expect(r.ended).toBe(false);
+    expect(log).toContain('release');
+  });
+
+  it('halt 前缀:lock_lost(归属未明)→ 未决 lock_loss_unresolved 且结束个人轮:余下步骤(对账 / 触发 / 解除)零调用', async () => {
+    const log: string[] = [];
+    const { w, b } = await budget();
+    const r = await runS2P({
+      ports: s2ports({
+        log,
+        reduce: {
+          expireCandidates: async () => ({ kind: 'incomplete', why: 'halt:lock_lost' }),
+        },
+      }),
+      round: w.round,
+      budget: b,
+      l0DueNow: false,
+      tripSeed: [],
+    });
     expect(r.unsettled).toContain('lock_loss_unresolved');
+    expect(r.ended).toBe(true);
+    for (const x of ['reconcile', 'triggers', 'release']) expect(log, x).not.toContain(x);
   });
 });
 
@@ -423,7 +445,7 @@ describe('taint_apply_failed(凭据 / 回滚写失败)', () => {
         scan: { scan: async () => ({ kind: 'ok', tainted: [cand()], unknown: [] }) },
         reduce: {
           applyTaint: async () => {
-            throw new TaintApplyFailed(['ra_a', 'ra_b']);
+            throw new TaintApplyFailed(['ra_0123456789ab', 'ra_ba9876543210']);
           },
         },
       }),
@@ -432,10 +454,10 @@ describe('taint_apply_failed(凭据 / 回滚写失败)', () => {
       l0DueNow: false,
       tripSeed: [],
     });
-    expect(r.faults).toContainEqual({
-      code: 'step_halted',
-      detail: 'taint_apply_failed:ra_a_ra_b',
-    });
+    // 真实长度的 id(15 字符):每个一条,不被 48 字符上限截断
+    for (const id of ['ra_0123456789ab', 'ra_ba9876543210']) {
+      expect(r.faults).toContainEqual({ code: 'step_halted', detail: `taint_apply_failed:${id}` });
+    }
     expect(r.faults.some((f) => f.code === 'step_threw')).toBe(false);
     expect(log).toContain('release'); // 不挡后续
   });
