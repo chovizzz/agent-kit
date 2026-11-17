@@ -5,7 +5,7 @@
  * **未覆盖**(验收清单里单列):真第二进程持 personal 锁(E3)、kill -9 崩溃点、真 dist 子进程快照(E7)——本块没有现成的 personal 锁子进程夹具。
  */
 import * as path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   RSI_ASSEMBLY_CAPS,
   RSI_PRODUCTION_WIRED_CAPS,
@@ -30,7 +30,7 @@ import type {
 } from '../../../src/rsi/personal/stage/types.js';
 import { runWorker, type RsiWorkerRunDeps } from '../../../src/rsi/worker.js';
 import { type TickFx, makeTickFx } from '../b5a-fixture.js';
-import { rsiToml, treeOf } from '../rsi-fixture.js';
+import { treeOf } from '../rsi-fixture.js';
 import { canaryDoc } from '../canary/w5-fixture.js';
 import { NOW } from '../ro-fixture.js';
 
@@ -142,15 +142,17 @@ const canaryOf = async (f: TickFx): Promise<{ agents_inject: string[]; generatio
   JSON.parse(await readText(canaryFile(f))) as { agents_inject: string[]; generation: number };
 
 /**
- * 个人锁的写出口(home-fs)只认「真实 HOME」或「严格位于 KIT_TMP 之内的 HOME」。夹具默认 KIT_TMP 与 HOME 并列 → 个人锁取锁得 `write_denied`(= 真实的故障路径);
- * KIT_TMP 不能是 HOME / 仓库的祖先(openRsiIo 拒绝),所以要真取到 / 占用个人锁,另建一个位于 `f.tmp` 之内的假 HOME 并搬过去配置。
+ * 个人锁的写出口(home-fs)只认「真实 HOME」(`getRealHome()` 读**进程**环境的 `KIT_REAL_HOME_OVERRIDE`,与 worker 自己的 env 注入无关)或「严格位于 KIT_TMP 之内的 HOME」;
+ * 后者与 `openRsiIo` 的「KIT_TMP 不得是 HOME / 仓库的祖先」冲突。夹具默认不满足前者 → 个人锁取锁得 `write_denied`(= 真实的故障路径)。
+ * 要真取到 / 占用个人锁,用 `vi.stubEnv` 让进程环境的真实 HOME 指向假 HOME(用完即还原)。
  */
-async function homeInsideTmp(f: TickFx): Promise<{ home: string; env: Record<string, string> }> {
-  const home = path.join(f.tmp, 'home2');
-  const cfgDir = path.join(home, '.config', 'agent-kit');
-  await mkdirp(f.fx, cfgDir, 0o755);
-  await writeFile(f.fx, path.join(cfgDir, 'config.toml'), rsiToml(f), { mode: 0o600 });
-  return { home, env: { ...f.env, KIT_REAL_HOME_OVERRIDE: home } };
+async function withRealHome<T>(f: TickFx, run: () => Promise<T>): Promise<T> {
+  vi.stubEnv('KIT_REAL_HOME_OVERRIDE', f.home);
+  try {
+    return await run();
+  } finally {
+    vi.unstubAllEnvs();
+  }
 }
 const lockFileIn = (home: string): string =>
   path.join(home, '.local', 'state', 'agent-kit', 'rsi-personal', 'lock');
@@ -183,22 +185,20 @@ describe('S0 真适配器(经真 runWorker)', () => {
     const f = await makeTickFx('c1b-asm-held-', { confirmed: true });
     await seedCanary(f);
     await seedBreakerMarker(f);
-    const h = await homeInsideTmp(f);
     const s = spy(assembleWorkerStage({ phase: 1, wired: ALL_CAPS }));
-    const r = await runWorker(wd(f, [], { personal: s.stage, env: h.env }));
+    const r = await withRealHome(f, () => runWorker(wd(f, [], { personal: s.stage })));
     expect(r.kind).toBe('ran');
     expect(s.rounds[0]?.faults).toEqual([]);
     expect(s.rounds[0]?.growth.kind).toBe('open');
     expect((await canaryOf(f)).agents_inject).toEqual([]);
-    expect(await exists(lockFileIn(h.home))).toBe(false); // 个人锁已释放
+    expect(await exists(lockFileIn(f.home))).toBe(false); // 个人锁已释放
   });
 
   it('无熔断(无 B / 无码 / 无 U):canary 与 B 都不被碰;没有 safety_fault 行', async () => {
     const f = await makeTickFx('c1b-asm-quiet-', { confirmed: true });
     await seedCanary(f);
-    const h = await homeInsideTmp(f);
     const s = spy(assembleWorkerStage({ phase: 1, wired: ALL_CAPS }));
-    const r = await runWorker(wd(f, [], { personal: s.stage, env: h.env }));
+    const r = await withRealHome(f, () => runWorker(wd(f, [], { personal: s.stage })));
     expect(r.kind).toBe('ran');
     expect(s.rounds[0]?.faults).toEqual([]);
     expect((await canaryOf(f)).agents_inject).toEqual(['claude']);
@@ -211,8 +211,7 @@ describe('S0 真适配器(经真 runWorker)', () => {
     const f = await makeTickFx('c1b-asm-busy-', { confirmed: true });
     await seedCanary(f);
     await seedBreakerMarker(f);
-    const h = await homeInsideTmp(f);
-    const lockFile = lockFileIn(h.home);
+    const lockFile = lockFileIn(f.home);
     await mkdirp(f.fx, path.dirname(lockFile), 0o700);
     const doc = JSON.stringify({
       pid: process.ppid,
@@ -222,7 +221,7 @@ describe('S0 真适配器(经真 runWorker)', () => {
     });
     await writeFile(f.fx, lockFile, doc, { mode: 0o600 });
     const s = spy(assembleWorkerStage({ phase: 1, wired: ALL_CAPS }));
-    const r = await runWorker(wd(f, [], { personal: s.stage, env: h.env }));
+    const r = await withRealHome(f, () => runWorker(wd(f, [], { personal: s.stage })));
     expect(r.kind).toBe('ran');
     expect(s.rounds[0]?.faults).toEqual([]);
     expect(s.rounds[0]?.growth).toEqual({ kind: 'denied', code: 'personal_busy' });
