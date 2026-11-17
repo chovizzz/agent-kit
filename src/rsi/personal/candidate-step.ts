@@ -18,7 +18,7 @@ import type {
 } from '../../contracts/rsi-personal.js';
 import { canonicalJson } from '../../io/canonical-json.js';
 import { RsiLockError } from '../lock-error.js';
-import { applyEvent, type ApplyDeps } from './candidate-apply.js';
+import type { ApplyDeps } from './candidate-apply.js';
 import type {
   FactsProvider,
   MarksStore,
@@ -42,6 +42,11 @@ import { buildDraft, selectable } from './candidate-source.js';
 import { overlapsPreset, runGates } from './gates.js';
 import type { ShadowCountPort } from './shadow-count.js';
 import { txnId } from './ids.js';
+import {
+  makeStepRunner,
+  reconcileRevocationLines,
+  shadowQueueExpiredEvent,
+} from './reduce-step.js';
 import { decideShadowStep, pickPromotionHead } from './transition.js';
 import {
   evaluationSlotOccupied,
@@ -66,17 +71,6 @@ export interface StepDeps extends ApplyDeps {
   /** 只用 `assertHeld`(提交底座另有自己的断言) */
   locks: { personal: { assertHeld(): Promise<void> } };
 }
-
-/** 撤销凭据的原因 → 对账事件的依据(显式映射;不在表里的原因不对账) */
-const RECONCILE_BASIS: Readonly<
-  Record<string, 'veto' | 'taint' | 'clear' | 'judge_reject' | undefined>
-> = Object.freeze({
-  vetoed: 'veto',
-  tainted: 'taint',
-  cleared: 'clear',
-  judge_reject: 'judge_reject',
-  judge_injection: 'judge_reject',
-});
 
 export interface StepResult {
   /** 凭据原因无法映射到终态理由的候选(未转移,凭据仍阻止推进) */
@@ -189,41 +183,7 @@ export async function runPersonalStep(d: StepDeps): Promise<StepResult> {
   }
   await d.marks.write(cur);
 
-  const run = async (
-    rec: PersonalLifecycleRecord,
-    event: TransitionEvent,
-    wcAfter?: ReturnType<typeof patchShadow>,
-  ): Promise<'transitioned' | 'other' | 'halt'> => {
-    let r;
-    try {
-      r = await applyEvent(d, rec, event, wcAfter, working.get(rec.id));
-    } catch (e) {
-      // 抛出 = 提交之前(或提交本身)失败:锁丢失立即中止;其它错误不吞,向上抛(提交后的落地失败由 applyEvent 内部分类,不会到这里)
-      if (e instanceof RsiLockError && e.kind === 'lock_lost') {
-        out.halted = 'lock_lost';
-        return 'halt';
-      }
-      throw e;
-    }
-    if (r.kind === 'halt') {
-      out.halted = r.halt;
-      if (r.halt === 'repo_invalid') out.breaker = 'personal_repo_invalid';
-      return 'halt';
-    }
-    if (r.kind === 'transitioned') {
-      if (r.effectsFailed !== undefined) out.effectsFailed.push(`${rec.id}:${r.effectsFailed}`);
-      if (r.lockLost === true) {
-        out.halted = 'lock_lost';
-        out.transitions.push(`${rec.id}: ${rec.lifecycle} -> ${r.next.lifecycle}`);
-        return 'halt';
-      }
-      out.transitions.push(`${rec.id}: ${rec.lifecycle} -> ${r.next.lifecycle}`);
-      const w = wcAfter?.(working.get(rec.id));
-      if (w !== undefined) working.set(rec.id, w);
-      return 'transitioned';
-    }
-    return 'other';
-  };
+  const run = makeStepRunner(d, working, out);
   const reload = async (): Promise<PersonalLifecycleRecord[] | null> => {
     const r = await d.store.readAll();
     if (r.kind !== 'ok') {
@@ -239,38 +199,9 @@ export async function runPersonalStep(d: StepDeps): Promise<StepResult> {
     return r.value;
   };
 
-  // ② 撤销凭据对账(proposed / shadow)
+  // ② 撤销凭据对账(proposed / shadow;逻辑在 reduce-step.ts,S2 的减影响步共用同一份)
   let records = all.value;
-  for (const line of rv0.lines) {
-    const rec = records.find(
-      (r) => r.id === line.candidate_id && r.content_sha256 === line.content_sha256,
-    );
-    if (rec === undefined) continue;
-    if (isTerminalLifecycle(rec.lifecycle)) {
-      // R21-4.4a ②:终态上的 veto 仍要写黑名单(效果幂等;其余终止事件对终态无事可做)
-      if (line.reason === 'vetoed') {
-        const r = await run(rec, {
-          kind: 'veto',
-          evidence: `revocation:${digest(canonicalJson(line)).slice(0, 16)}`,
-        });
-        if (r === 'halt') return out;
-      }
-      continue;
-    }
-    if (rec.lifecycle !== 'proposed' && rec.lifecycle !== 'shadow') continue; // canary 及以上归 V1b / W7
-    const evidence = `revocation:${digest(canonicalJson(line)).slice(0, 16)}`;
-    // R21-9.5:对账转移的原因是 revocation_reconciled;终态理由按凭据依据显式映射(未知依据不兜底成 clear:
-    // 记 unmappedRevocations,不转移——撤销凭据本身已让该候选不得被推进,见 ctx.revocation_listed)
-    const basis = RECONCILE_BASIS[line.reason];
-    if (basis === undefined) {
-      out.unmappedRevocations.push(rec.id);
-      out.reconcileIncomplete = true;
-      continue;
-    }
-    const r = await run(rec, { kind: 'revocation_reconcile', evidence, basis });
-    if (r === 'halt') return out;
-    if (r === 'transitioned') out.reconciled.push(rec.id);
-  }
+  if ((await reconcileRevocationLines(run, records, rv0.lines, out)) === 'halt') return out;
   let re = await reload();
   if (re === null) return out;
   records = re;
@@ -458,11 +389,7 @@ export async function runPersonalStep(d: StepDeps): Promise<StepResult> {
     if (queueExpired(wc.shadow.queued_since, today)) {
       const r = await run(
         rec,
-        {
-          kind: 'shadow_queue_expired',
-          evidence: `shadow:${today}`,
-          queued_since: wc.shadow.queued_since,
-        },
+        shadowQueueExpiredEvent(wc, today),
         patchShadow({
           canary_ready_since: wc.shadow.canary_ready_since,
           queued_since: wc.shadow.queued_since,
