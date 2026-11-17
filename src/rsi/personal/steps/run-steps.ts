@@ -3,7 +3,7 @@
  *  - 持两锁的回合:S2R → S1 → 压缩 → S2P → `settleSafety`;
  *  - personal 锁忙 / 故障(没有 `BothRound`):S2R → `T_rsi` → `settleSafety`;**不跑** S1 / 压缩 / S2P / 自动解除。
  * 个人锁丢失(`ended`)后立即停止余下个人步,但**仍**对已发生的写做一次扫尾尝试之前先看 rsi 锁:rsi 失锁原样上抛(`classify` 的 `rethrow`)。
- * 本模块不调用 `markRoundUnsettled`(它只在 `stage/` 内可达):返回 `unsettled` 列表,由 `stage/personal-stage.ts` 落到回合上。
+ * 本模块不直接改回合的未决集合(回合内部状态只在 `stage/` 内可达):返回 `unsettled` 列表,由 `stage/personal-stage.ts` 落到回合上。
  */
 import type { PersonalFault } from '../stage/errors.js';
 import type { Compactor, RecoveryPort, SafetyPort } from '../stage/ports.js';
