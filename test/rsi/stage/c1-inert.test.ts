@@ -164,7 +164,7 @@ describe('生产惰性(C1a)', () => {
     expect(c.files.has('src/rsi/personal/stage/fallback.ts')).toBe(true);
   });
 
-  it('正向对照:接线入口若多拉 growth.ts / 判决槽运行时,白名单检查必红(settle / monitoring / residual 自 C2 起在白名单内)', () => {
+  it('正向对照:接线入口若多拉 growth.ts,白名单检查必红(settle / monitoring / residual / judge-slot 自 C2 起在白名单内,不再算多拉)', () => {
     const c = closureOf(['src/rsi/inert-probe-wired.ts'], {
       includeTypes: false,
       virtual: {
@@ -173,14 +173,13 @@ describe('生产惰性(C1a)', () => {
       },
     });
     const extra = [...c.files].filter(isNew).filter((f) => !RUNTIME_WIRED.includes(f));
-    expect(extra).toEqual(
-      expect.arrayContaining([
-        'src/rsi/personal/stage/growth.ts',
-        'src/rsi/personal/judge-slot.ts',
-      ]),
-    );
+    // 白名单外的新模块恰好是增影响授权 growth.ts(必红);judge-slot.ts 已在白名单内(其调用点由 c1b-closure 收敛)
+    expect(extra).toEqual(expect.arrayContaining(['src/rsi/personal/stage/growth.ts']));
+    expect(extra).not.toContain('src/rsi/personal/judge-slot.ts');
     for (const ok of ['settle.ts', 'monitoring.ts', 'residual.ts'])
       expect(RUNTIME_WIRED).toContain(`${STAGE_DIR}${ok}`);
+    expect(RUNTIME_WIRED).toContain('src/rsi/personal/judge-slot.ts');
+    expect(RUNTIME_WIRED).not.toContain(`${STAGE_DIR}growth.ts`);
   });
 
   it('正向对照:虚拟入口 import 授权模块 / 判决槽时,同一检查报出', () => {

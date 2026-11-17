@@ -4,6 +4,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { RsiLockError } from '../../../src/rsi/lock-error.js';
+import { PersonalLockLost } from '../../../src/rsi/personal/stage/errors.js';
 import type { PersonalLockHandle } from '../../../src/rsi/personal/personal-lock.js';
 import type { S0Ports } from '../../../src/rsi/personal/stage/ladder.js';
 import { createPersonalStage } from '../../../src/rsi/personal/stage/personal-stage.js';
@@ -21,10 +22,10 @@ import { PERSONAL_NONCE, RSI_NONCE, asRaw, fakeLock } from '../stage/c1-fixture.
 
 const DONE: StepOutcome = { kind: 'done' };
 
-function ctxOf(): PersonalCtx {
+function ctxOf(lock: ReturnType<typeof fakeLock> = fakeLock(RSI_NONCE)): PersonalCtx {
   return {
     sctx: {} as PersonalCtx['sctx'],
-    lock: fakeLock(RSI_NONCE),
+    lock,
     obs: {} as PersonalCtx['obs'],
     now: () => new Date(0),
     nowMs: () => 0,
@@ -40,16 +41,25 @@ interface Sc {
   compactor?: boolean;
   trig?: readonly string[];
   stepsThrow?: boolean;
+  /** `recoverRepo` 抛个人失锁 */
+  repoLost?: boolean;
+  /** W9 槽返回 `halted: lock_lost`(`onJudge` 先执行,测试借它让某把锁真丢) */
+  judgeLockLost?: { onJudge(): void };
+  /** 压缩返回值 */
+  compactResult?: unknown;
+  /** 扫尾的 `enforceMute` 抛普通错误(扫尾细项应进 faults) */
+  enforceThrows?: boolean;
 }
 function mk(sc: Sc = {}) {
   const log: string[] = [];
   const personal = fakeLock(PERSONAL_NONCE);
   let roundSeen: BothRound | null = null;
   const safetyOf = (round: { writeAdapter: BothRound['writeAdapter'] }): SafetyPort => {
-    const enforce = round.writeAdapter(
-      'safety_mute',
-      async () => (log.push('sweep:enforce'), { mute: 'nothing' as const, fault: null }),
-    );
+    const enforce = round.writeAdapter('safety_mute', async () => {
+      log.push('sweep:enforce');
+      if (sc.enforceThrows) throw new Error('enforce boom');
+      return { mute: 'nothing' as const, fault: null };
+    });
     const reconcile = round.writeAdapter('safety_mute', async () => (log.push('caches'), DONE));
     return {
       enforceMute: () => enforce(),
@@ -101,7 +111,11 @@ function mk(sc: Sc = {}) {
         };
         return {
           recovery: {
-            recoverRepo: async () => (log.push('s1:repo'), { kind: 'absent' }),
+            recoverRepo: async () => {
+              log.push('s1:repo');
+              if (sc.repoLost) throw new PersonalLockLost();
+              return { kind: 'absent' };
+            },
             setFlagAndMute: async () => DONE,
             resumeRollbacks: async () => DONE,
             recoverTerminalEffects: async () => DONE,
@@ -113,18 +127,38 @@ function mk(sc: Sc = {}) {
             scanner: { scan: async () => ({ kind: 'ok', tainted: [], unknown: [] }) },
             candidates: { list: async () => ({ kind: 'ok', cands: [], canaryIds: [] }) },
             rescan: { rescan: async () => DONE },
-            judge: UNAVAILABLE_JUDGE.reduce,
+            judge:
+              sc.judgeLockLost === undefined
+                ? UNAVAILABLE_JUDGE.reduce
+                : {
+                    run: async () => {
+                      sc.judgeLockLost?.onJudge();
+                      return {
+                        evaluated: 0,
+                        transitioned: [],
+                        blocked: [],
+                        deferred: [],
+                        halted: 'lock_lost' as const,
+                        unavailable: false,
+                      };
+                    },
+                  },
           },
           ...(sc.compactor
             ? {
                 compactor: {
-                  compact: async () => (log.push('compact'), { kind: 'noop' as const }),
+                  compact: async () => (
+                    log.push('compact'),
+                    (sc.compactResult ?? { kind: 'noop' as const }) as never
+                  ),
                 },
               }
             : {}),
         };
       },
       rsiOnly: (_ctx, round) => safetyOf(round),
+      // 只在失锁归属用例里记录「读标志」(它在 rsi 失锁解析之后、最终复核之前:证明上抛发生在解析处而不是靠最终复核)
+      ...(sc.judgeLockLost !== undefined ? { flags: async () => (log.push('flags'), null) } : {}),
     },
   });
   return { stage, log, personal, round: () => roundSeen };
@@ -162,6 +196,80 @@ describe('持两锁的回合', () => {
     expect(r.faults.some((f) => f.code === 'step_threw')).toBe(true);
     expect(r.unsettled).toContain('safety_not_settled');
     expect(personal.releases).toBe(1);
+  });
+});
+
+describe('失锁与日志 / 扫尾细项(验收评审修复)', () => {
+  const S2P_CALLS = ['expire', 'triggers', 'release', 'compact', 'sweep:enforce', 'verify'];
+
+  it('recoverRepo 抛 PersonalLockLost → 压缩 / S2P / 扫尾零调用;回合 unsettled 且 growth = lock_lost;个人锁仍释放一次', async () => {
+    const { stage, log, personal } = mk({ compactor: true, repoLost: true, dirtyWrite: true });
+    const r = await stage.run(ctxOf());
+    expect(log).toEqual(['s0', 'caches', 's1:repo']);
+    for (const x of S2P_CALLS) expect(log, x).not.toContain(x);
+    expect(r.unsettled).toContain('safety_not_settled');
+    expect(r.growth).toEqual({ kind: 'denied', code: 'lock_lost' });
+    expect(personal.releases).toBe(1);
+  });
+
+  it('W9 槽 halted=lock_lost 且 rsi 锁实际已丢 → 原样上抛(resolveLockLoss 解析),S2P 余下步骤(触发 / 解除)不跑;个人锁仍释放一次', async () => {
+    const rsi = fakeLock(RSI_NONCE);
+    const { stage, log, personal } = mk({
+      judgeLockLost: {
+        onJudge: () => {
+          rsi.held = false;
+        },
+      },
+    });
+    await expect(stage.run(ctxOf(rsi))).rejects.toBeInstanceOf(RsiLockError);
+    expect(log).not.toContain('flags'); // 解析处就上抛,没走到读标志 / 最终复核
+    expect(log).not.toContain('triggers');
+    expect(log).not.toContain('release');
+    expect(personal.releases).toBe(1);
+  });
+
+  it('W9 槽 halted=lock_lost 且个人锁实际已丢 → 结束个人轮(不上抛):unsettled 含 lock_loss_unresolved,growth = lock_lost,余下步骤不跑', async () => {
+    const holder: { personal?: ReturnType<typeof fakeLock> } = {};
+    const { stage, log, personal } = mk({
+      judgeLockLost: {
+        onJudge: () => {
+          if (holder.personal !== undefined) holder.personal.held = false;
+        },
+      },
+    });
+    holder.personal = personal;
+    const r = await stage.run(ctxOf());
+    expect(r.unsettled).toEqual(
+      expect.arrayContaining(['lock_loss_unresolved', 'safety_not_settled']),
+    );
+    expect(r.growth).toEqual({ kind: 'denied', code: 'lock_lost' });
+    expect(log).not.toContain('triggers');
+    expect(log).not.toContain('release');
+  });
+
+  it('W9 槽 halted=lock_lost 但两把锁都在(查不出是哪一把)→ 按个人轮结束 + 未决,不上抛', async () => {
+    const { stage, log } = mk({ judgeLockLost: { onJudge: () => undefined } });
+    const r = await stage.run(ctxOf());
+    expect(r.unsettled).toContain('lock_loss_unresolved');
+    expect(log).not.toContain('triggers');
+  });
+
+  it('压缩日志码只经 faults 流向日志摘要:audit_full → step_halted:compact_audit_full,不未决(没有并行的 logCodes / storeFull 字段)', async () => {
+    const { stage } = mk({
+      compactor: true,
+      compactResult: { kind: 'compact_blocked', cause: 'audit_full' },
+    });
+    const r = await stage.run(ctxOf());
+    expect(r.faults).toContainEqual({ code: 'step_halted', detail: 'compact_audit_full' });
+    expect(r.unsettled).toEqual([]);
+  });
+
+  it('扫尾细项不丢:扫尾 enforceMute 抛错 → faults 含 step_threw,回合 safety_not_settled', async () => {
+    const { stage, log } = mk({ dirtyWrite: true, enforceThrows: true });
+    const r = await stage.run(ctxOf());
+    expect(log).toContain('sweep:enforce');
+    expect(r.faults).toContainEqual({ code: 'step_threw', detail: 'Error' });
+    expect(r.unsettled).toContain('safety_not_settled');
   });
 });
 

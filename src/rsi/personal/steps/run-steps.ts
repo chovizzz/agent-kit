@@ -20,9 +20,6 @@ export interface StepsResult {
   readonly unsettled: readonly UnsettledReason[];
   /** S1 对标志的结论(`null` = 无结论);读盘上的最终值由装配层 `flags()` 给 */
   readonly flagsTarget: Partial<S1Flags> | null;
-  /** 日志摘要码候选(`compact_*`);调用方按优先级取最高一行 */
-  readonly logCodes: readonly string[];
-  readonly storeFull: boolean;
   readonly ended: boolean;
   /** 本轮做过的步骤(顺序即执行顺序;测试与日志用) */
   readonly ran: readonly string[];
@@ -48,9 +45,7 @@ export async function runBothSteps(a: {
   const { ports, round, budget } = a;
   const faults: PersonalFault[] = [];
   const unsettled: UnsettledReason[] = [];
-  const logCodes: string[] = [];
   const ran: string[] = [];
-  let storeFull = false;
   let ended = false;
   let flagsTarget: Partial<S1Flags> | null = null;
 
@@ -73,14 +68,13 @@ export async function runBothSteps(a: {
   if (!ended) {
     const comp = await runCompaction(ports.compactor, round);
     ran.push('compact');
-    if (comp.logCode !== null) logCodes.push(comp.logCode);
     if (comp.fault !== null) faults.push(comp.fault);
-    // `compact_unwired` 不是故障(B1b 未装配);其余阻塞 / 失败码进 faults,摘要日志才看得见
+    // 压缩日志码只经 `faults` 流向日志摘要(W0-29 ②「记 log code」的唯一承载;没有并行的 logCodes 字段):
+    // `compact_unwired` 不是故障(B1b 未装配);其余阻塞 / 失败码进 faults。`store_full` 是 D 现读容量的结论,不由本步回传
     else if (comp.logCode !== null && comp.logCode !== 'compact_unwired') {
       faults.push({ code: 'step_halted', detail: comp.logCode });
     }
     unsettled.push(...comp.unsettled);
-    storeFull = comp.storeFull;
     ended = comp.ended;
   }
   if (!ended) {
@@ -98,10 +92,11 @@ export async function runBothSteps(a: {
   }
   // 单次扫尾(失锁原样抛出;个人锁已丢则不再扫:`settleSafety` 内的 `PersonalLockLost` 由调用方 `classify`)
   if (!ended) {
-    await settleSafety(round, ports.s2.safety, budget);
+    const sw = await settleSafety(round, ports.s2.safety, budget);
+    if (sw.kind === 'unsettled') faults.push(...sw.faults); // 扫尾细项进日志摘要(unsettled 标记已由 settleSafety 落到回合上)
     ran.push('settle');
   }
-  return { faults, unsettled, flagsTarget, logCodes, storeFull, ended, ran };
+  return { faults, unsettled, flagsTarget, ended, ran };
 }
 
 export async function runRsiOnlySteps(a: {
@@ -121,14 +116,13 @@ export async function runRsiOnlySteps(a: {
   faults.push(...tr.faults);
   unsettled.push(...tr.unsettled);
   ran.push(...tr.ran.map((x) => `t_rsi:${x}`));
-  await settleSafety(a.round, a.safety, budget);
+  const sw = await settleSafety(a.round, a.safety, budget);
+  if (sw.kind === 'unsettled') faults.push(...sw.faults);
   ran.push('settle');
   return {
     faults,
     unsettled,
     flagsTarget: null,
-    logCodes: [],
-    storeFull: false,
     ended: false,
     ran,
   };

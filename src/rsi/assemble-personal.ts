@@ -106,6 +106,7 @@ import {
   type RunTaintState,
   type StagingBound,
   type TaintFactsPort,
+  TaintApplyFailed,
 } from './personal/steps/steps-types.js';
 import { createTaintScanner } from './personal/steps/taint-scan.js';
 import { classifierFor, readRsiFixed } from './services/attribution.js';
@@ -114,6 +115,7 @@ import { isStagingId, listStaging, probeStagingDir, readMark } from './services/
 import { taintNewlyExcludedWith } from './services/taint.js';
 import { parseRsiStateDoc } from './state.js';
 import { compactorOf } from './store/compactor.js';
+import { createReconcileSource } from './store/reconcile-source.js';
 import { safeStoreFs } from './store/fs-port.js';
 import type { LockCap } from './store/ports.js';
 import { assembleRsiStore, type RsiStore } from './store/store.js';
@@ -145,9 +147,6 @@ export interface StepsAssemblyDeps {
 // ---------------------------------------------------------------------------
 // 小工具
 // ---------------------------------------------------------------------------
-class TaintApplyFailed extends Error {
-  override readonly name = 'TaintApplyFailed';
-}
 const isLockish = (e: unknown): boolean =>
   isRsiLockLost(e) || e instanceof PersonalLockLost || e instanceof RsiLockError;
 
@@ -473,7 +472,7 @@ export function makeBothPorts(
     };
     const store = assembleRsiStore({
       fs: safeStoreFs(io, rsiDir),
-      rsi: ctx.lock as unknown as LockCap,
+      rsi: fullRsiHandle(ctx.lock), // 与 taint 续做同口径:不是完整句柄 = fail-closed(不靠转型蒙混)
       personal: personalCap,
       clock: ctx.now,
     });
@@ -716,7 +715,7 @@ export function makeBothPorts(
         }
       }
       // 凭据 / 回滚写失败 = 写结果不可判定:抛出(写适配器据此使本轮 unsettled;下轮幂等重试)
-      if (failed.length > 0) throw new TaintApplyFailed(failed.join(','));
+      if (failed.length > 0) throw new TaintApplyFailed(failed);
       return conflict ? { kind: 'incomplete', why: 'taint_credential_conflict' } : { kind: 'done' };
     },
   );
@@ -935,7 +934,11 @@ export function makeBothPorts(
   const compactor: Compactor = {
     compact: round.writeAdapter('compaction', async () => {
       const k = await kit();
-      const r = await compactorOf(k.store, { clock: ctx.now }).compact();
+      // 压缩要从权威记录(私有仓库)证明被删区间:没有来源 = `compact_unwired` 抛错(fail-closed),所以必须给真来源
+      const r = await compactorOf(k.store, {
+        clock: ctx.now,
+        source: createReconcileSource({ records: k.auth }),
+      }).compact();
       if (r.kind === 'compact_blocked') {
         const cause = r.cause as string;
         return {

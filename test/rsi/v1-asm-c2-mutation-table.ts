@@ -515,6 +515,85 @@ export const V1_ASM_C2_MUTATIONS: readonly V1AsmC2Mutation[] = [
     expectRed: ['C2 生产装配(真 worker)', '私有仓库未建'],
     mustKill: ['私有仓库未建'],
   },
+  {
+    id: 's1_repo_lock_loss_not_ended',
+    clause: 'recoverRepo(S1 第 1 项)抛个人失锁 → ended,压缩 / S2P / 扫尾零调用',
+    edits: [
+      {
+        file: 'src/rsi/personal/steps/s1-recover.ts',
+        anchor:
+          '      ended = true; // 与 `guarded` 同:个人失锁必须让调用方(压缩 / S2P / 扫尾)看见 `ended`',
+        replacement: '      void 0;',
+      },
+    ],
+    tests: ['rsi/c2/c2-steps-s1.test.ts', 'rsi/c2/c2-run-steps.test.ts'],
+    expectRed: [
+      'runS1',
+      '失锁与日志 / 扫尾细项(验收评审修复)',
+      'recoverRepo(第 1 项)抛个人失锁',
+      'recoverRepo 抛 PersonalLockLost',
+    ],
+    mustKill: ['recoverRepo(第 1 项)抛个人失锁', 'recoverRepo 抛 PersonalLockLost'],
+  },
+  {
+    id: 'judge_lock_loss_not_resolved',
+    clause:
+      'W9 槽 halted=lock_lost:personal-stage 先 resolveLockLoss,rsi 已丢 = 原样上抛(不走读标志)',
+    edits: [
+      {
+        file: 'src/rsi/personal/stage/personal-stage.ts',
+        anchor:
+          "              if ((await resolveLockLoss(ctx.lock, held)) === 'rsi') await ctx.lock.assertHeld();",
+        replacement: '              void resolveLockLoss;',
+      },
+    ],
+    tests: ['rsi/c2/c2-run-steps.test.ts'],
+    expectRed: ['失锁与日志 / 扫尾细项(验收评审修复)', 'W9 槽 halted=lock_lost 且 rsi 锁实际已丢'],
+    mustKill: ['W9 槽 halted=lock_lost 且 rsi 锁实际已丢'],
+  },
+  {
+    id: 'taint_apply_failed_generic',
+    clause: 'applyTaint 失败 → 稳定码 taint_apply_failed + 候选 id(不是 step_threw)',
+    edits: [
+      {
+        file: 'src/rsi/personal/steps/s2-reduce.ts',
+        anchor: 'if (!(e instanceof TaintApplyFailed)) throw e;',
+        replacement: 'if (e !== undefined) throw e;',
+      },
+    ],
+    tests: ['rsi/c2/c2-steps-s2.test.ts'],
+    expectRed: ['taint_apply_failed(凭据 / 回滚写失败)', 'applyTaint 抛 TaintApplyFailed'],
+    mustKill: ['applyTaint 抛 TaintApplyFailed'],
+  },
+  {
+    id: 'settle_faults_dropped',
+    clause: '扫尾细项(settleSafety 的 faults)进回合 faults,不丢',
+    edits: [
+      {
+        file: 'src/rsi/personal/steps/run-steps.ts',
+        anchor:
+          "    if (sw.kind === 'unsettled') faults.push(...sw.faults); // 扫尾细项进日志摘要(unsettled 标记已由 settleSafety 落到回合上)",
+        replacement: '    void sw;',
+      },
+    ],
+    tests: ['rsi/c2/c2-run-steps.test.ts'],
+    expectRed: ['失锁与日志 / 扫尾细项(验收评审修复)', '扫尾细项不丢'],
+    mustKill: ['扫尾细项不丢'],
+  },
+  {
+    id: 'asm_compactor_without_source',
+    clause: '真压缩器必须带权威记录来源(否则 compact_unwired 抛错 = 每轮故障)',
+    edits: [
+      {
+        file: 'src/rsi/assemble-personal.ts',
+        anchor: '        source: createReconcileSource({ records: k.auth }),\n',
+        replacement: '',
+      },
+    ],
+    tests: ['rsi/c2/c2-assemble-e2e.test.ts'],
+    expectRed: ['C2 生产装配(真 worker)', '私有仓库未建'],
+    mustKill: ['私有仓库未建'],
+  },
 ];
 
 /** 执行后由主代理回填(本块不执行变异) */

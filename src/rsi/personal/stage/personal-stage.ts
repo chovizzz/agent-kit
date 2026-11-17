@@ -14,7 +14,7 @@
  *
  * `safetyFallback(ctx)`:`runFallbackLadder`,永不抛(含 rsi 失锁 → `aborted`)。`eligible()`:纯判定,抛错 = 不进(fail-closed)。
  */
-import { classify, isRsiLockLost } from './errors.js';
+import { classify, isRsiLockLost, resolveLockLoss } from './errors.js';
 import type { PersonalFault } from './errors.js';
 import { runEnforceLadder, runFallbackLadder, type S0Ports } from './ladder.js';
 import { attemptPersonal } from './lock-identity.js';
@@ -178,6 +178,11 @@ export function createPersonalStage(deps: PersonalStageDeps): PersonalStage {
               markRoundUnsettled(open.round, 'safety_not_settled');
             }
             if (sr.flagsTarget !== null) flags = { ...flags, ...sr.flagsTarget };
+            // W9 槽的 `halted=lock_lost` 分不出是哪一把锁(`lock_loss_unresolved`):在这里解析(设计页 §3)——
+            // rsi 锁已丢 = 原样上抛(`assertHeld` 抛出;finally 释放个人锁);个人锁 / 查不出 = 保持「结束个人轮 + 未决」
+            if (held !== null && sr.unsettled.includes('lock_loss_unresolved')) {
+              if ((await resolveLockLoss(ctx.lock, held)) === 'rsi') await ctx.lock.assertHeld();
+            }
           }
           try {
             const f = (await deps.steps.flags?.(ctx)) ?? null;

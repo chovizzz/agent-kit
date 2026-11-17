@@ -23,18 +23,16 @@ describe('bootstrap 前置守卫(s1_never_resumes_bootstrap_without_authorizatio
   it.each(['bootstrap'] as const)(
     'journal=%s(planned / initialized / committed 都是 bootstrap 类)→ 不调用 open,incomplete{bootstrap_pending}',
     async (jk) => {
-      for (const _phase of ['planned', 'initialized', 'committed']) {
-        let opens = 0;
-        const recover = createRepoRecovery({
-          journalKind: async () => jk,
-          open: async () => {
-            opens += 1;
-            return { kind: 'ready' };
-          },
-        });
-        expect(await recover()).toEqual({ kind: 'incomplete', why: 'bootstrap_pending' });
-        expect(opens).toBe(0);
-      }
+      let opens = 0;
+      const recover = createRepoRecovery({
+        journalKind: async () => jk,
+        open: async () => {
+          opens += 1;
+          return { kind: 'ready' };
+        },
+      });
+      expect(await recover()).toEqual({ kind: 'incomplete', why: 'bootstrap_pending' });
+      expect(opens).toBe(0);
     },
   );
 
@@ -172,10 +170,24 @@ describe('runS1', () => {
       recoverTerminalEffects: async () => ({ kind: 'incomplete', why: 'halt:repo_invalid' }),
     });
     const r = await runS1({ recovery: p, budget: await budgetOf() });
-    expect(calls).toEqual(['repo']); // resume 抛(未入 calls 的包装)
+    // resume 抛 / effects 返回 incomplete(两者的覆盖实现都不入 calls),所以 calls 只含真实现的 repo 与最后一项 reconcile:证明抛错不挡下一项
+    expect(calls).toEqual(['repo', 'reconcile']);
     expect(r.faults.some((f) => f.code === 'step_threw')).toBe(true);
     expect(r.unsettled).toContain('step_integrity:repo_invalid');
     expect(r.ended).toBe(false);
+  });
+
+  it('recoverRepo(第 1 项)抛个人失锁 → ended = true、余下四项零调用(与 guarded 路径同)', async () => {
+    const { p, calls } = ports({ repo: new PersonalLockLost() });
+    const r = await runS1({ recovery: p, budget: await budgetOf() });
+    expect(r.ended).toBe(true);
+    expect(calls).toEqual(['repo']);
+    await expect(
+      runS1({
+        recovery: ports({ repo: new RsiLockError('lock_lost') }).p,
+        budget: await budgetOf(),
+      }),
+    ).rejects.toBeInstanceOf(RsiLockError);
   });
 
   it('个人锁丢失 → 结束个人轮(余下步骤不调);rsi 锁丢失 → 原样上抛', async () => {

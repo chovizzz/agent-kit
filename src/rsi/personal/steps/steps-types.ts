@@ -19,6 +19,20 @@ import type { TaintCandidate, TaintScanner } from '../stage/taint-types.js';
  */
 export const START_ROLLBACK_LIMIT = 4;
 
+/**
+ * 污染凭据 / 回滚写失败(写结果不可判定):装配层的 `applyTaint` 抛它(写适配器据此使本轮 unsettled,下轮幂等重试),
+ * S2 编排把它归成稳定码 `taint_apply_failed` + 失败候选 id 进 faults(不再是 `step_threw:TaintApplyFailed`)。
+ */
+export class TaintApplyFailed extends Error {
+  override readonly name = 'TaintApplyFailed';
+  /** 失败候选 id */
+  readonly ids: readonly string[];
+  constructor(ids: readonly string[]) {
+    super('taint_apply_failed');
+    this.ids = ids;
+  }
+}
+
 /** 候选列表(S2 的输入):权威副本读不出 / 不存在时不判、不转移(读端口契约:读失败 = `unavailable`,从不返回空列表冒充成功) */
 export type CandidateListing =
   | {

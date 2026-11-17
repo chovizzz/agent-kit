@@ -10,7 +10,9 @@ import { exists, readText } from '../../../src/io/read-fs.js';
 import { assembleWorkerStage, bindWorkerPersonal } from '../../../src/rsi/assemble-worker.js';
 import {
   PERSONAL_REPO_REL,
+  PERSONAL_STATE_FILES,
   personalHome,
+  statePath,
   writeJournal,
 } from '../../../src/rsi/personal/home-state.js';
 import type { PersonalRound } from '../../../src/rsi/personal/stage/types.js';
@@ -65,7 +67,7 @@ describe('C2 生产装配(真 worker)', () => {
     expect(await exists(path.join(f.home, PERSONAL_REPO_REL, '.git'))).toBe(false);
   });
 
-  it('s1_never_resumes_bootstrap_without_authorization:bootstrap journal(planned / initialized / committed)→ S1 不续建仓,incomplete{bootstrap_pending};.git 不出现、journal 字节不变', async () => {
+  it('s1_never_resumes_bootstrap_without_authorization — bootstrap journal(planned / initialized / committed)→ S1 不续建仓,incomplete{bootstrap_pending};.git 不出现、journal 字节不变', async () => {
     for (const phase of ['planned', 'initialized', 'committed'] as const) {
       const f = await makeTickFx(`c2-asm-boot-${phase}-`, { confirmed: true });
       const h = personalHome(f.io, f.home);

@@ -11,11 +11,11 @@ import type {
   StepOutcome,
 } from '../../../src/rsi/personal/stage/ports.js';
 import { createRoundBudget } from '../../../src/rsi/personal/stage/settle.js';
-import type { TaintCandidate } from '../../../src/rsi/personal/stage/taint-types.js';
 import { runCompaction } from '../../../src/rsi/personal/steps/compact-sched.js';
 import { runS2P, runS2R, runTRsi } from '../../../src/rsi/personal/steps/s2-reduce.js';
 import {
   START_ROLLBACK_LIMIT,
+  TaintApplyFailed,
   type CandidateListing,
   type PurgeJournalFacts,
   type RunTaintState,
@@ -409,6 +409,35 @@ describe('污染扫描器(TaintScanner)', () => {
   it('扫描器只读:不调用任何写方法(端口里没有写成员)', async () => {
     const f = facts();
     expect(Object.keys(f).sort()).toEqual(['journal', 'runState', 'stagingBound']);
+  });
+});
+
+describe('taint_apply_failed(凭据 / 回滚写失败)', () => {
+  it('applyTaint 抛 TaintApplyFailed → faults 含稳定码 taint_apply_failed 与失败候选 id,不是 step_threw;后续步骤照跑', async () => {
+    const log: string[] = [];
+    const { w, b } = await budget();
+    const r = await runS2P({
+      ports: s2ports({
+        log,
+        listing: { kind: 'ok', cands: [cand()], canaryIds: [] },
+        scan: { scan: async () => ({ kind: 'ok', tainted: [cand()], unknown: [] }) },
+        reduce: {
+          applyTaint: async () => {
+            throw new TaintApplyFailed(['ra_a', 'ra_b']);
+          },
+        },
+      }),
+      round: w.round,
+      budget: b,
+      l0DueNow: false,
+      tripSeed: [],
+    });
+    expect(r.faults).toContainEqual({
+      code: 'step_halted',
+      detail: 'taint_apply_failed:ra_a_ra_b',
+    });
+    expect(r.faults.some((f) => f.code === 'step_threw')).toBe(false);
+    expect(log).toContain('release'); // 不挡后续
   });
 });
 

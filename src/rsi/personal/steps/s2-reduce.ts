@@ -18,7 +18,7 @@ import { recordJudgeBlocked, type BothRound } from '../stage/round.js';
 import type { RoundBudget } from '../stage/settle.js';
 import type { RsiOnlyTripReason, TripReason, UnsettledReason } from '../stage/types.js';
 import { HALT_PREFIX } from './s1-recover.js';
-import { faultOfOutcome, tagOf, type S2Ports } from './steps-types.js';
+import { TaintApplyFailed, faultOfOutcome, tagOf, type S2Ports } from './steps-types.js';
 import type { SafetyPort } from '../stage/ports.js';
 
 export interface S2Result {
@@ -123,7 +123,19 @@ export async function runS2P(p: {
         c.faults.push({ code: 'step_halted', detail: tagOf(`taint_unavailable:${scan.why}`) });
       } else {
         if (scan.tainted.length > 0) {
-          const o = await c.step('apply_taint', () => ports.reduce.applyTaint(scan.tainted));
+          const o = await c.step('apply_taint', async () => {
+            try {
+              return await ports.reduce.applyTaint(scan.tainted);
+            } catch (e) {
+              if (!(e instanceof TaintApplyFailed)) throw e;
+              // 凭据 / 回滚写失败:稳定码 + 失败候选 id(写适配器已使本轮 unsettled;下轮幂等重试)
+              c.faults.push({
+                code: 'step_halted',
+                detail: tagOf(`taint_apply_failed:${e.ids.join('+')}`),
+              });
+              return undefined;
+            }
+          });
           if (o !== undefined) c.note('apply_taint', o);
         }
         const canary = new Set(listing.canaryIds);
@@ -157,7 +169,8 @@ export async function runS2P(p: {
         const h = classifyHalt(rep.halted);
         if (h.kind === 'stop_step_unsettled') c.unsettled.push(`step_integrity:${h.cause}`);
         else if (h.kind === 'lock_lost_unresolved') {
-          // 查不出是哪一把锁:不得默认当个人锁继续;由调用方 `resolveLockLoss` 之后决定;这里只标未决并结束个人轮
+          // 查不出是哪一把锁:不得默认当个人锁继续;这里只标未决并结束个人轮(停掉余下的写),
+          // 归属由 `personal-stage` 在本步返回后 `resolveLockLoss`:rsi 锁已丢 = 原样上抛,个人锁 / 查不出 = 维持结束个人轮
           c.unsettled.push('lock_loss_unresolved');
           c.ended = true;
         }

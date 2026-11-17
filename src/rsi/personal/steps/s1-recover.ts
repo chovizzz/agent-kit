@@ -97,7 +97,10 @@ export async function runS1(p: {
   } catch (e) {
     const c = classify(e);
     if (c.kind === 'rethrow') throw e;
-    if (c.kind === 'end_personal_round') return done();
+    if (c.kind === 'end_personal_round') {
+      ended = true; // 与 `guarded` 同:个人失锁必须让调用方(压缩 / S2P / 扫尾)看见 `ended`
+      return done();
+    }
     faults.push(c.fault);
   }
 
