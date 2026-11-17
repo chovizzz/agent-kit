@@ -508,7 +508,333 @@ export const V1_ASM_C1B_MUTATIONS: readonly V1AsmC1bMutation[] = [
 ];
 
 /** 执行变异后由主代理回填(本块不执行变异,留空) */
-export const V1_ASM_C1B_RESULTS: readonly V1AsmC1bResult[] = [];
+/** 实测结果:r21c1b-mut-g @49af454(seal),32 条全杀 */
+export const V1_ASM_C1B_RESULTS: readonly V1AsmC1bResult[] = [
+  {
+    id: 'fallback_outcome_overrides_original',
+    failed: 3,
+    skipped: 0,
+    killedBy: [
+      '兜底合并协议(catch) recover_eio_fallback_eio_preserves_original_outcome:原 io_error;兜底自身抛错 → 日志 safety_fallback_threw;outcome 仍 io_error;finish 照常(熔断记账)',
+      '兜底合并协议(catch) 兜底成功(muted):outcome 仍是原异常的 io_error;日志先 safety_fallback_muted 再 io_error',
+      '兜底合并协议(catch) 兜底报告的 kind 不影响 outcome:任何报告都不改写 internal / io_error',
+    ],
+    restored: true,
+  },
+  {
+    id: 'fallback_called_on_lock_lost',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'fallbackSkipReason(纯判定;表驱动) 原异常是 rsi lock_lost → rsi_lock_lost(优先于其余);个人失锁 / 其它 RsiLockError 不属于它',
+      'runFallbackOnce(单飞协调器;永不抛) 跳过:零写入类 / rsi 失锁 / pCompleted / 无 stage / 无资格 → 不调用,返回 track.fb(null)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'fallback_not_guarded',
+    failed: 7,
+    skipped: 0,
+    killedBy: [
+      '相位 0 / 不 eligible:worker 与没有个人步时同行为 eligible 抛错 = 不进(fail-closed);恢复失败时也不调兜底',
+      '兜底合并协议(catch) recover_rsi_lock_lost_never_calls_fallback:原异常是 rsi lock_lost → 兜底零调用,零后续写入',
+      '兜底合并协议(catch) fallback_skipped_for_unrecordable_outcomes:零写入五类逐个(表驱动),兜底调用数 0,状态目录字节不变',
+      '兜底合并协议(catch) P 返回之后的抛点不再调兜底(pCompleted):outcome 由该异常算出并正常记账',
+      'P 违约(run 抛出非失锁错误) run 抛 rsi lock_lost:兜底零调用,outcome lock_lost、零写入',
+      'P 违约(run 抛出非失锁错误) 违约抛出的原异常是 write_denied 一类:outcome 取自它(不是一律 internal),零写入五类不调兜底',
+      '日志摘要(非常态才写;常态零行) 摘要日志写时发现 rsi 失锁:上抛 → outcome lock_lost、零后续写、不调兜底',
+    ],
+    restored: true,
+  },
+  {
+    id: 'fallback_second_call_after_p_violation',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'P 违约(run 抛出非失锁错误) fallback_single_shot_after_p_contract_violation:兜底恰好一次(origin=p_contract_violation),原异常原样进 catch → outcome internal;catch 不再调兜底',
+      'P 违约(run 抛出非失锁错误) p_contract_violation_fallback_loses_lock_preserves_original_and_skips_finish:兜底 aborted → outcome internal、recorded=false、状态目录零变化、兜底仍只一次',
+    ],
+    restored: true,
+  },
+  {
+    id: 'aborted_still_calls_finish',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      '兜底合并协议(catch) fallback_loses_rsi_lock_stops_all_further_writes:兜底报告 aborted → 不调 finish;原 outcome 不变;状态目录零变化',
+      'P 违约(run 抛出非失锁错误) p_contract_violation_fallback_loses_lock_preserves_original_and_skips_finish:兜底 aborted → outcome internal、recorded=false、状态目录零变化、兜底仍只一次',
+    ],
+    restored: true,
+  },
+  {
+    id: 'p_violation_path_drops_track_fb',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'P 违约(run 抛出非失锁错误) fallback_single_shot_after_p_contract_violation:兜底恰好一次(origin=p_contract_violation),原异常原样进 catch → outcome internal;catch 不再调兜底',
+      'P 违约(run 抛出非失锁错误) p_contract_violation_fallback_loses_lock_preserves_original_and_skips_finish:兜底 aborted → outcome internal、recorded=false、状态目录零变化、兜底仍只一次',
+    ],
+    restored: true,
+  },
+  {
+    id: 'pcompleted_not_set',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '兜底合并协议(catch) P 返回之后的抛点不再调兜底(pCompleted):outcome 由该异常算出并正常记账',
+    ],
+    restored: true,
+  },
+  {
+    id: 'safety_line_lock_loss_ignored',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '兜底合并协议(catch) 兜底成功后追加安全日志时发现 rsi 失锁:停止,不调 finish(state / 清单 / 日志零写),outcome 仍是原异常的',
+    ],
+    restored: true,
+  },
+  {
+    id: 'summary_lock_loss_swallowed',
+    failed: 3,
+    skipped: 0,
+    killedBy: [
+      'P:recoverUnderLock 之后恰好一次 eligible:run 恰好一次,ctx 带真实锁句柄与 updateBusy=false;在 recover 的写点之后',
+      '兜底合并协议(catch) P 返回之后的抛点不再调兜底(pCompleted):outcome 由该异常算出并正常记账',
+      '日志摘要(非常态才写;常态零行) 摘要日志写时发现 rsi 失锁:上抛 → outcome lock_lost、零后续写、不调兜底',
+    ],
+    restored: true,
+  },
+  {
+    id: 'update_busy_early_return_always',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'P:recoverUnderLock 之后恰好一次 update_in_progress_still_runs_P:update/lock 被存活进程持有且个人步可用 → run 仍恰好一次(updateBusy=true),outcome skipped_update_busy 记账;L0 / purge 续做不运行',
+    ],
+    restored: true,
+  },
+  {
+    id: 'p_never_runs',
+    failed: 9,
+    skipped: 0,
+    killedBy: [
+      'P:recoverUnderLock 之后恰好一次 eligible:run 恰好一次,ctx 带真实锁句柄与 updateBusy=false;在 recover 的写点之后',
+      'P:recoverUnderLock 之后恰好一次 update_in_progress_still_runs_P:update/lock 被存活进程持有且个人步可用 → run 仍恰好一次(updateBusy=true),outcome skipped_update_busy 记账;L0 / purge 续做不运行',
+      '兜底合并协议(catch) P 返回之后的抛点不再调兜底(pCompleted):outcome 由该异常算出并正常记账',
+      'P 违约(run 抛出非失锁错误) fallback_single_shot_after_p_contract_violation:兜底恰好一次(origin=p_contract_violation),原异常原样进 catch → outcome internal;catch 不再调兜底',
+      'P 违约(run 抛出非失锁错误) p_contract_violation_fallback_loses_lock_preserves_original_and_skips_finish:兜底 aborted → outcome internal、recorded=false、状态目录零变化、兜底仍只一次',
+      'P 违约(run 抛出非失锁错误) run 抛 rsi lock_lost:兜底零调用,outcome lock_lost、零写入',
+      'P 违约(run 抛出非失锁错误) 违约抛出的原异常是 write_denied 一类:outcome 取自它(不是一律 internal),零写入五类不调兜底',
+      '日志摘要(非常态才写;常态零行) safety fault → 日志一行 failed safety_fault_*;忙 → skipped personal_locked;各至多一行',
+      '日志摘要(非常态才写;常态零行) 摘要日志写时发现 rsi 失锁:上抛 → outcome lock_lost、零后续写、不调兜底',
+    ],
+    restored: true,
+  },
+  {
+    id: 'eligible_ignored_by_worker',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      '相位 0 / 不 eligible:worker 与没有个人步时同行为 eligible 为假:run / safetyFallback 调用数 0;结果与无 personal 的运行相同',
+      '相位 0 / 不 eligible:worker 与没有个人步时同行为 不 eligible 时 update_busy 仍是原来的早返回(P 不跑)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'ladder_lock_lost_swallowed',
+    failed: 3,
+    skipped: 0,
+    killedBy: [
+      'muteDown:阶梯 ①→④ 每个写点前 assertHeld;失锁(任一点)原样抛出且之后零写端口调用',
+      'runFallbackLadder(兜底:只读 state / 标记,不写 state) 永不抛:rsi 失锁 → aborted(之后零写端口调用);其它意外抛出 → threw',
+      'runEnforceLadder(S0) rsi 失锁原样上抛(enforceFull 内 / 阶梯内 / 读形状时);其它错误不抛',
+    ],
+    restored: true,
+  },
+  {
+    id: 'ladder_remove_skipped',
+    failed: 6,
+    skipped: 0,
+    killedBy: [
+      'muteDown:阶梯 ①→④ ② 静音抛错 → 删除 canary → removed;不建 B',
+      'muteDown:阶梯 ①→④ ③ 静音与删除都抛错 → 创建 B(gate_internal)→ marker',
+      'muteDown:阶梯 ①→④ ④ 三级都失败 → unreliable(不抛)',
+      'muteDown:阶梯 ①→④ 每个写点前 assertHeld;失锁(任一点)原样抛出且之后零写端口调用',
+      'runFallbackLadder(兜底:只读 state / 标记,不写 state) 阶梯各级结果原样报告;三级都失败 = unreliable',
+      'runEnforceLadder(S0) state 非法且静音 / 删除都失败 → 才建 B(阶梯 ③);三级全败 → fault 取 mute_unreliable',
+    ],
+    restored: true,
+  },
+  {
+    id: 'fallback_state_unreadable_not_muted',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'runFallbackLadder(兜底:只读 state / 标记,不写 state) state 暂停 → 静音;state 非法 / 读不出 / 读抛错 → fail-closed 静音',
+    ],
+    restored: true,
+  },
+  {
+    id: 'fallback_marker_error_not_closed',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'runFallbackLadder(兜底:只读 state / 标记,不写 state) 标记读抛错也按「需要静音」(不确定时收紧)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'enforce_called_with_invalid_state',
+    failed: 3,
+    skipped: 0,
+    killedBy: [
+      'runEnforceLadder(S0) state_and_manifest_bytes_untouched:整份不合规 / 读不出 → 不调 enforceFull(它读写 state),直接走阶梯静音,故障 state_invalid:schema',
+      'runEnforceLadder(S0) state 非法且静音 / 删除都失败 → 才建 B(阶梯 ③);三级全败 → fault 取 mute_unreliable',
+      'runEnforceLadder(S0) rsi 失锁原样上抛(enforceFull 内 / 阶梯内 / 读形状时);其它错误不抛',
+    ],
+    restored: true,
+  },
+  {
+    id: 'unreliable_fault_dropped',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'runEnforceLadder(S0) state 非法且静音 / 删除都失败 → 才建 B(阶梯 ③);三级全败 → fault 取 mute_unreliable',
+    ],
+    restored: true,
+  },
+  {
+    id: 'trip_error_skips_mute',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'tripAndMuteGuarded:state 写抛错仍静音 trip_state_write_enospc_still_mutes:state.write 抛 ENOSPC → 阶梯静音仍被调用,原错误原样抛出',
+    ],
+    restored: true,
+  },
+  {
+    id: 's0_fault_not_unsettled',
+    failed: 3,
+    skipped: 0,
+    killedBy: [
+      'S0 非净 → 本轮未决 → 增影响被拒 state 非法:faults 带 safety_fault:state_invalid:schema(step_halted + detail),本轮 unsettled=[safety_not_settled];evaluateGrowth 返回 unsettled',
+      'S0 非净 → 本轮未决 → 增影响被拒 静音抛错 → 删除兜底成功:故障码仍是 state_invalid:schema(只有三级全败才改成 mute_unreliable,见 c1b-ladder)',
+      'S0 非净 → 本轮未决 → 增影响被拒 S0 内部非失锁的违约抛出(端口工厂抛)→ 记 fault、本轮未决,不上抛',
+    ],
+    restored: true,
+  },
+  {
+    id: 'personal_lock_not_released',
+    failed: 4,
+    skipped: 0,
+    killedBy: [
+      'run:状态机 持有:S0 一次 → 回合 open;个人锁在返回前释放恰好一次;flags / 事实字段是「未计算」的空值',
+      'run:状态机 update_busy:S0 照跑,growth = denied update_busy(S3 不可达);个人锁仍释放',
+      '失锁与释放 返回前复核 rsi 锁:取得个人锁后 rsi 锁丢失 → 上抛,个人锁仍释放(不靠 release 暴露失锁)',
+      '失锁与释放 openRound 抛(两把锁 nonce 相同)→ 个人锁仍释放(整个 run 体在 finally 内)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'rsi_assert_before_return_dropped',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '失锁与释放 返回前复核 rsi 锁:取得个人锁后 rsi 锁丢失 → 上抛,个人锁仍释放(不靠 release 暴露失锁)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'stage_eligible_throw_as_true',
+    failed: 1,
+    skipped: 0,
+    killedBy: ['eligible / safetyFallback eligible:抛错 = 假(fail-closed);非 true 的真值 = 假'],
+    restored: true,
+  },
+  {
+    id: 'eligible_ignores_capabilities',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'production_capability_table_matches_delivered 生产装配在 V1a 相位 + 契约生产集合下不 eligible:提相位的 PR 在能力齐全之前必红(assertPhaseCaps 抛)',
+      '相位 / 能力资格 测试缝:相位 ≥ V1a 且能力齐全才 eligible;相位 0 + 能力齐全 = 假;V1a + 缺一项 = 假',
+    ],
+    restored: true,
+  },
+  {
+    id: 'capability_table_claims_delivered',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'production_capability_table_matches_delivered 契约能力表:键 = RSI_ASSEMBLY_CAPS 全集,全部为假(C1b 没有交付任何契约能力);推出的 wired 集合为空且与契约导出的生产集合一致',
+    ],
+    restored: true,
+  },
+  {
+    id: 'mute_generation_not_bumped',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'S0 真适配器(经真 runWorker) 个人锁取锁失败(write_denied)时 S0 仍跑完:B 在、状态无码、canary 在注入 → 补码(state 经清单提交)+ 静音;growth = denied personal_fault;L0 之后码仍在(state 接续);日志一行 personal_fault_*',
+    ],
+    restored: true,
+  },
+  {
+    id: 'marker_create_without_lock_check',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'S0 的 B 写点前复核 rsi 锁(失锁 = 零写入) 状态有暂停码、B 缺失:失锁后 S0 不创建 B、canary 不动;outcome lock_lost,零记账',
+    ],
+    restored: true,
+  },
+  {
+    id: 'marker_remove_without_lock_check',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'S0 的 B 写点前复核 rsi 锁(失锁 = 零写入) B 是解除残留(状态已清码且证据与 B 的 id 相等):失锁后 S0 不删 B(删 B 是放松保护,同样先复核)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'residual_span_off_by_one',
+    failed: 1,
+    skipped: 0,
+    killedBy: ['lock_starvation held_over_ttl / stale + ≥3 条 + 跨度 ≥ 30 分钟 → 成立'],
+    restored: true,
+  },
+  {
+    id: 'residual_heartbeat_inclusive',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'p_heartbeat_approx last_tick 年龄 > 24 小时 ∧ rsi on ∧ 熔断未打开 → 成立(严格大于)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'residual_marker_ignored',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'safety_breaker_inject B 或 U 在 / canary 已不注入 / canary 缺失 / 非 safety / state 读不出 → 不成立',
+      'state_written_not_muted(仅「hint 读 state」未采纳时计入) 已采纳问题 1(hintReadsPauseState)/ 有标记 / canary 不注入 / state 读不出 → 不成立',
+    ],
+    restored: true,
+  },
+  {
+    id: 'worker_imports_growth_module',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      '生产惰性(C1a) 接线入口的闭包只含白名单内的 stage 模块:非白名单即禁(growth / settle / monitoring / residual / 判决槽运行时),两档分别查',
+      '生产惰性(C1a) hint.ts 的源码没有提到新模块路径;worker.ts 只提到白名单内的 stage 模块(且不提 growth / judge-slot)',
+    ],
+    restored: true,
+  },
+];
 
 /**
  * 对照表(不入必杀整表,不要求杀得掉):复合变异里「遮蔽层」那一半**单独**施加时,被它遮住的目标用例必须**不红**——证明复合变异的红来自去掉内层守卫,
