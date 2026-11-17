@@ -45,6 +45,7 @@ const RESIDUAL = 'src/rsi/personal/stage/residual.ts';
 const MUTE = 'src/rsi/canary/canary-mute.ts';
 
 const T_WORKER = 'rsi/stage/c1b-worker.test.ts';
+const T_FALLBACK = 'rsi/stage/c1-fallback.test.ts';
 const T_LADDER = 'rsi/stage/c1b-ladder.test.ts';
 const T_PSTAGE = 'rsi/stage/c1b-personal-stage.test.ts';
 const T_ASM = 'rsi/stage/c1b-assemble.test.ts';
@@ -102,11 +103,23 @@ export const V1_ASM_C1B_MUTATIONS: readonly V1AsmC1bMutation[] = [
   },
   {
     id: 'fallback_called_on_lock_lost',
-    clause: '原异常是 rsi lock_lost → 不调兜底',
+    clause:
+      '原异常是 rsi lock_lost → 不调兜底。真 worker 路径上这道判据被下一行 `SKIP_SET`(lock_lost ∈ UNRECORDABLE)遮住(rsi lock_lost 只能是 RsiLockError,其 outcome 恒为 lock_lost),所以杀手是 C1a 的纯判定用例(同 C1a 表同名条目);worker 用例留在 expectRed 里作旁证(不要求它红)',
     edits: [swap(FALLBACK, "if (isRsiLockLost(input.original)) return 'rsi_lock_lost';", '')],
-    tests: [T_WORKER],
-    expectRed: ['recover_rsi_lock_lost_never_calls_fallback', ...D_WORKER],
-    mustKill: ['recover_rsi_lock_lost_never_calls_fallback'],
+    tests: [T_WORKER, T_FALLBACK],
+    expectRed: [
+      '原异常是 rsi lock_lost → rsi_lock_lost(优先于其余',
+      'classify',
+      'classifyHalt(StepHalt 的处置;lock_lost 不能默认当个人锁)',
+      'classifyHalt 只认自有属性(原型链键不是合法分类)',
+      'resolveLockLoss:StepHalt=lock_lost 查明是哪把锁',
+      '兜底跳过集合 = worker 既有的零写入契约 UNRECORDABLE',
+      'fallbackSkipReason(纯判定;表驱动)',
+      'runFallbackOnce(单飞协调器;永不抛)',
+      'planAfterFallback(原异常的 outcome 永不被替换)',
+      ...D_WORKER,
+    ],
+    mustKill: ['原异常是 rsi lock_lost → rsi_lock_lost(优先于其余'],
   },
   {
     id: 'fallback_not_guarded',
@@ -175,12 +188,18 @@ export const V1_ASM_C1B_MUTATIONS: readonly V1AsmC1bMutation[] = [
   },
   {
     id: 'safety_line_lock_loss_ignored',
-    clause: '追加安全日志时发现 rsi 失锁 → 停止,不调 finish',
+    clause:
+      '追加安全日志时发现 rsi 失锁 → 停止,不调 finish。复合变异:`finish` 自己的 catch-all(失锁时返回 recorded=false)会遮住这道内层守卫(两者返回值相同),所以同时让 finish 把失锁上抛——这样「内层守卫被去掉」才可观测(finish 被调到 = runWorker 抛出)',
     edits: [
       swap(
         WORKER,
         "if (isRsiLockLost(err)) return { kind: 'ran', outcome: plan.outcome, recorded: false };",
         '',
+      ),
+      swap(
+        WORKER,
+        "  } catch {\n    return { kind: 'ran', outcome, recorded: false };\n  }\n}",
+        "  } catch (e) {\n    if (isRsiLockLost(e)) throw e;\n    return { kind: 'ran', outcome, recorded: false };\n  }\n}",
       ),
     ],
     tests: [T_WORKER],
@@ -189,13 +208,15 @@ export const V1_ASM_C1B_MUTATIONS: readonly V1AsmC1bMutation[] = [
   },
   {
     id: 'summary_lock_loss_swallowed',
-    clause: 'P 摘要日志写时发现 rsi 失锁 → 上抛(普通失败才吞)',
+    clause:
+      'P 摘要日志写时发现 rsi 失锁 → 上抛(普通失败才吞)。复合变异:其后第一个写点(L0 预写 attempt 的 commitState)会再次发现失锁并上抛,返回值与上抛相同、遮住这道内层守卫,所以同时让「L0 未到期」分支恒进入(其后只有 finish 的 catch-all,失锁时返回 skipped_throttled + recorded=false)——内层守卫被去掉时结果不再是 lock_lost',
     edits: [
       swap(
         WORKER,
         '    if (isRsiLockLost(e)) throw e;\n  }\n}\n\nexport function personalSummaryLine',
         '  }\n}\n\nexport function personalSummaryLine',
       ),
+      swap(WORKER, 'if (!l0Due(s1.prev, nowMs())) {', 'if (true) {'),
     ],
     tests: [T_WORKER],
     expectRed: ['摘要日志写时发现 rsi 失锁', ...D_WORKER],

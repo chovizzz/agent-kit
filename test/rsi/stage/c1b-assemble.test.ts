@@ -2,7 +2,7 @@
  * C1b:生产装配 `assemble-worker.ts` 的真适配器(真 `runWorker` + 真快照 / 真锁 / 真 `canary.json` 与 B 标记;假 HOME)。
  * 能力表与相位资格(`production_capability_table_matches_delivered`)、S0 真补做与静音、个人锁真持有 / 忙(另一存活 pid 持锁的模拟,同 `foreignLock` 手法)、
  * 兜底的真写集合(只允许碰 `canary.json`,对 `state.json` / 清单 / `log.jsonl` 零写)。
- * **未覆盖**(验收清单里单列):真第二进程持 personal 锁(E3)、kill -9 崩溃点、真 dist 子进程快照(E7)——本块没有现成的 personal 锁子进程夹具。
+ * 真第二进程持 personal 锁(E3)、kill -9 崩溃点、真 dist 子进程快照(E7)见 `c1b-proc.test.ts` / `c1b-e7-dist.test.ts`(本文件里「另一存活 pid」是快速的进程内模拟,不作为真进程验收的证据)。
  */
 import * as path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
