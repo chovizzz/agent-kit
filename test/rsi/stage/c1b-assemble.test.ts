@@ -144,8 +144,14 @@ const canaryOf = async (f: TickFx): Promise<{ agents_inject: string[]; generatio
 const personalLockFile = (f: TickFx): string =>
   path.join(f.home, '.local', 'state', 'agent-kit', 'rsi-personal', 'lock');
 
+/**
+ * 个人锁的写出口(home-fs)只认「真实 HOME」或「严格位于 KIT_TMP 之内的 HOME」。夹具默认 KIT_TMP 与 HOME 并列 → 个人锁取锁得 `write_denied`(= 真实的故障路径);
+ * 要真取到 / 占用个人锁,把 KIT_TMP 提到包含假 HOME 的目录(`f.dir`)。
+ */
+const homeInTmp = (f: TickFx): Record<string, string> => ({ ...f.env, KIT_TMP: f.dir });
+
 describe('S0 真适配器(经真 runWorker)', () => {
-  it('B 在、状态无码、canary 在注入:补码(state 经清单提交)+ 静音;L0 之后码仍在(state 接续);个人锁取得并释放', async () => {
+  it('个人锁取锁失败(write_denied)时 S0 仍跑完:B 在、状态无码、canary 在注入 → 补码(state 经清单提交)+ 静音;growth = denied personal_fault;L0 之后码仍在(state 接续);日志一行 personal_fault_*', async () => {
     const f = await makeTickFx('c1b-asm-repair-', { confirmed: true });
     await seedCanary(f);
     await seedBreakerMarker(f);
@@ -153,8 +159,8 @@ describe('S0 真适配器(经真 runWorker)', () => {
     const r = await runWorker(wd(f, [], { personal: s.stage }));
     expect(r).toMatchObject({ kind: 'ran', outcome: 'ok' });
     expect(s.rounds).toHaveLength(1);
-    expect(s.rounds[0]?.faults).toEqual([]);
-    expect(s.rounds[0]?.growth.kind).toBe('open');
+    expect(s.rounds[0]?.faults).toEqual([{ code: 'personal_lock_error:write_denied' }]);
+    expect(s.rounds[0]?.growth).toEqual({ kind: 'denied', code: 'personal_fault' });
     const c = await canaryOf(f);
     expect(c.agents_inject).toEqual([]);
     expect(c.generation).toBe(2);
@@ -162,15 +168,32 @@ describe('S0 真适配器(经真 runWorker)', () => {
       auto_pause?: { reasons: string[] };
     };
     expect(st.auto_pause?.reasons).toEqual(['gate_internal']);
+    const log = await readText(path.join(f.rsiDir, 'log.jsonl'));
+    expect(
+      log.split('\n').filter((l) => l.includes('personal_fault_personal_lock_error_write_denied')),
+    ).toHaveLength(1);
+  });
+
+  it('个人锁取得并释放(HOME 在 KIT_TMP 之内):growth = open、faults 空、锁文件已不在;S0 同样补码 + 静音', async () => {
+    const f = await makeTickFx('c1b-asm-held-', { confirmed: true });
+    await seedCanary(f);
+    await seedBreakerMarker(f);
+    const s = spy(assembleWorkerStage({ phase: 1, wired: ALL_CAPS }));
+    const r = await runWorker(wd(f, [], { personal: s.stage, env: homeInTmp(f) }));
+    expect(r).toMatchObject({ kind: 'ran', outcome: 'ok' });
+    expect(s.rounds[0]?.faults).toEqual([]);
+    expect(s.rounds[0]?.growth.kind).toBe('open');
+    expect((await canaryOf(f)).agents_inject).toEqual([]);
     expect(await exists(personalLockFile(f))).toBe(false); // 个人锁已释放
   });
 
-  it('无熔断(无 B / 无码 / 无 U):canary 与 state 的暂停键都不被碰;常态零行摘要', async () => {
+  it('无熔断(无 B / 无码 / 无 U):canary 与 B 都不被碰;没有 safety_fault 行', async () => {
     const f = await makeTickFx('c1b-asm-quiet-', { confirmed: true });
     await seedCanary(f);
     const s = spy(assembleWorkerStage({ phase: 1, wired: ALL_CAPS }));
-    const r = await runWorker(wd(f, [], { personal: s.stage }));
+    const r = await runWorker(wd(f, [], { personal: s.stage, env: homeInTmp(f) }));
     expect(r).toMatchObject({ outcome: 'ok' });
+    expect(s.rounds[0]?.faults).toEqual([]);
     expect((await canaryOf(f)).agents_inject).toEqual(['claude']);
     expect(await exists(path.join(f.rsiDir, 'AUTO_PAUSE_BREAKER'))).toBe(false);
     const log = await readText(path.join(f.rsiDir, 'log.jsonl'));
@@ -191,7 +214,7 @@ describe('S0 真适配器(经真 runWorker)', () => {
     });
     await writeFile(f.fx, personalLockFile(f), doc, { mode: 0o600 });
     const s = spy(assembleWorkerStage({ phase: 1, wired: ALL_CAPS }));
-    const r = await runWorker(wd(f, [], { personal: s.stage }));
+    const r = await runWorker(wd(f, [], { personal: s.stage, env: homeInTmp(f) }));
     expect(r).toMatchObject({ kind: 'ran', outcome: 'ok' });
     expect(s.rounds[0]?.faults).toEqual([]);
     expect(s.rounds[0]?.growth).toEqual({ kind: 'denied', code: 'personal_busy' });
