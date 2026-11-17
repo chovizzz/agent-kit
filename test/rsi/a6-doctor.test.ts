@@ -478,9 +478,10 @@ describe('R20-17.20 只读、无绝对路径、不拿锁', () => {
     expect(await treeOf(f.dir)).toEqual(before);
   });
 
-  it('D17 属于 DOCTOR_CHECK_IDS(17 项);--only D17 被接受', () => {
-    expect(DOCTOR_CHECK_IDS).toHaveLength(17);
+  it('D17 属于 DOCTOR_CHECK_IDS(W0-29 ⑥ 起共 18 项,D17 仍在下标 16);--only D17 被接受', () => {
+    expect(DOCTOR_CHECK_IDS).toHaveLength(18);
     expect(DOCTOR_CHECK_IDS[16]).toBe('D17');
+    expect(DOCTOR_CHECK_IDS[17]).toBe('D18');
   });
 });
 

@@ -2,8 +2,7 @@
  * §21 V1 装配块 C1b——**监测信号的判定内核**(C v2 §3.3;阈值取 `monitoring.ts` 的冻结常量;纯函数,无 I/O)。
  *
  * 只交付「判定」:输入是调用方探测好的只读事实(`peekRsiLock` / `log.jsonl` 末尾 / `state.json` / `canary.json` / B、U 的存在性)。
- * **没有采集端、没有承载入口**:doctor 的检查项是封闭枚举(`DOCTOR_CHECK_IDS` = D01–D17,契约 §19.3),加 `rsi_safety_residual` 要改契约,本块不擅自扩;
- * 所以本文件**不等于**「监测已交付」——采集与承载待主代理 / owner 指定(备选:W0-29 加 D18;或 `rsi status` 文本末尾追加一行)。
+ * 采集端与承载入口:doctor 检查项 D18(§21 W0-29 ⑥;`src/doctor/rsi-residual.ts` 采集、`src/doctor/checks.ts` 的 `checkD18` 展示);本文件只做判定。
  */
 import { MONITOR_THRESHOLDS } from './monitoring.js';
 

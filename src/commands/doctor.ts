@@ -31,9 +31,11 @@ import {
   checkD15,
   checkD16,
   checkD17,
+  checkD18,
 } from '../doctor/checks.js';
 import { Collector } from '../doctor/collect.js';
 import { collectD17 } from '../doctor/rsi-face.js';
+import { collectD18 } from '../doctor/rsi-residual.js';
 import type { CollectDeps } from '../doctor/collect.js';
 import { result } from '../doctor/types.js';
 import type { CheckResult } from '../doctor/types.js';
@@ -144,7 +146,7 @@ export function createDoctorCommand(deps: DoctorCommandDeps = {}): CommandDef {
     ownerBlock: 'S5',
     flags: [
       { name: '--json', description: 'stdout 输出 canonical JSON(键集合固定)' },
-      { name: '--only <id>', description: '只跑指定检查(D01–D17),可重复' },
+      { name: '--only <id>', description: '只跑指定检查(D01–D18),可重复' },
       {
         name: '--online',
         description: '多读一次 registry(本版未实现联网:D12 标 n_a,退出 4)',
@@ -233,6 +235,14 @@ export function createDoctorCommand(deps: DoctorCommandDeps = {}): CommandDef {
           case 'D17':
             return checkD17(
               await collectD17({
+                home,
+                env,
+                ...(deps.now !== undefined ? { now: deps.now } : {}),
+              }),
+            );
+          case 'D18':
+            return checkD18(
+              await collectD18({
                 home,
                 env,
                 ...(deps.now !== undefined ? { now: deps.now } : {}),

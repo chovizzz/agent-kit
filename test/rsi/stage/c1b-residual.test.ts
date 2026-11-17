@@ -1,6 +1,6 @@
 /**
  * C1b:监测信号的判定内核(`stage/residual.ts`,纯函数)。四个信号逐个有成立 / 不成立 / 边界夹具;输入是已探测好的只读事实,函数本身不做 I/O。
- * 本文件**不**证明监测已交付:采集端与承载入口(doctor 的 `rsi_safety_residual` 要改封闭枚举 D01–D17 的契约)待主代理定,见 residual.ts 头注。
+ * 本文件只证明判定内核;采集端与承载入口 = doctor D18(W0-29 ⑥;`test/rsi/c2/c2-doctor-d18.test.ts`)。
  */
 import { describe, expect, it } from 'vitest';
 import {

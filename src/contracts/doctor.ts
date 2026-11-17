@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 /**
  * S0 追加(docs/contracts.md §19.3):doctor 的检查 id 与结果枚举。编号只追加不重排。
- * D13(hook)恒为 n_a(套件目前不渲染 hook);D16 记录最近一次自动同步;D17(A6,R20-17.19)= 自动 RSI 的采集面 + 钩子面。
+ * D13(hook)恒为 n_a(套件目前不渲染 hook);D16 记录最近一次自动同步;D17(A6,R20-17.19)= 自动 RSI 的采集面 + 钩子面;D18(§21 W0-29 ⑥)= worker 安全残余的只读监测。
  */
 export const DOCTOR_CHECK_IDS = [
   'D01',
@@ -22,6 +22,7 @@ export const DOCTOR_CHECK_IDS = [
   'D15',
   'D16',
   'D17',
+  'D18',
 ] as const;
 export const DoctorCheckIdSchema = z.enum(DOCTOR_CHECK_IDS);
 export type DoctorCheckId = z.infer<typeof DoctorCheckIdSchema>;
