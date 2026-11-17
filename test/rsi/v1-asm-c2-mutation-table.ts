@@ -643,4 +643,370 @@ export const V1_ASM_C2_MUTATIONS: readonly V1AsmC2Mutation[] = [
 ];
 
 /** 执行后由主代理回填(本块不执行变异) */
-export const V1_ASM_C2_RESULTS: readonly V1AsmC2Result[] = [];
+/** 实测结果:39 条 @46469b8(r21c2-mut-f)+ 2 条修正后 @7a1bdf7(r21c2-mut2-g),其间仅改表内这两条;全部 KILLED */
+export const V1_ASM_C2_RESULTS: readonly V1AsmC2Result[] = [
+  {
+    id: 's1_calls_open_with_bootstrap_journal',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'C2 生产装配(真 worker) s1_never_resumes_bootstrap_without_authorization — bootstrap journal(planned / initialized / committed)→ S1 不续建仓,incomplete{bootstrap_pending};.git 不出现、journal 字节不变',
+      'bootstrap 前置守卫(s1_never_resumes_bootstrap_without_authorization) journal=bootstrap(planned / initialized / committed 都是 bootstrap 类)→ 不调用 open,incomplete{bootstrap_pending}',
+    ],
+    restored: true,
+  },
+  {
+    id: 's1_invalid_journal_still_opens',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'bootstrap 前置守卫(s1_never_resumes_bootstrap_without_authorization) journal 不合规 → invalid(不调 open);无 journal / 非 bootstrap journal → 才调 open,并映射结果',
+    ],
+    restored: true,
+  },
+  {
+    id: 's1_open_lock_error_swallowed',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'bootstrap 前置守卫(s1_never_resumes_bootstrap_without_authorization) git 读失败(open 抛非锁错误)= 仓库不可用 invalid;锁错误 / 失锁原样上抛',
+    ],
+    restored: true,
+  },
+  {
+    id: 's1_deferred_reason_mixed',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'bootstrap 前置守卫(s1_never_resumes_bootstrap_without_authorization) journal 不合规 → invalid(不调 open);无 journal / 非 bootstrap journal → 才调 open,并映射结果',
+    ],
+    restored: true,
+  },
+  {
+    id: 's1_flag_diverged_also_clears_owner',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'runS1 标志重算:① 清两标志;② 只置 diverged;④ 只置 owner_changed;③ / absent 不动(flag_not_cleared_on_unreadable)',
+    ],
+    restored: true,
+  },
+  {
+    id: 's1_repo_invalid_not_reported',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'runS1 仓库 invalid → 不在 S1 里 trip(预算每轮 ≤1),而是返回 tripReasons 并入 S2P 的单次 trip',
+    ],
+    restored: true,
+  },
+  {
+    id: 's1_step_failure_stops_rest',
+    failed: 1,
+    skipped: 0,
+    killedBy: ['runS1 某项抛错 → 记故障、继续下一项;incomplete 的 halt 前缀进 unsettled'],
+    restored: true,
+  },
+  {
+    id: 's1_halt_prefix_ignored',
+    failed: 1,
+    skipped: 0,
+    killedBy: ['runS1 某项抛错 → 记故障、继续下一项;incomplete 的 halt 前缀进 unsettled'],
+    restored: true,
+  },
+  {
+    id: 's1_personal_lock_loss_continues',
+    failed: 1,
+    skipped: 0,
+    killedBy: ['runS1 个人锁丢失 → 结束个人轮(余下步骤不调);rsi 锁丢失 → 原样上抛'],
+    restored: true,
+  },
+  {
+    id: 'taint_run_dir_missing_as_clean',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '污染扫描器(TaintScanner) unknown 三态不当 clean、不当 tainted:来源缺失 / run 目录不存在 / 标记读不出',
+    ],
+    restored: true,
+  },
+  {
+    id: 'taint_journal_not_read',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      '污染扫描器(TaintScanner) 标记命中 → tainted;journal 目标命中 → tainted(目录已被清走也是);clean 不入',
+      '污染扫描器(TaintScanner) journal invalid / unreadable、暂存区超限 / 不可信 → unavailable(不臆测任何候选干净)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'taint_source_null_not_unknown',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '污染扫描器(TaintScanner) unknown 三态不当 clean、不当 tainted:来源缺失 / run 目录不存在 / 标记读不出',
+    ],
+    restored: true,
+  },
+  {
+    id: 'taint_journal_target_ignored',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '污染扫描器(TaintScanner) 标记命中 → tainted;journal 目标命中 → tainted(目录已被清走也是);clean 不入',
+    ],
+    restored: true,
+  },
+  {
+    id: 's2_rescan_every_round',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'runS2P 顺序与「唯一一次」 顺序:污染 → 分析(有 canary)→ 到期 → 对账 → 触发 → 解除;触发评估 / 自动解除各恰一次',
+      'runS2P 顺序与「唯一一次」 exclude_rescan_only_when_due:仅 l0DueNow 的轮在扫描前先重扫',
+    ],
+    restored: true,
+  },
+  {
+    id: 's2_trip_not_merged',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'runS2P 顺序与「唯一一次」 S1 的 personal_repo_invalid 与触发评估的码合并成**一次** tripAndMute;无码不调',
+      'runS2P 顺序与「唯一一次」 隔离:某步抛错 → 记故障、后面照跑;个人失锁 → ended 且后面不跑;rsi 失锁原样上抛',
+    ],
+    restored: true,
+  },
+  {
+    id: 's2_unknown_canary_not_stopped',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'runS2P 顺序与「唯一一次」 命中污染 → applyTaint(凭据先于转移的实现在端口里);unknown 的 canary → 只停注入(不转移)',
+    ],
+    restored: true,
+  },
+  {
+    id: 's2_analysis_without_canary',
+    failed: 1,
+    skipped: 0,
+    killedBy: ['runS2P 顺序与「唯一一次」 无 canary 记录 → 不跑分析链'],
+    restored: true,
+  },
+  {
+    id: 's2_rsi_lock_loss_swallowed',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'runS2P 顺序与「唯一一次」 隔离:某步抛错 → 记故障、后面照跑;个人失锁 → ended 且后面不跑;rsi 失锁原样上抛',
+    ],
+    restored: true,
+  },
+  {
+    id: 'compact_full_unsettles',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '压缩调度 noop / compacted 无事;audit_full / effects_full → storeFull(不未决、不停 S2);region_open / store_io / 非法 / 抛错 → 未决 compaction_failed',
+    ],
+    restored: true,
+  },
+  {
+    id: 'compact_unwired_is_fault',
+    failed: 1,
+    skipped: 0,
+    killedBy: ['压缩调度 缺省(B1b 未装配)= compact_unwired,不是故障、不未决'],
+    restored: true,
+  },
+  {
+    id: 'compact_throw_not_unsettled',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '压缩调度 noop / compacted 无事;audit_full / effects_full → storeFull(不未决、不停 S2);region_open / store_io / 非法 / 抛错 → 未决 compaction_failed',
+    ],
+    restored: true,
+  },
+  {
+    id: 'stage_busy_runs_s1',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '忙 / 故障轮(没有 BothRound) 只跑 S2R + T_rsi + 扫尾:S1 / 压缩 / S2P 零调用;verdict personal_busy;命中码经 tripAndMute',
+    ],
+    restored: true,
+  },
+  {
+    id: 'stage_factory_throw_not_unsettled',
+    failed: 1,
+    skipped: 0,
+    killedBy: ['持两锁的回合 端口工厂抛错 → 记故障 + 本轮未决;个人锁仍释放;不崩'],
+    restored: true,
+  },
+  {
+    id: 'hint_ignores_reasons',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'hint 读已提交 state.json 的暂停事实(canary 部分) reasons 非空 → 本次没有 canary 部分(无关联标记、不落账);计数行不受影响',
+    ],
+    restored: true,
+  },
+  {
+    id: 'hint_ignores_diverged',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'hint 读已提交 state.json 的暂停事实(canary 部分) diverged → 本次没有 canary 部分(无关联标记、不落账);计数行不受影响',
+    ],
+    restored: true,
+  },
+  {
+    id: 'hint_ignores_owner_changed',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'hint 读已提交 state.json 的暂停事实(canary 部分) owner_changed → 本次没有 canary 部分(无关联标记、不落账);计数行不受影响',
+    ],
+    restored: true,
+  },
+  {
+    id: 'revoke_detailed_wrong_existing',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'writeRevocationDetailed 同键、已有凭据来源不同(veto / cleared):返回已有归因,字节不变(不覆盖、不追加)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'revoke_detailed_ignores_sha',
+    failed: 1,
+    skipped: 0,
+    killedBy: ['writeRevocationDetailed 内容 sha 不同 = 新键 → written(两行)'],
+    restored: true,
+  },
+  {
+    id: 'd18_marker_ignored',
+    failed: 1,
+    skipped: 0,
+    killedBy: ['collectD18(真夹具;只读) B 标记在 → 同一夹具不再成立(正向对照)'],
+    restored: true,
+  },
+  {
+    id: 'd18_tail_counts_other_rows',
+    failed: 1,
+    skipped: 0,
+    killedBy: ['skippedLockedTailOf 尾部有别的行 / 不合规行 → 0 条;中间夹别的行只数其后'],
+    restored: true,
+  },
+  {
+    id: 'd18_unreadable_ok',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'checkD18(纯展示合成) 不适用 → n_a / absent;读不到 → warn / unreadable;无信号 → ok;有信号 → warn,result 取首个、items 列全部',
+    ],
+    restored: true,
+  },
+  {
+    id: 'cap_taint_scan_claimed_false',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'production_capability_table_matches_delivered 契约能力表:键 = RSI_ASSEMBLY_CAPS 全集;只有已交付的 worker_safety_skeleton / taint_scan 为真(C2),推出的 wired 集合与契约导出的生产集合一致',
+      'production_capability_table_matches_delivered wiredFromTable 的变异对照:把某个键置真就会出现在集合里(表是读出能力的唯一来源)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'asm_open_repo_with_bootstrap_option',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'C2 生产装配(真 worker) 私有仓库未建:S1 / S2 全程无故障,growth open,个人锁已释放,不建 .git',
+      'C2 生产装配(真 worker) s1_never_resumes_bootstrap_without_authorization — bootstrap journal(planned / initialized / committed)→ S1 不续建仓,incomplete{bootstrap_pending};.git 不出现、journal 字节不变',
+    ],
+    restored: true,
+  },
+  {
+    id: 's1_repo_lock_loss_not_ended',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      '失锁与日志 / 扫尾细项(验收评审修复) recoverRepo 抛 PersonalLockLost → 压缩 / S2P / 扫尾零调用;回合 unsettled 且 growth = lock_lost;个人锁仍释放一次',
+      'runS1 recoverRepo(第 1 项)抛个人失锁 → ended = true、余下四项零调用(与 guarded 路径同)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'judge_lock_loss_not_resolved',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '失锁与日志 / 扫尾细项(验收评审修复) W9 槽 halted=lock_lost 且 rsi 锁实际已丢 → 原样上抛(resolveLockLoss 解析),S2P 余下步骤(触发 / 解除)不跑;个人锁仍释放一次',
+    ],
+    restored: true,
+  },
+  {
+    id: 'taint_apply_failed_generic',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'taint_apply_failed(凭据 / 回滚写失败) applyTaint 抛 TaintApplyFailed → faults 含稳定码 taint_apply_failed 与失败候选 id,不是 step_threw;后续步骤照跑',
+    ],
+    restored: true,
+  },
+  {
+    id: 'settle_faults_dropped',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '失锁与日志 / 扫尾细项(验收评审修复) 扫尾细项不丢:扫尾 enforceMute 抛错 → faults 含 step_threw,回合 safety_not_settled',
+    ],
+    restored: true,
+  },
+  {
+    id: 'asm_compactor_without_source',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'C2 生产装配(真 worker) 私有仓库未建:S1 / S2 全程无故障,growth open,个人锁已释放,不建 .git',
+    ],
+    restored: true,
+  },
+  {
+    id: 's2_halt_lock_lost_not_ended',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'runS2P 顺序与「唯一一次」 halt 前缀:lock_lost(归属未明)→ 未决 lock_loss_unresolved 且结束个人轮:余下步骤(对账 / 触发 / 解除)零调用',
+    ],
+    restored: true,
+  },
+  {
+    id: 'open_repo_recovers_bootstrap_when_refused',
+    failed: 7,
+    skipped: 0,
+    killedBy: [
+      'C2 生产装配(真 worker) s1_never_resumes_bootstrap_without_authorization — bootstrap journal(planned / initialized / committed)→ S1 不续建仓,incomplete{bootstrap_pending};.git 不出现、journal 字节不变',
+      'C2 refuseBootstrapRecovery(bootstrap journal 任一阶段:不恢复、零写) refuse_planned_dir_missing — openPersonalRepo / readPersonalFiles 返回 invalid{bootstrap_pending};journal 字节不变,.git 不出现',
+      'C2 refuseBootstrapRecovery(bootstrap journal 任一阶段:不恢复、零写) refuse_planned_dir_empty — openPersonalRepo / readPersonalFiles 返回 invalid{bootstrap_pending};journal 字节不变,.git 不出现',
+      'C2 refuseBootstrapRecovery(bootstrap journal 任一阶段:不恢复、零写) refuse_initialized_dir_missing — openPersonalRepo / readPersonalFiles 返回 invalid{bootstrap_pending};journal 字节不变,.git 不出现',
+      'C2 refuseBootstrapRecovery(bootstrap journal 任一阶段:不恢复、零写) refuse_initialized_dir_empty — openPersonalRepo / readPersonalFiles 返回 invalid{bootstrap_pending};journal 字节不变,.git 不出现',
+      'C2 refuseBootstrapRecovery(bootstrap journal 任一阶段:不恢复、零写) refuse_committed_dir_missing — openPersonalRepo / readPersonalFiles 返回 invalid{bootstrap_pending};journal 字节不变,.git 不出现',
+      'C2 refuseBootstrapRecovery(bootstrap journal 任一阶段:不恢复、零写) refuse_committed_dir_empty — openPersonalRepo / readPersonalFiles 返回 invalid{bootstrap_pending};journal 字节不变,.git 不出现',
+    ],
+    restored: true,
+  },
+  {
+    id: 'asm_repo_deps_without_refuse',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'C2 生产装配(真 worker) s1_never_resumes_bootstrap_without_authorization — bootstrap journal(planned / initialized / committed)→ S1 不续建仓,incomplete{bootstrap_pending};.git 不出现、journal 字节不变',
+    ],
+    restored: true,
+  },
+];
