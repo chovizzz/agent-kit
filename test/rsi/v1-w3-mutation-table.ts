@@ -32,6 +32,7 @@ export interface V1W3Result {
 
 const P = 'src/rsi/personal/';
 const STEP = `${P}candidate-step.ts`;
+const RSTEP = `${P}reduce-step.ts`;
 const APPLY = `${P}candidate-apply.ts`;
 const GATES = `${P}gates.ts`;
 const SOURCE = `${P}candidate-source.ts`;
@@ -219,7 +220,7 @@ export const V1_W3_MUTATIONS: readonly V1W3Mutation[] = [
     id: 'post-commit-lock-lost-continues',
     clause: 'R21-3.6 / W0-15:提交之后发现丢锁也立即结束步骤',
     edits: [
-      { file: STEP, anchor: 'if (r.lockLost === true) {', replacement: 'if (false as boolean) {' },
+      { file: RSTEP, anchor: 'if (r.lockLost === true) {', replacement: 'if (false as boolean) {' },
     ],
     tests: [T_STEP],
     expectRed: ['提交之后工作副本写入丢锁'],
@@ -230,7 +231,7 @@ export const V1_W3_MUTATIONS: readonly V1W3Mutation[] = [
     clause: 'R21-4.4a ②:终态上的 veto 仍写黑名单',
     edits: [
       {
-        file: STEP,
+        file: RSTEP,
         anchor: "if (line.reason === 'vetoed') {",
         replacement: 'if (false as boolean) {',
       },
@@ -623,7 +624,7 @@ export const V1_W3_MUTATIONS: readonly V1W3Mutation[] = [
     clause: 'R21-3.6 / W0-15:丢锁立即中止',
     edits: [
       {
-        file: STEP,
+        file: RSTEP,
         anchor: "if (e instanceof RsiLockError && e.kind === 'lock_lost') {",
         replacement: 'if (false as boolean) {',
       },
@@ -802,7 +803,7 @@ export const V1_W3_MUTATIONS: readonly V1W3Mutation[] = [
     clause: 'R21-9.5:对账不兜底 clear',
     edits: [
       {
-        file: STEP,
+        file: RSTEP,
         anchor: 'const basis = RECONCILE_BASIS[line.reason];',
         replacement: "const basis = RECONCILE_BASIS[line.reason] ?? 'clear';",
       },
@@ -959,7 +960,7 @@ export const V1_W3_MUTATIONS: readonly V1W3Mutation[] = [
     id: 'revocation-ignores-content-hash',
     clause: 'R21-9.5:凭据绑定(候选 id, 内容哈希)',
     edits: [
-      { file: STEP, anchor: 'r.content_sha256 === line.content_sha256', replacement: 'true' },
+      { file: RSTEP, anchor: 'r.content_sha256 === line.content_sha256', replacement: 'true' },
     ],
     tests: [T_STEP],
     expectRed: ['凭据的内容哈希不是该候选当前内容'],
