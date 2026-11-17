@@ -624,6 +624,8 @@ export function makeBothPorts(
   const effects = round.writeAdapter('effects', async (): Promise<StepOutcome> => {
     const k = await kit();
     const r = await recoverTerminalEffects({ store: k.auth, effects: k.rd.keyedEffects });
+    // 私有仓库还没建(首次,生产常态)= 没有终态可补;读不出 / 被延期 = 未完成
+    if (r.skipped === 'absent') return { kind: 'done' };
     if (r.skipped !== null) return { kind: 'incomplete', why: `effects_skipped:${r.skipped}` };
     if (r.failed.length > 0) return { kind: 'incomplete', why: 'effects_failed' };
     if (r.deferred.length > 0) return { kind: 'incomplete', why: 'effects_deferred' };
