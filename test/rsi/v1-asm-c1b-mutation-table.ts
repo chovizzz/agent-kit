@@ -509,3 +509,41 @@ export const V1_ASM_C1B_MUTATIONS: readonly V1AsmC1bMutation[] = [
 
 /** 执行变异后由主代理回填(本块不执行变异,留空) */
 export const V1_ASM_C1B_RESULTS: readonly V1AsmC1bResult[] = [];
+
+/**
+ * 对照表(不入必杀整表,不要求杀得掉):复合变异里「遮蔽层」那一半**单独**施加时,被它遮住的目标用例必须**不红**——证明复合变异的红来自去掉内层守卫,
+ * 而不是遮蔽层本身把目标用例弄坏。执行:`mut-run.mjs <本文件> V1_ASM_C1B_AUX_CONTROLS`,看 KILLEDBY 行里没有各条 `mustStayGreen` 的用例名。
+ */
+export const V1_ASM_C1B_AUX_CONTROLS: readonly (V1AsmC1bMutation & {
+  mustStayGreen: readonly string[];
+})[] = [
+  {
+    id: 'aux_only_finish_rethrows_lock_loss',
+    clause:
+      '对照(safety_line_lock_loss_ignored 的遮蔽层单独施加):finish 上抛失锁;内层守卫仍在,目标用例必须仍绿',
+    edits: [
+      swap(
+        WORKER,
+        "  } catch {\n    return { kind: 'ran', outcome, recorded: false };\n  }\n}",
+        "  } catch (e) {\n    if (isRsiLockLost(e)) throw e;\n    return { kind: 'ran', outcome, recorded: false };\n  }\n}",
+      ),
+    ],
+    tests: [T_WORKER],
+    expectRed: D_WORKER,
+    mustKill: [],
+    mustStayGreen: ['兜底成功后追加安全日志时发现 rsi 失锁'],
+  },
+  {
+    id: 'aux_only_taint_resume_removed_and_l0_always_throttled',
+    clause:
+      '对照(summary_lock_loss_swallowed 的遮蔽层单独施加):去掉 taint 续做调用、L0 未到期分支恒进入;摘要守卫仍在,目标用例必须仍绿',
+    edits: [
+      swap(WORKER, '    await resumeTaintWith(mctx, lock, hooks);\n', ''),
+      swap(WORKER, 'if (!l0Due(s1.prev, nowMs())) {', 'if (true) {'),
+    ],
+    tests: [T_WORKER],
+    expectRed: D_WORKER,
+    mustKill: [],
+    mustStayGreen: ['摘要日志写时发现 rsi 失锁'],
+  },
+];

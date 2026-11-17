@@ -3,7 +3,8 @@
  * 两个操作:
  *  - `hold_personal`:真取 `personal/lock` 并一直持有(等被外部 SIGKILL);
  *  - `worker`:跑真 `runWorker` + 生产装配 `assembleWorkerStage`(相位 / 能力经测试缝打开),并经 `writeAudit` 记录每一次写入口的调用;
- *    `crash.index = k` 时,在**第 k 次写入口被调用之前**(= 第 k-1 次写完之后)对**自己**发 SIGKILL(真 kill -9:不跑 finally、不释放锁)。
+ *    `crashBefore = k` 时,在**第 k 个写审计事件(`writeAudit` 回调)之前**对**自己**发 SIGKILL(真 kill -9:不跑 finally、不释放锁)。
+ * 注意:审计事件是写函数的入口事件,不是「写完成」事件(如 rename 连续审计 rename.from / rename;durable 写还有 syncFile / fsyncDir 的入口事件),所以这里验的是「某个审计事件之前崩溃」,不是掉电持久性。
  * 崩溃钩子只存在于本测试入口,不进生产代码(生产 / dist 不带任何环境变量驱动的崩溃点)。
  */
 import * as path from 'node:path';

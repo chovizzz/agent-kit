@@ -99,7 +99,7 @@ async function walk(
     const abs = path.join(root, r);
     const st = await lstat(abs);
     const mode = (st.mode & 0o777).toString(8);
-    if (e.isSymbolicLink) out.desc[r] = 'l';
+    if (e.isSymbolicLink) throw new Error(`E7 世界里不应出现符号链接(快照不记录链接目标):${r}`);
     else if (e.isDirectory) {
       out.desc[r] = `d ${mode}`;
       await walk(root, r, out);
