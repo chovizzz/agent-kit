@@ -168,7 +168,11 @@ export async function main(argv: readonly string[], env: MainEnv = {}): Promise<
   // `rsi/hook-entry.ts`;这里只为进程内调用 `main()` 保持一致,经**动态** import 转交(不改变本文件的静态闭包)。传原始 argv:全局选项也算多余参数(退 2)
   if (flags.rest[0] === '__rsi') {
     const { runHookEntry } = await import('./rsi/hook-entry.js');
-    return runHookEntry(argv, env.env !== undefined ? { env: { ...env.env } } : {});
+    const { runAssembledWorker } = await import('./rsi/worker-entry.js');
+    return runHookEntry(argv, {
+      runWorker: runAssembledWorker,
+      ...(env.env !== undefined ? { env: { ...env.env } } : {}),
+    });
   }
 
   // 内部入口:后台 update worker。不在 COMMANDS 里,不进 --help;只有这一个精确形状

@@ -47,6 +47,7 @@ const WIRED_ENTRIES = [
   'src/rsi/worker.ts',
   'src/rsi/hook-entry.ts',
   'src/rsi/assemble-worker.ts',
+  'src/rsi/worker-entry.ts',
 ].filter((f) => existsSync(path.join(ROOT, f)));
 /** 运行时生产闭包里允许出现的 stage 模块(C1b 接线所需的纯逻辑) */
 const RUNTIME_WIRED: readonly string[] = [

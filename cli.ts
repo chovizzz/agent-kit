@@ -14,7 +14,12 @@ while (i < argv.length && String(argv[i]).startsWith('-'))
 const isHook =
   argv[i] === '__rsi' || (argv[i] === 'rsi' && (argv[i + 1] === 'poke' || argv[i + 1] === 'hint'));
 if (isHook) {
-  process.exitCode = await (await import('./src/rsi/hook-entry.js')).runHookEntry(argv);
+  // worker 形状的生产装配(带写出口)在此注入,不进 hook-entry 的闭包(D-AU)
+  const runWorker = async (env: Record<string, string | undefined>): Promise<void> =>
+    (await import('./src/rsi/worker-entry.js')).runAssembledWorker(env);
+  process.exitCode = await (
+    await import('./src/rsi/hook-entry.js')
+  ).runHookEntry(argv, { runWorker });
 } else {
   const { launchAndSchedule } = await import('./src/update/launcher.js');
   process.exitCode = await launchAndSchedule(argv, async () => (await import('./src/cli.js')).main);

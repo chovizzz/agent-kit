@@ -53,8 +53,9 @@ const REAL_ENTRY_CANDIDATES: readonly string[] = [
   'src/rsi/poke.ts',
   'src/rsi/hint.ts',
   'src/rsi/worker.ts',
-  // C1b:个人步的生产装配(hook-entry 与 worker 同时动态加载;闭包同样零网络 / 无 llm-exec / 无启动器)
+  // C1b:个人步的生产装配(由根入口注入 hook-entry,hook-entry 自身闭包不含它;本入口闭包同样零网络 / 无 llm-exec / 无启动器)
   'src/rsi/assemble-worker.ts',
+  'src/rsi/worker-entry.ts',
   // A3:根入口加载的零网络钩子入口、顺带调度(启动器经动态 import 调用它,但它自身闭包必须零网络)
   'src/rsi/hook-entry.ts',
   'src/rsi/kit-schedule.ts',

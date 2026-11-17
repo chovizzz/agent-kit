@@ -71,6 +71,11 @@ export interface HookEntryDeps {
   env?: Env;
   /** 测试注入:替换转发 / 调度的桥接(缺省动态加载 `src/update/self-spawn.ts`) */
   bridge?: HookBridge;
+  /**
+   * worker 运行器(部署组装处注入;缺省 = 不带个人步的 `runWorker`)。生产装配 `worker-entry.ts` 带进写出口 `io/home-fs.ts`,
+   * 不能出现在本文件的闭包里(D-AU),所以由根入口 `cli.ts` / `src/cli.ts` 注入。
+   */
+  runWorker?: (env: Env) => Promise<void>;
 }
 
 export interface HookBridge {
@@ -106,10 +111,8 @@ export async function runHookEntry(
       const bridge = deps.bridge ?? (await loadBridge());
       const f = await bridge.forward({ argv, home: getRealHome(env), env, timeoutMs: null });
       if (f.forwarded) return f.code;
-      const { runWorker } = await import('./worker.js');
-      // 个人步的生产装配:与 worker 同时求值(两者的模块一次性载入,P 运行期间不再惰性加载安装树里的文件);相位 < V1a 或能力缺项时 `eligible()` 为假,worker 不进 P
-      const { assembleWorkerStage } = await import('./assemble-worker.js');
-      await runWorker({ env, personal: assembleWorkerStage() });
+      if (deps.runWorker !== undefined) await deps.runWorker(env);
+      else await (await import('./worker.js')).runWorker({ env });
       return ExitCode.OK;
     }
     if (shape.hadGlobal) return ExitCode.OK;
