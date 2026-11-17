@@ -109,9 +109,6 @@ export function createPersonalStage(deps: PersonalStageDeps): PersonalStage {
             markRoundUnsettled(open.round, 'safety_not_settled');
           }
         }
-        // rsi 锁复核:丢失 = 原样上抛(finally 释放个人锁)
-        await ctx.lock.assertHeld();
-
         let l0DueNow = false;
         try {
           l0DueNow = (await deps.l0DueNow(ctx)) === true;
@@ -119,6 +116,9 @@ export function createPersonalStage(deps: PersonalStageDeps): PersonalStage {
           if (isRsiLockLost(e)) throw e;
           l0DueNow = false;
         }
+
+        // 返回前最后一次 rsi 锁复核:丢失 = 原样上抛(finally 释放个人锁)
+        await ctx.lock.assertHeld();
 
         return {
           growth: growthAccessOf(open, { updateBusy: ctx.updateBusy, lockLost }),

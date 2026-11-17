@@ -193,6 +193,7 @@ describe('S0 真适配器(经真 runWorker)', () => {
     const s = spy(assembleWorkerStage({ phase: 1, wired: ALL_CAPS }));
     const r = await runWorker(wd(f, [], { personal: s.stage }));
     expect(r).toMatchObject({ kind: 'ran', outcome: 'ok' });
+    expect(s.rounds[0]?.faults).toEqual([]);
     expect(s.rounds[0]?.growth).toEqual({ kind: 'denied', code: 'personal_busy' });
     expect((await canaryOf(f)).agents_inject).toEqual([]);
     const log = (await readText(path.join(f.rsiDir, 'log.jsonl'))).split('\n');
