@@ -39,6 +39,7 @@ const DECIDE = `${C}canary-decide.ts`;
 const DOC = `${C}canary-doc.ts`;
 const HINTP = `${C}canary-hint.ts`;
 const WRITER = `${C}canary-writer.ts`;
+const RECONCILE = `${C}canary-reconcile.ts`;
 const LEDGER = `${C}ledger.ts`;
 const PERMIT = `${C}permit-read.ts`;
 const TICKET = `${C}probe-ticket.ts`;
@@ -929,7 +930,7 @@ export const V1_W5_MUTATIONS: readonly V1W5Mutation[] = [
     clause: 'R21-9.5:不可读缓存可由对账清理收口,否则屏障永远拒绝授予',
     edits: [
       {
-        file: WRITER,
+        file: RECONCILE,
         anchor: "cur.kind === 'unreadable' ||",
         replacement: 'false ||',
       },
