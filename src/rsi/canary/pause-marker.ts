@@ -31,6 +31,8 @@ export function makeBreakerMarkerPort(
   rsiDir: string,
   now: () => Date,
   newId: () => string = defaultNewId,
+  /** 写点守卫(可选):紧贴实际写操作(创建 / unlink)之前调用,抛错 = 不写;删除时在回读之后调用。端口接口不变 */
+  guard: () => Promise<void> = () => Promise.resolve(),
 ): BreakerMarkerPort {
   const file = path.join(rsiDir, CANARY_FILES.pauseBreaker);
   const read = async (): Promise<PauseMarker | null> => {
@@ -47,12 +49,14 @@ export function makeBreakerMarkerPort(
     read,
     async ensure(reason) {
       const body = canonicalJson({ at: now().toISOString(), by: 'breaker', reason, id: newId() });
+      await guard();
       // 文件与父目录 fsync 之后才返回(调用方此后才写 state):掉电后也不会出现「状态已熔断、标记没了」;已存在的标记同样补一次 fsync
       return createExclusiveDurable(io, file, body, RSI_FILE_MODE);
     },
     async remove() {
       const cur = await read();
       if (cur === null) return false;
+      await guard();
       await remove(io, file);
       return true;
     },

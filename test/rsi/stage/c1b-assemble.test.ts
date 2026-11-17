@@ -28,6 +28,7 @@ import type {
   PersonalRound,
   PersonalStage,
 } from '../../../src/rsi/personal/stage/types.js';
+import { RsiLockError } from '../../../src/rsi/lock-error.js';
 import { runWorker, type RsiWorkerRunDeps } from '../../../src/rsi/worker.js';
 import { type TickFx, loseLockOf, makeTickFx } from '../b5a-fixture.js';
 import { treeOf } from '../rsi-fixture.js';
@@ -75,7 +76,7 @@ describe('相位 / 能力资格', () => {
     missing.delete('audit_sweep');
     expect(assembleWorkerStage({ phase: 1, wired: missing }).eligible()).toBe(false);
   });
-  it('工厂求值与 eligible() 零 IO:假 HOME 与状态目录的文件树前后逐字节相同(不读盘 / 不建目录 / 不取锁);个人锁目录不被建', async () => {
+  it('工厂求值与 eligible() 零持久写入:假 HOME 与状态目录的文件树前后逐字节相同(不建文件 / 不建目录 / 不取锁文件);个人锁目录不被建', async () => {
     const f = await makeTickFx('c1b-asm-zero-io-', { confirmed: true });
     const before = [...(await treeOf(f.home)), ...(await treeOf(f.io.stateDir))];
     const stage = assembleWorkerStage({ phase: 1, wired: ALL_CAPS });
@@ -300,6 +301,145 @@ describe('S0 的 B 写点前复核 rsi 锁(失锁 = 零写入)', () => {
     const s = spy(assembleWorkerStage({ phase: 1, wired: ALL_CAPS }));
     await runWorker(wd(f, [], { personal: s.stage }));
     expect(await exists(path.join(f.rsiDir, 'AUTO_PAUSE_BREAKER'))).toBe(false);
+  });
+});
+
+describe('B 标记写点守卫(目录校验之后、实际写之前才复核;删除在回读之后)', () => {
+  const B_ID = '0123456789abcdef';
+  const lostErr = (): RsiLockError => new RsiLockError('lock_lost');
+
+  it('端口:创建时守卫在 now() 之后、写之前被调用;守卫抛错 = B 不创建(注入点是守卫本身,不靠计时)', async () => {
+    const f = await makeTickFx('c1b-asm-bguard-create-', { confirmed: true });
+    const order: string[] = [];
+    const port = makeBreakerMarkerPort(
+      f.io,
+      f.rsiDir,
+      () => {
+        order.push('now');
+        return new Date(T);
+      },
+      () => B_ID,
+      async () => {
+        order.push(`guard:B=${String(await exists(path.join(f.rsiDir, 'AUTO_PAUSE_BREAKER')))}`);
+        throw lostErr();
+      },
+    );
+    await expect(port.ensure('gate_internal')).rejects.toBeInstanceOf(RsiLockError);
+    expect(order).toEqual(['now', 'guard:B=false']);
+    expect(await exists(path.join(f.rsiDir, 'AUTO_PAUSE_BREAKER'))).toBe(false);
+  });
+
+  it('端口正向对照:守卫放行时同一调用创建 B', async () => {
+    const f = await makeTickFx('c1b-asm-bguard-create-ok-', { confirmed: true });
+    const port = makeBreakerMarkerPort(
+      f.io,
+      f.rsiDir,
+      () => new Date(T),
+      () => B_ID,
+      () => Promise.resolve(),
+    );
+    await port.ensure('gate_internal');
+    expect(await exists(path.join(f.rsiDir, 'AUTO_PAUSE_BREAKER'))).toBe(true);
+  });
+
+  it('端口:删除在回读之后复核 —— B 存在且守卫抛错 = B 保留;B 不存在 = 返回 false 且守卫不被调用(回读先于守卫)', async () => {
+    const f = await makeTickFx('c1b-asm-bguard-remove-', { confirmed: true });
+    let calls = 0;
+    const guard = (): Promise<void> => {
+      calls += 1;
+      return Promise.reject(lostErr());
+    };
+    const mk = (g: () => Promise<void>) =>
+      makeBreakerMarkerPort(
+        f.io,
+        f.rsiDir,
+        () => new Date(T),
+        () => B_ID,
+        g,
+      );
+    await expect(mk(guard).remove()).resolves.toBe(false);
+    expect(calls).toBe(0);
+    await mk(() => Promise.resolve()).ensure('gate_internal');
+    await expect(mk(guard).remove()).rejects.toBeInstanceOf(RsiLockError);
+    expect(calls).toBe(1);
+    expect(await exists(path.join(f.rsiDir, 'AUTO_PAUSE_BREAKER'))).toBe(true);
+  });
+
+  it('端口正向对照:守卫放行时同一残留 B 被删除', async () => {
+    const f = await makeTickFx('c1b-asm-bguard-remove-ok-', { confirmed: true });
+    const p = makeBreakerMarkerPort(
+      f.io,
+      f.rsiDir,
+      () => new Date(T),
+      () => B_ID,
+    );
+    await p.ensure('gate_internal');
+    await expect(p.remove()).resolves.toBe(true);
+    expect(await exists(path.join(f.rsiDir, 'AUTO_PAUSE_BREAKER'))).toBe(false);
+  });
+
+  /** 锁在 S0 开始时是好的、也能通过所有别处的复核;只有从 B 标记适配器写点(调用栈含 pause-marker)发起的复核才报失锁 = 「目录校验之后失锁」 */
+  const lostAtMarkerWrite = (real: PersonalStage, armed: boolean): PersonalStage => ({
+    ...real,
+    run: (ctx) =>
+      real.run({
+        ...ctx,
+        lock: {
+          ...ctx.lock,
+          assertHeld: () =>
+            armed && (new Error().stack ?? '').includes('pause-marker')
+              ? Promise.reject(lostErr())
+              : ctx.lock.assertHeld(),
+        },
+      }),
+  });
+  const createCase = async (tag: string, armed: boolean) => {
+    const f = await makeTickFx(tag, {
+      confirmed: true,
+      state: { auto_pause: { reasons: ['gate_internal'], diverged: false, owner_changed: false } },
+    });
+    await seedCanary(f);
+    const stage = lostAtMarkerWrite(assembleWorkerStage({ phase: 1, wired: ALL_CAPS }), armed);
+    const r = await runWorker(wd(f, [], { personal: stage }));
+    return { r, b: await exists(path.join(f.rsiDir, 'AUTO_PAUSE_BREAKER')) };
+  };
+  const removeCase = async (tag: string, armed: boolean) => {
+    const f = await makeTickFx(tag, {
+      confirmed: true,
+      state: {
+        auto_pause: {
+          reasons: [],
+          diverged: false,
+          owner_changed: false,
+          released_marker_id: B_ID,
+        },
+      },
+    });
+    await makeBreakerMarkerPort(
+      f.io,
+      f.rsiDir,
+      () => new Date(T),
+      () => B_ID,
+    ).ensure('gate_internal');
+    const stage = lostAtMarkerWrite(assembleWorkerStage({ phase: 1, wired: ALL_CAPS }), armed);
+    const r = await runWorker(wd(f, [], { personal: stage }));
+    return { r, b: await exists(path.join(f.rsiDir, 'AUTO_PAUSE_BREAKER')) };
+  };
+
+  it('装配(创建):目录校验之后、写之前失锁 → 不创建 B;对照:不注入失锁则创建', async () => {
+    const lost = await createCase('c1b-asm-bwin-create-', true);
+    expect(lost.r).toEqual({ kind: 'ran', outcome: 'lock_lost', recorded: false });
+    expect(lost.b).toBe(false);
+    const ok = await createCase('c1b-asm-bwin-create-ok-', false);
+    expect(ok.b).toBe(true);
+  });
+
+  it('装配(删除):B 回读之后、unlink 之前失锁 → 不删除 B;对照:不注入失锁则删除', async () => {
+    const lost = await removeCase('c1b-asm-bwin-remove-', true);
+    expect(lost.r).toEqual({ kind: 'ran', outcome: 'lock_lost', recorded: false });
+    expect(lost.b).toBe(true);
+    const ok = await removeCase('c1b-asm-bwin-remove-ok-', false);
+    expect(ok.b).toBe(false);
   });
 });
 

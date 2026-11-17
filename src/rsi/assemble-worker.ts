@@ -172,6 +172,21 @@ async function withDir<T>(io: IoContext, f: (dir: string) => Promise<T>): Promis
   return f(dir);
 }
 
+/**
+ * S0 与阶梯共用的 B 标记端口:目录先解析 / 校验,rsi 锁复核由写点守卫在**实际创建 / unlink 之前**做(删除在回读之后);失锁 = 零写入。
+ * `assertHeld` 不是 fencing,这里只保证最后一次复核与写之间没有额外的异步文件操作
+ */
+function guardedBreakerMarker(c: Rsi): BreakerDeps['marker']['breaker'] {
+  const io = c.sctx.io;
+  const port = (d: string) =>
+    makeBreakerMarkerPort(io, d, c.now, undefined, () => c.lock.assertHeld());
+  return {
+    ensure: (reason) => withDir(io, (d) => port(d).ensure(reason)),
+    read: () => withDir(io, (d) => port(d).read()),
+    remove: () => withDir(io, (d) => port(d).remove()),
+  };
+}
+
 function breakerDeps(c: Rsi, phase: number): BreakerDeps {
   const io = c.sctx.io;
   return {
@@ -180,18 +195,7 @@ function breakerDeps(c: Rsi, phase: number): BreakerDeps {
       mute: () => withDir(io, (rsiDir) => muteCanary({ io, rsiDir, locks: { rsi: c.lock } })),
     },
     marker: {
-      breaker: {
-        // B 的文件端口本身不取锁、不复核锁(`pause-marker.ts` 的契约):装配层在**写点之前**复核 rsi 锁,失锁 = 零写入(创建与删除都是)
-        ensure: async (reason) => {
-          await c.lock.assertHeld();
-          return withDir(io, (d) => makeBreakerMarkerPort(io, d, c.now).ensure(reason));
-        },
-        read: () => withDir(io, (d) => makeBreakerMarkerPort(io, d, c.now).read()),
-        remove: async () => {
-          await c.lock.assertHeld();
-          return withDir(io, (d) => makeBreakerMarkerPort(io, d, c.now).remove());
-        },
-      },
+      breaker: guardedBreakerMarker(c),
       user: { exists: () => withDir(io, (d) => makeUserMarkerPort(io, d, c.now).exists()) },
     },
     phase,
@@ -211,7 +215,7 @@ function ladderPorts(
     },
     ensureBreakerMarker: (cause) => {
       void cause;
-      return withDir(io, (d) => makeBreakerMarkerPort(io, d, c.now).ensure('gate_internal'));
+      return guardedBreakerMarker(c).ensure('gate_internal');
     },
     assertHeld: () => c.lock.assertHeld(),
   };
