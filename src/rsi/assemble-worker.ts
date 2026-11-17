@@ -308,7 +308,11 @@ export function assembleWorkerStage(d: AssembleWorkerDeps = {}): PersonalStage {
 // ---------- 依赖倒置的装配点:真实个人步 + 真实兜底协调器 → worker 的叶子端口 ----------
 type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 type MustBeTrue<T extends true> = T;
-/** 编译期断言:叶子端口里的结构化视图与 C1a 冻结类型不得漂移(任一边改了,这里就编译失败) */
+/**
+ * 编译期断言:叶子端口里的结构化视图与 C1a 冻结类型不得漂移(任一边改了,这里就编译失败)。
+ * 口径:FallbackTrack / FallbackReport 是**双向等价**;ctx 与 round 是**方向性兼容**(worker 交出的 ctx 能当真实 ctx 用、真实回合能被 worker 的只读视图读),
+ * 不是整类型镜像——端口只描述 worker 读写的最小字段(ISP);round 视图里的 `growth.code` 是宽的 string,worker 只比较 `personal_busy` / `personal_fault` 两个字面量。
+ */
 export type PortDriftChecks = [
   MustBeTrue<Same<FallbackTrack, PortFallbackTrack>>,
   MustBeTrue<Same<FallbackReport, PortFallbackReport>>,
