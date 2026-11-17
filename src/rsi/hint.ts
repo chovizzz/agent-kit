@@ -303,9 +303,10 @@ async function compose(
     agent,
     format,
     io,
-    // R21-6.11 第 1 行:只有 `confirmed`(且 `.state/rsi` 目录存在)才进入 canary 部分
+    // R21-6.11 第 1 行:只有 `confirmed`(且 `.state/rsi` 目录存在)才进入 canary 部分;
+    // W0-29 ⑤:已提交的 `state.json` 带暂停码 / `diverged` / `owner_changed` → 本次没有 canary 部分(纯读;计数行不受影响)
     canary:
-      st.state === 'confirmed' && d.kind === 'ok'
+      st.state === 'confirmed' && d.kind === 'ok' && !statePausesCanary(docState)
         ? {
             rsiDir: d.dir,
             autoLoopEffective: isAutoLoopEffective(
@@ -317,6 +318,12 @@ async function compose(
           }
         : null,
   };
+}
+
+/** 已提交 `state.json` 的暂停事实:`auto_pause.reasons ≠ ∅ ∨ diverged ∨ owner_changed`(W0-29 ⑤;缺 `auto_pause` = 未暂停) */
+function statePausesCanary(doc: Pick<RsiState, 'auto_pause'> | null): boolean {
+  const ap = doc?.auto_pause;
+  return ap !== undefined && (ap.reasons.length > 0 || ap.diverged || ap.owner_changed);
 }
 
 /**
