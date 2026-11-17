@@ -16,6 +16,7 @@ import {
   RSI_EFFECTS_LIMITS,
   RSI_LEDGER_REFINE,
   RsiAuditCompactionSchema,
+  parseCompactionBytes,
   RsiEffectsLedgerSchema,
   type RsiAuditCompaction,
   type RsiEffectsLedger,
@@ -28,7 +29,8 @@ import type { AuditTextRead, Watermark } from './ports.js';
 export type AssertHeld = () => Promise<void>;
 
 const LEDGER_READ_MAX = RSI_EFFECTS_LIMITS.bytes + 1024 * 1024;
-const COMPACTION_READ_MAX = 8 * 1024 * 1024;
+/** 压缩文件的读取上限(字节);写前检查与读取共用这一个常量——写出的文件下一次读取必被接受 */
+export const COMPACTION_READ_MAX = 8 * 1024 * 1024;
 const REFINE_TOKENS: readonly string[] = Object.values(RSI_LEDGER_REFINE);
 
 /** 把底层 I/O 错误归一为 `store_io`(`detail` = errno 码 / 错误名);已是 `StoreError` / `RsiLockError` 的原样上抛 */
@@ -60,22 +62,9 @@ export function encodeLedger(l: RsiEffectsLedger): string {
 }
 
 export function decodeCompaction(bytes: Buffer, today: string): RsiAuditCompaction {
-  let raw: unknown;
-  try {
-    raw = JSON.parse(strictUtf8(bytes));
-  } catch (e) {
-    throw new StoreError('compaction_unsupported', e instanceof TypeError ? 'utf8' : 'json');
-  }
-  const p = RsiAuditCompactionSchema.safeParse(raw);
-  if (!p.success) {
-    const refineCode = p.error.issues.map((i) => i.message).find((m) => m.endsWith('_sum'));
-    throw new StoreError('compaction_unsupported', refineCode ?? 'schema');
-  }
-  // I1:水位线必须早于今日(UTC)
-  if (p.data.through !== null && p.data.through >= today) {
-    throw new StoreError('compaction_unsupported', 'through_not_before_today');
-  }
-  return p.data;
+  const r = parseCompactionBytes(bytes, today);
+  if (!r.ok) throw new StoreError('compaction_unsupported', r.detail);
+  return r.value;
 }
 
 export interface StoreBackend {
@@ -192,7 +181,12 @@ export function createBackend(fs: StoreFs, clock: () => Date): StoreBackend {
       if (next.gen !== (cur?.gen ?? 0) + 1)
         throw new StoreError('compaction_unsupported', 'gen_not_sequential');
       // 与读侧同一份语义校验(I1:through 须早于今日)——不得写出下一次读取就拒绝的文件;I4:水位线不回退
-      decodeCompaction(Buffer.from(canonicalJson(next), 'utf8'), today());
+      const text = canonicalJson(next); // 只编码一次:校验与落盘用同一份文本
+      const bytes = Buffer.from(text, 'utf8');
+      // P2 之前拒绝超过读取上限的文件:提交后读不回来 = 后续所有写事务与续做都被堵死;拒绝时旧压缩文件不动
+      if (bytes.length > COMPACTION_READ_MAX)
+        throw new StoreError('compaction_unsupported', 'too_large');
+      decodeCompaction(bytes, today());
       if (
         cur?.through !== undefined &&
         cur.through !== null &&
@@ -200,7 +194,7 @@ export function createBackend(fs: StoreFs, clock: () => Date): StoreBackend {
       ) {
         throw new StoreError('compaction_unsupported', 'through_regressed');
       }
-      await atomicReplace(RSI_AUDIT_COMPACTION_FILE, canonicalJson(next), assertHeld);
+      await atomicReplace(RSI_AUDIT_COMPACTION_FILE, text, assertHeld);
     },
   };
 }

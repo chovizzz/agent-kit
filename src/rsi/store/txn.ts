@@ -14,6 +14,7 @@
  */
 import { StoreError } from './errors.js';
 import type { StoreBackend } from './backend.js';
+import { bindCompactionPort } from './compaction-port.js';
 import { acquireLockControl } from './lock-control.js';
 import type { HeldStore, LockCap, TxnPorts } from './ports.js';
 
@@ -71,6 +72,11 @@ export function createHeldStore(deps: HeldStoreDeps): HeldStore {
         rewrite: (text) => track(() => deps.backend.rewriteAudit(text, assertBoth)),
       },
     };
+
+    bindCompactionPort(ports, {
+      read: () => track(() => deps.backend.readCompaction()),
+      commit: (next) => track(() => deps.backend.writeCompaction(next, assertBoth)),
+    });
 
     try {
       await assertBoth();

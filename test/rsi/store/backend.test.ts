@@ -8,8 +8,19 @@ import { createIoContext } from '../../../src/io/paths.js';
 import { rsiDir } from '../../../src/rsi/rsi-dir.js';
 import { safeStoreFs } from '../../../src/rsi/store/fs-port.js';
 import { StoreError } from '../../../src/rsi/store/errors.js';
+import { COMPACTION_READ_MAX, createBackend } from '../../../src/rsi/store/backend.js';
 import { baseCtx, makeTempDir, REPO_ROOT } from '../../helpers/tmp.js';
-import { FILES, MemFs, makeWorld, meta, tomb } from './store-fixture.js';
+import { paddedCompaction } from './b1b-fixture.js';
+import {
+  FILES,
+  MemFs,
+  TODAY_ISO,
+  expectSameBytes,
+  faulty,
+  makeWorld,
+  meta,
+  tomb,
+} from './store-fixture.js';
 
 const noop = async (): Promise<void> => undefined;
 const code = async (p: Promise<unknown>): Promise<[string, string | undefined]> => {
@@ -193,4 +204,47 @@ describe('事务端口的元信息校验沿用同一份规划(对照)', () => {
     expect(meta().event_at).toBe('2026-11-15T08:00:00.000Z');
     expect(tomb().type).toBe('write_tombstone');
   });
+});
+
+describe.each(['mem', 'real'] as const)('压缩文件读写共用一个字节上限(%s)', (kind) => {
+  it('compaction_write_at_read_limit:恰好等于上限(8 MiB)可写也可读,后续读水位线照常', async () => {
+    const w = await makeWorld(kind);
+    await w.backend.writeCompaction(paddedCompaction(COMPACTION_READ_MAX), noop);
+    expect((await w.bytes(FILES.compaction))?.length).toBe(COMPACTION_READ_MAX);
+    expect(await w.backend.readWatermark()).toEqual({ through: '2026-11-01', gen: 1 });
+    expect((await w.backend.readCompaction())?.gen).toBe(1);
+  }, 120_000); // 8 MiB 文档:约 17 万键的规范化编码与 schema 校验各跑数遍,慢机上超过 20 s
+});
+
+describe('压缩文件写前容量检查', () => {
+  const setup = async () => {
+    const mem = new MemFs();
+    const f = faulty(mem, []);
+    const backend = createBackend(f, () => new Date(TODAY_ISO));
+    const old = { schema_version: 1 as const, gen: 1, through: '2026-10-01', months: {} };
+    await backend.writeCompaction(old, noop);
+    const oldBytes = Buffer.from(mem.files.get(FILES.compaction) as Buffer);
+    return { mem, f, backend, oldBytes };
+  };
+
+  it('compaction_write_one_byte_over_limit_refused:超过上限一个字节 = compaction_unsupported(too_large);没有 writeTmp / rename,旧文件字节不变且仍可读', async () => {
+    const { mem, f, backend, oldBytes } = await setup();
+    const callsBefore = f.calls.length;
+    const over = paddedCompaction(COMPACTION_READ_MAX + 1, { gen: 2, through: '2026-10-02' });
+    expect(await code(backend.writeCompaction(over, noop))).toEqual([
+      'compaction_unsupported',
+      'too_large',
+    ]);
+    const attempt = f.calls.slice(callsBefore).filter((c) => !c.startsWith('read:'));
+    expect(attempt).toEqual([]);
+    expect(mem.tmps.size).toBe(0);
+    expectSameBytes(mem.files.get(FILES.compaction) ?? null, oldBytes);
+    expect(await backend.readWatermark()).toEqual({ through: '2026-10-01', gen: 1 });
+    // 对照:恰好等于上限的同一份增量可写
+    await backend.writeCompaction(
+      paddedCompaction(COMPACTION_READ_MAX, { gen: 2, through: '2026-10-02' }),
+      noop,
+    );
+    expect(await backend.readWatermark()).toEqual({ through: '2026-10-02', gen: 2 });
+  }, 120_000);
 });

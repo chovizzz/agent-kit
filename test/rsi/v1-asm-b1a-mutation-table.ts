@@ -483,7 +483,7 @@ export const V1_ASM_B1A_MUTATIONS: readonly V1AsmB1aMutation[] = [
     clause: 'W0-26 §7 水位线须早于今日',
     edits: [
       swap(
-        'src/rsi/store/backend.ts',
+        'src/contracts/rsi-compaction.ts',
         'if (p.data.through !== null && p.data.through >= today) {',
         'if (false) {',
       ),
@@ -769,7 +769,7 @@ export const V1_ASM_B1A_MUTATIONS: readonly V1AsmB1aMutation[] = [
     clause: 'W0-26 §8 lines = deleted + derived_missing',
     edits: [
       swap(
-        'src/contracts/rsi-store.ts',
+        'src/contracts/rsi-compaction.ts',
         'if (m.lines !== m.deleted + m.derived_missing) {',
         'if (false) {',
       ),
@@ -819,7 +819,7 @@ export const V1_ASM_B1A_MUTATIONS: readonly V1AsmB1aMutation[] = [
     clause: 'W0-26 §8 transition_by_to 之和 = by_kind.transition',
     edits: [
       swap(
-        'src/contracts/rsi-store.ts',
+        'src/contracts/rsi-compaction.ts',
         "if (sum(m.transition_by_to) !== (m.by_kind['transition'] ?? 0)) {",
         'if (false) {',
       ),
@@ -845,13 +845,7 @@ export const V1_ASM_B1A_MUTATIONS: readonly V1AsmB1aMutation[] = [
   {
     id: 'compaction_write_unchecked',
     clause: 'W0-26 §7 写入与读侧同一语义',
-    edits: [
-      swap(
-        'src/rsi/store/backend.ts',
-        "decodeCompaction(Buffer.from(canonicalJson(next), 'utf8'), today());",
-        ';',
-      ),
-    ],
+    edits: [swap('src/rsi/store/backend.ts', 'decodeCompaction(bytes, today());', ';')],
     tests: ['rsi/store/backend.test.ts'],
     expectRed: ['writeCompaction 与读侧同一份语义'],
     mustKill: ['writeCompaction 与读侧同一份语义'],
@@ -1385,8 +1379,8 @@ export const V1_ASM_B1A_MUTATIONS: readonly V1AsmB1aMutation[] = [
   },
 ];
 
-/** 由主代理整表执行变异后回填 */
-/** 实测结果:r21b1a-mut-h5 @6ab767e(javis):92 条全部被杀(recover_range_unchecked 另红了同文件一条审计满用例,已并入 expectRed) */
+/** 由主代理整表执行变异后回填(B1b 并入后 3 个 file 字段改指 rsi-compaction.ts,原结果作废,待重跑回填) */
+/** 实测结果:r21b1b-mutb1a3 @9efd0c3(B1b 合并后):92 条全部被杀 */
 export const V1_ASM_B1A_RESULTS: readonly V1AsmB1aResult[] = [
   {
     id: 'key_same_content_always_satisfied',
@@ -1841,12 +1835,11 @@ export const V1_ASM_B1A_RESULTS: readonly V1AsmB1aResult[] = [
   },
   {
     id: 'recover_range_unchecked',
-    failed: 3,
+    failed: 2,
     skipped: 0,
     killedBy: [
       'recoverThrough 契约(mem) recover_through_rejects_event_after_W:任一批事件日 > W → 整个调用 out_of_range,零写入;事件日 == W 通过(边界对照)',
       'recoverThrough 契约(real) recover_through_rejects_event_after_W:任一批事件日 > W → 整个调用 out_of_range,零写入;事件日 == W 通过(边界对照)',
-      'recoverThrough 契约(real) recover_through_audit_full_still_commits_ledger:审计满(20000 行)时账照样提交——不存在循环依赖',
     ],
     restored: true,
   },

@@ -10,12 +10,14 @@
  * cost / canary 的聚合口径(契约只列键名):`cost.injected_bytes` / `cost.s2_count` = 区间内审计行 `counts.injected_bytes` / `counts.s2_count` 之和;`canary` = 区间内进入 `canary` 的转移。
  */
 import { ExitCode } from '../../../contracts/exit-codes.js';
+import { RSI_SNAPSHOT_BUSY } from '../../../contracts/rsi.js';
 import { RsiAuditLineSchema, type RsiAuditLine } from '../../../contracts/rsi-personal.js';
 import { canonicalJson } from '../../../io/canonical-json.js';
 import { emitLines, jsonLines, type OutputSink } from '../../output.js';
 import type { OutLine } from '../../sanitize.js';
 import { parseUtcDate } from '../select-rollback.js';
-import type { AutoReadPorts } from './ports.js';
+import { readCompactedAudit } from './compaction-snapshot.js';
+import type { AutoReadPorts, RawRead } from './ports.js';
 
 export interface ReportRange {
   from: string;
@@ -111,8 +113,37 @@ export interface ReportDoc {
 
 export type ReportResult = { kind: 'ok'; doc: ReportDoc } | { kind: 'fail'; lines: string[] };
 
-export async function computeReport(p: AutoReadPorts, range: ReportRange): Promise<ReportResult> {
-  const parsed = parseAudit(await p.audit());
+/** `readCompactedAudit` 的一致快照:压缩后的审计原文 + 水位线 W(`null` = 未压缩) */
+export interface ReportSnapshot {
+  audit: RawRead;
+  through: string | null;
+}
+
+/**
+ * 压缩后的区间口径:区间起点不晚于 W 时,W 及之前的明细已并入月汇总、不可逐日还原,所以 `request_before_observed=true`
+ * (精度 = 月;JSON 键集合不变,不另加字段)。
+ */
+function withWatermark(r: ReportResult, range: ReportRange, through: string | null): ReportResult {
+  if (r.kind === 'ok' && through !== null && range.from <= through) {
+    r.doc.request_before_observed = true;
+  }
+  return r;
+}
+
+export async function computeReport(
+  p: AutoReadPorts,
+  range: ReportRange,
+  snap?: ReportSnapshot,
+): Promise<ReportResult> {
+  const through = snap?.through ?? null;
+  let parsed = parseAudit(snap?.audit ?? (await p.audit()));
+  // 压缩后 P3 之前的残留行(日期 ≤ W)已计入汇总:一律滤掉,所以 P2 与 P3 之间既不重计也不漏计
+  if (through !== null && parsed.kind === 'ok') {
+    parsed = {
+      ...parsed,
+      lines: parsed.lines.filter((l) => utcDay(new Date(Date.parse(l.at))) > through),
+    };
+  }
   if (parsed.kind === 'unreadable') return { kind: 'fail', lines: [] };
   const empty = (file: 'present' | 'absent'): ReportDoc => ({
     range,
@@ -130,8 +161,15 @@ export async function computeReport(p: AutoReadPorts, range: ReportRange): Promi
     parsed.kind === 'absent' ||
     (parsed.kind === 'ok' && parsed.lines.length === 0 && parsed.corrupt === 0)
   ) {
-    if (await p.priorActivity()) return { kind: 'fail', lines: [] };
-    return { kind: 'ok', doc: empty(parsed.kind === 'absent' ? 'absent' : 'present') };
+    // 已压缩(W 非空)时审计为空 / 缺失是合法状态,不再用「曾有转移」误退 3
+    if (through === null) {
+      if (await p.priorActivity()) return { kind: 'fail', lines: [] };
+    }
+    return withWatermark(
+      { kind: 'ok', doc: empty(parsed.kind === 'absent' ? 'absent' : 'present') },
+      range,
+      through,
+    );
   }
   if (parsed.corrupt > 0) return { kind: 'fail', lines: [`corrupt_lines=${parsed.corrupt}`] };
   const days = parsed.lines.map((l) => utcDay(new Date(Date.parse(l.at)))).sort();
@@ -148,7 +186,7 @@ export async function computeReport(p: AutoReadPorts, range: ReportRange): Promi
   const byTo: Record<string, number> = {};
   for (const t of trans) if (t.to !== undefined) byTo[t.to] = (byTo[t.to] ?? 0) + 1;
   const sum = (key: string): number => inRange.reduce((n, l) => n + (l.counts?.[key] ?? 0), 0);
-  return {
+  const result: ReportResult = {
     kind: 'ok',
     doc: {
       range,
@@ -163,6 +201,7 @@ export async function computeReport(p: AutoReadPorts, range: ReportRange): Promi
       counts_scope: 'observed',
     },
   };
+  return withWatermark(result, range, through);
 }
 
 export function renderReportText(d: ReportDoc): OutLine[] {
@@ -192,7 +231,17 @@ export async function runReport(
   o: { json: boolean; range: ReportRange; forbidden: readonly string[] },
   sink: OutputSink,
 ): Promise<number> {
-  const r = await computeReport(p, o.range);
+  const snap = await readCompactedAudit(p);
+  if (snap.kind === 'busy') {
+    sink.stderr(`${RSI_SNAPSHOT_BUSY}\n`);
+    return ExitCode.NOT_RUN;
+  }
+  if (snap.kind === 'fail') {
+    sink.stdout(`cause=${snap.cause}\n`);
+    sink.stderr('RSI_FAIL_CLOSED reason=audit_invalid\n');
+    return ExitCode.FAIL_CLOSED;
+  }
+  const r = await computeReport(p, o.range, snap);
   if (r.kind === 'fail') {
     if (r.lines.length > 0) sink.stdout(r.lines.map((l) => `${l}\n`).join(''));
     sink.stderr('RSI_FAIL_CLOSED reason=audit_invalid\n');

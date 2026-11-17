@@ -89,6 +89,8 @@ export interface AutoReadPorts {
   markers(): Promise<MarkerRead>;
   /** `.state/rsi/audit.jsonl` 原文 */
   audit(): Promise<RawRead>;
+  /** `.state/rsi/audit-compaction.json` 原文(压缩与水位线;缺失 = 虚拟 `gen: 0`,合法) */
+  compaction(): Promise<RawRead>;
   /** 账 / 状态是否显示曾有转移(`rsi report` 的缺失 / 空审计文件判定) */
   priorActivity(): Promise<boolean>;
   home: HomeReadPort;
