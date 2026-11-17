@@ -35,7 +35,7 @@ import {
   type BreakerDeps,
   type PauseStatePort,
 } from './personal/breaker.js';
-import { acquirePersonalLock } from './personal/personal-lock.js';
+import { acquirePersonalLock, type PersonalLockHandle } from './personal/personal-lock.js';
 import { personalHome } from './personal/home-state.js';
 import { isRsiLockLost } from './personal/stage/errors.js';
 import {
@@ -44,8 +44,14 @@ import {
   runFallbackOnce,
   type FallbackTrack,
 } from './personal/stage/fallback.js';
-import type { S0Ports, S0StateKind } from './personal/stage/ladder.js';
+import { runEnforceLadder, type S0Ports, type S0StateKind } from './personal/stage/ladder.js';
 import { createPersonalStage } from './personal/stage/personal-stage.js';
+import {
+  makeBothPorts,
+  makeSafetyPort,
+  type PersonalToolkit,
+  type StepsAssemblyDeps,
+} from './assemble-personal.js';
 import type { FallbackPorts, StateRead } from './personal/stage/ports.js';
 import type {
   FallbackCtx,
@@ -276,10 +282,45 @@ function fallbackPortsFor(ctx: FallbackCtx): FallbackPorts {
   };
 }
 
+/** 读盘上的两个标志(`PersonalRound.flags`);读不出 = `null`(按未知处理,不臆测) */
+async function readFlags(
+  io: IoContext,
+): Promise<{ diverged: boolean; owner_changed: boolean } | null> {
+  try {
+    const r = await readRsiFixed(io, 'state.json');
+    if (r.kind === 'missing') return { diverged: false, owner_changed: false };
+    const doc = parseRsiStateDoc(r.bytes);
+    if (doc.kind !== 'ok') return null;
+    const ap = doc.state.auto_pause;
+    return { diverged: ap?.diverged ?? false, owner_changed: ap?.owner_changed ?? false };
+  } catch {
+    return null;
+  }
+}
+
 export function assembleWorkerStage(d: AssembleWorkerDeps = {}): PersonalStage {
   const phase = d.phase ?? RSI_AUTO_PHASE;
   const wired = d.wired ?? RSI_PRODUCTION_WIRED_CAPS;
+  /** 本轮取到的原始个人锁句柄(个人步端口要真实 `LockCap`;`HeldPersonal` 包装不外泄) */
+  const rawPersonal: { current: PersonalLockHandle | null } = { current: null };
+  const toolkit: PersonalToolkit = {
+    breakerDeps: (c, ph) => breakerDeps(c, ph),
+    ladderPorts: (c) => ladderPorts(c),
+    enforce: (c, ph) =>
+      runEnforceLadder({
+        ...ladderPorts(c),
+        enforceFull: () => enforceMute(breakerDeps(c, ph)),
+        stateKind: () => readStateKind(c.sctx.io),
+      }),
+  };
+  const sd: StepsAssemblyDeps = { phase, toolkit, rawPersonal: () => rawPersonal.current };
   return createPersonalStage({
+    steps: {
+      both: (ctx, round, budget) => makeBothPorts(ctx, round, budget, sd),
+      rsiOnly: (ctx, round) =>
+        makeSafetyPort({ sctx: ctx.sctx, lock: ctx.lock, now: ctx.now }, sd, round),
+      flags: (ctx) => readFlags(ctx.sctx.io),
+    },
     eligible: () => phaseAtLeast('V1a', phase) && missingPhaseCaps(phase, wired).length === 0,
     s0Ports(ctx: PersonalCtx): S0Ports {
       const c: Rsi = { sctx: ctx.sctx, lock: ctx.lock, now: ctx.now };
@@ -292,10 +333,13 @@ export function assembleWorkerStage(d: AssembleWorkerDeps = {}): PersonalStage {
     },
     fallbackPorts: fallbackPortsFor,
     acquirePersonal(ctx: PersonalCtx) {
-      return () => {
+      return async () => {
+        rawPersonal.current = null;
         const home = ctx.sctx.io.hostEnv['HOME'];
         if (home === undefined || !path.isAbsolute(home)) throw new RsiLockError('internal');
-        return acquirePersonalLock(personalHome(ctx.sctx.io, home), d.lock ?? {});
+        const h = await acquirePersonalLock(personalHome(ctx.sctx.io, home), d.lock ?? {});
+        rawPersonal.current = h;
+        return h;
       };
     },
     async l0DueNow(ctx: PersonalCtx): Promise<boolean> {
