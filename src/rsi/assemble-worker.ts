@@ -181,9 +181,16 @@ function breakerDeps(c: Rsi, phase: number): BreakerDeps {
     },
     marker: {
       breaker: {
-        ensure: (reason) => withDir(io, (d) => makeBreakerMarkerPort(io, d, c.now).ensure(reason)),
+        // B 的文件端口本身不取锁、不复核锁(`pause-marker.ts` 的契约):装配层在**写点之前**复核 rsi 锁,失锁 = 零写入(创建与删除都是)
+        ensure: async (reason) => {
+          await c.lock.assertHeld();
+          return withDir(io, (d) => makeBreakerMarkerPort(io, d, c.now).ensure(reason));
+        },
         read: () => withDir(io, (d) => makeBreakerMarkerPort(io, d, c.now).read()),
-        remove: () => withDir(io, (d) => makeBreakerMarkerPort(io, d, c.now).remove()),
+        remove: async () => {
+          await c.lock.assertHeld();
+          return withDir(io, (d) => makeBreakerMarkerPort(io, d, c.now).remove());
+        },
       },
       user: { exists: () => withDir(io, (d) => makeUserMarkerPort(io, d, c.now).exists()) },
     },

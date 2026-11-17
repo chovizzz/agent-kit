@@ -29,7 +29,7 @@ import type {
   PersonalStage,
 } from '../../../src/rsi/personal/stage/types.js';
 import { runWorker, type RsiWorkerRunDeps } from '../../../src/rsi/worker.js';
-import { type TickFx, makeTickFx } from '../b5a-fixture.js';
+import { type TickFx, loseLockOf, makeTickFx } from '../b5a-fixture.js';
 import { treeOf } from '../rsi-fixture.js';
 import { canaryDoc } from '../canary/w5-fixture.js';
 import { NOW } from '../ro-fixture.js';
@@ -229,6 +229,77 @@ describe('S0 真适配器(经真 runWorker)', () => {
     const log = (await readText(path.join(f.rsiDir, 'log.jsonl'))).split('\n');
     expect(log.filter((l) => l.includes('"personal_locked"'))).toHaveLength(1);
     expect(await readText(lockFile)).toBe(doc);
+  });
+});
+
+describe('S0 的 B 写点前复核 rsi 锁(失锁 = 零写入)', () => {
+  const B_ID = '0123456789abcdef';
+  const losing = (f: TickFx, real: PersonalStage): PersonalStage => ({
+    ...real,
+    run: async (ctx) => {
+      await loseLockOf(f); // S0 开始之前锁就没了
+      return real.run(ctx);
+    },
+  });
+
+  it('状态有暂停码、B 缺失:失锁后 S0 不创建 B、canary 不动;outcome lock_lost,零记账', async () => {
+    const f = await makeTickFx('c1b-asm-bloss-create-', {
+      confirmed: true,
+      state: { auto_pause: { reasons: ['gate_internal'], diverged: false, owner_changed: false } },
+    });
+    await seedCanary(f);
+    const stage = losing(f, assembleWorkerStage({ phase: 1, wired: ALL_CAPS }));
+    const r = await runWorker(wd(f, [], { personal: stage }));
+    expect(r).toEqual({ kind: 'ran', outcome: 'lock_lost', recorded: false });
+    expect(await exists(path.join(f.rsiDir, 'AUTO_PAUSE_BREAKER'))).toBe(false);
+    expect((await canaryOf(f)).agents_inject).toEqual(['claude']);
+  });
+
+  it('B 是解除残留(状态已清码且证据与 B 的 id 相等):失锁后 S0 不删 B(删 B 是放松保护,同样先复核)', async () => {
+    const f = await makeTickFx('c1b-asm-bloss-remove-', {
+      confirmed: true,
+      state: {
+        auto_pause: {
+          reasons: [],
+          diverged: false,
+          owner_changed: false,
+          released_marker_id: B_ID,
+        },
+      },
+    });
+    await makeBreakerMarkerPort(
+      f.io,
+      f.rsiDir,
+      () => new Date(T),
+      () => B_ID,
+    ).ensure('gate_internal');
+    const stage = losing(f, assembleWorkerStage({ phase: 1, wired: ALL_CAPS }));
+    const r = await runWorker(wd(f, [], { personal: stage }));
+    expect(r).toEqual({ kind: 'ran', outcome: 'lock_lost', recorded: false });
+    expect(await exists(path.join(f.rsiDir, 'AUTO_PAUSE_BREAKER'))).toBe(true);
+  });
+
+  it('正向对照:锁在手时同一残留 B 被删除(证明上一条的「没删」来自失锁而非夹具)', async () => {
+    const f = await makeTickFx('c1b-asm-bloss-control-', {
+      confirmed: true,
+      state: {
+        auto_pause: {
+          reasons: [],
+          diverged: false,
+          owner_changed: false,
+          released_marker_id: B_ID,
+        },
+      },
+    });
+    await makeBreakerMarkerPort(
+      f.io,
+      f.rsiDir,
+      () => new Date(T),
+      () => B_ID,
+    ).ensure('gate_internal');
+    const s = spy(assembleWorkerStage({ phase: 1, wired: ALL_CAPS }));
+    await runWorker(wd(f, [], { personal: s.stage }));
+    expect(await exists(path.join(f.rsiDir, 'AUTO_PAUSE_BREAKER'))).toBe(false);
   });
 });
 

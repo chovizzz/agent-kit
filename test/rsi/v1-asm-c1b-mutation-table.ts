@@ -401,6 +401,34 @@ export const V1_ASM_C1B_MUTATIONS: readonly V1AsmC1bMutation[] = [
     expectRed: ['补码(state 经清单提交)+ 静音', ...D_ASM],
     mustKill: ['补码(state 经清单提交)+ 静音'],
   },
+  {
+    id: 'marker_create_without_lock_check',
+    clause: 'S0 完整路径:B 的创建写点前复核 rsi 锁',
+    edits: [
+      swap(
+        ASSEMBLE,
+        '          await c.lock.assertHeld();\n          return withDir(io, (d) => makeBreakerMarkerPort(io, d, c.now).ensure(reason));',
+        '          return withDir(io, (d) => makeBreakerMarkerPort(io, d, c.now).ensure(reason));',
+      ),
+    ],
+    tests: [T_ASM],
+    expectRed: ['状态有暂停码、B 缺失:失锁后 S0 不创建 B', ...D_ASM, 'S0 的 B 写点前复核 rsi 锁'],
+    mustKill: ['状态有暂停码、B 缺失:失锁后 S0 不创建 B'],
+  },
+  {
+    id: 'marker_remove_without_lock_check',
+    clause: 'S0 完整路径:B 的删除写点前复核 rsi 锁(删 B 是放松保护)',
+    edits: [
+      swap(
+        ASSEMBLE,
+        '          await c.lock.assertHeld();\n          return withDir(io, (d) => makeBreakerMarkerPort(io, d, c.now).remove());',
+        '          return withDir(io, (d) => makeBreakerMarkerPort(io, d, c.now).remove());',
+      ),
+    ],
+    tests: [T_ASM],
+    expectRed: ['B 是解除残留(状态已清码', ...D_ASM, 'S0 的 B 写点前复核 rsi 锁'],
+    mustKill: ['B 是解除残留(状态已清码'],
+  },
   // ---------- 监测判定内核 ----------
   {
     id: 'residual_span_off_by_one',
