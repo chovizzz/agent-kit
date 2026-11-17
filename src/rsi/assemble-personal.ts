@@ -90,12 +90,7 @@ import type { BothRound, RsiOnlyRound } from './personal/stage/round.js';
 import type { RoundBudget } from './personal/stage/settle.js';
 import type { TaintCandidate } from './personal/stage/taint-types.js';
 import type { PersonalCtx, RsiOnlyTripReason, TripReason } from './personal/stage/types.js';
-import {
-  terminationReason,
-  terminationTarget,
-  utcDay,
-  canaryDays,
-} from './personal/transition-table.js';
+import { utcDay, canaryDays } from './personal/transition-table.js';
 import {
   createRepoRecovery,
   type JournalKind,
@@ -187,7 +182,6 @@ const isoZ = (d: Date): string => `${d.toISOString().slice(0, 19)}Z`;
 function outcomeOfRollback(o: RollbackOutcome): StepOutcome {
   if (o.status === 'complete' || o.status === 'revocation_complete') return { kind: 'done' };
   const cause = 'cause' in o ? o.cause : 'unknown';
-  if (cause === 'lock_lost') return haltOutcome('lock_lost');
   return { kind: 'incomplete', why: `rollback_${o.status}:${cause}` };
 }
 
