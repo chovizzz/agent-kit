@@ -538,13 +538,12 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
   {
     id: 'growth_denied_halt_class_unsettled',
     clause:
-      'I9:growth_denied 的 halt 分类 = 只停本步(不使本轮 unsettled;被拒的增影响动作没有写任何东西)',
+      'I9:growth_denied 作为 halted(= 运行器没降级:底座违约)的分类 = 停本步并使本轮 unsettled(fail-closed)',
     edits: [
       {
         file: ERRORS,
-        anchor: "  growth_denied: { kind: 'stop_step' },",
-        replacement:
-          "  growth_denied: { kind: 'stop_step_unsettled', cause: 'candidate_invalid' },",
+        anchor: "  growth_denied: { kind: 'stop_step_unsettled', cause: 'commit_failed' },",
+        replacement: "  growth_denied: { kind: 'stop_step' },",
       },
     ],
     tests: [FB_T],

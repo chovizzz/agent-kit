@@ -139,8 +139,9 @@ const HALT_CLASS: Readonly<Record<StepHalt, HaltClass>> = Object.freeze({
   commit_failed: { kind: 'stop_step_unsettled', cause: 'commit_failed' },
   candidate_invalid: { kind: 'stop_step_unsettled', cause: 'candidate_invalid' },
   lock_lost: { kind: 'lock_lost_unresolved' },
-  // D1b-2:增影响被拒(缺端口 / claim 拒 / 提交前复核拒)= 只停本步,不使本轮 unsettled:增影响本就由 G3 / G4 另行拒绝,被拒的动作没有写任何东西
-  growth_denied: { kind: 'stop_step' },
+  // D1b-2:`halted = growth_denied` 只会出现在**运行器没有降级**的场合(减影响事件出现 growth_denied、或没有 `growthDenied` 记录端的运行器 = 底座违约);
+  // 正常的增影响被拒(缺端口 / claim 拒 / 提交前复核拒)由 `runPersonalStep` 记为 `growthDenied`,不经 halted。违约 = 完整性不明:停本步并使本轮 unsettled(fail-closed),cause 取既有的 `commit_failed`
+  growth_denied: { kind: 'stop_step_unsettled', cause: 'commit_failed' },
 });
 
 export function classifyHalt(h: StepHalt): HaltClass {
