@@ -15,6 +15,8 @@ import type { Signal } from '../../../src/contracts/signal.js';
 import type {
   AuthoritativeStore,
   FactsProvider,
+  GrowthClaimOp,
+  GrowthClaimPort,
   MarksStore,
   RecordRead,
   RepoRead,
@@ -24,7 +26,11 @@ import type {
 } from '../../../src/rsi/personal/candidate-ports.js';
 import { buildDraft, type StagedProposal } from '../../../src/rsi/personal/candidate-source.js';
 import type { StepDeps } from '../../../src/rsi/personal/candidate-step.js';
-import type { CommitResult, TreeSpec } from '../../../src/rsi/personal/commit.js';
+import {
+  BeforeRefUpdateDenied,
+  type CommitResult,
+  type TreeSpec,
+} from '../../../src/rsi/personal/commit.js';
 import type { CandidateDraft, GateFacts } from '../../../src/rsi/personal/gate-types.js';
 import type { TransitionEffect } from '../../../src/rsi/personal/transition.js';
 import type { PromoteBase } from '../../../src/rsi/personal/transition-table.js';
@@ -258,6 +264,15 @@ export class MemStore implements AuthoritativeStore {
   async commit(spec: TreeSpec): Promise<CommitResult> {
     if (this.throwOnCommit !== null) throw this.throwOnCommit;
     if (this.failCommit !== null) return this.failCommit;
+    // 与真提交底座同一契约(里氏替换):`beforeRefUpdate` 在「引用更新」之前调用;抛 `BeforeRefUpdateDenied` → `denied`(什么都不落),其它错误原样传播
+    if (spec.beforeRefUpdate !== undefined) {
+      try {
+        await spec.beforeRefUpdate();
+      } catch (e) {
+        if (e instanceof BeforeRefUpdateDenied) return { status: 'denied', code: e.code };
+        throw e;
+      }
+    }
     this.commits.push(spec);
     for (const f of spec.upserts) {
       this.files.set(f.path, f.content);
@@ -280,8 +295,44 @@ export const REV = (id: string, reason = 'cleared', sha = SHA): RsiRevocationLin
   by: reason === 'cleared' ? 'clear' : reason === 'vetoed' ? 'veto' : 'worker',
 });
 
+/**
+ * 增影响端口假件(D1b-2):缺省放行(`claim` 记录 `(op, cand)` 并返回一个计数钩子)。`denyClaim` = `claim` 拒;`hookDeny` = 钩子在提交前抛 `BeforeRefUpdateDenied`。
+ * 测试要「缺端口」就 `delete w.d.growth`(不是把本假件改成拒绝:两者是不同的拒绝路径)。
+ */
+export interface GrowthFake {
+  claims: { op: GrowthClaimOp; cand: { id: string; content_sha256: string } | null }[];
+  hookCalls: number;
+  denyClaim: string | null;
+  hookDeny: string | null;
+  port: GrowthClaimPort;
+}
+
+export function growthFake(): GrowthFake {
+  const g: GrowthFake = {
+    claims: [],
+    hookCalls: 0,
+    denyClaim: null,
+    hookDeny: null,
+    port: {
+      claim: async (op, cand) => {
+        g.claims.push({ op, cand });
+        if (g.denyClaim !== null) return { ok: false, code: g.denyClaim };
+        return {
+          ok: true,
+          hook: async () => {
+            g.hookCalls++;
+            if (g.hookDeny !== null) throw new BeforeRefUpdateDenied(g.hookDeny);
+          },
+        };
+      },
+    },
+  };
+  return g;
+}
+
 export interface World3 {
   d: StepDeps;
+  growth: GrowthFake;
   store: MemStore;
   working: Map<string, CandidateWorkingCopy>;
   audits: RsiAuditLine[];
@@ -367,6 +418,7 @@ export function world3(over: { phase?: number } = {}): World3 {
     now,
     effectsFail,
     putFail,
+    growth: growthFake(),
     d: undefined as unknown as StepDeps,
   };
   const facts: FactsProvider = {
@@ -387,7 +439,10 @@ export function world3(over: { phase?: number } = {}): World3 {
       },
     },
     revocations: { read: async () => revs.value },
-    audit: { append: async (l) => void audits.push(...l) },
+    audit: {
+      append: async (l) => void audits.push(...l),
+      appendObservation: async (row) => void audits.push(row),
+    },
     effects: {
       apply: async (e) => {
         if (effectsFail.value) throw new Error('effects down');
@@ -402,7 +457,11 @@ export function world3(over: { phase?: number } = {}): World3 {
     facts,
     marks: markStore,
     fingerprint,
-    locks: { personal: { assertHeld: async () => undefined } },
+    locks: {
+      rsi: { assertHeld: async () => undefined },
+      personal: { assertHeld: async () => undefined },
+    },
+    growth: w.growth.port,
   };
   return w;
 }

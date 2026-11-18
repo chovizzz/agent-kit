@@ -16,7 +16,8 @@ import type {
 import { canonicalJson } from '../../io/canonical-json.js';
 import { RsiLockError } from '../lock-error.js';
 import { applyEvent, type ApplyDeps } from './candidate-apply.js';
-import type { StepHalt } from './candidate-ports.js';
+import type { GrowthClaimOp, StepHalt } from './candidate-ports.js';
+import { growthOpOfEvent } from './growth-events.js';
 import {
   isTerminalLifecycle,
   queueExpired,
@@ -46,6 +47,11 @@ export interface RunnerOut {
   breaker: 'gate_internal' | 'personal_repo_invalid' | null;
   effectsFailed: string[];
   transitions: string[];
+  /**
+   * 增影响事件被拒的记录(D1b-2;可选):**给了它的运行器**(`runPersonalStep`)把 `growth_denied` 记在这里并返回 `other`——被拒的增影响动作不得中止减影响子步骤
+   * (到期 / no_hit / 对账 / 收紧类转移照常);**没给的运行器**(S2 只减影响,不会遇到)把它当 halt(fail-closed,不吞)。
+   */
+  growthDenied?: { op: GrowthClaimOp | 'unmappable'; code: string }[];
 }
 
 export type RunOutcome = 'transitioned' | 'other' | 'halt';
@@ -75,6 +81,11 @@ export function makeStepRunner(
         return 'halt';
       }
       throw e;
+    }
+    if (r.kind === 'halt' && r.halt === 'growth_denied' && out.growthDenied !== undefined) {
+      const op = growthOpOfEvent(event.kind);
+      out.growthDenied.push({ op: op === null ? 'unmappable' : op, code: r.why ?? 'unknown' });
+      return 'other';
     }
     if (r.kind === 'halt') {
       out.halted = r.halt;

@@ -117,7 +117,10 @@ export type HaltClass =
   | {
       readonly kind: 'stop_step_unsettled';
       /** 不含 `repo_absent` / `repo_deferred`(它们是 `stop_step`);与 `UnsettledReason` 的 `step_integrity:*` 同集 */
-      readonly cause: Exclude<StepHalt, 'lock_lost' | 'repo_absent' | 'repo_deferred'>;
+      readonly cause: Exclude<
+        StepHalt,
+        'lock_lost' | 'repo_absent' | 'repo_deferred' | 'growth_denied'
+      >;
     }
   /**
    * `StepHalt` 里只有一个 `lock_lost`,**区分不出是 rsi 锁还是个人锁**。不得默认当个人锁处理(那等于 rsi 失锁时继续写):
@@ -136,6 +139,8 @@ const HALT_CLASS: Readonly<Record<StepHalt, HaltClass>> = Object.freeze({
   commit_failed: { kind: 'stop_step_unsettled', cause: 'commit_failed' },
   candidate_invalid: { kind: 'stop_step_unsettled', cause: 'candidate_invalid' },
   lock_lost: { kind: 'lock_lost_unresolved' },
+  // D1b-2:增影响被拒(缺端口 / claim 拒 / 提交前复核拒)= 只停本步,不使本轮 unsettled:增影响本就由 G3 / G4 另行拒绝,被拒的动作没有写任何东西
+  growth_denied: { kind: 'stop_step' },
 });
 
 export function classifyHalt(h: StepHalt): HaltClass {

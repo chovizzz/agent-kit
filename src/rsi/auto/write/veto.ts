@@ -106,6 +106,7 @@ const haltExit = (ctx: RsiEarlyContext, r: Extract<ApplyResult, { kind: 'halt' }
       return failClosed(ctx, 'candidate_invalid');
     case 'commit_failed':
     case 'lock_lost':
+    case 'growth_denied': // veto 是减影响事件,不经增影响端口;出现 = 内部错误(fail-closed)
       return failClosed(ctx, 'internal');
     case 'sealed_interval':
       return failClosed(ctx, 'audit_invalid');

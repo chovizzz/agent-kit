@@ -11,12 +11,16 @@ import { RsiLockError } from '../lock-error.js';
 import type {
   AuditSink,
   AuthoritativeStore,
+  BeforeRefUpdate,
   EffectSink,
   EnvReader,
+  GrowthClaimOp,
+  GrowthClaimPort,
   RevocationReader,
   StepHalt,
   WorkingStore,
 } from './candidate-ports.js';
+import { growthOpOfEvent } from './growth-events.js';
 import { txnId } from './ids.js';
 import { createHash } from 'node:crypto';
 import {
@@ -41,6 +45,11 @@ export interface ApplyDeps {
    * 落地结束后(任何分支)关闭区域。缺省 = 无封存(只有缩减入口 `rsi auto clear` 与既有单测;生产命令装配必给)。
    */
   seal?: EntrySeal;
+  /**
+   * 增影响汇点端口(D1b-2;W0-30):**增影响事件**(`gates_passed` / `shadow_promote` / `deploy_inject`,见 `growth-events.ts`)必须先经它;缺省 = 拒绝(`growth_denied` / `unwired`,零写入)。
+   * 减影响事件不看它。生产装配由 D2 / D3 给真实现(`claim` 内 evaluate → veto 现读,钩子内 `requireGrowth`);本块只交端口与缺则拒。
+   */
+  growth?: GrowthClaimPort;
 }
 
 export type ApplyResult =
@@ -69,6 +78,9 @@ export async function applyEvent(
   wcAfter?: (wc: CandidateWorkingCopy | undefined) => CandidateWorkingCopy | undefined,
   wc?: CandidateWorkingCopy,
 ): Promise<ApplyResult> {
+  // 增影响事件先过注入端口:分类与端口存在性是零 IO 判定,`claim` 只读;全部先于 `seal.open` / `store.read` / `store.commit`(缺 / 拒 = 零写入)
+  const claimed = await claimGrowth(d, rec, event);
+  if (claimed.kind === 'halt') return claimed;
   // 锁内重读权威记录(M13-2)与撤销凭据(R21-9.5 对账先于授予)
   const fresh = await d.store.read(rec.id);
   if (fresh.kind === 'absent') return { kind: 'halt', halt: 'repo_absent' };
@@ -88,10 +100,53 @@ export async function applyEvent(
   // 封存区域:取时**之前**开(读水位线一次),落地结束后一定关闭(任何分支,含抛错);注意区域内不得再次打开
   const region = d.seal === undefined ? null : await d.seal.open();
   try {
-    return await applyIn(d, rec, event, fresh, rv, env, region, wcAfter, wc);
+    return await applyIn(d, rec, event, fresh, rv, env, region, wcAfter, wc, claimed.hook);
   } finally {
     region?.close();
   }
+}
+
+/** 增影响分类 → 端口:减影响 = 无钩子;增影响 = 取钩子;`unmappable` / 缺端口 / `claim` 拒或返回畸形 = `halt{growth_denied}` */
+async function claimGrowth(
+  d: ApplyDeps,
+  rec: PersonalLifecycleRecord,
+  event: TransitionEvent,
+): Promise<
+  | { kind: 'none'; hook?: undefined }
+  | { kind: 'claimed'; hook: BeforeRefUpdate }
+  | Extract<ApplyResult, { kind: 'halt' }>
+> {
+  const op = growthOpOfEvent(event.kind);
+  if (op === null) return { kind: 'none' };
+  if (op === 'unmappable') return { kind: 'halt', halt: 'growth_denied', why: 'unmappable' };
+  const cand =
+    op === 'candidate_create' ? null : { id: rec.id, content_sha256: rec.content_sha256 };
+  const r = await claimGrowthPort(d.growth, op, cand);
+  return r.ok
+    ? { kind: 'claimed', hook: r.hook }
+    : { kind: 'halt', halt: 'growth_denied', why: r.code };
+}
+
+/**
+ * 取增影响钩子(`applyEvent` 与 `runPersonalStep` 的创建提交共用):端口缺 → `unwired`;跨端口边界只认 `{ok:true, hook:function}` / `{ok:false, code:string}`,
+ * 其余畸形一律拒绝(`claim_malformed`)。端口自己抛出的错误(含丢锁)原样传播,不吞。
+ */
+export async function claimGrowthPort(
+  port: GrowthClaimPort | undefined,
+  op: GrowthClaimOp,
+  cand: { id: string; content_sha256: string } | null,
+): Promise<{ ok: true; hook: BeforeRefUpdate } | { ok: false; code: string }> {
+  if (port === undefined) return { ok: false, code: 'unwired' };
+  const r: unknown = await port.claim(op, cand);
+  const o =
+    typeof r === 'object' && r !== null
+      ? (r as { ok?: unknown; hook?: unknown; code?: unknown })
+      : {};
+  if (o.ok === true && typeof o.hook === 'function') {
+    return { ok: true, hook: o.hook as BeforeRefUpdate };
+  }
+  const code = o.ok === false && typeof o.code === 'string' ? o.code : 'claim_malformed';
+  return { ok: false, code };
 }
 
 type Fresh = Extract<Awaited<ReturnType<AuthoritativeStore['read']>>, { kind: 'ok' }>;
@@ -107,6 +162,7 @@ async function applyIn(
   region: StampRegion | null,
   wcAfter?: (wc: CandidateWorkingCopy | undefined) => CandidateWorkingCopy | undefined,
   wc?: CandidateWorkingCopy,
+  hook?: BeforeRefUpdate,
 ): Promise<ApplyResult> {
   // 事件时刻只在这里取一次(条目与同批无键审计行共用);取点见 `entry-stamp.ts`
   let now: string;
@@ -154,7 +210,10 @@ async function applyIn(
     txnId: txnId('transition', [rec.id], fresh.head, digest(json)),
     candidateIds: [rec.id],
     upserts: [{ path: `lifecycle/${rec.id}.json`, content: json }],
+    // 增影响事件:最终复核钩子在 `update-ref` 之前由提交底座调用(拒 → `denied`)
+    ...(hook !== undefined ? { beforeRefUpdate: hook } : {}),
   });
+  if (c.status === 'denied') return { kind: 'halt', halt: 'growth_denied', why: c.code };
   if (c.status === 'absent') return { kind: 'halt', halt: 'repo_absent' };
   if (c.status === 'deferred') return { kind: 'halt', halt: 'repo_deferred', why: c.why };
   if (c.status === 'invalid') return { kind: 'halt', halt: 'repo_invalid', why: c.why };

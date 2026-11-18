@@ -100,6 +100,7 @@ describe('classifyHalt(StepHalt 的处置;lock_lost 不能默认当个人锁)', 
       commit_failed: { kind: 'stop_step_unsettled', cause: 'commit_failed' },
       candidate_invalid: { kind: 'stop_step_unsettled', cause: 'candidate_invalid' },
       lock_lost: { kind: 'lock_lost_unresolved' },
+      growth_denied: { kind: 'stop_step' },
     };
     for (const [h, want] of Object.entries(table))
       expect(classifyHalt(h as StepHalt), h).toEqual(want);

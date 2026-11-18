@@ -60,6 +60,7 @@ import {
   type World,
 } from '../personal/repo-helpers.js';
 import { BODY, POLICY, T0, adm, admitted, canaryDoc } from '../canary/w5-fixture.js';
+import { mintTestPass } from '../stage/growth-fixture.js';
 import { V1A, V1B } from './w7-fixture.js';
 
 slowTests();
@@ -302,6 +303,7 @@ describe('R21-9.5 验收③:并发 clear 与旧 worker 经 personal/lock 串行,
         background_fp_ex: '2'.repeat(16),
         policy_fp: POLICY,
       },
+      await mintTestPass('grant'), // D1b-2:真 pass(真 evaluateGrowth),使本用例仍走到「凭据 revoked」这一层
     );
     expect(grant).toEqual({ kind: 'refused', reason: 'revoked' });
     expect(await exists(path.join(cw, CANARY_FILES.canary))).toBe(false);

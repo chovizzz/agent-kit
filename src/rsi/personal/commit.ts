@@ -11,7 +11,7 @@
  * 不依赖 `git revert`,不用 `add` / `commit` 的高层路径;作者与提交者固定为 `RSI_PERSONAL_AUTHOR`。
  * 树约束(R21-3.1):upsert / delete 的顶层只许布局目录(= kit 管理路径,见 {@link KIT_MANAGED_TOP_DIRS});路径段不得以 `.` 开头(含 `.gitattributes` / `.gitmodules` / `.git`),文件一律 `100644`。
  */
-import { PersonalHeadSchema } from '../../contracts/rsi-personal.js';
+import { PersonalHeadSchema, type PersonalCommitJournal } from '../../contracts/rsi-personal.js';
 import type { RsiAutoPauseReason } from '../../contracts/rsi.js';
 import {
   PERSONAL_STATE_FILES,
@@ -19,6 +19,7 @@ import {
   probeFirstTime,
   readHead,
   readJournal,
+  removeJournal,
   statePath,
   writeHead,
   type PersonalHome,
@@ -85,6 +86,20 @@ export interface TreeSpec {
   /** 显式 delete:只许落在 kit 管理的命名空间内;不存在的路径视为已删(崩溃重做幂等) */
   deletes?: readonly string[];
   message?: string;
+  /**
+   * 增影响提交的最终复核钩子(D1b-2):在**最后一次 `assertLocks` 之后、`update-ref` 之前**调用,钩子返回后再复核一次锁。
+   * 只认一种拒绝:抛 {@link BeforeRefUpdateDenied} → 本次提交返回 `denied`(引用不动、自己写下的 journal 在所有权核对后删除);
+   * 任何其它错误(含 `RsiLockError` / `PersonalLockLost` / 未知错误)原样传播,**不删 journal、不改引用**(留给下次恢复:`ref = old_head` → `discard`)。
+   */
+  beforeRefUpdate?: () => Promise<void>;
+}
+
+/** 钩子的唯一拒绝信号(定义在本文件,不依赖 stage;`code` 是调用方给的原因码,本文件不解释) */
+export class BeforeRefUpdateDenied extends Error {
+  constructor(readonly code: string) {
+    super(`before_ref_update_denied:${code}`);
+    this.name = 'BeforeRefUpdateDenied';
+  }
 }
 
 export class TreeSpecError extends Error {
@@ -386,7 +401,40 @@ export type CommitResult =
    * **注意**:本提交的在途 journal 可能仍留在盘上(`objects_written`),下一次恢复按 R21-3.6a 观测到「ref 是第三个值」→ `personal_repo_diverged`;
    * 它不是可以直接重试的干净失败(若并发者是持锁的 kit 提交者,它会先丢弃该 journal 而不留下)。
    */
-  | { status: 'cas_failed'; expected: string; actual: string | null };
+  | { status: 'cas_failed'; expected: string; actual: string | null }
+  /** `beforeRefUpdate` 钩子拒绝(增影响提交的最终复核没过):引用、索引、工作树都没动;`code` 是钩子给的原因码 */
+  | { status: 'denied'; code: string };
+
+/**
+ * 钩子拒绝后删自己刚写的 journal(尽力):先复核锁(抛 → 传播,不动);盘上 journal 与本次写下的**逐字段全等**、phase 仍是本次提交的 `objects_written`、
+ * 当前 `refs/heads/rsi === old_head` 才删;其余一律保留(留给下次恢复判定)。删除的 IO 失败吞掉(`denied` 照常返回,下次恢复按 `discard` 处理)。
+ */
+async function discardOwnJournal(
+  ctx: OpCtx,
+  mine: PersonalCommitJournal,
+  oldHead: string,
+): Promise<void> {
+  await assertLocks(ctx);
+  const cur = await readJournal(ctx.h);
+  if (cur.kind !== 'ok') return;
+  const a = cur.value;
+  const same =
+    a.txn_id === mine.txn_id &&
+    a.kind === mine.kind &&
+    a.old_head === mine.old_head &&
+    a.target_tree === mine.target_tree &&
+    a.new_commit === mine.new_commit &&
+    a.phase === mine.phase &&
+    a.candidate_ids.length === mine.candidate_ids.length &&
+    a.candidate_ids.every((id, i) => id === mine.candidate_ids[i]);
+  if (!same || (a.phase !== 'planned' && a.phase !== 'objects_written')) return;
+  if (revParse(ctx.git, 'refs/heads/rsi') !== oldHead) return;
+  try {
+    await removeJournal(ctx.h);
+  } catch {
+    // 删除失败:保留 journal,下次恢复在 `ref = old_head` 时丢弃
+  }
+}
 
 export async function commitPersonal(
   deps: PersonalRepoDeps,
@@ -440,6 +488,16 @@ export async function commitPersonal(
 
   await ctx.onStep?.('before:update-ref');
   await assertLocks(ctx); // update-ref 之前复核锁(lock_lost 时立即停止)
+  if (spec.beforeRefUpdate !== undefined) {
+    try {
+      await spec.beforeRefUpdate();
+    } catch (e) {
+      if (!(e instanceof BeforeRefUpdateDenied)) throw e;
+      await discardOwnJournal(ctx, j, oldHead);
+      return { status: 'denied', code: e.code };
+    }
+    await assertLocks(ctx); // 钩子是 async 现读:它之后到 update-ref 之间不得丢锁
+  }
   const upd = git.run(['update-ref', 'refs/heads/rsi', commit, oldHead]);
   if (upd.status !== 0) {
     const actual = revParse(git, 'refs/heads/rsi');

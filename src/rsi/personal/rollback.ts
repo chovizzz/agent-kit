@@ -437,6 +437,7 @@ function haltCause(h: StepHalt): RollbackCause {
       return 'candidate_invalid';
     case 'commit_failed':
     case 'lock_lost':
+    case 'growth_denied': // 回滚路径只施加减影响事件(无增影响端口);出现 = 重试即可,不推进
     case 'sealed_interval': // 时钟恢复后重跑即可(命令层另把封存拒绝升级为退 3,见 `write/layers.ts`)
       return 'retryable';
   }

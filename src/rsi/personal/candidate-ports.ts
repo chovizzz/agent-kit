@@ -36,6 +36,24 @@ export interface AuthoritativeStore {
   commit(spec: TreeSpec): Promise<CommitResult>;
 }
 
+/**
+ * 增影响汇点的注入端口(D1b-2;W0-30 取代 D v4 b4 的「`applyEvent(..., pass?: GrowthPass)`」):**结构类型,不出现任何 stage 类型**
+ * (`candidate-apply.ts` / `candidate-step.ts` / `commit.ts` 在 worker 与严格入口的类型闭包里,`GrowthPass` / `GrowthDeny` 进不来)。
+ * 真实现(D2 / D3):`claim` 内 `evaluateGrowth` → `checkGrowthVeto`,返回的钩子在 `update-ref` 之前调 `requireGrowth` 与最终复核序列。
+ */
+export type BeforeRefUpdate = () => Promise<void>;
+export type GrowthClaimOp = 'candidate_create' | 'shadow_to_canary' | 'deploy_inject';
+export interface GrowthClaimPort {
+  /**
+   * 取得「本次增影响提交」的最终复核钩子;拒绝 → `{ok:false, code}`(只读,零写入)。钩子由 `commitPersonal` 在 `update-ref` 之前调用,
+   * 抛 `BeforeRefUpdateDenied` = 拒绝(`commitPersonal` 返回 `denied`),其它错误原样传播。`cand = null` 对应 `{cap:'candidate_create'}`。
+   */
+  claim(
+    op: GrowthClaimOp,
+    cand: { id: string; content_sha256: string } | null,
+  ): Promise<{ ok: true; hook: BeforeRefUpdate } | { ok: false; code: string }>;
+}
+
 export interface AuditSink {
   append(lines: readonly RsiAuditLine[]): Promise<void>;
   /**
@@ -43,6 +61,11 @@ export interface AuditSink {
    * (两个 evidence 不同的合法转移可以产生内容完全相同的行)。没有条目的审计(终态空操作)没有键。
    */
   appendKeyed?(items: readonly { line: RsiAuditLine; idem_key?: string }[]): Promise<void>;
+  /**
+   * 无键观察行(`evaluation` 一类,没有转移条目、没有事件身份)的落地(可选)。**缺省 = 拒绝落观察行**:调用方记 `effectsFailed`,**不回落 `append`**
+   * (生产的带键出口 `keyedAuditSink.append` 对无键行抛 `audit_key_missing`,回落只会把观察行当成无身份的转移行写进去)。
+   */
+  appendObservation?(row: RsiAuditLine): Promise<void>;
 }
 
 /**
@@ -99,4 +122,6 @@ export type StepHalt =
   | 'candidate_invalid'
   | 'lock_lost'
   /** 事件时刻落在已封存区间(W0-26 第 9 条):源提交之前拒绝,零写入;时钟恢复后重跑 */
-  | 'sealed_interval';
+  | 'sealed_interval'
+  /** 增影响事件被 {@link GrowthClaimPort} 拒绝(缺端口 / 无法映射 / claim 拒 / 提交前复核拒):零写入或提交前拒绝,`why` 带原因码;`runPersonalStep` 把它降为 `growthDenied` 记录而不中止减影响子步骤 */
+  | 'growth_denied';

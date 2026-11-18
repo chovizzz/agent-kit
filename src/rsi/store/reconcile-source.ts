@@ -18,6 +18,7 @@ import {
   type PersonalLifecycleRecord,
 } from '../../contracts/rsi-personal.js';
 import { utcDay, type UtcDay } from '../../contracts/rsi-store.js';
+import { creationAuditItems } from '../personal/creation-audit.js';
 import {
   terminalEffectKey,
   terminalEffectsOf,
@@ -65,11 +66,19 @@ const byLocator = (a: { idem_key: string }, b: { idem_key: string }): number =>
   a.idem_key < b.idem_key ? -1 : a.idem_key > b.idem_key ? 1 : 0;
 
 function derivedOf(rec: PersonalLifecycleRecord): DerivedRow[] {
-  const rows: DerivedRow[] = rec.transitions.map((e) => ({
-    idem_key: e.idem_key,
-    row: { ...auditOf(e, rec.id), idem_key: e.idem_key },
-    locator: { kind: 'entry', ref: `${rec.id}:${e.idem_key}` },
-  }));
+  // 创建行的审计行只有一个派生点(`personal/creation-audit.ts`,D1b-2):即时落地、崩溃补做与本对账源共用,`at` / 键 / 内容不会漂移
+  const creation = new Map(creationAuditItems(rec).map((i) => [i.idem_key, i]));
+  const rows: DerivedRow[] = rec.transitions.map((e) => {
+    const c = creation.get(e.idem_key);
+    return {
+      idem_key: e.idem_key,
+      row:
+        c !== undefined
+          ? { ...c.line, idem_key: c.idem_key }
+          : { ...auditOf(e, rec.id), idem_key: e.idem_key },
+      locator: { kind: 'entry', ref: `${rec.id}:${e.idem_key}` },
+    };
+  });
   for (const e of terminalEffectsOf(rec)) {
     if (e.type !== 'protection_mark') continue;
     rows.push({
