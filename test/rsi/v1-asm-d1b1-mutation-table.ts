@@ -519,7 +519,7 @@ export const V1_ASM_D1B1_MUTATIONS: readonly V1AsmD1b1Mutation[] = [
       {
         file: JOURNAL,
         anchor:
-          "  if (revParse(c.git, `${done}^{tree}`) !== EMPTY_TREE || revParse(c.git, `${done}^`) !== null) {",
+          '  if (revParse(c.git, `${done}^{tree}`) !== EMPTY_TREE || revParse(c.git, `${done}^`) !== null) {',
         replacement: '  if (false) {',
       },
     ],
