@@ -13,6 +13,7 @@ import {
   ID1,
   makeWorld,
   NEXT_FILES,
+  READ_OPTS,
   repoDeps,
   setupRepo,
   snapshot,
@@ -26,7 +27,7 @@ import {
 slowTests();
 
 const open = (w: World, over: Parameters<typeof repoDeps>[1] = {}) =>
-  withLock(w, (locks) => openPersonalRepo(repoDeps(w, over), locks));
+  withLock(w, (locks) => openPersonalRepo(repoDeps(w, over), locks, READ_OPTS));
 
 async function userCommit(w: World, msg: string): Promise<string> {
   git(w, ['add', '-A']);

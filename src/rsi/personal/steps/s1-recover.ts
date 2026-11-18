@@ -2,7 +2,7 @@
  * S1 恢复步(C v1 §5 / v2 §8.4;持两把锁)。五项各自独立 try,任一失败不挡下一项;`classify`:rsi 失锁原样上抛,个人失锁结束个人轮(`ended`)。
  * 只编排,不含 I/O:全部副作用在 `RecoveryPort`(装配处实现并经 `round.writeAdapter` 包装)。
  *
- *  1. 仓库 + journal 续做(`recoverRepo`;bootstrap 守卫在端口内,见 `repo-recover.ts`);
+ *  1. 仓库 + journal 续做(`recoverRepo`;bootstrap 类 journal 由端口 `openPersonalRepo({mode:'complete_only'})` 处置,见 `repo-recover.ts`);
  *  2. 标志重算(W0-25):judged ① → 清 `diverged` / `owner_changed`;② → `diverged`;④ → `owner_changed`;③ / absent / incomplete / 抛错 → **不动**。有更新才调 `setFlagAndMute`(一次 state 写 + 紧随静音,预算 ≤1);写失败 → 故障,**不清标志**(宁可多停);
  *  3. `resumeRollbacks`;4. `recoverTerminalEffects`;5. `reconcileRevocations`(含 canary 级:凭据命中 canary 且无 journal → 启动 reconcile 回滚)。
  * 仓库不可用(invalid)**不在 S1 里 trip**:熔断预算每轮 ≤1,由 S2P 第 5 步把 `personal_repo_invalid` 与其它触发码**合并成一次** `tripAndMute`(返回 `tripReasons`)。

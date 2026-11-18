@@ -7,7 +7,7 @@ import { personalRepoStore } from '../../../src/rsi/personal/candidate-repo.js';
 import { creationFiles, newRecord } from '../../../src/rsi/personal/candidate-record.js';
 import { openPersonalRepo, readPersonalFiles } from '../../../src/rsi/personal/commit.js';
 import { draftOf } from './w3-fixture.js';
-import { makeWorld, repoDeps, slowTests, spec, withLock } from './repo-helpers.js';
+import { BOOT_OPTS, makeWorld, repoDeps, slowTests, spec, withLock } from './repo-helpers.js';
 
 slowTests();
 
@@ -19,7 +19,7 @@ describe('personalRepoStore', () => {
     await withLock(w, async (locks) => {
       const store = personalRepoStore(repoDeps(w), locks);
       expect(await store.readAll()).toEqual({ kind: 'absent' });
-      const open = await openPersonalRepo(repoDeps(w), locks, { bootstrap: true });
+      const open = await openPersonalRepo(repoDeps(w), locks, BOOT_OPTS);
       expect(open.kind).toBe('ready');
       const c = await store.commit(spec('3', creationFiles(d, rec), 'transition', [d.id]));
       expect(c.status).toBe('committed');
@@ -39,7 +39,7 @@ describe('personalRepoStore', () => {
     const rec = newRecord(d, '2026-11-10T12:00:00.000Z', false);
     await withLock(w, async (locks) => {
       const store = personalRepoStore(repoDeps(w), locks);
-      await openPersonalRepo(repoDeps(w), locks, { bootstrap: true });
+      await openPersonalRepo(repoDeps(w), locks, BOOT_OPTS);
       await store.commit(
         spec('4', [{ path: `lifecycle/ra_bbbbbbbbbbbb.json`, content: canonicalJson(rec) }]),
       );

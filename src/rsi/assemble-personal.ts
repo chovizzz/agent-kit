@@ -6,7 +6,7 @@
  *  - 工厂求值零 IO;端口方法被调用时才有 I/O(`kit` 惰性构造:存储核、仓库依赖、回滚依赖);
  *  - **写端口只在最外层包装**(`round.writeAdapter`):每个对外端口方法各一个包装;包装内部调用的叶子端口(工作副本、审计、凭据写、journal)**不再包装**(写适配器单飞:嵌套 = `internal`);
  *  - 个人锁:端口收**被包装的句柄**(`wrapPersonalLock`:丢失转型为 `PersonalLockLost`,不会被 worker 映射成 UNRECORDABLE);存储核要的 `LockCap` 是对原始句柄的委托壳(`assertHeld` 同样转型);
- *  - 不装配任何增影响能力(没有 `grantCanary`、`runPersonalStep`、建仓、创建提交):`openPersonalRepo` **只**经 `steps/repo-recover.ts` 的 bootstrap 守卫调用,`bootstrap` 选项恒不传;
+ *  - 不装配任何增影响能力(没有 `grantCanary`、`runPersonalStep`、建仓、创建提交):S1 的 `openPersonalRepo` 只用 `{mode:'complete_only'}`;`mode:'bootstrap'` 在本文件里没有调用方;
  *  - 不装配的事实源(不臆测,只少一道熔断 / 只少一项展示):`budget_high_legacy` / `cost_high_legacy` / `redaction_changed` / 上线代理事件日;`rollback_stalled` / `protection_marks`(D 的 auto-view 写者消费)。
  */
 import * as path from 'node:path';
@@ -48,7 +48,7 @@ import { legacyKeyedEffects } from './personal/effects-adapter.js';
 import { keyedAuditSink, recoverTerminalEffects } from './personal/effects-recover.js';
 import { isSealedInterval, type EntrySeal } from './personal/entry-stamp.js';
 import { onAnalysisOutcome } from './personal/harm-chain.js';
-import { ownerRepoFingerprint, personalHome, readJournal } from './personal/home-state.js';
+import { ownerRepoFingerprint, personalHome } from './personal/home-state.js';
 import type { JudgeReduceSlot } from './personal/judge-slot.js';
 import type { PersonalLockHandle } from './personal/personal-lock.js';
 import {
@@ -93,7 +93,7 @@ import type { PersonalCtx, RsiOnlyTripReason, TripReason } from './personal/stag
 import { utcDay, canaryDays } from './personal/transition-table.js';
 import {
   createRepoRecovery,
-  type JournalKind,
+  outcomeOfOpen,
   type OpenOutcome,
 } from './personal/steps/repo-recover.js';
 import type { BothPorts } from './personal/steps/run-steps.js';
@@ -455,8 +455,6 @@ export function makeBothPorts(
       h,
       ownerRepoFp: await ownerRepoFingerprint(ctx.sctx.config.repo),
       now: ctx.now,
-      // bootstrap 类 journal 在场:任何经 openPersonalRepo 的读写(权威副本 / 回滚移除 / 记录 sha)都不恢复它(见 commit.ts)
-      refuseBootstrapRecovery: true,
     };
     const locks: PersonalLocks = { personal: held, rsi: ctx.lock };
     // 存储核要真实 LockCap:个人锁用委托壳(assertHeld 转型成 PersonalLockLost;其余成员委托原始句柄)
@@ -558,27 +556,10 @@ export function makeBothPorts(
   const recoverRepo = round.writeAdapter(
     'candidate_record',
     createRepoRecovery({
-      async journalKind(): Promise<JournalKind> {
-        const k = await kit();
-        const j = await readJournal(k.h);
-        if (j.kind === 'invalid') return 'invalid';
-        if (j.kind === 'absent') return 'none';
-        return j.value.kind === 'bootstrap' ? 'bootstrap' : 'other';
-      },
       async open(): Promise<OpenOutcome> {
         const k = await kit();
-        // 只在 bootstrap 守卫放行后才会走到这里;`bootstrap` 选项恒不传(私有仓库一律 absent)
-        const r = await openPersonalRepo(k.repoDeps, k.locks, {});
-        switch (r.kind) {
-          case 'ready':
-            return { kind: 'ready' };
-          case 'absent':
-            return { kind: 'absent' };
-          case 'deferred':
-            return { kind: 'deferred', reason: r.reason };
-          case 'invalid':
-            return { kind: 'invalid', why: r.why };
-        }
+        // S1 只用 `complete_only`:不建仓、不续 planned / initialized;committed / recorded 先读真实 ref 与树再收尾(见 commit.ts `OpenOpts`)
+        return outcomeOfOpen(await openPersonalRepo(k.repoDeps, k.locks, { mode: 'complete_only' }));
       },
     }),
   );

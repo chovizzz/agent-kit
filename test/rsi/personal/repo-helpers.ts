@@ -12,7 +12,12 @@ import { readDir, readText } from '../../../src/io/read-fs.js';
 import * as safe from '../../../src/io/safe-fs.js';
 import type { TreeSpec } from '../../../src/rsi/personal/commit.js';
 import { commitPersonal, openPersonalRepo } from '../../../src/rsi/personal/commit.js';
-import type { PersonalLocks, StepHook } from '../../../src/rsi/personal/commit.js';
+import type {
+  BootstrapAuth,
+  OpenOpts,
+  PersonalLocks,
+  StepHook,
+} from '../../../src/rsi/personal/commit.js';
 import {
   ownerRepoFingerprint,
   personalHome,
@@ -114,6 +119,11 @@ export function git(
   return r.stdout.replace(/\n$/, '');
 }
 
+/** 测试用的放行版建仓授权(**仅测试目录**;生产闭包断言它不在 src) */
+export const TEST_BOOTSTRAP_AUTH: BootstrapAuth = { authorize: async () => undefined };
+export const BOOT_OPTS: OpenOpts = { mode: 'bootstrap', auth: TEST_BOOTSTRAP_AUTH };
+export const READ_OPTS: OpenOpts = { mode: 'read' };
+
 export const ID1 = 'ra_aaaaaaaaaaaa';
 export const ID2 = 'ra_bbbbbbbbbbbb';
 
@@ -135,7 +145,7 @@ export function spec(
 /** 建仓并提交第一棵树(BASE_FILES);返回提交结果的 commit */
 export async function setupRepo(w: World): Promise<string> {
   const r = await withLock(w, async (locks) => {
-    const open = await openPersonalRepo(repoDeps(w), locks, { bootstrap: true });
+    const open = await openPersonalRepo(repoDeps(w), locks, BOOT_OPTS);
     if (open.kind !== 'ready') throw new Error(`bootstrap 后应为 ready:${JSON.stringify(open)}`);
     return commitPersonal(repoDeps(w), locks, spec('1', BASE_FILES));
   });

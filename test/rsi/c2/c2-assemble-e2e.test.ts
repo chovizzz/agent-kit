@@ -1,6 +1,6 @@
 /**
  * C2 生产装配(真 `runWorker` + 真适配器 + 假 HOME):私有仓库尚未建立(生产常态)时 S1 / S2 全程无故障;
- * **bootstrap 类 journal 在场时 S1 不续建仓**(`.git` 不出现、journal 字节不变,`recovery_incomplete{bootstrap_pending}`);
+ * **bootstrap 类 journal(planned / initialized)在场时 S1 不续建仓**(`.git` 不出现、journal 字节不变,`recovery_incomplete{bootstrap_pending}`);committed 但仓库不存在 = `invalid`(熔断,journal 保留);
  * 凭据冲突 / 缺省时间线等细节由纯编排测试(`c2-steps-*`)与 `writeRevocationDetailed` 测试覆盖。
  */
 import * as path from 'node:path';
@@ -67,8 +67,8 @@ describe('C2 生产装配(真 worker)', () => {
     expect(await exists(path.join(f.home, PERSONAL_REPO_REL, '.git'))).toBe(false);
   });
 
-  it('s1_never_resumes_bootstrap_without_authorization — bootstrap journal(planned / initialized / committed)→ S1 不续建仓,incomplete{bootstrap_pending};.git 不出现、journal 字节不变', async () => {
-    for (const phase of ['planned', 'initialized', 'committed'] as const) {
+  it('s1_never_resumes_bootstrap_without_authorization — bootstrap journal(planned / initialized)→ S1 不续建仓,incomplete{bootstrap_pending};.git 不出现、journal 字节不变', async () => {
+    for (const phase of ['planned', 'initialized'] as const) {
       const f = await makeTickFx(`c2-asm-boot-${phase}-`, { confirmed: true });
       const h = personalHome(f.io, f.home);
       const j = {
@@ -79,7 +79,7 @@ describe('C2 生产装配(真 worker)', () => {
         ref: 'refs/heads/rsi' as const,
         old_head: null,
         target_tree: '4b825dc642cb6eb9a060e54bf8d69288fbee4904',
-        new_commit: phase === 'committed' ? 'a'.repeat(40) : null,
+        new_commit: null,
         phase,
         at: '2026-11-10T00:00:00Z',
       };
@@ -95,5 +95,32 @@ describe('C2 生产装配(真 worker)', () => {
       const after = (await exists(journalFile)) ? await readText(journalFile) : null;
       expect(after, phase).toBe(before);
     }
+  });
+
+  it('e2e_committed_bootstrap_journal_without_repo_is_invalid_not_incomplete — committed journal 而真实仓库不存在:S1 报 invalid(不是 bootstrap_pending);.git 不出现、journal 字节不变', async () => {
+    const f = await makeTickFx('c2-asm-boot-committed-', { confirmed: true });
+    const h = personalHome(f.io, f.home);
+    const j = {
+      schema_version: 1 as const,
+      txn_id: '0123456789abcdef',
+      kind: 'bootstrap' as const,
+      candidate_ids: [],
+      ref: 'refs/heads/rsi' as const,
+      old_head: null,
+      target_tree: '4b825dc642cb6eb9a060e54bf8d69288fbee4904',
+      new_commit: 'a'.repeat(40),
+      phase: 'committed' as const,
+      at: '2026-11-10T00:00:00Z',
+    };
+    await withRealHome(f, () => writeJournal(h, j));
+    const journalFile = statePath(h, PERSONAL_STATE_FILES.journal);
+    const before = await readText(journalFile);
+    const { rounds } = await runOnce(f);
+    expect(rounds[0]?.faults).not.toContainEqual({
+      code: 'step_halted',
+      detail: 'recovery_incomplete:bootstrap_pending',
+    });
+    expect(await exists(path.join(f.home, PERSONAL_REPO_REL, '.git'))).toBe(false);
+    expect(await readText(journalFile)).toBe(before);
   });
 });

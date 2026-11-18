@@ -31,6 +31,9 @@ import {
   recoverCommitJournal,
   syncWorktree,
   writePhase,
+  NO_BOOTSTRAP_AUTH,
+  BootstrapDenied,
+  type BootstrapAuth,
   type OpCtx,
   type PersonalLocks,
   type StepHook,
@@ -46,7 +49,7 @@ import {
   type RepoSituation,
 } from './repo-check.js';
 
-export type { PersonalLocks, StepHook } from './commit-journal.js';
+export type { BootstrapAuth, BootstrapStep, PersonalLocks, StepHook } from './commit-journal.js';
 
 export interface PersonalRepoDeps {
   h: PersonalHome;
@@ -57,12 +60,6 @@ export interface PersonalRepoDeps {
   uid?: number;
   /** 崩溃注入 / 观测缝(测试);产品代码不传 */
   onStep?: StepHook;
-  /**
-   * C2 装配恒为 true:`openPersonalRepo` 遇到 bootstrap 类 journal(任一阶段)**不恢复**(不 `git init` / `update-ref` / 删 journal),直接 `invalid{bootstrap_pending}`。
-   * 经 `readPersonalFiles` / `commitPersonal` / `personalRepoStore` 等所有走 `openPersonalRepo` 的路径都被同一处挡住(S1 前置守卫只管 S1 第 1 项,挡不住后续读写)。
-   * D1b 换成 `complete_only` 模式后删除本开关。
-   */
-  refuseBootstrapRecovery?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -227,6 +224,10 @@ export type OpenResult =
   | { kind: 'ready'; head: string; ctx: OpCtx }
   /** 首次(尚无仓库)且未要求建仓 */
   | { kind: 'absent' }
+  /** bootstrap 类 journal 在场且本模式不许续做(`read`:任一阶段;`complete_only`:`planned` / `initialized`):什么都没做,journal 原样 */
+  | { kind: 'bootstrap_pending' }
+  /** `mode:'bootstrap'` 的入口校验或某个建仓边界(`init` / `cas`)被授权端口拒绝;journal 停在原阶段 */
+  | { kind: 'bootstrap_denied'; step: 'entry' | 'init' | 'cas' }
   /** 情形② / ④(或恢复判 diverged):暂停新增生效,不熔断,不碰引用 / 索引 / 工作树 */
   | { kind: 'deferred'; reason: 'personal_repo_diverged' | 'personal_owner_changed'; why: string }
   /** 熔断 `personal_repo_invalid`(`breaker` 是 R21-10.2 码表里的熔断码) */
@@ -259,15 +260,45 @@ async function makeCtx(deps: PersonalRepoDeps, locks: PersonalLocks): Promise<Op
 }
 
 /**
- * 持 `personal/lock` 者的入口。`bootstrap = true` 时,证明为首次(W0-5)则自动建仓;否则返回 `absent`。
- * 顺序固定:journal(bootstrap 先恢复)→ 首次证明 → R21-3.4 结构校验 → R21-3.6a 恢复(先于 3.5)→ R21-3.5 判定 → 情形①更新记录。
+ * `openPersonalRepo` 的模式(D1b-1;**必填**,没有默认,编译器找全部调用方)。bootstrap 类 journal 在场时:
+ *  - `read`:不动它,返回 `bootstrap_pending`;首次(无仓库)返回 `absent`,不建仓;
+ *  - `complete_only`:只许 `committed` / `recorded` 阶段——先读真实 ref 与树(`continueBootstrap` 的核对),吻合才 `committed → recorded → 写 head.json → 删 journal`,不吻合 = `invalid{bootstrap_inconsistent}`(保留 journal);
+ *    `planned` / `initialized`:返回 `bootstrap_pending`,零 `git init` / `mktree` / `commit-tree` / `update-ref`(含 `planned` + 目录缺失:不丢弃 journal,D3 前恒如此);
+ *  - `bootstrap`:全部阶段续做,建仓边界(`init` / `cas`)经 `auth.authorize`;首次(无 journal)证明为首次才建。**本期生产无调用方**。
+ */
+export type OpenOpts =
+  | { readonly mode: 'read' }
+  | { readonly mode: 'complete_only' }
+  | { readonly mode: 'bootstrap'; readonly auth: BootstrapAuth };
+
+/** 运行时形状校验(跨信任边界:调用方可能是 JS / 强转):`auth.authorize` 必须是函数 */
+function authShapeOk(opts: OpenOpts): boolean {
+  const a = (opts as { auth?: unknown }).auth;
+  return (
+    typeof a === 'object' &&
+    a !== null &&
+    typeof (a as { authorize?: unknown }).authorize === 'function'
+  );
+}
+
+/**
+ * 持 `personal/lock` 者的入口(模式见 {@link OpenOpts})。
+ * 顺序固定:journal(bootstrap 类按模式处理)→ 首次证明(`bootstrap` 才建)→ R21-3.4 结构校验 → R21-3.6a 恢复(先于 3.5)→ R21-3.5 判定 → 情形①更新记录。
  */
 export async function openPersonalRepo(
   deps: PersonalRepoDeps,
   locks: PersonalLocks,
-  opts: { bootstrap?: boolean } = {},
+  opts: OpenOpts,
 ): Promise<OpenResult> {
   if (locks.personal === undefined) throw new Error('openPersonalRepo: 必须持 personal/lock');
+  const mode = (opts as { mode?: unknown } | null | undefined)?.mode;
+  if (mode !== 'read' && mode !== 'complete_only' && mode !== 'bootstrap') {
+    throw new Error('openPersonalRepo: opts.mode 必填(read | complete_only | bootstrap)');
+  }
+  // bootstrap 的 auth 在任何副作用(含 makeCtx 的目录初始化、planned journal)之前校验
+  if (mode === 'bootstrap' && !authShapeOk(opts)) {
+    return { kind: 'bootstrap_denied', step: 'entry' };
+  }
   const c = await makeCtx(deps, locks);
   await assertLocks(c);
 
@@ -275,19 +306,27 @@ export async function openPersonalRepo(
   if (jr.kind === 'invalid') return invalid(`journal_${jr.why}`);
   let journal = jr.kind === 'ok' ? jr.value : null;
 
-  if (journal !== null && journal.kind === 'bootstrap') {
-    if (deps.refuseBootstrapRecovery === true) return invalid('bootstrap_pending');
-    const r = await recoverBootstrap(c, journal);
-    if (r.status === 'invalid') return invalid(r.why);
-    journal = null; // created(已记录并删 journal)/ discarded(什么也没建)
-  }
-
-  if (journal === null && (await probeFirstTime(deps.h)) === 'first') {
-    if (opts.bootstrap !== true) return { kind: 'absent' };
-    const r = await bootstrapRepo(c);
-    if (r.status !== 'created') {
-      return invalid(r.status === 'invalid' ? r.why : 'bootstrap_discarded');
+  try {
+    if (journal !== null && journal.kind === 'bootstrap') {
+      if (mode === 'read') return { kind: 'bootstrap_pending' };
+      const early = journal.phase === 'planned' || journal.phase === 'initialized';
+      if (mode === 'complete_only' && early) return { kind: 'bootstrap_pending' };
+      const auth = opts.mode === 'bootstrap' ? opts.auth : NO_BOOTSTRAP_AUTH;
+      const r = await recoverBootstrap(c, journal, auth);
+      if (r.status === 'invalid') return invalid(r.why);
+      journal = null; // created(已记录并删 journal)/ discarded(什么也没建)
     }
+
+    if (journal === null && (await probeFirstTime(deps.h)) === 'first') {
+      if (opts.mode !== 'bootstrap') return { kind: 'absent' };
+      const r = await bootstrapRepo(c, opts.auth);
+      if (r.status !== 'created') {
+        return invalid(r.status === 'invalid' ? r.why : 'bootstrap_discarded');
+      }
+    }
+  } catch (e) {
+    if (e instanceof BootstrapDenied) return { kind: 'bootstrap_denied', step: e.step };
+    throw e;
   }
 
   const s = await checkRepoStructure(
@@ -354,10 +393,13 @@ export async function commitPersonal(
   locks: PersonalLocks,
   spec: TreeSpec,
 ): Promise<CommitResult> {
-  const open = await openPersonalRepo(deps, locks);
+  const open = await openPersonalRepo(deps, locks, { mode: 'read' });
   if (open.kind === 'absent') return { status: 'absent' };
   if (open.kind === 'invalid') {
     return { status: 'invalid', why: open.why, breaker: open.breaker };
+  }
+  if (open.kind === 'bootstrap_pending' || open.kind === 'bootstrap_denied') {
+    return { status: 'invalid', why: open.kind, breaker: PERSONAL_REPO_INVALID };
   }
   if (open.kind === 'deferred') {
     return { status: 'deferred', reason: open.reason, why: open.why };
@@ -439,9 +481,12 @@ export async function readPersonalFiles(
   locks: PersonalLocks,
   dirs: readonly string[],
 ): Promise<ReadFilesResult> {
-  const open = await openPersonalRepo(deps, locks);
+  const open = await openPersonalRepo(deps, locks, { mode: 'read' });
   if (open.kind === 'absent') return { status: 'absent' };
   if (open.kind === 'invalid') return { status: 'invalid', why: open.why, breaker: open.breaker };
+  if (open.kind === 'bootstrap_pending' || open.kind === 'bootstrap_denied') {
+    return { status: 'invalid', why: open.kind, breaker: PERSONAL_REPO_INVALID };
+  }
   if (open.kind === 'deferred') {
     return { status: 'deferred', reason: open.reason, why: open.why };
   }

@@ -21,7 +21,7 @@ const ENTRY = 'src/rsi/assemble-worker.ts';
  * candidate-apply.ts / settle.ts / judge-slot.ts 也算作「增影响」整体禁入;C2 的设计(S1 调 `openPersonalRepo`、污染写凭据、reduce-step 经 `applyEvent` 对账、W9 槽 4b)
  * 必须引入它们。所以这里分两层:
  *  ① 真正的增影响汇点(授予 / 增长授权 / 候选推进入口)与其模块——**仍然整体禁入**;
- *  ② 被 C2 认领的写能力符号——不再禁入,但**调用点收敛**:每个符号只许出现在列出的文件里(见 `CALL_SITES`),新增调用点 = 红;bootstrap 守卫另有运行期用例(`c2-steps-s1.test.ts`)。
+ *  ② 被 C2 认领的写能力符号——不再禁入,但**调用点收敛**:每个符号只许出现在列出的文件里(见 `CALL_SITES`),新增调用点 = 红;bootstrap 类 journal 的处置另有运行期用例(`c2-steps-s1.test.ts` / `d1b1/` 下的 complete_only 用例)。
  */
 const GROWTH_SINK_SYMBOLS = [
   'grantCanary',

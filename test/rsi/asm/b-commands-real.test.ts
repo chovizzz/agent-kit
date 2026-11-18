@@ -20,6 +20,7 @@ import { PERSONAL_STATE_FILES, statePath } from '../../../src/rsi/personal/home-
 import type { RsiEarlyContext } from '../../../src/rsi/types.js';
 import { ID, SHA, rec } from '../personal/transition-fixture.js';
 import {
+  BOOT_OPTS,
   git,
   makeWorld,
   repoDeps,
@@ -44,7 +45,7 @@ const STATE_DOC = {
 
 async function seed(w: World, r: PersonalLifecycleRecord): Promise<void> {
   await withLock(w, async (locks) => {
-    const open = await openPersonalRepo(repoDeps(w), locks, { bootstrap: true });
+    const open = await openPersonalRepo(repoDeps(w), locks, BOOT_OPTS);
     if (open.kind !== 'ready') throw new Error(`bootstrap:${JSON.stringify(open)}`);
     const res = await commitPersonal(repoDeps(w), locks, {
       kind: 'transition',

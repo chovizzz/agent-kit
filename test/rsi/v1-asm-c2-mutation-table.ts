@@ -32,34 +32,6 @@ export interface V1AsmC2Result {
 
 export const V1_ASM_C2_MUTATIONS: readonly V1AsmC2Mutation[] = [
   {
-    id: 's1_calls_open_with_bootstrap_journal',
-    clause: '§8.4:bootstrap journal 在场时 S1 不调用 openPersonalRepo',
-    edits: [
-      {
-        file: 'src/rsi/personal/steps/repo-recover.ts',
-        anchor: "if (jk === 'bootstrap') return { kind: 'incomplete', why: 'bootstrap_pending' };",
-        replacement: 'void 0;',
-      },
-    ],
-    tests: ['rsi/c2/c2-steps-s1.test.ts', 'rsi/c2/c2-assemble-e2e.test.ts'],
-    expectRed: ['bootstrap 前置守卫', 's1_never_resumes_bootstrap_without_authorization'],
-    mustKill: ['bootstrap 前置守卫'],
-  },
-  {
-    id: 's1_invalid_journal_still_opens',
-    clause: 'journal 不合规 → invalid,不调 open',
-    edits: [
-      {
-        file: 'src/rsi/personal/steps/repo-recover.ts',
-        anchor: "if (jk === 'invalid') return { kind: 'invalid' };",
-        replacement: 'void 0;',
-      },
-    ],
-    tests: ['rsi/c2/c2-steps-s1.test.ts'],
-    expectRed: ['bootstrap 前置守卫', 'journal 不合规 → invalid(不调 open)'],
-    mustKill: ['journal 不合规 → invalid(不调 open)'],
-  },
-  {
     id: 's1_open_lock_error_swallowed',
     clause: 'open 抛锁错误 / 失锁必须原样上抛(不得被当成仓库 invalid)',
     edits: [
@@ -72,7 +44,7 @@ export const V1_ASM_C2_MUTATIONS: readonly V1AsmC2Mutation[] = [
     ],
     tests: ['rsi/c2/c2-steps-s1.test.ts'],
     expectRed: [
-      'bootstrap 前置守卫',
+      'S1 仓库恢复映射',
       'git 读失败(open 抛非锁错误)= 仓库不可用 invalid;锁错误 / 失锁原样上抛',
     ],
     mustKill: ['git 读失败(open 抛非锁错误)= 仓库不可用 invalid;锁错误 / 失锁原样上抛'],
@@ -88,8 +60,8 @@ export const V1_ASM_C2_MUTATIONS: readonly V1AsmC2Mutation[] = [
       },
     ],
     tests: ['rsi/c2/c2-steps-s1.test.ts'],
-    expectRed: ['bootstrap 前置守卫', 'journal 不合规 → invalid(不调 open)'],
-    mustKill: ['journal 不合规 → invalid(不调 open)'],
+    expectRed: ['S1 仓库恢复映射', 'open 结果映射'],
+    mustKill: ['open 结果映射'],
   },
   {
     id: 's1_flag_diverged_also_clears_owner',
@@ -503,20 +475,6 @@ export const V1_ASM_C2_MUTATIONS: readonly V1AsmC2Mutation[] = [
     mustKill: ['契约能力表:键 = RSI_ASSEMBLY_CAPS 全集'],
   },
   {
-    id: 'asm_open_repo_with_bootstrap_option',
-    clause: '装配里 openPersonalRepo 恒不传 bootstrap(没有建仓调用方)',
-    edits: [
-      {
-        file: 'src/rsi/assemble-personal.ts',
-        anchor: 'const r = await openPersonalRepo(k.repoDeps, k.locks, {});',
-        replacement: 'const r = await openPersonalRepo(k.repoDeps, k.locks, { bootstrap: true });',
-      },
-    ],
-    tests: ['rsi/c2/c2-assemble-e2e.test.ts'],
-    expectRed: ['C2 生产装配(真 worker)', '私有仓库未建'],
-    mustKill: ['私有仓库未建'],
-  },
-  {
     id: 's1_repo_lock_loss_not_ended',
     clause: 'recoverRepo(S1 第 1 项)抛个人失锁 → ended,压缩 / S2P / 扫尾零调用',
     edits: [
@@ -609,67 +567,17 @@ export const V1_ASM_C2_MUTATIONS: readonly V1AsmC2Mutation[] = [
     expectRed: ['runS2P 顺序与「唯一一次」', 'halt 前缀:lock_lost(归属未明)'],
     mustKill: ['halt 前缀:lock_lost(归属未明)'],
   },
-  {
-    id: 'open_repo_recovers_bootstrap_when_refused',
-    clause:
-      '§8.4:openPersonalRepo 在 refuseBootstrapRecovery 下不恢复 bootstrap journal(后续读写路径也不删 / 不续)',
-    edits: [
-      {
-        file: 'src/rsi/personal/commit.ts',
-        anchor:
-          "    if (deps.refuseBootstrapRecovery === true) return invalid('bootstrap_pending');\n",
-        replacement: '',
-      },
-    ],
-    tests: ['rsi/c2/c2-refuse-bootstrap-recovery.test.ts', 'rsi/c2/c2-assemble-e2e.test.ts'],
-    expectRed: ['C2 refuseBootstrapRecovery', 's1_never_resumes_bootstrap_without_authorization'],
-    mustKill: ['C2 refuseBootstrapRecovery'],
-  },
-  {
-    id: 'asm_repo_deps_without_refuse',
-    clause:
-      '装配层的 repoDeps 恒带 refuseBootstrapRecovery(否则 S1 之后的步骤会删 planned journal)',
-    edits: [
-      {
-        file: 'src/rsi/assemble-personal.ts',
-        anchor: '      refuseBootstrapRecovery: true,\n',
-        replacement: '',
-      },
-    ],
-    tests: ['rsi/c2/c2-assemble-e2e.test.ts'],
-    expectRed: ['C2 生产装配(真 worker)', 's1_never_resumes_bootstrap_without_authorization'],
-    mustKill: ['s1_never_resumes_bootstrap_without_authorization'],
-  },
 ];
 
 /** 执行后由主代理回填(本块不执行变异) */
-/** 实测结果:39 条 @46469b8(r21c2-mut-f)+ 2 条修正后 @7a1bdf7(r21c2-mut2-g),其间仅改表内这两条;全部 KILLED */
+/** 历史实测:39 条 @46469b8(r21c2-mut-f)+ 2 条修正后 @7a1bdf7(r21c2-mut2-g),其间仅改表内这两条;全部 KILLED。**D1b-1 删去 5 条(守卫类)并同序删其结果条目、重命名 S1 映射测试(killedBy 文本同步);剩余条目待主代理在 D1b-1 合并树上重跑受影响锚点** */
 export const V1_ASM_C2_RESULTS: readonly V1AsmC2Result[] = [
-  {
-    id: 's1_calls_open_with_bootstrap_journal',
-    failed: 2,
-    skipped: 0,
-    killedBy: [
-      'C2 生产装配(真 worker) s1_never_resumes_bootstrap_without_authorization — bootstrap journal(planned / initialized / committed)→ S1 不续建仓,incomplete{bootstrap_pending};.git 不出现、journal 字节不变',
-      'bootstrap 前置守卫(s1_never_resumes_bootstrap_without_authorization) journal=bootstrap(planned / initialized / committed 都是 bootstrap 类)→ 不调用 open,incomplete{bootstrap_pending}',
-    ],
-    restored: true,
-  },
-  {
-    id: 's1_invalid_journal_still_opens',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'bootstrap 前置守卫(s1_never_resumes_bootstrap_without_authorization) journal 不合规 → invalid(不调 open);无 journal / 非 bootstrap journal → 才调 open,并映射结果',
-    ],
-    restored: true,
-  },
   {
     id: 's1_open_lock_error_swallowed',
     failed: 1,
     skipped: 0,
     killedBy: [
-      'bootstrap 前置守卫(s1_never_resumes_bootstrap_without_authorization) git 读失败(open 抛非锁错误)= 仓库不可用 invalid;锁错误 / 失锁原样上抛',
+      'S1 仓库恢复映射(createRepoRecovery:open 结果 → RepoRecovery) git 读失败(open 抛非锁错误)= 仓库不可用 invalid;锁错误 / 失锁原样上抛',
     ],
     restored: true,
   },
@@ -678,7 +586,7 @@ export const V1_ASM_C2_RESULTS: readonly V1AsmC2Result[] = [
     failed: 1,
     skipped: 0,
     killedBy: [
-      'bootstrap 前置守卫(s1_never_resumes_bootstrap_without_authorization) journal 不合规 → invalid(不调 open);无 journal / 非 bootstrap journal → 才调 open,并映射结果',
+      'S1 仓库恢复映射(createRepoRecovery:open 结果 → RepoRecovery) open 结果映射:absent / ready / invalid / deferred(两个原因)/ bootstrap_pending(incomplete,不熔断);open 恒被调用',
     ],
     restored: true,
   },
@@ -921,16 +829,6 @@ export const V1_ASM_C2_RESULTS: readonly V1AsmC2Result[] = [
     restored: true,
   },
   {
-    id: 'asm_open_repo_with_bootstrap_option',
-    failed: 2,
-    skipped: 0,
-    killedBy: [
-      'C2 生产装配(真 worker) 私有仓库未建:S1 / S2 全程无故障,growth open,个人锁已释放,不建 .git',
-      'C2 生产装配(真 worker) s1_never_resumes_bootstrap_without_authorization — bootstrap journal(planned / initialized / committed)→ S1 不续建仓,incomplete{bootstrap_pending};.git 不出现、journal 字节不变',
-    ],
-    restored: true,
-  },
-  {
     id: 's1_repo_lock_loss_not_ended',
     failed: 2,
     skipped: 0,
@@ -982,30 +880,6 @@ export const V1_ASM_C2_RESULTS: readonly V1AsmC2Result[] = [
     skipped: 0,
     killedBy: [
       'runS2P 顺序与「唯一一次」 halt 前缀:lock_lost(归属未明)→ 未决 lock_loss_unresolved 且结束个人轮:余下步骤(对账 / 触发 / 解除)零调用',
-    ],
-    restored: true,
-  },
-  {
-    id: 'open_repo_recovers_bootstrap_when_refused',
-    failed: 7,
-    skipped: 0,
-    killedBy: [
-      'C2 生产装配(真 worker) s1_never_resumes_bootstrap_without_authorization — bootstrap journal(planned / initialized / committed)→ S1 不续建仓,incomplete{bootstrap_pending};.git 不出现、journal 字节不变',
-      'C2 refuseBootstrapRecovery(bootstrap journal 任一阶段:不恢复、零写) refuse_planned_dir_missing — openPersonalRepo / readPersonalFiles 返回 invalid{bootstrap_pending};journal 字节不变,.git 不出现',
-      'C2 refuseBootstrapRecovery(bootstrap journal 任一阶段:不恢复、零写) refuse_planned_dir_empty — openPersonalRepo / readPersonalFiles 返回 invalid{bootstrap_pending};journal 字节不变,.git 不出现',
-      'C2 refuseBootstrapRecovery(bootstrap journal 任一阶段:不恢复、零写) refuse_initialized_dir_missing — openPersonalRepo / readPersonalFiles 返回 invalid{bootstrap_pending};journal 字节不变,.git 不出现',
-      'C2 refuseBootstrapRecovery(bootstrap journal 任一阶段:不恢复、零写) refuse_initialized_dir_empty — openPersonalRepo / readPersonalFiles 返回 invalid{bootstrap_pending};journal 字节不变,.git 不出现',
-      'C2 refuseBootstrapRecovery(bootstrap journal 任一阶段:不恢复、零写) refuse_committed_dir_missing — openPersonalRepo / readPersonalFiles 返回 invalid{bootstrap_pending};journal 字节不变,.git 不出现',
-      'C2 refuseBootstrapRecovery(bootstrap journal 任一阶段:不恢复、零写) refuse_committed_dir_empty — openPersonalRepo / readPersonalFiles 返回 invalid{bootstrap_pending};journal 字节不变,.git 不出现',
-    ],
-    restored: true,
-  },
-  {
-    id: 'asm_repo_deps_without_refuse',
-    failed: 1,
-    skipped: 0,
-    killedBy: [
-      'C2 生产装配(真 worker) s1_never_resumes_bootstrap_without_authorization — bootstrap journal(planned / initialized / committed)→ S1 不续建仓,incomplete{bootstrap_pending};.git 不出现、journal 字节不变',
     ],
     restored: true,
   },

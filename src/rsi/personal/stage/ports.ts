@@ -90,7 +90,7 @@ export interface FlagUpdate {
   readonly owner_changed?: boolean;
 }
 export interface RecoveryPort {
-  /** 仓库 + journal 续做;**只用 `complete_only` 语义**(D1b 前:遇 bootstrap 类 journal 不续建,报 `incomplete`) */
+  /** 仓库 + journal 续做;**只用 `complete_only` 语义**(遇 bootstrap 类 journal:planned / initialized 不续建,报 `incomplete`;committed / recorded 先核真实 ref 与树再收尾) */
   recoverRepo(): Promise<RepoRecovery>;
   /** 标志重算后的一次 state 写 + 紧随的静音(复合操作 `setFlagAndMute`,计入预算) */
   setFlagAndMute(flags: FlagUpdate): Promise<StepOutcome>;

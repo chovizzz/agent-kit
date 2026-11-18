@@ -16,12 +16,14 @@ import {
 } from '../../../src/rsi/personal/home-state.js';
 import { checkRepoStructure, createClosedGit } from '../../../src/rsi/personal/repo-check.js';
 import {
+  BOOT_OPTS,
   crashAt,
   git,
   gitRaw,
   InjectedCrash,
   makeWorld,
   NOW,
+  READ_OPTS,
   repoDeps,
   withLock,
   type World,
@@ -32,9 +34,7 @@ slowTests();
 
 const boot = (w: World, onStep?: StepHook) =>
   withLock(w, (locks) =>
-    openPersonalRepo(repoDeps(w, onStep === undefined ? {} : { onStep }), locks, {
-      bootstrap: true,
-    }),
+    openPersonalRepo(repoDeps(w, onStep === undefined ? {} : { onStep }), locks, BOOT_OPTS),
   );
 
 describe('W0-5 首次建仓证明', () => {
@@ -42,7 +42,7 @@ describe('W0-5 首次建仓证明', () => {
     const w = await makeWorld('p-b-first-');
     await withLock(w, async (locks) => {
       expect(await probeFirstTime(w.h)).toBe('first');
-      expect(await openPersonalRepo(repoDeps(w), locks)).toEqual({ kind: 'absent' });
+      expect(await openPersonalRepo(repoDeps(w), locks, READ_OPTS)).toEqual({ kind: 'absent' });
     });
     expect(await exists(w.h.repoDir)).toBe(false);
     expect(await exists(path.join(w.h.stateDir, 'head.json'))).toBe(false);
@@ -248,7 +248,7 @@ describe('W0-5 bootstrap 恢复:结构校验先行、观测核对、丢锁即停
           },
         }),
         locks,
-        { bootstrap: true },
+        BOOT_OPTS,
       ),
     ).rejects.toMatchObject({ kind: 'lock_lost' });
     expect(gitRaw(w, ['rev-parse', '--verify', '-q', 'refs/heads/rsi']).status).not.toBe(0);
@@ -308,7 +308,7 @@ describe('W0-5 git init 之前的校验(planned + 目录缺失 / 为空):不满�
             },
           }),
           locks,
-          { bootstrap: true },
+          BOOT_OPTS,
         );
       } finally {
         await safe.chmod(w.io, share, 0o755);
@@ -332,7 +332,7 @@ describe('W0-5 git init 之前的校验(planned + 目录缺失 / 为空):不满�
           },
         }),
         locks,
-        { bootstrap: true },
+        BOOT_OPTS,
       ),
     );
     expect(o).toMatchObject({ kind: 'invalid', why: 'ancestor_not_dir' });
@@ -350,7 +350,7 @@ describe('W0-5 git init 之前的校验(planned + 目录缺失 / 为空):不满�
     const w = await crashedAtDirReady();
     const uid = process.getuid?.() ?? 0;
     const o = await withLock(w, (locks) =>
-      openPersonalRepo(repoDeps(w, { uid: uid + 1 }), locks, { bootstrap: true }),
+      openPersonalRepo(repoDeps(w, { uid: uid + 1 }), locks, BOOT_OPTS),
     );
     expect(o).toMatchObject({ kind: 'invalid', why: 'owner' });
     expect(await exists(path.join(w.h.repoDir, '.git'))).toBe(false);
@@ -367,7 +367,7 @@ describe('先复核锁,再做任何写入初始化', () => {
         },
       },
     };
-    await expect(openPersonalRepo(repoDeps(w), locks, { bootstrap: true })).rejects.toMatchObject({
+    await expect(openPersonalRepo(repoDeps(w), locks, BOOT_OPTS)).rejects.toMatchObject({
       kind: 'lock_lost',
     });
     expect(await exists(path.join(w.home, '.local'))).toBe(false);
