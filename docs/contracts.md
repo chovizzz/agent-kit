@@ -7025,7 +7025,7 @@ W9a(判官裁决的纯判定、读端口适配器、`rsi show` 段订正)落地�
 
 #### W0-28 近似指纹(near_fp)算法与参数草案(2026-11-15;R21-11.2;装配块 D 段 D1a)
 
-**状态:草案条目,阈值与 Unicode 口径未冻结**(冻结归 D3-nf,须在提相位之前;冻结前 `NEAR_ALGO.frozen = false`)。**订正(D1b-1)**:W0-29 第 3 条所述「S1 前置守卫」随 D1b-1 删除,S1 改用 `openPersonalRepo({mode:'complete_only'})`,现行语义见该条。D 段其余订正(purge 改写、`creationReady`、bootstrap 授权等)另列于本号的后续条目,合并前再核编号(W9 = W0-27、D = W0-28、C = W0-29)。
+**状态:草案条目,阈值与 Unicode 口径未冻结**(冻结归 D3-nf,须在提相位之前;冻结前 `NEAR_ALGO.frozen = false`)。**订正(D1b-1)**:W0-29 第 3 条所述「S1 前置守卫」随 D1b-1 删除,S1 改用 `openPersonalRepo({mode:'complete_only'})`,现行语义见该条。**订正(D1b-2)**:D v4 b4 的「`applyEvent(..., pass?: GrowthPass)` / `runPersonalStep` 带 pass」形态由注入端口 `GrowthClaimPort` **取代**,见 W0-30 第 1 条。D 段其余订正(purge 改写、`creationReady`、bootstrap 授权等)另列于本号的后续条目,合并前再核编号(W9 = W0-27、D = W0-28、C = W0-29)。
 
 **与 R21-11.2 的取代关系(逐句)**:原文 R21-11.2 `[V1]`「**文本指纹**:规范化正文的 HMAC-SHA256(本机密钥 `.state/rsi/fp.key`,0600,32 字节随机,首建经 `createExclusive`)+ 近似指纹(固定 shingle 参数,常量);与冷却同期失效;只在本机,永不进投稿、日志、`--json`(只出前 8 位用于人工对照)」。
 
@@ -7056,6 +7056,20 @@ W9a(判官裁决的纯判定、读端口适配器、`rsi show` 段订正)落地�
 8. **残余 R-W(无已证明上界)**:对只有 worker 才能发现或施加的减影响动作——harm 判定、熔断触发、尚未落凭据的污染、分叉 / 换主检测、「状态已写但静音失败」且 hint 未读该状态者(第 5 条采纳后此子类并入零窗口)——本设计不声称任何有限延迟上界。P 能运行当且仅当:有一次 poke / kit 命令事件;spawn 闸通过(距上次 L0 完成 ≥ 6 小时、熔断未打开〔24 小时;`kind=safety` 永不自动半开〕、30 分钟预留窗口未占);rsi 锁未被存活进程持有(存活持有者超过 15 分钟只标 `locked_over_ttl`,不会被回收)。健康状态下的典型值是「下一次会话结束事件 + 至多 6 小时」,**不是上界**;此残余期间的安全论证只依赖 hint 每次现读的拒绝集合,不依赖 worker 迟早修复。D18 是它的可见性手段。
 9. **C → D 条款**:T1 候选类 op 缺候选 = 类型错误;T2 pass 一次性、多个不可逆写各自重新 `evaluateGrowth`;T3 写前统一顺序 = 最新权威记录 → purge / admission 现读 → W9 `check` → 外部否决事实 → `requireGrowth` → `assertLocks`;T4 U 无锁创建的线性化点 = `requireGrowth` 内最后一次读;T5 `GROWTH_SINKS` 内函数运行时缺 pass 先于任何副作用拒绝;T6 见第 4 条;T7 `GrowthStage.ops` 逐项装配,缺项 `growth_unwired`;T8 组合验收(真 C 写适配器 + 真 D 写前门);T9 bootstrap 协调器与受控写端口的边界(协调器自身不是写事务,`authorize()` 只在 `inFlight=0` 时调用,嵌套 = `internal`)。
 10. **不在本块 / 未装配**:`.git` 0700 归 D(W0-22 第 6 条不变);`budget_high_legacy` / `cost_high_legacy` / `redaction_changed` / 上线代理事件日的事实源未装配(只少一道熔断,不放行增影响);`rollback_stalled` / `protection_marks` 不由 C2 计算;W9b 判决槽缺省空操作并报告 unavailable;`assemble-write.ts` 命令侧的 working / env 桩不动。
+
+#### W0-30 装配块 D1b-2:增影响汇点的注入端口、提交前复核钩子与创建审计(2026-11-18;R21-6.10、R21-4.1 创建行、W0-28 D v4 b4、W0-29 第 9 条 T5)
+
+**状态**:D1b-2 落地的口径。保留冻结原文,以已授权的订正明确覆盖下列条款;未列出的条款不变。owner 2026-11-17 选择框已定:Q1 改注入端口、Q3 `gates_passed` 算增效、Q6 拆两个 PR。**生产零行为变化**:相位恒 0,`runPersonalStep` 无生产调用方,`GrowthStage` 未装配;「创建恒拒」是防误接线,不是功能。
+
+1. **取代 D v4 b4(owner Q1)**:`applyEvent` 与 `runPersonalStep` **不带** `GrowthPass`,改经注入端口 `GrowthClaimPort`(`candidate-ports.ts`,结构类型,零 stage 依赖):`claim(op, cand | null)` 只读,返回 `{ok:true, hook}` 或 `{ok:false, code}`;钩子由提交底座在 `update-ref` 之前调用。理由:`candidate-apply.ts` / `candidate-step.ts` / `commit.ts` 在 worker 类型闭包与严格入口闭包里(`c1b-closure` / `c1-inert`),`GrowthPass` 等 stage 类型进不来,放行只能削弱守卫。`grantCanary` / `stepAdmission` 仍取**真** `pass: GrowthPass`(最后一个形参、非可选;函数体第一条语句 `hasSinkPass(pass)`,先于任何锁断言 / 读写,缺 / 伪 → `growth_denied`)。D1b-2 只验 pass 的存在与铸造登记;真实性 / op 绑定 / 一次性 / 最终事实由 D2 的 `requireGrowth` 落实;`claim` 的真实现(`evaluateGrowth` → `checkGrowthVeto`,钩子内 `requireGrowth`)归 D2。
+2. **增影响事件分类**(`personal/growth-events.ts`;`Record<EventKind, …>` 穷举):`gates_passed`(op = `candidate_create`,owner Q3)、`shadow_promote`(`shadow_to_canary`)、`deploy_inject`(`deploy_inject`)必须先过端口;`decide_better` 无对应 op = `unmappable` 恒拒;其余事件(终止 / 回滚 / 撤销对账 / 到期 / 无命中 / 闸红 / 补偿 / 移除)为减影响类,**不走授权、不受暂停限制**。运行期未登记的 kind 一律按 `unmappable` 拒绝。端口缺 / 拒 / 畸形返回 = `halt{growth_denied, why}`,判定先于 `seal.open` / `store.read` / `store.commit`(零写入)。
+3. **结果面的加法**:`StepHalt` 加 `growth_denied`(`classifyHalt` → `stop_step`:被拒的动作没有写任何东西,不使本轮 `unsettled`);`StepResult.growthDenied`(`{op, code}[]`)——`runPersonalStep` 把被拒的增影响动作(创建缺端口 / `claim` 拒 / 提交前复核拒;`gates_passed` / `shadow_promote` 经 `applyEvent` 被拒)记在这里,**不 halt**(减影响子步骤照常);`TreeSpec.beforeRefUpdate?`、`CommitResult` 加 `{status:'denied'; code:string}`;`AuditSink.appendObservation?`;`StepDeps.locks` 两把锁(`rsi`、`personal`)必填并在入口断言。
+4. **`beforeRefUpdate` 语义**(`commit.ts`):钩子在最后一次 `assertLocks` 之后、`update-ref` 之前调用,返回后再复核一次锁;只认 `BeforeRefUpdateDenied` 为拒绝 → `denied{code}`,引用 / 索引 / 工作树不动,并在核对所有权后删除自己写下的 journal(盘上 journal 与本次写下的 `txn_id / kind / candidate_ids / old_head / target_tree / new_commit / phase` 逐字段全等、phase ∈ {planned, objects_written}、当前 `ref = old_head` 才删;清理前先复核锁;删除的 IO 失败吞掉);任何其它错误(含 `RsiLockError`)原样传播,不删 journal、不改引用。
+5. **创建取时与观察行**:创建条目取时只经封存区域(`stampFirst`,封存区间 → `halt sealed_interval`,源提交之前、零写入);无键观察行(`ready_since_rebuilt` / 排队清零)只经 `AuditSink.appendObservation`,缺端口 = 不落、记 `effectsFailed`,**不回落**无键 `append`(生产带键出口对无键行抛 `audit_key_missing`)。
+6. **创建审计**(`personal/creation-audit.ts`):创建行的审计行只有一个派生点 `creationAuditItems`(事件时间取条目 `at`,稳定键 `audit:<候选>:<条目 idem_key>`),即时落地(带键)、`recoverCreationAudits`(提交后崩溃的补做,按键幂等)与 B1b 对账源 `derivedOf` 共用它;依赖方向 `store/reconcile-source.ts` → `personal/creation-audit.ts`,反向禁止。
+7. **`GROWTH_SINKS` 架构门**(`canary/growth-sinks.ts` + `test/rsi/d1b2/growth-sinks-arch.test.ts`):登记 `grantCanary`(pass_param)/ `stepAdmission`(pass_param)/ `applyEvent`(port_claim)/ `runPersonalStep`(port_claim)/ `continueBootstrap`(auth_port),AST 校验形态;清单外的同名定义、`src/rsi/**` 里登记之外的 canary 写出口与带 `beforeRefUpdate` 的提交 = 红(只减影响的写者 `muteCanary` / `removeCanary` 在冻结白名单内)。
+8. **`CreationExtra`**(`personal/creation-extra.ts`):`candidate_create` 的 `extra` 位端口,默认 `REFUSING_CREATION_EXTRA` 恒返回 `creation_unready`;真实现归 D3。
+9. **不在本块**:`claim` 的真实现(D2)、`appendKeyed(first{region})` 的生产直连与 `MarksStore` 生产适配器(D3)、候选创建时给权威记录持久化证据摘要(D1a 验收遗留,记录 schema 加字段,未定归属)。
 
 #### W0 订正的合法 / 错误示例
 
