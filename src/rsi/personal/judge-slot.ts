@@ -80,7 +80,6 @@ const DENY_SET: ReadonlySet<string> = new Set(JUDGE_GROWTH_DENY_CODES);
 
 /** `StepHalt` 的运行期全集(`Record` 保证与类型穷尽一致:新增 / 删除成员即类型错误) */
 const STEP_HALTS: Readonly<Record<StepHalt, true>> = Object.freeze({
-  growth_denied: true,
   repo_absent: true,
   repo_deferred: true,
   repo_invalid: true,

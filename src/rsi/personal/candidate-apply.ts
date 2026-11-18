@@ -20,6 +20,7 @@ import type {
   StepHalt,
   WorkingStore,
 } from './candidate-ports.js';
+import { creationAuditItems } from './creation-audit.js';
 import { growthOpOfEvent } from './growth-events.js';
 import { txnId } from './ids.js';
 import { createHash } from 'node:crypto';
@@ -46,7 +47,7 @@ export interface ApplyDeps {
    */
   seal?: EntrySeal;
   /**
-   * 增影响汇点端口(D1b-2;W0-30):**增影响事件**(`gates_passed` / `shadow_promote` / `deploy_inject`,见 `growth-events.ts`)必须先经它;缺省 = 拒绝(`growth_denied` / `unwired`,零写入)。
+   * 增影响汇点端口(D1b-2;W0-30):**增影响事件**(`gates_passed` / `shadow_promote` / `deploy_inject`,见 `growth-events.ts`)必须先经它;缺省 = 拒绝(`denied` / `unwired`,零写入)。
    * 减影响事件不看它。生产装配由 D2 / D3 给真实现(`claim` 内 evaluate → veto 现读,钩子内 `requireGrowth`);本块只交端口与缺则拒。
    */
   growth?: GrowthClaimPort;
@@ -66,7 +67,13 @@ export type ApplyResult =
   | { kind: 'refused'; refusal: Refusal }
   /** 权威记录已不是调用方手里的状态(M13-2):不推进 */
   | { kind: 'stale'; authoritative: string }
-  | { kind: 'halt'; halt: StepHalt; why?: string };
+  | { kind: 'halt'; halt: StepHalt; why?: string }
+  /**
+   * 增影响事件被 {@link GrowthClaimPort} 拒绝(缺端口 / 无法映射 / claim 拒 / 提交前复核拒):零写入或提交前拒绝,`why` 带原因码。**独立分支,不是 `StepHalt`**
+   * (`StepHalt` 属 C1a 冻结面,正常的授权拒绝也不是完整性停机):`runPersonalStep` 对增影响事件把它记为 `growthDenied` 而不中止减影响子步骤;
+   * 其余消费方(减影响事件不带钩子,出现即底座违约)一律 fail-closed。
+   */
+  | { kind: 'denied'; why: string };
 
 const digest = (s: string): string => createHash('sha256').update(s, 'utf8').digest('hex');
 
@@ -80,7 +87,7 @@ export async function applyEvent(
 ): Promise<ApplyResult> {
   // 增影响事件先过注入端口:分类与端口存在性是零 IO 判定,`claim` 只读;全部先于 `seal.open` / `store.read` / `store.commit`(缺 / 拒 = 零写入)
   const claimed = await claimGrowth(d, rec, event);
-  if (claimed.kind === 'halt') return claimed;
+  if (claimed.kind === 'halt' || claimed.kind === 'denied') return claimed;
   // 锁内重读权威记录(M13-2)与撤销凭据(R21-9.5 对账先于授予)
   const fresh = await d.store.read(rec.id);
   if (fresh.kind === 'absent') return { kind: 'halt', halt: 'repo_absent' };
@@ -106,7 +113,7 @@ export async function applyEvent(
   }
 }
 
-/** 增影响分类 → 端口:减影响 = 无钩子;增影响 = 取钩子;`unmappable` / 缺端口 / `claim` 拒或返回畸形 = `halt{growth_denied}` */
+/** 增影响分类 → 端口:减影响 = 无钩子;增影响 = 取钩子;`unmappable` / 缺端口 / `claim` 拒或返回畸形 = `denied` */
 async function claimGrowth(
   d: ApplyDeps,
   rec: PersonalLifecycleRecord,
@@ -114,17 +121,15 @@ async function claimGrowth(
 ): Promise<
   | { kind: 'none'; hook?: undefined }
   | { kind: 'claimed'; hook: BeforeRefUpdate }
-  | Extract<ApplyResult, { kind: 'halt' }>
+  | Extract<ApplyResult, { kind: 'halt' | 'denied' }>
 > {
   const op = growthOpOfEvent(event.kind);
   if (op === null) return { kind: 'none' };
-  if (op === 'unmappable') return { kind: 'halt', halt: 'growth_denied', why: 'unmappable' };
+  if (op === 'unmappable') return { kind: 'denied', why: 'unmappable' };
   const cand =
     op === 'candidate_create' ? null : { id: rec.id, content_sha256: rec.content_sha256 };
   const r = await claimGrowthPort(d.growth, op, cand);
-  return r.ok
-    ? { kind: 'claimed', hook: r.hook }
-    : { kind: 'halt', halt: 'growth_denied', why: r.code };
+  return r.ok ? { kind: 'claimed', hook: r.hook } : { kind: 'denied', why: r.code };
 }
 
 /**
@@ -203,6 +208,11 @@ async function applyIn(
   }
   if (sealed) return { kind: 'halt', halt: 'sealed_interval', why: 'non_terminal_after_stamp' };
 
+  // 创建审计的截断边界(W0-30 第 4 条):本次转移会把记录里的创建条目挤出 256 条窗口 → **先**确认创建审计耐久落地(同键幂等),否则拒绝本次转移(源提交前,零写入)。
+  // 窗口外 `recoverCreationAudits` 与 B1b 对账源都失去来源,所以确认必须先于截断;条目仍在窗口内时不额外落行(即时路径与恢复路径负责)
+  const unconfirmed = await confirmCreationAuditBeforeTruncation(d, rec, res.next);
+  if (unconfirmed !== null) return unconfirmed;
+
   const json = canonicalJson(res.next);
   const c = await d.store.commit({
     kind: 'transition',
@@ -212,7 +222,7 @@ async function applyIn(
     // 增影响事件:最终复核钩子在 `update-ref` 之前由提交底座调用(拒 → `denied`)
     ...(hook !== undefined ? { beforeRefUpdate: hook } : {}),
   });
-  if (c.status === 'denied') return { kind: 'halt', halt: 'growth_denied', why: c.code };
+  if (c.status === 'denied') return { kind: 'denied', why: c.code };
   if (c.status === 'absent') return { kind: 'halt', halt: 'repo_absent' };
   if (c.status === 'deferred') return { kind: 'halt', halt: 'repo_deferred', why: c.why };
   if (c.status === 'invalid') return { kind: 'halt', halt: 'repo_invalid', why: c.why };
@@ -233,6 +243,35 @@ async function applyIn(
     };
   }
   return { kind: 'transitioned', next: res.next };
+}
+
+/**
+ * 本次转移会截掉创建条目 → 先经带键端口落创建审计行(`appendKeyed` 返回 = 已耐久:落地或进入带键的持久待办)。
+ * 丢锁原样抛;`sealed_interval`(创建日已封存 = 该日对账已完成并封存,行不会再丢)视为已确认;缺 `appendKeyed` 或其它失败 → `halt{commit_failed}`(`why` 带原因,转移不提交)。
+ */
+async function confirmCreationAuditBeforeTruncation(
+  d: ApplyDeps,
+  rec: PersonalLifecycleRecord,
+  next: PersonalLifecycleRecord,
+): Promise<Extract<ApplyResult, { kind: 'halt' }> | null> {
+  const items = creationAuditItems(rec);
+  if (items.length === 0 || next.transitions_dropped <= rec.transitions_dropped) return null;
+  if (next.transitions.some((e) => items.some((i) => i.idem_key === e.idem_key))) return null;
+  if (d.audit.appendKeyed === undefined) {
+    return { kind: 'halt', halt: 'commit_failed', why: 'creation_audit_unconfirmed:port_missing' };
+  }
+  try {
+    await d.audit.appendKeyed(items.map((i) => ({ line: i.line, idem_key: i.idem_key })));
+  } catch (e) {
+    if (e instanceof RsiLockError && e.kind === 'lock_lost') throw e;
+    if (isSealedInterval(e)) return null;
+    return {
+      kind: 'halt',
+      halt: 'commit_failed',
+      why: `creation_audit_unconfirmed:${e instanceof Error ? e.message : 'error'}`,
+    };
+  }
+  return null;
 }
 
 async function landEffects(d: ApplyDeps, effects: readonly TransitionEffect[]): Promise<void> {

@@ -1,7 +1,7 @@
 /**
  * D1b-2:`applyEvent` 的增影响端口(`GrowthClaimPort`;I9)。增影响事件(`gates_passed` / `shadow_promote` / `deploy_inject`)必须先经端口:
- * 端口缺 / `unmappable` / `claim` 拒 / 返回畸形 = `halt{growth_denied}`,**零写入**(判定先于 `seal.open` / `store.read` / `store.commit`);
- * 放行 → 钩子进 `commit({beforeRefUpdate})`;提交前复核拒(`denied`)→ `halt{growth_denied}`。减影响事件不看端口(任何时候都能做)。
+ * 端口缺 / `unmappable` / `claim` 拒 / 返回畸形 = `denied`,**零写入**(判定先于 `seal.open` / `store.read` / `store.commit`);
+ * 放行 → 钩子进 `commit({beforeRefUpdate})`;提交前复核拒(`denied`)→ `denied`。减影响事件不看端口(任何时候都能做)。
  */
 import { describe, expect, it } from 'vitest';
 import type { PersonalLifecycleRecord } from '../../../src/contracts/rsi-personal.js';
@@ -142,31 +142,29 @@ const CASES: Case[] = [
   },
 ];
 
-describe('增影响事件:端口缺 / 拒 / 畸形 = growth_denied 且零写入', () => {
+describe('增影响事件:端口缺 / 拒 / 畸形 = denied 且零写入', () => {
   for (const c of CASES) {
-    it(`d1_sinks_refuse_without_pass:${c.name} 缺 growth 端口 → halt{growth_denied, unwired};零写入`, async () => {
+    it(`d1_sinks_refuse_without_pass:${c.name} 缺 growth 端口 → denied{unwired};零写入`, async () => {
       const p = probe(c.record(), 'absent');
       expect(await applyEvent(p.d, c.record(), c.event)).toEqual({
-        kind: 'halt',
-        halt: 'growth_denied',
+        kind: 'denied',
         why: 'unwired',
       });
       expectZeroWrites(p);
     });
 
-    it(`apply_growth_claim_denied_zero_write:${c.name} claim 拒 → halt{growth_denied, 原因码};零写入;claim 收到对应 op 与候选`, async () => {
+    it(`apply_growth_claim_denied_zero_write:${c.name} claim 拒 → denied{原因码};零写入;claim 收到对应 op 与候选`, async () => {
       const p = probe(c.record());
       p.growth.denyClaim = 'paused';
       expect(await applyEvent(p.d, c.record(), c.event)).toEqual({
-        kind: 'halt',
-        halt: 'growth_denied',
+        kind: 'denied',
         why: 'paused',
       });
       expectZeroWrites(p);
       expect(p.growth.claims).toEqual([{ op: c.op, cand: c.cand }]);
     });
 
-    it(`${c.name} claim 返回畸形(缺钩子 / 钩子非函数 / 无码的拒绝 / null / 非对象)→ 一律 growth_denied{claim_malformed};零写入`, async () => {
+    it(`${c.name} claim 返回畸形(缺钩子 / 钩子非函数 / 无码的拒绝 / null / 非对象)→ 一律 denied{claim_malformed};零写入`, async () => {
       const bad: unknown[] = [
         { ok: true },
         { ok: true, hook: 'nope' },
@@ -181,8 +179,7 @@ describe('增影响事件:端口缺 / 拒 / 畸形 = growth_denied 且零写入'
         const p = probe(c.record(), { claim: async () => b as never });
         const r = await applyEvent(p.d, c.record(), c.event);
         expect(r, JSON.stringify(b)).toEqual({
-          kind: 'halt',
-          halt: 'growth_denied',
+          kind: 'denied',
           why: 'claim_malformed',
         });
         expectZeroWrites(p);
@@ -211,11 +208,11 @@ describe('增影响事件:端口缺 / 拒 / 畸形 = growth_denied 且零写入'
       expect(p.growth.claims).toEqual([{ op: c.op, cand: c.cand }]);
     });
 
-    it(`${c.name} 提交前复核拒(commit 返回 denied)→ halt{growth_denied, 码};权威记录不变;区域已关闭;无审计 / 效果 / 工作副本写`, async () => {
+    it(`${c.name} 提交前复核拒(commit 返回 denied)→ denied{码};权威记录不变;区域已关闭;无审计 / 效果 / 工作副本写`, async () => {
       const p = probe(c.record());
       p.growth.hookDeny = 'taint_pending';
       const r = await applyEvent(p.d, c.record(), c.event);
-      expect(r).toEqual({ kind: 'halt', halt: 'growth_denied', why: 'taint_pending' });
+      expect(r).toEqual({ kind: 'denied', why: 'taint_pending' });
       expect(p.store.records.get(ID)?.lifecycle).toBe(c.record().lifecycle);
       expect(p.store.commits).toEqual([]);
       expect(p.n.opens).toBe(1);
@@ -250,8 +247,7 @@ describe('增影响事件:端口缺 / 拒 / 畸形 = growth_denied 且零写入'
     const canary = rec('canary', { deploy: { claude: 'none', pi: 'none', codex: 'none' } });
     const absent = probe(canary, 'absent');
     expect(await applyEvent(absent.d, canary, E.inject())).toEqual({
-      kind: 'halt',
-      halt: 'growth_denied',
+      kind: 'denied',
       why: 'unwired',
     });
     expectZeroWrites(absent);
@@ -270,8 +266,7 @@ describe('decide_better_always_refused_as_growth / 未登记事件', () => {
     const canary = rec('canary');
     const p = probe(canary);
     expect(await applyEvent(p.d, canary, E.decide())).toEqual({
-      kind: 'halt',
-      halt: 'growth_denied',
+      kind: 'denied',
       why: 'unmappable',
     });
     expect(p.growth.claims).toEqual([]);
@@ -283,8 +278,7 @@ describe('decide_better_always_refused_as_growth / 未登记事件', () => {
     const p = probe(r0, 'absent');
     const dirty = { kind: 'brand_new', evidence: 'x' } as unknown as TransitionEvent;
     expect(await applyEvent(p.d, r0, dirty)).toEqual({
-      kind: 'halt',
-      halt: 'growth_denied',
+      kind: 'denied',
       why: 'unmappable',
     });
     expectZeroWrites(p);

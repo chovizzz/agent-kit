@@ -41,7 +41,7 @@ import {
 } from './candidate-record.js';
 import { buildDraft, selectable } from './candidate-source.js';
 import { creationAuditItems } from './creation-audit.js';
-import { isSealedInterval, unsealedEntryTime } from './entry-stamp.js';
+import { isSealedInterval } from './entry-stamp.js';
 import { overlapsPreset, runGates } from './gates.js';
 import type { ShadowCountPort } from './shadow-count.js';
 import { txnId } from './ids.js';
@@ -288,6 +288,13 @@ export async function runPersonalStep(d: StepDeps): Promise<StepResult> {
     }
     // 创建是增影响动作:本轮已被拒过一次(缺端口 / claim 拒 / 提交前复核拒)就不再逐个候选重试(拒绝原因是回合级的),但后面的提案仍按原规则分类(skip / 碰撞中止)
     if (creationDenied) continue;
+    // W0-30 第 5 条:创建条目取时只经封存区域,**没有无封存退路**:缺 `seal` = 装配错误,提交前拒绝(不取时、不调 claim、零写入;与缺端口同为回合级拒绝)。减影响入口(`applyEvent` 缩减路径)保留无封存兼容
+    const seal = d.seal;
+    if (seal === undefined) {
+      creationDenied = true;
+      out.growthDenied.push({ op: 'candidate_create', code: 'seal_missing' });
+      continue;
+    }
     const claim = await claimGrowthPort(d.growth, 'candidate_create', null);
     if (!claim.ok) {
       creationDenied = true;
@@ -295,11 +302,11 @@ export async function runPersonalStep(d: StepDeps): Promise<StepResult> {
       continue;
     }
     // 取时只经封存区域(`entry-stamp.ts`:W 先于 now 读好,取值后校验;区域覆盖到本次落地结束):封存区间 → 源提交之前拒绝,零写入
-    const region = d.seal === undefined ? null : await d.seal.open();
+    const region = await seal.open();
     try {
       let now: string;
       try {
-        now = region === null ? unsealedEntryTime(d.now) : region.stampFirst(d.now);
+        now = region.stampFirst(d.now);
       } catch (e) {
         if (!isSealedInterval(e)) throw e;
         return halt('sealed_interval');
@@ -330,7 +337,7 @@ export async function runPersonalStep(d: StepDeps): Promise<StepResult> {
                 : 'commit_failed',
         );
       }
-      region?.markSourceCommitted();
+      region.markSourceCommitted();
       head = c.commit;
       known.set(draft.id, draft.contentSha256);
       // 已提交:先登记创建事实,再落地工作副本与审计(失败不抹掉 created;丢锁立即结束)
@@ -352,7 +359,7 @@ export async function runPersonalStep(d: StepDeps): Promise<StepResult> {
         out.effectsFailed.push(`${draft.id}:${e instanceof Error ? e.message : 'error'}`);
       }
     } finally {
-      region?.close();
+      region.close();
     }
   }
   re = await reload();

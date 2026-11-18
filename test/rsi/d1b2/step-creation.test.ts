@@ -243,15 +243,15 @@ describe('创建审计缺带键出口:不回落无键 append(与恢复的键去�
   });
 });
 
-describe('growth_denied 的降级只对已分类的增影响事件(减影响事件出现 growth_denied = 底座违约 → halt)', () => {
-  it('runner_downgrades_reducing_denied:减影响事件(shadow 排队到期)的提交返回 denied → halted=growth_denied(fail-closed),不记 growthDenied', async () => {
+describe('ApplyResult.denied 的降级只对已分类的增影响事件(减影响事件出现 denied = 底座违约 → halt commit_failed)', () => {
+  it('runner_downgrades_reducing_denied:减影响事件(shadow 排队到期)的提交返回 denied → halted=commit_failed(既有的完整性失败类,fail-closed),不记 growthDenied', async () => {
     const w = world3({ phase: V1B });
     const s = mkRec('shadow', { id: B, cluster_id: 'cl-b' });
     w.store.put(s);
     w.working.set(B, wcFor(s, '2026-10-11')); // 30 日 → 排队到期(减影响)
     w.store.failCommit = { status: 'denied', code: 'rogue' };
     const r = await runPersonalStep(w.d);
-    expect(r.halted).toBe('growth_denied');
+    expect(r.halted).toBe('commit_failed');
     expect(r.growthDenied).toEqual([]);
     expect(w.store.records.get(B)?.lifecycle).toBe('shadow');
   });

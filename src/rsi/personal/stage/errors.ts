@@ -117,10 +117,7 @@ export type HaltClass =
   | {
       readonly kind: 'stop_step_unsettled';
       /** 不含 `repo_absent` / `repo_deferred`(它们是 `stop_step`);与 `UnsettledReason` 的 `step_integrity:*` 同集 */
-      readonly cause: Exclude<
-        StepHalt,
-        'lock_lost' | 'repo_absent' | 'repo_deferred' | 'growth_denied'
-      >;
+      readonly cause: Exclude<StepHalt, 'lock_lost' | 'repo_absent' | 'repo_deferred'>;
     }
   /**
    * `StepHalt` 里只有一个 `lock_lost`,**区分不出是 rsi 锁还是个人锁**。不得默认当个人锁处理(那等于 rsi 失锁时继续写):
@@ -139,9 +136,6 @@ const HALT_CLASS: Readonly<Record<StepHalt, HaltClass>> = Object.freeze({
   commit_failed: { kind: 'stop_step_unsettled', cause: 'commit_failed' },
   candidate_invalid: { kind: 'stop_step_unsettled', cause: 'candidate_invalid' },
   lock_lost: { kind: 'lock_lost_unresolved' },
-  // D1b-2:`halted = growth_denied` 只会出现在**运行器没有降级**的场合(减影响事件出现 growth_denied、或没有 `growthDenied` 记录端的运行器 = 底座违约);
-  // 正常的增影响被拒(缺端口 / claim 拒 / 提交前复核拒)由 `runPersonalStep` 记为 `growthDenied`,不经 halted。违约 = 完整性不明:停本步并使本轮 unsettled(fail-closed),cause 取既有的 `commit_failed`
-  growth_denied: { kind: 'stop_step_unsettled', cause: 'commit_failed' },
 });
 
 export function classifyHalt(h: StepHalt): HaltClass {

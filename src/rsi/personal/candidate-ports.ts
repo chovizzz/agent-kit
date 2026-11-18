@@ -122,6 +122,4 @@ export type StepHalt =
   | 'candidate_invalid'
   | 'lock_lost'
   /** 事件时刻落在已封存区间(W0-26 第 9 条):源提交之前拒绝,零写入;时钟恢复后重跑 */
-  | 'sealed_interval'
-  /** 增影响事件被 {@link GrowthClaimPort} 拒绝(缺端口 / 无法映射 / claim 拒 / 提交前复核拒):零写入或提交前拒绝,`why` 带原因码;`runPersonalStep` 把它降为 `growthDenied` 记录而不中止减影响子步骤 */
-  | 'growth_denied';
+  | 'sealed_interval';

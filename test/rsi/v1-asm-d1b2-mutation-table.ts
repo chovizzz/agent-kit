@@ -43,7 +43,7 @@ const RECONCILE = 'src/rsi/store/reconcile-source.ts';
 const GRANT = 'src/rsi/canary/canary-writer.ts';
 const ADMISSION = 'src/rsi/canary/admission-write.ts';
 const SINKS = 'src/rsi/canary/growth-sinks.ts';
-const ERRORS = 'src/rsi/personal/stage/errors.ts';
+const VETO = 'src/rsi/auto/write/veto.ts';
 
 const HOOK_T = 'rsi/d1b2/commit-hook.test.ts';
 const APPLY_T = 'rsi/d1b2/apply-growth.test.ts';
@@ -54,13 +54,13 @@ const CAUDIT_T = 'rsi/d1b2/creation-audit.test.ts';
 const CEXTRA_T = 'rsi/d1b2/creation-extra.test.ts';
 const ARCH_T = 'rsi/d1b2/growth-sinks-arch.test.ts';
 const STAMP_T = 'rsi/asm/b-entry-stamp-arch.test.ts';
-const FB_T = 'rsi/stage/c1-fallback.test.ts';
+const ACC_T = 'rsi/d1b2/accept-r1.test.ts';
 
 /** 各测试文件的 describe 标题(失败集合须 ⊆ expectRed;所以把整个 describe 记为「命中范围」) */
 const D_HOOK_DENY = 'beforeRefUpdate:拒绝';
 const D_HOOK_OTHER = 'beforeRefUpdate:其它错误一律传播(不当成拒绝)';
 const D_HOOK_POS = 'beforeRefUpdate:位置与锁复核';
-const D_AG = '增影响事件:端口缺 / 拒 / 畸形 = growth_denied 且零写入';
+const D_AG = '增影响事件:端口缺 / 拒 / 畸形 = denied 且零写入';
 const D_AG_DECIDE = 'decide_better_always_refused_as_growth / 未登记事件';
 const D_EV = 'event_kind_classified:增影响分类穷举';
 const D_S_CREATE =
@@ -72,7 +72,7 @@ const D_S_OBS = '观察行只经 appendObservation(I12)';
 const D_S_LOCKS = 'StepDeps.locks 两把锁都要持(I9 的锁半)';
 const D_S_AUDIT_PORT = '创建审计缺带键出口:不回落无键 append(与恢复的键去重对齐)';
 const D_S_DOWNGRADE =
-  'growth_denied 的降级只对已分类的增影响事件(减影响事件出现 growth_denied = 底座违约 → halt)';
+  'ApplyResult.denied 的降级只对已分类的增影响事件(减影响事件出现 denied = 底座违约 → halt commit_failed)';
 const D_S_HOOKREAD = 'claim 返回值只读一次(校验过的值就是转交的值)';
 const D_P_HAS = 'hasSinkPass:只认铸造登记';
 const D_P_GRANT = 'grantCanary:pass 是第一道门';
@@ -84,7 +84,13 @@ const D_EX = 'd1_creation_always_refused_with_reason';
 const D_ARCH = 'GROWTH_SINKS:登记表与形态校验';
 const D_ARCH_SCAN = '同名扫描与写出口覆盖扫描(防漏登记)';
 const D_STAMP = 'entry_time_only_via_stamp(B2 档)';
-const D_FB = 'classifyHalt(StepHalt 的处置;lock_lost 不能默认当个人锁)';
+const D_ACC_TRUNC = 'creation_audit_confirmed_before_truncation(第 3 条)';
+const D_ACC_SEAL = 'creation_requires_seal(第 4 条)';
+const D_ACC_DENIED = 'denied_is_apply_result_branch(第 5 条)';
+const D_ARCH_AUTH = '④ 权威写出口反查:调用者 ⊆ 登记汇点 ∪ 精确白名单(不看钩子)';
+const K_ARCH_AUTH = 'src/rsi/** 的权威写出口调用者恰为允许集';
+const K_ARCH_FLOW = '钩子数据流:claim 返回值 → 拒绝分支先于提交';
+const K_ARCH_INONLY = 'applyIn 只被 applyEvent 调用';
 
 const PASS_GATE_GRANT =
   "  if (!hasSinkPass(pass)) return { kind: 'refused', reason: 'growth_denied' };";
@@ -161,8 +167,8 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
     edits: [
       {
         file: COMMIT,
-        anchor: "  if (!same || (a.phase !== 'planned' && a.phase !== 'objects_written')) return;",
-        replacement: "  if (a.phase !== 'planned' && a.phase !== 'objects_written') return;",
+        anchor: "  if (!same) return { kind: 'journal_unverified', why: 'journal_not_mine' };\n",
+        replacement: '',
       },
     ],
     tests: [HOOK_T],
@@ -198,8 +204,8 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
       {
         file: COMMIT,
         anchor:
-          '): Promise<void> {\n  await assertLocks(ctx);\n  const cur = await readJournal(ctx.h);',
-        replacement: '): Promise<void> {\n  const cur = await readJournal(ctx.h);',
+          '): Promise<DiscardResult> {\n  await assertLocks(ctx);\n  const cur = await readJournal(ctx.h);',
+        replacement: '): Promise<DiscardResult> {\n  const cur = await readJournal(ctx.h);',
       },
     ],
     tests: [HOOK_T],
@@ -321,8 +327,7 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
     edits: [
       {
         file: APPLY,
-        anchor:
-          "  if (op === 'unmappable') return { kind: 'halt', halt: 'growth_denied', why: 'unmappable' };\n",
+        anchor: "  if (op === 'unmappable') return { kind: 'denied', why: 'unmappable' };\n",
         replacement: '',
       },
     ],
@@ -342,6 +347,7 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
     ],
     tests: [APPLY_T, ARCH_T],
     expectRed: [
+      D_ARCH_AUTH,
       D_AG,
       D_ARCH,
       '放行:钩子进 commit 的 beforeRefUpdate',
@@ -354,13 +360,12 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
     ],
   },
   {
-    id: 'apply_denied_commit_not_growth_denied',
-    clause: 'I9:提交前复核拒(commit denied)= growth_denied + 原因码,不是 commit_failed',
+    id: 'apply_denied_commit_not_denied_branch',
+    clause: 'I9:提交前复核拒(commit denied)= ApplyResult.denied + 原因码,不是 commit_failed',
     edits: [
       {
         file: APPLY,
-        anchor:
-          "  if (c.status === 'denied') return { kind: 'halt', halt: 'growth_denied', why: c.code };\n",
+        anchor: "  if (c.status === 'denied') return { kind: 'denied', why: c.code };\n",
         replacement: '',
       },
     ],
@@ -395,6 +400,7 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
     ],
     tests: [STEP_T, ARCH_T],
     expectRed: [
+      D_ARCH_AUTH,
       D_S_CREATE,
       D_S_NOHALT,
       D_ARCH,
@@ -408,7 +414,13 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
     clause: 'I9:创建提交的钩子必须进 commit(提交前最终复核)',
     edits: [{ file: STEP, anchor: '        beforeRefUpdate: claim.hook,', replacement: '' }],
     tests: [STEP_T, ARCH_T],
-    expectRed: [D_S_CREATE, D_ARCH, '提交前复核拒(commit 返回 denied)', '每个登记汇点的实现合规'],
+    expectRed: [
+      D_ARCH_AUTH,
+      D_S_CREATE,
+      D_ARCH,
+      '提交前复核拒(commit 返回 denied)',
+      '每个登记汇点的实现合规',
+    ],
     mustKill: ['提交前复核拒(commit 返回 denied)', '每个登记汇点的实现合规'],
   },
   {
@@ -456,8 +468,8 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
     edits: [
       {
         file: RSTEP,
-        anchor: '      out.growthDenied !== undefined &&\n',
-        replacement: '      out.growthDenied === undefined &&\n',
+        anchor: '      if (out.growthDenied !== undefined && growthOp !== null) {\n',
+        replacement: '      if (out.growthDenied === undefined && growthOp !== null) {\n',
       },
     ],
     tests: [STEP_T],
@@ -523,12 +535,12 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
   {
     id: 'runner_downgrades_reducing_denied',
     clause:
-      'I9:growth_denied 只对已分类的增影响事件降级为记录;减影响事件出现 = 底座违约 → halt(fail-closed)',
+      'I9 / 验收第 5 条:denied 只对已分类的增影响事件降级为记录;减影响事件出现 = 底座违约 → halt commit_failed(fail-closed)',
     edits: [
       {
         file: RSTEP,
-        anchor: '      growthOp !== null\n    ) {',
-        replacement: '      true\n    ) {',
+        anchor: '      if (out.growthDenied !== undefined && growthOp !== null) {\n',
+        replacement: '      if (out.growthDenied !== undefined) {\n',
       },
     ],
     tests: [STEP_T],
@@ -536,19 +548,34 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
     mustKill: ['runner_downgrades_reducing_denied'],
   },
   {
-    id: 'growth_denied_halt_class_unsettled',
+    id: 'runner_denied_unclassified_continues',
     clause:
-      'I9:growth_denied 作为 halted(= 运行器没降级:底座违约)的分类 = 停本步并使本轮 unsettled(fail-closed)',
+      '验收第 5 条:无法处理的 denied(减影响事件 / 无记录端)映射 commit_failed 并停本步,不得当成普通结果继续',
     edits: [
       {
-        file: ERRORS,
-        anchor: "  growth_denied: { kind: 'stop_step_unsettled', cause: 'commit_failed' },",
-        replacement: "  growth_denied: { kind: 'stop_step' },",
+        file: RSTEP,
+        anchor:
+          "      out.halted = 'commit_failed';\n      return 'halt';\n    }\n    if (r.kind === 'halt') {",
+        replacement: "      return 'other';\n    }\n    if (r.kind === 'halt') {",
       },
     ],
-    tests: [FB_T],
-    expectRed: [D_FB, '逐值钉死'],
-    mustKill: ['逐值钉死'],
+    tests: [STEP_T, ACC_T],
+    expectRed: [D_S_DOWNGRADE, 'runner_downgrades_reducing_denied', D_ACC_DENIED],
+    mustKill: ['runner_downgrades_reducing_denied'],
+  },
+  {
+    id: 'veto_denied_treated_as_success',
+    clause: '验收第 5 条:veto(减影响)遇到 denied = 底座违约,退 3 internal(fail-closed),不当成成功',
+    edits: [
+      {
+        file: VETO,
+        anchor: "  if (r.kind === 'denied') return failClosed(ctx, 'internal');\n",
+        replacement: '',
+      },
+    ],
+    tests: [ACC_T],
+    expectRed: [D_ACC_DENIED, 'veto(减影响)遇到 denied'],
+    mustKill: ['veto(减影响)遇到 denied'],
   },
 
   // ---------------- I10:事件分类 ----------------
@@ -660,8 +687,7 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
     edits: [
       {
         file: STEP,
-        anchor:
-          '        now = region === null ? unsealedEntryTime(d.now) : region.stampFirst(d.now);',
+        anchor: '        now = region.stampFirst(d.now);',
         replacement: '        now = d.now().toISOString();',
       },
     ],
@@ -680,7 +706,7 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
   {
     id: 'creation_region_not_closed',
     clause: 'I11:封存区域在创建落地结束后关闭(任何分支)',
-    edits: [{ file: STEP, anchor: '      region?.close();', replacement: '      void 0;' }],
+    edits: [{ file: STEP, anchor: '      region.close();', replacement: '      void 0;' }],
     tests: [STEP_T],
     expectRed: [D_S_CREATE, '提交前复核拒(commit 返回 denied)'],
     mustKill: ['提交前复核拒(commit 返回 denied)'],
@@ -974,6 +1000,341 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
       'sink_gate_list_emptied',
     ],
     mustKill: ['登记表非空、冻结、文件与函数都存在'],
+  },
+
+  // ---------------- 验收第 1 轮(R1)返工 ----------------
+  // 第 1 条:钩子拒绝后清理结果可区分,不确认 = 不降级为普通 denied
+  {
+    id: 'denied_cleanup_unreadable_journal_silent',
+    clause: 'R1-1:journal 读不出(被别人删)时不能静默当作干净清理(保留现场,走完整性失败路径)',
+    edits: [
+      {
+        file: COMMIT,
+        anchor:
+          "  if (cur.kind !== 'ok') return { kind: 'journal_unverified', why: `journal_${cur.kind}` };",
+        replacement: "  if (cur.kind !== 'ok') return { kind: 'clean' };",
+      },
+    ],
+    tests: [HOOK_T],
+    expectRed: [D_HOOK_DENY, 'denied_cleanup_journal_gone_not_plain_denied'],
+    mustKill: ['denied_cleanup_journal_gone_not_plain_denied'],
+  },
+  {
+    id: 'denied_cleanup_ref_moved_silent',
+    clause: 'R1-1:refs/heads/rsi 已被别人推进时不能返回普通 denied(完整性不明,保留现场)',
+    edits: [
+      {
+        file: COMMIT,
+        anchor: "  if (actual !== oldHead) return { kind: 'ref_moved', actual };\n",
+        replacement: '',
+      },
+    ],
+    tests: [HOOK_T],
+    expectRed: [D_HOOK_DENY, 'denied_cleanup_ref_moved_not_plain_denied'],
+    mustKill: ['denied_cleanup_ref_moved_not_plain_denied'],
+  },
+  {
+    id: 'denied_unverified_result_mapped_to_denied',
+    clause: 'R1-1:清理结果为「journal 不能确认」时 commitPersonal 不得返回普通 denied',
+    edits: [
+      {
+        file: COMMIT,
+        anchor:
+          "      if (d.kind === 'journal_unverified') {\n        return { status: 'invalid', why: d.why, breaker: PERSONAL_REPO_INVALID };\n      }\n",
+        replacement: '',
+      },
+    ],
+    tests: [HOOK_T],
+    expectRed: [
+      D_HOOK_DENY,
+      'before_ref_update_denied_foreign_journal_untouched',
+      'before_ref_update_denied_same_txn_different_content_untouched',
+      'denied_cleanup_journal_gone_not_plain_denied',
+    ],
+    mustKill: [
+      'before_ref_update_denied_foreign_journal_untouched',
+      'denied_cleanup_journal_gone_not_plain_denied',
+    ],
+  },
+  {
+    id: 'denied_ref_moved_result_mapped_to_denied',
+    clause: 'R1-1:清理结果为「ref 已移动」时 commitPersonal 不得返回普通 denied',
+    edits: [
+      {
+        file: COMMIT,
+        anchor:
+          "      if (d.kind === 'ref_moved') {\n        return {\n          status: 'deferred',\n          reason: 'personal_repo_diverged',\n          why: 'ref_moved_after_denied',\n        };\n      }\n",
+        replacement: '',
+      },
+    ],
+    tests: [HOOK_T],
+    expectRed: [D_HOOK_DENY, 'denied_cleanup_ref_moved_not_plain_denied'],
+    mustKill: ['denied_cleanup_ref_moved_not_plain_denied'],
+  },
+  // 第 2 条:架构门反查权威写出口 + 钩子数据流
+  {
+    id: 'unregistered_hookless_writer_added',
+    clause: 'R1-2:新增一个未登记、无钩子的权威提交写者(store.commit)→ 反查红',
+    edits: [
+      {
+        file: RSTEP,
+        anchor: '/** 对账的结果(`StepResult` 的结构化子集) */',
+        replacement:
+          "export async function rogueWriter(d: ApplyDeps): Promise<void> {\n  await d.store.commit({ kind: 'transition', txnId: 'x', candidateIds: [], upserts: [] });\n}\n\n/** 对账的结果(`StepResult` 的结构化子集) */",
+      },
+    ],
+    tests: [ARCH_T],
+    expectRed: [D_ARCH_AUTH, K_ARCH_AUTH],
+    mustKill: [K_ARCH_AUTH],
+  },
+  {
+    id: 'unregistered_aliased_writer_added',
+    clause: 'R1-2:别名后的提交(const s = d.store; s.commit({txnId…}))也被反查到',
+    edits: [
+      {
+        file: RSTEP,
+        anchor: '/** 对账的结果(`StepResult` 的结构化子集) */',
+        replacement:
+          "export async function rogueAlias(d: ApplyDeps): Promise<void> {\n  const s = d.store;\n  await s.commit({ kind: 'transition', txnId: 'x', candidateIds: [], upserts: [] });\n}\n\n/** 对账的结果(`StepResult` 的结构化子集) */",
+      },
+    ],
+    tests: [ARCH_T],
+    expectRed: [D_ARCH_AUTH, K_ARCH_AUTH],
+    mustKill: [K_ARCH_AUTH],
+  },
+  {
+    id: 'creation_commit_hook_replaced_by_noop',
+    clause: 'R1-2:创建提交保留 claim 但丢掉它给的钩子(换成空钩子)→ 钩子数据流红',
+    edits: [
+      {
+        file: STEP,
+        anchor: '        beforeRefUpdate: claim.hook,',
+        replacement: '        beforeRefUpdate: async () => undefined,',
+      },
+    ],
+    tests: [ARCH_T],
+    expectRed: [D_ARCH, D_ARCH_AUTH, K_ARCH_FLOW, '每个登记汇点的实现合规'],
+    mustKill: [K_ARCH_FLOW, '每个登记汇点的实现合规'],
+  },
+  {
+    id: 'creation_commit_hook_removed',
+    clause: 'R1-2:删掉创建提交的 hook 转交 → 钩子数据流红',
+    edits: [{ file: STEP, anchor: '        beforeRefUpdate: claim.hook,\n', replacement: '' }],
+    tests: [ARCH_T],
+    expectRed: [
+      D_ARCH_AUTH,
+      D_ARCH_SCAN,
+      D_ARCH,
+      D_ARCH_AUTH,
+      K_ARCH_FLOW,
+      '每个登记汇点的实现合规',
+    ],
+    mustKill: [K_ARCH_FLOW, '每个登记汇点的实现合规'],
+  },
+  {
+    id: 'apply_commit_hook_replaced_by_noop',
+    clause: 'R1-2:applyIn 的提交保留条件展开但钩子换成空钩子 → 钩子数据流红',
+    edits: [
+      {
+        file: APPLY,
+        anchor: '    ...(hook !== undefined ? { beforeRefUpdate: hook } : {}),',
+        replacement:
+          '    ...(hook !== undefined ? { beforeRefUpdate: async () => undefined } : {}),',
+      },
+    ],
+    tests: [ARCH_T],
+    expectRed: [D_ARCH_AUTH, D_ARCH, K_ARCH_FLOW, '每个登记汇点的实现合规'],
+    mustKill: [K_ARCH_FLOW],
+  },
+  {
+    id: 'apply_event_claim_hook_dropped',
+    clause: 'R1-2:applyEvent 保留 claim 但不把钩子转交 applyIn → 红',
+    edits: [
+      {
+        file: APPLY,
+        anchor: 'region, wcAfter, wc, claimed.hook);',
+        replacement: 'region, wcAfter, wc, undefined);',
+      },
+    ],
+    tests: [ARCH_T, APPLY_T],
+    expectRed: [
+      D_ARCH_AUTH,
+      D_ARCH,
+      K_ARCH_FLOW,
+      'candidate-apply.ts:所有 store.commit 带 beforeRefUpdate',
+      '放行:钩子进 commit 的 beforeRefUpdate',
+      D_AG,
+    ],
+    mustKill: [K_ARCH_FLOW],
+  },
+  {
+    id: 'apply_event_rejection_not_returned',
+    clause: 'R1-2:applyEvent 被拒后不得继续往下(拒绝分支先于 applyIn)',
+    edits: [
+      {
+        file: APPLY,
+        anchor: "  if (claimed.kind === 'halt' || claimed.kind === 'denied') return claimed;\n",
+        replacement: '',
+      },
+    ],
+    tests: [ARCH_T, APPLY_T],
+    expectRed: [
+      D_ARCH_AUTH,
+      D_ARCH,
+      K_ARCH_FLOW,
+      D_AG,
+      'apply_growth_claim_denied_zero_write',
+      'd1_sinks_refuse_without_pass',
+    ],
+    mustKill: [K_ARCH_FLOW, 'apply_growth_claim_denied_zero_write'],
+  },
+  {
+    id: 'applyin_second_caller_added',
+    clause: 'R1-2:applyIn 出现第二个调用者(绕过 applyEvent 的 claim)→ 反查红',
+    edits: [
+      {
+        file: APPLY,
+        anchor: 'async function applyIn(\n  d: ApplyDeps,',
+        replacement:
+          "export async function backdoor(d: ApplyDeps, rec: PersonalLifecycleRecord, event: TransitionEvent, fresh: Fresh, rv: RevRead, env: Awaited<ReturnType<EnvReader['read']>>): Promise<ApplyResult> {\n  return applyIn(d, rec, event, fresh, rv, env, null);\n}\n\nasync function applyIn(\n  d: ApplyDeps,",
+      },
+    ],
+    tests: [ARCH_T],
+    expectRed: [D_ARCH_AUTH, K_ARCH_INONLY],
+    mustKill: [K_ARCH_INONLY],
+  },
+  // 第 3 条:创建审计的截断边界
+  {
+    id: 'truncation_without_creation_audit_confirm',
+    clause: 'R1-3:截断创建条目之前不确认创建审计(整段确认被删)',
+    edits: [
+      {
+        file: APPLY,
+        anchor:
+          '  const unconfirmed = await confirmCreationAuditBeforeTruncation(d, rec, res.next);\n  if (unconfirmed !== null) return unconfirmed;\n',
+        replacement: '',
+      },
+    ],
+    tests: [ACC_T],
+    expectRed: [
+      D_ACC_TRUNC,
+      '截断创建条目的转移:先经带键端口落创建审计',
+      'truncation_refused_when_creation_audit_unconfirmed',
+    ],
+    mustKill: [
+      '截断创建条目的转移:先经带键端口落创建审计',
+      'truncation_refused_when_creation_audit_unconfirmed',
+    ],
+  },
+  {
+    id: 'truncation_confirm_failure_swallowed',
+    clause: 'R1-3:确认失败不得放行截断(失败 = 拒绝该转移)',
+    edits: [
+      {
+        file: APPLY,
+        anchor:
+          "    return {\n      kind: 'halt',\n      halt: 'commit_failed',\n      why: `creation_audit_unconfirmed:${e instanceof Error ? e.message : 'error'}`,\n    };",
+        replacement: '    return null;',
+      },
+    ],
+    tests: [ACC_T],
+    expectRed: [D_ACC_TRUNC, 'truncation_refused_when_creation_audit_unconfirmed'],
+    mustKill: ['truncation_refused_when_creation_audit_unconfirmed'],
+  },
+  {
+    id: 'truncation_confirm_port_missing_proceeds',
+    clause: 'R1-3:缺 appendKeyed 端口时不得放行截断',
+    edits: [
+      {
+        file: APPLY,
+        anchor:
+          "    return { kind: 'halt', halt: 'commit_failed', why: 'creation_audit_unconfirmed:port_missing' };",
+        replacement: '    return null;',
+      },
+    ],
+    tests: [ACC_T],
+    expectRed: [D_ACC_TRUNC, '缺 appendKeyed 端口 → 拒绝截断'],
+    mustKill: ['缺 appendKeyed 端口 → 拒绝截断'],
+  },
+  {
+    id: 'truncation_confirm_always',
+    clause: 'R1-3:只在会截断创建条目的转移上确认(创建条目仍在窗口内不额外落行)',
+    edits: [
+      {
+        file: APPLY,
+        anchor:
+          '  if (items.length === 0 || next.transitions_dropped <= rec.transitions_dropped) return null;',
+        replacement: '  if (items.length === 0) return null;',
+      },
+    ],
+    tests: [ACC_T],
+    expectRed: [D_ACC_TRUNC, '对照:创建条目仍在窗口内'],
+    mustKill: ['对照:创建条目仍在窗口内'],
+  },
+  {
+    id: 'truncation_confirm_lock_lost_swallowed',
+    clause: 'R1-3:确认期间丢锁原样传播,不吞成 halt',
+    edits: [
+      {
+        file: APPLY,
+        anchor:
+          "    if (e instanceof RsiLockError && e.kind === 'lock_lost') throw e;\n    if (isSealedInterval(e)) return null;\n",
+        replacement: '    if (isSealedInterval(e)) return null;\n',
+      },
+    ],
+    tests: [ACC_T],
+    expectRed: [D_ACC_TRUNC, '丢锁原样传播'],
+    mustKill: ['丢锁原样传播'],
+  },
+  {
+    id: 'truncation_confirm_sealed_blocks',
+    clause: 'R1-3:创建日已封存(sealed_interval)视为已确认,不得永久阻塞转移',
+    edits: [
+      {
+        file: APPLY,
+        anchor: '    if (isSealedInterval(e)) return null;\n    return {',
+        replacement: '    return {',
+      },
+    ],
+    tests: [ACC_T],
+    expectRed: [D_ACC_TRUNC, '创建日已封存'],
+    mustKill: ['创建日已封存'],
+  },
+  // 第 4 条:创建没有无封存退路
+  {
+    id: 'creation_seal_missing_allowed',
+    clause: 'R1-4:缺 seal 时不得创建(恢复「无封存退路」→ 红)',
+    edits: [
+      {
+        file: STEP,
+        anchor: '    if (seal === undefined) {\n      creationDenied = true;',
+        replacement: '    if ((seal as unknown) === 0) {\n      creationDenied = true;',
+      },
+      {
+        file: STEP,
+        anchor: '    const region = await seal.open();',
+        replacement:
+          '    const region =\n      seal === undefined\n        ? { stampFirst: (n: () => Date) => n().toISOString(), markSourceCommitted: () => undefined, close: () => undefined }\n        : await seal.open();',
+      },
+    ],
+    tests: [ACC_T],
+    expectRed: [D_ACC_SEAL, '放行的 claim + 不装 seal'],
+    mustKill: ['放行的 claim + 不装 seal'],
+  },
+  {
+    id: 'creation_seal_check_after_claim',
+    clause: 'R1-4:缺 seal 的拒绝先于 claim(claim 不被调用)',
+    edits: [
+      {
+        file: STEP,
+        anchor: "      out.growthDenied.push({ op: 'candidate_create', code: 'seal_missing' });\n",
+        replacement:
+          "      out.growthDenied.push({ op: 'candidate_create', code: 'seal_missing' });\n      await claimGrowthPort(d.growth, 'candidate_create', null);\n",
+      },
+    ],
+    tests: [ACC_T],
+    expectRed: [D_ACC_SEAL, '放行的 claim + 不装 seal'],
+    mustKill: ['放行的 claim + 不装 seal'],
   },
 ];
 

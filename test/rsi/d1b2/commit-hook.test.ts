@@ -11,7 +11,7 @@ import {
   type PersonalLocks,
 } from '../../../src/rsi/personal/commit.js';
 import { EMPTY_TREE } from '../../../src/rsi/personal/commit-journal.js';
-import { readJournal, writeJournal } from '../../../src/rsi/personal/home-state.js';
+import { readJournal, removeJournal, writeJournal } from '../../../src/rsi/personal/home-state.js';
 import {
   git,
   makeWorld,
@@ -87,7 +87,7 @@ describe('beforeRefUpdate:拒绝', () => {
     expect(ok.status).toBe('committed');
   });
 
-  it('before_ref_update_denied_foreign_journal_untouched:钩子期间 journal 被换成别的事务 → denied,但不删别人的 journal', async () => {
+  it('before_ref_update_denied_foreign_journal_untouched:钩子期间 journal 被换成别的事务 → 不是普通 denied(invalid / journal_not_mine,保留现场),也不删别人的 journal', async () => {
     const w = await makeWorld('d1b2-hook-foreign-');
     await setupRepo(w);
     let foreign = '';
@@ -103,12 +103,12 @@ describe('beforeRefUpdate:拒绝', () => {
         },
       }),
     );
-    expect(r.status).toBe('denied');
+    expect(r).toMatchObject({ status: 'invalid', why: 'journal_not_mine' });
     const after = await readJournal(w.h);
     expect(after.kind === 'ok' ? after.value.txn_id : null).toBe(foreign);
   });
 
-  it('before_ref_update_denied_same_txn_different_content_untouched:txn_id 相同但内容(target_tree)不同 → 不删(只比 txn_id 不够)', async () => {
+  it('before_ref_update_denied_same_txn_different_content_untouched:txn_id 相同但内容(target_tree)不同 → 不删且不当普通 denied(只比 txn_id 不够)', async () => {
     const w = await makeWorld('d1b2-hook-samecontent-');
     await setupRepo(w);
     const r = await withLock(w, (locks) =>
@@ -122,9 +122,51 @@ describe('beforeRefUpdate:拒绝', () => {
         },
       }),
     );
-    expect(r.status).toBe('denied');
+    expect(r).toMatchObject({ status: 'invalid', why: 'journal_not_mine' });
     const after = await readJournal(w.h);
     expect(after.kind === 'ok' ? after.value.target_tree : null).toBe(EMPTY_TREE);
+  });
+
+  it('denied_cleanup_journal_gone_not_plain_denied:钩子期间 journal 被删(无法确认是本次事务)→ invalid / journal_absent,不是普通 denied;引用不动', async () => {
+    const w = await makeWorld('d1b2-hook-gone-');
+    await setupRepo(w);
+    const old = refOf(w);
+    const r = await withLock(w, (locks) =>
+      commitPersonal(repoDeps(w), locks, {
+        ...spec('2', NEXT_FILES),
+        beforeRefUpdate: async () => {
+          await removeJournal(w.h);
+          throw new BeforeRefUpdateDenied('x');
+        },
+      }),
+    );
+    expect(r).toMatchObject({ status: 'invalid', why: 'journal_absent' });
+    expect(refOf(w)).toBe(old);
+  });
+
+  it('denied_cleanup_ref_moved_not_plain_denied:钩子期间 refs/heads/rsi 被别人推进 → deferred / personal_repo_diverged,不是普通 denied;自己的 journal 与第三方引用都保留', async () => {
+    const w = await makeWorld('d1b2-hook-refmoved-');
+    await setupRepo(w);
+    let moved = '';
+    const r = await withLock(w, (locks) =>
+      commitPersonal(repoDeps(w), locks, {
+        ...spec('2', NEXT_FILES),
+        beforeRefUpdate: async () => {
+          const old = refOf(w);
+          moved = git(w, ['commit-tree', `${old}^{tree}`, '-p', old, '-m', 'third']);
+          git(w, ['update-ref', 'refs/heads/rsi', moved, old]);
+          throw new BeforeRefUpdateDenied('x');
+        },
+      }),
+    );
+    expect(r).toMatchObject({
+      status: 'deferred',
+      reason: 'personal_repo_diverged',
+      why: 'ref_moved_after_denied',
+    });
+    expect(refOf(w)).toBe(moved);
+    const j = await readJournal(w.h);
+    expect(j.kind === 'ok' ? j.value.phase : null).toBe('objects_written');
   });
 });
 

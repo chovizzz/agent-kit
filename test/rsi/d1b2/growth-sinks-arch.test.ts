@@ -3,7 +3,10 @@
  *  ① 登记表里每个汇点按形态校验:`pass_param` = 最后一个形参 `pass: GrowthPass` 非可选 + 函数体第一条语句是 `if (!hasSinkPass(pass)) return …`(任何 await 之前);
  *     `port_claim` = 钩子经 `claim*` 取得,且先于 `store.read` / `seal.open` / `store.commit`,所有 `store.commit(` 都带 `beforeRefUpdate`;`auth_port` = `authorize` 先于 `mkdir` / `git init` / `mktree`;
  *  ② 同名扫描:`src/rsi/**` 里定义了与汇点同名的函数而不在登记文件里 = 红(防漏登记 / 拷贝出绕过版);
- *  ③ 写出口覆盖扫描:写 `canary.json` / `canary-admission.json` 的调用、带 `beforeRefUpdate` 的 `store.commit`,所在函数必须 ⊆ 登记表 ∪ 冻结的「只减影响」白名单(带理由)。
+ *  ③ 写出口覆盖扫描:写 `canary.json` / `canary-admission.json` 的调用,所在函数必须 ⊆ 登记表 ∪ 冻结的「只减影响」白名单(带理由);
+ *  ④ **权威写出口反查**(验收第 1 轮第 2 条):从权威提交出口(`commitPersonal` / `*.store.commit` / 带 `txnId` 的 `*.commit({…})`)反查**全部**调用者,**不看有没有钩子**:
+ *     调用者必须是登记的 `port_claim` 汇点,或精确白名单(减影响 / 纯转发写者,带理由);新增一个未登记、无钩子的 lifecycle 写者 = 红。
+ *     白名单里的 `applyIn` 另验「只被 `applyEvent` 调用」;两个 `port_claim` 汇点另验**钩子数据流**:claim 的返回值 → 拒绝分支先于提交 → 提交的 `beforeRefUpdate` 恰为 claim 得到的那个钩子。
  * 每一层都有正向对照(虚拟违规源码必须被同一检查报出)。
  */
 import * as path from 'node:path';
@@ -122,6 +125,7 @@ export function portClaimProblems(sf: ts.SourceFile, name: string): string[] {
       }
     }
   }
+  out.push(...hookFlowProblems(sf, name));
   return out;
 }
 
@@ -156,6 +160,122 @@ export function authPortProblems(sf: ts.SourceFile, name: string): string[] {
   if (init !== undefined && cas !== undefined && cas.pos < init.pos)
     out.push(`${name}:cas 先于 init`);
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// ④ 钩子数据流(轻量 AST 判定):claim 返回值 → 拒绝分支先于提交 → 提交的 beforeRefUpdate 恰为 claim 得到的钩子
+// ---------------------------------------------------------------------------
+function findAll<T extends ts.Node>(root: ts.Node, pred: (n: ts.Node) => n is T): T[] {
+  const out: T[] = [];
+  const visit = (n: ts.Node): void => {
+    if (pred(n)) out.push(n);
+    ts.forEachChild(n, visit);
+  };
+  visit(root);
+  return out;
+}
+const isCall = (n: ts.Node): n is ts.CallExpression => ts.isCallExpression(n);
+const isIf = (n: ts.Node): n is ts.IfStatement => ts.isIfStatement(n);
+const isPropAssign = (n: ts.Node): n is ts.PropertyAssignment => ts.isPropertyAssignment(n);
+
+/** `const V = await <claimFn>(…)` 的变量名 */
+function claimVar(fn: ts.Node, sf: ts.SourceFile, claimFn: string): string | undefined {
+  const decls = findAll(fn, (n): n is ts.VariableDeclaration => ts.isVariableDeclaration(n));
+  for (const d of decls) {
+    const init = d.initializer;
+    if (
+      init !== undefined &&
+      ts.isAwaitExpression(init) &&
+      ts.isCallExpression(init.expression) &&
+      init.expression.expression.getText(sf) === claimFn &&
+      ts.isIdentifier(d.name)
+    ) {
+      return d.name.text;
+    }
+  }
+  return undefined;
+}
+
+/** 提交调用的 `beforeRefUpdate` 属性初值(对象字面量参数内任意位置,含条件展开);没有 = undefined */
+function hookInitializers(call: ts.CallExpression, sf: ts.SourceFile): string[] {
+  return findAll(call, isPropAssign)
+    .filter((p) => p.name.getText(sf) === 'beforeRefUpdate')
+    .map((p) => p.initializer.getText(sf));
+}
+
+const stmtExits = (n: ts.Node): boolean =>
+  findAll(n, (x): x is ts.Node => ts.isContinueStatement(x) || ts.isReturnStatement(x)).length > 0;
+
+/**
+ * 两个 `port_claim` 汇点的钩子数据流:
+ *  - `runPersonalStep`:`const V = await claimGrowthPort(…)`;提交前有 `if (!V.ok) {… continue / return}`;每个 `d.store.commit({…})` 的 `beforeRefUpdate` 初值恰为 `V.hook`;
+ *  - `applyEvent`:`const V = await claimGrowth(…)`;`applyIn(…)` 之前有 `if (V.kind === …) return V`(拒绝不往下走);`applyIn` 的实参含 `V.hook`;
+ *  - `applyIn`:它唯一的 `d.store.commit({…})` 的 `beforeRefUpdate` 初值恰为形参 `hook`;且 `applyIn` 只被 `applyEvent` 调用。
+ */
+export function hookFlowProblems(sf: ts.SourceFile, name: string): string[] {
+  const out: string[] = [];
+  const fn = findFn(sf, name);
+  if (fn === undefined) return [`${name}:函数不存在`];
+  const calls = findAll(fn, isCall);
+  const commits = calls.filter((c) => c.expression.getText(sf) === 'd.store.commit');
+  if (name === 'runPersonalStep' || name === 'applyEvent') {
+    const claimFn = name === 'runPersonalStep' ? 'claimGrowthPort' : 'claimGrowth';
+    const v = claimVar(fn, sf, claimFn);
+    if (v === undefined) return [`${name}:没有 const v = await ${claimFn}(…)`];
+    if (name === 'runPersonalStep') {
+      if (commits.length === 0) out.push(`${name}:没有 store.commit(创建提交缺失?)`);
+      for (const c of commits) {
+        const inits = hookInitializers(c, sf);
+        if (inits.length !== 1 || inits[0] !== `${v}.hook`) {
+          out.push(`${name}:store.commit 的 beforeRefUpdate 不是 ${v}.hook(${inits.join('|')})`);
+        }
+        const guard = findAll(fn, isIf).find(
+          (i) =>
+            i.expression.getText(sf) === `!${v}.ok` &&
+            i.getStart(sf) < c.getStart(sf) &&
+            stmtExits(i.thenStatement),
+        );
+        if (guard === undefined) out.push(`${name}:提交之前没有 if (!${v}.ok) {…continue/return}`);
+      }
+    } else {
+      const inCalls = calls.filter((c) => c.expression.getText(sf) === 'applyIn');
+      if (inCalls.length !== 1) out.push(`${name}:applyIn 调用数 ${inCalls.length} ≠ 1`);
+      for (const c of inCalls) {
+        if (!c.arguments.some((a) => a.getText(sf) === `${v}.hook`)) {
+          out.push(`${name}:applyIn 的实参里没有 ${v}.hook`);
+        }
+        const guard = findAll(fn, isIf).find(
+          (i) =>
+            i.expression.getText(sf).includes(`${v}.kind`) &&
+            i.getStart(sf) < c.getStart(sf) &&
+            findAll(i.thenStatement, (x): x is ts.ReturnStatement => ts.isReturnStatement(x)).some(
+              (r) => r.expression?.getText(sf) === v,
+            ),
+        );
+        if (guard === undefined) out.push(`${name}:applyIn 之前没有 if (${v}.kind …) return ${v}`);
+      }
+    }
+  } else if (name === 'applyIn') {
+    if (!fn.parameters.some((p) => p.name.getText(sf) === 'hook'))
+      out.push(`${name}:没有形参 hook`);
+    if (commits.length !== 1) out.push(`${name}:store.commit 数 ${commits.length} ≠ 1`);
+    for (const c of commits) {
+      const inits = hookInitializers(c, sf);
+      if (inits.length !== 1 || inits[0] !== 'hook') {
+        out.push(`${name}:store.commit 的 beforeRefUpdate 不是形参 hook(${inits.join('|')})`);
+      }
+    }
+  } else {
+    out.push(`${name}:没有钩子数据流规则`);
+  }
+  return out;
+}
+
+/** 文件里 `applyIn(…)` 调用所在的函数名(反查调用者) */
+export function callersOfIn(sf: ts.SourceFile, callee: string): string[] {
+  return findAll(sf, isCall)
+    .filter((c) => c.expression.getText(sf) === callee)
+    .map((c) => enclosingFn(c, sf));
 }
 
 function problemsOf(sink: GrowthSink, sf: ts.SourceFile): string[] {
@@ -444,5 +564,171 @@ describe('同名扫描与写出口覆盖扫描(防漏登记)', () => {
 
   it('sink_gate_list_emptied(对照):登记表若被清空,门会因「汇点集合不符」红(上面第一条用例钉住五个名字)', () => {
     expect(GROWTH_SINKS.length).toBe(5);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ④ 权威写出口反查(不看钩子)
+// ---------------------------------------------------------------------------
+export interface AuthExit {
+  kind: 'commit_personal' | 'store_commit';
+  fn: string;
+}
+/**
+ * 权威提交出口:`commitPersonal(…)` 调用、`*.store.commit(…)` 调用、第一个实参是带 `txnId` 的对象字面量的 `*.commit(…)`(别名 / 改名也逃不掉);
+ * 返回每个调用所在的函数。**不看 `beforeRefUpdate`**——「不带钩子的增效提交」正是这条要抓的。
+ */
+export function authoritativeExits(file: string, text: string): AuthExit[] {
+  const sf = parse(file, text);
+  const out: AuthExit[] = [];
+  for (const n of findAll(sf, isCall)) {
+    const callee = n.expression.getText(sf);
+    const arg0 = n.arguments[0];
+    const txnLiteral =
+      arg0 !== undefined &&
+      ts.isObjectLiteralExpression(arg0) &&
+      arg0.properties.some((p) => p.name?.getText(sf) === 'txnId');
+    if (callee === 'commitPersonal') out.push({ kind: 'commit_personal', fn: enclosingFn(n, sf) });
+    else if (callee.endsWith('.store.commit') || (callee.endsWith('.commit') && txnLiteral)) {
+      out.push({ kind: 'store_commit', fn: enclosingFn(n, sf) });
+    }
+  }
+  return out;
+}
+
+/**
+ * 登记 `port_claim` 汇点的直接出口(钩子数据流另验)+ **精确白名单**(`<文件>:<函数>:<种类>`,理由随条;新增 = 改本表并写理由):
+ *  - `candidate-apply.ts:applyIn`:`applyEvent` 的内部实现;只被 `applyEvent` 调用(下面的用例反查),钩子只来自 `applyEvent` 的 claim(减影响事件无钩子);
+ *  - `candidate-repo.ts:personalRepoStore`:`AuthoritativeStore.commit` 的适配器,原样转发调用方的 spec(含钩子),自己不构造提交;
+ *  - `rollback-repo.ts:personalRepoRemoval`:撤销路径的仓库文件移除:只删 kit 命名空间内非 lifecycle 的目标文件(`lifecycle` 顶层会抛 `TreeSpecError`),只收紧。
+ */
+const AUTH_EXITS_ALLOWED: readonly string[] = [
+  'src/rsi/personal/candidate-step.ts:runPersonalStep:store_commit',
+  'src/rsi/personal/candidate-apply.ts:applyIn:store_commit',
+  'src/rsi/personal/candidate-repo.ts:personalRepoStore:commit_personal',
+  'src/rsi/personal/rollback-repo.ts:personalRepoRemoval:commit_personal',
+];
+
+describe('④ 权威写出口反查:调用者 ⊆ 登记汇点 ∪ 精确白名单(不看钩子)', () => {
+  it('src/rsi/** 的权威写出口调用者恰为允许集;允许集里每一项都真实存在(不是空扫);登记的 port_claim 汇点都在其中', async () => {
+    const found = new Set<string>();
+    for (const f of await walkTs(path.join(ROOT, 'src/rsi'))) {
+      for (const x of authoritativeExits(rel(f), readTextSync(f)))
+        found.add(`${rel(f)}:${x.fn}:${x.kind}`);
+    }
+    expect([...found].filter((x) => !AUTH_EXITS_ALLOWED.includes(x))).toEqual([]);
+    for (const x of AUTH_EXITS_ALLOWED) expect(found.has(x), x).toBe(true);
+    // 登记的 port_claim 汇点:runPersonalStep 直接提交;applyEvent 经 applyIn(下一条钉住)
+    for (const s of GROWTH_SINKS.filter((x) => x.mode === 'port_claim')) {
+      expect(
+        s.fn === 'runPersonalStep'
+          ? found.has(`${s.file}:${s.fn}:store_commit`)
+          : callersOfIn(parse(s.file, readTextSync(path.join(ROOT, s.file))), 'applyIn').includes(
+              s.fn,
+            ),
+        s.fn,
+      ).toBe(true);
+    }
+  });
+
+  it('applyIn 只被 applyEvent 调用(白名单里的内部实现不能有第二个入口绕过 claim)', () => {
+    const sf = parse(
+      'candidate-apply.ts',
+      readTextSync(path.join(ROOT, 'src/rsi/personal/candidate-apply.ts')),
+    );
+    expect(callersOfIn(sf, 'applyIn')).toEqual(['applyEvent']);
+  });
+
+  it('钩子数据流:claim 返回值 → 拒绝分支先于提交 → beforeRefUpdate 恰为 claim 得到的钩子(applyEvent / applyIn / runPersonalStep)', () => {
+    const apply = parse(
+      'candidate-apply.ts',
+      readTextSync(path.join(ROOT, 'src/rsi/personal/candidate-apply.ts')),
+    );
+    const step = parse(
+      'candidate-step.ts',
+      readTextSync(path.join(ROOT, 'src/rsi/personal/candidate-step.ts')),
+    );
+    expect(hookFlowProblems(apply, 'applyEvent')).toEqual([]);
+    expect(hookFlowProblems(apply, 'applyIn')).toEqual([]);
+    expect(hookFlowProblems(step, 'runPersonalStep')).toEqual([]);
+  });
+
+  describe('正向对照:违规的虚拟源码必须被同一检查报出', () => {
+    const exits = (src: string): string[] =>
+      authoritativeExits('v.ts', src).map((x) => `${x.fn}:${x.kind}`);
+    it('不带钩子的 lifecycle 写者 / 别名提交 / commitPersonal 直调 → 都被反查到', () => {
+      expect(
+        exits(
+          'export async function sneaky(d: D) { await d.store.commit({ kind: 1, txnId: 1 }); }',
+        ),
+      ).toEqual(['sneaky:store_commit']);
+      expect(
+        exits(
+          'export async function alias(d: D) { const s = d.repo; await s.commit({ txnId: 1, upserts: [] }); }',
+        ),
+      ).toEqual(['alias:store_commit']);
+      expect(
+        exits('export async function raw(d: D) { await commitPersonal(d.deps, d.locks, spec); }'),
+      ).toEqual(['raw:commit_personal']);
+      // 对照:ledger 一类的 commit(非对象字面量 txnId)与别的调用不算
+      expect(
+        exits(
+          'export async function ok(p: P) { await p.ledgerWrite.commit(plan.next); foo({ txnId: 1 }); }',
+        ),
+      ).toEqual([]);
+    });
+    const P = (body: string): ts.SourceFile => parse('v.ts', body);
+    it('hook 数据流:丢掉 claim 的钩子(换成别的函数)/ 没有拒绝分支 / 拒绝分支不退出 / applyIn 不转交', () => {
+      const okStep =
+        'export async function runPersonalStep(d: D) { for (const x of xs) { const claim = await claimGrowthPort(d.growth); if (!claim.ok) { continue; } await d.store.commit({ txnId: 1, beforeRefUpdate: claim.hook }); } }';
+      expect(hookFlowProblems(P(okStep), 'runPersonalStep')).toEqual([]);
+      expect(
+        hookFlowProblems(
+          P(okStep.replace('claim.hook', 'async () => undefined')),
+          'runPersonalStep',
+        ),
+      ).not.toEqual([]);
+      expect(
+        hookFlowProblems(P(okStep.replace('if (!claim.ok) { continue; }', '')), 'runPersonalStep'),
+      ).not.toEqual([]);
+      expect(
+        hookFlowProblems(P(okStep.replace('continue;', 'log();')), 'runPersonalStep'),
+      ).not.toEqual([]);
+      expect(
+        hookFlowProblems(P(okStep.replace(', beforeRefUpdate: claim.hook', '')), 'runPersonalStep'),
+      ).not.toEqual([]);
+      const okApply =
+        "export async function applyEvent(d: D) { const claimed = await claimGrowth(d); if (claimed.kind === 'halt') return claimed; return applyIn(d, claimed.hook); }";
+      expect(hookFlowProblems(P(okApply), 'applyEvent')).toEqual([]);
+      expect(
+        hookFlowProblems(P(okApply.replace('claimed.hook', 'undefined')), 'applyEvent'),
+      ).not.toEqual([]);
+      expect(
+        hookFlowProblems(
+          P(okApply.replace("if (claimed.kind === 'halt') return claimed;", '')),
+          'applyEvent',
+        ),
+      ).not.toEqual([]);
+      const okIn =
+        'async function applyIn(d: D, hook?: H) { return d.store.commit({ txnId: 1, ...(hook !== undefined ? { beforeRefUpdate: hook } : {}) }); }';
+      expect(hookFlowProblems(P(okIn), 'applyIn')).toEqual([]);
+      expect(
+        hookFlowProblems(
+          P(okIn.replace('beforeRefUpdate: hook', 'beforeRefUpdate: async () => undefined')),
+          'applyIn',
+        ),
+      ).not.toEqual([]);
+      expect(
+        hookFlowProblems(
+          P(okIn.replace('...(hook !== undefined ? { beforeRefUpdate: hook } : {})', '')),
+          'applyIn',
+        ),
+      ).not.toEqual([]);
+    });
+    it('callersOfIn:applyIn 出现在第二个函数里 → 报出', () => {
+      const src =
+        'async function applyEvent(d: D) { return applyIn(d); } async function backdoor(d: D) { return applyIn(d); }';
+      expect(callersOfIn(P(src), 'applyIn')).toEqual(['applyEvent', 'backdoor']);
+    });
   });
 });

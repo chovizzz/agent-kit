@@ -130,10 +130,11 @@ describe('entry_time_only_via_stamp(B2 档)', () => {
   it('D1b-2 收紧:创建分支经 stampFirst 取时(封存区域),区间内没有任何直接时钟调用', () => {
     const src = readTextSync(path.join(ROOT, 'src/rsi/personal/candidate-step.ts'));
     expect(src).toContain('region.stampFirst(d.now)');
-    expect(src).toContain('unsealedEntryTime(d.now)');
+    // 创建没有无封存退路(W0-30 第 5 条):candidate-step.ts 不得引用 `unsealedEntryTime`
+    expect(src).not.toContain('unsealedEntryTime');
     const lineOf = (needle: string): number => src.slice(0, src.indexOf(needle)).split('\n').length;
     const from = lineOf("claimGrowthPort(d.growth, 'candidate_create'");
-    const to = lineOf('region?.close();');
+    const to = lineOf('region.close();');
     expect(to).toBeGreaterThan(from);
     const inside = clockCalls('candidate-step.ts', src).filter((c) => {
       const ln = Number(c.split(':')[0]);

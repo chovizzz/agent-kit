@@ -405,18 +405,26 @@ export type CommitResult =
   /** `beforeRefUpdate` 钩子拒绝(增影响提交的最终复核没过):引用、索引、工作树都没动;`code` 是钩子给的原因码 */
   | { status: 'denied'; code: string };
 
+/** 钩子拒绝后清理自己 journal 的结果:只有 `clean` 才允许对外返回普通 `denied`;其余保留现场(不删、不改引用),由调用方走既有完整性失败路径 */
+type DiscardResult =
+  | { kind: 'clean' }
+  | { kind: 'ref_moved'; actual: string | null }
+  | { kind: 'journal_unverified'; why: string };
+
 /**
- * 钩子拒绝后删自己刚写的 journal(尽力):先复核锁(抛 → 传播,不动);盘上 journal 与本次写下的**逐字段全等**、phase 仍是本次提交的 `objects_written`、
- * 当前 `refs/heads/rsi === old_head` 才删;其余一律保留(留给下次恢复判定)。删除的 IO 失败吞掉(`denied` 照常返回,下次恢复按 `discard` 处理)。
+ * 钩子拒绝后删自己刚写的 journal:先复核锁(抛 → 传播,不动);盘上 journal 与本次写下的**逐字段全等**(含 phase)、
+ * 当前 `refs/heads/rsi === old_head` 才删并返回 `clean`;journal 读不出 / 字段不符 → `journal_unverified`,ref 不是 `oldHead` → `ref_moved`,**两者都保留现场**
+ * (不能确认是本次事务、或引用已被别人动过 = 完整性不明,不得降级为普通拒绝)。丢锁照旧传播。
+ * 删除本身的 IO 失败吞掉(`clean` 照常返回:已确认是自己的 journal 且 `ref = old_head`,下次恢复按 `discard` 处理,没有完整性疑点)。
  */
 async function discardOwnJournal(
   ctx: OpCtx,
   mine: PersonalCommitJournal,
   oldHead: string,
-): Promise<void> {
+): Promise<DiscardResult> {
   await assertLocks(ctx);
   const cur = await readJournal(ctx.h);
-  if (cur.kind !== 'ok') return;
+  if (cur.kind !== 'ok') return { kind: 'journal_unverified', why: `journal_${cur.kind}` };
   const a = cur.value;
   const same =
     a.txn_id === mine.txn_id &&
@@ -427,14 +435,16 @@ async function discardOwnJournal(
     a.phase === mine.phase &&
     a.candidate_ids.length === mine.candidate_ids.length &&
     a.candidate_ids.every((id, i) => id === mine.candidate_ids[i]);
-  if (!same || (a.phase !== 'planned' && a.phase !== 'objects_written')) return;
-  if (revParse(ctx.git, 'refs/heads/rsi') !== oldHead) return;
+  if (!same) return { kind: 'journal_unverified', why: 'journal_not_mine' };
+  const actual = revParse(ctx.git, 'refs/heads/rsi');
+  if (actual !== oldHead) return { kind: 'ref_moved', actual };
   await assertLocks(ctx); // 读盘与比较之后、删除之前再复核一次(逐字段全等只证明那一刻的快照;丢锁则传播,不进下面吞 IO 错误的 catch)
   try {
     await removeJournal(ctx.h);
   } catch {
     // 删除失败:保留 journal,下次恢复在 `ref = old_head` 时丢弃
   }
+  return { kind: 'clean' };
 }
 
 export async function commitPersonal(
@@ -494,7 +504,17 @@ export async function commitPersonal(
       await spec.beforeRefUpdate();
     } catch (e) {
       if (!(e instanceof BeforeRefUpdateDenied)) throw e;
-      await discardOwnJournal(ctx, j, oldHead);
+      const d = await discardOwnJournal(ctx, j, oldHead);
+      if (d.kind === 'ref_moved') {
+        return {
+          status: 'deferred',
+          reason: 'personal_repo_diverged',
+          why: 'ref_moved_after_denied',
+        };
+      }
+      if (d.kind === 'journal_unverified') {
+        return { status: 'invalid', why: d.why, breaker: PERSONAL_REPO_INVALID };
+      }
       return { status: 'denied', code: e.code };
     }
     await assertLocks(ctx); // 钩子是 async 现读:它之后到 update-ref 之间不得丢锁

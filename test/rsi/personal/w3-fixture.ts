@@ -464,6 +464,14 @@ export function world3(over: { phase?: number } = {}): World3 {
       personal: { assertHeld: async () => undefined },
     },
     growth: w.growth.port,
+    // 创建没有无封存退路(D1b-2 W0-30 第 5 条):缺省装一个直通封存(不设水位线,只取时),要测「缺 seal」就 `delete w.d.seal`
+    seal: {
+      open: async () => ({
+        stampFirst: (clock) => clock().toISOString(),
+        markSourceCommitted: () => undefined,
+        close: () => undefined,
+      }),
+    },
   };
   return w;
 }
