@@ -4,7 +4,8 @@
  * 读不出 / 找不到 = 抛错(第二段判据不成立,journal 保留,下次续做),**不**返回 `cleaned`。缩减入口(`rsi auto clear`)不装配本端口(恒 `pending`,不访问仓库 `.state`)。
  */
 import type { IoContext } from '../../io/paths.js';
-import { reconcileCaches } from '../canary/canary-writer.js';
+// 直接取拆出的 `canary-reconcile.ts`(只减影响):不经 `canary-writer.ts`——后者是增影响汇点(`GROWTH_SINKS`,运行时依赖 `stage/growth.ts`),不得进入生产入口闭包(`c1-inert`)
+import { reconcileCaches } from '../canary/canary-reconcile.js';
 import type { RsiDirResolver } from '../canary/state-port.js';
 import { assertInsideLocks, type CommandLockContext } from '../auto/write/command-locks.js';
 import type { RevocationReader } from './candidate-ports.js';

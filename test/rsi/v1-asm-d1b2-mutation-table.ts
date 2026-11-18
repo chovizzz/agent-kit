@@ -62,7 +62,6 @@ const D_HOOK_OTHER = 'beforeRefUpdate:其它错误一律传播(不当成拒绝)'
 const D_HOOK_POS = 'beforeRefUpdate:位置与锁复核';
 const D_AG = '增影响事件:端口缺 / 拒 / 畸形 = growth_denied 且零写入';
 const D_AG_DECIDE = 'decide_better_always_refused_as_growth / 未登记事件';
-const D_AG_REDUCE = '减影响事件不看端口(不受暂停 / 缺端口限制)';
 const D_EV = 'event_kind_classified:增影响分类穷举';
 const D_S_CREATE =
   '创建提交先过 growth 端口(d1_sinks_refuse_without_pass / creation_commit_without_claim)';

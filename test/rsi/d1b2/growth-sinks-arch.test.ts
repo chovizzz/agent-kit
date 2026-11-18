@@ -328,7 +328,15 @@ export interface WriteExit {
 function enclosingFn(n: ts.Node, sf: ts.SourceFile): string {
   for (let p: ts.Node | undefined = n.parent; p !== undefined; p = p.parent) {
     if (ts.isFunctionDeclaration(p) && p.name !== undefined) return p.name.text;
-    if (ts.isVariableDeclaration(p) && ts.isIdentifier(p.name)) return p.name.getText(sf);
+    // 只有「函数值的变量」才算所在函数(`const c = await d.store.commit(…)` 的 `c` 不是函数)
+    if (
+      ts.isVariableDeclaration(p) &&
+      ts.isIdentifier(p.name) &&
+      p.initializer !== undefined &&
+      (ts.isArrowFunction(p.initializer) || ts.isFunctionExpression(p.initializer))
+    ) {
+      return p.name.getText(sf);
+    }
   }
   return '<top>';
 }
