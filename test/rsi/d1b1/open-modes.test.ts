@@ -295,7 +295,11 @@ describe('命令路径(personalRepoStore,repoDeps 与 assemble-write 同形:无�
       const before = await fingerprint(w);
       const steps: string[] = [];
       const out = await withLock(w, async (locks) => {
-        const store = personalRepoStore(repoDeps(w, { onStep: (s) => steps.push(s) }), locks);
+        const store = personalRepoStore(repoDeps(w, {
+            onStep: (s) => {
+              steps.push(s);
+            },
+          }), locks);
         return { read: await store.readAll(), commit: await store.commit(spec('9', BASE_FILES)) };
       });
       expect(out.read).toEqual({ kind: 'invalid', why: 'bootstrap_pending' });
