@@ -80,15 +80,24 @@ export function auditItemsOf(rec: PersonalLifecycleRecord): KeyedAuditItem[] {
 
 /** 执行器的审计出口:每行经带键端口落地。缺事件身份(没有转移条目的审计,如终态空操作)→ 抛错(fail-closed,不回落到行内容哈希) */
 export function keyedAuditSink(sink: KeyedEffectSink): AuditSink {
-  const land = async (items: readonly { line: RsiAuditLine; idem_key?: string }[]) => {
+  /** 全部落完才返回;任一行 `deferred`(本入口不能访问效果存放处,记为待对账)→ 返回 `'deferred'`(行没有落地:调用方需要「已落地」的保证时不得当成确认) */
+  const land = async (
+    items: readonly { line: RsiAuditLine; idem_key?: string }[],
+  ): Promise<void | 'deferred'> => {
+    let deferred = false;
     for (const it of items) {
       if (it.idem_key === undefined) throw new Error('audit_key_missing');
-      await sink.applyOnce(auditKeyOf(it.line.id, it.idem_key), [
+      const r = await sink.applyOnce(auditKeyOf(it.line.id, it.idem_key), [
         { type: 'append_audit', line: it.line, idem_key: it.idem_key },
       ]);
+      if (r === 'deferred') deferred = true;
     }
+    return deferred ? 'deferred' : undefined;
   };
-  return { append: (lines) => land(lines.map((line) => ({ line }))), appendKeyed: land };
+  return {
+    append: async (lines) => void (await land(lines.map((line) => ({ line })))),
+    appendKeyed: land,
+  };
 }
 
 /** 补做回滚路径的审计行(按键幂等);任一行 `deferred` → `deferred`(其余行仍尽力落,不因一行推迟而漏做);否则有行落地 → `applied`;全是 `already` → `already`;没有行 → `none` */

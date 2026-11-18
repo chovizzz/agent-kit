@@ -44,6 +44,9 @@ const GRANT = 'src/rsi/canary/canary-writer.ts';
 const ADMISSION = 'src/rsi/canary/admission-write.ts';
 const SINKS = 'src/rsi/canary/growth-sinks.ts';
 const VETO = 'src/rsi/auto/write/veto.ts';
+const ROLLBACK = 'src/rsi/personal/rollback.ts';
+const RECOVER = 'src/rsi/personal/effects-recover.ts';
+const REPO = 'src/rsi/personal/candidate-repo.ts';
 
 const HOOK_T = 'rsi/d1b2/commit-hook.test.ts';
 const APPLY_T = 'rsi/d1b2/apply-growth.test.ts';
@@ -87,8 +90,8 @@ const D_STAMP = 'entry_time_only_via_stamp(B2 档)';
 const D_ACC_TRUNC = 'creation_audit_confirmed_before_truncation(第 3 条)';
 const D_ACC_SEAL = 'creation_requires_seal(第 4 条)';
 const D_ACC_DENIED = 'denied_is_apply_result_branch(第 5 条)';
-const D_ARCH_AUTH = '④ 权威写出口反查:调用者 ⊆ 登记汇点 ∪ 精确白名单(不看钩子)';
-const K_ARCH_AUTH = 'src/rsi/** 的权威写出口调用者恰为允许集';
+const D_ARCH_AUTH = '④ 权威写出口反查:调用者 ⊆ 登记汇点 ∪ 精确白名单(不看钩子、不看拼写)';
+const K_ARCH_AUTH = '提交类出口调用者恰为允许集';
 const K_ARCH_FLOW = '钩子数据流:claim 返回值 → 拒绝分支先于提交';
 const K_ARCH_INONLY = 'applyIn 只被 applyEvent 调用';
 
@@ -1335,6 +1338,73 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
     tests: [ACC_T],
     expectRed: [D_ACC_SEAL, '放行的 claim + 不装 seal'],
     mustKill: ['放行的 claim + 不装 seal'],
+  },
+  {
+    id: 'truncation_confirm_deferred_accepted',
+    clause: 'R1-3:appendKeyed 返回 deferred(行没落地)不是确认,不得放行截断',
+    edits: [
+      {
+        file: APPLY,
+        anchor: "    if (landed === 'deferred') {",
+        replacement: '    if ((landed as unknown) === 0) {',
+      },
+    ],
+    tests: [ACC_T],
+    expectRed: [D_ACC_TRUNC, 'appendKeyed 返回 deferred'],
+    mustKill: ['appendKeyed 返回 deferred'],
+  },
+  {
+    id: 'keyed_audit_sink_drops_deferred',
+    clause: 'R1-3:keyedAuditSink 把底层 applyOnce 的 deferred 如实上报(不丢)',
+    edits: [
+      {
+        file: RECOVER,
+        anchor: "    return deferred ? 'deferred' : undefined;",
+        replacement: '    return undefined;',
+      },
+    ],
+    tests: [ACC_T],
+    expectRed: [D_ACC_TRUNC, 'appendKeyed 返回 deferred'],
+    mustKill: ['appendKeyed 返回 deferred'],
+  },
+  {
+    id: 'rollback_denied_falls_through',
+    clause: 'R1-5:回滚路径遇到 denied 记为未推进(note),不落入推进成功的正常路径',
+    edits: [
+      {
+        file: ROLLBACK,
+        anchor: "    } else if (r.kind === 'denied') {",
+        replacement: "    } else if ((r.kind as string) === 'never') {",
+      },
+    ],
+    tests: [ACC_T],
+    expectRed: [D_ACC_DENIED, '回滚路径:记录推进被 denied'],
+    mustKill: ['回滚路径:记录推进被 denied'],
+  },
+  {
+    id: 'commit_personal_import_aliased',
+    clause: 'R1-2:commitPersonal 改名 import 会让按调用名的反查漏掉 → 红',
+    edits: [
+      { file: REPO, anchor: '  commitPersonal,\n', replacement: '  commitPersonal as cp,\n' },
+    ],
+    tests: [ARCH_T],
+    expectRed: [D_ARCH_AUTH, 'commitPersonal 只被两个允许的文件 import'],
+    mustKill: ['commitPersonal 只被两个允许的文件 import'],
+  },
+  {
+    id: 'repo_store_forward_modified',
+    clause: 'R1-2:personalRepoStore 必须原样转发 spec(不得自己改写 / 覆盖钩子)',
+    edits: [
+      {
+        file: REPO,
+        anchor: 'commit: (spec) => commitPersonal(deps, locks, spec),',
+        replacement:
+          'commit: (spec) => commitPersonal(deps, locks, { ...spec, beforeRefUpdate: undefined }),',
+      },
+    ],
+    tests: [ARCH_T],
+    expectRed: [D_ARCH_AUTH, '白名单写者的形状'],
+    mustKill: ['白名单写者的形状'],
   },
 ];
 

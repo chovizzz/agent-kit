@@ -167,6 +167,12 @@ describe('beforeRefUpdate:拒绝', () => {
     expect(refOf(w)).toBe(moved);
     const j = await readJournal(w.h);
     expect(j.kind === 'ok' ? j.value.phase : null).toBe('objects_written');
+    // 重新打开仓库(下一次提交):保留的 journal 按既有恢复规则判定——引用是第三个值 → personal_repo_diverged,不改引用
+    const again = await withLock(w, (locks) =>
+      commitPersonal(repoDeps(w), locks, spec('3', NEXT_FILES)),
+    );
+    expect(again).toMatchObject({ status: 'deferred', reason: 'personal_repo_diverged' });
+    expect(refOf(w)).toBe(moved);
   });
 });
 

@@ -13,16 +13,18 @@ import type {
 } from '../../../src/contracts/rsi-personal.js';
 import { RsiLockError } from '../../../src/rsi/lock-error.js';
 import { applyEvent } from '../../../src/rsi/personal/candidate-apply.js';
+import { startRollback } from '../../../src/rsi/personal/rollback.js';
 import { CREATION_FROM } from '../../../src/rsi/personal/candidate-record.js';
 import { runPersonalStep } from '../../../src/rsi/personal/candidate-step.js';
 import { recoverCreationAudits } from '../../../src/rsi/personal/creation-audit.js';
-import { auditKeyOf } from '../../../src/rsi/personal/effects-recover.js';
-import type {
-  KeyedEffectResult,
-  KeyedEffectSink,
+import { auditKeyOf, keyedAuditSink } from '../../../src/rsi/personal/effects-recover.js';
+import {
+  deferredKeyedEffects,
+  type KeyedEffectResult,
+  type KeyedEffectSink,
 } from '../../../src/rsi/personal/rollback-ports.js';
 import { makeFx, runWrite } from '../auto/write-fixture.js';
-import { world7, ID as ID7 } from '../rollback/w7-fixture.js';
+import { world7, harmReq, recordOf, ID as ID7 } from '../rollback/w7-fixture.js';
 import { E, entry, rec, SIG } from '../personal/transition-fixture.js';
 import { gateFactsNoBusy, staged, world3, type World3 } from '../personal/w3-fixture.js';
 
@@ -185,6 +187,35 @@ describe('creation_audit_confirmed_before_truncation(第 3 条)', () => {
     expect((await applyEvent(w.d, r0, E.gatesPassed())).kind).toBe('transitioned');
     expect([...k.rows.keys()].filter((x) => x === creationKey(r0.id))).toHaveLength(1);
     expect(k.rows.get(creationKey(r0.id))?.at).toBe(CREATED_AT);
+  });
+
+  it('appendKeyed 返回 deferred(缩减入口:行没落地、续做依赖记录里的创建条目)不是确认 → 拒绝截断;零写入;真实适配器 keyedAuditSink(deferredKeyedEffects) 同样如此', async () => {
+    // 假件返回 'deferred'
+    const w = world3({ phase: V1B });
+    w.d.audit.appendKeyed = async () => 'deferred';
+    const r0 = windowed(rec('proposed'), 256);
+    w.store.put(r0);
+    expect(await applyEvent(w.d, r0, E.gatesPassed())).toEqual({
+      kind: 'halt',
+      halt: 'commit_failed',
+      why: 'creation_audit_unconfirmed:deferred',
+    });
+    expect(w.store.commits).toEqual([]);
+    // 生产的带键出口:底层 sink 是 deferred → appendKeyed 返回 'deferred'(不能把 applyOnce 的 deferred 丢掉)
+    const w2 = world3({ phase: V1B });
+    const real = keyedAuditSink(deferredKeyedEffects);
+    expect(await real.appendKeyed?.([{ line: {} as RsiAuditLine, idem_key: 'c'.repeat(16) }])).toBe(
+      'deferred',
+    );
+    w2.d.audit = real;
+    w2.store.put(r0);
+    expect((await applyEvent(w2.d, r0, E.gatesPassed())).kind).toBe('halt');
+    expect(w2.store.commits).toEqual([]);
+    // 对照:底层 sink 落地(applied)→ 返回 undefined,转移照常
+    const w3 = world3({ phase: V1B });
+    w3.d.audit = keyedAuditSink({ applyOnce: async () => 'applied' });
+    w3.store.put(r0);
+    expect((await applyEvent(w3.d, r0, E.gatesPassed())).kind).toBe('transitioned');
   });
 
   it('缺 appendKeyed 端口 → 拒绝截断(halt{commit_failed, port_missing});不回落无键 append;零写入', async () => {
@@ -368,6 +399,15 @@ describe('denied_is_apply_result_branch(第 5 条)', () => {
     const r = await applyEvent(w.d, p, E.gatesPassed());
     expect(r).toEqual({ kind: 'denied', why: 'unwired' });
     expect(r.kind).not.toBe('halt');
+  });
+
+  it('回滚路径:记录推进被 denied(底座违约)→ incomplete{retryable, record_denied:*};记录不动,不落入「推进成功」的正常路径', async () => {
+    const w = world7();
+    w.store.failCommit = { status: 'denied', code: 'rogue' };
+    const r = await startRollback(w.d, harmReq());
+    expect(r).toMatchObject({ status: 'incomplete', cause: 'retryable' });
+    expect(JSON.stringify(r)).toContain('record_denied:rogue');
+    expect(recordOf(w).lifecycle).toBe('canary');
   });
 
   it('veto(减影响)遇到 denied → 退 3 internal(fail-closed),不当成成功;记录不动', async () => {

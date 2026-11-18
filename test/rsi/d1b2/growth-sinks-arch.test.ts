@@ -203,8 +203,17 @@ function hookInitializers(call: ts.CallExpression, sf: ts.SourceFile): string[] 
     .map((p) => p.initializer.getText(sf));
 }
 
-const stmtExits = (n: ts.Node): boolean =>
-  findAll(n, (x): x is ts.Node => ts.isContinueStatement(x) || ts.isReturnStatement(x)).length > 0;
+/** 分支内有 continue / return(不算嵌套函数里的:那是别的函数的出口) */
+function stmtExits(n: ts.Node): boolean {
+  let found = false;
+  const visit = (x: ts.Node): void => {
+    if (ts.isFunctionLike(x) && x !== n) return;
+    if (ts.isContinueStatement(x) || ts.isReturnStatement(x)) found = true;
+    ts.forEachChild(x, visit);
+  };
+  visit(n);
+  return found;
+}
 
 /**
  * 两个 `port_claim` 汇点的钩子数据流:
@@ -246,13 +255,18 @@ export function hookFlowProblems(sf: ts.SourceFile, name: string): string[] {
         }
         const guard = findAll(fn, isIf).find(
           (i) =>
+            ['halt', 'denied'].every((k) => i.expression.getText(sf).includes(`'${k}'`)) &&
             i.expression.getText(sf).includes(`${v}.kind`) &&
             i.getStart(sf) < c.getStart(sf) &&
             findAll(i.thenStatement, (x): x is ts.ReturnStatement => ts.isReturnStatement(x)).some(
               (r) => r.expression?.getText(sf) === v,
             ),
         );
-        if (guard === undefined) out.push(`${name}:applyIn 之前没有 if (${v}.kind …) return ${v}`);
+        if (guard === undefined) {
+          out.push(
+            `${name}:applyIn 之前没有 if (${v}.kind === 'halt' || … === 'denied') return ${v}`,
+          );
+        }
       }
     }
   } else if (name === 'applyIn') {
@@ -269,6 +283,18 @@ export function hookFlowProblems(sf: ts.SourceFile, name: string): string[] {
     out.push(`${name}:没有钩子数据流规则`);
   }
   return out;
+}
+
+/** `name` 作为标识符的**非调用、非声明**引用(`const f = applyIn` / 当参数传):这些引用让「只被 applyEvent 调用」的反查失效 */
+export function applyInValueRefs(sf: ts.SourceFile, name: string): string[] {
+  return findAll(sf, (n): n is ts.Identifier => ts.isIdentifier(n) && n.text === name)
+    .filter((id) => {
+      const p = id.parent;
+      if (ts.isFunctionDeclaration(p) && p.name === id) return false;
+      if (ts.isCallExpression(p) && p.expression === id) return false;
+      return true;
+    })
+    .map((id) => `${enclosingFn(id, sf)}:${id.getText(sf)}`);
 }
 
 /** 文件里 `applyIn(…)` 调用所在的函数名(反查调用者) */
@@ -374,7 +400,7 @@ describe('GROWTH_SINKS:登记表与形态校验', () => {
     });
     it('port_claim:claim 挪到 store.read 之后 / commit 不带钩子 / 没有 claim', () => {
       const ok =
-        'export async function applyEvent(d: D) { const c = await claimGrowth(d); const f = await d.store.read(1); return applyIn(d, c); }';
+        "export async function applyEvent(d: D) { const c = await claimGrowth(d); if (c.kind === 'halt' || c.kind === 'denied') return c; const f = await d.store.read(1); return applyIn(d, c.hook); }";
       expect(portClaimProblems(P(ok), 'applyEvent')).toEqual([]);
       const late =
         'export async function applyEvent(d: D) { const f = await d.store.read(1); const c = await claimGrowth(d); return c; }';
@@ -568,53 +594,75 @@ describe('同名扫描与写出口覆盖扫描(防漏登记)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// ④ 权威写出口反查(不看钩子)
+// ④ 权威写出口反查(不看钩子、不看拼写)
 // ---------------------------------------------------------------------------
 export interface AuthExit {
-  kind: 'commit_personal' | 'store_commit';
+  kind: 'commit' | 'commit_personal';
   fn: string;
 }
 /**
- * 权威提交出口:`commitPersonal(…)` 调用、`*.store.commit(…)` 调用、第一个实参是带 `txnId` 的对象字面量的 `*.commit(…)`(别名 / 改名也逃不掉);
- * 返回每个调用所在的函数。**不看 `beforeRefUpdate`**——「不带钩子的增效提交」正是这条要抓的。
+ * 提交类出口:`commitPersonal(…)` / `X.commitPersonal(…)`、**任何** `*.commit(…)` / 裸 `commit(…)` 调用;返回每个调用所在的函数。
+ * 故意**不**按 `store.commit` 拼写或 `txnId` 字面量筛(别名、`const s = d.store; s.commit(spec)` 都逃不掉):`src/rsi/**` 里每一个提交类调用都必须在下面的允许集里登记,新增 = 红。
+ * **不看 `beforeRefUpdate`**——「不带钩子的增效提交」正是这条要抓的。
  */
 export function authoritativeExits(file: string, text: string): AuthExit[] {
   const sf = parse(file, text);
   const out: AuthExit[] = [];
   for (const n of findAll(sf, isCall)) {
     const callee = n.expression.getText(sf);
-    const arg0 = n.arguments[0];
-    const txnLiteral =
-      arg0 !== undefined &&
-      ts.isObjectLiteralExpression(arg0) &&
-      arg0.properties.some((p) => p.name?.getText(sf) === 'txnId');
-    if (callee === 'commitPersonal') out.push({ kind: 'commit_personal', fn: enclosingFn(n, sf) });
-    else if (callee.endsWith('.store.commit') || (callee.endsWith('.commit') && txnLiteral)) {
-      out.push({ kind: 'store_commit', fn: enclosingFn(n, sf) });
+    if (callee === 'commitPersonal' || callee.endsWith('.commitPersonal')) {
+      out.push({ kind: 'commit_personal', fn: enclosingFn(n, sf) });
+    } else if (callee === 'commit' || callee.endsWith('.commit')) {
+      out.push({ kind: 'commit', fn: enclosingFn(n, sf) });
     }
   }
   return out;
 }
 
+/** `commitPersonal` 的 import 说明符(含别名:`import { commitPersonal as cp }`);返回 `[文件, 是否别名]` */
+export function commitPersonalImports(file: string, text: string): { alias: boolean }[] {
+  const sf = parse(file, text);
+  return findAll(
+    sf,
+    (n): n is ts.ImportSpecifier =>
+      ts.isImportSpecifier(n) && (n.propertyName ?? n.name).text === 'commitPersonal',
+  ).map((n) => ({ alias: n.propertyName !== undefined }));
+}
+
 /**
- * 登记 `port_claim` 汇点的直接出口(钩子数据流另验)+ **精确白名单**(`<文件>:<函数>:<种类>`,理由随条;新增 = 改本表并写理由):
- *  - `candidate-apply.ts:applyIn`:`applyEvent` 的内部实现;只被 `applyEvent` 调用(下面的用例反查),钩子只来自 `applyEvent` 的 claim(减影响事件无钩子);
- *  - `candidate-repo.ts:personalRepoStore`:`AuthoritativeStore.commit` 的适配器,原样转发调用方的 spec(含钩子),自己不构造提交;
- *  - `rollback-repo.ts:personalRepoRemoval`:撤销路径的仓库文件移除:只删 kit 命名空间内非 lifecycle 的目标文件(`lifecycle` 顶层会抛 `TreeSpecError`),只收紧。
+ * 提交类出口的允许集(`<文件>:<函数>:<种类>`,理由随条;新增 = 改本表并写理由):
+ *  登记的 `port_claim` 汇点 / 其内部实现:
+ *  - `candidate-step.ts:runPersonalStep`:创建提交(钩子数据流另验);
+ *  - `candidate-apply.ts:applyIn`:`applyEvent` 的内部实现,只被 `applyEvent` 调用(下面反查),钩子只来自 `applyEvent` 的 claim(减影响事件无钩子);
+ *  精确白名单(不是增影响汇点):
+ *  - `candidate-repo.ts:personalRepoStore`:`AuthoritativeStore.commit` 的适配器,原样转发调用方的 spec(含钩子,下面验实参就是 `spec`),自己不构造提交;
+ *  - `rollback-repo.ts:personalRepoRemoval`:撤销路径的仓库文件移除:`upserts: []` + `deletes`,只删 kit 命名空间内非 lifecycle 的文件(`lifecycle` 顶层会抛 `TreeSpecError`),只收紧;
+ *  - `store/apply-once.ts` / `store/compactor.ts` 的 `ledgerWrite.commit` / `cp.commit`:效果账与审计的存储核提交,与私有仓库的 lifecycle 权威记录无关(不写 `refs/heads/rsi`)。
  */
 const AUTH_EXITS_ALLOWED: readonly string[] = [
-  'src/rsi/personal/candidate-step.ts:runPersonalStep:store_commit',
-  'src/rsi/personal/candidate-apply.ts:applyIn:store_commit',
+  'src/rsi/personal/candidate-step.ts:runPersonalStep:commit',
+  'src/rsi/personal/candidate-apply.ts:applyIn:commit',
   'src/rsi/personal/candidate-repo.ts:personalRepoStore:commit_personal',
   'src/rsi/personal/rollback-repo.ts:personalRepoRemoval:commit_personal',
+  'src/rsi/store/apply-once.ts:createKeyedEffectSink:commit',
+  'src/rsi/store/apply-once.ts:createLedgerRecovery:commit',
+  'src/rsi/store/apply-once.ts:createUserVetoPort:commit',
+  'src/rsi/store/compactor.ts:cleanupSteps:commit',
+  'src/rsi/store/compactor.ts:run:commit',
+];
+/** 允许 import `commitPersonal` 的文件(非别名) */
+const COMMIT_PERSONAL_IMPORTERS: readonly string[] = [
+  'src/rsi/personal/candidate-repo.ts',
+  'src/rsi/personal/rollback-repo.ts',
 ];
 
-describe('④ 权威写出口反查:调用者 ⊆ 登记汇点 ∪ 精确白名单(不看钩子)', () => {
-  it('src/rsi/** 的权威写出口调用者恰为允许集;允许集里每一项都真实存在(不是空扫);登记的 port_claim 汇点都在其中', async () => {
+describe('④ 权威写出口反查:调用者 ⊆ 登记汇点 ∪ 精确白名单(不看钩子、不看拼写)', () => {
+  it('src/rsi/** 的提交类出口调用者恰为允许集(多一个 = 红);允许集里每一项都真实存在(不是空扫);登记的 port_claim 汇点都在其中', async () => {
     const found = new Set<string>();
     for (const f of await walkTs(path.join(ROOT, 'src/rsi'))) {
-      for (const x of authoritativeExits(rel(f), readTextSync(f)))
+      for (const x of authoritativeExits(rel(f), readTextSync(f))) {
         found.add(`${rel(f)}:${x.fn}:${x.kind}`);
+      }
     }
     expect([...found].filter((x) => !AUTH_EXITS_ALLOWED.includes(x))).toEqual([]);
     for (const x of AUTH_EXITS_ALLOWED) expect(found.has(x), x).toBe(true);
@@ -622,7 +670,7 @@ describe('④ 权威写出口反查:调用者 ⊆ 登记汇点 ∪ 精确白名�
     for (const s of GROWTH_SINKS.filter((x) => x.mode === 'port_claim')) {
       expect(
         s.fn === 'runPersonalStep'
-          ? found.has(`${s.file}:${s.fn}:store_commit`)
+          ? found.has(`${s.file}:${s.fn}:commit`)
           : callersOfIn(parse(s.file, readTextSync(path.join(ROOT, s.file))), 'applyIn').includes(
               s.fn,
             ),
@@ -631,12 +679,52 @@ describe('④ 权威写出口反查:调用者 ⊆ 登记汇点 ∪ 精确白名�
     }
   });
 
-  it('applyIn 只被 applyEvent 调用(白名单里的内部实现不能有第二个入口绕过 claim)', () => {
+  it('commitPersonal 只被两个允许的文件 import,且不得改名 import(别名会让反查按调用名漏掉)', async () => {
+    const importers: string[] = [];
+    for (const f of await walkTs(path.join(ROOT, 'src/rsi'))) {
+      const imps = commitPersonalImports(rel(f), readTextSync(f));
+      expect(
+        imps.filter((i) => i.alias),
+        rel(f),
+      ).toEqual([]);
+      if (imps.length > 0) importers.push(rel(f));
+    }
+    expect(importers.sort()).toEqual([...COMMIT_PERSONAL_IMPORTERS].sort());
+  });
+
+  it('白名单写者的形状:personalRepoStore 原样转发 spec;personalRepoRemoval 只删(upserts 为空数组、带 deletes)', () => {
+    const repo = parse(
+      'candidate-repo.ts',
+      readTextSync(path.join(ROOT, 'src/rsi/personal/candidate-repo.ts')),
+    );
+    const fwd = findAll(repo, isCall).filter(
+      (c) => c.expression.getText(repo) === 'commitPersonal',
+    );
+    expect(fwd).toHaveLength(1);
+    expect(fwd[0]?.arguments[2]?.getText(repo)).toBe('spec');
+    const rem = parse(
+      'rollback-repo.ts',
+      readTextSync(path.join(ROOT, 'src/rsi/personal/rollback-repo.ts')),
+    );
+    const calls = findAll(rem, isCall).filter(
+      (c) => c.expression.getText(rem) === 'commitPersonal',
+    );
+    expect(calls).toHaveLength(1);
+    const props = findAll(calls[0] as ts.CallExpression, isPropAssign);
+    expect(props.find((p) => p.name.getText(rem) === 'upserts')?.initializer.getText(rem)).toBe(
+      '[]',
+    );
+    expect(props.some((p) => p.name.getText(rem) === 'deletes')).toBe(true);
+    expect(props.some((p) => p.name.getText(rem) === 'beforeRefUpdate')).toBe(false);
+  });
+
+  it('applyIn 只被 applyEvent 调用,且没有被当成值引用(赋给变量 / 当参数传)', () => {
     const sf = parse(
       'candidate-apply.ts',
       readTextSync(path.join(ROOT, 'src/rsi/personal/candidate-apply.ts')),
     );
     expect(callersOfIn(sf, 'applyIn')).toEqual(['applyEvent']);
+    expect(applyInValueRefs(sf, 'applyIn')).toEqual([]);
   });
 
   it('钩子数据流:claim 返回值 → 拒绝分支先于提交 → beforeRefUpdate 恰为 claim 得到的钩子(applyEvent / applyIn / runPersonalStep)', () => {
@@ -656,29 +744,40 @@ describe('④ 权威写出口反查:调用者 ⊆ 登记汇点 ∪ 精确白名�
   describe('正向对照:违规的虚拟源码必须被同一检查报出', () => {
     const exits = (src: string): string[] =>
       authoritativeExits('v.ts', src).map((x) => `${x.fn}:${x.kind}`);
-    it('不带钩子的 lifecycle 写者 / 别名提交 / commitPersonal 直调 → 都被反查到', () => {
+    it('不带钩子的 lifecycle 写者 / 别名提交 / 变量传参提交 / commitPersonal 直调与命名空间调用 → 都被反查到', () => {
       expect(
         exits(
           'export async function sneaky(d: D) { await d.store.commit({ kind: 1, txnId: 1 }); }',
         ),
-      ).toEqual(['sneaky:store_commit']);
+      ).toEqual(['sneaky:commit']);
       expect(
-        exits(
-          'export async function alias(d: D) { const s = d.repo; await s.commit({ txnId: 1, upserts: [] }); }',
-        ),
-      ).toEqual(['alias:store_commit']);
+        exits('export async function alias(d: D) { const s = d.repo; await s.commit(spec); }'),
+      ).toEqual(['alias:commit']);
       expect(
         exits('export async function raw(d: D) { await commitPersonal(d.deps, d.locks, spec); }'),
       ).toEqual(['raw:commit_personal']);
-      // 对照:ledger 一类的 commit(非对象字面量 txnId)与别的调用不算
       expect(
-        exits(
-          'export async function ok(p: P) { await p.ledgerWrite.commit(plan.next); foo({ txnId: 1 }); }',
-        ),
+        exits('export async function ns(d: D) { await personal.commitPersonal(a, b, spec); }'),
+      ).toEqual(['ns:commit_personal']);
+      expect(exits('export async function bare(d: D) { await commit(spec); }')).toEqual([
+        'bare:commit',
+      ]);
+      // 对照:不是提交的调用不算
+      expect(
+        exits('export async function ok(p: P) { await p.save(plan.next); foo({ txnId: 1 }); }'),
       ).toEqual([]);
     });
+    it('commitPersonal 改名 import → 报出别名', () => {
+      expect(
+        commitPersonalImports('v.ts', "import { commitPersonal as cp } from './commit.js';"),
+      ).toEqual([{ alias: true }]);
+      expect(
+        commitPersonalImports('v.ts', "import { commitPersonal } from './commit.js';"),
+      ).toEqual([{ alias: false }]);
+      expect(commitPersonalImports('v.ts', "import { other } from './commit.js';")).toEqual([]);
+    });
     const P = (body: string): ts.SourceFile => parse('v.ts', body);
-    it('hook 数据流:丢掉 claim 的钩子(换成别的函数)/ 没有拒绝分支 / 拒绝分支不退出 / applyIn 不转交', () => {
+    it('hook 数据流:丢掉 claim 的钩子(换成别的函数)/ 没有拒绝分支 / 拒绝分支不退出(含只在嵌套函数里 return)/ 拒绝分支漏掉 denied / applyIn 不转交', () => {
       const okStep =
         'export async function runPersonalStep(d: D) { for (const x of xs) { const claim = await claimGrowthPort(d.growth); if (!claim.ok) { continue; } await d.store.commit({ txnId: 1, beforeRefUpdate: claim.hook }); } }';
       expect(hookFlowProblems(P(okStep), 'runPersonalStep')).toEqual([]);
@@ -695,19 +794,33 @@ describe('④ 权威写出口反查:调用者 ⊆ 登记汇点 ∪ 精确白名�
         hookFlowProblems(P(okStep.replace('continue;', 'log();')), 'runPersonalStep'),
       ).not.toEqual([]);
       expect(
+        hookFlowProblems(
+          P(okStep.replace('continue;', 'const f = () => { return 1; }; f();')),
+          'runPersonalStep',
+        ),
+      ).not.toEqual([]);
+      expect(
         hookFlowProblems(P(okStep.replace(', beforeRefUpdate: claim.hook', '')), 'runPersonalStep'),
       ).not.toEqual([]);
       const okApply =
-        "export async function applyEvent(d: D) { const claimed = await claimGrowth(d); if (claimed.kind === 'halt') return claimed; return applyIn(d, claimed.hook); }";
+        "export async function applyEvent(d: D) { const claimed = await claimGrowth(d); if (claimed.kind === 'halt' || claimed.kind === 'denied') return claimed; return applyIn(d, claimed.hook); }";
       expect(hookFlowProblems(P(okApply), 'applyEvent')).toEqual([]);
       expect(
         hookFlowProblems(P(okApply.replace('claimed.hook', 'undefined')), 'applyEvent'),
       ).not.toEqual([]);
       expect(
         hookFlowProblems(
-          P(okApply.replace("if (claimed.kind === 'halt') return claimed;", '')),
+          P(
+            okApply.replace(
+              "if (claimed.kind === 'halt' || claimed.kind === 'denied') return claimed;",
+              '',
+            ),
+          ),
           'applyEvent',
         ),
+      ).not.toEqual([]);
+      expect(
+        hookFlowProblems(P(okApply.replace(" || claimed.kind === 'denied'", '')), 'applyEvent'),
       ).not.toEqual([]);
       const okIn =
         'async function applyIn(d: D, hook?: H) { return d.store.commit({ txnId: 1, ...(hook !== undefined ? { beforeRefUpdate: hook } : {}) }); }';
@@ -725,10 +838,24 @@ describe('④ 权威写出口反查:调用者 ⊆ 登记汇点 ∪ 精确白名�
         ),
       ).not.toEqual([]);
     });
-    it('callersOfIn:applyIn 出现在第二个函数里 → 报出', () => {
+    it('callersOfIn / applyInValueRefs:applyIn 出现在第二个函数里、或被当值引用 → 报出', () => {
       const src =
         'async function applyEvent(d: D) { return applyIn(d); } async function backdoor(d: D) { return applyIn(d); }';
       expect(callersOfIn(P(src), 'applyIn')).toEqual(['applyEvent', 'backdoor']);
+      expect(
+        applyInValueRefs(
+          P('async function applyEvent(d: D) { const f = applyIn; return f(d); }'),
+          'applyIn',
+        ),
+      ).toHaveLength(1);
+      expect(
+        applyInValueRefs(
+          P(
+            'async function applyIn(d: D) { return 1; } async function applyEvent(d: D) { return applyIn(d); }',
+          ),
+          'applyIn',
+        ),
+      ).toEqual([]);
     });
   });
 });

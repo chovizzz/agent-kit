@@ -60,7 +60,9 @@ export interface AuditSink {
    * 带事件身份的落地(可选;装配了它的落地端优先用它):`idem_key` = 转移条目的稳定键,同一事件只落一次,不靠行内容去重
    * (两个 evidence 不同的合法转移可以产生内容完全相同的行)。没有条目的审计(终态空操作)没有键。
    */
-  appendKeyed?(items: readonly { line: RsiAuditLine; idem_key?: string }[]): Promise<void>;
+  appendKeyed?(
+    items: readonly { line: RsiAuditLine; idem_key?: string }[],
+  ): Promise<void | 'deferred'>;
   /**
    * 无键观察行(`evaluation` 一类,没有转移条目、没有事件身份)的落地(可选)。**缺省 = 拒绝落观察行**:调用方记 `effectsFailed`,**不回落 `append`**
    * (生产的带键出口 `keyedAuditSink.append` 对无键行抛 `audit_key_missing`,回落只会把观察行当成无身份的转移行写进去)。

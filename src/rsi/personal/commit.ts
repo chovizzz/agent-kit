@@ -415,7 +415,7 @@ type DiscardResult =
  * 钩子拒绝后删自己刚写的 journal:先复核锁(抛 → 传播,不动);盘上 journal 与本次写下的**逐字段全等**(含 phase)、
  * 当前 `refs/heads/rsi === old_head` 才删并返回 `clean`;journal 读不出 / 字段不符 → `journal_unverified`,ref 不是 `oldHead` → `ref_moved`,**两者都保留现场**
  * (不能确认是本次事务、或引用已被别人动过 = 完整性不明,不得降级为普通拒绝)。丢锁照旧传播。
- * 删除本身的 IO 失败吞掉(`clean` 照常返回:已确认是自己的 journal 且 `ref = old_head`,下次恢复按 `discard` 处理,没有完整性疑点)。
+ * 删除本身的 IO 失败吞掉(`clean` 照常返回:已确认是自己的 journal 且 `ref = old_head`;下次恢复是否 `discard` 还取决于 HEAD / 索引 / 工作树的观测,不满足时按既有恢复规则归为 diverged,不是本函数的保证)。
  */
 async function discardOwnJournal(
   ctx: OpCtx,
@@ -442,7 +442,7 @@ async function discardOwnJournal(
   try {
     await removeJournal(ctx.h);
   } catch {
-    // 删除失败:保留 journal,下次恢复在 `ref = old_head` 时丢弃
+    // 删除失败:保留 journal,交给下次恢复判定
   }
   return { kind: 'clean' };
 }

@@ -247,7 +247,7 @@ async function applyIn(
 
 /**
  * 本次转移会截掉创建条目 → 先经带键端口落创建审计行(`appendKeyed` 返回 = 已耐久:落地或进入带键的持久待办)。
- * 丢锁原样抛;`sealed_interval`(创建日已封存 = 该日对账已完成并封存,行不会再丢)视为已确认;缺 `appendKeyed` 或其它失败 → `halt{commit_failed}`(`why` 带原因,转移不提交)。
+ * 丢锁原样抛;`appendKeyed` 返回 `'deferred'`(行没落地)不是确认;`sealed_interval`(创建日已封存 = 该日由 B1b 对账源派生并封存,行不会再丢;该前提由 B1b 的封存前对账保证,本块不重证)视为已确认;缺 `appendKeyed` 或其它失败 → `halt{commit_failed}`(`why` 带原因,转移不提交)。
  */
 async function confirmCreationAuditBeforeTruncation(
   d: ApplyDeps,
@@ -261,7 +261,13 @@ async function confirmCreationAuditBeforeTruncation(
     return { kind: 'halt', halt: 'commit_failed', why: 'creation_audit_unconfirmed:port_missing' };
   }
   try {
-    await d.audit.appendKeyed(items.map((i) => ({ line: i.line, idem_key: i.idem_key })));
+    const landed = await d.audit.appendKeyed(
+      items.map((i) => ({ line: i.line, idem_key: i.idem_key })),
+    );
+    // `deferred` = 行没有落地(缩减入口记为待对账,续做依赖「当前记录里还有创建条目」,恰是这次转移要截掉的):不是确认
+    if (landed === 'deferred') {
+      return { kind: 'halt', halt: 'commit_failed', why: 'creation_audit_unconfirmed:deferred' };
+    }
   } catch (e) {
     if (e instanceof RsiLockError && e.kind === 'lock_lost') throw e;
     if (isSealedInterval(e)) return null;
