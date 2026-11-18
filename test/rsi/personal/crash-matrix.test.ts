@@ -20,6 +20,7 @@ import {
   makeWorld,
   NEXT_FILES,
   readUserFile,
+  READ_OPTS,
   repoDeps,
   setupRepo,
   snapshot,
@@ -68,7 +69,7 @@ describe('R21-3.6a 崩溃矩阵:五个 phase 之间各注入一次崩溃', () =>
       value: { head: headJsonAfterRecorded ? refNow : first },
     });
 
-    const o = await withLock(w, (locks) => openPersonalRepo(repoDeps(w), locks));
+    const o = await withLock(w, (locks) => openPersonalRepo(repoDeps(w), locks, READ_OPTS));
     expect(o, step).toMatchObject({ kind: 'ready' }); // 绝不是 deferred / personal_repo_diverged
     const expected = refSide === 'old' ? first : refNow;
     if (o.kind !== 'ready') throw new Error('unreachable');
@@ -133,7 +134,7 @@ describe('R21-3.6a 崩溃窗口里的用户改动:保留、diverged、journal �
       const before = await snapshot(w);
       expect(before.journal).not.toBeNull();
 
-      const o = await withLock(w, (locks) => openPersonalRepo(repoDeps(w), locks));
+      const o = await withLock(w, (locks) => openPersonalRepo(repoDeps(w), locks, READ_OPTS));
       expect(o).toMatchObject({ kind: 'deferred', reason: 'personal_repo_diverged' });
       // 恢复什么都没改:引用、索引、工作树、未跟踪文件、journal 字节逐项相同
       expect(await snapshot(w)).toEqual(before);
@@ -150,7 +151,7 @@ describe('R21-3.6a 崩溃窗口里的用户改动:保留、diverged、journal �
     const w = await makeWorld('p-window-ctrl-');
     await setupRepo(w);
     await expect(commitNext(w, 'journal:ref_updated')).rejects.toBeInstanceOf(InjectedCrash);
-    const o = await withLock(w, (locks) => openPersonalRepo(repoDeps(w), locks));
+    const o = await withLock(w, (locks) => openPersonalRepo(repoDeps(w), locks, READ_OPTS));
     expect(o.kind).toBe('ready');
   });
 });
@@ -163,7 +164,7 @@ describe('恢复先于 R21-3.5 判定,且不借机改归属', () => {
     const refNow = git(w, ['rev-parse', 'refs/heads/rsi']);
     const other = 'e'.repeat(16);
     const o = await withLock(w, (locks) =>
-      openPersonalRepo(repoDeps(w, { ownerRepoFp: other }), locks),
+      openPersonalRepo(repoDeps(w, { ownerRepoFp: other }), locks, READ_OPTS),
     );
     expect(o).toMatchObject({ kind: 'deferred', reason: 'personal_owner_changed' });
     // 未完成的提交已按观测值补齐(head.json 推进到新提交,journal 已删),归属字段没有被悄悄改成新仓库
@@ -201,6 +202,7 @@ describe('R21-3.6a 恢复同样遵守「head.json 只在 journal 到达 recorded
           },
         }),
         locks,
+        READ_OPTS,
       ),
     );
     expect(o.kind).toBe('ready');
@@ -234,7 +236,7 @@ describe('R21-3.6a 索引标志(assume-unchanged / skip-worktree)让 status 看�
         'rules/base.md',
       );
       const before = await snapshot(w);
-      const o = await withLock(w, (locks) => openPersonalRepo(repoDeps(w), locks));
+      const o = await withLock(w, (locks) => openPersonalRepo(repoDeps(w), locks, READ_OPTS));
       expect(o).toMatchObject({ kind: 'deferred', reason: 'personal_repo_diverged' });
       expect(await snapshot(w)).toEqual(before);
       expect(await readUserFile(w, 'rules/base.md')).toBe('HIDDEN EDIT\n');

@@ -48,6 +48,7 @@ import { RsiLockError } from '../../../src/rsi/lock-error.js';
 import { MemStore } from '../personal/w3-fixture.js';
 import { rec, ID, SHA } from '../personal/transition-fixture.js';
 import {
+  BOOT_OPTS,
   git,
   makeWorld,
   NOW,
@@ -68,7 +69,7 @@ const RULE = `rules/${ID}.md`;
 /** 建仓并提交:候选的权威记录 + 原子文件 + 一份无关的 rules/base.md */
 async function setup(w: World, record: PersonalLifecycleRecord): Promise<void> {
   const r = await withLock(w, async (locks) => {
-    const open = await openPersonalRepo(repoDeps(w), locks, { bootstrap: true });
+    const open = await openPersonalRepo(repoDeps(w), locks, BOOT_OPTS);
     if (open.kind !== 'ready') throw new Error('bootstrap');
     return commitPersonal(
       repoDeps(w),

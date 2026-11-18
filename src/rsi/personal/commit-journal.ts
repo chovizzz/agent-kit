@@ -16,6 +16,7 @@ import { createHash } from 'node:crypto';
 import * as path from 'node:path';
 import { PersonalHeadSchema, type PersonalCommitJournal } from '../../contracts/rsi-personal.js';
 import { readDir, lstat } from '../../io/read-fs.js';
+import { RsiLockError } from '../lock-error.js';
 import {
   makeRepoDir,
   readHead,
@@ -233,6 +234,40 @@ export type BootstrapResult =
 
 const inconsistent = (): BootstrapResult => ({ status: 'invalid', why: 'bootstrap_inconsistent' });
 
+/** bootstrap 里两个「会建东西」的边界:`init` = 建仓目录(含其前 `mkdir`)与 `git init`;`cas` = 空树 / 首提交对象(`mktree` 起)与 `refs/heads/rsi` 的比较交换 */
+export type BootstrapStep = 'init' | 'cas';
+
+/** 授权端口(D1b-1):`mode:'bootstrap'` 的调用方在部署组装处注入;本期生产无调用方。`authorize` 抛错 = 拒绝(锁错误除外,原样上抛) */
+export interface BootstrapAuth {
+  authorize(step: BootstrapStep): Promise<void>;
+}
+
+/** 某个建仓边界被拒;`openPersonalRepo` 把它映射成 `bootstrap_denied{step}`。journal 保持原阶段 */
+export class BootstrapDenied extends Error {
+  constructor(readonly step: BootstrapStep) {
+    super(`bootstrap_denied:${step}`);
+  }
+}
+
+/** 恒拒(`complete_only` 用:该模式只许 committed → recorded,任何会建东西的边界一律拒;纵深防御,正常不会走到) */
+export const NO_BOOTSTRAP_AUTH: BootstrapAuth = {
+  authorize: (step) => Promise.reject(new BootstrapDenied(step)),
+};
+
+/** 个人锁丢失(`PersonalLockLost` 的 `code`;不 import stage/ —— commit-journal 在 worker 类型闭包内) */
+const PERSONAL_LOCK_LOST_CODE = 'PERSONAL_LOCK_LOST';
+
+async function authorizeStep(auth: BootstrapAuth, step: BootstrapStep): Promise<void> {
+  try {
+    await auth.authorize(step);
+  } catch (e) {
+    const code = (e as { code?: unknown } | null)?.code;
+    // 锁丢失不是「被拒」
+    if (e instanceof RsiLockError || code === PERSONAL_LOCK_LOST_CODE) throw e;
+    throw e instanceof BootstrapDenied ? e : new BootstrapDenied(step);
+  }
+}
+
 async function dirState(p: string): Promise<'missing' | 'empty' | 'nonempty'> {
   try {
     await lstat(p);
@@ -273,7 +308,7 @@ async function preInitCheck(c: OpCtx): Promise<RepoInvalidWhy | null> {
 }
 
 /** 全新建仓(调用方已用 `probeFirstTime` 证明首次、并持锁) */
-export async function bootstrapRepo(c: OpCtx): Promise<BootstrapResult> {
+export async function bootstrapRepo(c: OpCtx, auth: BootstrapAuth): Promise<BootstrapResult> {
   const planned: PersonalCommitJournal = {
     schema_version: 1,
     txn_id: BOOTSTRAP_TXN_ID,
@@ -289,7 +324,7 @@ export async function bootstrapRepo(c: OpCtx): Promise<BootstrapResult> {
   await assertLocks(c);
   await writeJournal(c.h, planned);
   await c.onStep?.('journal:planned');
-  return continueBootstrap(c, planned);
+  return continueBootstrap(c, planned, auth);
 }
 
 /**
@@ -299,13 +334,14 @@ export async function bootstrapRepo(c: OpCtx): Promise<BootstrapResult> {
 export async function recoverBootstrap(
   c: OpCtx,
   j: PersonalCommitJournal,
+  auth: BootstrapAuth,
 ): Promise<BootstrapResult> {
   if (j.phase === 'planned' && (await dirState(c.h.repoDir)) === 'missing') {
     await assertLocks(c);
     await removeJournal(c.h);
     return { status: 'discarded' };
   }
-  return continueBootstrap(c, j);
+  return continueBootstrap(c, j, auth);
 }
 
 /**
@@ -321,7 +357,11 @@ function bootstrapObserved(c: OpCtx, commit: string | null): boolean {
   return commit === null || indexEquals(c.git, commit);
 }
 
-async function continueBootstrap(c: OpCtx, start: PersonalCommitJournal): Promise<BootstrapResult> {
+async function continueBootstrap(
+  c: OpCtx,
+  start: PersonalCommitJournal,
+  auth: BootstrapAuth,
+): Promise<BootstrapResult> {
   let j = start;
   if (j.phase === 'planned') {
     const dir = await dirState(c.h.repoDir);
@@ -334,6 +374,7 @@ async function continueBootstrap(c: OpCtx, start: PersonalCommitJournal): Promis
       }
     } else {
       await assertLocks(c);
+      await authorizeStep(auth, 'init'); // 任何 mkdir / git init 之前
       if (dir === 'missing') await makeRepoDir(c.h);
       await c.onStep?.('bootstrap:dir_ready');
       const bad = await preInitCheck(c);
@@ -351,6 +392,7 @@ async function continueBootstrap(c: OpCtx, start: PersonalCommitJournal): Promis
     if (!bootstrapObserved(c, commit)) return inconsistent();
     if (commit === null) {
       await assertLocks(c);
+      await authorizeStep(auth, 'cas'); // 任何对象写入(mktree / commit-tree)与引用写入之前
       const tree = gitMust(c.git, 'mktree', ['mktree'], { input: '' });
       if (tree !== EMPTY_TREE) return inconsistent();
       commit = gitMust(c.git, 'commit-tree', ['commit-tree', EMPTY_TREE, '-m', 'rsi: bootstrap']);
@@ -369,6 +411,10 @@ async function continueBootstrap(c: OpCtx, start: PersonalCommitJournal): Promis
   const done = j.new_commit as string; // committed / recorded 的 journal 必带 new_commit(schema)
   if (revParse(c.git, 'refs/heads/rsi') !== done) return inconsistent();
   if (!bootstrapObserved(c, done)) return inconsistent();
+  // 提交本身也必须是 bootstrap 的空树根提交(不能只信 journal 与 ref 同指一个提交)
+  if (revParse(c.git, `${done}^{tree}`) !== EMPTY_TREE || revParse(c.git, `${done}^`) !== null) {
+    return inconsistent();
+  }
   if (j.phase === 'committed') j = await writePhase(c, j, { phase: 'recorded' });
   await recordHeadAndFinish(c, j);
   return { status: 'created', commit: done };

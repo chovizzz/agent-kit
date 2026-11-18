@@ -14,6 +14,7 @@ import {
   git,
   makeWorld,
   NEXT_FILES,
+  READ_OPTS,
   repoDeps,
   setupRepo,
   snapshot,
@@ -91,7 +92,7 @@ describe('R21-3.6 update-ref 带期望旧值', () => {
     expect(a).toMatchObject({ status: 'cas_failed', expected: first });
     const before = await snapshot(w);
     expect(before.journal).not.toBeNull();
-    const o = await withLock(w, (locks) => openPersonalRepo(repoDeps(w), locks));
+    const o = await withLock(w, (locks) => openPersonalRepo(repoDeps(w), locks, READ_OPTS));
     expect(o).toMatchObject({ kind: 'deferred', reason: 'personal_repo_diverged' });
     expect(await snapshot(w)).toEqual(before);
   });
@@ -122,7 +123,7 @@ describe('R20-5.5 lock_lost:提交点前复核锁,丢锁立即停止、不再写
     ).rejects.toMatchObject({ kind: 'lock_lost' });
     expect(git(w, ['rev-parse', 'refs/heads/rsi'])).toBe(first); // 引用没动
     expect(await exists(path.join(w.h.repoDir, 'rules/new.md'))).toBe(false);
-    const o = await withLock(w, (l) => openPersonalRepo(repoDeps(w), l));
+    const o = await withLock(w, (l) => openPersonalRepo(repoDeps(w), l, READ_OPTS));
     expect(o).toMatchObject({ kind: 'ready', head: first });
     expect(await readJournal(w.h)).toEqual({ kind: 'absent' });
   });

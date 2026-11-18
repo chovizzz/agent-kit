@@ -1,5 +1,5 @@
 /**
- * C2 S1:bootstrap 前置守卫(§8.4)与五项恢复的编排(标志、失败隔离、失锁分类)。端口全为假件(与真端口同契约:读失败 = 抛错 / 返回 invalid)。
+ * C2 S1:仓库恢复结果映射(D1b-1 起无前置守卫,bootstrap 类 journal 由 `complete_only` 端口处置,见 `test/rsi/d1b1/`)与五项恢复的编排(标志、失败隔离、失锁分类)。端口全为假件(与真端口同契约:读失败 = 抛错 / 返回 invalid)。
  */
 import { describe, expect, it } from 'vitest';
 import { RsiLockError } from '../../../src/rsi/lock-error.js';
@@ -12,63 +12,44 @@ import type {
 import { createRoundBudget } from '../../../src/rsi/personal/stage/settle.js';
 import {
   createRepoRecovery,
-  type JournalKind,
   type OpenOutcome,
 } from '../../../src/rsi/personal/steps/repo-recover.js';
 import { runS1 } from '../../../src/rsi/personal/steps/s1-recover.js';
 import { START_ROLLBACK_LIMIT } from '../../../src/rsi/personal/steps/steps-types.js';
 import { openBoth } from '../stage/c1-fixture.js';
 
-describe('bootstrap 前置守卫(s1_never_resumes_bootstrap_without_authorization)', () => {
-  it.each(['bootstrap'] as const)(
-    'journal=%s(planned / initialized / committed 都是 bootstrap 类)→ 不调用 open,incomplete{bootstrap_pending}',
-    async (jk) => {
-      let opens = 0;
-      const recover = createRepoRecovery({
-        journalKind: async () => jk,
-        open: async () => {
-          opens += 1;
-          return { kind: 'ready' };
-        },
-      });
-      expect(await recover()).toEqual({ kind: 'incomplete', why: 'bootstrap_pending' });
-      expect(opens).toBe(0);
-    },
-  );
-
-  it('journal 不合规 → invalid(不调 open);无 journal / 非 bootstrap journal → 才调 open,并映射结果', async () => {
+describe('S1 仓库恢复映射(createRepoRecovery:open 结果 → RepoRecovery)', () => {
+  it('open 结果映射:absent / ready / invalid / deferred(两个原因)/ bootstrap_pending(incomplete,不熔断);open 恒被调用', async () => {
     let opens = 0;
-    const mk = (jk: JournalKind, o: OpenOutcome | Error) =>
+    const mk = (o: OpenOutcome | Error) =>
       createRepoRecovery({
-        journalKind: async () => jk,
         open: async () => {
           opens += 1;
           if (o instanceof Error) throw o;
           return o;
         },
       });
-    expect(await mk('invalid', { kind: 'ready' })()).toEqual({ kind: 'invalid' });
-    expect(opens).toBe(0);
-    expect(await mk('none', { kind: 'ready' })()).toEqual({
-      kind: 'judged',
-      judgement: 'at_record',
-    });
-    expect(await mk('other', { kind: 'absent' })()).toEqual({ kind: 'absent' });
-    expect(await mk('none', { kind: 'invalid', why: 'x' })()).toEqual({ kind: 'invalid' });
-    expect(await mk('none', { kind: 'deferred', reason: 'personal_repo_diverged' })()).toEqual({
+    expect(await mk({ kind: 'ready' })()).toEqual({ kind: 'judged', judgement: 'at_record' });
+    expect(await mk({ kind: 'absent' })()).toEqual({ kind: 'absent' });
+    expect(await mk({ kind: 'invalid', why: 'x' })()).toEqual({ kind: 'invalid' });
+    expect(await mk({ kind: 'deferred', reason: 'personal_repo_diverged' })()).toEqual({
       kind: 'judged',
       judgement: 'diverged',
     });
-    expect(await mk('none', { kind: 'deferred', reason: 'personal_owner_changed' })()).toEqual({
+    expect(await mk({ kind: 'deferred', reason: 'personal_owner_changed' })()).toEqual({
       kind: 'judged',
       judgement: 'owner_changed',
     });
-    expect(opens).toBe(5);
+    // bootstrap 类 journal 未完成:S1 报 incomplete(只进 faults / incomplete,不熔断),不是 invalid
+    expect(await mk({ kind: 'bootstrap_pending' })()).toEqual({
+      kind: 'incomplete',
+      why: 'bootstrap_pending',
+    });
+    expect(opens).toBe(6);
   });
 
   it('git 读失败(open 抛非锁错误)= 仓库不可用 invalid;锁错误 / 失锁原样上抛', async () => {
-    const mk = (e: unknown) =>
-      createRepoRecovery({ journalKind: async () => 'none', open: async () => Promise.reject(e) });
+    const mk = (e: unknown) => createRepoRecovery({ open: async () => Promise.reject(e) });
     expect(await mk(new Error('git exploded'))()).toEqual({ kind: 'invalid' });
     await expect(mk(new RsiLockError('lock_lost'))()).rejects.toBeInstanceOf(RsiLockError);
     await expect(mk(new PersonalLockLost())()).rejects.toBeInstanceOf(PersonalLockLost);

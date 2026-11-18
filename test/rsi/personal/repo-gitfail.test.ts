@@ -17,7 +17,15 @@ import {
   revParse,
 } from '../../../src/rsi/personal/repo-check.js';
 import { REPO_ROOT } from '../../helpers/tmp.js';
-import { makeWorld, NOW, repoDeps, setupRepo, slowTests, withLock } from './repo-helpers.js';
+import {
+  makeWorld,
+  NOW,
+  READ_OPTS,
+  repoDeps,
+  setupRepo,
+  slowTests,
+  withLock,
+} from './repo-helpers.js';
 
 slowTests();
 
@@ -59,7 +67,7 @@ describe('git 读取三态', () => {
     const w = await makeWorld('p-gf-corrupt-');
     await setupRepo(w);
     await safe.writeFile(w.io, path.join(w.h.repoDir, '.git', 'HEAD'), 'garbage\n');
-    const o = await withLock(w, (locks) => openPersonalRepo(repoDeps(w), locks));
+    const o = await withLock(w, (locks) => openPersonalRepo(repoDeps(w), locks, READ_OPTS));
     expect(o).toMatchObject({ kind: 'invalid', breaker: 'personal_repo_invalid' });
   });
 });
