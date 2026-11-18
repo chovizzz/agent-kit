@@ -203,6 +203,24 @@ function hookInitializers(call: ts.CallExpression, sf: ts.SourceFile): string[] 
     .map((p) => p.initializer.getText(sf));
 }
 
+/** `if (V.kind === 'halt' || V.kind === 'denied') return V`:条件恰为这两个严格比较的析取;then 分支**直接**(不在嵌套函数 / 子块里)返回 V */
+export function isDenyGuard(i: ts.IfStatement, v: string, sf: ts.SourceFile): boolean {
+  const operands: string[] = [];
+  const flat = (e: ts.Expression): void => {
+    if (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.BarBarToken) {
+      flat(e.left);
+      flat(e.right);
+    } else operands.push(e.getText(sf));
+  };
+  flat(i.expression);
+  const want = [`${v}.kind === 'halt'`, `${v}.kind === 'denied'`];
+  if ([...operands].sort().join('|') !== [...want].sort().join('|')) return false;
+  const isRet = (s: ts.Statement): boolean =>
+    ts.isReturnStatement(s) && s.expression?.getText(sf) === v;
+  const t = i.thenStatement;
+  return isRet(t) || (ts.isBlock(t) && t.statements.some(isRet));
+}
+
 /** 分支内有 continue / return(不算嵌套函数里的:那是别的函数的出口) */
 function stmtExits(n: ts.Node): boolean {
   let found = false;
@@ -254,13 +272,7 @@ export function hookFlowProblems(sf: ts.SourceFile, name: string): string[] {
           out.push(`${name}:applyIn 的实参里没有 ${v}.hook`);
         }
         const guard = findAll(fn, isIf).find(
-          (i) =>
-            ['halt', 'denied'].every((k) => i.expression.getText(sf).includes(`'${k}'`)) &&
-            i.expression.getText(sf).includes(`${v}.kind`) &&
-            i.getStart(sf) < c.getStart(sf) &&
-            findAll(i.thenStatement, (x): x is ts.ReturnStatement => ts.isReturnStatement(x)).some(
-              (r) => r.expression?.getText(sf) === v,
-            ),
+          (i) => i.getStart(sf) < c.getStart(sf) && isDenyGuard(i, v, sf),
         );
         if (guard === undefined) {
           out.push(
@@ -295,6 +307,26 @@ export function applyInValueRefs(sf: ts.SourceFile, name: string): string[] {
       return true;
     })
     .map((id) => `${enclosingFn(id, sf)}:${id.getText(sf)}`);
+}
+
+/** `personalRepoRemoval` 的提交实参(第 3 个):顶层对象字面量、无展开 / 计算属性、`upserts` 恰为 `[]`、有 `deletes`、无 `beforeRefUpdate` */
+export function removalSpecProblems(call: ts.CallExpression, sf: ts.SourceFile): string[] {
+  const spec = call.arguments[2];
+  if (spec === undefined || !ts.isObjectLiteralExpression(spec))
+    return ['第 3 个实参不是对象字面量'];
+  const out: string[] = [];
+  const names = new Map<string, string>();
+  for (const p of spec.properties) {
+    if (ts.isSpreadAssignment(p)) out.push('含展开');
+    else if (ts.isPropertyAssignment(p) && !ts.isComputedPropertyName(p.name)) {
+      names.set(p.name.getText(sf), p.initializer.getText(sf));
+    } else if (ts.isShorthandPropertyAssignment(p)) names.set(p.name.text, p.name.text);
+    else out.push('含无法静态确认的属性');
+  }
+  if (names.get('upserts') !== '[]') out.push('upserts 不是 []');
+  if (!names.has('deletes')) out.push('没有 deletes');
+  if (names.has('beforeRefUpdate')) out.push('带 beforeRefUpdate');
+  return out;
 }
 
 /** 文件里 `applyIn(…)` 调用所在的函数名(反查调用者) */
@@ -647,6 +679,7 @@ const AUTH_EXITS_ALLOWED: readonly string[] = [
   'src/rsi/store/apply-once.ts:createKeyedEffectSink:commit',
   'src/rsi/store/apply-once.ts:createLedgerRecovery:commit',
   'src/rsi/store/apply-once.ts:createUserVetoPort:commit',
+  'src/rsi/store/apply-once.ts:createUserVetoPort:commit', // 该函数内两处(多重集按调用点计)
   'src/rsi/store/compactor.ts:cleanupSteps:commit',
   'src/rsi/store/compactor.ts:run:commit',
 ];
@@ -658,14 +691,15 @@ const COMMIT_PERSONAL_IMPORTERS: readonly string[] = [
 
 describe('④ 权威写出口反查:调用者 ⊆ 登记汇点 ∪ 精确白名单(不看钩子、不看拼写)', () => {
   it('src/rsi/** 的提交类出口调用者恰为允许集(多一个 = 红);允许集里每一项都真实存在(不是空扫);登记的 port_claim 汇点都在其中', async () => {
-    const found = new Set<string>();
+    const foundList: string[] = [];
     for (const f of await walkTs(path.join(ROOT, 'src/rsi'))) {
       for (const x of authoritativeExits(rel(f), readTextSync(f))) {
-        found.add(`${rel(f)}:${x.fn}:${x.kind}`);
+        foundList.push(`${rel(f)}:${x.fn}:${x.kind}`);
       }
     }
-    expect([...found].filter((x) => !AUTH_EXITS_ALLOWED.includes(x))).toEqual([]);
-    for (const x of AUTH_EXITS_ALLOWED) expect(found.has(x), x).toBe(true);
+    // 按调用点计数(多重集):已白名单函数里再加第二笔提交也是红
+    expect([...foundList].sort()).toEqual([...AUTH_EXITS_ALLOWED].sort());
+    const found = new Set(foundList);
     // 登记的 port_claim 汇点:runPersonalStep 直接提交;applyEvent 经 applyIn(下一条钉住)
     for (const s of GROWTH_SINKS.filter((x) => x.mode === 'port_claim')) {
       expect(
@@ -710,12 +744,7 @@ describe('④ 权威写出口反查:调用者 ⊆ 登记汇点 ∪ 精确白名�
       (c) => c.expression.getText(rem) === 'commitPersonal',
     );
     expect(calls).toHaveLength(1);
-    const props = findAll(calls[0] as ts.CallExpression, isPropAssign);
-    expect(props.find((p) => p.name.getText(rem) === 'upserts')?.initializer.getText(rem)).toBe(
-      '[]',
-    );
-    expect(props.some((p) => p.name.getText(rem) === 'deletes')).toBe(true);
-    expect(props.some((p) => p.name.getText(rem) === 'beforeRefUpdate')).toBe(false);
+    expect(removalSpecProblems(calls[0] as ts.CallExpression, rem)).toEqual([]);
   });
 
   it('applyIn 只被 applyEvent 调用,且没有被当成值引用(赋给变量 / 当参数传)', () => {
@@ -837,6 +866,34 @@ describe('④ 权威写出口反查:调用者 ⊆ 登记汇点 ∪ 精确白名�
           'applyIn',
         ),
       ).not.toEqual([]);
+    });
+    it('guard 语义:|| 换成 && / 缺 denied / return 在嵌套函数里 → 报出;removalSpec:展开覆盖 upserts → 报出', () => {
+      const g = (cond: string, body: string): boolean => {
+        const sf = P(`function f(claimed: C) { if (${cond}) ${body} }`);
+        const i = findAll(sf, isIf)[0] as ts.IfStatement;
+        return isDenyGuard(i, 'claimed', sf);
+      };
+      const both = "claimed.kind === 'halt' || claimed.kind === 'denied'";
+      expect(g(both, 'return claimed;')).toBe(true);
+      expect(g(both.replace('||', '&&'), 'return claimed;')).toBe(false);
+      expect(g("claimed.kind === 'halt'", 'return claimed;')).toBe(false);
+      expect(g(both, '{ const h = () => { return claimed; }; h(); }')).toBe(false);
+      const spec = (body: string): string[] => {
+        const sf = P(`const x = commitPersonal(a, b, ${body});`);
+        return removalSpecProblems(findAll(sf, isCall)[0] as ts.CallExpression, sf);
+      };
+      expect(spec('{ upserts: [], deletes: present }')).toEqual([]);
+      expect(spec('{ ...{ upserts: [], deletes: present }, upserts: files }')).not.toEqual([]);
+      expect(spec('{ upserts: files, deletes: present }')).not.toEqual([]);
+    });
+    it('多重集:已白名单函数里新增第二笔提交 → 计数多一 = 与允许集不等', () => {
+      const one = authoritativeExits('v.ts', 'function g(p: P) { p.ledgerWrite.commit(a); }');
+      const two = authoritativeExits(
+        'v.ts',
+        'function g(p: P) { p.ledgerWrite.commit(a); other.commit(spec); }',
+      );
+      expect(one).toHaveLength(1);
+      expect(two).toHaveLength(2);
     });
     it('callersOfIn / applyInValueRefs:applyIn 出现在第二个函数里、或被当值引用 → 报出', () => {
       const src =

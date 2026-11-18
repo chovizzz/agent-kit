@@ -218,6 +218,26 @@ describe('creation_audit_confirmed_before_truncation(第 3 条)', () => {
     expect((await applyEvent(w3.d, r0, E.gatesPassed())).kind).toBe('transitioned');
   });
 
+  it('已知代价(owner 待定):减影响事件(veto)在缩减入口(deferredKeyedEffects)上也被截断确认挡住 → halt{commit_failed},记录不动;非截断的减影响不受影响', async () => {
+    const w = world3({ phase: V1B });
+    w.d.audit = keyedAuditSink(deferredKeyedEffects);
+    const r0 = windowed(rec('canary'), 256);
+    w.store.put(r0);
+    expect(await applyEvent(w.d, r0, E.veto())).toEqual({
+      kind: 'halt',
+      halt: 'commit_failed',
+      why: 'creation_audit_unconfirmed:deferred',
+    });
+    expect(w.store.commits).toEqual([]);
+    expect(w.store.records.get(r0.id)?.lifecycle).toBe('canary');
+    // 对照:窗口未满(创建条目不会被截)→ veto 照常
+    const w2 = world3({ phase: V1B });
+    w2.d.audit = keyedAuditSink(deferredKeyedEffects);
+    const r1 = windowed(rec('canary'), 255);
+    w2.store.put(r1);
+    expect((await applyEvent(w2.d, r1, E.veto())).kind).toBe('transitioned');
+  });
+
   it('缺 appendKeyed 端口 → 拒绝截断(halt{commit_failed, port_missing});不回落无键 append;零写入', async () => {
     const w = world3({ phase: V1B });
     delete w.d.audit.appendKeyed;
@@ -295,6 +315,7 @@ describe('creation_audit_confirmed_before_truncation(第 3 条)', () => {
         // 模拟之后记录增长到 256 条窗口,下一次转移会截掉创建条目
         const grown: PersonalLifecycleRecord = {
           ...created,
+          lifecycle: 'proposed', // 同一步的闸可能已把它推进到 shadow;这里要对 proposed 再施加 gates_passed
           transitions: [
             created.transitions[0] as PersonalLifecycleRecord['transitions'][number],
             ...Array.from({ length: 255 }, (_, i) => entry(i + 100)),
@@ -408,6 +429,9 @@ describe('denied_is_apply_result_branch(第 5 条)', () => {
     expect(r).toMatchObject({ status: 'incomplete', cause: 'retryable' });
     expect(JSON.stringify(r)).toContain('record_denied:rogue');
     expect(recordOf(w).lifecycle).toBe('canary');
+    // 修复要保护的副作用:记录没推进 → 不得删仓库文件(`repo.remove` 未被调用,目标文件仍在)
+    expect(w.calls).not.toContain('repo.remove');
+    expect(w.repoFiles.size).toBe(1);
   });
 
   it('veto(减影响)遇到 denied → 退 3 internal(fail-closed),不当成成功;记录不动', async () => {

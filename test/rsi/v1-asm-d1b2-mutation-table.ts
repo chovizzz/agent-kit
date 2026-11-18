@@ -212,8 +212,12 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
       },
     ],
     tests: [HOOK_T],
-    expectRed: [D_HOOK_POS, '拒绝后清理 journal 之前先复核锁'],
-    mustKill: ['拒绝后清理 journal 之前先复核锁'],
+    expectRed: [
+      D_HOOK_POS,
+      '拒绝后清理 journal 之前先复核锁',
+      'denied_cleanup_skips_remove_lock_check',
+    ],
+    mustKill: ['denied_cleanup_skips_remove_lock_check'],
   },
   {
     id: 'denied_journal_never_removed',
@@ -240,7 +244,11 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
       },
     ],
     tests: [HOOK_T],
-    expectRed: [D_HOOK_DENY, 'before_ref_update_denied_ref_unchanged_journal_removed'],
+    expectRed: [
+      D_HOOK_DENY,
+      'denied_cleanup_skips_remove_lock_check',
+      'before_ref_update_denied_ref_unchanged_journal_removed',
+    ],
     mustKill: ['before_ref_update_denied_ref_unchanged_journal_removed'],
   },
 
@@ -403,6 +411,7 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
     ],
     tests: [STEP_T, ARCH_T],
     expectRed: [
+      D_S_HOOKREAD,
       D_ARCH_AUTH,
       D_S_CREATE,
       D_S_NOHALT,
@@ -418,6 +427,8 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
     edits: [{ file: STEP, anchor: '        beforeRefUpdate: claim.hook,', replacement: '' }],
     tests: [STEP_T, ARCH_T],
     expectRed: [
+      D_S_HOOKREAD,
+      D_ARCH_SCAN,
       D_ARCH_AUTH,
       D_S_CREATE,
       D_ARCH,
@@ -1350,7 +1361,7 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
       },
     ],
     tests: [ACC_T],
-    expectRed: [D_ACC_TRUNC, 'appendKeyed 返回 deferred'],
+    expectRed: [D_ACC_TRUNC, '减影响事件(veto)', 'appendKeyed 返回 deferred'],
     mustKill: ['appendKeyed 返回 deferred'],
   },
   {
