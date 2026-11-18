@@ -441,6 +441,8 @@ export function world3(over: { phase?: number } = {}): World3 {
     revocations: { read: async () => revs.value },
     audit: {
       append: async (l) => void audits.push(...l),
+      // 创建行审计只经带键出口(D1b-2:缺端口不回落无键 append);与生产 `keyedAuditSink` 同形——行进同一份 `audits`
+      appendKeyed: async (items) => void audits.push(...items.map((i) => i.line)),
       appendObservation: async (row) => void audits.push(row),
     },
     effects: {

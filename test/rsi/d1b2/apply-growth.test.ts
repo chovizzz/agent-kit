@@ -224,6 +224,28 @@ describe('增影响事件:端口缺 / 拒 / 畸形 = growth_denied 且零写入'
     });
   }
 
+  it('claim_hook_reread:claim 返回带 getter 的对象 → 每个字段只读一次,commit 收到的就是校验过的那个函数(不重读同一个对象)', async () => {
+    for (const c of CASES) {
+      let hookReads = 0;
+      const fn = async (): Promise<void> => undefined;
+      const port: GrowthClaimPort = {
+        claim: async () =>
+          ({
+            ok: true,
+            get hook() {
+              hookReads++;
+              return hookReads === 1 ? fn : undefined;
+            },
+          }) as never,
+      };
+      const p = probe(c.record(), port);
+      const r = await applyEvent(p.d, c.record(), c.event);
+      expect(r.kind, c.name).toBe('transitioned');
+      expect(hookReads, c.name).toBe(1);
+      expect(p.store.commits[0]?.beforeRefUpdate, c.name).toBe(fn);
+    }
+  });
+
   it('deploy_inject 同样先过端口(canary 记录):缺端口零写入;claim 收到 (deploy_inject, 候选)', async () => {
     const canary = rec('canary', { deploy: { claude: 'none', pi: 'none', codex: 'none' } });
     const absent = probe(canary, 'absent');

@@ -11,6 +11,9 @@ import type {
 } from '../../../src/contracts/rsi-personal.js';
 import { RsiLockError } from '../../../src/rsi/lock-error.js';
 import { runPersonalStep } from '../../../src/rsi/personal/candidate-step.js';
+import { recoverCreationAudits } from '../../../src/rsi/personal/creation-audit.js';
+import type { GrowthClaimPort } from '../../../src/rsi/personal/candidate-ports.js';
+import type { KeyedEffectResult } from '../../../src/rsi/personal/rollback-ports.js';
 import { SealRegistry, createSealGuard } from '../../../src/rsi/store/seal.js';
 import type { EntrySeal } from '../../../src/rsi/personal/entry-stamp.js';
 import { rec as mkRec, SIG } from '../personal/transition-fixture.js';
@@ -209,6 +212,72 @@ describe('创建审计经唯一派生点、带键落地(I13 的即时一半)', (
     expect(row?.idem_key).toBe(first?.idem_key);
     expect(row?.line.at).toBe(first?.at);
     expect(w.audits.some((a) => a.from === 'none')).toBe(false);
+  });
+});
+
+describe('创建审计缺带键出口:不回落无键 append(与恢复的键去重对齐)', () => {
+  it('creation_audit_without_keyed_port_not_appended_via_keyless_append:缺 appendKeyed → 创建成功但创建行审计不落、记 effectsFailed;随后恢复按键补一次(applied),再来一次 already(不重复)', async () => {
+    const w = world3({ phase: V1B });
+    delete w.d.audit.appendKeyed;
+    const appended: RsiAuditLine[] = [];
+    w.d.audit.append = async (l) => void appended.push(...l);
+    propose(w);
+    const r = await runPersonalStep(w.d);
+    expect(r.created).toHaveLength(1);
+    const id = r.created[0] as string;
+    expect(r.effectsFailed).toContain(`${id}:creation_audit_port_missing`);
+    expect(appended.some((a) => a.from === 'none')).toBe(false);
+    expect(w.audits.some((a) => a.from === 'none')).toBe(false);
+    // 恢复:同一个键空间,第一次补上,第二次 already(无键行不参与去重,所以绝不能先写一条无键的)
+    const landed = new Set<string>();
+    const sink = {
+      applyOnce: async (key: string): Promise<KeyedEffectResult> => {
+        if (landed.has(key)) return 'already';
+        landed.add(key);
+        return 'applied';
+      },
+    };
+    const store = { readAll: () => w.store.readAll() };
+    expect((await recoverCreationAudits({ store, sink })).applied).toEqual([id]);
+    expect((await recoverCreationAudits({ store, sink })).already).toEqual([id]);
+  });
+});
+
+describe('growth_denied 的降级只对已分类的增影响事件(减影响事件出现 growth_denied = 底座违约 → halt)', () => {
+  it('runner_downgrades_reducing_denied:减影响事件(shadow 排队到期)的提交返回 denied → halted=growth_denied(fail-closed),不记 growthDenied', async () => {
+    const w = world3({ phase: V1B });
+    const s = mkRec('shadow', { id: B, cluster_id: 'cl-b' });
+    w.store.put(s);
+    w.working.set(B, wcFor(s, '2026-10-11')); // 30 日 → 排队到期(减影响)
+    w.store.failCommit = { status: 'denied', code: 'rogue' };
+    const r = await runPersonalStep(w.d);
+    expect(r.halted).toBe('growth_denied');
+    expect(r.growthDenied).toEqual([]);
+    expect(w.store.records.get(B)?.lifecycle).toBe('shadow');
+  });
+});
+
+describe('claim 返回值只读一次(校验过的值就是转交的值)', () => {
+  it('创建路径:带 getter 的 claim 返回值 —— hook 只被读一次,commit 收到的就是那一次读到的函数', async () => {
+    const w = world3({ phase: V1B });
+    let reads = 0;
+    const fn = async (): Promise<void> => undefined;
+    const port: GrowthClaimPort = {
+      claim: async () =>
+        ({
+          ok: true,
+          get hook() {
+            reads++;
+            return reads === 1 ? fn : undefined;
+          },
+        }) as never,
+    };
+    w.d.growth = port;
+    propose(w);
+    const r = await runPersonalStep(w.d);
+    expect(r.created).toHaveLength(1);
+    expect(reads).toBeGreaterThanOrEqual(1);
+    expect(w.store.commits[0]?.beforeRefUpdate).toBe(fn);
   });
 });
 

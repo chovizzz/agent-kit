@@ -142,11 +142,10 @@ export async function claimGrowthPort(
     typeof r === 'object' && r !== null
       ? (r as { ok?: unknown; hook?: unknown; code?: unknown })
       : {};
-  if (o.ok === true && typeof o.hook === 'function') {
-    return { ok: true, hook: o.hook as BeforeRefUpdate };
-  }
-  const code = o.ok === false && typeof o.code === 'string' ? o.code : 'claim_malformed';
-  return { ok: false, code };
+  // 每个字段只读一次,校验与转交用同一个值(校验通过后不重读同一个对象:带 getter 的返回值不能在两次读取间换成别的)
+  const { ok, hook, code } = o;
+  if (ok === true && typeof hook === 'function') return { ok: true, hook: hook as BeforeRefUpdate };
+  return { ok: false, code: ok === false && typeof code === 'string' ? code : 'claim_malformed' };
 }
 
 type Fresh = Extract<Awaited<ReturnType<AuthoritativeStore['read']>>, { kind: 'ok' }>;

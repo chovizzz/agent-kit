@@ -429,6 +429,7 @@ async function discardOwnJournal(
     a.candidate_ids.every((id, i) => id === mine.candidate_ids[i]);
   if (!same || (a.phase !== 'planned' && a.phase !== 'objects_written')) return;
   if (revParse(ctx.git, 'refs/heads/rsi') !== oldHead) return;
+  await assertLocks(ctx); // 读盘与比较之后、删除之前再复核一次(逐字段全等只证明那一刻的快照;丢锁则传播,不进下面吞 IO 错误的 catch)
   try {
     await removeJournal(ctx.h);
   } catch {

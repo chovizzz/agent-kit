@@ -70,6 +70,10 @@ const D_S_STAMP = '创建取时经封存区域(I11)';
 const D_S_AUDIT = '创建审计经唯一派生点、带键落地(I13 的即时一半)';
 const D_S_OBS = '观察行只经 appendObservation(I12)';
 const D_S_LOCKS = 'StepDeps.locks 两把锁都要持(I9 的锁半)';
+const D_S_AUDIT_PORT = '创建审计缺带键出口:不回落无键 append(与恢复的键去重对齐)';
+const D_S_DOWNGRADE =
+  'growth_denied 的降级只对已分类的增影响事件(减影响事件出现 growth_denied = 底座违约 → halt)';
+const D_S_HOOKREAD = 'claim 返回值只读一次(校验过的值就是转交的值)';
 const D_P_HAS = 'hasSinkPass:只认铸造登记';
 const D_P_GRANT = 'grantCanary:pass 是第一道门';
 const D_P_ADM = 'stepAdmission:pass 是第一道门';
@@ -370,8 +374,9 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
     edits: [
       {
         file: APPLY,
-        anchor: "  if (o.ok === true && typeof o.hook === 'function') {",
-        replacement: '  if (o.ok === true) {',
+        anchor:
+          "  if (ok === true && typeof hook === 'function') return { ok: true, hook: hook as BeforeRefUpdate };",
+        replacement: '  if (ok === true) return { ok: true, hook: hook as BeforeRefUpdate };',
       },
     ],
     tests: [APPLY_T, STEP_T],
@@ -451,10 +456,8 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
     edits: [
       {
         file: RSTEP,
-        anchor:
-          "    if (r.kind === 'halt' && r.halt === 'growth_denied' && out.growthDenied !== undefined) {",
-        replacement:
-          "    if (r.kind === 'halt' && r.halt === 'growth_denied' && out.growthDenied === undefined) {",
+        anchor: '      out.growthDenied !== undefined &&\n',
+        replacement: '      out.growthDenied === undefined &&\n',
       },
     ],
     tests: [STEP_T],
@@ -468,6 +471,69 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
     tests: [STEP_T],
     expectRed: [D_S_LOCKS, 'rsi 锁丢失:入口 assertHeld 抛'],
     mustKill: ['rsi 锁丢失:入口 assertHeld 抛'],
+  },
+  {
+    id: 'claim_hook_reread',
+    clause: 'I9:校验过的 claim 返回值就是转交的值(每个字段只读一次;不重读同一个对象)',
+    edits: [
+      {
+        file: APPLY,
+        anchor:
+          "  if (ok === true && typeof hook === 'function') return { ok: true, hook: hook as BeforeRefUpdate };",
+        replacement:
+          "  if (ok === true && typeof hook === 'function') return { ok: true, hook: (r as { hook: BeforeRefUpdate }).hook };",
+      },
+    ],
+    tests: [APPLY_T, STEP_T],
+    expectRed: [D_AG, D_S_HOOKREAD, 'claim_hook_reread', 'claim 返回值只读一次'],
+    mustKill: ['claim_hook_reread', 'claim 返回值只读一次'],
+  },
+  {
+    id: 'denied_cleanup_skips_remove_lock_check',
+    clause: 'I8:清理在读盘并核对所有权之后、删除之前再复核一次锁(逐字段全等只证明那一刻的快照)',
+    edits: [
+      {
+        file: COMMIT,
+        anchor:
+          '  await assertLocks(ctx); // 读盘与比较之后、删除之前再复核一次(逐字段全等只证明那一刻的快照;丢锁则传播,不进下面吞 IO 错误的 catch)',
+        replacement: '  void 0;',
+      },
+    ],
+    tests: [HOOK_T],
+    expectRed: [D_HOOK_POS, 'denied_cleanup_skips_remove_lock_check'],
+    mustKill: ['denied_cleanup_skips_remove_lock_check'],
+  },
+  {
+    id: 'creation_audit_falls_back_to_append',
+    clause: 'I13:创建审计缺带键出口时不回落无键 append(无键行不参与键去重,即时 + 恢复会重复)',
+    edits: [
+      {
+        file: STEP,
+        anchor: '          out.effectsFailed.push(`${draft.id}:creation_audit_port_missing`);',
+        replacement: '          await d.audit.append(items.map((i) => i.line));',
+      },
+    ],
+    tests: [STEP_T],
+    expectRed: [
+      D_S_AUDIT_PORT,
+      'creation_audit_without_keyed_port_not_appended_via_keyless_append',
+    ],
+    mustKill: ['creation_audit_without_keyed_port_not_appended_via_keyless_append'],
+  },
+  {
+    id: 'runner_downgrades_reducing_denied',
+    clause:
+      'I9:growth_denied 只对已分类的增影响事件降级为记录;减影响事件出现 = 底座违约 → halt(fail-closed)',
+    edits: [
+      {
+        file: RSTEP,
+        anchor: '      growthOp !== null\n    ) {',
+        replacement: '      true\n    ) {',
+      },
+    ],
+    tests: [STEP_T],
+    expectRed: [D_S_DOWNGRADE, 'runner_downgrades_reducing_denied'],
+    mustKill: ['runner_downgrades_reducing_denied'],
   },
   {
     id: 'growth_denied_halt_class_unsettled',

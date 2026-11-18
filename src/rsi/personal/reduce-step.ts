@@ -82,9 +82,15 @@ export function makeStepRunner(
       }
       throw e;
     }
-    if (r.kind === 'halt' && r.halt === 'growth_denied' && out.growthDenied !== undefined) {
-      const op = growthOpOfEvent(event.kind);
-      out.growthDenied.push({ op: op === null ? 'unmappable' : op, code: r.why ?? 'unknown' });
+    // 只对**已分类的增影响事件**降级为记录;减影响事件(`op === null`)不带钩子,出现 growth_denied = 底座违约,走下面的 halt(fail-closed)
+    const growthOp = growthOpOfEvent(event.kind);
+    if (
+      r.kind === 'halt' &&
+      r.halt === 'growth_denied' &&
+      out.growthDenied !== undefined &&
+      growthOp !== null
+    ) {
+      out.growthDenied.push({ op: growthOp, code: r.why ?? 'unknown' });
       return 'other';
     }
     if (r.kind === 'halt') {

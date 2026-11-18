@@ -339,10 +339,14 @@ export async function runPersonalStep(d: StepDeps): Promise<StepResult> {
       try {
         await d.working.put(wc);
         working.set(draft.id, wc);
-        // 创建行审计:行与键都来自唯一派生点(`creation-audit.ts`;提交后崩溃由 `recoverCreationAudits` 以记录里的 `at` 补)
+        // 创建行审计:行与键都来自唯一派生点(`creation-audit.ts`;提交后崩溃由 `recoverCreationAudits` 以记录里的 `at` 补)。
+        // 只经带键出口:缺 `appendKeyed` 时**不回落**无键 `append`(无键行不参与键去重,即时一条 + 恢复补一条会重复)——记 effectsFailed,留给恢复补
         const items = creationAuditItems(rec).map((i) => ({ line: i.line, idem_key: i.idem_key }));
-        if (d.audit.appendKeyed !== undefined) await d.audit.appendKeyed(items);
-        else await d.audit.append(items.map((i) => i.line));
+        if (d.audit.appendKeyed === undefined) {
+          out.effectsFailed.push(`${draft.id}:creation_audit_port_missing`);
+        } else {
+          await d.audit.appendKeyed(items);
+        }
       } catch (e) {
         if (e instanceof RsiLockError && e.kind === 'lock_lost') return halt('lock_lost');
         out.effectsFailed.push(`${draft.id}:${e instanceof Error ? e.message : 'error'}`);

@@ -251,6 +251,44 @@ describe('beforeRefUpdate:位置与锁复核', () => {
     expect(j.kind === 'ok' ? j.value.phase : null).toBe('objects_written');
   });
 
+  it('denied_cleanup_skips_remove_lock_check:清理在「读盘并核对所有权」之后、删除之前再复核一次锁:清理阶段恰有两次锁断言;第二次丢锁 → 传播 lock_lost,journal 不动', async () => {
+    // 钩子拒绝之后才开始计数(armed):清理阶段的 assertHeld 调用次数 + 在第 N 次丢锁
+    async function run(failAt: number): Promise<{ n: number; err: unknown; w: World }> {
+      const w = await makeWorld('d1b2-hook-removelock-');
+      await setupRepo(w);
+      const st = { armed: false, n: 0 };
+      const locks: PersonalLocks = {
+        personal: {
+          assertHeld: async () => {
+            if (!st.armed) return;
+            st.n++;
+            if (st.n >= failAt) throw new RsiLockError('lock_lost');
+          },
+        },
+      };
+      let err: unknown = null;
+      try {
+        await commitPersonal(repoDeps(w), locks, {
+          ...spec('2', NEXT_FILES),
+          beforeRefUpdate: async () => {
+            st.armed = true;
+            throw new BeforeRefUpdateDenied('x');
+          },
+        });
+      } catch (e) {
+        err = e;
+      }
+      return { n: st.n, err, w };
+    }
+    const dry = await run(Number.POSITIVE_INFINITY);
+    expect(dry.err).toBeNull();
+    expect(dry.n).toBe(2); // 读盘之前一次 + 删除之前一次
+    const lostAtRemove = await run(2);
+    expect(lostAtRemove.err).toBeInstanceOf(RsiLockError);
+    const j = await readJournal(lostAtRemove.w.h);
+    expect(j.kind === 'ok' ? j.value.phase : null).toBe('objects_written');
+  });
+
   it('不带钩子的调用方行为不变(加法):同一提交 committed,钩子字段缺省', async () => {
     const w = await makeWorld('d1b2-hook-absent-');
     await setupRepo(w);
