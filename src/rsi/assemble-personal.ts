@@ -559,7 +559,9 @@ export function makeBothPorts(
       async open(): Promise<OpenOutcome> {
         const k = await kit();
         // S1 只用 `complete_only`:不建仓、不续 planned / initialized;committed / recorded 先读真实 ref 与树再收尾(见 commit.ts `OpenOpts`)
-        return outcomeOfOpen(await openPersonalRepo(k.repoDeps, k.locks, { mode: 'complete_only' }));
+        return outcomeOfOpen(
+          await openPersonalRepo(k.repoDeps, k.locks, { mode: 'complete_only' }),
+        );
       },
     }),
   );

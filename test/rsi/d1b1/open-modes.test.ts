@@ -154,10 +154,18 @@ describe('read 模式:bootstrap 类 journal 一律不动', () => {
       expect(await open(w, READ_OPTS, (s) => steps.push(s))).toEqual({ kind: 'bootstrap_pending' });
       expect(
         await withLock(w, (l) => readPersonalFiles(repoDeps(w), l, ['lifecycle'])),
-      ).toMatchObject({ status: 'invalid', why: 'bootstrap_pending', breaker: 'personal_repo_invalid' });
+      ).toMatchObject({
+        status: 'invalid',
+        why: 'bootstrap_pending',
+        breaker: 'personal_repo_invalid',
+      });
       expect(
         await withLock(w, (l) => commitPersonal(repoDeps(w), l, spec('9', BASE_FILES))),
-      ).toMatchObject({ status: 'invalid', why: 'bootstrap_pending', breaker: 'personal_repo_invalid' });
+      ).toMatchObject({
+        status: 'invalid',
+        why: 'bootstrap_pending',
+        breaker: 'personal_repo_invalid',
+      });
       expect(steps).toEqual([]);
       expect(await fingerprint(w)).toEqual(before);
     },
@@ -209,7 +217,11 @@ describe('complete_only:只做 committed → recorded', () => {
     const o = await open(w, COMPLETE_ONLY, (s) => steps.push(s));
     if (o.kind !== 'ready') throw new Error(JSON.stringify(o));
     expect(steps).toContain('journal:recorded');
-    for (const never of ['journal:initialized', 'bootstrap:dir_ready', 'bootstrap:before:update-ref']) {
+    for (const never of [
+      'journal:initialized',
+      'bootstrap:dir_ready',
+      'bootstrap:before:update-ref',
+    ]) {
       expect(steps).not.toContain(never);
     }
     expect(git(w, ['rev-parse', 'refs/heads/rsi'])).toBe(o.head);
