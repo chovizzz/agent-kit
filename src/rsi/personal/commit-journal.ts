@@ -411,6 +411,10 @@ async function continueBootstrap(
   const done = j.new_commit as string; // committed / recorded 的 journal 必带 new_commit(schema)
   if (revParse(c.git, 'refs/heads/rsi') !== done) return inconsistent();
   if (!bootstrapObserved(c, done)) return inconsistent();
+  // 提交本身也必须是 bootstrap 的空树根提交(不能只信 journal 与 ref 同指一个提交)
+  if (revParse(c.git, `${done}^{tree}`) !== EMPTY_TREE || revParse(c.git, `${done}^`) !== null) {
+    return inconsistent();
+  }
   if (j.phase === 'committed') j = await writePhase(c, j, { phase: 'recorded' });
   await recordHeadAndFinish(c, j);
   return { status: 'created', commit: done };

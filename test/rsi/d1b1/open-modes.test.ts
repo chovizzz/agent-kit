@@ -29,6 +29,7 @@ import {
   statePath,
   writeJournal,
 } from '../../../src/rsi/personal/home-state.js';
+import { personalRepoStore } from '../../../src/rsi/personal/candidate-repo.js';
 import { PersonalLockLost } from '../../../src/rsi/personal/stage/errors.js';
 import { createRepoRecovery, outcomeOfOpen } from '../../../src/rsi/personal/steps/repo-recover.js';
 import {
@@ -250,6 +251,28 @@ describe('complete_only:只做 committed → recorded', () => {
     expect(await readHead(w.h)).toEqual({ kind: 'absent' });
   });
 
+  it.each(['committed', 'recorded'] as const)(
+    'complete_only_%s_nonempty_tree_commit_invalid_journal_kept — journal 与 ref 同指一个带文件的提交(索引 / 工作树与之一致)→ invalid{bootstrap_inconsistent}',
+    async (sc) => {
+      const w = await makeWorld('d1b1-co-tree-');
+      await plant(w, sc);
+      const blob = git(w, ['hash-object', '-w', '--stdin'], { input: 'x\n' });
+      const tree = git(w, ['mktree'], { input: `100644 blob ${blob}\tf.txt\n` });
+      const c = git(w, ['commit-tree', tree, '-m', 'not bootstrap']);
+      git(w, ['update-ref', 'refs/heads/rsi', c]);
+      git(w, ['reset', '--hard', '-q', c]);
+      const j = await readJournal(w.h);
+      if (j.kind !== 'ok') throw new Error('journal');
+      await writeJournal(w.h, { ...j.value, new_commit: c });
+      expect(await open(w, COMPLETE_ONLY)).toMatchObject({
+        kind: 'invalid',
+        why: 'bootstrap_inconsistent',
+      });
+      expect(await exists(journalFile(w))).toBe(true);
+      expect(await readHead(w.h)).toEqual({ kind: 'absent' });
+    },
+  );
+
   it('complete_only_committed_dirty_worktree_invalid_journal_kept — 工作树多了未跟踪文件(树不符)→ invalid{bootstrap_inconsistent}', async () => {
     const w = await makeWorld('d1b1-co-dirty-');
     await plant(w, 'committed');
@@ -261,6 +284,26 @@ describe('complete_only:只做 committed → recorded', () => {
     expect(await exists(journalFile(w))).toBe(true);
     expect(await readHead(w.h)).toEqual({ kind: 'absent' });
   });
+});
+
+describe('命令路径(personalRepoStore,repoDeps 与 assemble-write 同形:无任何开关)', () => {
+  it.each(['planned_missing', 'initialized', 'committed'] as const)(
+    'write_path_never_resumes_bootstrap_%s — readAll / commit 遇 bootstrap journal = invalid{bootstrap_pending};零步骤点,journal 与仓库状态不变',
+    async (sc) => {
+      const w = await makeWorld('d1b1-wpath-');
+      await plant(w, sc);
+      const before = await fingerprint(w);
+      const steps: string[] = [];
+      const out = await withLock(w, async (locks) => {
+        const store = personalRepoStore(repoDeps(w, { onStep: (s) => steps.push(s) }), locks);
+        return { read: await store.readAll(), commit: await store.commit(spec('9', BASE_FILES)) };
+      });
+      expect(out.read).toEqual({ kind: 'invalid', why: 'bootstrap_pending' });
+      expect(out.commit).toMatchObject({ status: 'invalid', why: 'bootstrap_pending' });
+      expect(steps).toEqual([]);
+      expect(await fingerprint(w)).toEqual(before);
+    },
+  );
 });
 
 describe('S1 端口(真 openPersonalRepo complete_only + createRepoRecovery)', () => {

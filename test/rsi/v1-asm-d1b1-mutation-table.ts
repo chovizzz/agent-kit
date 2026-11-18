@@ -49,12 +49,13 @@ const D_READ = 'read 模式:bootstrap 类 journal 一律不动';
 const D_CO = 'complete_only:只做 committed → recorded';
 const D_S1 = 'S1 端口(真 openPersonalRepo complete_only + createRepoRecovery)';
 const D_AUTH = 'bootstrap 模式:授权边界与崩溃窗口';
+const D_WP = '命令路径(personalRepoStore,repoDeps 与 assemble-write 同形:无任何开关)';
 const D_DEF = 'D1b-1 端口纵深防御与映射';
 const D_ARCH = 'D1b-1 架构钉子';
 const D_MAP = 'S1 仓库恢复映射';
 const D_W2 = 'W0-5 bootstrap';
 const D_E2E = 'C2 生产装配(真 worker)';
-const OPEN_ALL = [D_READ, D_CO, D_S1, D_AUTH, D_DEF] as const;
+const OPEN_ALL = [D_READ, D_CO, D_S1, D_AUTH, D_DEF, D_WP] as const;
 
 export const V1_ASM_D1B1_MUTATIONS: readonly V1AsmD1b1Mutation[] = [
   {
@@ -247,9 +248,14 @@ export const V1_ASM_D1B1_MUTATIONS: readonly V1AsmD1b1Mutation[] = [
       ...OPEN_ALL,
       D_ARCH,
       'read_mode_never_touches_bootstrap_journal',
+      'write_path_never_resumes_bootstrap',
       'openPersonalRepo 的生产调用方与模式',
     ],
-    mustKill: ['read_mode_never_touches_bootstrap_journal', 'openPersonalRepo 的生产调用方与模式'],
+    mustKill: [
+      'read_mode_never_touches_bootstrap_journal',
+      'write_path_never_resumes_bootstrap',
+      'openPersonalRepo 的生产调用方与模式',
+    ],
   },
   {
     id: 'read_files_uses_bootstrap_mode',
@@ -268,9 +274,14 @@ export const V1_ASM_D1B1_MUTATIONS: readonly V1AsmD1b1Mutation[] = [
       ...OPEN_ALL,
       D_ARCH,
       'read_mode_never_touches_bootstrap_journal',
+      'write_path_never_resumes_bootstrap',
       'openPersonalRepo 的生产调用方与模式',
     ],
-    mustKill: ['read_mode_never_touches_bootstrap_journal', 'openPersonalRepo 的生产调用方与模式'],
+    mustKill: [
+      'read_mode_never_touches_bootstrap_journal',
+      'write_path_never_resumes_bootstrap',
+      'openPersonalRepo 的生产调用方与模式',
+    ],
   },
   {
     id: 'commit_wrapper_ignores_pending',
@@ -500,6 +511,21 @@ export const V1_ASM_D1B1_MUTATIONS: readonly V1AsmD1b1Mutation[] = [
     tests: [OPEN_TEST],
     expectRed: [...OPEN_ALL, 'outcome_of_open_maps_every_kind'],
     mustKill: ['outcome_of_open_maps_every_kind'],
+  },
+  {
+    id: 'committed_commit_tree_unchecked',
+    clause: 'I3:committed / recorded 还要核对提交本身是空树根提交(不能只信 journal 与 ref 同指)',
+    edits: [
+      {
+        file: JOURNAL,
+        anchor:
+          "  if (revParse(c.git, `${done}^{tree}`) !== EMPTY_TREE || revParse(c.git, `${done}^`) !== null) {",
+        replacement: '  if (false) {',
+      },
+    ],
+    tests: [OPEN_TEST, W2_BOOT_TEST],
+    expectRed: [...OPEN_ALL, D_W2, 'nonempty_tree_commit_invalid_journal_kept'],
+    mustKill: ['nonempty_tree_commit_invalid_journal_kept'],
   },
 ];
 

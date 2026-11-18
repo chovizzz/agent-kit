@@ -97,7 +97,7 @@ describe('C2 生产装配(真 worker)', () => {
     }
   });
 
-  it('e2e_committed_bootstrap_journal_without_repo_is_invalid_not_incomplete — committed journal 而真实仓库不存在:S1 报 invalid(不是 bootstrap_pending);.git 不出现、journal 字节不变', async () => {
+  it('e2e_committed_bootstrap_journal_without_repo_not_incomplete — committed journal 而真实仓库不存在:S1 不报 bootstrap_pending(invalid 由 d1b1 的 s1_ 端口用例钉);.git 不出现、journal 字节不变', async () => {
     const f = await makeTickFx('c2-asm-boot-committed-', { confirmed: true });
     const h = personalHome(f.io, f.home);
     const j = {
