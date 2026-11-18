@@ -3,8 +3,8 @@
  *  ① 没有任何生产入口(含 `worker.ts` / `hook-entry.ts` / `hint.ts` / 命令入口)的 import 闭包含 `src/rsi/personal/stage/**` 或 `judge-slot.ts`
  *     (类型导入也不含:`includeTypes` 两档都查)——不接线、没有注入点;
  *  **C1b 订正(接线后,依赖倒置)**:`worker.ts` 只依赖叶子端口 `worker-personal-port.ts`(只有类型),`hook-entry.ts` 不认识装配——这两个文件的闭包(含 `import type`)里 stage 模块为**零**(严格档);
- *  个人步的真实装配只在 `assemble-worker.ts` / `worker-entry.ts`(只被根入口 `cli.ts` / `src/cli.ts` 经动态 `import()` 加载)。所以 ① 对「接线入口」细分为**两档白名单**:运行时闭包只允许 `RUNTIME_WIRED`(纯逻辑的 P 骨架),
- *  类型闭包另允许 `TYPE_ONLY_WIRED`(只被 `import type` 引用);**其余一切 stage 模块**(`growth.ts` 增影响授权、`settle.ts`、`monitoring.ts`、`residual.ts`、判决槽 `judge-slot.ts` 的运行时)
+ *  个人步的真实装配只在 `assemble-worker.ts` / `worker-entry.ts`(只被根入口 `cli.ts` / `src/cli.ts` 经动态 `import()` 加载)。所以 ① 对「接线入口」细分为**两档白名单**:运行时闭包只允许 `RUNTIME_WIRED`(纯逻辑的 P 骨架;C2 起含 settle / monitoring / residual 与 judge-slot.ts〔只有槽类型 / 缺省实现 / 运行期校验,其调用点由 c1b-closure 收敛〕),
+ *  类型闭包另允许 `TYPE_ONLY_WIRED`(只被 `import type` 引用);**其余一切 stage 模块**(`growth.ts` 增影响授权)
  *  在任一档的生产闭包里仍然禁止;`hint.ts` 与命令入口(只读 / 前台)仍是全禁。这不是删闸:被允许的模块逐个是纯逻辑(见下面的纯度检查),且禁区覆盖面按「非白名单即禁」计。
  *  ② 新模块顶层无副作用(只有声明;顶层初始化只允许冻结 / 空登记表的构造),且全部为纯逻辑:无 fs 写用法、不 import 任何写出口;
  *  ③ 依赖收敛:对锁句柄具体类型 / 存储核的依赖只在 `lock-identity.ts`(且不含 `src/rsi/store/**`);不复制 W9 判决逻辑(不 import judge 逻辑模块);
@@ -60,13 +60,18 @@ const RUNTIME_WIRED: readonly string[] = [
   'personal-stage.ts',
   'round.ts',
   'types.ts',
-].map((f) => `${STAGE_DIR}${f}`);
+  // C2 订正(W0-29):S1 / S2 编排用 `settleSafety` / `RoundBudget`;D18 doctor 检查(根入口经命令表进入闭包)用判定内核 `residual.ts` 及其常量 `monitoring.ts`。
+  // 三者都是纯逻辑(下面的纯度检查逐文件覆盖);`growth.ts`(增影响授权)与判决槽运行时仍禁。
+  'monitoring.ts',
+  'residual.ts',
+  'settle.ts',
+]
+  .map((f) => `${STAGE_DIR}${f}`)
+  // C2 订正:S2P 第 4b 步(W9 槽 `run`)的返回值要经 `normalizeJudgeReport` 校验;judge-slot.ts 只有槽类型 / 缺省实现 / 运行期校验,不含判决逻辑
+  // (`UNAVAILABLE_JUDGE` / `checkJudgeGrowth` 只许出现在它自己里:见 c1b-closure 的调用点收敛)
+  .concat(['src/rsi/personal/judge-slot.ts']);
 /** 仅类型闭包另允许(只被 `import type` 引用;没有运行时代码) */
-const TYPE_ONLY_WIRED: readonly string[] = [
-  `${STAGE_DIR}ports.ts`,
-  `${STAGE_DIR}taint-types.ts`,
-  'src/rsi/personal/judge-slot.ts',
-];
+const TYPE_ONLY_WIRED: readonly string[] = [`${STAGE_DIR}ports.ts`, `${STAGE_DIR}taint-types.ts`];
 
 /** 严格入口:闭包里一个 stage 模块都不许有(只读 / 前台 / 候选步入口;C1b 起含 worker 与钩子入口——个人步经端口注入,不静态依赖) */
 const ENTRIES = [
@@ -159,21 +164,22 @@ describe('生产惰性(C1a)', () => {
     expect(c.files.has('src/rsi/personal/stage/fallback.ts')).toBe(true);
   });
 
-  it('正向对照:接线入口若多拉 growth.ts / settle.ts,白名单检查必红', () => {
+  it('正向对照:接线入口若多拉 growth.ts,白名单检查必红(settle / monitoring / residual / judge-slot 自 C2 起在白名单内,不再算多拉)', () => {
     const c = closureOf(['src/rsi/inert-probe-wired.ts'], {
       includeTypes: false,
       virtual: {
         'src/rsi/inert-probe-wired.ts':
-          "import { evaluateGrowth } from './personal/stage/growth.js';\nimport { settleSafety } from './personal/stage/settle.js';\nexport const x = [evaluateGrowth, settleSafety];",
+          "import { evaluateGrowth } from './personal/stage/growth.js';\nimport { UNAVAILABLE_JUDGE } from './personal/judge-slot.js';\nexport const x = [evaluateGrowth, UNAVAILABLE_JUDGE];",
       },
     });
     const extra = [...c.files].filter(isNew).filter((f) => !RUNTIME_WIRED.includes(f));
-    expect(extra).toEqual(
-      expect.arrayContaining([
-        'src/rsi/personal/stage/growth.ts',
-        'src/rsi/personal/stage/settle.ts',
-      ]),
-    );
+    // 白名单外的新模块恰好是增影响授权 growth.ts(必红);judge-slot.ts 已在白名单内(其调用点由 c1b-closure 收敛)
+    expect(extra).toEqual(expect.arrayContaining(['src/rsi/personal/stage/growth.ts']));
+    expect(extra).not.toContain('src/rsi/personal/judge-slot.ts');
+    for (const ok of ['settle.ts', 'monitoring.ts', 'residual.ts'])
+      expect(RUNTIME_WIRED).toContain(`${STAGE_DIR}${ok}`);
+    expect(RUNTIME_WIRED).toContain('src/rsi/personal/judge-slot.ts');
+    expect(RUNTIME_WIRED).not.toContain(`${STAGE_DIR}growth.ts`);
   });
 
   it('正向对照:虚拟入口 import 授权模块 / 判决槽时,同一检查报出', () => {

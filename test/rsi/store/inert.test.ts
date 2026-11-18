@@ -33,8 +33,15 @@ const WRITE_SIDE_ENTRIES = [
   'src/rsi/auto/deps-write.ts',
 ].filter((f) => existsSync(path.join(ROOT, f)));
 const ENTRIES = [...READ_SIDE_ENTRIES, ...WRITE_SIDE_ENTRIES];
-/** 写侧入口里唯一允许把存储核带进闭包的组合根 */
+/** 写侧入口里允许把存储核带进闭包的组合根(B2:写命令装配) */
 const WRITE_ROOT = 'src/rsi/assemble-write.ts';
+/**
+ * C2 改动(依据:设计稿 v2 §11 C2——worker 个人步的压缩 / 对账接入存储核):`cli.ts` / `src/cli.ts` 经字面量动态 import
+ * `worker-entry.ts` → `assemble-worker.ts` → **`assemble-personal.ts`** 到达存储核。这是第二个、也是唯一新增的组合根;
+ * 相位 0 下个人步不合格(`eligible()` 恒 false,`test/rsi/c2/*`、`test/rsi/stage/c1-inert.test.ts` 证明),不会求值存储核。
+ * `READ_SIDE_ENTRIES` 里的 `worker.ts` 只 import 类型叶子端口,仍断言闭包不含存储核。
+ */
+const PERSONAL_ROOT = 'src/rsi/assemble-personal.ts';
 
 const storeFiles = (files: Iterable<string>): string[] =>
   [...files].filter((f) => f.startsWith('src/rsi/store/') || f === 'src/contracts/rsi-store.ts');
@@ -51,14 +58,25 @@ describe('生产惰性(B1a)', () => {
     expect(c.unresolved).toEqual([]);
   });
 
-  it('写侧入口只经 assemble-write.ts 到达存储核(把组合根换成空模块后闭包不含存储核);组合根确实带进存储核', () => {
-    const virtual = { [WRITE_ROOT]: 'export {};' };
+  it('写侧入口只经 assemble-write.ts / assemble-personal.ts 到达存储核(两个组合根换成空模块后闭包不含存储核);两个组合根各自确实带进存储核', () => {
+    const virtual = { [WRITE_ROOT]: 'export {};', [PERSONAL_ROOT]: 'export {};' };
     const cut = closureOf(WRITE_SIDE_ENTRIES, { includeTypes: false, virtual });
     expect(storeFiles(cut.files)).toEqual([]);
     expect(cut.unresolved).toEqual([]);
     const real = closureOf(WRITE_SIDE_ENTRIES, { includeTypes: false });
     expect(real.files.has(WRITE_ROOT)).toBe(true);
+    expect(real.files.has(PERSONAL_ROOT)).toBe(true);
     expect(storeFiles(real.files)).toContain('src/rsi/store/store.ts');
+    // 正向对照:只空掉其中一个组合根时,另一个仍把存储核带进来(两条路径各自独立有效,检查不是空转)
+    for (const keep of [WRITE_ROOT, PERSONAL_ROOT]) {
+      const other = keep === WRITE_ROOT ? PERSONAL_ROOT : WRITE_ROOT;
+      const half = closureOf(WRITE_SIDE_ENTRIES, {
+        includeTypes: false,
+        virtual: { [other]: 'export {};' },
+      });
+      expect(half.files.has(keep)).toBe(true);
+      expect(storeFiles(half.files)).toContain('src/rsi/store/store.ts');
+    }
   });
 
   it('正向对照:虚拟入口 import 装配函数时,闭包含存储核(检查有效)', () => {

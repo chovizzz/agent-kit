@@ -435,6 +435,32 @@ export const FIXTURES: Fixture[] = [
     },
     expect: { status: 'fail', result: 'repo_invalid' },
   },
+  // D18(§21 W0-29 ⑥):worker 安全残余。ok = 没配 [rsi](n_a);bad = [rsi] 配置有问题(repo 不存在)→ 监测读不到 = warn / unreadable
+  {
+    id: 'D18',
+    kind: 'ok',
+    name: '没有 [rsi] 配置(n_a / absent)',
+    build: async () => [await cleanWorld('d18-ok-')],
+    expect: { status: 'n_a', result: 'absent' },
+  },
+  {
+    id: 'D18',
+    kind: 'bad',
+    name: '[rsi] enabled = true 但 repo 不存在(监测读不到:warn / unreadable)',
+    build: async () => {
+      const w = await cleanWorld('d18-bad-');
+      const cfgDir = path.join(w.home, '.config', 'agent-kit');
+      await safe.mkdirp(w.io, cfgDir, 0o755);
+      await safe.writeFile(
+        w.io,
+        path.join(cfgDir, 'config.toml'),
+        `[rsi]\nenabled = true\nrepo = ${JSON.stringify(path.join(w.dir, 'no-such-repo'))}\n`,
+        { mode: 0o600 },
+      );
+      return [w];
+    },
+    expect: { status: 'warn', result: 'unreadable' },
+  },
 ];
 
 describe('doctor:夹具矩阵', () => {

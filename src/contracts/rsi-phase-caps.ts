@@ -12,9 +12,11 @@ export const RSI_ASSEMBLY_CAPS = Object.freeze([
   'effects_ledger_write',
   'audit_appender',
   'audit_compaction',
-  // C:worker 骨架
+  // C:worker 骨架(W0-29 ⑦:`worker_safety_skeleton` = P 点 + S0 阶梯 + 兜底 + 状态机,C1 已交付;`taint_scan` = S1 / S2P / 污染 / 压缩调度的真实现,C2 交付)
+  'worker_safety_skeleton',
   'audit_sweep',
   'recovery_scan',
+  'taint_scan',
   'growth_storage_guard',
   'seal_stamp_all_producers',
   // D:候选推进与授予
@@ -39,8 +41,14 @@ export const RSI_PHASE_REQUIRES: Readonly<Record<RsiAutoPhaseName, readonly RsiA
     V6b: [],
   });
 
-/** 生产装配实际注入的能力(B1b = 空集;B2 / C / D 各自在真装配里追加) */
-export const RSI_PRODUCTION_WIRED_CAPS: ReadonlySet<RsiAssemblyCap> = new Set<RsiAssemblyCap>();
+/**
+ * 生产装配实际注入的能力(B1b = 空集;B2 / C / D 各自在真装配里追加)。C2 起 = `worker_safety_skeleton`、`taint_scan`
+ * (`assemble-worker.ts` 的 `PRODUCTION_CAPABILITY_TABLE` 与本集合逐项核对);其余能力仍缺,提相位 PR 仍必红。
+ */
+export const RSI_PRODUCTION_WIRED_CAPS: ReadonlySet<RsiAssemblyCap> = new Set<RsiAssemblyCap>([
+  'worker_safety_skeleton',
+  'taint_scan',
+]);
 
 /** 相位 `phase`(整数下标)尚缺的能力(按 `RSI_ASSEMBLY_CAPS` 顺序;越界 / 非整数相位 = 要求全部,默认拒绝) */
 export function missingPhaseCaps(

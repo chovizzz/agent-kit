@@ -35,7 +35,7 @@ import {
   type BreakerDeps,
   type PauseStatePort,
 } from './personal/breaker.js';
-import { acquirePersonalLock } from './personal/personal-lock.js';
+import { acquirePersonalLock, type PersonalLockHandle } from './personal/personal-lock.js';
 import { personalHome } from './personal/home-state.js';
 import { isRsiLockLost } from './personal/stage/errors.js';
 import {
@@ -44,8 +44,14 @@ import {
   runFallbackOnce,
   type FallbackTrack,
 } from './personal/stage/fallback.js';
-import type { S0Ports, S0StateKind } from './personal/stage/ladder.js';
+import { runEnforceLadder, type S0Ports, type S0StateKind } from './personal/stage/ladder.js';
 import { createPersonalStage } from './personal/stage/personal-stage.js';
+import {
+  makeBothPorts,
+  makeSafetyPort,
+  type PersonalToolkit,
+  type StepsAssemblyDeps,
+} from './assemble-personal.js';
 import type { FallbackPorts, StateRead } from './personal/stage/ports.js';
 import type {
   FallbackCtx,
@@ -70,14 +76,21 @@ import type {
 } from './worker-personal-port.js';
 
 // ---------- 能力表 ----------
-/** 契约能力表(键 = `RSI_ASSEMBLY_CAPS` 全集)。C1b **没有交付任何契约能力**(审计补扫 / 恢复扫描 / 增长存储守卫 / 全产生者盖戳都在 C2 / D),全部为假;只有 `RSI_PRODUCTION_WIRED_CAPS` 才是门禁依据 */
+/**
+ * 契约能力表(键 = `RSI_ASSEMBLY_CAPS` 全集)。**只有「生产装配里确实注入了该端口实例」才为真**,且必须与契约导出的 `RSI_PRODUCTION_WIRED_CAPS` 逐项一致(测试核对):
+ *  - `worker_safety_skeleton`:P 点 + S0 阶梯 + 兜底协议 + 试锁状态机 + 写适配器 / `gen`(C1b 交付,本装配即其注入);
+ *  - `taint_scan`:S1 / S2P / 污染扫描 / 压缩调度的真实现(C2;`makeBothPorts` 注入);
+ *  - 其余(审计补扫 / 恢复扫描 / 增长存储守卫 / 全产生者盖戳 / 账消费 / 近似指纹产生方)在 D 及之后,全部为假 → 相位提升 PR 在齐全前必红。
+ */
 export const PRODUCTION_CAPABILITY_TABLE: Readonly<Record<RsiAssemblyCap, boolean>> = Object.freeze(
   {
     effects_ledger_write: false,
     audit_appender: false,
     audit_compaction: false,
+    worker_safety_skeleton: true,
     audit_sweep: false,
     recovery_scan: false,
+    taint_scan: true,
     growth_storage_guard: false,
     seal_stamp_all_producers: false,
     ledger_consume_ingest: false,
@@ -85,11 +98,6 @@ export const PRODUCTION_CAPABILITY_TABLE: Readonly<Record<RsiAssemblyCap, boolea
     near_fp_producer: false,
   },
 );
-
-/** 本块交付记录(**不是契约能力键**,不进 wired 集合、不影响相位门禁):C1b 交付 = P 点 + S0 + 兜底协议 + 试锁状态机 */
-export const DELIVERED_MILESTONES: Readonly<Record<string, boolean>> = Object.freeze({
-  worker_safety_skeleton: true,
-});
 
 /** 由契约能力表读出「已注入」的键集合(测试把它与契约导出的 `RSI_PRODUCTION_WIRED_CAPS` 逐项核对) */
 export function wiredFromTable(
@@ -276,10 +284,45 @@ function fallbackPortsFor(ctx: FallbackCtx): FallbackPorts {
   };
 }
 
+/** 读盘上的两个标志(`PersonalRound.flags`);读不出 = `null`(按未知处理,不臆测) */
+async function readFlags(
+  io: IoContext,
+): Promise<{ diverged: boolean; owner_changed: boolean } | null> {
+  try {
+    const r = await readRsiFixed(io, 'state.json');
+    if (r.kind === 'missing') return { diverged: false, owner_changed: false };
+    const doc = parseRsiStateDoc(r.bytes);
+    if (doc.kind !== 'ok') return null;
+    const ap = doc.state.auto_pause;
+    return { diverged: ap?.diverged ?? false, owner_changed: ap?.owner_changed ?? false };
+  } catch {
+    return null;
+  }
+}
+
 export function assembleWorkerStage(d: AssembleWorkerDeps = {}): PersonalStage {
   const phase = d.phase ?? RSI_AUTO_PHASE;
   const wired = d.wired ?? RSI_PRODUCTION_WIRED_CAPS;
+  /** 本轮取到的原始个人锁句柄(个人步端口要真实 `LockCap`;`HeldPersonal` 包装不外泄) */
+  const rawPersonal: { current: PersonalLockHandle | null } = { current: null };
+  const toolkit: PersonalToolkit = {
+    breakerDeps: (c, ph) => breakerDeps(c, ph),
+    ladderPorts: (c) => ladderPorts(c),
+    enforce: (c, ph) =>
+      runEnforceLadder({
+        ...ladderPorts(c),
+        enforceFull: () => enforceMute(breakerDeps(c, ph)),
+        stateKind: () => readStateKind(c.sctx.io),
+      }),
+  };
+  const sd: StepsAssemblyDeps = { phase, toolkit, rawPersonal: () => rawPersonal.current };
   return createPersonalStage({
+    steps: {
+      both: (ctx, round, budget) => makeBothPorts(ctx, round, budget, sd),
+      rsiOnly: (ctx, round) =>
+        makeSafetyPort({ sctx: ctx.sctx, lock: ctx.lock, now: ctx.now }, sd, round),
+      flags: (ctx) => readFlags(ctx.sctx.io),
+    },
     eligible: () => phaseAtLeast('V1a', phase) && missingPhaseCaps(phase, wired).length === 0,
     s0Ports(ctx: PersonalCtx): S0Ports {
       const c: Rsi = { sctx: ctx.sctx, lock: ctx.lock, now: ctx.now };
@@ -292,10 +335,13 @@ export function assembleWorkerStage(d: AssembleWorkerDeps = {}): PersonalStage {
     },
     fallbackPorts: fallbackPortsFor,
     acquirePersonal(ctx: PersonalCtx) {
-      return () => {
+      return async () => {
+        rawPersonal.current = null;
         const home = ctx.sctx.io.hostEnv['HOME'];
         if (home === undefined || !path.isAbsolute(home)) throw new RsiLockError('internal');
-        return acquirePersonalLock(personalHome(ctx.sctx.io, home), d.lock ?? {});
+        const h = await acquirePersonalLock(personalHome(ctx.sctx.io, home), d.lock ?? {});
+        rawPersonal.current = h;
+        return h;
       };
     },
     async l0DueNow(ctx: PersonalCtx): Promise<boolean> {

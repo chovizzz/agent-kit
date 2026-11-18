@@ -1,5 +1,5 @@
 /**
- * S5:doctor 的 17 个检查(D01–D17;D17 为 A6,docs/contracts.md §19.3),每个是纯函数:输入是调用方探测好的只读快照 / 状态,
+ * S5:doctor 的 18 个检查(D01–D18;D17 为 A6、D18 为 W0-29 ⑥,docs/contracts.md §19.3),每个是纯函数:输入是调用方探测好的只读快照 / 状态,
  * 输出是 CheckResult。本文件不读盘、不写盘、不联网、不读环境;所有字符串输出都经 types.ts 的过滤器。
  *
  * D05 / D06 / D07 / D08 复用 S3 的分类(`src/sync/classify.ts` 的 preflightEntry / currentOf 与 `planSync` 的计划),
@@ -675,4 +675,38 @@ export function checkD17(i: D17Input): CheckResult {
     return result('D17', 'n_a', i.collection.result, { facts, items });
   }
   return result('D17', pick.status, pick.result, { facts, items });
+}
+
+// ---------------------------------------------------------------------------
+// D18 worker 安全残余(§21 W0-29 ⑥;C v2 §3.3 的监测信号):只读、不拿锁
+// ---------------------------------------------------------------------------
+/**
+ * 输入是采集端(`rsi-residual.ts`)已算好的**信号 id 列表**(判定内核 `evaluateSafetyResidual` 在采集端调用;本函数只做展示合成,无 I/O)。
+ *  - `applicable = false`(没有 `[rsi]` / 已禁用)→ `n_a` / `absent`;
+ *  - `unreadable = true`(`rsi/` 不安全、state / canary / log 读不了)→ `warn` / `unreadable`(监测读不到本身就是需要注意的事,但不制造顶层 fail-closed);
+ *  - 无信号 → `ok` / `ok`;任一信号 → `warn`,`result` 取首个命中信号 id,`items` 列全部。
+ * facts 只含枚举 / 布尔 / 计数。
+ */
+export interface D18Input {
+  applicable: boolean;
+  unreadable: boolean;
+  signals: readonly string[];
+  facts: { lock: string | null; marker_b: boolean | null; marker_u: boolean | null };
+}
+
+export function checkD18(i: D18Input): CheckResult {
+  const facts = {
+    lock: en(i.facts.lock ?? undefined),
+    marker_b: i.facts.marker_b,
+    marker_u: i.facts.marker_u,
+  };
+  if (!i.applicable) return result('D18', 'n_a', 'absent', { facts });
+  if (i.unreadable) return result('D18', 'warn', 'unreadable', { facts });
+  const items = i.signals.map((s) => en(s) ?? 'unknown_signal');
+  if (items.length === 0) return result('D18', 'ok', 'ok', { facts });
+  return result('D18', 'warn', items[0] ?? 'unknown_signal', {
+    counts: { signals: items.length },
+    facts,
+    items,
+  });
 }

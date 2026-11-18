@@ -16,30 +16,48 @@ import { ROOT, closureOf, identHits } from '../closure-util.js';
 
 const ENTRY = 'src/rsi/assemble-worker.ts';
 
+/**
+ * **C2 订正(W0-29 / C v1 §2「写能力边界」口径)**:C1b 的守卫把 `openPersonalRepo` / `writeRevocation` / `bootstrapRepo` 与 commit.ts / commit-journal.ts / revoke-write.ts /
+ * candidate-apply.ts / settle.ts / judge-slot.ts 也算作「增影响」整体禁入;C2 的设计(S1 调 `openPersonalRepo`、污染写凭据、reduce-step 经 `applyEvent` 对账、W9 槽 4b)
+ * 必须引入它们。所以这里分两层:
+ *  ① 真正的增影响汇点(授予 / 增长授权 / 候选推进入口)与其模块——**仍然整体禁入**;
+ *  ② 被 C2 认领的写能力符号——不再禁入,但**调用点收敛**:每个符号只许出现在列出的文件里(见 `CALL_SITES`),新增调用点 = 红;bootstrap 守卫另有运行期用例(`c2-steps-s1.test.ts`)。
+ */
 const GROWTH_SINK_SYMBOLS = [
   'grantCanary',
   'runPersonalStep',
-  'bootstrapRepo',
-  'openPersonalRepo',
   'evaluateGrowth',
   'requireGrowth',
   'checkGrowthVeto',
-  'UNAVAILABLE_JUDGE',
-  'checkJudgeGrowth',
-  'writeRevocation',
 ] as const;
 const GROWTH_SINK_MODULES = [
   'src/rsi/canary/canary-writer.ts',
   'src/rsi/canary/admission-write.ts',
   'src/rsi/personal/candidate-step.ts',
-  'src/rsi/personal/candidate-apply.ts',
-  'src/rsi/personal/commit.ts',
-  'src/rsi/personal/commit-journal.ts',
-  'src/rsi/personal/revoke-write.ts',
-  'src/rsi/personal/judge-slot.ts',
   'src/rsi/personal/stage/growth.ts',
-  'src/rsi/personal/stage/settle.ts',
 ].filter((f) => existsSync(path.join(ROOT, f)));
+
+/** ② 写能力符号的调用点收敛(闭包内出现该标识符的文件必须 ⊆ 允许集合;定义处与既有使用方在内) */
+const CALL_SITES: Readonly<Record<string, readonly string[]>> = {
+  openPersonalRepo: ['src/rsi/assemble-personal.ts', 'src/rsi/personal/commit.ts'],
+  bootstrapRepo: ['src/rsi/personal/commit-journal.ts', 'src/rsi/personal/commit.ts'],
+  writeRevocationDetailed: ['src/rsi/assemble-personal.ts', 'src/rsi/personal/revoke-write.ts'],
+  writeRevocation: ['src/rsi/personal/revoke-write.ts', 'src/rsi/personal/rollback-ports.ts'],
+  applyEvent: [
+    'src/rsi/personal/candidate-apply.ts',
+    'src/rsi/personal/reduce-step.ts',
+    'src/rsi/personal/rollback.ts',
+  ],
+  UNAVAILABLE_JUDGE: ['src/rsi/personal/judge-slot.ts'],
+  checkJudgeGrowth: ['src/rsi/personal/judge-slot.ts'],
+};
+const callSiteViolations = (c: ReturnType<typeof closureOf>): string[] =>
+  identHits(c, Object.keys(CALL_SITES)).filter((h) => {
+    const i = h.lastIndexOf(':');
+    const f = h.slice(0, i);
+    const sym = h.slice(i + 1);
+    return !(CALL_SITES[sym] ?? []).includes(f);
+  });
 
 describe('c_closure_has_no_growth_symbols', () => {
   it('装配入口的运行时闭包:无增影响符号、无增影响模块', () => {
@@ -54,6 +72,21 @@ describe('c_closure_has_no_growth_symbols', () => {
     const c = closureOf([ENTRY], { includeTypes: true });
     expect(identHits(c, ['evaluateGrowth', 'requireGrowth', 'checkGrowthVeto'])).toEqual([]);
     expect([...c.files].filter((f) => f.endsWith('stage/growth.ts'))).toEqual([]);
+  });
+
+  it('C2:写能力符号的调用点收敛(运行时闭包与类型闭包);新增调用点必红', () => {
+    for (const includeTypes of [false, true]) {
+      const c = closureOf([ENTRY], { includeTypes });
+      expect(callSiteViolations(c), `includeTypes=${includeTypes}`).toEqual([]);
+    }
+    // 正向对照:虚拟文件里多一个 `openPersonalRepo` 调用点 → 报出
+    const bad = closureOf(['src/rsi/probe-callsite.ts'], {
+      virtual: {
+        'src/rsi/probe-callsite.ts':
+          "import { openPersonalRepo } from './personal/commit.js';\nexport const x = openPersonalRepo;",
+      },
+    });
+    expect(callSiteViolations(bad)).toContain('src/rsi/probe-callsite.ts:openPersonalRepo');
   });
 
   it('正向对照:虚拟入口引入授予入口 / 增长授权 → 同一检查报出', () => {

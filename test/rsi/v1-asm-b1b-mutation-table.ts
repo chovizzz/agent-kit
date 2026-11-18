@@ -1261,12 +1261,12 @@ export const V1_ASM_B1B_MUTATIONS: readonly V1AsmB1bMutation[] = [
   },
   {
     id: 'phase_wired_preset',
-    clause: '生产装配未注入任何能力',
+    clause: '生产装配只注入已交付的能力(worker_safety_skeleton / taint_scan)',
     edits: [
       swap(
         'src/contracts/rsi-phase-caps.ts',
-        'ReadonlySet<RsiAssemblyCap> = new Set<RsiAssemblyCap>();',
-        'ReadonlySet<RsiAssemblyCap> = new Set<RsiAssemblyCap>(RSI_ASSEMBLY_CAPS);',
+        "  'taint_scan',\n]);",
+        "  'taint_scan',\n  ...RSI_ASSEMBLY_CAPS,\n]);",
       ),
     ],
     tests: ['rsi/store/b1b-gate.test.ts'],

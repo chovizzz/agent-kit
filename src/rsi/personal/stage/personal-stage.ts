@@ -14,12 +14,27 @@
  *
  * `safetyFallback(ctx)`:`runFallbackLadder`,永不抛(含 rsi 失锁 → `aborted`)。`eligible()`:纯判定,抛错 = 不进(fail-closed)。
  */
-import { classify, isRsiLockLost } from './errors.js';
+import { classify, isRsiLockLost, resolveLockLoss } from './errors.js';
 import type { PersonalFault } from './errors.js';
 import { runEnforceLadder, runFallbackLadder, type S0Ports } from './ladder.js';
 import { attemptPersonal } from './lock-identity.js';
-import type { FallbackPorts } from './ports.js';
-import { growthAccessOf, markRoundUnsettled, openRound } from './round.js';
+import type { FallbackPorts, SafetyPort } from './ports.js';
+import {
+  growthAccessOf,
+  markRoundUnsettled,
+  openRound,
+  type BothRound,
+  type RsiOnlyRound,
+} from './round.js';
+import { createRoundBudget, type RoundBudget } from './settle.js';
+import {
+  bothBudgetOf,
+  runBothSteps,
+  runRsiOnlySteps,
+  type BothPorts,
+  type StepsResult,
+} from '../steps/run-steps.js';
+import type { S1Flags } from '../steps/s1-recover.js';
 import type {
   FallbackCtx,
   FallbackReport,
@@ -39,6 +54,16 @@ export interface PersonalStageDeps {
   acquirePersonal(ctx: PersonalCtx): Parameters<typeof attemptPersonal>[0];
   /** 本轮 L0 是否到期(S3 节流依据,用当前 state 现算);抛错按 false(不到期 = 不增影响) */
   l0DueNow(ctx: PersonalCtx): Promise<boolean>;
+  /**
+   * **C2**(可选;缺省 = C1b 行为:只有 S0 与试锁):S1 / 压缩 / S2 / `T_rsi` / 单次扫尾的端口工厂。装配层每次 `run` 现建
+   * (持两锁:`both` 收本轮 `BothRound`,写端口经 `round.writeAdapter` 包装;忙 / 故障:`rsiOnly` 只给 rsi 侧 `SafetyPort`)。
+   */
+  steps?: {
+    both(ctx: PersonalCtx, round: BothRound, budget: RoundBudget): BothPorts;
+    rsiOnly(ctx: PersonalCtx, round: RsiOnlyRound, budget: RoundBudget): SafetyPort;
+    /** 读盘上最终的两个标志(给 `PersonalRound.flags`);读不出 = `null`(按未知处理,不臆测) */
+    flags?(ctx: PersonalCtx): Promise<S1Flags | null>;
+  };
 }
 
 const safetyFaultOf = (kind: string): PersonalFault => ({
@@ -117,6 +142,56 @@ export function createPersonalStage(deps: PersonalStageDeps): PersonalStage {
           l0DueNow = false;
         }
 
+        // ---- C2:S2R → S1 → 压缩 → S2P → 扫尾(忙 / 故障:S2R → T_rsi → 扫尾) ----
+        let flags: S1Flags = { diverged: false, owner_changed: false };
+        if (deps.steps !== undefined && !lockLost) {
+          let sr: StepsResult | null = null;
+          try {
+            if (open.kind === 'both') {
+              const budget = bothBudgetOf(open.round);
+              sr = await runBothSteps({
+                ports: deps.steps.both(ctx, open.round, budget),
+                round: open.round,
+                budget,
+                l0DueNow,
+              });
+            } else {
+              const budget = createRoundBudget(open.round);
+              sr = await runRsiOnlySteps({
+                safety: deps.steps.rsiOnly(ctx, open.round, budget),
+                round: open.round,
+                budget,
+              });
+            }
+          } catch (e) {
+            const c = classify(e);
+            if (c.kind === 'rethrow') throw e;
+            markRoundUnsettled(open.round, 'safety_not_settled');
+            if (c.kind === 'end_personal_round') lockLost = true;
+            else faults.push(c.fault);
+          }
+          if (sr !== null) {
+            faults.push(...sr.faults);
+            for (const r of sr.unsettled) markRoundUnsettled(open.round, r);
+            if (sr.ended) {
+              lockLost = true; // 个人锁丢失:结束个人轮,余下写不依赖失效句柄
+              markRoundUnsettled(open.round, 'safety_not_settled');
+            }
+            if (sr.flagsTarget !== null) flags = { ...flags, ...sr.flagsTarget };
+            // W9 槽的 `halted=lock_lost` 分不出是哪一把锁(`lock_loss_unresolved`):在这里解析(设计页 §3)——
+            // rsi 锁已丢 = 原样上抛(`assertHeld` 抛出;finally 释放个人锁);个人锁 / 查不出 = 保持「结束个人轮 + 未决」
+            if (held !== null && sr.unsettled.includes('lock_loss_unresolved')) {
+              if ((await resolveLockLoss(ctx.lock, held)) === 'rsi') await ctx.lock.assertHeld();
+            }
+          }
+          try {
+            const f = (await deps.steps.flags?.(ctx)) ?? null;
+            if (f !== null) flags = f;
+          } catch (e) {
+            if (isRsiLockLost(e)) throw e;
+          }
+        }
+
         // 返回前最后一次 rsi 锁复核:丢失 = 原样上抛(finally 释放个人锁)
         await ctx.lock.assertHeld();
 
@@ -125,7 +200,7 @@ export function createPersonalStage(deps: PersonalStageDeps): PersonalStage {
           faults,
           unsettled: open.round.unsettled(),
           l0DueNow,
-          flags: { diverged: false, owner_changed: false },
+          flags,
           rollback_stalled: [],
           protection_marks: [],
         };

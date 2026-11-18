@@ -37,9 +37,9 @@ describe('RSI_PHASE_REQUIRES(相位 → 必备能力)', () => {
     }
   });
 
-  it('生产惰性:相位常量 0、生产装配没有注入任何能力;当前相位无缺口(提相位前恒成立)', () => {
+  it('生产惰性:相位常量 0、生产装配只注入已交付的 worker_safety_skeleton / taint_scan;当前相位无缺口(提相位前恒成立)', () => {
     expect(RSI_AUTO_PHASE).toBe(0);
-    expect(RSI_PRODUCTION_WIRED_CAPS.size).toBe(0);
+    expect([...RSI_PRODUCTION_WIRED_CAPS].sort()).toEqual(['taint_scan', 'worker_safety_skeleton']);
     expect(missingPhaseCaps(RSI_AUTO_PHASE)).toEqual([]);
     expect(() => assertPhaseCaps(RSI_AUTO_PHASE)).not.toThrow();
     // 提相位的 PR 必须同时让生产装配带齐能力:相位 ≥ V1a 时缺口必须为空(现在为 0,不触发)
@@ -50,7 +50,8 @@ describe('RSI_PHASE_REQUIRES(相位 → 必备能力)', () => {
     const missing = missingPhaseCaps(V1A);
     expect(missing).toContain('near_fp_producer');
     expect(missing).toContain('effects_ledger_write');
-    expect(missing).toEqual([...RSI_ASSEMBLY_CAPS]);
+    // 已交付的两项(worker_safety_skeleton / taint_scan)不再缺;其余全缺
+    expect(missing).toEqual(RSI_ASSEMBLY_CAPS.filter((c) => !RSI_PRODUCTION_WIRED_CAPS.has(c)));
     try {
       assertPhaseCaps(V1A);
       throw new Error('expected throw');
@@ -73,7 +74,9 @@ describe('RSI_PHASE_REQUIRES(相位 → 必备能力)', () => {
 
   it('非整数 / 越界相位 = 默认拒绝(要求全部能力)', () => {
     for (const bad of [-1, 1.5, 99, Number.NaN]) {
-      expect(missingPhaseCaps(bad)).toEqual([...RSI_ASSEMBLY_CAPS]);
+      expect(missingPhaseCaps(bad)).toEqual(
+        RSI_ASSEMBLY_CAPS.filter((c) => !RSI_PRODUCTION_WIRED_CAPS.has(c)),
+      );
     }
   });
 });
