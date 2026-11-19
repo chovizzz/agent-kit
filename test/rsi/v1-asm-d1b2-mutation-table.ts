@@ -182,6 +182,7 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
       D_HOOK_DENY,
       'before_ref_update_denied_foreign_journal_untouched',
       'before_ref_update_denied_same_txn_different_content_untouched',
+      'denied_cleanup_final_check_journal_replaced',
     ],
     mustKill: [
       'before_ref_update_denied_foreign_journal_untouched',
@@ -1034,7 +1035,11 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
       },
     ],
     tests: [HOOK_T],
-    expectRed: [D_HOOK_DENY, 'denied_cleanup_journal_gone_not_plain_denied'],
+    expectRed: [
+      D_HOOK_DENY,
+      'denied_cleanup_journal_gone_not_plain_denied',
+      'denied_cleanup_final_check_journal_gone',
+    ],
     mustKill: ['denied_cleanup_journal_gone_not_plain_denied'],
   },
   {
@@ -1048,7 +1053,11 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
       },
     ],
     tests: [HOOK_T],
-    expectRed: [D_HOOK_DENY, 'denied_cleanup_ref_moved_not_plain_denied'],
+    expectRed: [
+      D_HOOK_DENY,
+      'denied_cleanup_ref_moved_not_plain_denied',
+      'denied_cleanup_final_check_after_last_lock',
+    ],
     mustKill: ['denied_cleanup_ref_moved_not_plain_denied'],
   },
   {
@@ -1068,6 +1077,8 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
       'before_ref_update_denied_foreign_journal_untouched',
       'before_ref_update_denied_same_txn_different_content_untouched',
       'denied_cleanup_journal_gone_not_plain_denied',
+      'denied_cleanup_final_check_journal_gone',
+      'denied_cleanup_final_check_journal_replaced',
     ],
     mustKill: [
       'before_ref_update_denied_foreign_journal_untouched',
@@ -1086,7 +1097,11 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
       },
     ],
     tests: [HOOK_T],
-    expectRed: [D_HOOK_DENY, 'denied_cleanup_ref_moved_not_plain_denied'],
+    expectRed: [
+      D_HOOK_DENY,
+      'denied_cleanup_ref_moved_not_plain_denied',
+      'denied_cleanup_final_check_after_last_lock',
+    ],
     mustKill: ['denied_cleanup_ref_moved_not_plain_denied'],
   },
   // 第 2 条:架构门反查权威写出口 + 钩子数据流
@@ -1117,7 +1132,7 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
       },
     ],
     tests: [ARCH_T],
-    expectRed: [D_ARCH_AUTH, K_ARCH_AUTH],
+    expectRed: [D_ARCH_AUTH, K_ARCH_AUTH, D_ARCH_SCAN],
     mustKill: [K_ARCH_AUTH],
   },
   {
