@@ -1197,6 +1197,7 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
       D_ARCH,
       K_ARCH_FLOW,
       D_AG,
+      D_AG_DECIDE,
       'apply_growth_claim_denied_zero_write',
       'd1_sinks_refuse_without_pass',
     ],
@@ -1214,7 +1215,11 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
       },
     ],
     tests: [ARCH_T],
-    expectRed: [D_ARCH_AUTH, K_ARCH_INONLY],
+    expectRed: [
+      D_ARCH_AUTH,
+      K_ARCH_INONLY,
+      'candidate-apply.ts:所有 store.commit 带 beforeRefUpdate',
+    ],
     mustKill: [K_ARCH_INONLY],
   },
   // 第 3 条:创建审计的截断边界
@@ -1270,21 +1275,10 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
     expectRed: [D_ACC_TRUNC, '缺 appendKeyed 端口 → 拒绝截断'],
     mustKill: ['缺 appendKeyed 端口 → 拒绝截断'],
   },
-  {
-    id: 'truncation_confirm_always',
-    clause: 'R1-3:只在会截断创建条目的转移上确认(创建条目仍在窗口内不额外落行)',
-    edits: [
-      {
-        file: APPLY,
-        anchor:
-          '  if (items.length === 0 || next.transitions_dropped <= rec.transitions_dropped) return null;',
-        replacement: '  if (items.length === 0) return null;',
-      },
-    ],
-    tests: [ACC_T],
-    expectRed: [D_ACC_TRUNC, '对照:创建条目仍在窗口内'],
-    mustKill: ['对照:创建条目仍在窗口内'],
-  },
+  // 已删除 truncation_confirm_always(去掉 `next.transitions_dropped <= rec.transitions_dropped` 一支):等价变异。
+  // 创建条目恒在 transitions[0](creationAuditItems 只在首条是创建条目时非空),转移引擎只从头部截(transition.ts 先追加再 `next.transitions_dropped += excess`),
+  // 所以「创建条目离开窗口」⇔「transitions_dropped 增加」;去掉这一支后,下一行「next.transitions 仍含创建键 → return null」在 dropped 未增时必然成立(条目没被截),
+  // 两者对任何可达输入给出同一结果,无可观测差别(确认端口失败 / 缺失 / deferred 在窗口内同样不被触达)。为它加断言只会钉实现细节,不反映契约。
   {
     id: 'truncation_confirm_lock_lost_swallowed',
     clause: 'R1-3:确认期间丢锁原样传播,不吞成 halt',
