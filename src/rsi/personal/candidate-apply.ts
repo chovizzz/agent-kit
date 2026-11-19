@@ -20,6 +20,7 @@ import type {
   StepHalt,
   WorkingStore,
 } from './candidate-ports.js';
+import { REF_MOVED_AFTER_DENIED } from './commit-reasons.js';
 import { creationAuditItems } from './creation-audit.js';
 import { growthOpOfEvent } from './growth-events.js';
 import { txnId } from './ids.js';
@@ -224,6 +225,10 @@ async function applyIn(
   });
   if (c.status === 'denied') return { kind: 'denied', why: c.code };
   if (c.status === 'absent') return { kind: 'halt', halt: 'repo_absent' };
+  // 拒绝后引用被别人推进(提交底座保留了现场,完整性不明)不是普通 deferred(那只停本步):按 fail-closed 映射 `commit_failed`(→ stop_step_unsettled),保留 why
+  if (c.status === 'deferred' && c.why === REF_MOVED_AFTER_DENIED) {
+    return { kind: 'halt', halt: 'commit_failed', why: c.why };
+  }
   if (c.status === 'deferred') return { kind: 'halt', halt: 'repo_deferred', why: c.why };
   if (c.status === 'invalid') return { kind: 'halt', halt: 'repo_invalid', why: c.why };
   if (c.status !== 'committed') return { kind: 'halt', halt: 'commit_failed', why: c.status };
@@ -247,7 +252,7 @@ async function applyIn(
 
 /**
  * 本次转移会截掉创建条目 → 先经带键端口落创建审计行(`appendKeyed` 返回 = 已耐久:落地或进入带键的持久待办)。
- * 丢锁原样抛;`appendKeyed` 返回 `'deferred'`(行没落地)不是确认;`sealed_interval`(创建日已封存 = 该日由 B1b 对账源派生并封存,行不会再丢;该前提由 B1b 的封存前对账保证,本块不重证)视为已确认;缺 `appendKeyed` 或其它失败 → `halt{commit_failed}`(`why` 带原因,转移不提交)。
+ * 两种丢锁(`RsiLockError('lock_lost')` 与 `PersonalLockLost`)原样抛(源转移未提交;审计端可能已追加该键行——重试时同键确认,不回滚已追加的审计);`appendKeyed` 返回 `'deferred'`(行没落地)不是确认;`sealed_interval`(创建日已封存 = 该日由 B1b 对账源派生并封存,行不会再丢;该前提由 B1b 的封存前对账保证,本块不重证)视为已确认;缺 `appendKeyed` 或其它失败 → `halt{commit_failed}`(`why` 带原因,转移不提交)。
  */
 async function confirmCreationAuditBeforeTruncation(
   d: ApplyDeps,
@@ -269,7 +274,7 @@ async function confirmCreationAuditBeforeTruncation(
       return { kind: 'halt', halt: 'commit_failed', why: 'creation_audit_unconfirmed:deferred' };
     }
   } catch (e) {
-    if (e instanceof RsiLockError && e.kind === 'lock_lost') throw e;
+    if (isLockLostError(e)) throw e;
     if (isSealedInterval(e)) return null;
     return {
       kind: 'halt',
@@ -278,6 +283,13 @@ async function confirmCreationAuditBeforeTruncation(
     };
   }
   return null;
+}
+
+/** rsi 锁 `lock_lost` 与个人锁丢失(`PersonalLockLost`,按 `code` 识别:不 import stage/,candidate-apply 在 worker 类型闭包内)都是锁丢失,不是「确认失败」 */
+const PERSONAL_LOCK_LOST_CODE = 'PERSONAL_LOCK_LOST';
+function isLockLostError(e: unknown): boolean {
+  if (e instanceof RsiLockError && e.kind === 'lock_lost') return true;
+  return (e as { code?: unknown } | null)?.code === PERSONAL_LOCK_LOST_CODE;
 }
 
 async function landEffects(d: ApplyDeps, effects: readonly TransitionEffect[]): Promise<void> {

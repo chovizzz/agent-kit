@@ -337,6 +337,68 @@ describe('beforeRefUpdate:位置与锁复核', () => {
     expect(j.kind === 'ok' ? j.value.phase : null).toBe('objects_written');
   });
 
+  it('denied_cleanup_final_check_after_last_lock:最后一次锁复核**期间**引用被别人推进 → 不返回普通 denied(deferred / ref_moved_after_denied);journal 与第三方引用都保留(最终核对在最后一次锁复核之后)', async () => {
+    const w = await makeWorld('d1b2-hook-finalref-');
+    await setupRepo(w);
+    let moved = '';
+    const st = { armed: false, n: 0 };
+    const locks: PersonalLocks = {
+      personal: {
+        assertHeld: async () => {
+          if (!st.armed) return;
+          st.n++;
+          // 清理阶段第 2 次断言 = 删除之前的最后一次锁复核:此刻(await 之内)引用被推进
+          if (st.n === 2) {
+            const old = refOf(w);
+            moved = git(w, ['commit-tree', `${old}^{tree}`, '-p', old, '-m', 'third']);
+            git(w, ['update-ref', 'refs/heads/rsi', moved, old]);
+          }
+        },
+      },
+    };
+    const r = await commitPersonal(repoDeps(w), locks, {
+      ...spec('2', NEXT_FILES),
+      beforeRefUpdate: async () => {
+        st.armed = true;
+        throw new BeforeRefUpdateDenied('x');
+      },
+    });
+    expect(r).toMatchObject({
+      status: 'deferred',
+      reason: 'personal_repo_diverged',
+      why: 'ref_moved_after_denied',
+    });
+    expect(st.n).toBeGreaterThanOrEqual(2);
+    expect(refOf(w)).toBe(moved);
+    const j = await readJournal(w.h);
+    expect(j.kind === 'ok' ? j.value.phase : null).toBe('objects_written');
+  });
+
+  it('denied_cleanup_final_check_journal_gone:最后一次锁复核期间 journal 被删 → invalid / journal_absent,不是普通 denied;引用不动', async () => {
+    const w = await makeWorld('d1b2-hook-finaljournal-');
+    await setupRepo(w);
+    const old = refOf(w);
+    const st = { armed: false, n: 0 };
+    const locks: PersonalLocks = {
+      personal: {
+        assertHeld: async () => {
+          if (!st.armed) return;
+          st.n++;
+          if (st.n === 2) await removeJournal(w.h);
+        },
+      },
+    };
+    const r = await commitPersonal(repoDeps(w), locks, {
+      ...spec('2', NEXT_FILES),
+      beforeRefUpdate: async () => {
+        st.armed = true;
+        throw new BeforeRefUpdateDenied('x');
+      },
+    });
+    expect(r).toMatchObject({ status: 'invalid', why: 'journal_absent' });
+    expect(refOf(w)).toBe(old);
+  });
+
   it('不带钩子的调用方行为不变(加法):同一提交 committed,钩子字段缺省', async () => {
     const w = await makeWorld('d1b2-hook-absent-');
     await setupRepo(w);

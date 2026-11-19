@@ -11,6 +11,7 @@ import type {
 } from '../../../src/contracts/rsi-personal.js';
 import { RsiLockError } from '../../../src/rsi/lock-error.js';
 import { runPersonalStep } from '../../../src/rsi/personal/candidate-step.js';
+import { classifyHalt } from '../../../src/rsi/personal/stage/errors.js';
 import { recoverCreationAudits } from '../../../src/rsi/personal/creation-audit.js';
 import type { GrowthClaimPort } from '../../../src/rsi/personal/candidate-ports.js';
 import type { KeyedEffectResult } from '../../../src/rsi/personal/rollback-ports.js';
@@ -343,6 +344,39 @@ describe('StepDeps.locks 两把锁都要持(I9 的锁半)', () => {
       throw new RsiLockError('lock_lost');
     };
     await expect(runPersonalStep(w.d)).rejects.toBeInstanceOf(RsiLockError);
+    expectNoCreation(w);
+  });
+});
+
+describe('创建提交遇到拒绝后引用异动:映射 commit_failed(fail-closed),不是只停本步的 repo_deferred', () => {
+  it('creation_ref_moved_after_denied_maps_commit_failed:创建提交返回 deferred{ref_moved_after_denied} → halted=commit_failed,分类 stop_step_unsettled;无创建落地', async () => {
+    const w = world3({ phase: V1B });
+    propose(w);
+    w.store.failCommit = {
+      status: 'deferred',
+      reason: 'personal_repo_diverged',
+      why: 'ref_moved_after_denied',
+    };
+    const r = await runPersonalStep(w.d);
+    expect(r.halted).toBe('commit_failed');
+    expect(r.created).toEqual([]);
+    expect(classifyHalt(r.halted as 'commit_failed')).toEqual({
+      kind: 'stop_step_unsettled',
+      cause: 'commit_failed',
+    });
+    expectNoCreation(w);
+  });
+
+  it('对照:创建提交的其它 deferred 仍是 repo_deferred(只停本步)', async () => {
+    const w = world3({ phase: V1B });
+    propose(w);
+    w.store.failCommit = {
+      status: 'deferred',
+      reason: 'personal_repo_diverged',
+      why: 'some_other_why',
+    };
+    const r = await runPersonalStep(w.d);
+    expect(r.halted).toBe('repo_deferred');
     expectNoCreation(w);
   });
 });

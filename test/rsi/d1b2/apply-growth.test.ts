@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import type { PersonalLifecycleRecord } from '../../../src/contracts/rsi-personal.js';
 import { RsiLockError } from '../../../src/rsi/lock-error.js';
 import { applyEvent, type ApplyDeps } from '../../../src/rsi/personal/candidate-apply.js';
+import { classifyHalt } from '../../../src/rsi/personal/stage/errors.js';
 import type { GrowthClaimPort } from '../../../src/rsi/personal/candidate-ports.js';
 import type { EntrySeal, StampRegion } from '../../../src/rsi/personal/entry-stamp.js';
 import type { TransitionEvent } from '../../../src/rsi/personal/transition-table.js';
@@ -303,5 +304,28 @@ describe('减影响事件不看端口(不受暂停 / 缺端口限制)', () => {
       expect((await applyEvent(q.d, r0, ev)).kind, name).toBe('transitioned');
       expect(q.growth.claims, name).toEqual([]);
     }
+  });
+});
+
+describe('拒绝后引用异动(ref_moved_after_denied)不是普通 deferred:映射 commit_failed(fail-closed)', () => {
+  const diverged = (why: string) =>
+    ({ status: 'deferred', reason: 'personal_repo_diverged', why }) as const;
+
+  it('ref_moved_after_denied_maps_commit_failed:提交底座返回 deferred{ref_moved_after_denied} → halt commit_failed(保留 why),分类为 stop_step_unsettled', async () => {
+    const p = probe(rec('proposed'));
+    p.store.failCommit = diverged('ref_moved_after_denied');
+    const r = await applyEvent(p.d, rec('proposed'), E.gatesPassed());
+    expect(r).toEqual({ kind: 'halt', halt: 'commit_failed', why: 'ref_moved_after_denied' });
+    if (r.kind !== 'halt') throw new Error('unreachable');
+    expect(classifyHalt(r.halt)).toEqual({ kind: 'stop_step_unsettled', cause: 'commit_failed' });
+  });
+
+  it('对照:其它 deferred(why 不是 ref_moved_after_denied)仍是 repo_deferred(只停本步),不被升级', async () => {
+    const p = probe(rec('proposed'));
+    p.store.failCommit = diverged('some_other_why');
+    const r = await applyEvent(p.d, rec('proposed'), E.gatesPassed());
+    expect(r).toEqual({ kind: 'halt', halt: 'repo_deferred', why: 'some_other_why' });
+    if (r.kind !== 'halt') throw new Error('unreachable');
+    expect(classifyHalt(r.halt)).toEqual({ kind: 'stop_step' });
   });
 });

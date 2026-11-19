@@ -13,6 +13,7 @@
  */
 import { PersonalHeadSchema, type PersonalCommitJournal } from '../../contracts/rsi-personal.js';
 import type { RsiAutoPauseReason } from '../../contracts/rsi.js';
+import { REF_MOVED_AFTER_DENIED } from './commit-reasons.js';
 import {
   PERSONAL_STATE_FILES,
   ensureEmptyDir,
@@ -423,6 +424,26 @@ async function discardOwnJournal(
   oldHead: string,
 ): Promise<DiscardResult> {
   await assertLocks(ctx);
+  const early = await verifyOwnJournal(ctx, mine, oldHead);
+  if (early.kind !== 'clean') return early;
+  await assertLocks(ctx); // 最后一次锁复核(丢锁则传播,不进下面吞 IO 错误的 catch);上面的核对只是快速失败,不是依据
+  // 所有权与引用的最终核对在最后一次锁复核**之后**、紧贴删除:锁复核期间(await)盘与引用可能被动过,前面读到的快照不能当依据
+  const last = await verifyOwnJournal(ctx, mine, oldHead);
+  if (last.kind !== 'clean') return last;
+  try {
+    await removeJournal(ctx.h);
+  } catch {
+    // 删除失败:保留 journal,交给下次恢复判定
+  }
+  return { kind: 'clean' };
+}
+
+/** 盘上 journal 与本次写下的逐字段全等(含 phase)且 `refs/heads/rsi === oldHead` → `clean`;否则给出不可降级的原因 */
+async function verifyOwnJournal(
+  ctx: OpCtx,
+  mine: PersonalCommitJournal,
+  oldHead: string,
+): Promise<DiscardResult> {
   const cur = await readJournal(ctx.h);
   if (cur.kind !== 'ok') return { kind: 'journal_unverified', why: `journal_${cur.kind}` };
   const a = cur.value;
@@ -438,12 +459,6 @@ async function discardOwnJournal(
   if (!same) return { kind: 'journal_unverified', why: 'journal_not_mine' };
   const actual = revParse(ctx.git, 'refs/heads/rsi');
   if (actual !== oldHead) return { kind: 'ref_moved', actual };
-  await assertLocks(ctx); // 读盘与比较之后、删除之前再复核一次(逐字段全等只证明那一刻的快照;丢锁则传播,不进下面吞 IO 错误的 catch)
-  try {
-    await removeJournal(ctx.h);
-  } catch {
-    // 删除失败:保留 journal,交给下次恢复判定
-  }
   return { kind: 'clean' };
 }
 
@@ -509,7 +524,7 @@ export async function commitPersonal(
         return {
           status: 'deferred',
           reason: 'personal_repo_diverged',
-          why: 'ref_moved_after_denied',
+          why: REF_MOVED_AFTER_DENIED,
         };
       }
       if (d.kind === 'journal_unverified') {

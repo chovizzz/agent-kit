@@ -40,6 +40,7 @@ import {
   rebuildWorkingCopy,
 } from './candidate-record.js';
 import { buildDraft, selectable } from './candidate-source.js';
+import { REF_MOVED_AFTER_DENIED } from './commit-reasons.js';
 import { creationAuditItems } from './creation-audit.js';
 import { isSealedInterval } from './entry-stamp.js';
 import { overlapsPreset, runGates } from './gates.js';
@@ -330,11 +331,13 @@ export async function runPersonalStep(d: StepDeps): Promise<StepResult> {
         return halt(
           c.status === 'absent'
             ? 'repo_absent'
-            : c.status === 'deferred'
-              ? 'repo_deferred'
-              : c.status === 'invalid'
-                ? 'repo_invalid'
-                : 'commit_failed',
+            : c.status === 'deferred' && c.why === REF_MOVED_AFTER_DENIED
+              ? 'commit_failed' // 拒绝后引用异动 = 完整性不明,不是只停本步的普通 deferred
+              : c.status === 'deferred'
+                ? 'repo_deferred'
+                : c.status === 'invalid'
+                  ? 'repo_invalid'
+                  : 'commit_failed',
         );
       }
       region.markSourceCommitted();

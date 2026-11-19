@@ -176,7 +176,6 @@ function findAll<T extends ts.Node>(root: ts.Node, pred: (n: ts.Node) => n is T)
 }
 const isCall = (n: ts.Node): n is ts.CallExpression => ts.isCallExpression(n);
 const isIf = (n: ts.Node): n is ts.IfStatement => ts.isIfStatement(n);
-const isPropAssign = (n: ts.Node): n is ts.PropertyAssignment => ts.isPropertyAssignment(n);
 
 /** `const V = await <claimFn>(…)` 的变量名 */
 function claimVar(fn: ts.Node, sf: ts.SourceFile, claimFn: string): string | undefined {
@@ -196,11 +195,71 @@ function claimVar(fn: ts.Node, sf: ts.SourceFile, claimFn: string): string | und
   return undefined;
 }
 
-/** 提交调用的 `beforeRefUpdate` 属性初值(对象字面量参数内任意位置,含条件展开);没有 = undefined */
-function hookInitializers(call: ts.CallExpression, sf: ts.SourceFile): string[] {
-  return findAll(call, isPropAssign)
-    .filter((p) => p.name.getText(sf) === 'beforeRefUpdate')
-    .map((p) => p.initializer.getText(sf));
+const unparen = (e: ts.Expression): ts.Expression =>
+  ts.isParenthesizedExpression(e) ? unparen(e.expression) : e;
+
+/**
+ * 提交调用**实参对象的有效结构**里 `beforeRefUpdate` 的来源(不是「文本里出现过」):
+ *  - 实参恰为 1 个对象字面量;顶层属性里没有计算属性名、没有除下面这一种之外的展开;
+ *  - `beforeRefUpdate` 只能经两种形态之一出现、且**全对象恰一处**(不可能被后面的同名属性 / 展开覆盖):
+ *      `direct`:顶层 `beforeRefUpdate: <表达式>`;
+ *      `cond`:顶层展开 `...(H !== undefined ? { beforeRefUpdate: H } : {})`(条件方向是 `!== undefined` → 有钩子才带;翻成 `===` 就是「没钩子才带」)。
+ * 返回问题清单与解析出的来源(`direct` 的初值文本 / `cond` 的 H 文本)。
+ */
+export function commitHookStructure(
+  call: ts.CallExpression,
+  sf: ts.SourceFile,
+): { problems: string[]; direct: string | null; cond: string | null } {
+  const problems: string[] = [];
+  let direct: string | null = null;
+  let cond: string | null = null;
+  const spec = call.arguments[0];
+  if (call.arguments.length !== 1 || spec === undefined || !ts.isObjectLiteralExpression(spec)) {
+    return { problems: ['提交实参不是单个对象字面量'], direct, cond };
+  }
+  let seen = 0;
+  for (const p of spec.properties) {
+    if (ts.isPropertyAssignment(p) && !ts.isComputedPropertyName(p.name)) {
+      if (p.name.getText(sf) === 'beforeRefUpdate') {
+        seen++;
+        direct = p.initializer.getText(sf);
+      }
+    } else if (ts.isShorthandPropertyAssignment(p)) {
+      if (p.name.text === 'beforeRefUpdate') {
+        seen++;
+        direct = 'beforeRefUpdate';
+      }
+    } else if (ts.isSpreadAssignment(p)) {
+      const e = unparen(p.expression);
+      const ok =
+        ts.isConditionalExpression(e) &&
+        ts.isBinaryExpression(e.condition) &&
+        e.condition.operatorToken.kind === ts.SyntaxKind.ExclamationEqualsEqualsToken &&
+        ts.isIdentifier(e.condition.left) &&
+        e.condition.right.getText(sf) === 'undefined' &&
+        ts.isObjectLiteralExpression(e.whenTrue) &&
+        e.whenTrue.properties.length === 1 &&
+        ts.isPropertyAssignment(e.whenTrue.properties[0] as ts.ObjectLiteralElementLike) &&
+        ts.isObjectLiteralExpression(e.whenFalse) &&
+        e.whenFalse.properties.length === 0;
+      if (!ok) {
+        problems.push(`含无法静态确认的展开:${p.getText(sf)}`);
+        continue;
+      }
+      const t = e.whenTrue.properties[0] as ts.PropertyAssignment;
+      const h = (e.condition.left as ts.Identifier).text;
+      if (t.name.getText(sf) !== 'beforeRefUpdate' || t.initializer.getText(sf) !== h) {
+        problems.push(`条件展开不是 \`...(${h} !== undefined ? { beforeRefUpdate: ${h} } : {})\``);
+        continue;
+      }
+      seen++;
+      cond = h;
+    } else if (ts.isPropertyAssignment(p) || ts.isMethodDeclaration(p) || ts.isAccessor(p)) {
+      problems.push(`含无法静态确认的属性:${p.getText(sf).slice(0, 40)}`);
+    }
+  }
+  if (seen > 1) problems.push(`beforeRefUpdate 出现 ${seen} 处(后者会覆盖前者)`);
+  return { problems, direct, cond };
 }
 
 /** `if (V.kind === 'halt' || V.kind === 'denied') return V`:条件恰为这两个严格比较的析取;then 分支**直接**(不在嵌套函数 / 子块里)返回 V */
@@ -252,9 +311,12 @@ export function hookFlowProblems(sf: ts.SourceFile, name: string): string[] {
     if (name === 'runPersonalStep') {
       if (commits.length === 0) out.push(`${name}:没有 store.commit(创建提交缺失?)`);
       for (const c of commits) {
-        const inits = hookInitializers(c, sf);
-        if (inits.length !== 1 || inits[0] !== `${v}.hook`) {
-          out.push(`${name}:store.commit 的 beforeRefUpdate 不是 ${v}.hook(${inits.join('|')})`);
+        const h = commitHookStructure(c, sf);
+        out.push(...h.problems.map((x) => `${name}:${x}`));
+        if (h.direct !== `${v}.hook` || h.cond !== null) {
+          out.push(
+            `${name}:store.commit 的有效 beforeRefUpdate 不是顶层 \`beforeRefUpdate: ${v}.hook\`(direct=${h.direct} cond=${h.cond})`,
+          );
         }
         const guard = findAll(fn, isIf).find(
           (i) =>
@@ -271,6 +333,12 @@ export function hookFlowProblems(sf: ts.SourceFile, name: string): string[] {
         if (!c.arguments.some((a) => a.getText(sf) === `${v}.hook`)) {
           out.push(`${name}:applyIn 的实参里没有 ${v}.hook`);
         }
+        // 位置:`V.hook` 必须落在 applyIn 的 `hook` 形参那个位置(只「出现」不够:换到别的形参位置 = 钩子被当成别的东西)
+        const inFn = findFn(sf, 'applyIn');
+        const at = inFn?.parameters.findIndex((p) => p.name.getText(sf) === 'hook') ?? -1;
+        if (inFn !== undefined && (at < 0 || c.arguments[at]?.getText(sf) !== `${v}.hook`)) {
+          out.push(`${name}:${v}.hook 不在 applyIn 的 hook 形参位置(${at})`);
+        }
         const guard = findAll(fn, isIf).find(
           (i) => i.getStart(sf) < c.getStart(sf) && isDenyGuard(i, v, sf),
         );
@@ -286,9 +354,12 @@ export function hookFlowProblems(sf: ts.SourceFile, name: string): string[] {
       out.push(`${name}:没有形参 hook`);
     if (commits.length !== 1) out.push(`${name}:store.commit 数 ${commits.length} ≠ 1`);
     for (const c of commits) {
-      const inits = hookInitializers(c, sf);
-      if (inits.length !== 1 || inits[0] !== 'hook') {
-        out.push(`${name}:store.commit 的 beforeRefUpdate 不是形参 hook(${inits.join('|')})`);
+      const h = commitHookStructure(c, sf);
+      out.push(...h.problems.map((x) => `${name}:${x}`));
+      if (h.cond !== 'hook' || h.direct !== null) {
+        out.push(
+          `${name}:store.commit 的有效 beforeRefUpdate 不是 \`...(hook !== undefined ? { beforeRefUpdate: hook } : {})\`(direct=${h.direct} cond=${h.cond})`,
+        );
       }
     }
   } else {
@@ -651,6 +722,64 @@ export function authoritativeExits(file: string, text: string): AuthExit[] {
   return out;
 }
 
+const PROTECTED_MEMBERS: readonly string[] = ['commit', 'commitPersonal'];
+const isProtectedLiteral = (e: ts.Expression): boolean =>
+  (ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e)) &&
+  PROTECTED_MEMBERS.includes(e.text);
+
+/**
+ * 受保护写能力的**引用**(不只是调用表达式):只放行「`x.commit(…)` / `x.commitPersonal(…)` / 裸 `commitPersonal(…)` 的直接调用」(这些由 `authoritativeExits` 按调用点计数);
+ * 其余形态一律报出,格式 `<所在函数>:<形态>:<源码文本>`:
+ *  - `value`:`x.commit` / `x.commitPersonal` 当值用(别名赋值、当参数、`.call` / `.bind`、括号包裹后调用);
+ *  - `element`:`x['commit']`(括号 / 字面量访问);
+ *  - `destructure`:`const { commit } = store` / `{ commit: c }`(含参数解构);
+ *  - `bare`:`commitPersonal` 标识符不是直接被调用(别名 / 当值传递 / 再导出 / `typeof`);import 说明符与函数声明名不算(import 另由 `commitPersonalImports` 钉住);
+ *  - `shorthand`:对象字面量里的 `{ commitPersonal }` 简写。
+ * 声明位置(接口成员、方法、`commit: …` 属性名)不是引用。不做通用跨函数数据流:`x[k]`(非字面量键)读不出,不在本扫描范围。
+ */
+export function protectedRefs(file: string, text: string): string[] {
+  const sf = parse(file, text);
+  const out: string[] = [];
+  const add = (n: ts.Node, form: string): void => {
+    out.push(`${enclosingFn(n, sf)}:${form}:${n.getText(sf).replace(/\s+/g, ' ')}`);
+  };
+  const visit = (n: ts.Node): void => {
+    if (ts.isPropertyAccessExpression(n) && PROTECTED_MEMBERS.includes(n.name.text)) {
+      const p = n.parent;
+      if (!(ts.isCallExpression(p) && p.expression === n)) add(n, 'value');
+    } else if (ts.isElementAccessExpression(n) && isProtectedLiteral(n.argumentExpression)) {
+      add(n, 'element');
+    } else if (
+      ts.isBindingElement(n) &&
+      ts.isObjectBindingPattern(n.parent) &&
+      PROTECTED_MEMBERS.includes((n.propertyName ?? n.name).getText(sf))
+    ) {
+      add(n, 'destructure');
+    } else if (ts.isShorthandPropertyAssignment(n) && n.name.text === 'commitPersonal') {
+      add(n, 'shorthand');
+    } else if (ts.isIdentifier(n) && n.text === 'commitPersonal') {
+      const p = n.parent;
+      const decl =
+        ts.isImportSpecifier(p) ||
+        (ts.isFunctionDeclaration(p) && p.name === n) ||
+        (ts.isPropertyAccessExpression(p) && p.name === n) || // 上面 value 分支已覆盖
+        ((ts.isPropertyAssignment(p) ||
+          ts.isMethodDeclaration(p) ||
+          ts.isMethodSignature(p) ||
+          ts.isPropertySignature(p) ||
+          ts.isPropertyDeclaration(p)) &&
+          p.name === n) ||
+        (ts.isBindingElement(p) && ts.isObjectBindingPattern(p.parent)) || // destructure 分支已覆盖
+        ts.isShorthandPropertyAssignment(p);
+      const directCall = ts.isCallExpression(p) && p.expression === n;
+      if (!decl && !directCall) add(n, 'bare');
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return out;
+}
+
 /** `commitPersonal` 的 import 说明符(含别名:`import { commitPersonal as cp }`);返回 `[文件, 是否别名]` */
 export function commitPersonalImports(file: string, text: string): { alias: boolean }[] {
   const sf = parse(file, text);
@@ -689,6 +818,14 @@ const COMMIT_PERSONAL_IMPORTERS: readonly string[] = [
   'src/rsi/personal/rollback-repo.ts',
 ];
 
+/**
+ * 受保护写能力**引用**的精确允许集(`<文件>:<函数>:<形态>:<源码文本>`,理由随条):
+ *  - `candidate-step.ts:runPersonalStep:value:c.commit`:读 `CommitResult.commit`(提交后的新 HEAD 哈希,结果对象的字段,不是写能力)。
+ */
+const AUTH_REFS_ALLOWED: readonly string[] = [
+  'src/rsi/personal/candidate-step.ts:runPersonalStep:value:c.commit',
+];
+
 describe('④ 权威写出口反查:调用者 ⊆ 登记汇点 ∪ 精确白名单(不看钩子、不看拼写)', () => {
   it('src/rsi/** 的提交类出口调用者恰为允许集(多一个 = 红);允许集里每一项都真实存在(不是空扫);登记的 port_claim 汇点都在其中', async () => {
     const foundList: string[] = [];
@@ -711,6 +848,14 @@ describe('④ 权威写出口反查:调用者 ⊆ 登记汇点 ∪ 精确白名�
         s.fn,
       ).toBe(true);
     }
+  });
+
+  it('受保护写能力的引用(别名 / 括号访问 / 解构 / 当值传递 / 命名空间取值)恰为精确允许集:不止盯调用表达式', async () => {
+    const found: string[] = [];
+    for (const f of await walkTs(path.join(ROOT, 'src/rsi'))) {
+      for (const x of protectedRefs(rel(f), readTextSync(f))) found.push(`${rel(f)}:${x}`);
+    }
+    expect([...found].sort()).toEqual([...AUTH_REFS_ALLOWED].sort());
   });
 
   it('commitPersonal 只被两个允许的文件 import,且不得改名 import(别名会让反查按调用名漏掉)', async () => {
@@ -805,7 +950,100 @@ describe('④ 权威写出口反查:调用者 ⊆ 登记汇点 ∪ 精确白名�
       ).toEqual([{ alias: false }]);
       expect(commitPersonalImports('v.ts', "import { other } from './commit.js';")).toEqual([]);
     });
+    it('引用扫描:方法别名 / 括号访问 / 解构 / 当值传递 / 命名空间取值改名 / .bind → 都报出;已知直接调用与声明位置不报', () => {
+      const refs = (src: string): string[] => protectedRefs('v.ts', src);
+      expect(refs('function f(d: D) { const c = d.store.commit; return c(spec); }')).toEqual([
+        'f:value:d.store.commit',
+      ]);
+      expect(refs("function f(d: D) { return d.store['commit'](spec); }")).toEqual([
+        "f:element:d.store['commit']",
+      ]);
+      expect(refs('function f(d: D) { const { commit } = d.store; return commit(spec); }')).toEqual(
+        ['f:destructure:commit'],
+      );
+      expect(refs('function f(d: D) { const { commit: c } = d.store; return c(spec); }')).toEqual([
+        'f:destructure:commit: c',
+      ]);
+      expect(refs('function f(d: D) { return run(commitPersonal); }')).toEqual([
+        'f:bare:commitPersonal',
+      ]);
+      expect(refs('function f() { return { commitPersonal }; }')).toEqual([
+        'f:shorthand:commitPersonal',
+      ]);
+      expect(refs('function f(ns: N) { const cp = ns.commitPersonal; return cp(a); }')).toEqual([
+        'f:value:ns.commitPersonal',
+      ]);
+      expect(refs('function f(d: D) { return d.store.commit.bind(d.store)(spec); }')).toEqual([
+        'f:value:d.store.commit',
+      ]);
+      expect(refs('function f(d: D) { return (d.store.commit)(spec); }')).toEqual([
+        'f:value:d.store.commit',
+      ]);
+      // 对照:已知的直接调用形态与声明位置不报(它们由 authoritativeExits 按调用点计数)
+      expect(
+        refs(
+          'function f(d: D, ns: N) { d.store.commit(a); ns.commitPersonal(b); commitPersonal(c); return { commit: async (s: S) => 1 }; } interface I { commit(s: S): Promise<R>; }',
+        ),
+      ).toEqual([]);
+    });
     const P = (body: string): ts.SourceFile => parse('v.ts', body);
+    it('提交实参的有效结构:条件方向翻转 / 钩子被后面的同名属性或展开覆盖 / 钩子放进嵌套对象 / 非对象字面量实参 → 报出', () => {
+      const flow = (src: string, fn: string): string[] => hookFlowProblems(P(src), fn);
+      const okIn =
+        'async function applyIn(d: D, hook?: H) { return d.store.commit({ txnId: 1, ...(hook !== undefined ? { beforeRefUpdate: hook } : {}) }); }';
+      expect(flow(okIn, 'applyIn')).toEqual([]);
+      // 条件方向翻成 ===:没钩子才带(语义相反),旧的「属性初值文本」检查看不出
+      expect(flow(okIn.replace('hook !== undefined', 'hook === undefined'), 'applyIn')).not.toEqual(
+        [],
+      );
+      // 后面的展开 / 同名属性覆盖钩子
+      expect(flow(okIn.replace('txnId: 1,', 'txnId: 1, ...extra,'), 'applyIn')).not.toEqual([]);
+      expect(
+        flow(okIn.replace('} : {}) })', '} : {}), beforeRefUpdate: undefined })'), 'applyIn'),
+      ).not.toEqual([]);
+      // 钩子被挪进嵌套对象(不在提交对象顶层)
+      expect(
+        flow(
+          'async function applyIn(d: D, hook?: H) { return d.store.commit({ txnId: 1, meta: { beforeRefUpdate: hook } }); }',
+          'applyIn',
+        ),
+      ).not.toEqual([]);
+      // 实参不是对象字面量
+      expect(
+        flow(
+          'async function applyIn(d: D, hook?: H) { return d.store.commit(buildSpec(hook)); }',
+          'applyIn',
+        ),
+      ).not.toEqual([]);
+      const okStep =
+        'export async function runPersonalStep(d: D) { for (const x of xs) { const claim = await claimGrowthPort(d.growth); if (!claim.ok) { continue; } await d.store.commit({ txnId: 1, beforeRefUpdate: claim.hook }); } }';
+      expect(flow(okStep, 'runPersonalStep')).toEqual([]);
+      expect(
+        flow(
+          okStep.replace('beforeRefUpdate: claim.hook }', 'beforeRefUpdate: claim.hook, ...o }'),
+          'runPersonalStep',
+        ),
+      ).not.toEqual([]);
+      expect(
+        flow(
+          okStep.replace(
+            'beforeRefUpdate: claim.hook }',
+            '...(claim.hook !== undefined ? { beforeRefUpdate: claim.hook } : {}) }',
+          ),
+          'runPersonalStep',
+        ),
+      ).not.toEqual([]);
+      // applyEvent:`V.hook` 出现但不在 applyIn 的 hook 形参位置
+      const okApply =
+        "async function applyEvent(d: D) { const claimed = await claimGrowth(d); if (claimed.kind === 'halt' || claimed.kind === 'denied') return claimed; return applyIn(d, rec, claimed.hook); } async function applyIn(d: D, rec: R, hook?: H) { return 1; }";
+      expect(flow(okApply, 'applyEvent')).toEqual([]);
+      expect(
+        flow(
+          okApply.replace('applyIn(d, rec, claimed.hook)', 'applyIn(d, claimed.hook, rec)'),
+          'applyEvent',
+        ),
+      ).not.toEqual([]);
+    });
     it('hook 数据流:丢掉 claim 的钩子(换成别的函数)/ 没有拒绝分支 / 拒绝分支不退出(含只在嵌套函数里 return)/ 拒绝分支漏掉 denied / applyIn 不转交', () => {
       const okStep =
         'export async function runPersonalStep(d: D) { for (const x of xs) { const claim = await claimGrowthPort(d.growth); if (!claim.ok) { continue; } await d.store.commit({ txnId: 1, beforeRefUpdate: claim.hook }); } }';

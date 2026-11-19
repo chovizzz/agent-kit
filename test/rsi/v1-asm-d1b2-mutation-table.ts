@@ -90,6 +90,9 @@ const D_STAMP = 'entry_time_only_via_stamp(B2 档)';
 const D_ACC_TRUNC = 'creation_audit_confirmed_before_truncation(第 3 条)';
 const D_ACC_SEAL = 'creation_requires_seal(第 4 条)';
 const D_ACC_DENIED = 'denied_is_apply_result_branch(第 5 条)';
+const D_REFMOVED =
+  '拒绝后引用异动(ref_moved_after_denied)不是普通 deferred:映射 commit_failed(fail-closed)';
+const K_ARCH_REFS = '受保护写能力的引用';
 const D_ARCH_AUTH = '④ 权威写出口反查:调用者 ⊆ 登记汇点 ∪ 精确白名单(不看钩子、不看拼写)';
 const K_ARCH_AUTH = '提交类出口调用者恰为允许集';
 const K_ARCH_FLOW = '钩子数据流:claim 返回值 → 拒绝分支先于提交';
@@ -207,8 +210,9 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
       {
         file: COMMIT,
         anchor:
-          '): Promise<DiscardResult> {\n  await assertLocks(ctx);\n  const cur = await readJournal(ctx.h);',
-        replacement: '): Promise<DiscardResult> {\n  const cur = await readJournal(ctx.h);',
+          '): Promise<DiscardResult> {\n  await assertLocks(ctx);\n  const early = await verifyOwnJournal(ctx, mine, oldHead);',
+        replacement:
+          '): Promise<DiscardResult> {\n  const early = await verifyOwnJournal(ctx, mine, oldHead);',
       },
     ],
     tests: [HOOK_T],
@@ -521,7 +525,7 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
       {
         file: COMMIT,
         anchor:
-          '  await assertLocks(ctx); // 读盘与比较之后、删除之前再复核一次(逐字段全等只证明那一刻的快照;丢锁则传播,不进下面吞 IO 错误的 catch)',
+          '  await assertLocks(ctx); // 最后一次锁复核(丢锁则传播,不进下面吞 IO 错误的 catch);上面的核对只是快速失败,不是依据',
         replacement: '  void 0;',
       },
     ],
@@ -1077,7 +1081,7 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
       {
         file: COMMIT,
         anchor:
-          "      if (d.kind === 'ref_moved') {\n        return {\n          status: 'deferred',\n          reason: 'personal_repo_diverged',\n          why: 'ref_moved_after_denied',\n        };\n      }\n",
+          "      if (d.kind === 'ref_moved') {\n        return {\n          status: 'deferred',\n          reason: 'personal_repo_diverged',\n          why: REF_MOVED_AFTER_DENIED,\n        };\n      }\n",
         replacement: '',
       },
     ],
@@ -1222,6 +1226,197 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
     ],
     mustKill: [K_ARCH_INONLY],
   },
+  // 验收第 2 轮(主代理评审)
+  {
+    id: 'denied_cleanup_final_check_skipped',
+    clause:
+      'R2-1:所有权与 ref 的最终核对在最后一次锁复核之后(去掉后置核对 → 锁复核期间的异动看不见,返回普通 denied)',
+    edits: [
+      {
+        file: COMMIT,
+        anchor:
+          "  const last = await verifyOwnJournal(ctx, mine, oldHead);\n  if (last.kind !== 'clean') return last;\n",
+        replacement: '',
+      },
+    ],
+    tests: [HOOK_T],
+    expectRed: [
+      D_HOOK_POS,
+      'denied_cleanup_final_check_after_last_lock',
+      'denied_cleanup_final_check_journal_gone',
+    ],
+    mustKill: [
+      'denied_cleanup_final_check_after_last_lock',
+      'denied_cleanup_final_check_journal_gone',
+    ],
+  },
+  {
+    id: 'apply_ref_moved_after_denied_not_mapped',
+    clause:
+      'R2-2:applyEvent 的源提交遇 deferred{ref_moved_after_denied} 映射 commit_failed(不洗成 repo_deferred)',
+    edits: [
+      {
+        file: APPLY,
+        anchor:
+          "  if (c.status === 'deferred' && c.why === REF_MOVED_AFTER_DENIED) {\n    return { kind: 'halt', halt: 'commit_failed', why: c.why };\n  }\n",
+        replacement: '',
+      },
+    ],
+    tests: [APPLY_T],
+    expectRed: [D_REFMOVED, 'ref_moved_after_denied_maps_commit_failed'],
+    mustKill: ['ref_moved_after_denied_maps_commit_failed'],
+  },
+  {
+    id: 'apply_all_deferred_upgraded',
+    clause: 'R2-2:只升级 ref_moved_after_denied 这一种,不升级其它普通 deferred(升级过宽 → 对照红)',
+    edits: [
+      {
+        file: APPLY,
+        anchor: "c.status === 'deferred' && c.why === REF_MOVED_AFTER_DENIED",
+        replacement: "c.status === 'deferred'",
+      },
+    ],
+    tests: [APPLY_T],
+    expectRed: [D_REFMOVED, '对照:其它 deferred(why 不是 ref_moved_after_denied)'],
+    mustKill: ['对照:其它 deferred(why 不是 ref_moved_after_denied)'],
+  },
+  {
+    id: 'step_ref_moved_after_denied_not_mapped',
+    clause: 'R2-2:创建提交遇 deferred{ref_moved_after_denied} 映射 commit_failed',
+    edits: [
+      {
+        file: STEP,
+        anchor:
+          "            : c.status === 'deferred' && c.why === REF_MOVED_AFTER_DENIED\n              ? 'commit_failed' // 拒绝后引用异动 = 完整性不明,不是只停本步的普通 deferred\n              : c.status === 'deferred'",
+        replacement: "            : c.status === 'deferred'",
+      },
+    ],
+    tests: [STEP_T],
+    expectRed: [
+      'creation_ref_moved_after_denied_maps_commit_failed',
+      '创建提交遇到拒绝后引用异动:映射 commit_failed(fail-closed),不是只停本步的 repo_deferred',
+    ],
+    mustKill: ['creation_ref_moved_after_denied_maps_commit_failed'],
+  },
+  {
+    id: 'step_all_deferred_upgraded',
+    clause: 'R2-2:创建路径只升级 ref_moved_after_denied 这一种',
+    edits: [
+      {
+        file: STEP,
+        anchor: "c.status === 'deferred' && c.why === REF_MOVED_AFTER_DENIED",
+        replacement: "c.status === 'deferred'",
+      },
+    ],
+    tests: [STEP_T],
+    expectRed: [
+      '对照:创建提交的其它 deferred 仍是 repo_deferred',
+      '创建提交遇到拒绝后引用异动:映射 commit_failed(fail-closed),不是只停本步的 repo_deferred',
+    ],
+    mustKill: ['对照:创建提交的其它 deferred 仍是 repo_deferred'],
+  },
+  {
+    id: 'arch_ref_alias_commit',
+    clause: 'R2-3:受保护写能力的方法别名(`const x = d.store.commit`)→ 引用扫描红',
+    edits: [
+      {
+        file: APPLY,
+        anchor:
+          "  const c = await d.store.commit({\n    kind: 'transition',\n    txnId: txnId('transition', [rec.id], fresh.head, digest(json)),",
+        replacement:
+          "  const aliased = d.store.commit;\n  void aliased;\n  const c = await d.store.commit({\n    kind: 'transition',\n    txnId: txnId('transition', [rec.id], fresh.head, digest(json)),",
+      },
+    ],
+    tests: [ARCH_T],
+    expectRed: [K_ARCH_REFS, D_ARCH_AUTH],
+    mustKill: [K_ARCH_REFS],
+  },
+  {
+    id: 'arch_ref_bracket_commit',
+    clause: "R2-3:括号访问 `d.store['commit'](…)` → 引用扫描红(按调用名反查会漏)",
+    edits: [
+      {
+        file: APPLY,
+        anchor:
+          "  const c = await d.store.commit({\n    kind: 'transition',\n    txnId: txnId('transition', [rec.id], fresh.head, digest(json)),",
+        replacement:
+          "  const c = await d.store['commit']({\n    kind: 'transition',\n    txnId: txnId('transition', [rec.id], fresh.head, digest(json)),",
+      },
+    ],
+    tests: [ARCH_T],
+    expectRed: [
+      K_ARCH_REFS,
+      D_ARCH_AUTH,
+      D_ARCH,
+      'candidate-apply.ts:所有 store.commit 带 beforeRefUpdate',
+    ],
+    mustKill: [K_ARCH_REFS],
+  },
+  {
+    id: 'arch_ref_destructured_commit',
+    clause: 'R2-3:解构取值 `const { commit } = d.store` → 引用扫描红',
+    edits: [
+      {
+        file: STEP,
+        anchor:
+          "      const c = await d.store.commit({\n        kind: 'transition',\n        txnId: txnId('transition', [draft.id], head,",
+        replacement:
+          "      const { commit: aliasedCommit } = d.store;\n      void aliasedCommit;\n      const c = await d.store.commit({\n        kind: 'transition',\n        txnId: txnId('transition', [draft.id], head,",
+      },
+    ],
+    tests: [ARCH_T],
+    expectRed: [K_ARCH_REFS, D_ARCH_AUTH],
+    mustKill: [K_ARCH_REFS],
+  },
+  {
+    id: 'arch_hook_condition_flipped',
+    clause: 'R2-3:applyIn 提交对象的钩子条件方向翻成 `=== undefined`(没钩子才带)→ 有效结构检查红',
+    edits: [
+      {
+        file: APPLY,
+        anchor: '...(hook !== undefined ? { beforeRefUpdate: hook } : {}),',
+        replacement: '...(hook === undefined ? { beforeRefUpdate: hook } : {}),',
+      },
+    ],
+    tests: [ARCH_T],
+    expectRed: [
+      D_ARCH_AUTH,
+      D_ARCH,
+      K_ARCH_FLOW,
+      'candidate-apply.ts:所有 store.commit 带 beforeRefUpdate',
+    ],
+    mustKill: [K_ARCH_FLOW],
+  },
+  {
+    id: 'arch_hook_overridden_after',
+    clause: 'R2-3:创建提交对象里钩子被后面的同名属性覆盖 → 有效结构检查红',
+    edits: [
+      {
+        file: STEP,
+        anchor: '        beforeRefUpdate: claim.hook,\n      });',
+        replacement:
+          '        beforeRefUpdate: claim.hook,\n        beforeRefUpdate: undefined,\n      });',
+      },
+    ],
+    tests: [ARCH_T],
+    expectRed: [D_ARCH_AUTH, D_ARCH, K_ARCH_FLOW],
+    mustKill: [K_ARCH_FLOW],
+  },
+  {
+    id: 'arch_hook_arg_position_swapped',
+    clause:
+      'R2-3:applyEvent 转交的 claimed.hook 不在 applyIn 的 hook 形参位置 → 红(只「出现」不够)',
+    edits: [
+      {
+        file: APPLY,
+        anchor: 'env, region, wcAfter, wc, claimed.hook);',
+        replacement: 'env, region, wcAfter, claimed.hook, wc);',
+      },
+    ],
+    tests: [ARCH_T],
+    expectRed: [D_ARCH_AUTH, D_ARCH, K_ARCH_FLOW],
+    mustKill: [K_ARCH_FLOW],
+  },
   // 第 3 条:创建审计的截断边界
   {
     id: 'truncation_without_creation_audit_confirm',
@@ -1285,14 +1480,43 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
     edits: [
       {
         file: APPLY,
-        anchor:
-          "    if (e instanceof RsiLockError && e.kind === 'lock_lost') throw e;\n    if (isSealedInterval(e)) return null;\n",
+        anchor: '    if (isLockLostError(e)) throw e;\n    if (isSealedInterval(e)) return null;\n',
         replacement: '    if (isSealedInterval(e)) return null;\n',
       },
     ],
     tests: [ACC_T],
-    expectRed: [D_ACC_TRUNC, '丢锁原样传播'],
+    expectRed: [D_ACC_TRUNC, '丢锁原样传播', 'personal_lock_lost_propagates'],
     mustKill: ['丢锁原样传播'],
+  },
+  {
+    id: 'truncation_confirm_personal_lock_lost_swallowed',
+    clause:
+      'R2-4:确认期间个人锁丢失(PersonalLockLost)同样原样传播,只认 RsiLockError 会把它吞成确认失败',
+    edits: [
+      {
+        file: APPLY,
+        anchor: '    if (isLockLostError(e)) throw e;\n    if (isSealedInterval(e)) return null;\n',
+        replacement:
+          "    if (e instanceof RsiLockError && e.kind === 'lock_lost') throw e;\n    if (isSealedInterval(e)) return null;\n",
+      },
+    ],
+    tests: [ACC_T],
+    expectRed: [D_ACC_TRUNC, 'personal_lock_lost_propagates'],
+    mustKill: ['personal_lock_lost_propagates'],
+  },
+  {
+    id: 'truncation_confirm_all_errors_propagate',
+    clause: 'R2-4:只有丢锁传播;普通确认失败仍拒绝截断(过宽传播 → 对照红)',
+    edits: [
+      {
+        file: APPLY,
+        anchor: '    if (isLockLostError(e)) throw e;\n    if (isSealedInterval(e)) return null;\n',
+        replacement: '    throw e;\n',
+      },
+    ],
+    tests: [ACC_T],
+    expectRed: ['对照:非丢锁的确认失败(普通错误)仍被拒绝截断', D_ACC_TRUNC],
+    mustKill: ['对照:非丢锁的确认失败(普通错误)仍被拒绝截断'],
   },
   {
     id: 'truncation_confirm_sealed_blocks',

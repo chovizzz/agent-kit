@@ -12,6 +12,7 @@ import type {
   RsiAuditLine,
 } from '../../../src/contracts/rsi-personal.js';
 import { RsiLockError } from '../../../src/rsi/lock-error.js';
+import { PersonalLockLost } from '../../../src/rsi/personal/stage/errors.js';
 import { applyEvent } from '../../../src/rsi/personal/candidate-apply.js';
 import { startRollback } from '../../../src/rsi/personal/rollback.js';
 import { CREATION_FROM } from '../../../src/rsi/personal/candidate-record.js';
@@ -56,7 +57,8 @@ class KeyedAudit {
   rows = new Map<string, RsiAuditLine>();
   calls: string[][] = [];
   log: string[];
-  fault: 'none' | 'throw_before' | 'throw_after' | 'sealed' | 'lock_lost' = 'none';
+  fault: 'none' | 'throw_before' | 'throw_after' | 'sealed' | 'lock_lost' | 'personal_lock_lost' =
+    'none';
   constructor(log: string[] = []) {
     this.log = log;
   }
@@ -78,6 +80,10 @@ class KeyedAudit {
     if (f === 'lock_lost') {
       this.fault = 'none';
       throw new RsiLockError('lock_lost');
+    }
+    if (f === 'personal_lock_lost') {
+      this.fault = 'none';
+      throw new PersonalLockLost();
     }
     for (const it of items) {
       const key = auditKeyOf(it.line.id, it.idem_key ?? '');
@@ -262,6 +268,33 @@ describe('creation_audit_confirmed_before_truncation(第 3 条)', () => {
     w.store.put(r0);
     k.fault = 'lock_lost';
     await expect(applyEvent(w.d, r0, E.gatesPassed())).rejects.toBeInstanceOf(RsiLockError);
+    expect(w.store.commits).toEqual([]);
+  });
+
+  it('personal_lock_lost_propagates:带键端口抛 PersonalLockLost(个人锁丢失)→ 原样传播,不吞成 halt;源提交与后续个人写(工作副本 / 审计 / 效果)均未发生', async () => {
+    const w = world3({ phase: V1B });
+    const k = new KeyedAudit();
+    w.d.audit.appendKeyed = k.appendKeyed;
+    const r0 = windowed(rec('proposed'), 256);
+    w.store.put(r0);
+    k.fault = 'personal_lock_lost';
+    await expect(applyEvent(w.d, r0, E.gatesPassed())).rejects.toBeInstanceOf(PersonalLockLost);
+    expect(w.store.commits).toEqual([]);
+    expect(w.working.size).toBe(0);
+    expect(w.audits).toEqual([]);
+    expect(w.effects).toEqual([]);
+    expect(w.store.records.get(r0.id)?.transitions_dropped).toBe(0);
+  });
+
+  it('对照:非丢锁的确认失败(普通错误)仍被拒绝截断(halt commit_failed),不被当成丢锁传播', async () => {
+    const w = world3({ phase: V1B });
+    const k = new KeyedAudit();
+    w.d.audit.appendKeyed = k.appendKeyed;
+    const r0 = windowed(rec('proposed'), 256);
+    w.store.put(r0);
+    k.fault = 'throw_before';
+    const r = await applyEvent(w.d, r0, E.gatesPassed());
+    expect(r).toMatchObject({ kind: 'halt', halt: 'commit_failed' });
     expect(w.store.commits).toEqual([]);
   });
 
