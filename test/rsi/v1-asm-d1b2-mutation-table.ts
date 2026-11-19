@@ -1414,7 +1414,7 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
 ];
 
 /** 变异执行结果:由主代理跑完整表后按 `V1_ASM_D1B2_MUTATIONS` 的顺序回填(本块不执行变异,留空) */
-export const V1_ASM_D1B1_RESULTS: readonly V1AsmD1b1Result[] = [
+export const V1_ASM_D1B2_RESULTS: readonly V1AsmD1b2Result[] = [
   {
     id: 'hook_removed',
     failed: 12,
