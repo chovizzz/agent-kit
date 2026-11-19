@@ -7,3 +7,6 @@
  * 与普通 `deferred`(只停本步)不同,调用方把它映射为 `commit_failed`(fail-closed,→ stop_step_unsettled)。
  */
 export const REF_MOVED_AFTER_DENIED = 'ref_moved_after_denied';
+
+/** 个人锁丢失的错误码(= `PersonalLockLost.code`;`stage/errors.ts` 的类型在 worker 闭包外,这里只共享字面量,`accept-r1.test.ts` 钉住两者相等) */
+export const PERSONAL_LOCK_LOST_CODE = 'PERSONAL_LOCK_LOST';

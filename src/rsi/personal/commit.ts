@@ -438,7 +438,10 @@ async function discardOwnJournal(
   return { kind: 'clean' };
 }
 
-/** 盘上 journal 与本次写下的逐字段全等(含 phase)且 `refs/heads/rsi === oldHead` → `clean`;否则给出不可降级的原因 */
+/**
+ * 保证的边界(不夸大):最终核对之后、`unlink` 之前没有 await 与锁复核,但路径删除不与「刚核对过的那个文件」绑定;合作写者都持同一把个人锁,
+ * 锁有效期间不会换 journal;外部 `git update-ref` 不受该锁约束,发生在 `revParse` 之后的推进本函数观测不到(下次恢复按既有规则判 diverged)。
+ * 盘上 journal 与本次写下的逐字段全等(含 phase)且 `refs/heads/rsi === oldHead` → `clean`;否则给出不可降级的原因 */
 async function verifyOwnJournal(
   ctx: OpCtx,
   mine: PersonalCommitJournal,

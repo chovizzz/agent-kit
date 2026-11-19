@@ -360,6 +360,7 @@ describe('创建提交遇到拒绝后引用异动:映射 commit_failed(fail-clos
     const r = await runPersonalStep(w.d);
     expect(r.halted).toBe('commit_failed');
     expect(r.created).toEqual([]);
+    expect(r.growthDenied).toEqual([]); // 完整性失败,不是被拒
     expect(classifyHalt(r.halted as 'commit_failed')).toEqual({
       kind: 'stop_step_unsettled',
       cause: 'commit_failed',

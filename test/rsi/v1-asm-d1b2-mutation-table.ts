@@ -1244,6 +1244,7 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
       D_HOOK_POS,
       'denied_cleanup_final_check_after_last_lock',
       'denied_cleanup_final_check_journal_gone',
+      'denied_cleanup_final_check_journal_replaced',
     ],
     mustKill: [
       'denied_cleanup_final_check_after_last_lock',
@@ -1400,6 +1401,44 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
     ],
     tests: [ARCH_T],
     expectRed: [D_ARCH_AUTH, D_ARCH, K_ARCH_FLOW],
+    mustKill: [K_ARCH_FLOW],
+  },
+  {
+    id: 'arch_hook_param_reassigned',
+    clause: 'R2-3:applyIn 的钩子形参在提交前被重新赋值(提交用的不是 claim 得到的钩子)→ 红',
+    edits: [
+      {
+        file: APPLY,
+        anchor:
+          "  const c = await d.store.commit({\n    kind: 'transition',\n    txnId: txnId('transition', [rec.id], fresh.head, digest(json)),",
+        replacement:
+          "  hook = async () => undefined;\n  const c = await d.store.commit({\n    kind: 'transition',\n    txnId: txnId('transition', [rec.id], fresh.head, digest(json)),",
+      },
+    ],
+    tests: [ARCH_T],
+    expectRed: [D_ARCH_AUTH, D_ARCH, K_ARCH_FLOW],
+    mustKill: [K_ARCH_FLOW],
+  },
+  {
+    id: 'arch_commit_escaped_member_name',
+    clause:
+      'R2-3:成员名用转义写法 → 钩子数据流按文本找不到提交 = 红(保守失败,不静默放过);出口反查按 AST 名字仍计数',
+    edits: [
+      {
+        file: APPLY,
+        anchor:
+          "  const c = await d.store.commit({\n    kind: 'transition',\n    txnId: txnId('transition', [rec.id], fresh.head, digest(json)),",
+        replacement:
+          "  const c = await d.store.\\u0063ommit({\n    kind: 'transition',\n    txnId: txnId('transition', [rec.id], fresh.head, digest(json)),",
+      },
+    ],
+    tests: [ARCH_T],
+    expectRed: [
+      D_ARCH_AUTH,
+      D_ARCH,
+      K_ARCH_FLOW,
+      'candidate-apply.ts:所有 store.commit 带 beforeRefUpdate',
+    ],
     mustKill: [K_ARCH_FLOW],
   },
   {

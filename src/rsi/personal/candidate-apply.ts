@@ -20,7 +20,7 @@ import type {
   StepHalt,
   WorkingStore,
 } from './candidate-ports.js';
-import { REF_MOVED_AFTER_DENIED } from './commit-reasons.js';
+import { PERSONAL_LOCK_LOST_CODE, REF_MOVED_AFTER_DENIED } from './commit-reasons.js';
 import { creationAuditItems } from './creation-audit.js';
 import { growthOpOfEvent } from './growth-events.js';
 import { txnId } from './ids.js';
@@ -286,7 +286,6 @@ async function confirmCreationAuditBeforeTruncation(
 }
 
 /** rsi 锁 `lock_lost` 与个人锁丢失(`PersonalLockLost`,按 `code` 识别:不 import stage/,candidate-apply 在 worker 类型闭包内)都是锁丢失,不是「确认失败」 */
-const PERSONAL_LOCK_LOST_CODE = 'PERSONAL_LOCK_LOST';
 function isLockLostError(e: unknown): boolean {
   if (e instanceof RsiLockError && e.kind === 'lock_lost') return true;
   return (e as { code?: unknown } | null)?.code === PERSONAL_LOCK_LOST_CODE;

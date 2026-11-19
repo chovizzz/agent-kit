@@ -12,6 +12,7 @@ import type {
   RsiAuditLine,
 } from '../../../src/contracts/rsi-personal.js';
 import { RsiLockError } from '../../../src/rsi/lock-error.js';
+import { PERSONAL_LOCK_LOST_CODE } from '../../../src/rsi/personal/commit-reasons.js';
 import { PersonalLockLost } from '../../../src/rsi/personal/stage/errors.js';
 import { applyEvent } from '../../../src/rsi/personal/candidate-apply.js';
 import { startRollback } from '../../../src/rsi/personal/rollback.js';
@@ -284,6 +285,10 @@ describe('creation_audit_confirmed_before_truncation(第 3 条)', () => {
     expect(w.audits).toEqual([]);
     expect(w.effects).toEqual([]);
     expect(w.store.records.get(r0.id)?.transitions_dropped).toBe(0);
+  });
+
+  it('personal_lock_lost_code_shared:共享的码字面量与 PersonalLockLost.code 相等(生产者改码不会让截断确认静默退化成确认失败)', () => {
+    expect(new PersonalLockLost().code).toBe(PERSONAL_LOCK_LOST_CODE);
   });
 
   it('对照:非丢锁的确认失败(普通错误)仍被拒绝截断(halt commit_failed),不被当成丢锁传播', async () => {

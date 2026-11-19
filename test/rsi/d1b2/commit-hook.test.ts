@@ -399,6 +399,36 @@ describe('beforeRefUpdate:位置与锁复核', () => {
     expect(refOf(w)).toBe(old);
   });
 
+  it('denied_cleanup_final_check_journal_replaced:最后一次锁复核期间 journal 被换成别的事务的 → invalid / journal_not_mine,第三方 journal 原样保留(不删)', async () => {
+    const w = await makeWorld('d1b2-hook-finalreplaced-');
+    await setupRepo(w);
+    const foreign = 'e'.repeat(16);
+    const st = { armed: false, n: 0 };
+    const locks: PersonalLocks = {
+      personal: {
+        assertHeld: async () => {
+          if (!st.armed) return;
+          st.n++;
+          if (st.n === 2) {
+            const j = await readJournal(w.h);
+            if (j.kind !== 'ok') throw new Error('journal 应在');
+            await writeJournal(w.h, { ...j.value, txn_id: foreign });
+          }
+        },
+      },
+    };
+    const r = await commitPersonal(repoDeps(w), locks, {
+      ...spec('2', NEXT_FILES),
+      beforeRefUpdate: async () => {
+        st.armed = true;
+        throw new BeforeRefUpdateDenied('x');
+      },
+    });
+    expect(r).toMatchObject({ status: 'invalid', why: 'journal_not_mine' });
+    const after = await readJournal(w.h);
+    expect(after.kind === 'ok' ? after.value.txn_id : null).toBe(foreign);
+  });
+
   it('不带钩子的调用方行为不变(加法):同一提交 committed,钩子字段缺省', async () => {
     const w = await makeWorld('d1b2-hook-absent-');
     await setupRepo(w);

@@ -19,6 +19,16 @@ import { ROOT } from '../closure-util.js';
 const parse = (file: string, text: string): ts.SourceFile =>
   ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 
+/** 属性名的**解码后**文本(`'beforeRefUpdate'` / `beforeRefUpdate` / 转义写法都得同一个键);计算属性名 / 无法静态确认 → null */
+function propName(n: ts.Node | undefined): string | null {
+  if (n === undefined) return null;
+  if (ts.isIdentifier(n) || ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) {
+    return n.text;
+  }
+  if (ts.isNumericLiteral(n)) return n.text;
+  return null;
+}
+
 function findFn(sf: ts.SourceFile, name: string): ts.FunctionDeclaration | undefined {
   let found: ts.FunctionDeclaration | undefined;
   const visit = (n: ts.Node): void => {
@@ -219,8 +229,8 @@ export function commitHookStructure(
   }
   let seen = 0;
   for (const p of spec.properties) {
-    if (ts.isPropertyAssignment(p) && !ts.isComputedPropertyName(p.name)) {
-      if (p.name.getText(sf) === 'beforeRefUpdate') {
+    if (ts.isPropertyAssignment(p) && propName(p.name) !== null) {
+      if (propName(p.name) === 'beforeRefUpdate') {
         seen++;
         direct = p.initializer.getText(sf);
       }
@@ -248,7 +258,7 @@ export function commitHookStructure(
       }
       const t = e.whenTrue.properties[0] as ts.PropertyAssignment;
       const h = (e.condition.left as ts.Identifier).text;
-      if (t.name.getText(sf) !== 'beforeRefUpdate' || t.initializer.getText(sf) !== h) {
+      if (propName(t.name) !== 'beforeRefUpdate' || t.initializer.getText(sf) !== h) {
         problems.push(`条件展开不是 \`...(${h} !== undefined ? { beforeRefUpdate: ${h} } : {})\``);
         continue;
       }
@@ -308,6 +318,7 @@ export function hookFlowProblems(sf: ts.SourceFile, name: string): string[] {
     const claimFn = name === 'runPersonalStep' ? 'claimGrowthPort' : 'claimGrowth';
     const v = claimVar(fn, sf, claimFn);
     if (v === undefined) return [`${name}:没有 const v = await ${claimFn}(…)`];
+    for (const x of reassignedIn(fn, v)) out.push(`${name}:claim 变量 ${v} 被重新赋值:${x}`);
     if (name === 'runPersonalStep') {
       if (commits.length === 0) out.push(`${name}:没有 store.commit(创建提交缺失?)`);
       for (const c of commits) {
@@ -352,6 +363,7 @@ export function hookFlowProblems(sf: ts.SourceFile, name: string): string[] {
   } else if (name === 'applyIn') {
     if (!fn.parameters.some((p) => p.name.getText(sf) === 'hook'))
       out.push(`${name}:没有形参 hook`);
+    for (const x of reassignedIn(fn, 'hook')) out.push(`${name}:形参 hook 被重新赋值:${x}`);
     if (commits.length !== 1) out.push(`${name}:store.commit 数 ${commits.length} ≠ 1`);
     for (const c of commits) {
       const h = commitHookStructure(c, sf);
@@ -365,6 +377,34 @@ export function hookFlowProblems(sf: ts.SourceFile, name: string): string[] {
   } else {
     out.push(`${name}:没有钩子数据流规则`);
   }
+  return out;
+}
+
+/** 函数里对标识符 `name` 的重新赋值(`=` / 复合赋值 / `++` / `--`):钩子变量被改写 = 提交用的不是 claim 得到的那一个 */
+export function reassignedIn(fn: ts.Node, name: string): string[] {
+  const out: string[] = [];
+  const visit = (n: ts.Node): void => {
+    if (
+      ts.isBinaryExpression(n) &&
+      n.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+      n.operatorToken.kind <= ts.SyntaxKind.LastAssignment &&
+      ts.isIdentifier(n.left) &&
+      n.left.text === name
+    ) {
+      out.push(n.getText());
+    }
+    if (
+      (ts.isPrefixUnaryExpression(n) || ts.isPostfixUnaryExpression(n)) &&
+      (n.operator === ts.SyntaxKind.PlusPlusToken ||
+        n.operator === ts.SyntaxKind.MinusMinusToken) &&
+      ts.isIdentifier(n.operand) &&
+      n.operand.text === name
+    ) {
+      out.push(n.getText());
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(fn);
   return out;
 }
 
@@ -712,10 +752,16 @@ export function authoritativeExits(file: string, text: string): AuthExit[] {
   const sf = parse(file, text);
   const out: AuthExit[] = [];
   for (const n of findAll(sf, isCall)) {
-    const callee = n.expression.getText(sf);
-    if (callee === 'commitPersonal' || callee.endsWith('.commitPersonal')) {
+    // 成员名取 AST 解码后的 `.text`(`s.\u0063ommit(x)` 的源码文本不含 `commit`,但标识符就是 `commit`)
+    const e = n.expression;
+    const name = ts.isPropertyAccessExpression(e)
+      ? e.name.text
+      : ts.isIdentifier(e)
+        ? e.text
+        : null;
+    if (name === 'commitPersonal') {
       out.push({ kind: 'commit_personal', fn: enclosingFn(n, sf) });
-    } else if (callee === 'commit' || callee.endsWith('.commit')) {
+    } else if (name === 'commit') {
       out.push({ kind: 'commit', fn: enclosingFn(n, sf) });
     }
   }
@@ -752,7 +798,7 @@ export function protectedRefs(file: string, text: string): string[] {
     } else if (
       ts.isBindingElement(n) &&
       ts.isObjectBindingPattern(n.parent) &&
-      PROTECTED_MEMBERS.includes((n.propertyName ?? n.name).getText(sf))
+      PROTECTED_MEMBERS.includes(propName(n.propertyName ?? n.name) ?? '')
     ) {
       add(n, 'destructure');
     } else if (ts.isShorthandPropertyAssignment(n) && n.name.text === 'commitPersonal') {
@@ -936,6 +982,10 @@ describe('④ 权威写出口反查:调用者 ⊆ 登记汇点 ∪ 精确白名�
       expect(exits('export async function bare(d: D) { await commit(spec); }')).toEqual([
         'bare:commit',
       ]);
+      // 转义写法的成员名:源码文本不含 `commit`,但标识符就是 commit
+      expect(exits('export async function esc(s: S) { await s.\\u0063ommit(spec); }')).toEqual([
+        'esc:commit',
+      ]);
       // 对照:不是提交的调用不算
       expect(
         exits('export async function ok(p: P) { await p.save(plan.next); foo({ txnId: 1 }); }'),
@@ -963,6 +1013,9 @@ describe('④ 权威写出口反查:调用者 ⊆ 登记汇点 ∪ 精确白名�
       );
       expect(refs('function f(d: D) { const { commit: c } = d.store; return c(spec); }')).toEqual([
         'f:destructure:commit: c',
+      ]);
+      expect(refs("function f(s: S) { const { 'commit': c } = s; return c(spec); }")).toEqual([
+        "f:destructure:'commit': c",
       ]);
       expect(refs('function f(d: D) { return run(commitPersonal); }')).toEqual([
         'f:bare:commitPersonal',
@@ -1007,6 +1060,17 @@ describe('④ 权威写出口反查:调用者 ⊆ 登记汇点 ∪ 精确白名�
           'async function applyIn(d: D, hook?: H) { return d.store.commit({ txnId: 1, meta: { beforeRefUpdate: hook } }); }',
           'applyIn',
         ),
+      ).not.toEqual([]);
+      // 带引号的同名覆盖(运行时键仍是 beforeRefUpdate)
+      expect(
+        flow(
+          okIn.replace('} : {}) })', "} : {}), 'beforeRefUpdate': async () => {} })"),
+          'applyIn',
+        ),
+      ).not.toEqual([]);
+      // 钩子形参 / claim 变量在提交前被重新赋值
+      expect(
+        flow(okIn.replace('return d.store', 'hook = async () => {}; return d.store'), 'applyIn'),
       ).not.toEqual([]);
       // 实参不是对象字面量
       expect(
