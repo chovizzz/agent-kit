@@ -1695,7 +1695,7 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
 export const V1_ASM_D1B2_RESULTS: readonly V1AsmD1b2Result[] = [
   {
     id: 'hook_removed',
-    failed: 12,
+    failed: 15,
     skipped: 0,
     killedBy: [
       'beforeRefUpdate:拒绝 before_ref_update_denied_ref_unchanged_journal_removed:钩子拒绝 → denied{code};引用 / 索引 / 工作树 / journal 全部回到提交前;钩子在 objects_written 阶段、引用仍为旧值时被调用',
@@ -1710,6 +1710,9 @@ export const V1_ASM_D1B2_RESULTS: readonly V1AsmD1b2Result[] = [
       'beforeRefUpdate:位置与锁复核 hook_without_post_assertlocks:钩子(现读)期间丢锁、钩子正常返回 → 抛 lock_lost,引用不变(钩子之后到 update-ref 之间不得丢锁)',
       'beforeRefUpdate:位置与锁复核 拒绝后清理 journal 之前先复核锁:钩子丢锁并拒绝 → 传播 lock_lost,journal 不动(留给下次恢复)',
       'beforeRefUpdate:位置与锁复核 denied_cleanup_skips_remove_lock_check:清理在「读盘并核对所有权」之后、删除之前再复核一次锁:清理阶段恰有两次锁断言;第二次丢锁 → 传播 lock_lost,journal 不动',
+      'beforeRefUpdate:位置与锁复核 denied_cleanup_final_check_after_last_lock:最后一次锁复核**期间**引用被别人推进 → 不返回普通 denied(deferred / ref_moved_after_denied);journal 与第三方引用都保留(最终核对在最后一次锁复核之后)',
+      'beforeRefUpdate:位置与锁复核 denied_cleanup_final_check_journal_gone:最后一次锁复核期间 journal 被删 → invalid / journal_absent,不是普通 denied;引用不动',
+      'beforeRefUpdate:位置与锁复核 denied_cleanup_final_check_journal_replaced:最后一次锁复核期间 journal 被换成别的事务的 → invalid / journal_not_mine,第三方 journal 原样保留(不删)',
     ],
     restored: true,
   },
@@ -1743,11 +1746,12 @@ export const V1_ASM_D1B2_RESULTS: readonly V1AsmD1b2Result[] = [
   },
   {
     id: 'denied_cleanup_without_ownership_check',
-    failed: 2,
+    failed: 3,
     skipped: 0,
     killedBy: [
       'beforeRefUpdate:拒绝 before_ref_update_denied_foreign_journal_untouched:钩子期间 journal 被换成别的事务 → 不是普通 denied(invalid / journal_not_mine,保留现场),也不删别人的 journal',
       'beforeRefUpdate:拒绝 before_ref_update_denied_same_txn_different_content_untouched:txn_id 相同但内容(target_tree)不同 → 不删且不当普通 denied(只比 txn_id 不够)',
+      'beforeRefUpdate:位置与锁复核 denied_cleanup_final_check_journal_replaced:最后一次锁复核期间 journal 被换成别的事务的 → invalid / journal_not_mine,第三方 journal 原样保留(不删)',
     ],
     restored: true,
   },
@@ -1762,10 +1766,13 @@ export const V1_ASM_D1B2_RESULTS: readonly V1AsmD1b2Result[] = [
   },
   {
     id: 'denied_cleanup_skips_lock_check',
-    failed: 1,
+    failed: 4,
     skipped: 0,
     killedBy: [
       'beforeRefUpdate:位置与锁复核 denied_cleanup_skips_remove_lock_check:清理在「读盘并核对所有权」之后、删除之前再复核一次锁:清理阶段恰有两次锁断言;第二次丢锁 → 传播 lock_lost,journal 不动',
+      'beforeRefUpdate:位置与锁复核 denied_cleanup_final_check_after_last_lock:最后一次锁复核**期间**引用被别人推进 → 不返回普通 denied(deferred / ref_moved_after_denied);journal 与第三方引用都保留(最终核对在最后一次锁复核之后)',
+      'beforeRefUpdate:位置与锁复核 denied_cleanup_final_check_journal_gone:最后一次锁复核期间 journal 被删 → invalid / journal_absent,不是普通 denied;引用不动',
+      'beforeRefUpdate:位置与锁复核 denied_cleanup_final_check_journal_replaced:最后一次锁复核期间 journal 被换成别的事务的 → invalid / journal_not_mine,第三方 journal 原样保留(不删)',
     ],
     restored: true,
   },
@@ -1998,10 +2005,13 @@ export const V1_ASM_D1B2_RESULTS: readonly V1AsmD1b2Result[] = [
   },
   {
     id: 'denied_cleanup_skips_remove_lock_check',
-    failed: 1,
+    failed: 4,
     skipped: 0,
     killedBy: [
       'beforeRefUpdate:位置与锁复核 denied_cleanup_skips_remove_lock_check:清理在「读盘并核对所有权」之后、删除之前再复核一次锁:清理阶段恰有两次锁断言;第二次丢锁 → 传播 lock_lost,journal 不动',
+      'beforeRefUpdate:位置与锁复核 denied_cleanup_final_check_after_last_lock:最后一次锁复核**期间**引用被别人推进 → 不返回普通 denied(deferred / ref_moved_after_denied);journal 与第三方引用都保留(最终核对在最后一次锁复核之后)',
+      'beforeRefUpdate:位置与锁复核 denied_cleanup_final_check_journal_gone:最后一次锁复核期间 journal 被删 → invalid / journal_absent,不是普通 denied;引用不动',
+      'beforeRefUpdate:位置与锁复核 denied_cleanup_final_check_journal_replaced:最后一次锁复核期间 journal 被换成别的事务的 → invalid / journal_not_mine,第三方 journal 原样保留(不删)',
     ],
     restored: true,
   },
@@ -2297,39 +2307,44 @@ export const V1_ASM_D1B2_RESULTS: readonly V1AsmD1b2Result[] = [
   },
   {
     id: 'denied_cleanup_unreadable_journal_silent',
-    failed: 1,
+    failed: 2,
     skipped: 0,
     killedBy: [
       'beforeRefUpdate:拒绝 denied_cleanup_journal_gone_not_plain_denied:钩子期间 journal 被删(无法确认是本次事务)→ invalid / journal_absent,不是普通 denied;引用不动',
+      'beforeRefUpdate:位置与锁复核 denied_cleanup_final_check_journal_gone:最后一次锁复核期间 journal 被删 → invalid / journal_absent,不是普通 denied;引用不动',
     ],
     restored: true,
   },
   {
     id: 'denied_cleanup_ref_moved_silent',
-    failed: 1,
+    failed: 2,
     skipped: 0,
     killedBy: [
       'beforeRefUpdate:拒绝 denied_cleanup_ref_moved_not_plain_denied:钩子期间 refs/heads/rsi 被别人推进 → deferred / personal_repo_diverged,不是普通 denied;自己的 journal 与第三方引用都保留',
+      'beforeRefUpdate:位置与锁复核 denied_cleanup_final_check_after_last_lock:最后一次锁复核**期间**引用被别人推进 → 不返回普通 denied(deferred / ref_moved_after_denied);journal 与第三方引用都保留(最终核对在最后一次锁复核之后)',
     ],
     restored: true,
   },
   {
     id: 'denied_unverified_result_mapped_to_denied',
-    failed: 3,
+    failed: 5,
     skipped: 0,
     killedBy: [
       'beforeRefUpdate:拒绝 before_ref_update_denied_foreign_journal_untouched:钩子期间 journal 被换成别的事务 → 不是普通 denied(invalid / journal_not_mine,保留现场),也不删别人的 journal',
       'beforeRefUpdate:拒绝 before_ref_update_denied_same_txn_different_content_untouched:txn_id 相同但内容(target_tree)不同 → 不删且不当普通 denied(只比 txn_id 不够)',
       'beforeRefUpdate:拒绝 denied_cleanup_journal_gone_not_plain_denied:钩子期间 journal 被删(无法确认是本次事务)→ invalid / journal_absent,不是普通 denied;引用不动',
+      'beforeRefUpdate:位置与锁复核 denied_cleanup_final_check_journal_gone:最后一次锁复核期间 journal 被删 → invalid / journal_absent,不是普通 denied;引用不动',
+      'beforeRefUpdate:位置与锁复核 denied_cleanup_final_check_journal_replaced:最后一次锁复核期间 journal 被换成别的事务的 → invalid / journal_not_mine,第三方 journal 原样保留(不删)',
     ],
     restored: true,
   },
   {
     id: 'denied_ref_moved_result_mapped_to_denied',
-    failed: 1,
+    failed: 2,
     skipped: 0,
     killedBy: [
       'beforeRefUpdate:拒绝 denied_cleanup_ref_moved_not_plain_denied:钩子期间 refs/heads/rsi 被别人推进 → deferred / personal_repo_diverged,不是普通 denied;自己的 journal 与第三方引用都保留',
+      'beforeRefUpdate:位置与锁复核 denied_cleanup_final_check_after_last_lock:最后一次锁复核**期间**引用被别人推进 → 不返回普通 denied(deferred / ref_moved_after_denied);journal 与第三方引用都保留(最终核对在最后一次锁复核之后)',
     ],
     restored: true,
   },
@@ -2427,8 +2442,133 @@ export const V1_ASM_D1B2_RESULTS: readonly V1AsmD1b2Result[] = [
     restored: true,
   },
   {
+    id: 'denied_cleanup_final_check_skipped',
+    failed: 3,
+    skipped: 0,
+    killedBy: [
+      'beforeRefUpdate:位置与锁复核 denied_cleanup_final_check_after_last_lock:最后一次锁复核**期间**引用被别人推进 → 不返回普通 denied(deferred / ref_moved_after_denied);journal 与第三方引用都保留(最终核对在最后一次锁复核之后)',
+      'beforeRefUpdate:位置与锁复核 denied_cleanup_final_check_journal_gone:最后一次锁复核期间 journal 被删 → invalid / journal_absent,不是普通 denied;引用不动',
+      'beforeRefUpdate:位置与锁复核 denied_cleanup_final_check_journal_replaced:最后一次锁复核期间 journal 被换成别的事务的 → invalid / journal_not_mine,第三方 journal 原样保留(不删)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'apply_ref_moved_after_denied_not_mapped',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '拒绝后引用异动(ref_moved_after_denied)不是普通 deferred:映射 commit_failed(fail-closed) ref_moved_after_denied_maps_commit_failed:提交底座返回 deferred{ref_moved_after_denied} → halt commit_failed(保留 why),分类为 stop_step_unsettled',
+    ],
+    restored: true,
+  },
+  {
+    id: 'apply_all_deferred_upgraded',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '拒绝后引用异动(ref_moved_after_denied)不是普通 deferred:映射 commit_failed(fail-closed) 对照:其它 deferred(why 不是 ref_moved_after_denied)仍是 repo_deferred(只停本步),不被升级',
+    ],
+    restored: true,
+  },
+  {
+    id: 'step_ref_moved_after_denied_not_mapped',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '创建提交遇到拒绝后引用异动:映射 commit_failed(fail-closed),不是只停本步的 repo_deferred creation_ref_moved_after_denied_maps_commit_failed:创建提交返回 deferred{ref_moved_after_denied} → halted=commit_failed,分类 stop_step_unsettled;无创建落地',
+    ],
+    restored: true,
+  },
+  {
+    id: 'step_all_deferred_upgraded',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '创建提交遇到拒绝后引用异动:映射 commit_failed(fail-closed),不是只停本步的 repo_deferred 对照:创建提交的其它 deferred 仍是 repo_deferred(只停本步)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'arch_ref_alias_commit',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '④ 权威写出口反查:调用者 ⊆ 登记汇点 ∪ 精确白名单(不看钩子、不看拼写) 受保护写能力的引用(别名 / 括号访问 / 解构 / 当值传递 / 命名空间取值)恰为精确允许集:不止盯调用表达式',
+    ],
+    restored: true,
+  },
+  {
+    id: 'arch_ref_bracket_commit',
+    failed: 4,
+    skipped: 0,
+    killedBy: [
+      'GROWTH_SINKS:登记表与形态校验 candidate-apply.ts:所有 store.commit 带 beforeRefUpdate;applyIn 只收 applyEvent 取得的钩子',
+      '④ 权威写出口反查:调用者 ⊆ 登记汇点 ∪ 精确白名单(不看钩子、不看拼写) src/rsi/** 的提交类出口调用者恰为允许集(多一个 = 红);允许集里每一项都真实存在(不是空扫);登记的 port_claim 汇点都在其中',
+      '④ 权威写出口反查:调用者 ⊆ 登记汇点 ∪ 精确白名单(不看钩子、不看拼写) 受保护写能力的引用(别名 / 括号访问 / 解构 / 当值传递 / 命名空间取值)恰为精确允许集:不止盯调用表达式',
+      '④ 权威写出口反查:调用者 ⊆ 登记汇点 ∪ 精确白名单(不看钩子、不看拼写) 钩子数据流:claim 返回值 → 拒绝分支先于提交 → beforeRefUpdate 恰为 claim 得到的钩子(applyEvent / applyIn / runPersonalStep)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'arch_ref_destructured_commit',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '④ 权威写出口反查:调用者 ⊆ 登记汇点 ∪ 精确白名单(不看钩子、不看拼写) 受保护写能力的引用(别名 / 括号访问 / 解构 / 当值传递 / 命名空间取值)恰为精确允许集:不止盯调用表达式',
+    ],
+    restored: true,
+  },
+  {
+    id: 'arch_hook_condition_flipped',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '④ 权威写出口反查:调用者 ⊆ 登记汇点 ∪ 精确白名单(不看钩子、不看拼写) 钩子数据流:claim 返回值 → 拒绝分支先于提交 → beforeRefUpdate 恰为 claim 得到的钩子(applyEvent / applyIn / runPersonalStep)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'arch_hook_overridden_after',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'GROWTH_SINKS:登记表与形态校验 每个登记汇点的实现合规(pass 形参 + 首句检查 / 端口先于副作用 / 授权先于建仓)',
+      '④ 权威写出口反查:调用者 ⊆ 登记汇点 ∪ 精确白名单(不看钩子、不看拼写) 钩子数据流:claim 返回值 → 拒绝分支先于提交 → beforeRefUpdate 恰为 claim 得到的钩子(applyEvent / applyIn / runPersonalStep)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'arch_hook_param_reassigned',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      '④ 权威写出口反查:调用者 ⊆ 登记汇点 ∪ 精确白名单(不看钩子、不看拼写) 钩子数据流:claim 返回值 → 拒绝分支先于提交 → beforeRefUpdate 恰为 claim 得到的钩子(applyEvent / applyIn / runPersonalStep)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'arch_commit_escaped_member_name',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'GROWTH_SINKS:登记表与形态校验 candidate-apply.ts:所有 store.commit 带 beforeRefUpdate;applyIn 只收 applyEvent 取得的钩子',
+      '④ 权威写出口反查:调用者 ⊆ 登记汇点 ∪ 精确白名单(不看钩子、不看拼写) 钩子数据流:claim 返回值 → 拒绝分支先于提交 → beforeRefUpdate 恰为 claim 得到的钩子(applyEvent / applyIn / runPersonalStep)',
+    ],
+    restored: true,
+  },
+  {
+    id: 'arch_hook_arg_position_swapped',
+    failed: 2,
+    skipped: 0,
+    killedBy: [
+      'GROWTH_SINKS:登记表与形态校验 每个登记汇点的实现合规(pass 形参 + 首句检查 / 端口先于副作用 / 授权先于建仓)',
+      '④ 权威写出口反查:调用者 ⊆ 登记汇点 ∪ 精确白名单(不看钩子、不看拼写) 钩子数据流:claim 返回值 → 拒绝分支先于提交 → beforeRefUpdate 恰为 claim 得到的钩子(applyEvent / applyIn / runPersonalStep)',
+    ],
+    restored: true,
+  },
+  {
     id: 'truncation_without_creation_audit_confirm',
-    failed: 7,
+    failed: 9,
     skipped: 0,
     killedBy: [
       'creation_audit_confirmed_before_truncation(第 3 条) 截断创建条目的转移:先经带键端口落创建审计(原 at、原键),再提交;提交后窗口里不再有创建条目;恰好一行',
@@ -2438,16 +2578,19 @@ export const V1_ASM_D1B2_RESULTS: readonly V1AsmD1b2Result[] = [
       'creation_audit_confirmed_before_truncation(第 3 条) 已知代价(owner 待定):减影响事件(veto)在缩减入口(deferredKeyedEffects)上也被截断确认挡住 → halt{commit_failed},记录不动;非截断的减影响不受影响',
       'creation_audit_confirmed_before_truncation(第 3 条) 缺 appendKeyed 端口 → 拒绝截断(halt{commit_failed, port_missing});不回落无键 append;零写入',
       'creation_audit_confirmed_before_truncation(第 3 条) 丢锁原样传播(不吞成 halt);零写入',
+      'creation_audit_confirmed_before_truncation(第 3 条) personal_lock_lost_propagates:带键端口抛 PersonalLockLost(个人锁丢失)→ 原样传播,不吞成 halt;源提交与后续个人写(工作副本 / 审计 / 效果)均未发生',
+      'creation_audit_confirmed_before_truncation(第 3 条) 对照:非丢锁的确认失败(普通错误)仍被拒绝截断(halt commit_failed),不被当成丢锁传播',
     ],
     restored: true,
   },
   {
     id: 'truncation_confirm_failure_swallowed',
-    failed: 2,
+    failed: 3,
     skipped: 0,
     killedBy: [
       'creation_audit_confirmed_before_truncation(第 3 条) truncation_refused_when_creation_audit_unconfirmed:确认失败(抛错)→ halt{commit_failed},转移不提交(零写入);故障恢复后重试成功,仍恰好一行',
       'creation_audit_confirmed_before_truncation(第 3 条) 审计行已落但确认没返回(throw_after):不提交;重试时同键幂等 → 最终恰好一行、原 at',
+      'creation_audit_confirmed_before_truncation(第 3 条) 对照:非丢锁的确认失败(普通错误)仍被拒绝截断(halt commit_failed),不被当成丢锁传播',
     ],
     restored: true,
   },
@@ -2462,10 +2605,32 @@ export const V1_ASM_D1B2_RESULTS: readonly V1AsmD1b2Result[] = [
   },
   {
     id: 'truncation_confirm_lock_lost_swallowed',
-    failed: 1,
+    failed: 2,
     skipped: 0,
     killedBy: [
       'creation_audit_confirmed_before_truncation(第 3 条) 丢锁原样传播(不吞成 halt);零写入',
+      'creation_audit_confirmed_before_truncation(第 3 条) personal_lock_lost_propagates:带键端口抛 PersonalLockLost(个人锁丢失)→ 原样传播,不吞成 halt;源提交与后续个人写(工作副本 / 审计 / 效果)均未发生',
+    ],
+    restored: true,
+  },
+  {
+    id: 'truncation_confirm_personal_lock_lost_swallowed',
+    failed: 1,
+    skipped: 0,
+    killedBy: [
+      'creation_audit_confirmed_before_truncation(第 3 条) personal_lock_lost_propagates:带键端口抛 PersonalLockLost(个人锁丢失)→ 原样传播,不吞成 halt;源提交与后续个人写(工作副本 / 审计 / 效果)均未发生',
+    ],
+    restored: true,
+  },
+  {
+    id: 'truncation_confirm_all_errors_propagate',
+    failed: 4,
+    skipped: 0,
+    killedBy: [
+      'creation_audit_confirmed_before_truncation(第 3 条) truncation_refused_when_creation_audit_unconfirmed:确认失败(抛错)→ halt{commit_failed},转移不提交(零写入);故障恢复后重试成功,仍恰好一行',
+      'creation_audit_confirmed_before_truncation(第 3 条) 审计行已落但确认没返回(throw_after):不提交;重试时同键幂等 → 最终恰好一行、原 at',
+      'creation_audit_confirmed_before_truncation(第 3 条) 对照:非丢锁的确认失败(普通错误)仍被拒绝截断(halt commit_failed),不被当成丢锁传播',
+      'creation_audit_confirmed_before_truncation(第 3 条) 创建日已封存(AuditSealedError sealed_interval)= 已对账封存,视为已确认:转移照常提交',
     ],
     restored: true,
   },
