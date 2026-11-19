@@ -663,6 +663,40 @@ export async function rename(ctx: HomeFsContext, fromRel: string, toRel: string)
   if (from.parentAbs !== to.parentAbs) await syncDir(from.parentAbs);
 }
 
+/**
+ * 不覆盖的改名:两端都必须是表内、计划内的文件路径;目标已存在 → `HomeExistsError`(原路径与来源都不动)。
+ * 用 `link(来源, 目标)`(目标存在即 EEXIST,由内核原子判定)再 `unlink(来源)` 实现——`rename` 会静默覆盖目标,Node 没有 no-replace 选项。
+ * **不是原子移动**,只保证「不覆盖已存在的目标」:两步之间来源与目标短暂是同一 inode 的两个名字(`nlink=2`,此时进程死亡则两个名字都会被安全读取拒绝);
+ * `link` 之后来源若被换掉,`unlink(来源)` 作用于换上的那个名字;`unlink` 失败时抛错并尽力撤销刚建的目标名(无所有权核对)。目标是链接 / 目录 / 硬链接 → 守卫抛 `HomeWriteDeniedError`(不是 `HomeExistsError`)。来源不存在 → ENOENT。
+ */
+export async function renameExclusive(
+  ctx: HomeFsContext,
+  fromRel: string,
+  toRel: string,
+): Promise<void> {
+  audit(ctx, 'renameExclusive.from', fromRel);
+  audit(ctx, 'renameExclusive', toRel);
+  const from = checkFile(ctx, fromRel);
+  const to = checkFile(ctx, toRel);
+  if (from.leaf === undefined) throw enoent();
+  if (to.leaf !== undefined) throw new HomeExistsError(toRel);
+  try {
+    await fsp.link(from.abs, to.abs);
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === 'EEXIST') throw new HomeExistsError(toRel);
+    throw e;
+  }
+  try {
+    await fsp.unlink(from.abs);
+  } catch (e) {
+    await fsp.unlink(to.abs).catch(() => undefined);
+    throw e;
+  }
+  await syncDir(to.parentAbs);
+  if (from.parentAbs !== to.parentAbs) await syncDir(from.parentAbs);
+}
+
 /** 对已校验文件的 fd 做 fchmod(不跟随检查后换上的链接)。 */
 export async function chmod(ctx: HomeFsContext, rel: string, mode: number): Promise<void> {
   audit(ctx, 'chmod', rel);

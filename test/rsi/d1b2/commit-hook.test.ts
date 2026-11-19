@@ -4,6 +4,9 @@
  * (→ `denied`,引用不动,自己写下的 journal 在所有权核对后删除);其它错误(含 `RsiLockError`)原样传播,不删 journal、不改引用。
  */
 import { describe, expect, it } from 'vitest';
+import { exists, readDir, readText } from '../../../src/io/read-fs.js';
+import * as safe from '../../../src/io/safe-fs.js';
+import type { PersonalCommitJournal } from '../../../src/contracts/rsi-personal.js';
 import { RsiLockError } from '../../../src/rsi/lock-error.js';
 import {
   BeforeRefUpdateDenied,
@@ -11,7 +14,13 @@ import {
   type PersonalLocks,
 } from '../../../src/rsi/personal/commit.js';
 import { EMPTY_TREE } from '../../../src/rsi/personal/commit-journal.js';
-import { readJournal, removeJournal, writeJournal } from '../../../src/rsi/personal/home-state.js';
+import {
+  PERSONAL_STATE_FILES,
+  readJournal,
+  removeJournal,
+  statePath,
+  writeJournal,
+} from '../../../src/rsi/personal/home-state.js';
 import {
   git,
   makeWorld,
@@ -436,5 +445,148 @@ describe('beforeRefUpdate:位置与锁复核', () => {
       commitPersonal(repoDeps(w), locks, spec('2', NEXT_FILES)),
     );
     expect(r.status).toBe('committed');
+  });
+});
+
+/**
+ * R3:拒绝后清理 journal 的「先原子改名到墓碑 → 对墓碑核对 → unlink 墓碑」协议。
+ * 注入点(`onStep`):`discard:after-rename`(改名之后、核对墓碑之前)、`discard:before-unlink`(核对之后、unlink 之前);「改名之前」= 第 2 次锁断言(上面已有用例)。
+ */
+describe('beforeRefUpdate:拒绝后清理的改名协议', () => {
+  const tombOf = (w: World, txn: string): string =>
+    statePath(w.h, `${PERSONAL_STATE_FILES.journal}.denied-${txn}`);
+  const leftovers = async (w: World): Promise<string[]> =>
+    (await readDir(w.h.stateDir))
+      .map((e) => e.name)
+      .filter((n) => n.startsWith(PERSONAL_STATE_FILES.journal));
+  const journalTxn = async (w: World): Promise<string | null> => {
+    const j = await readJournal(w.h);
+    return j.kind === 'ok' ? j.value.txn_id : null;
+  };
+
+  /** 钩子拒绝后跑清理;`at` 步骤上执行 `act`(此刻原路径上是什么由步骤决定) */
+  async function run(
+    prefix: string,
+    at: 'discard:after-rename' | 'discard:before-unlink',
+    act: (w: World, base: PersonalCommitJournal) => Promise<void>,
+  ): Promise<{ w: World; r: Awaited<ReturnType<typeof commitPersonal>>; txn: string }> {
+    const w = await makeWorld(prefix);
+    await setupRepo(w);
+    let base: PersonalCommitJournal | null = null;
+    const deps = repoDeps(w, {
+      onStep: async (step) => {
+        if (step === at && base !== null) await act(w, base);
+      },
+    });
+    const r = await withLock(w, (locks) =>
+      commitPersonal(deps, locks, {
+        ...spec('2', NEXT_FILES),
+        beforeRefUpdate: async () => {
+          const j = await readJournal(w.h);
+          if (j.kind !== 'ok') throw new Error('journal 应在');
+          base = j.value;
+          throw new BeforeRefUpdateDenied('x');
+        },
+      }),
+    );
+    if (base === null) throw new Error('钩子未被调用');
+    return { w, r, txn: (base as PersonalCommitJournal).txn_id };
+  }
+  const foreignA = 'a'.repeat(16);
+  const foreignB = 'b'.repeat(16);
+  const advance = (w: World): string => {
+    const old = refOf(w);
+    const moved = git(w, ['commit-tree', `${old}^{tree}`, '-p', old, '-m', 'third']);
+    git(w, ['update-ref', 'refs/heads/rsi', moved, old]);
+    return moved;
+  };
+
+  it('denied_cleanup_rename_then_verify_ok:无人干扰 → denied;改名与删除之后原名与墓碑都不在', async () => {
+    const { w, r } = await run('d1b2-aside-clean-', 'discard:after-rename', async () => undefined);
+    expect(r).toEqual({ status: 'denied', code: 'x' });
+    expect(await readJournal(w.h)).toEqual({ kind: 'absent' });
+    expect(await leftovers(w)).toEqual([]);
+  });
+
+  it('denied_cleanup_new_journal_after_rename_survives:改名之后原路径上换上别的事务的 journal → 我们删的只是墓碑,第三方 journal 原样保留(denied),无墓碑残留', async () => {
+    const { w, r } = await run('d1b2-aside-newj-', 'discard:after-rename', async (w2, base) => {
+      await writeJournal(w2.h, { ...base, txn_id: foreignA });
+    });
+    expect(r).toEqual({ status: 'denied', code: 'x' });
+    expect(await journalTxn(w)).toBe(foreignA);
+    expect(await leftovers(w)).toEqual([PERSONAL_STATE_FILES.journal]);
+  });
+
+  it('denied_cleanup_tombstone_replaced_not_mine:改名之后核对期间墓碑被换成别的事务的内容 → invalid / journal_not_mine;第三方内容改回原名,不删', async () => {
+    const { w, r, txn } = await run(
+      'd1b2-aside-tomb-',
+      'discard:after-rename',
+      async (w2, base) => {
+        await writeJournal(w2.h, { ...base, txn_id: foreignA });
+        await safe.rename(
+          w2.io,
+          statePath(w2.h, PERSONAL_STATE_FILES.journal),
+          tombOf(w2, base.txn_id),
+        );
+      },
+    );
+    expect(r).toMatchObject({ status: 'invalid', why: 'journal_not_mine' });
+    expect(await journalTxn(w)).toBe(foreignA);
+    expect(await exists(tombOf(w, txn))).toBe(false);
+  });
+
+  it('denied_cleanup_restore_never_clobbers:墓碑不符且原名已被占 → invalid / journal_not_mine;原名上的内容与墓碑都原样保留(改回不覆盖)', async () => {
+    const { w, r, txn } = await run('d1b2-aside-occ-', 'discard:after-rename', async (w2, base) => {
+      await writeJournal(w2.h, { ...base, txn_id: foreignB });
+      await safe.rename(
+        w2.io,
+        statePath(w2.h, PERSONAL_STATE_FILES.journal),
+        tombOf(w2, base.txn_id),
+      );
+      await writeJournal(w2.h, { ...base, txn_id: foreignA });
+    });
+    expect(r).toMatchObject({ status: 'invalid', why: 'journal_not_mine' });
+    expect(await journalTxn(w)).toBe(foreignA);
+    const tomb = JSON.parse(await readText(tombOf(w, txn))) as { txn_id: string };
+    expect(tomb.txn_id).toBe(foreignB);
+  });
+
+  it('denied_cleanup_ref_moved_during_verify:改名之后核对期间 ref 被外部推进 → deferred / ref_moved_after_denied;自己的 journal 改回原名(现场保留),第三方引用不动,无墓碑', async () => {
+    let moved = '';
+    const { w, r, txn } = await run('d1b2-aside-refmv-', 'discard:after-rename', async (w2) => {
+      moved = advance(w2);
+    });
+    expect(r).toMatchObject({
+      status: 'deferred',
+      reason: 'personal_repo_diverged',
+      why: 'ref_moved_after_denied',
+    });
+    expect(refOf(w)).toBe(moved);
+    expect(await journalTxn(w)).toBe(txn);
+    expect(await leftovers(w)).toEqual([PERSONAL_STATE_FILES.journal]);
+  });
+
+  it('denied_cleanup_new_journal_before_unlink_survives:核对之后、unlink 之前原路径上换上别的事务的 journal → 只删墓碑,第三方 journal 保留(denied)', async () => {
+    const { w, r } = await run('d1b2-unlink-newj-', 'discard:before-unlink', async (w2, base) => {
+      await writeJournal(w2.h, { ...base, txn_id: foreignA });
+    });
+    expect(r).toEqual({ status: 'denied', code: 'x' });
+    expect(await journalTxn(w)).toBe(foreignA);
+    expect(await leftovers(w)).toEqual([PERSONAL_STATE_FILES.journal]);
+  });
+
+  it('denied_cleanup_ref_moved_before_unlink:核对之后、unlink 之前 ref 被外部推进 → 删除完成后再读 ref → deferred / ref_moved_after_denied(不是普通 denied);已删的自己的 journal 不回滚,第三方引用不动', async () => {
+    let moved = '';
+    const { w, r } = await run('d1b2-unlink-refmv-', 'discard:before-unlink', async (w2) => {
+      moved = advance(w2);
+    });
+    expect(r).toMatchObject({
+      status: 'deferred',
+      reason: 'personal_repo_diverged',
+      why: 'ref_moved_after_denied',
+    });
+    expect(refOf(w)).toBe(moved);
+    expect(await readJournal(w.h)).toEqual({ kind: 'absent' });
+    expect(await leftovers(w)).toEqual([]);
   });
 });

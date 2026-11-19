@@ -99,6 +99,21 @@ const cases: Case[] = [
     ],
   },
   {
+    name: 'renameExclusive(来源 + 目标各一条,来源先)',
+    scope: [`${S}/a`, `${S}/b`],
+    prep: async (fx) => hfs.writeFile(fx.mk([`${S}/a`], false), `${S}/a`, 'a'),
+    ok: (c) => hfs.renameExclusive(c, `${S}/a`, `${S}/b`),
+    expected: [
+      ['home.renameExclusive.from', `${S}/a`],
+      ['home.renameExclusive', `${S}/b`],
+    ],
+    denied: (c) => hfs.renameExclusive(c, `${S}/a`, '.ssh/b'),
+    deniedExpected: [
+      ['home.renameExclusive.from', `${S}/a`],
+      ['home.renameExclusive', '.ssh/b'],
+    ],
+  },
+  {
     name: 'chmod',
     scope: [`${S}/m`],
     prep: async (fx) => hfs.writeFile(fx.mk([`${S}/m`], false), `${S}/m`, 'm'),

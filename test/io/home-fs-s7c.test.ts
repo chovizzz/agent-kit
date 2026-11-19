@@ -71,6 +71,41 @@ describe('createExclusive', () => {
   });
 });
 
+describe('renameExclusive', () => {
+  const A = '.local/state/agent-kit/x/a';
+  const B = '.local/state/agent-kit/x/b';
+  const mkdirX = (s: Awaited<ReturnType<typeof setup>>) =>
+    safe.mkdirp(s.fx, path.join(s.home, '.local/state/agent-kit/x'), 0o700);
+
+  it('目标不存在:改名成功,来源消失、内容与单一 inode 链接数(nlink=1)保持', async () => {
+    const s = await setup([A, B]);
+    await mkdirX(s);
+    await hfs.writeFile(s.mk(), A, 'one', { mode: 0o600, dirMode: 0o700 });
+    await hfs.renameExclusive(s.mk(), A, B);
+    expect(await readText(path.join(s.home, B))).toBe('one');
+    await expect(lstat(path.join(s.home, A))).rejects.toThrow();
+    expect((await lstat(path.join(s.home, B))).nlink).toBe(1);
+  });
+
+  it('目标已存在:EEXIST,来源与目标都原样保留(不覆盖)', async () => {
+    const s = await setup([A, B]);
+    await mkdirX(s);
+    await hfs.writeFile(s.mk(), A, 'from', { mode: 0o600, dirMode: 0o700 });
+    await hfs.writeFile(s.mk(), B, 'to', { mode: 0o600, dirMode: 0o700 });
+    expect(await code(hfs.renameExclusive(s.mk(), A, B))).toBe('EEXIST');
+    expect(await readText(path.join(s.home, A))).toBe('from');
+    expect(await readText(path.join(s.home, B))).toBe('to');
+  });
+
+  it('来源不存在:ENOENT;表外 / 计划外路径拒绝', async () => {
+    const s = await setup([A, B]);
+    await mkdirX(s);
+    await expect(hfs.renameExclusive(s.mk(), A, B)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await code(hfs.renameExclusive(s.mk(), A, '.ssh/b'))).not.toBe('ok');
+    expect(await code(hfs.renameExclusive(s.mk([A]), A, B))).toBe(HOME_DENY.OUT_OF_PLAN_SCOPE);
+  });
+});
+
 describe('renameDir', () => {
   const FROM = `${SHARE}/staging/st-1`;
   const TO = `${SHARE}/versions/1.0.0`;

@@ -33,6 +33,7 @@ export interface V1AsmD1b2Result {
 }
 
 const COMMIT = 'src/rsi/personal/commit.ts';
+const HSTATE = 'src/rsi/personal/home-state.ts';
 const APPLY = 'src/rsi/personal/candidate-apply.ts';
 const STEP = 'src/rsi/personal/candidate-step.ts';
 const RSTEP = 'src/rsi/personal/reduce-step.ts';
@@ -63,6 +64,7 @@ const ACC_T = 'rsi/d1b2/accept-r1.test.ts';
 const D_HOOK_DENY = 'beforeRefUpdate:拒绝';
 const D_HOOK_OTHER = 'beforeRefUpdate:其它错误一律传播(不当成拒绝)';
 const D_HOOK_POS = 'beforeRefUpdate:位置与锁复核';
+const D_HOOK_ASIDE = 'beforeRefUpdate:拒绝后清理的改名协议';
 const D_AG = '增影响事件:端口缺 / 拒 / 畸形 = denied 且零写入';
 const D_AG_DECIDE = 'decide_better_always_refused_as_growth / 未登记事件';
 const D_EV = 'event_kind_classified:增影响分类穷举';
@@ -112,6 +114,7 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
     ],
     tests: [HOOK_T],
     expectRed: [
+      D_HOOK_ASIDE,
       D_HOOK_DENY,
       D_HOOK_OTHER,
       D_HOOK_POS,
@@ -131,6 +134,7 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
     ],
     tests: [HOOK_T],
     expectRed: [
+      D_HOOK_ASIDE,
       D_HOOK_OTHER,
       D_HOOK_DENY,
       D_HOOK_POS,
@@ -150,7 +154,7 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
       },
     ],
     tests: [HOOK_T],
-    expectRed: [D_HOOK_POS, 'hook_before_last_assertlocks'],
+    expectRed: [D_HOOK_ASIDE, D_HOOK_POS, 'hook_before_last_assertlocks'],
     mustKill: ['hook_before_last_assertlocks'],
   },
   {
@@ -164,7 +168,7 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
       },
     ],
     tests: [HOOK_T],
-    expectRed: [D_HOOK_POS, 'hook_without_post_assertlocks'],
+    expectRed: [D_HOOK_ASIDE, D_HOOK_POS, 'hook_without_post_assertlocks'],
     mustKill: ['hook_without_post_assertlocks'],
   },
   {
@@ -173,12 +177,20 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
     edits: [
       {
         file: COMMIT,
-        anchor: "  if (!same) return { kind: 'journal_unverified', why: 'journal_not_mine' };\n",
+        anchor:
+          "  if (!sameJournal(cur.value, mine)) return { kind: 'journal_unverified', why: 'journal_not_mine' };\n",
         replacement: '',
+      },
+      {
+        // 两道核对(读盘快速失败 + 对墓碑核对)都去掉才等于「不核对所有权」
+        file: COMMIT,
+        anchor: '  else if (!sameJournal(tomb.value, mine)) {\n',
+        replacement: '  else if ((false as boolean) && !sameJournal(tomb.value, mine)) {\n',
       },
     ],
     tests: [HOOK_T],
     expectRed: [
+      D_HOOK_ASIDE,
       D_HOOK_DENY,
       'before_ref_update_denied_foreign_journal_untouched',
       'before_ref_update_denied_same_txn_different_content_untouched',
@@ -196,12 +208,16 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
       {
         file: COMMIT,
         anchor:
-          '    a.kind === mine.kind &&\n    a.old_head === mine.old_head &&\n    a.target_tree === mine.target_tree &&\n    a.new_commit === mine.new_commit &&\n    a.phase === mine.phase &&\n    a.candidate_ids.length === mine.candidate_ids.length &&\n    a.candidate_ids.every((id, i) => id === mine.candidate_ids[i]);',
-        replacement: '    true;',
+          '  a.kind === mine.kind &&\n  a.old_head === mine.old_head &&\n  a.target_tree === mine.target_tree &&\n  a.new_commit === mine.new_commit &&\n  a.phase === mine.phase &&\n  a.candidate_ids.length === mine.candidate_ids.length &&\n  a.candidate_ids.every((id, i) => id === mine.candidate_ids[i]);',
+        replacement: '  true;',
       },
     ],
     tests: [HOOK_T],
-    expectRed: [D_HOOK_DENY, 'before_ref_update_denied_same_txn_different_content_untouched'],
+    expectRed: [
+      D_HOOK_ASIDE,
+      D_HOOK_DENY,
+      'before_ref_update_denied_same_txn_different_content_untouched',
+    ],
     mustKill: ['before_ref_update_denied_same_txn_different_content_untouched'],
   },
   {
@@ -218,6 +234,7 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
     ],
     tests: [HOOK_T],
     expectRed: [
+      D_HOOK_ASIDE,
       D_HOOK_POS,
       '拒绝后清理 journal 之前先复核锁',
       'denied_cleanup_skips_remove_lock_check',
@@ -228,10 +245,15 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
     id: 'denied_journal_never_removed',
     clause: 'I8:拒绝后自己的 journal 被删(不留残留挡路)',
     edits: [
-      { file: COMMIT, anchor: '    await removeJournal(ctx.h);', replacement: '    void 0;' },
+      {
+        file: COMMIT,
+        anchor: '    await removeJournalTombstone(ctx.h, mine.txn_id);',
+        replacement: '    await restoreJournalFromTombstone(ctx.h, mine.txn_id);',
+      },
     ],
     tests: [HOOK_T],
     expectRed: [
+      D_HOOK_ASIDE,
       D_HOOK_DENY,
       'before_ref_update_denied_ref_unchanged_journal_removed',
       'denied 之后同一仓库可以正常再提交',
@@ -250,6 +272,7 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
     ],
     tests: [HOOK_T],
     expectRed: [
+      D_HOOK_ASIDE,
       D_HOOK_DENY,
       'denied_cleanup_skips_remove_lock_check',
       'before_ref_update_denied_ref_unchanged_journal_removed',
@@ -531,7 +554,7 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
       },
     ],
     tests: [HOOK_T],
-    expectRed: [D_HOOK_POS, 'denied_cleanup_skips_remove_lock_check'],
+    expectRed: [D_HOOK_ASIDE, D_HOOK_POS, 'denied_cleanup_skips_remove_lock_check'],
     mustKill: ['denied_cleanup_skips_remove_lock_check'],
   },
   {
@@ -1033,9 +1056,17 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
           "  if (cur.kind !== 'ok') return { kind: 'journal_unverified', why: `journal_${cur.kind}` };",
         replacement: "  if (cur.kind !== 'ok') return { kind: 'clean' };",
       },
+      {
+        // journal 不见了当作干净:墓碑阶段的「原路径无文件」同样不得再报 journal_absent
+        file: COMMIT,
+        anchor:
+          "  if (moved === 'absent') return { kind: 'journal_unverified', why: 'journal_absent' };\n",
+        replacement: "  if (moved === 'absent') return { kind: 'clean' };\n",
+      },
     ],
     tests: [HOOK_T],
     expectRed: [
+      D_HOOK_ASIDE,
       D_HOOK_DENY,
       'denied_cleanup_journal_gone_not_plain_denied',
       'denied_cleanup_final_check_journal_gone',
@@ -1051,9 +1082,17 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
         anchor: "  if (actual !== oldHead) return { kind: 'ref_moved', actual };\n",
         replacement: '',
       },
+      {
+        // 「别人推进 ref 时不能静默」要连墓碑阶段的兜底一起去掉才成立
+        file: COMMIT,
+        anchor:
+          "  } else {\n    const actual = revParse(ctx.git, 'refs/heads/rsi');\n    if (actual !== oldHead) bad = { kind: 'ref_moved', actual };\n  }\n",
+        replacement: '  }\n',
+      },
     ],
     tests: [HOOK_T],
     expectRed: [
+      D_HOOK_ASIDE,
       D_HOOK_DENY,
       'denied_cleanup_ref_moved_not_plain_denied',
       'denied_cleanup_final_check_after_last_lock',
@@ -1073,6 +1112,7 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
     ],
     tests: [HOOK_T],
     expectRed: [
+      D_HOOK_ASIDE,
       D_HOOK_DENY,
       'before_ref_update_denied_foreign_journal_untouched',
       'before_ref_update_denied_same_txn_different_content_untouched',
@@ -1098,6 +1138,7 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
     ],
     tests: [HOOK_T],
     expectRed: [
+      D_HOOK_ASIDE,
       D_HOOK_DENY,
       'denied_cleanup_ref_moved_not_plain_denied',
       'denied_cleanup_final_check_after_last_lock',
@@ -1250,12 +1291,13 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
       {
         file: COMMIT,
         anchor:
-          "  const last = await verifyOwnJournal(ctx, mine, oldHead);\n  if (last.kind !== 'clean') return last;\n",
-        replacement: '',
+          "  const aside = await setJournalAside(ctx, mine, oldHead);\n  if (aside.kind !== 'clean') return aside;\n",
+        replacement: '  await moveJournalToTombstone(ctx.h, mine.txn_id);\n',
       },
     ],
     tests: [HOOK_T],
     expectRed: [
+      D_HOOK_ASIDE,
       D_HOOK_POS,
       'denied_cleanup_final_check_after_last_lock',
       'denied_cleanup_final_check_journal_gone',
@@ -1688,6 +1730,136 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
     tests: [ARCH_T],
     expectRed: [D_ARCH_AUTH, '白名单写者的形状'],
     mustKill: ['白名单写者的形状'],
+  },
+  // 返工第 4 轮(owner 选择框 2026-11-19):先原子改名到墓碑,再对墓碑核对、unlink,删除后再读 ref
+  {
+    id: 'denied_cleanup_path_unlink',
+    clause:
+      'R3-1:最终删除作用于改名后的墓碑,不按原路径 unlink(退回按路径删 → 核对之后换上的第三方 journal 被误删)',
+    edits: [
+      {
+        file: COMMIT,
+        anchor: '  removeJournalTombstone,\n',
+        replacement: '  removeJournal,\n  removeJournalTombstone,\n',
+      },
+      {
+        file: COMMIT,
+        anchor: '    await removeJournalTombstone(ctx.h, mine.txn_id);',
+        replacement: '    await removeJournal(ctx.h);',
+      },
+    ],
+    tests: [HOOK_T],
+    expectRed: [
+      D_HOOK_DENY,
+      D_HOOK_POS,
+      D_HOOK_ASIDE,
+      'denied_cleanup_new_journal_before_unlink_survives',
+    ],
+    mustKill: ['denied_cleanup_new_journal_before_unlink_survives'],
+  },
+  {
+    id: 'denied_cleanup_tombstone_not_verified',
+    clause:
+      'R3-1:对墓碑逐字段核对所有权(去掉 → 改名之后核对期间被换成别人的内容也被当作自己的删掉)',
+    edits: [
+      {
+        file: COMMIT,
+        anchor: '  else if (!sameJournal(tomb.value, mine)) {\n',
+        replacement: '  else if ((false as boolean) && !sameJournal(tomb.value, mine)) {\n',
+      },
+    ],
+    tests: [HOOK_T],
+    expectRed: [
+      D_HOOK_DENY,
+      D_HOOK_POS,
+      D_HOOK_ASIDE,
+      'denied_cleanup_tombstone_replaced_not_mine',
+    ],
+    mustKill: ['denied_cleanup_tombstone_replaced_not_mine'],
+  },
+  {
+    id: 'denied_cleanup_restore_skipped',
+    clause:
+      'R3-1:核对不符 / ref 异动时把墓碑改回原名(不改回 → 现场丢失:第三方内容与自己的 journal 都不在原名下)',
+    edits: [
+      {
+        file: COMMIT,
+        anchor:
+          "  try {\n    if ((await restoreJournalFromTombstone(ctx.h, mine.txn_id)) === 'occupied') {\n      return { kind: 'journal_unverified', why: 'journal_not_mine' };\n    }\n  } catch {\n    // 改回失败:墓碑保留,仍按核对结果返回(不降级)\n  }\n",
+        replacement: '',
+      },
+    ],
+    tests: [HOOK_T],
+    expectRed: [
+      D_HOOK_DENY,
+      D_HOOK_POS,
+      D_HOOK_ASIDE,
+      'denied_cleanup_tombstone_replaced_not_mine',
+      'denied_cleanup_ref_moved_during_verify',
+    ],
+    mustKill: [
+      'denied_cleanup_tombstone_replaced_not_mine',
+      'denied_cleanup_ref_moved_during_verify',
+    ],
+  },
+  {
+    id: 'denied_cleanup_restore_clobbers',
+    clause: 'R3-1:改回原名不覆盖(用会覆盖的 rename → 原名上已被占用的第三方内容被抹掉)',
+    edits: [
+      {
+        file: HSTATE,
+        anchor:
+          '    await renameExclusive(homeFsFor(h, [to, from]), stateRel(from), stateRel(to));',
+        replacement: '    await rename(homeFsFor(h, [to, from]), stateRel(from), stateRel(to));',
+      },
+    ],
+    tests: [HOOK_T],
+    expectRed: [D_HOOK_DENY, D_HOOK_POS, D_HOOK_ASIDE, 'denied_cleanup_restore_never_clobbers'],
+    mustKill: ['denied_cleanup_restore_never_clobbers'],
+  },
+  {
+    id: 'denied_cleanup_ref_not_checked_on_tombstone',
+    clause: 'R3-2:改名后的核对包含 ref(去掉 → ref 在核对期间被推进也照删 journal,现场不保留)',
+    edits: [
+      {
+        file: COMMIT,
+        anchor:
+          "  } else {\n    const actual = revParse(ctx.git, 'refs/heads/rsi');\n    if (actual !== oldHead) bad = { kind: 'ref_moved', actual };\n  }\n",
+        replacement: '  }\n',
+      },
+    ],
+    tests: [HOOK_T],
+    expectRed: [D_HOOK_DENY, D_HOOK_POS, D_HOOK_ASIDE, 'denied_cleanup_ref_moved_during_verify'],
+    mustKill: ['denied_cleanup_ref_moved_during_verify'],
+  },
+  {
+    id: 'denied_cleanup_post_delete_ref_unread',
+    clause: 'R3-2:删除完成后再读一次 ref(去掉 → 核对之后被外部推进的 ref 被漏报,返回普通 denied)',
+    edits: [
+      {
+        file: COMMIT,
+        anchor:
+          "  const after = revParse(ctx.git, 'refs/heads/rsi');\n  if (after !== oldHead) return { kind: 'ref_moved', actual: after };\n  return { kind: 'clean' };\n",
+        replacement: "  return { kind: 'clean' };\n",
+      },
+    ],
+    tests: [HOOK_T],
+    expectRed: [D_HOOK_DENY, D_HOOK_POS, D_HOOK_ASIDE, 'denied_cleanup_ref_moved_before_unlink'],
+    mustKill: ['denied_cleanup_ref_moved_before_unlink'],
+  },
+  {
+    id: 'denied_cleanup_tombstone_left_behind',
+    clause: 'R3-1:墓碑核对通过后被 unlink(不删 → 每次拒绝都在状态目录留下墓碑)',
+    edits: [
+      {
+        file: COMMIT,
+        anchor: '    await removeJournalTombstone(ctx.h, mine.txn_id);',
+        replacement: '    void 0;',
+      },
+    ],
+    tests: [HOOK_T],
+    expectRed: [D_HOOK_DENY, D_HOOK_POS, D_HOOK_ASIDE, 'denied_cleanup_rename_then_verify_ok'],
+    mustKill: ['denied_cleanup_rename_then_verify_ok'],
   },
 ];
 

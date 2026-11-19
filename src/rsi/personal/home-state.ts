@@ -26,8 +26,12 @@ import { RSI_FILE_MODE, RSI_REVOCATIONS_MAX_BYTES } from '../../contracts/rsi.js
 import { canonicalJson } from '../../io/canonical-json.js';
 import {
   createHomeFsContext,
+  HomeExistsError,
+  HomeWriteDeniedError,
   mkdirp,
   remove,
+  rename,
+  renameExclusive,
   writeFile,
   type HomeFsContext,
   type HomeFsStage,
@@ -169,6 +173,58 @@ export const writeJournal = (h: PersonalHome, j: PersonalCommitJournal): Promise
 
 export const removeJournal = (h: PersonalHome): Promise<void> =>
   remove(homeFsFor(h, [PERSONAL_STATE_FILES.journal]), stateRel(PERSONAL_STATE_FILES.journal));
+
+// ---------------------------------------------------------------------------
+// 拒绝后清理 journal 用的墓碑(同目录、本事务唯一的名字):先把 journal **原子改名**到墓碑,再对墓碑核对,最后 unlink 墓碑
+// (核对与删除对象绑定到同一个 inode:改名之后原路径上换上的任何新 journal 都不会被删)
+// ---------------------------------------------------------------------------
+
+const tombstoneName = (txnId: string): string => `${PERSONAL_STATE_FILES.journal}.denied-${txnId}`;
+
+/** journal → 墓碑。`'absent'` = 原路径上没有文件(ENOENT);其它错误向上抛。已存在的同名墓碑(同一 txn 的残留)被覆盖 */
+export async function moveJournalToTombstone(
+  h: PersonalHome,
+  txnId: string,
+): Promise<'moved' | 'absent'> {
+  const from = PERSONAL_STATE_FILES.journal;
+  const to = tombstoneName(txnId);
+  try {
+    await rename(homeFsFor(h, [from, to]), stateRel(from), stateRel(to));
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return 'absent';
+    throw e;
+  }
+  return 'moved';
+}
+
+export const readJournalTombstone = (
+  h: PersonalHome,
+  txnId: string,
+): Promise<StateRead<PersonalCommitJournal>> =>
+  readJson(statePath(h, tombstoneName(txnId)), schemaParse(PersonalCommitJournalSchema));
+
+/** 墓碑 → 原名(不覆盖):`'occupied'` = 原路径已被别人占用(墓碑原样保留);`'absent'` = 墓碑不在 */
+export async function restoreJournalFromTombstone(
+  h: PersonalHome,
+  txnId: string,
+): Promise<'restored' | 'occupied' | 'absent'> {
+  const to = PERSONAL_STATE_FILES.journal;
+  const from = tombstoneName(txnId);
+  try {
+    await renameExclusive(homeFsFor(h, [to, from]), stateRel(from), stateRel(to));
+  } catch (e) {
+    // 原名上已有东西:普通文件(EEXIST)或 home-fs 守卫拒绝的异类(链接 / 目录 / 硬链接)——一律当作被占用,墓碑原样保留
+    if (e instanceof HomeExistsError || e instanceof HomeWriteDeniedError) return 'occupied';
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return 'absent';
+    throw e;
+  }
+  return 'restored';
+}
+
+export const removeJournalTombstone = (h: PersonalHome, txnId: string): Promise<void> => {
+  const name = tombstoneName(txnId);
+  return remove(homeFsFor(h, [name]), stateRel(name));
+};
 
 export const writeTxn = (h: PersonalHome, t: PersonalTxn): Promise<void> => {
   const parsed = PersonalTxnSchema.parse(t);
