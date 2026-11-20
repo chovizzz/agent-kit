@@ -784,6 +784,42 @@ describe('beforeRefUpdate:拒绝后清理的改名协议', () => {
     expect(tomb.txn_id).toBe(base.txn_id);
   });
 
+  it('denied_cleanup_restore_io_failure_invalid:改回时发生通用 IO 错误(非占用),且 ref 已被推进 → invalid / journal_restore_failed,不是 deferred;墓碑(自己的 journal)原样保留,原名无文件,ref 不动', async () => {
+    let moved = '';
+    const { w, r, base } = await runDeny('d1b2-rsio-', (w2) => ({
+      tombstoneHex: fixedHex,
+      onStep: async (step) => {
+        if (step === 'discard:after-rename') moved = advance(w2); // 迫使走改回分支
+      },
+      onStage: failOnceAt('pre-unlink-source', 2, async () => {
+        throw new Error('EIO injected'); // 改回的 unlink(墓碑) 失败;我们建的原名链接被回滚撤销
+      }),
+    }));
+    expect(r).toMatchObject({ status: 'invalid', why: 'journal_restore_failed' });
+    expect(r).not.toMatchObject({ status: 'deferred' });
+    expect(await exists(journalPath(w))).toBe(false);
+    const tomb = JSON.parse(await readText(fixedTomb(w))) as PersonalCommitJournal;
+    expect(tomb).toEqual(expect.objectContaining(base));
+    expect((await lstat(fixedTomb(w))).nlink).toBe(1);
+    expect(refOf(w)).toBe(moved);
+  });
+
+  it('denied_cleanup_restore_absent_invalid:核对不通过要改回时墓碑已不在 → invalid / journal_restore_failed,不是 deferred;原名与墓碑都没有 journal,ref 不动', async () => {
+    let moved = '';
+    const { w, r } = await runDeny('d1b2-rsabs-', (w2) => ({
+      tombstoneHex: fixedHex,
+      onStep: async (step) => {
+        if (step === 'discard:after-rename') moved = advance(w2); // 核对不通过(ref_moved),要走改回
+        if (step === 'discard:before-restore') await safe.remove(w2.io, fixedTomb(w2)); // 改回前墓碑被拿走
+      },
+    }));
+    expect(r).toMatchObject({ status: 'invalid', why: 'journal_restore_failed' });
+    expect(r).not.toMatchObject({ status: 'deferred' });
+    expect(await exists(journalPath(w))).toBe(false);
+    expect(await exists(fixedTomb(w))).toBe(false);
+    expect(refOf(w)).toBe(moved);
+  });
+
   /** 崩在 update-ref 之前,留下一个 objects_written 的 journal(ref 未动) */
   async function pendingJournalWorld(prefix: string): Promise<World> {
     const w = await makeWorld(prefix);

@@ -1805,7 +1805,7 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
       {
         file: COMMIT,
         anchor:
-          "  try {\n    if ((await restoreJournalFromTombstone(ctx.h, tomb)) === 'occupied') {\n      return { kind: 'journal_unverified', why: 'journal_not_mine' };\n    }\n  } catch {\n    // 改回失败:墓碑保留,仍按核对结果返回(不降级)\n  }\n",
+          "  try {\n    const restored = await restoreJournalFromTombstone(ctx.h, tomb);\n    if (restored === 'occupied') return { kind: 'journal_unverified', why: 'journal_not_mine' };\n    // 墓碑已不在:没有任何名字下有这份 journal(现场已丢),同样不能按核对结果返回\n    if (restored === 'absent') return { kind: 'journal_unverified', why: 'journal_restore_failed' };\n  } catch {\n    // 改回时的通用 IO 失败(非 occupied):journal 只剩随机墓碑名(恢复路径不读孤立墓碑),现场已丢——\n    // 不能再按核对结果返回(那可能是 deferred / ref_moved);一律 invalid,墓碑原样保留\n    return { kind: 'journal_unverified', why: 'journal_restore_failed' };\n  }\n",
         replacement: '',
       },
     ],
@@ -1821,6 +1821,38 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
       'denied_cleanup_tombstone_replaced_not_mine',
       'denied_cleanup_ref_moved_during_verify',
     ],
+  },
+  {
+    id: 'denied_cleanup_restore_io_failure_swallowed',
+    clause:
+      'R6-1:改回时的通用 IO 错误不得吞成核对结果(deferred / ref_moved):改回失败 → invalid / journal_restore_failed,墓碑保留',
+    edits: [
+      {
+        file: COMMIT,
+        anchor:
+          "    return { kind: 'journal_unverified', why: 'journal_restore_failed' };\n  }\n  return bad;",
+        replacement: '  }\n  return bad;',
+      },
+    ],
+    tests: [HOOK_T],
+    expectRed: ['denied_cleanup_restore_io_failure_invalid'],
+    mustKill: ['denied_cleanup_restore_io_failure_invalid'],
+  },
+  {
+    id: 'denied_cleanup_restore_absent_returns_check_result',
+    clause:
+      'R6-2:改回时墓碑已不在(absent)= 现场已丢,不得按核对结果返回(deferred / ref_moved):invalid / journal_restore_failed',
+    edits: [
+      {
+        file: COMMIT,
+        anchor:
+          "    if (restored === 'absent') return { kind: 'journal_unverified', why: 'journal_restore_failed' };\n",
+        replacement: '',
+      },
+    ],
+    tests: [HOOK_T],
+    expectRed: ['denied_cleanup_restore_absent_invalid'],
+    mustKill: ['denied_cleanup_restore_absent_invalid'],
   },
   {
     id: 'denied_cleanup_restore_clobbers',

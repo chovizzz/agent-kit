@@ -517,12 +517,16 @@ async function discardViaTombstone(
     if (!(e instanceof HomeWriteDeniedError)) throw e;
     bad = { kind: 'journal_unverified', why: 'journal_unsafe' };
   }
+  await ctx.onStep?.('discard:before-restore');
   try {
-    if ((await restoreJournalFromTombstone(ctx.h, tomb)) === 'occupied') {
-      return { kind: 'journal_unverified', why: 'journal_not_mine' };
-    }
+    const restored = await restoreJournalFromTombstone(ctx.h, tomb);
+    if (restored === 'occupied') return { kind: 'journal_unverified', why: 'journal_not_mine' };
+    // 墓碑已不在:没有任何名字下有这份 journal(现场已丢),同样不能按核对结果返回
+    if (restored === 'absent') return { kind: 'journal_unverified', why: 'journal_restore_failed' };
   } catch {
-    // 改回失败:墓碑保留,仍按核对结果返回(不降级)
+    // 改回时的通用 IO 失败(非 occupied):journal 只剩随机墓碑名(恢复路径不读孤立墓碑),现场已丢——
+    // 不能再按核对结果返回(那可能是 deferred / ref_moved);一律 invalid,墓碑原样保留
+    return { kind: 'journal_unverified', why: 'journal_restore_failed' };
   }
   return bad;
 }
