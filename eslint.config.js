@@ -500,6 +500,8 @@ export default tseslint.config(
   // S0:HOME 写出口。home-fs.ts 自己可用 fs(它是第三个写出口);能引用它的只有下面这几个文件与对应测试。
   // 同样注意:每块都必须由 restrictions({...}) 生成完整规则,后面同名规则会整条替换前面的。
   { files: ['src/io/home-fs.ts'], rules: restrictions({ allowFs: true }) },
+  // 测试夹具:在守卫之外造 / 拆 nlink>1 的中间态(原因见文件头注释);只此一个文件放开 node:fs。
+  { files: ['test/helpers/raw-links.ts'], rules: restrictions({ allowFs: true }) },
   { files: ['src/sync/apply.ts'], rules: restrictions({ allowHomeFs: true }) },
   { files: ['test/io/home-fs*.test.ts'], rules: restrictions({ allowHomeFs: true }) },
   { files: ['test/sync/apply*.test.ts'], rules: restrictions({ allowHomeFs: true }) },

@@ -16,7 +16,8 @@ import type {
 import { canonicalJson } from '../../io/canonical-json.js';
 import { RsiLockError } from '../lock-error.js';
 import { applyEvent, type ApplyDeps } from './candidate-apply.js';
-import type { StepHalt } from './candidate-ports.js';
+import type { GrowthClaimOp, StepHalt } from './candidate-ports.js';
+import { growthOpOfEvent } from './growth-events.js';
 import {
   isTerminalLifecycle,
   queueExpired,
@@ -46,6 +47,11 @@ export interface RunnerOut {
   breaker: 'gate_internal' | 'personal_repo_invalid' | null;
   effectsFailed: string[];
   transitions: string[];
+  /**
+   * 增影响事件被拒的记录(D1b-2;可选):**给了它的运行器**(`runPersonalStep`)把增影响拒绝(`ApplyResult.denied`)记在这里并返回 `other`——被拒的增影响动作不得中止减影响子步骤
+   * (到期 / no_hit / 对账 / 收紧类转移照常);**没给的运行器**(S2 只减影响,不会遇到)把它映射 `commit_failed`(fail-closed,不吞)。
+   */
+  growthDenied?: { op: GrowthClaimOp | 'unmappable'; code: string }[];
 }
 
 export type RunOutcome = 'transitioned' | 'other' | 'halt';
@@ -75,6 +81,17 @@ export function makeStepRunner(
         return 'halt';
       }
       throw e;
+    }
+    if (r.kind === 'denied') {
+      // 只对**已分类的增影响事件**(且运行器有记录端)降级为记录,后续减影响子步骤照跑;
+      // 减影响事件不带钩子,出现拒绝 = 底座违约;无记录端的运行器无法处理 → 都映射既有 `commit_failed`(完整性不明,fail-closed)
+      const growthOp = growthOpOfEvent(event.kind);
+      if (out.growthDenied !== undefined && growthOp !== null) {
+        out.growthDenied.push({ op: growthOp, code: r.why });
+        return 'other';
+      }
+      out.halted = 'commit_failed';
+      return 'halt';
     }
     if (r.kind === 'halt') {
       out.halted = r.halt;

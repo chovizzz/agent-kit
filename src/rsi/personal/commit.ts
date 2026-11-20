@@ -11,18 +11,29 @@
  * 不依赖 `git revert`,不用 `add` / `commit` 的高层路径;作者与提交者固定为 `RSI_PERSONAL_AUTHOR`。
  * 树约束(R21-3.1):upsert / delete 的顶层只许布局目录(= kit 管理路径,见 {@link KIT_MANAGED_TOP_DIRS});路径段不得以 `.` 开头(含 `.gitattributes` / `.gitmodules` / `.git`),文件一律 `100644`。
  */
-import { PersonalHeadSchema } from '../../contracts/rsi-personal.js';
+import {
+  PersonalCommitJournalSchema,
+  PersonalHeadSchema,
+  type PersonalCommitJournal,
+} from '../../contracts/rsi-personal.js';
 import type { RsiAutoPauseReason } from '../../contracts/rsi.js';
+import { REF_MOVED_AFTER_DENIED } from './commit-reasons.js';
 import {
   PERSONAL_STATE_FILES,
   ensureEmptyDir,
+  moveJournalToTombstone,
+  newTombstoneName,
   probeFirstTime,
   readHead,
   readJournal,
+  removeVerifiedTombstone,
+  restoreJournalFromTombstone,
+  settleHalfMovedJournal,
   statePath,
   writeHead,
   type PersonalHome,
 } from './home-state.js';
+import { HomeWriteDeniedError } from '../../io/home-fs.js';
 import {
   assertLocks,
   bootstrapRepo,
@@ -85,6 +96,20 @@ export interface TreeSpec {
   /** 显式 delete:只许落在 kit 管理的命名空间内;不存在的路径视为已删(崩溃重做幂等) */
   deletes?: readonly string[];
   message?: string;
+  /**
+   * 增影响提交的最终复核钩子(D1b-2):在**最后一次 `assertLocks` 之后、`update-ref` 之前**调用,钩子返回后再复核一次锁。
+   * 只认一种拒绝:抛 {@link BeforeRefUpdateDenied} → 本次提交返回 `denied`(引用不动、自己写下的 journal 在所有权核对后删除);
+   * 任何其它错误(含 `RsiLockError` / `PersonalLockLost` / 未知错误)原样传播,**不删 journal、不改引用**(留给下次恢复:`ref = old_head` → `discard`)。
+   */
+  beforeRefUpdate?: () => Promise<void>;
+}
+
+/** 钩子的唯一拒绝信号(定义在本文件,不依赖 stage;`code` 是调用方给的原因码,本文件不解释) */
+export class BeforeRefUpdateDenied extends Error {
+  constructor(readonly code: string) {
+    super(`before_ref_update_denied:${code}`);
+    this.name = 'BeforeRefUpdateDenied';
+  }
 }
 
 export class TreeSpecError extends Error {
@@ -301,6 +326,8 @@ export async function openPersonalRepo(
   }
   const c = await makeCtx(deps, locks);
   await assertLocks(c);
+  // 读 journal 之前:收尾「改名 / 改回死在 link 之后」留下的确定半完成态(原名与墓碑同 inode、nlink=2),否则读取会按硬链接拒绝而熔断
+  await settleHalfMovedJournal(deps.h);
 
   const jr = await readJournal(deps.h);
   if (jr.kind === 'invalid') return invalid(`journal_${jr.why}`);
@@ -386,7 +413,159 @@ export type CommitResult =
    * **注意**:本提交的在途 journal 可能仍留在盘上(`objects_written`),下一次恢复按 R21-3.6a 观测到「ref 是第三个值」→ `personal_repo_diverged`;
    * 它不是可以直接重试的干净失败(若并发者是持锁的 kit 提交者,它会先丢弃该 journal 而不留下)。
    */
-  | { status: 'cas_failed'; expected: string; actual: string | null };
+  | { status: 'cas_failed'; expected: string; actual: string | null }
+  /** `beforeRefUpdate` 钩子拒绝(增影响提交的最终复核没过):引用、索引、工作树都没动;`code` 是钩子给的原因码 */
+  | { status: 'denied'; code: string };
+
+/** 钩子拒绝后清理自己 journal 的结果:只有 `clean` 才允许对外返回普通 `denied`;其余保留现场(不删、不改引用),由调用方走既有完整性失败路径 */
+type DiscardResult =
+  | { kind: 'clean' }
+  | { kind: 'ref_moved'; actual: string | null }
+  | { kind: 'journal_unverified'; why: string };
+
+/**
+ * 钩子拒绝后删自己刚写的 journal。协议(R3 / R4;**保证的边界见下,不夸大**):
+ *  1. 复核锁(抛 → 传播,不动)→ 读盘快速核对所有权与 ref(只是快速失败,不是依据)→ 最后一次锁复核;
+ *  2. **不覆盖地**把 journal 改名到本次清理唯一的**随机**墓碑名(同目录;名字不含 txn_id、不可推导;{@link discardViaTombstone});墓碑名已被占用 → 不动现场,invalid;
+ *  3. 对墓碑**经已打开的 fd**核对:内容与本次写下的逐字段全等(含 phase)、`refs/heads/rsi === oldHead`;不符 → 把墓碑不覆盖地改回原名(原名已被占 / 改回途中被换 → 墓碑保留,invalid);
+ *  4. 核对通过后:unlink 前在路径上 lstat 比对 dev:ino(已不是核对过的那个对象 → 不删,invalid);unlink 后对**同一个 fd** 再 fstat,nlink 必须为 0(核对过的对象仍有别的名字 → invalid;nlink==0 只证明该对象事后没有名字,不证明本次 unlink 删的就是它);
+ *  5. 删除完成后**再读一次** ref,与 `oldHead` 不符(核对之后被外部 `git update-ref` 推进)→ `ref_moved`(不回滚已删的自己的 journal,但绝不返回普通 denied)。
+ * 只有 `clean` 才允许对外返回普通 `denied`;其余保留现场(不改引用),由调用方走既有完整性失败路径。丢锁照旧传播。
+ *
+ * 三类结果,不混:
+ *  - **已验证**:步骤 3 / 4 **观测到**的替换(墓碑被换、unlink 前 lstat 身份变了、unlink 后 nlink≠0)一律 invalid;步骤 2 之后原路径上换上的 journal 不会被本函数删;
+ *  - **未验证的残留**:lstat 与 unlink 之间路径被换上别的文件(按路径的窗口,home-fs 文件头已声明)——只能事后发现(nlink),不能撤销;步骤 5 之后的推进观测不到;步骤 5 报 `ref_moved` 时 journal 已删(不回滚);
+ *    步骤 2 与 3 之间进程死亡:孤立墓碑(内容未核对),原名无 journal(与「已丢弃」同形:ref / 索引 / 工作树都没动,钩子拒绝发生在 `update-ref` 之前),恢复不读墓碑;
+ *  - **半完成态**:步骤 2 / 3 的改名 / 改回是 link+unlink,死在 link 之后 = 原名与墓碑同 inode、nlink=2;下次 `openPersonalRepo` 持锁读 journal 之前自动收尾(只删墓碑名)。
+ * 合作写者持同一把个人锁不会换 journal;外部 git 不受该锁约束,故 ref 单独在改名后与删除后各读一次。
+ */
+async function discardOwnJournal(
+  ctx: OpCtx,
+  mine: PersonalCommitJournal,
+  oldHead: string,
+): Promise<DiscardResult> {
+  await assertLocks(ctx);
+  const early = await verifyOwnJournal(ctx, mine, oldHead);
+  if (early.kind !== 'clean') return early;
+  await assertLocks(ctx); // 最后一次锁复核(丢锁则传播,不进下面吞 IO 错误的 catch);上面的核对只是快速失败,不是依据
+  return discardViaTombstone(ctx, mine, oldHead);
+}
+
+/** 对 fd 读出的墓碑内容做核对:`undefined` = 是本次写下的 journal 且 ref 仍为 `oldHead`(随后才 unlink);其它 = 不通过的原因 */
+async function judgeTombstone(
+  ctx: OpCtx,
+  bytes: Buffer,
+  mine: PersonalCommitJournal,
+  oldHead: string,
+): Promise<DiscardResult | undefined> {
+  let parsed: PersonalCommitJournal | undefined;
+  try {
+    const r = PersonalCommitJournalSchema.safeParse(JSON.parse(bytes.toString('utf8')));
+    parsed = r.success ? r.data : undefined;
+  } catch {
+    parsed = undefined;
+  }
+  if (parsed === undefined) return { kind: 'journal_unverified', why: 'journal_invalid' };
+  if (!sameJournal(parsed, mine)) return { kind: 'journal_unverified', why: 'journal_not_mine' };
+  const actual = revParse(ctx.git, 'refs/heads/rsi');
+  if (actual !== oldHead) return { kind: 'ref_moved', actual };
+  await ctx.onStep?.('discard:before-unlink');
+  return undefined;
+}
+
+/**
+ * 改名到随机墓碑 → 经 fd 核对 → 删除 → 再读 ref(协议见 {@link discardOwnJournal} 的 2–5)。
+ * `clean` = 核对过的、本次写下的 journal 事后没有任何名字(见 `removeVerified` 的残余说明与检不出情形),且 ref 仍为 `oldHead`。
+ * 只有「核对不通过」(`rejected`)与「守卫拒绝读取」两类才尝试把墓碑不覆盖地改回原名;`absent` / `replaced` / `not_removed_object` / 移入失败 / 墓碑名被占用都不动现场(没有可改回的、或改回会放回未核对的对象)。
+ */
+async function discardViaTombstone(
+  ctx: OpCtx,
+  mine: PersonalCommitJournal,
+  oldHead: string,
+): Promise<DiscardResult> {
+  const tomb = newTombstoneName(ctx.h);
+  let moved: 'moved' | 'absent' | 'occupied';
+  try {
+    moved = await moveJournalToTombstone(ctx.h, tomb);
+  } catch {
+    return { kind: 'journal_unverified', why: 'journal_rename_failed' };
+  }
+  if (moved === 'absent') return { kind: 'journal_unverified', why: 'journal_absent' };
+  if (moved === 'occupied')
+    return { kind: 'journal_unverified', why: 'journal_tombstone_occupied' };
+  await ctx.onStep?.('discard:after-rename');
+  let bad: DiscardResult;
+  try {
+    const r = await removeVerifiedTombstone<DiscardResult>(ctx.h, tomb, (bytes) =>
+      judgeTombstone(ctx, bytes, mine, oldHead),
+    );
+    if (r.kind === 'removed') {
+      const after = revParse(ctx.git, 'refs/heads/rsi');
+      if (after !== oldHead) return { kind: 'ref_moved', actual: after };
+      return { kind: 'clean' };
+    }
+    if (r.kind === 'absent') return { kind: 'journal_unverified', why: 'journal_absent' };
+    if (r.kind === 'replaced') {
+      return { kind: 'journal_unverified', why: 'journal_tombstone_replaced' };
+    }
+    if (r.kind === 'not_removed_object') {
+      return { kind: 'journal_unverified', why: 'journal_tombstone_not_removed' };
+    }
+    bad = r.value;
+  } catch (e) {
+    // 守卫拒绝读取(硬链接 / 属主 / 权限 / 过大):不是我们能确认的 journal;其它错误(含注入的步骤异常)照旧传播
+    if (!(e instanceof HomeWriteDeniedError)) throw e;
+    bad = { kind: 'journal_unverified', why: 'journal_unsafe' };
+  }
+  await ctx.onStep?.('discard:before-restore');
+  try {
+    const restored = await restoreJournalFromTombstone(ctx.h, tomb);
+    if (restored === 'occupied') return { kind: 'journal_unverified', why: 'journal_not_mine' };
+    // 墓碑已不在:没有任何名字下有这份 journal(现场已丢),同样不能按核对结果返回
+    if (restored === 'absent') return { kind: 'journal_unverified', why: 'journal_restore_failed' };
+    // 路径探测(lstat / readdir)IO 失败:不是被占用,journal 只剩墓碑名,现场已丢 → invalid,墓碑保留
+    if (restored === 'io_failed') {
+      return { kind: 'journal_unverified', why: 'journal_restore_failed' };
+    }
+    // 守卫拒绝了墓碑本身(链接 / 硬链接 / 目录):来源不可信,不是原名被占用
+    if (restored === 'source_rejected')
+      return { kind: 'journal_unverified', why: 'journal_unsafe' };
+  } catch (e) {
+    // 改回时的文件系统 IO 失败(带 errno code,非 occupied):journal 只剩随机墓碑名(恢复路径不读孤立墓碑),现场已丢——
+    // 不能再按核对结果返回(那可能是 deferred / ref_moved);invalid,墓碑原样保留。
+    // 非 IO 错误(含测试用的 InjectedCrash 进程死亡模拟、编程错误)不在此列:维持原行为,按核对结果返回,崩溃现场交重启收尾
+    if (isFsIoError(e)) return { kind: 'journal_unverified', why: 'journal_restore_failed' };
+  }
+  return bad;
+}
+
+/** 文件系统 IO 错误:Node 的系统错误带大写 errno 字符串 code(EIO / ENOSPC / EACCES …);其它错误一律不是 */
+const isFsIoError = (e: unknown): boolean =>
+  e instanceof Error && /^E[A-Z0-9]+$/.test((e as NodeJS.ErrnoException).code ?? '');
+
+const sameJournal = (a: PersonalCommitJournal, mine: PersonalCommitJournal): boolean =>
+  a.txn_id === mine.txn_id &&
+  a.kind === mine.kind &&
+  a.old_head === mine.old_head &&
+  a.target_tree === mine.target_tree &&
+  a.new_commit === mine.new_commit &&
+  a.phase === mine.phase &&
+  a.candidate_ids.length === mine.candidate_ids.length &&
+  a.candidate_ids.every((id, i) => id === mine.candidate_ids[i]);
+
+/** 快速失败用的读盘核对(不是删除依据):盘上 journal 与本次写下的逐字段全等且 `refs/heads/rsi === oldHead` → `clean` */
+async function verifyOwnJournal(
+  ctx: OpCtx,
+  mine: PersonalCommitJournal,
+  oldHead: string,
+): Promise<DiscardResult> {
+  const cur = await readJournal(ctx.h);
+  if (cur.kind !== 'ok') return { kind: 'journal_unverified', why: `journal_${cur.kind}` };
+  if (!sameJournal(cur.value, mine)) return { kind: 'journal_unverified', why: 'journal_not_mine' };
+  const actual = revParse(ctx.git, 'refs/heads/rsi');
+  if (actual !== oldHead) return { kind: 'ref_moved', actual };
+  return { kind: 'clean' };
+}
 
 export async function commitPersonal(
   deps: PersonalRepoDeps,
@@ -440,6 +619,26 @@ export async function commitPersonal(
 
   await ctx.onStep?.('before:update-ref');
   await assertLocks(ctx); // update-ref 之前复核锁(lock_lost 时立即停止)
+  if (spec.beforeRefUpdate !== undefined) {
+    try {
+      await spec.beforeRefUpdate();
+    } catch (e) {
+      if (!(e instanceof BeforeRefUpdateDenied)) throw e;
+      const d = await discardOwnJournal(ctx, j, oldHead);
+      if (d.kind === 'ref_moved') {
+        return {
+          status: 'deferred',
+          reason: 'personal_repo_diverged',
+          why: REF_MOVED_AFTER_DENIED,
+        };
+      }
+      if (d.kind === 'journal_unverified') {
+        return { status: 'invalid', why: d.why, breaker: PERSONAL_REPO_INVALID };
+      }
+      return { status: 'denied', code: e.code };
+    }
+    await assertLocks(ctx); // 钩子是 async 现读:它之后到 update-ref 之间不得丢锁
+  }
   const upd = git.run(['update-ref', 'refs/heads/rsi', commit, oldHead]);
   if (upd.status !== 0) {
     const actual = revParse(git, 'refs/heads/rsi');

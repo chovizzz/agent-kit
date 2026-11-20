@@ -265,6 +265,8 @@ async function directVeto(
     if (r.halt === 'sealed_interval') await protectiveE1(d, rec);
     return applyLayers(ctx, p, haltExit(ctx, r));
   }
+  // veto 是减影响事件,不经增影响端口;`denied` = 底座违约(内部错误,fail-closed)
+  if (r.kind === 'denied') return failClosed(ctx, 'internal');
   if (r.kind === 'refused' || r.kind === 'stale') return failClosed(ctx, 'candidate_invalid');
   if (r.kind === 'transitioned') {
     // 转移已提交但丢锁:立即结束本步,不再调用任何写出口(E2 / 审计),交给已提交终态记录的恢复机制续做(candidate-apply 的 `lockLost` 约定)

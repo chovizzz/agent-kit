@@ -29,10 +29,14 @@ const GROWTH_SINK_SYMBOLS = [
   'evaluateGrowth',
   'requireGrowth',
   'checkGrowthVeto',
+  // D1b-2(只增不减):pass 存在性检查与汇点登记表也只在增影响一侧
+  'hasSinkPass',
+  'GROWTH_SINKS',
 ] as const;
 const GROWTH_SINK_MODULES = [
   'src/rsi/canary/canary-writer.ts',
   'src/rsi/canary/admission-write.ts',
+  'src/rsi/canary/growth-sinks.ts',
   'src/rsi/personal/candidate-step.ts',
   'src/rsi/personal/stage/growth.ts',
 ].filter((f) => existsSync(path.join(ROOT, f)));
@@ -128,6 +132,39 @@ function dynamicLoads(file: string, source: string): string[] {
   visit(sf);
   return out;
 }
+
+describe('D1b-2:applyEvent 经注入端口取增影响钩子,pass 没有被拖进 worker 闭包(owner Q1)', () => {
+  const APPLY = 'src/rsi/personal/candidate-apply.ts';
+  const PASS_HOLDERS = [
+    'hasSinkPass',
+    'GROWTH_SINKS',
+    'isGrowthPass',
+    'evaluateGrowth',
+    'requireGrowth',
+  ];
+  it('candidate-apply.ts 的运行时与类型闭包都不含 stage 模块 / growth-sinks;端口类型 GrowthClaimPort 在其中', () => {
+    for (const includeTypes of [false, true]) {
+      const c = closureOf([APPLY], { includeTypes });
+      expect(c.unresolved).toEqual([]);
+      expect(
+        [...c.files].filter((f) => f.includes('/stage/') || f.endsWith('growth-sinks.ts')),
+      ).toEqual([]);
+      expect(identHits(c, PASS_HOLDERS), `includeTypes=${includeTypes}`).toEqual([]);
+    }
+    const t = closureOf([APPLY], { includeTypes: true });
+    expect(identHits(t, ['GrowthClaimPort']).length).toBeGreaterThan(0);
+  });
+  it('正向对照:虚拟文件里 applyEvent 同类入口 import growth-sinks → 同一检查报出', () => {
+    const c = closureOf(['src/rsi/probe-apply.ts'], {
+      virtual: {
+        'src/rsi/probe-apply.ts':
+          "import { hasSinkPass } from './canary/growth-sinks.js';\nexport const x = hasSinkPass;",
+      },
+    });
+    expect([...c.files].filter((f) => f.endsWith('growth-sinks.ts'))).toHaveLength(1);
+    expect(identHits(c, PASS_HOLDERS).length).toBeGreaterThan(0);
+  });
+});
 
 describe('个人步闭包全静态(update_in_progress_still_runs_P 的静态一半)', () => {
   it('assemble-worker.ts 与 worker.ts 的闭包里没有任何动态 import() / require', () => {

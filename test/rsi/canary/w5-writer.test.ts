@@ -6,7 +6,7 @@ import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { exists, lstat, readText } from '../../../src/io/read-fs.js';
 import {
-  grantCanary,
+  grantCanary as grantCanaryWithPass,
   reconcileCaches,
   muteCanary,
   removeCanary,
@@ -18,6 +18,7 @@ import { writeFile } from '../../../src/io/safe-fs.js';
 import { revocationRefOf } from '../../../src/rsi/canary/files.js';
 import { appendStopLine } from '../../../src/rsi/canary/ledger.js';
 import { MemStore } from '../personal/w3-fixture.js';
+import { mintTestPass } from '../stage/growth-fixture.js';
 import { SHA as TSHA, entry, rec } from '../personal/transition-fixture.js';
 import {
   BODY,
@@ -30,6 +31,12 @@ import {
   makeCanaryWorld,
   type CanaryWorld,
 } from './w5-fixture.js';
+
+/** D1b-2:`grantCanary` 要真 pass(`mintTestPass` 走真 `evaluateGrowth`);既有用例经本包装取 pass,用例名与断言不变。缺 / 伪 pass 的负向用例见 `d1b2/sinks-pass.test.ts` */
+const grantCanary = async (
+  d: CanaryWriterDeps,
+  g: GrantInput,
+): ReturnType<typeof grantCanaryWithPass> => grantCanaryWithPass(d, g, await mintTestPass('grant'));
 
 const GRANT: GrantInput = {
   candidate_id: CID,

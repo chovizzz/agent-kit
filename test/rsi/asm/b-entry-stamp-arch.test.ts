@@ -2,7 +2,7 @@
  * 装配块 B2:`entry_time_only_via_stamp` 架构测试 **B2 档**(设计稿 v3 §C.2 第 4 条、§F B2 ⑥)。
  * 规则:构造 lifecycle 条目事件日的位置(`candidate-apply.ts`、`src/rsi/auto/write/**`)里**不得调用时钟**——不得 `X.now()` / 裸 `now()` / `Date.now()` / 无参 `new Date()`;
  * 取时只经 `entry-stamp.ts`(`stampFirst(d.now)` 把 `d.now` 当**引用**传是允许的)。用 TS AST 判定调用(注释 / 字符串 / 引用不算),不用正则。
- * 全量档(`candidate-step.ts:338` 等创建条目的位置、`seal_stamp_all_producers`)归 C / D;这里**钉住**当前已知缺口的数量(`full_tier_known_gap_pinned`):
+ * 全量档:D1b-2 起创建条目取时已改经 `stampFirst`(`candidate-step.ts` 创建分支),`seal_stamp_all_producers` 能力置真仍归 D3;这里**钉住**余下直接取时的数量(`full_tier_remaining_clock_calls_pinned`)并断言创建区间无直接取时:
  * C 改掉它时这条必须同步改,所以它是绊线,不是跳过。每条规则都有正向对照(虚拟违规源码必须被报出)与负向对照(合规写法不报)。
  * 另核 `rollback.ts` 的 `.now()` 取点全部是 journal / 凭据 / 阶段时间(不是审计事件日),条目一律经 `applyEvent`(统一出口)。
  */
@@ -120,11 +120,26 @@ describe('entry_time_only_via_stamp(B2 档)', () => {
     expect(src).not.toMatch(/\btransition\(/);
   });
 
-  it('full_tier_known_gap_pinned:candidate-step.ts 当前恰有 6 处直接取时(归 C / D;改掉时同步改本条)', () => {
+  it('full_tier_remaining_clock_calls_pinned:candidate-step.ts 恰有 5 处直接取时(D1b-2:创建取时已改经 stampFirst,6 → 5;改掉时同步改本条)', () => {
     const src = readTextSync(path.join(ROOT, 'src/rsi/personal/candidate-step.ts'));
     const calls = clockCalls('candidate-step.ts', src);
-    // `338` 首次创建条目的 now(须改为 stampFirst,全量档 `seal_stamp_all_producers`)、`309` 观察行 at(走 appendObservation,不入本规则),
-    // 其余(`289` / `428` / `566` / `621`)是判定上下文,不落行
-    expect(calls).toHaveLength(6);
+    // 余下 5 处:重建工作副本的日期(`utcDay(d.now()…)`)、重建 / 清零的观察行 `at`(无键观察行,走 appendObservation,不入本规则)、闸 / shadow 步的判定上下文取时(不落条目)
+    expect(calls).toHaveLength(5);
+  });
+
+  it('D1b-2 收紧:创建分支经 stampFirst 取时(封存区域),区间内没有任何直接时钟调用', () => {
+    const src = readTextSync(path.join(ROOT, 'src/rsi/personal/candidate-step.ts'));
+    expect(src).toContain('region.stampFirst(d.now)');
+    // 创建没有无封存退路(W0-30 第 5 条):candidate-step.ts 不得引用 `unsealedEntryTime`
+    expect(src).not.toContain('unsealedEntryTime');
+    const lineOf = (needle: string): number => src.slice(0, src.indexOf(needle)).split('\n').length;
+    const from = lineOf("claimGrowthPort(d.growth, 'candidate_create'");
+    const to = lineOf('region.close();');
+    expect(to).toBeGreaterThan(from);
+    const inside = clockCalls('candidate-step.ts', src).filter((c) => {
+      const ln = Number(c.split(':')[0]);
+      return ln >= from && ln <= to;
+    });
+    expect(inside).toEqual([]);
   });
 });

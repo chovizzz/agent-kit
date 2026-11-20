@@ -71,6 +71,8 @@ export function personalRepoRemoval(deps: PersonalRepoDeps, locks: PersonalLocks
           return { status: 'invalid', why: res.why };
         case 'cas_failed':
           throw new Error('personal repo commit: cas_failed');
+        case 'denied': // 移除提交不带 `beforeRefUpdate`,不可能被钩子拒绝;出现 = 底座违约,按失败抛出(执行器记 incomplete,不推进)
+          throw new Error(`personal repo commit: denied:${res.code}`);
       }
     },
   };

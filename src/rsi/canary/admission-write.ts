@@ -13,6 +13,8 @@ import { writeRsiFileAtomic, type HeldLock } from './atomic-write.js';
 import { planAdmission, type AdmissionChange, type AdmissionPlanInput } from './admission-plan.js';
 import { CANARY_FILES } from './files.js';
 import { readAdmissionDoc } from './permit-read.js';
+import { hasSinkPass } from './growth-sinks.js';
+import type { GrowthPass } from '../personal/stage/growth.js';
 
 export interface AdmissionWriterDeps {
   io: IoContext;
@@ -23,15 +25,18 @@ export interface AdmissionWriterDeps {
 export type AdmissionStep =
   | { kind: 'unchanged' }
   | { kind: 'written'; changes: AdmissionChange[] }
-  | { kind: 'blocked'; why: 'admission_file_unreadable' };
+  | { kind: 'blocked'; why: 'admission_file_unreadable' | 'growth_denied' };
 
 /** 除 `current`(本函数自己读)之外的判定输入 */
 export type AdmissionInputs = Omit<AdmissionPlanInput, 'current'>;
 
+/** **增影响汇点**(`GROWTH_SINKS`):`pass` 必填、非可选;第一条语句检查其存在与品牌,缺 / 伪 → `blocked{growth_denied}`,零写入(任何锁断言 / 读写之前) */
 export async function stepAdmission(
   d: AdmissionWriterDeps,
   inputs: AdmissionInputs,
+  pass: GrowthPass,
 ): Promise<AdmissionStep> {
+  if (!hasSinkPass(pass)) return { kind: 'blocked', why: 'growth_denied' };
   await d.locks.rsi.assertHeld();
   await d.locks.personal.assertHeld();
   const cur = await readAdmissionDoc(d.rsiDir);

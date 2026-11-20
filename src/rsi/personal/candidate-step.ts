@@ -15,12 +15,14 @@ import { RSI_SHADOW_MIN_HITS, RSI_SHADOW_MIN_SESSIONS } from '../../contracts/rs
 import type {
   CandidateWorkingCopy,
   PersonalLifecycleRecord,
+  RsiAuditLine,
 } from '../../contracts/rsi-personal.js';
 import { canonicalJson } from '../../io/canonical-json.js';
 import { RsiLockError } from '../lock-error.js';
-import type { ApplyDeps } from './candidate-apply.js';
+import { claimGrowthPort, type ApplyDeps } from './candidate-apply.js';
 import type {
   FactsProvider,
+  GrowthClaimOp,
   MarksStore,
   PresetSource,
   ReadySinceRecovery,
@@ -32,13 +34,15 @@ import type {
   WorkerMarks,
 } from './candidate-ports.js';
 import {
-  creationAudit,
   creationFiles,
   newRecord,
   newWorkingCopy,
   rebuildWorkingCopy,
 } from './candidate-record.js';
 import { buildDraft, selectable } from './candidate-source.js';
+import { REF_MOVED_AFTER_DENIED } from './commit-reasons.js';
+import { creationAuditItems } from './creation-audit.js';
+import { isSealedInterval } from './entry-stamp.js';
 import { overlapsPreset, runGates } from './gates.js';
 import type { ShadowCountPort } from './shadow-count.js';
 import { txnId } from './ids.js';
@@ -68,8 +72,11 @@ export interface StepDeps extends ApplyDeps {
   readySince?: ReadySinceRecovery;
   /** 可选(W5):重建工作副本后由真实计数重算 shadow 的 `sessions` / `hits`;缺省 = 清零(旧行为)。读失败 / 事实不可得按缺省处理 */
   shadowCounts?: ShadowCountPort;
-  /** 只用 `assertHeld`(提交底座另有自己的断言) */
-  locks: { personal: { assertHeld(): Promise<void> } };
+  /**
+   * 只用 `assertHeld`(提交底座另有自己的断言)。**两把锁都必填**(D1b-2):结构类型而不是存储核的 `LockCap`(本文件在读侧入口闭包里,不得 import 存储核);
+   * 入口先断言 rsi 再断言 personal(任一丢失 = 抛,零写入)。
+   */
+  locks: { rsi: { assertHeld(): Promise<void> }; personal: { assertHeld(): Promise<void> } };
 }
 
 export interface StepResult {
@@ -92,6 +99,11 @@ export interface StepResult {
   halted: StepHalt | null;
   /** 效果落地(黑名单 / 墓碑 / 冷却)失败:权威副本已提交,效果须由 W7 的 outbox 续做 */
   effectsFailed: string[];
+  /**
+   * 增影响动作被拒(D1b-2):`candidate_create` 缺端口 / `claim` 拒 / 提交前复核拒;`gates_passed` / `shadow_promote` 经 `applyEvent` 被拒时同样记在这里。
+   * **不是 halt**:被拒的增影响动作不阻止后面的减影响子步骤(到期 / no_hit / 对账 / 收紧)。
+   */
+  growthDenied: { op: GrowthClaimOp | 'unmappable'; code: string }[];
 }
 
 /** W0-13:入口事件 → 清零。`prev = null`(首次)也清零,无害 */
@@ -144,12 +156,22 @@ export async function runPersonalStep(d: StepDeps): Promise<StepResult> {
     breaker: null,
     halted: null,
     effectsFailed: [],
+    growthDenied: [],
   };
   const halt = (h: StepHalt): StepResult => {
     out.halted = h;
     return out;
   };
+  await d.locks.rsi.assertHeld();
   await d.locks.personal.assertHeld();
+  /** 无键观察行只经 `appendObservation` 端口;缺端口 = 不落、记 `effectsFailed`,**不回落** `append`(生产带键出口对无键行抛 `audit_key_missing`) */
+  const observe = async (row: RsiAuditLine): Promise<void> => {
+    if (d.audit.appendObservation === undefined) {
+      out.effectsFailed.push(`${row.id}:observation_port_missing`);
+      return;
+    }
+    await d.audit.appendObservation(row);
+  };
   const env = await d.env.read();
   const rv0 = await d.revocations.read();
   const baseMarks = { ...env.marks, revocationCount: rv0.kind === 'ok' ? rv0.lines.length : 0 };
@@ -235,15 +257,13 @@ export async function runPersonalStep(d: StepDeps): Promise<StepResult> {
     await d.working.put(wc);
     working.set(rec.id, wc);
     if (rec.lifecycle === 'shadow') {
-      await d.audit.append([
-        {
-          at: d.now().toISOString(),
-          kind: 'evaluation',
-          id: rec.id,
-          reason: 'ready_since_rebuilt',
-          counts: { recovered: recovered === null ? 0 : 1 },
-        },
-      ]);
+      await observe({
+        at: d.now().toISOString(),
+        kind: 'evaluation',
+        id: rec.id,
+        reason: 'ready_since_rebuilt',
+        counts: { recovered: recovered === null ? 0 : 1 },
+      });
     }
   }
 
@@ -251,6 +271,7 @@ export async function runPersonalStep(d: StepDeps): Promise<StepResult> {
   const known = new Map(records.map((r) => [r.id, r.content_sha256]));
   const presets = await d.presets.presets();
   let head = all.head;
+  let creationDenied = false;
   for (const sp of await d.staged.list()) {
     if (!selectable(sp.proposal)) continue;
     const sigs = await d.signals.getMany(sp.proposal.evidence.map((e) => e.sig));
@@ -266,38 +287,82 @@ export async function runPersonalStep(d: StepDeps): Promise<StepResult> {
       if (knownSha !== draft.contentSha256) return halt('candidate_invalid');
       continue;
     }
-    const now = d.now().toISOString();
-    const rec = newRecord(draft, now, overlapsPreset(draft, presets));
-    const files = creationFiles(draft, rec);
-    const c = await d.store.commit({
-      kind: 'transition',
-      txnId: txnId('transition', [draft.id], head, digest(canonicalJson(files))),
-      candidateIds: [draft.id],
-      upserts: files,
-    });
-    if (c.status !== 'committed') {
-      return halt(
-        c.status === 'absent'
-          ? 'repo_absent'
-          : c.status === 'deferred'
-            ? 'repo_deferred'
-            : c.status === 'invalid'
-              ? 'repo_invalid'
-              : 'commit_failed',
-      );
+    // 创建是增影响动作:本轮已被拒过一次(缺端口 / claim 拒 / 提交前复核拒)就不再逐个候选重试(拒绝原因是回合级的),但后面的提案仍按原规则分类(skip / 碰撞中止)
+    if (creationDenied) continue;
+    // W0-30 第 5 条:创建条目取时只经封存区域,**没有无封存退路**:缺 `seal` = 装配错误,提交前拒绝(不取时、不调 claim、零写入;与缺端口同为回合级拒绝)。减影响入口(`applyEvent` 缩减路径)保留无封存兼容
+    const seal = d.seal;
+    if (seal === undefined) {
+      creationDenied = true;
+      out.growthDenied.push({ op: 'candidate_create', code: 'seal_missing' });
+      continue;
     }
-    head = c.commit;
-    known.set(draft.id, draft.contentSha256);
-    // 已提交:先登记创建事实,再落地工作副本与审计(失败不抹掉 created;丢锁立即结束)
-    out.created.push(draft.id);
-    const wc = newWorkingCopy(draft, dr.signals);
+    const claim = await claimGrowthPort(d.growth, 'candidate_create', null);
+    if (!claim.ok) {
+      creationDenied = true;
+      out.growthDenied.push({ op: 'candidate_create', code: claim.code });
+      continue;
+    }
+    // 取时只经封存区域(`entry-stamp.ts`:W 先于 now 读好,取值后校验;区域覆盖到本次落地结束):封存区间 → 源提交之前拒绝,零写入
+    const region = await seal.open();
     try {
-      await d.working.put(wc);
-      working.set(draft.id, wc);
-      await d.audit.append([creationAudit(rec, now)]);
-    } catch (e) {
-      if (e instanceof RsiLockError && e.kind === 'lock_lost') return halt('lock_lost');
-      out.effectsFailed.push(`${draft.id}:${e instanceof Error ? e.message : 'error'}`);
+      let now: string;
+      try {
+        now = region.stampFirst(d.now);
+      } catch (e) {
+        if (!isSealedInterval(e)) throw e;
+        return halt('sealed_interval');
+      }
+      const rec = newRecord(draft, now, overlapsPreset(draft, presets));
+      const files = creationFiles(draft, rec);
+      const c = await d.store.commit({
+        kind: 'transition',
+        txnId: txnId('transition', [draft.id], head, digest(canonicalJson(files))),
+        candidateIds: [draft.id],
+        upserts: files,
+        // 最终复核钩子:`update-ref` 之前由提交底座调用(拒 → `denied`,引用不动)
+        beforeRefUpdate: claim.hook,
+      });
+      if (c.status === 'denied') {
+        creationDenied = true;
+        out.growthDenied.push({ op: 'candidate_create', code: c.code });
+        continue;
+      }
+      if (c.status !== 'committed') {
+        return halt(
+          c.status === 'absent'
+            ? 'repo_absent'
+            : c.status === 'deferred' && c.why === REF_MOVED_AFTER_DENIED
+              ? 'commit_failed' // 拒绝后引用异动 = 完整性不明,不是只停本步的普通 deferred
+              : c.status === 'deferred'
+                ? 'repo_deferred'
+                : c.status === 'invalid'
+                  ? 'repo_invalid'
+                  : 'commit_failed',
+        );
+      }
+      region.markSourceCommitted();
+      head = c.commit;
+      known.set(draft.id, draft.contentSha256);
+      // 已提交:先登记创建事实,再落地工作副本与审计(失败不抹掉 created;丢锁立即结束)
+      out.created.push(draft.id);
+      const wc = newWorkingCopy(draft, dr.signals);
+      try {
+        await d.working.put(wc);
+        working.set(draft.id, wc);
+        // 创建行审计:行与键都来自唯一派生点(`creation-audit.ts`;提交后崩溃由 `recoverCreationAudits` 以记录里的 `at` 补)。
+        // 只经带键出口:缺 `appendKeyed` 时**不回落**无键 `append`(无键行不参与键去重,即时一条 + 恢复补一条会重复)——记 effectsFailed,留给恢复补
+        const items = creationAuditItems(rec).map((i) => ({ line: i.line, idem_key: i.idem_key }));
+        if (d.audit.appendKeyed === undefined) {
+          out.effectsFailed.push(`${draft.id}:creation_audit_port_missing`);
+        } else {
+          await d.audit.appendKeyed(items);
+        }
+      } catch (e) {
+        if (e instanceof RsiLockError && e.kind === 'lock_lost') return halt('lock_lost');
+        out.effectsFailed.push(`${draft.id}:${e instanceof Error ? e.message : 'error'}`);
+      }
+    } finally {
+      region.close();
     }
   }
   re = await reload();
@@ -372,7 +437,7 @@ export async function runPersonalStep(d: StepDeps): Promise<StepResult> {
     await d.working.put(next);
     working.set(rec.id, next);
     out.queueCleared.push({ id: rec.id, reason });
-    await d.audit.append([{ at: nowIso, kind: 'evaluation', id: rec.id, reason }]);
+    await observe({ at: nowIso, kind: 'evaluation', id: rec.id, reason });
   };
   const decisions: {
     rec: PersonalLifecycleRecord;

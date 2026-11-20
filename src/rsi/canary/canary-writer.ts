@@ -27,6 +27,8 @@ import { writeRsiFileAtomic, type HeldLock } from './atomic-write.js';
 import { canaryDocProblem } from './canary-doc.js';
 import { CANARY_FILES, sha12Of } from './files.js';
 import { readCanaryDoc } from './permit-read.js';
+import { hasSinkPass } from './growth-sinks.js';
+import type { GrowthPass } from '../personal/stage/growth.js';
 
 export interface GrantInput {
   candidate_id: string;
@@ -60,6 +62,8 @@ export type GrantRefusal =
   | 'content_changed'
   | 'slot_occupied'
   | 'body_unavailable'
+  /** 缺 / 伪 `GrowthPass`(D1b-2:函数第一条语句,先于锁断言与任何读写) */
+  | 'growth_denied'
   | `doc_invalid:${string}`;
 
 export type GrantResult =
@@ -113,7 +117,15 @@ export async function reconcileBarrier(
 
 export { reconcileCaches } from './canary-reconcile.js';
 
-export async function grantCanary(d: CanaryWriterDeps, g: GrantInput): Promise<GrantResult> {
+/**
+ * 授予影响。**增影响汇点**(`GROWTH_SINKS`):`pass` 必填、非可选;第一条语句检查其存在与品牌(D1b-2 只验这一层,真实性 / op 绑定 / 一次性归 D2 的 `requireGrowth`),缺 / 伪 → `growth_denied`,零写入。
+ */
+export async function grantCanary(
+  d: CanaryWriterDeps,
+  g: GrantInput,
+  pass: GrowthPass,
+): Promise<GrantResult> {
+  if (!hasSinkPass(pass)) return { kind: 'refused', reason: 'growth_denied' };
   await d.locks.rsi.assertHeld();
   await d.locks.personal.assertHeld();
   // ① 对账先于授予:持锁重读撤销凭据

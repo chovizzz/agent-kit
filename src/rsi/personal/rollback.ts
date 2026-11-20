@@ -555,6 +555,13 @@ async function driveRecord(d: RollbackDeps, t: PersonalTxn, c: RunCtx): Promise<
       };
     } else if (r.kind === 'stale') {
       return { repo: 'ok', rec, note: { why: 'record_stale', cause: 'retryable' } };
+    } else if (r.kind === 'denied') {
+      // 回滚路径只施加减影响事件(不带钩子):出现 `denied` = 底座违约,记录未推进,不得落入「推进成功」的正常路径(否则后续仓库移除会绕过「记录未推进不删文件」的判据)
+      return {
+        repo: 'ok',
+        rec,
+        note: { why: `record_denied:${r.why}`, cause: 'retryable' },
+      };
     }
   }
   return { repo: 'ok', rec };

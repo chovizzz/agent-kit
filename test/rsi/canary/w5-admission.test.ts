@@ -11,7 +11,11 @@ import {
   type AgentFacts,
   type MarkerSighting,
 } from '../../../src/rsi/canary/admission-plan.js';
-import { stepAdmission } from '../../../src/rsi/canary/admission-write.js';
+import {
+  stepAdmission as stepAdmissionWithPass,
+  type AdmissionWriterDeps,
+} from '../../../src/rsi/canary/admission-write.js';
+import { mintTestPass } from '../stage/growth-fixture.js';
 import {
   buildMarkerView,
   postAdmissionMultiMarker,
@@ -465,6 +469,12 @@ describe('标记取回视图(R21-6.6)', () => {
 
 describe('canary-admission.json 的唯一写入方', () => {
   const held = { assertHeld: async (): Promise<void> => undefined };
+  /** D1b-2:`stepAdmission` 要真 pass(`mintTestPass` 走真 `evaluateGrowth`);既有用例经本包装取 pass,用例名与断言不变。缺 / 伪 pass 见 `d1b2/sinks-pass.test.ts` */
+  const stepAdmission = async (
+    d: AdmissionWriterDeps,
+    i: Omit<AdmissionPlanInput, 'current'>,
+  ): ReturnType<typeof stepAdmissionWithPass> =>
+    stepAdmissionWithPass(d, i, await mintTestPass('admission'));
   const inputs = (): Omit<AdmissionPlanInput, 'current'> => ({
     now: NOW,
     autoLoopEffective: true,
