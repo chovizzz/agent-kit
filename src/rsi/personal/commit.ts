@@ -474,8 +474,8 @@ async function judgeTombstone(
 }
 
 /**
- * 改名到随机墓碑 → 经 fd 核对 → 删除同一对象 → 再读 ref(协议见 {@link discardOwnJournal} 的 2–5)。
- * `clean` = 删的就是核对过的、本次写下的 journal(见 `removeVerified` 的残余说明),且 ref 仍为 `oldHead`。
+ * 改名到随机墓碑 → 经 fd 核对 → 删除 → 再读 ref(协议见 {@link discardOwnJournal} 的 2–5)。
+ * `clean` = 核对过的、本次写下的 journal 事后没有任何名字(见 `removeVerified` 的残余说明与检不出情形),且 ref 仍为 `oldHead`。
  * 只有「核对不通过」(`rejected`)与「守卫拒绝读取」两类才尝试把墓碑不覆盖地改回原名;`absent` / `replaced` / `not_removed_object` / 移入失败 / 墓碑名被占用都不动现场(没有可改回的、或改回会放回未核对的对象)。
  */
 async function discardViaTombstone(

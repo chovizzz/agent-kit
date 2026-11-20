@@ -209,7 +209,7 @@ export function newTombstoneName(h: PersonalHome): string {
 }
 
 /**
- * journal → 墓碑(**不覆盖**:`renameExclusive`)。`'absent'` = 原路径上没有文件;`'occupied'` = 墓碑名已被占用 / 守卫拒绝 / 目标被换(原路径与来源都不动或保留现场);其它错误向上抛。
+ * journal → 墓碑(**不覆盖**:`renameExclusive`)。`'absent'` = 原路径上没有文件;`'occupied'` = 墓碑名已被占用 / 目标(墓碑名)被换(原路径与来源都不动或保留现场);守卫拒绝、来源(原名)在移入途中消失 / 被换(`HomeRenameRaceError` side=source)与其它错误一样向上抛(调用方映射 `journal_rename_failed`)。
  */
 export async function moveJournalToTombstone(
   h: PersonalHome,
@@ -228,9 +228,9 @@ export async function moveJournalToTombstone(
 
 /** 目标名已被占用(含「link 之后目标名被换」):现场保留。守卫拒绝(`HomeWriteDeniedError`)不在此列——它可能是来源不可信,各调用方自己决定 */
 const isOccupied = (e: unknown): boolean =>
-  e instanceof HomeExistsError || e instanceof HomeRenameRaceError;
+  e instanceof HomeExistsError || (e instanceof HomeRenameRaceError && e.side === 'target');
 
-/** 对墓碑做「经 fd 核对 → 删除同一对象」;`verify` 返回 `undefined` = 接受。读取强度同 `readJson`(O_NOFOLLOW、nlink、属主 / 权限、字节上限) */
+/** 对墓碑做「经 fd 核对 → 删除」(后置条件:核对过的对象事后没有名字,见 `removeVerified`);`verify` 返回 `undefined` = 接受。读取强度同 `readJson`(O_NOFOLLOW、nlink、属主 / 权限、字节上限) */
 export const removeVerifiedTombstone = <T>(
   h: PersonalHome,
   tombName: string,
@@ -245,7 +245,7 @@ export const removeVerifiedTombstone = <T>(
 
 /**
  * 墓碑 → 原名(不覆盖):`'occupied'` = 原路径已被别人占用,或改回途中目标被换成别的东西(墓碑 / 别人的内容都不删);`'absent'` = 墓碑不在;
- * `'io_failed'` = 路径探测 IO 失败(不是被占用);`'source_rejected'` = 守卫拒绝了墓碑本身(来源不可信)。后两者墓碑都原样保留。
+ * `'io_failed'` = 改回未能完成且不是被占用(路径探测 IO 失败、无法归属的守卫错误、墓碑在改回途中消失 / 被换);`'source_rejected'` = 守卫拒绝了墓碑本身(来源不可信)。后两者墓碑都原样保留。
  * 原名上已有东西:普通文件(EEXIST)或 home-fs 守卫拒绝的异类(链接 / 目录 / 硬链接)——一律当作被占用,墓碑原样保留。
  * 残余(已知,不消除):改回按**路径**取墓碑,没有延续核对时 fd 的身份——核对与改回之间墓碑被换成别的文件时,换上者会被放回原名。
  * 原名在此之前就可被同权限的对抗者直接写入,这不增加其能力;只是「改回的就是刚核对过的那个对象」不在保证范围内。
@@ -259,14 +259,18 @@ export async function restoreJournalFromTombstone(
     await renameExclusive(homeFsFor(h, [to, tombName]), stateRel(tombName), stateRel(to));
   } catch (e) {
     if (e instanceof HomeWriteDeniedError) {
-      // 三类分开(先判 code 再判 rel:STAT_FAILED 带的 rel 是正在探测的那条路径,可能正是墓碑):
+      // 先判 code 再判 rel(STAT_FAILED 带的 rel 是正在探测的那条路径,可能正是墓碑);`rel` 是请求检查的路径,只在**明确等于原名**时才认「被占用」:
       //  - 路径探测(lstat / readdir)IO 失败:不是「被占用」,journal 只剩墓碑名 → io_failed;
       //  - 守卫拒绝的是**墓碑**(来源:链接 / 硬链接 / 目录…)→ source_rejected;
-      //  - 其余守卫拒绝落在原名上(链接 / 目录 / 硬链接等异类)→ 同样是被占用(墓碑保留)。
+      //  - 守卫拒绝落在原名上(链接 / 目录 / 硬链接等异类)→ 被占用(墓碑保留);
+      //  - 其余(无法归属的守卫错误,如 HOME 本身失效)→ io_failed(改回未能完成,不冒充占用)。
       if (e.code === HOME_DENY.STAT_FAILED) return 'io_failed';
       if (e.rel === stateRel(tombName)) return 'source_rejected';
-      return 'occupied';
+      if (e.rel === stateRel(to)) return 'occupied';
+      return 'io_failed';
     }
+    // 来源名(墓碑)在改回途中消失 / 被换:目标名保留(可能是原对象仅剩的名字),不是原名被占用
+    if (e instanceof HomeRenameRaceError && e.side === 'source') return 'io_failed';
     if (isOccupied(e)) return 'occupied';
     if ((e as NodeJS.ErrnoException).code === 'ENOENT') return 'absent';
     throw e;

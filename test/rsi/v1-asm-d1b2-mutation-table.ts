@@ -2056,7 +2056,7 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
       {
         file: HFS,
         anchor:
-          '    const cur = lstatIfExists(to.abs);\n    if (cur === undefined) throw e;\n    if (cur.dev !== ident.dev || cur.ino !== ident.ino) throw new HomeRenameRaceError(toRel);\n    // 目标名是本次建的链接。撤销它之前还要确认来源名仍持有原对象:来源已消失 / 被换时,目标名可能是原对象仅剩的名字,不能删(无法确认 = 保留)\n    const src = lstatIfExists(from.abs); // 探测失败(IO)= 抛出探测错误,尚未撤销目标:无法确认就保留\n    if (src === undefined || src.dev !== ident.dev || src.ino !== ident.ino) {\n      throw new HomeRenameRaceError(fromRel);\n    }\n    await fsp.unlink(to.abs).catch(() => undefined);\n    throw e;\n',
+          "    const cur = lstatIfExists(to.abs);\n    if (cur === undefined) throw e;\n    if (cur.dev !== ident.dev || cur.ino !== ident.ino) throw new HomeRenameRaceError(toRel);\n    // 目标名是本次建的链接。撤销它之前还要确认来源名仍持有原对象:来源已消失 / 被换时,目标名可能是原对象仅剩的名字,不能删(无法确认 = 保留)\n    const src = lstatIfExists(from.abs); // 探测失败(IO)= 抛出探测错误,尚未撤销目标:无法确认就保留\n    if (src === undefined || src.dev !== ident.dev || src.ino !== ident.ino) {\n      throw new HomeRenameRaceError(fromRel, 'source');\n    }\n    await fsp.unlink(to.abs).catch(() => undefined);\n    throw e;\n",
         replacement: '    await fsp.unlink(to.abs).catch(() => undefined);\n    throw e;\n',
       },
     ],
@@ -2106,7 +2106,8 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
     edits: [
       {
         file: HSTATE,
-        anchor: '  e instanceof HomeExistsError || e instanceof HomeRenameRaceError;',
+        anchor:
+          "  e instanceof HomeExistsError || (e instanceof HomeRenameRaceError && e.side === 'target');",
         replacement: '  e instanceof HomeExistsError;',
       },
     ],
@@ -2234,7 +2235,7 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
       {
         file: HFS,
         anchor:
-          '    if (src === undefined || src.dev !== ident.dev || src.ino !== ident.ino) {\n      throw new HomeRenameRaceError(fromRel);\n    }\n',
+          "    if (src === undefined || src.dev !== ident.dev || src.ino !== ident.ino) {\n      throw new HomeRenameRaceError(fromRel, 'source');\n    }\n",
         replacement: '',
       },
     ],
@@ -2330,6 +2331,37 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
       'denied_cleanup_restore_source_rejected_unsafe',
     ],
     mustKill: ['denied_cleanup_restore_source_rejected_unsafe'],
+  },
+  {
+    id: 'rename_race_source_side_as_occupied',
+    clause:
+      'R8-1:来源侧竞态(HomeRenameRaceError side=source)不是目标被占用:isOccupied 不看 side → 移入方向报 journal_tombstone_occupied、改回方向报 journal_not_mine(分类错误)',
+    edits: [
+      {
+        file: HSTATE,
+        anchor:
+          "  e instanceof HomeExistsError || (e instanceof HomeRenameRaceError && e.side === 'target');",
+        replacement: '  e instanceof HomeExistsError || e instanceof HomeRenameRaceError;',
+      },
+      {
+        file: HSTATE,
+        anchor:
+          "    if (e instanceof HomeRenameRaceError && e.side === 'source') return 'io_failed';\n",
+        replacement: '',
+      },
+    ],
+    tests: [HOOK_T],
+    expectRed: [
+      D_HOOK_DENY,
+      D_HOOK_POS,
+      D_HOOK_ASIDE,
+      'denied_cleanup_move_source_gone_not_occupied',
+      'denied_cleanup_restore_source_gone_not_occupied',
+    ],
+    mustKill: [
+      'denied_cleanup_move_source_gone_not_occupied',
+      'denied_cleanup_restore_source_gone_not_occupied',
+    ],
   },
 ];
 

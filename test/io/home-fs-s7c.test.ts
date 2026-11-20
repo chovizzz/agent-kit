@@ -307,9 +307,10 @@ describe('renameExclusive:半完成态与竞态(link 之后)', () => {
       await safe.writeFile(s.fx, abs(s, FB), 'FOREIGN', { mode: 0o600 }); // 换上别人的文件
       throw new Error('unlink failed');
     };
-    await expect(hfs.renameExclusive(s.mkStage(hook), FA, FB)).rejects.toBeInstanceOf(
-      hfs.HomeRenameRaceError,
-    );
+    await expect(hfs.renameExclusive(s.mkStage(hook), FA, FB)).rejects.toMatchObject({
+      name: 'HomeRenameRaceError',
+      side: 'target',
+    });
     expect(await readText(abs(s, FB))).toBe('FOREIGN');
     expect(await readText(abs(s, FA))).toBe('one');
   });
@@ -346,7 +347,7 @@ describe('renameExclusive:半完成态与竞态(link 之后)', () => {
         FA,
         FB,
       ),
-    ).rejects.toBeInstanceOf(hfs.HomeRenameRaceError);
+    ).rejects.toMatchObject({ name: 'HomeRenameRaceError', side: 'source' });
     expect(await readText(abs(s, FB))).toBe('one');
     expect(await readText(abs(s, FA))).toBe('FOREIGN');
   });
@@ -364,7 +365,7 @@ describe('renameExclusive:半完成态与竞态(link 之后)', () => {
         FA,
         FB,
       ),
-    ).rejects.toBeInstanceOf(hfs.HomeRenameRaceError);
+    ).rejects.toMatchObject({ name: 'HomeRenameRaceError', side: 'source' });
     expect(await readText(abs(s, FB))).toBe('one');
     expect((await lstat(abs(s, FB))).nlink).toBe(1);
     await expect(lstat(abs(s, FA))).rejects.toThrow();

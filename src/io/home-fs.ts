@@ -104,15 +104,19 @@ export class HomeExistsError extends Error {
 
 /**
  * 改名在 `link` 与 `unlink(来源)` 之间,来源与目标暂时是同一 inode 的两个名字(nlink=2)。该竞态被别人替换内容的结果,见 {@link renameExclusive}。
- * 抛 = 「目标名已被换成别的文件」,**来源名已不被我们动**,调用方应当按「现场被占用」处理(不覆盖、不删别人的东西)。
+ * 抛 = 竞态下**没有再动**任何名字;`side` 说明是哪一侧失去了身份:
+ *  - `target`:目标名已被换成别的文件(调用方按「现场被占用」处理:不覆盖、不删别人的东西);
+ *  - `source`:来源名已消失 / 被换(此刻目标名可能是原对象仅剩的名字,已保留)。**不是**目标被占用,调用方不得按占用归类。
  */
 export class HomeRenameRaceError extends Error {
   readonly code = 'HOME_RENAME_RACE';
   readonly rel: string;
-  constructor(rel: string) {
-    super(`HOME_RENAME_RACE path=${JSON.stringify(rel.slice(0, 200))}`);
+  readonly side: 'target' | 'source';
+  constructor(rel: string, side: 'target' | 'source' = 'target') {
+    super(`HOME_RENAME_RACE side=${side} path=${JSON.stringify(rel.slice(0, 200))}`);
     this.name = 'HomeRenameRaceError';
     this.rel = rel;
+    this.side = side;
   }
 }
 
@@ -704,7 +708,7 @@ export async function rename(ctx: HomeFsContext, fromRel: string, toRel: string)
  *    (挡掉「link 之后来源被换成别的文件」时误删换上者);来源名已不在 / 已是别的文件 = 视为移动已完成(目标名持有我们的对象),不删来源名上的任何东西;
  *    以上核对与 `unlink` 之间仍是按路径的窗口(home-fs 文件头已声明的残余,只缩小不消除);
  *  - `unlink` 失败 → 先核对目标名仍是**本次创建的那个链接**(同 dev:ino)**且来源名仍持有原对象**(同 dev:ino)才撤销目标;目标名已被换成别的东西 → 不删,抛 {@link HomeRenameRaceError};
- *    来源名已消失 / 被换(目标名可能是原对象仅剩的名字)→ 同样不删目标,抛 {@link HomeRenameRaceError};来源名探测本身 IO 失败 → 无法确认,保留目标(抛出探测错误)。
+ *    来源名已消失 / 被换(目标名可能是原对象仅剩的名字)→ 同样不删目标,抛 `side: 'source'` 的 {@link HomeRenameRaceError};来源名探测本身 IO 失败 → 无法确认,保留目标(抛出探测错误)。
  * 目标是链接 / 目录 / 硬链接 → 守卫抛 `HomeWriteDeniedError`(不是 `HomeExistsError`)。来源不存在 → ENOENT。
  */
 export async function renameExclusive(
@@ -745,7 +749,7 @@ export async function renameExclusive(
     // 目标名是本次建的链接。撤销它之前还要确认来源名仍持有原对象:来源已消失 / 被换时,目标名可能是原对象仅剩的名字,不能删(无法确认 = 保留)
     const src = lstatIfExists(from.abs); // 探测失败(IO)= 抛出探测错误,尚未撤销目标:无法确认就保留
     if (src === undefined || src.dev !== ident.dev || src.ino !== ident.ino) {
-      throw new HomeRenameRaceError(fromRel);
+      throw new HomeRenameRaceError(fromRel, 'source');
     }
     await fsp.unlink(to.abs).catch(() => undefined);
     throw e;

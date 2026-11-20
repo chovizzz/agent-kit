@@ -866,6 +866,38 @@ describe('beforeRefUpdate:拒绝后清理的改名协议', () => {
     expect((await lstat(fixedTomb(w))).nlink).toBe(2);
   });
 
+  it('denied_cleanup_move_source_gone_not_occupied:移入时 unlink(原名) 失败进入回滚、原名已被拿走 → 回滚保留墓碑(原对象仅剩的名字),返回 invalid / journal_rename_failed,不是 journal_tombstone_occupied;墓碑内容是自己的 journal,原名无文件', async () => {
+    const { w, r, base } = await runDeny('d1b2-mvsrc-', (w2) => ({
+      tombstoneHex: fixedHex,
+      onStage: failOnceAt('pre-unlink-source', 1, async () => {
+        await rawUnlink(journalPath(w2)); // 原名被拿走(此刻墓碑是原对象唯一的名字)
+        throw new Error('unlink failed');
+      }),
+    }));
+    expect(r).toMatchObject({ status: 'invalid', why: 'journal_rename_failed' });
+    expect(await exists(journalPath(w))).toBe(false);
+    const tomb = JSON.parse(await readText(fixedTomb(w))) as PersonalCommitJournal;
+    expect(tomb).toEqual(expect.objectContaining(base));
+    expect((await lstat(fixedTomb(w))).nlink).toBe(1);
+  });
+
+  it('denied_cleanup_restore_source_gone_not_occupied:改回时 unlink(墓碑) 失败进入回滚、墓碑已被拿走 → 回滚保留原名(原对象仅剩的名字),返回 invalid / journal_restore_failed,不是 journal_not_mine;原名上是自己的 journal,墓碑不在', async () => {
+    const { w, r, base } = await runDeny('d1b2-rssrcgone-', (w2) => ({
+      tombstoneHex: fixedHex,
+      onStep: async (step) => {
+        if (step === 'discard:after-rename') advance(w2); // 迫使走改回分支
+      },
+      onStage: failOnceAt('pre-unlink-source', 2, async () => {
+        await rawUnlink(fixedTomb(w2)); // 墓碑被拿走(此刻原名是原对象唯一的名字)
+        throw new Error('unlink failed');
+      }),
+    }));
+    expect(r).toMatchObject({ status: 'invalid', why: 'journal_restore_failed' });
+    expect(await exists(fixedTomb(w))).toBe(false);
+    expect(await journalTxn(w)).toBe(base.txn_id);
+    expect((await lstat(journalPath(w))).nlink).toBe(1);
+  });
+
   /** 崩在 update-ref 之前,留下一个 objects_written 的 journal(ref 未动) */
   async function pendingJournalWorld(prefix: string): Promise<World> {
     const w = await makeWorld(prefix);
