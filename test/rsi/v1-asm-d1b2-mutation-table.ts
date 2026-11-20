@@ -264,6 +264,8 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
       'before_ref_update_denied_ref_unchanged_journal_removed',
       'denied 之后同一仓库可以正常再提交',
       'denied_cleanup_final_check_after_last_lock',
+      'denied_cleanup_final_check_journal_replaced',
+      'denied_cleanup_final_check_journal_gone',
     ],
     mustKill: ['before_ref_update_denied_ref_unchanged_journal_removed'],
   },
