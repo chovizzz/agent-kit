@@ -792,7 +792,8 @@ describe('beforeRefUpdate:拒绝后清理的改名协议', () => {
         if (step === 'discard:after-rename') moved = advance(w2); // 迫使走改回分支
       },
       onStage: failOnceAt('pre-unlink-source', 2, async () => {
-        throw new Error('EIO injected'); // 改回的 unlink(墓碑) 失败;我们建的原名链接被回滚撤销
+        // 改回的 unlink(墓碑) 失败(带 errno code 的文件系统 IO 错误);我们建的原名链接被回滚撤销
+        throw Object.assign(new Error('EIO injected'), { code: 'EIO' });
       }),
     }));
     expect(r).toMatchObject({ status: 'invalid', why: 'journal_restore_failed' });

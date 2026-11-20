@@ -1805,7 +1805,7 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
       {
         file: COMMIT,
         anchor:
-          "  try {\n    const restored = await restoreJournalFromTombstone(ctx.h, tomb);\n    if (restored === 'occupied') return { kind: 'journal_unverified', why: 'journal_not_mine' };\n    // 墓碑已不在:没有任何名字下有这份 journal(现场已丢),同样不能按核对结果返回\n    if (restored === 'absent') return { kind: 'journal_unverified', why: 'journal_restore_failed' };\n  } catch {\n    // 改回时的通用 IO 失败(非 occupied):journal 只剩随机墓碑名(恢复路径不读孤立墓碑),现场已丢——\n    // 不能再按核对结果返回(那可能是 deferred / ref_moved);一律 invalid,墓碑原样保留\n    return { kind: 'journal_unverified', why: 'journal_restore_failed' };\n  }\n",
+          "  try {\n    const restored = await restoreJournalFromTombstone(ctx.h, tomb);\n    if (restored === 'occupied') return { kind: 'journal_unverified', why: 'journal_not_mine' };\n    // 墓碑已不在:没有任何名字下有这份 journal(现场已丢),同样不能按核对结果返回\n    if (restored === 'absent') return { kind: 'journal_unverified', why: 'journal_restore_failed' };\n  } catch (e) {\n    // 改回时的文件系统 IO 失败(带 errno code,非 occupied):journal 只剩随机墓碑名(恢复路径不读孤立墓碑),现场已丢——\n    // 不能再按核对结果返回(那可能是 deferred / ref_moved);invalid,墓碑原样保留。\n    // 非 IO 错误(含测试用的 InjectedCrash 进程死亡模拟、编程错误)不在此列:维持原行为,按核对结果返回,崩溃现场交重启收尾\n    if (isFsIoError(e)) return { kind: 'journal_unverified', why: 'journal_restore_failed' };\n  }\n",
         replacement: '',
       },
     ],
@@ -1830,7 +1830,7 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
       {
         file: COMMIT,
         anchor:
-          "    return { kind: 'journal_unverified', why: 'journal_restore_failed' };\n  }\n  return bad;",
+          "    if (isFsIoError(e)) return { kind: 'journal_unverified', why: 'journal_restore_failed' };\n  }\n  return bad;",
         replacement: '  }\n  return bad;',
       },
     ],
@@ -1853,6 +1853,22 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
     tests: [HOOK_T],
     expectRed: ['denied_cleanup_restore_absent_invalid'],
     mustKill: ['denied_cleanup_restore_absent_invalid'],
+  },
+  {
+    id: 'denied_cleanup_restore_catch_widened',
+    clause:
+      'R6-3:改回的 catch 只认带 errno 的文件系统 IO 错误;放宽回「全部」会把崩溃注入(InjectedCrash,模拟进程死亡)也吞成 invalid',
+    edits: [
+      {
+        file: COMMIT,
+        anchor:
+          "    if (isFsIoError(e)) return { kind: 'journal_unverified', why: 'journal_restore_failed' };\n",
+        replacement: "    return { kind: 'journal_unverified', why: 'journal_restore_failed' };\n",
+      },
+    ],
+    tests: [HOOK_T],
+    expectRed: ['denied_cleanup_crash_after_link_restore_recovers'],
+    mustKill: ['denied_cleanup_crash_after_link_restore_recovers'],
   },
   {
     id: 'denied_cleanup_restore_clobbers',

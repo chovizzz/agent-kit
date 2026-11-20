@@ -523,13 +523,18 @@ async function discardViaTombstone(
     if (restored === 'occupied') return { kind: 'journal_unverified', why: 'journal_not_mine' };
     // 墓碑已不在:没有任何名字下有这份 journal(现场已丢),同样不能按核对结果返回
     if (restored === 'absent') return { kind: 'journal_unverified', why: 'journal_restore_failed' };
-  } catch {
-    // 改回时的通用 IO 失败(非 occupied):journal 只剩随机墓碑名(恢复路径不读孤立墓碑),现场已丢——
-    // 不能再按核对结果返回(那可能是 deferred / ref_moved);一律 invalid,墓碑原样保留
-    return { kind: 'journal_unverified', why: 'journal_restore_failed' };
+  } catch (e) {
+    // 改回时的文件系统 IO 失败(带 errno code,非 occupied):journal 只剩随机墓碑名(恢复路径不读孤立墓碑),现场已丢——
+    // 不能再按核对结果返回(那可能是 deferred / ref_moved);invalid,墓碑原样保留。
+    // 非 IO 错误(含测试用的 InjectedCrash 进程死亡模拟、编程错误)不在此列:维持原行为,按核对结果返回,崩溃现场交重启收尾
+    if (isFsIoError(e)) return { kind: 'journal_unverified', why: 'journal_restore_failed' };
   }
   return bad;
 }
+
+/** 文件系统 IO 错误:Node 的系统错误带大写 errno 字符串 code(EIO / ENOSPC / EACCES …);其它错误一律不是 */
+const isFsIoError = (e: unknown): boolean =>
+  e instanceof Error && /^E[A-Z0-9]+$/.test((e as NodeJS.ErrnoException).code ?? '');
 
 const sameJournal = (a: PersonalCommitJournal, mine: PersonalCommitJournal): boolean =>
   a.txn_id === mine.txn_id &&
