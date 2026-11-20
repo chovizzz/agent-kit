@@ -4,6 +4,7 @@ import * as hfs from '../../src/io/home-fs.js';
 import { HOME_DENY, HomeExistsError, HomeWriteDeniedError } from '../../src/io/home-fs.js';
 import { lstat, readDir, readText, realpath } from '../../src/io/read-fs.js';
 import * as safe from '../../src/io/safe-fs.js';
+import { rawLink, rawUnlink } from '../helpers/raw-links.js';
 import { makeTempDir, wideCtx } from '../helpers/tmp.js';
 
 const SHARE = '.local/share/agent-kit';
@@ -302,7 +303,7 @@ describe('renameExclusive:半完成态与竞态(link 之后)', () => {
     await seed(s, FA, 'one');
     const hook = async (st: hfs.HomeFsStage): Promise<void> => {
       if (st !== 'pre-unlink-source') return;
-      await safe.remove(s.fx, abs(s, FB)); // 我们刚建的链接被拿走
+      await rawUnlink(abs(s, FB)); // 我们刚建的链接被拿走(此刻 nlink=2,safe-fs 守卫会拒,夹具走 raw)
       await safe.writeFile(s.fx, abs(s, FB), 'FOREIGN', { mode: 0o600 }); // 换上别人的文件
       throw new Error('unlink failed');
     };
@@ -338,7 +339,7 @@ describe('renameExclusive:半完成态与竞态(link 之后)', () => {
       hfs.renameExclusive(
         s.mkStage(async (st) => {
           if (st !== 'pre-unlink-source') return;
-          await safe.remove(s.fx, abs(s, FB));
+          await rawUnlink(abs(s, FB));
           await safe.writeFile(s.fx, abs(s, FB), 'FOREIGN', { mode: 0o600 });
         }),
         FA,
@@ -355,7 +356,7 @@ describe('renameExclusive:半完成态与竞态(link 之后)', () => {
     await hfs.renameExclusive(
       s.mkStage(async (st) => {
         if (st !== 'post-link') return;
-        await safe.remove(s.fx, abs(s, FA));
+        await rawUnlink(abs(s, FA));
         await safe.writeFile(s.fx, abs(s, FA), 'FOREIGN', { mode: 0o600 });
       }),
       FA,
@@ -392,7 +393,7 @@ describe('settleHalfLink:只收尾确定的半完成态', () => {
     const s = await setup([FA, FB]);
     await seed(s, FA, 'one');
     await safe.hardlink(s.fx, abs(s, FA), abs(s, FB));
-    await safe.hardlink(s.fx, abs(s, FA), abs(s, `${SD}/third`));
+    await rawLink(abs(s, FA), abs(s, `${SD}/third`)); // 来源已是 nlink=2,safe-fs.hardlink 会拒
     expect(await hfs.settleHalfLink(s.mk(), FB, FA)).toBe('not_half_state');
     expect((await lstat(abs(s, FA))).nlink).toBe(3);
     expect(await readText(abs(s, FB))).toBe('one');
@@ -501,7 +502,7 @@ describe('removeVerified:核对的就是删除的那个对象', () => {
     await seed(s, FA, 'payload');
     await safe.hardlink(s.fx, abs(s, FA), abs(s, FB));
     expect(await code(hfs.removeVerified(s.mk(), FA, OPTS, v))).toBe(HOME_DENY.HARDLINK);
-    await safe.remove(s.fx, abs(s, FB));
+    await rawUnlink(abs(s, FB)); // FA 此刻 nlink=2,safe-fs.remove 会拒
     await safe.chmod(s.fx, abs(s, FA), 0o644);
     expect(await code(hfs.removeVerified(s.mk(), FA, OPTS, v))).toBe(HOME_DENY.OWNER);
     await safe.chmod(s.fx, abs(s, FA), 0o600);

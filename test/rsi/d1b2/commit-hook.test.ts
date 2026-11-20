@@ -7,6 +7,7 @@ import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { exists, lstat, readDir, readText } from '../../../src/io/read-fs.js';
 import * as safe from '../../../src/io/safe-fs.js';
+import { rawLink, rawUnlink } from '../../helpers/raw-links.js';
 import type { PersonalCommitJournal } from '../../../src/contracts/rsi-personal.js';
 import { RsiLockError } from '../../../src/rsi/lock-error.js';
 import {
@@ -710,7 +711,7 @@ describe('beforeRefUpdate:拒绝后清理的改名协议', () => {
   it('denied_cleanup_move_source_swapped_not_unlinked:移入墓碑时 link 之后原名被换成别的事务的 journal → 不删换上者(denied;墓碑里是自己的 journal,核对后删除)', async () => {
     const { w, r } = await runDeny('d1b2-msrc-', (w2, base) => ({
       onStage: failOnceAt('post-link', 1, async () => {
-        await safe.remove(w2.io, journalPath(w2));
+        await rawUnlink(journalPath(w2)); // 此刻原名与墓碑同 inode(nlink=2),safe-fs.remove 会拒,夹具走 raw
         await writeJournal(w2.h, { ...base(), txn_id: foreignA });
       }),
     }));
@@ -772,7 +773,7 @@ describe('beforeRefUpdate:拒绝后清理的改名协议', () => {
         if (step === 'discard:after-rename') advance(w2); // 迫使走改回分支
       },
       onStage: failOnceAt('pre-unlink-source', 2, async () => {
-        await safe.remove(w2.io, journalPath(w2)); // 我们刚建的原名链接被拿走
+        await rawUnlink(journalPath(w2)); // 我们刚建的原名链接被拿走(nlink=2,走 raw)
         await writeJournal(w2.h, { ...mine(), txn_id: foreignA });
         throw new Error('unlink failed');
       }),
@@ -826,7 +827,7 @@ describe('beforeRefUpdate:拒绝后清理的改名协议', () => {
     const t1 = fixedTomb(w);
     const t2 = statePath(w.h, `${PERSONAL_STATE_FILES.journal}.denied-${'d'.repeat(32)}`);
     await safe.hardlink(w.io, journalPath(w), t1);
-    await safe.hardlink(w.io, journalPath(w), t2);
+    await rawLink(journalPath(w), t2); // 来源已是 nlink=2,safe-fs.hardlink 会拒
     const re = await openAgain(w);
     expect(re).toMatchObject({ kind: 'invalid', why: 'journal_unsafe' });
     expect((await lstat(journalPath(w))).nlink).toBe(3);
