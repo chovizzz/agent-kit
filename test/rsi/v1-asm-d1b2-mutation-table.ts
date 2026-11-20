@@ -392,6 +392,7 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
       '放行:钩子进 commit 的 beforeRefUpdate',
       '提交前复核拒',
       'candidate-apply.ts:所有 store.commit 带 beforeRefUpdate',
+      D_ARCH_SCAN,
     ],
     mustKill: [
       '放行:钩子进 commit 的 beforeRefUpdate',
