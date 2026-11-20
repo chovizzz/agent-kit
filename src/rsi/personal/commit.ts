@@ -11,23 +11,29 @@
  * 不依赖 `git revert`,不用 `add` / `commit` 的高层路径;作者与提交者固定为 `RSI_PERSONAL_AUTHOR`。
  * 树约束(R21-3.1):upsert / delete 的顶层只许布局目录(= kit 管理路径,见 {@link KIT_MANAGED_TOP_DIRS});路径段不得以 `.` 开头(含 `.gitattributes` / `.gitmodules` / `.git`),文件一律 `100644`。
  */
-import { PersonalHeadSchema, type PersonalCommitJournal } from '../../contracts/rsi-personal.js';
+import {
+  PersonalCommitJournalSchema,
+  PersonalHeadSchema,
+  type PersonalCommitJournal,
+} from '../../contracts/rsi-personal.js';
 import type { RsiAutoPauseReason } from '../../contracts/rsi.js';
 import { REF_MOVED_AFTER_DENIED } from './commit-reasons.js';
 import {
   PERSONAL_STATE_FILES,
   ensureEmptyDir,
   moveJournalToTombstone,
+  newTombstoneName,
   probeFirstTime,
   readHead,
   readJournal,
-  readJournalTombstone,
-  removeJournalTombstone,
+  removeVerifiedTombstone,
   restoreJournalFromTombstone,
+  settleHalfMovedJournal,
   statePath,
   writeHead,
   type PersonalHome,
 } from './home-state.js';
+import { HomeWriteDeniedError } from '../../io/home-fs.js';
 import {
   assertLocks,
   bootstrapRepo,
@@ -320,6 +326,8 @@ export async function openPersonalRepo(
   }
   const c = await makeCtx(deps, locks);
   await assertLocks(c);
+  // 读 journal 之前:收尾「改名 / 改回死在 link 之后」留下的确定半完成态(原名与墓碑同 inode、nlink=2),否则读取会按硬链接拒绝而熔断
+  await settleHalfMovedJournal(deps.h);
 
   const jr = await readJournal(deps.h);
   if (jr.kind === 'invalid') return invalid(`journal_${jr.why}`);
@@ -416,16 +424,19 @@ type DiscardResult =
   | { kind: 'journal_unverified'; why: string };
 
 /**
- * 钩子拒绝后删自己刚写的 journal。协议(R3,消除「核对 → 删除」之间的 TOCTOU):
+ * 钩子拒绝后删自己刚写的 journal。协议(R3 / R4;**保证的边界见下,不夸大**):
  *  1. 复核锁(抛 → 传播,不动)→ 读盘快速核对所有权与 ref(只是快速失败,不是依据)→ 最后一次锁复核;
- *  2. **先把 journal 原子改名**到本事务唯一的墓碑(同目录;{@link setJournalAside}),此后原路径上出现的任何东西都不再是我们要删的对象(核对与删除作用于同一个私有路径名,不是 inode 绑定:墓碑名只有本事务知道,核对与 unlink 之间被同权限的对抗进程替换属于 home-fs 文件头已声明的「按路径」残余);
- *  3. 对**墓碑**核对:内容与本次写下的逐字段全等(含 phase)、`refs/heads/rsi === oldHead`;不符 → 把墓碑不覆盖地改回原名(原名已被占 → 墓碑保留);
- *  4. unlink 墓碑(IO 失败吞掉:journal 已离开原路径,墓碑残留无害,下次恢复只认原名);
+ *  2. **不覆盖地**把 journal 改名到本次清理唯一的**随机**墓碑名(同目录;名字不含 txn_id、不可推导;{@link discardViaTombstone});墓碑名已被占用 → 不动现场,invalid;
+ *  3. 对墓碑**经已打开的 fd**核对:内容与本次写下的逐字段全等(含 phase)、`refs/heads/rsi === oldHead`;不符 → 把墓碑不覆盖地改回原名(原名已被占 / 改回途中被换 → 墓碑保留,invalid);
+ *  4. 核对通过后:unlink 前在路径上 lstat 比对 dev:ino(已不是核对过的那个对象 → 不删,invalid);unlink 后对**同一个 fd** 再 fstat,nlink 必须为 0(否则删的不是核对过的对象 → invalid);
  *  5. 删除完成后**再读一次** ref,与 `oldHead` 不符(核对之后被外部 `git update-ref` 推进)→ `ref_moved`(不回滚已删的自己的 journal,但绝不返回普通 denied)。
  * 只有 `clean` 才允许对外返回普通 `denied`;其余保留现场(不改引用),由调用方走既有完整性失败路径。丢锁照旧传播。
  *
- * 保证的边界(不夸大):步骤 2 之后原路径上换上的 journal 不会被本函数删;步骤 5 之后的推进本函数观测不到;步骤 5 报 `ref_moved` 时 journal 已删(不回滚),下次恢复看不到它;
- * 进程在步骤 2 与 3 之间死亡:墓碑残留、原名无 journal(与「已丢弃」同形:ref / 索引 / 工作树都没动,钩子拒绝发生在 `update-ref` 之前)。同一 txn 的重放会覆盖上次残留的墓碑。
+ * 三类结果,不混:
+ *  - **已验证**:步骤 3 / 4 观测到的替换(墓碑被换、unlink 前身份变了、unlink 后 nlink≠0)一律 invalid;步骤 2 之后原路径上换上的 journal 不会被本函数删;
+ *  - **未验证的残留**:lstat 与 unlink 之间路径被换上别的文件(按路径的窗口,home-fs 文件头已声明)——只能事后发现(nlink),不能撤销;步骤 5 之后的推进观测不到;步骤 5 报 `ref_moved` 时 journal 已删(不回滚);
+ *    步骤 2 与 3 之间进程死亡:孤立墓碑(内容未核对),原名无 journal(与「已丢弃」同形:ref / 索引 / 工作树都没动,钩子拒绝发生在 `update-ref` 之前),恢复不读墓碑;
+ *  - **半完成态**:步骤 2 / 3 的改名 / 改回是 link+unlink,死在 link 之后 = 原名与墓碑同 inode、nlink=2;下次 `openPersonalRepo` 持锁读 journal 之前自动收尾(只删墓碑名)。
  * 合作写者持同一把个人锁不会换 journal;外部 git 不受该锁约束,故 ref 单独在改名后与删除后各读一次。
  */
 async function discardOwnJournal(
@@ -437,50 +448,77 @@ async function discardOwnJournal(
   const early = await verifyOwnJournal(ctx, mine, oldHead);
   if (early.kind !== 'clean') return early;
   await assertLocks(ctx); // 最后一次锁复核(丢锁则传播,不进下面吞 IO 错误的 catch);上面的核对只是快速失败,不是依据
-  const aside = await setJournalAside(ctx, mine, oldHead);
-  if (aside.kind !== 'clean') return aside;
-  await ctx.onStep?.('discard:before-unlink');
+  return discardViaTombstone(ctx, mine, oldHead);
+}
+
+/** 对 fd 读出的墓碑内容做核对:`undefined` = 是本次写下的 journal 且 ref 仍为 `oldHead`(随后才 unlink);其它 = 不通过的原因 */
+async function judgeTombstone(
+  ctx: OpCtx,
+  bytes: Buffer,
+  mine: PersonalCommitJournal,
+  oldHead: string,
+): Promise<DiscardResult | undefined> {
+  let parsed: PersonalCommitJournal | undefined;
   try {
-    await removeJournalTombstone(ctx.h, mine.txn_id);
+    const r = PersonalCommitJournalSchema.safeParse(JSON.parse(bytes.toString('utf8')));
+    parsed = r.success ? r.data : undefined;
   } catch {
-    // 删除失败:墓碑残留(journal 已不在原名下,恢复不会看到它)
+    parsed = undefined;
   }
-  const after = revParse(ctx.git, 'refs/heads/rsi');
-  if (after !== oldHead) return { kind: 'ref_moved', actual: after };
-  return { kind: 'clean' };
+  if (parsed === undefined) return { kind: 'journal_unverified', why: 'journal_invalid' };
+  if (!sameJournal(parsed, mine)) return { kind: 'journal_unverified', why: 'journal_not_mine' };
+  const actual = revParse(ctx.git, 'refs/heads/rsi');
+  if (actual !== oldHead) return { kind: 'ref_moved', actual };
+  await ctx.onStep?.('discard:before-unlink');
+  return undefined;
 }
 
 /**
- * 把 journal 原子改名到墓碑并对墓碑核对。`clean` = 墓碑就是本次写下的 journal 且 ref 仍为 `oldHead`(墓碑留在原地,由调用方删);
- * 其余结果都已尽力把墓碑改回原名:改名失败(非 ENOENT)→ `journal_rename_failed`;原路径无文件 → `journal_absent`;
- * 墓碑读不出 / 不是本次的 → `journal_*`;ref 被推进 → `ref_moved`;改回时原名已被占 → `journal_not_mine`(墓碑保留)。
+ * 改名到随机墓碑 → 经 fd 核对 → 删除同一对象 → 再读 ref(协议见 {@link discardOwnJournal} 的 2–5)。
+ * `clean` = 删的就是核对过的、本次写下的 journal(见 `removeVerified` 的残余说明),且 ref 仍为 `oldHead`。
+ * 只有「核对不通过」(`rejected`)与「守卫拒绝读取」两类才尝试把墓碑不覆盖地改回原名;`absent` / `replaced` / `not_removed_object` / 移入失败 / 墓碑名被占用都不动现场(没有可改回的、或改回会放回未核对的对象)。
  */
-async function setJournalAside(
+async function discardViaTombstone(
   ctx: OpCtx,
   mine: PersonalCommitJournal,
   oldHead: string,
 ): Promise<DiscardResult> {
-  let moved: 'moved' | 'absent';
+  const tomb = newTombstoneName(ctx.h);
+  let moved: 'moved' | 'absent' | 'occupied';
   try {
-    moved = await moveJournalToTombstone(ctx.h, mine.txn_id);
+    moved = await moveJournalToTombstone(ctx.h, tomb);
   } catch {
     return { kind: 'journal_unverified', why: 'journal_rename_failed' };
   }
   if (moved === 'absent') return { kind: 'journal_unverified', why: 'journal_absent' };
+  if (moved === 'occupied')
+    return { kind: 'journal_unverified', why: 'journal_tombstone_occupied' };
   await ctx.onStep?.('discard:after-rename');
-  const tomb = await readJournalTombstone(ctx.h, mine.txn_id);
-  if (tomb.kind === 'absent') return { kind: 'journal_unverified', why: 'journal_absent' };
-  let bad: DiscardResult | undefined;
-  if (tomb.kind !== 'ok') bad = { kind: 'journal_unverified', why: `journal_${tomb.kind}` };
-  else if (!sameJournal(tomb.value, mine)) {
-    bad = { kind: 'journal_unverified', why: 'journal_not_mine' };
-  } else {
-    const actual = revParse(ctx.git, 'refs/heads/rsi');
-    if (actual !== oldHead) bad = { kind: 'ref_moved', actual };
-  }
-  if (bad === undefined) return { kind: 'clean' };
+  let bad: DiscardResult;
   try {
-    if ((await restoreJournalFromTombstone(ctx.h, mine.txn_id)) === 'occupied') {
+    const r = await removeVerifiedTombstone<DiscardResult>(ctx.h, tomb, (bytes) =>
+      judgeTombstone(ctx, bytes, mine, oldHead),
+    );
+    if (r.kind === 'removed') {
+      const after = revParse(ctx.git, 'refs/heads/rsi');
+      if (after !== oldHead) return { kind: 'ref_moved', actual: after };
+      return { kind: 'clean' };
+    }
+    if (r.kind === 'absent') return { kind: 'journal_unverified', why: 'journal_absent' };
+    if (r.kind === 'replaced') {
+      return { kind: 'journal_unverified', why: 'journal_tombstone_replaced' };
+    }
+    if (r.kind === 'not_removed_object') {
+      return { kind: 'journal_unverified', why: 'journal_tombstone_not_removed' };
+    }
+    bad = r.value;
+  } catch (e) {
+    // 守卫拒绝读取(硬链接 / 属主 / 权限 / 过大):不是我们能确认的 journal;其它错误(含注入的步骤异常)照旧传播
+    if (!(e instanceof HomeWriteDeniedError)) throw e;
+    bad = { kind: 'journal_unverified', why: 'journal_unsafe' };
+  }
+  try {
+    if ((await restoreJournalFromTombstone(ctx.h, tomb)) === 'occupied') {
       return { kind: 'journal_unverified', why: 'journal_not_mine' };
     }
   } catch {

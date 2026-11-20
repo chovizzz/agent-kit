@@ -34,6 +34,7 @@ export interface V1AsmD1b2Result {
 
 const COMMIT = 'src/rsi/personal/commit.ts';
 const HSTATE = 'src/rsi/personal/home-state.ts';
+const HFS = 'src/io/home-fs.ts';
 const APPLY = 'src/rsi/personal/candidate-apply.ts';
 const STEP = 'src/rsi/personal/candidate-step.ts';
 const RSTEP = 'src/rsi/personal/reduce-step.ts';
@@ -59,6 +60,7 @@ const CEXTRA_T = 'rsi/d1b2/creation-extra.test.ts';
 const ARCH_T = 'rsi/d1b2/growth-sinks-arch.test.ts';
 const STAMP_T = 'rsi/asm/b-entry-stamp-arch.test.ts';
 const ACC_T = 'rsi/d1b2/accept-r1.test.ts';
+const HFS_T = 'io/home-fs-s7c.test.ts';
 
 /** 各测试文件的 describe 标题(失败集合须 ⊆ expectRed;所以把整个 describe 记为「命中范围」) */
 const D_HOOK_DENY = 'beforeRefUpdate:拒绝';
@@ -184,8 +186,9 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
       {
         // 两道核对(读盘快速失败 + 对墓碑核对)都去掉才等于「不核对所有权」
         file: COMMIT,
-        anchor: '  else if (!sameJournal(tomb.value, mine)) {\n',
-        replacement: '  else if ((false as boolean) && !sameJournal(tomb.value, mine)) {\n',
+        anchor:
+          "  if (!sameJournal(parsed, mine)) return { kind: 'journal_unverified', why: 'journal_not_mine' };\n",
+        replacement: '',
       },
     ],
     tests: [HOOK_T],
@@ -247,8 +250,11 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
     edits: [
       {
         file: COMMIT,
-        anchor: '    await removeJournalTombstone(ctx.h, mine.txn_id);',
-        replacement: '    await restoreJournalFromTombstone(ctx.h, mine.txn_id);',
+        // 核对一律「不通过」→ 走改回分支:journal 被放回原名而不是被删
+        anchor:
+          '    const r = await removeVerifiedTombstone<DiscardResult>(ctx.h, tomb, (bytes) =>\n      judgeTombstone(ctx, bytes, mine, oldHead),\n    );\n',
+        replacement:
+          "    const r = await removeVerifiedTombstone<DiscardResult>(ctx.h, tomb, (bytes) =>\n      judgeTombstone(ctx, bytes, mine, oldHead).then((): DiscardResult => ({ kind: 'clean' })),\n    );\n",
       },
     ],
     tests: [HOOK_T],
@@ -1080,15 +1086,16 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
     edits: [
       {
         file: COMMIT,
-        anchor: "  if (actual !== oldHead) return { kind: 'ref_moved', actual };\n",
-        replacement: '',
+        anchor:
+          "  const actual = revParse(ctx.git, 'refs/heads/rsi');\n  if (actual !== oldHead) return { kind: 'ref_moved', actual };\n  return { kind: 'clean' };\n",
+        replacement: "  return { kind: 'clean' };\n",
       },
       {
         // 「别人推进 ref 时不能静默」要连墓碑阶段的兜底一起去掉才成立
         file: COMMIT,
         anchor:
-          "  } else {\n    const actual = revParse(ctx.git, 'refs/heads/rsi');\n    if (actual !== oldHead) bad = { kind: 'ref_moved', actual };\n  }\n",
-        replacement: '  }\n',
+          "  const actual = revParse(ctx.git, 'refs/heads/rsi');\n  if (actual !== oldHead) return { kind: 'ref_moved', actual };\n  await ctx.onStep?.('discard:before-unlink');\n",
+        replacement: "  await ctx.onStep?.('discard:before-unlink');\n",
       },
     ],
     tests: [HOOK_T],
@@ -1290,10 +1297,24 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
       'R2-1:所有权与 ref 的最终核对在最后一次锁复核之后(去掉后置核对 → 锁复核期间的异动看不见,返回普通 denied)',
     edits: [
       {
+        // 墓碑阶段的核对(所有权 + ref)整体去掉
         file: COMMIT,
         anchor:
-          "  const aside = await setJournalAside(ctx, mine, oldHead);\n  if (aside.kind !== 'clean') return aside;\n",
-        replacement: '  await moveJournalToTombstone(ctx.h, mine.txn_id);\n',
+          "  if (parsed === undefined) return { kind: 'journal_unverified', why: 'journal_invalid' };\n  if (!sameJournal(parsed, mine)) return { kind: 'journal_unverified', why: 'journal_not_mine' };\n  const actual = revParse(ctx.git, 'refs/heads/rsi');\n  if (actual !== oldHead) return { kind: 'ref_moved', actual };\n",
+        replacement: '',
+      },
+      {
+        // 原路径已无文件当作成功(不再报 journal_absent)
+        file: COMMIT,
+        anchor:
+          "  if (moved === 'absent') return { kind: 'journal_unverified', why: 'journal_absent' };\n",
+        replacement: '',
+      },
+      {
+        file: COMMIT,
+        anchor:
+          "    if (r.kind === 'absent') return { kind: 'journal_unverified', why: 'journal_absent' };\n",
+        replacement: "    if (r.kind === 'absent') return { kind: 'clean' };\n",
       },
     ],
     tests: [HOOK_T],
@@ -1736,17 +1757,14 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
   {
     id: 'denied_cleanup_path_unlink',
     clause:
-      'R3-1:最终删除作用于改名后的墓碑,不按原路径 unlink(退回按路径删 → 核对之后换上的第三方 journal 被误删)',
+      'R3-1:最终删除作用于改名后的墓碑,不按原路径删(退回按原路径 → 核对之后换上的第三方 journal 被误删 / 墓碑不删)',
     edits: [
       {
         file: COMMIT,
-        anchor: '  removeJournalTombstone,\n',
-        replacement: '  removeJournal,\n  removeJournalTombstone,\n',
-      },
-      {
-        file: COMMIT,
-        anchor: '    await removeJournalTombstone(ctx.h, mine.txn_id);',
-        replacement: '    await removeJournal(ctx.h);',
+        anchor:
+          '    const r = await removeVerifiedTombstone<DiscardResult>(ctx.h, tomb, (bytes) =>\n',
+        replacement:
+          '    const r = await removeVerifiedTombstone<DiscardResult>(ctx.h, PERSONAL_STATE_FILES.journal, (bytes) =>\n',
       },
     ],
     tests: [HOOK_T],
@@ -1765,8 +1783,9 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
     edits: [
       {
         file: COMMIT,
-        anchor: '  else if (!sameJournal(tomb.value, mine)) {\n',
-        replacement: '  else if ((false as boolean) && !sameJournal(tomb.value, mine)) {\n',
+        anchor:
+          "  if (!sameJournal(parsed, mine)) return { kind: 'journal_unverified', why: 'journal_not_mine' };\n",
+        replacement: '',
       },
     ],
     tests: [HOOK_T],
@@ -1786,7 +1805,7 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
       {
         file: COMMIT,
         anchor:
-          "  try {\n    if ((await restoreJournalFromTombstone(ctx.h, mine.txn_id)) === 'occupied') {\n      return { kind: 'journal_unverified', why: 'journal_not_mine' };\n    }\n  } catch {\n    // 改回失败:墓碑保留,仍按核对结果返回(不降级)\n  }\n",
+          "  try {\n    if ((await restoreJournalFromTombstone(ctx.h, tomb)) === 'occupied') {\n      return { kind: 'journal_unverified', why: 'journal_not_mine' };\n    }\n  } catch {\n    // 改回失败:墓碑保留,仍按核对结果返回(不降级)\n  }\n",
         replacement: '',
       },
     ],
@@ -1809,9 +1828,15 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
     edits: [
       {
         file: HSTATE,
+        anchor: '  renameExclusive,\n  settleHalfLink,\n',
+        replacement: '  rename,\n  renameExclusive,\n  settleHalfLink,\n',
+      },
+      {
+        file: HSTATE,
         anchor:
-          '    await renameExclusive(homeFsFor(h, [to, from]), stateRel(from), stateRel(to));',
-        replacement: '    await rename(homeFsFor(h, [to, from]), stateRel(from), stateRel(to));',
+          '    await renameExclusive(homeFsFor(h, [to, tombName]), stateRel(tombName), stateRel(to));',
+        replacement:
+          '    await rename(homeFsFor(h, [to, tombName]), stateRel(tombName), stateRel(to));',
       },
     ],
     tests: [HOOK_T],
@@ -1825,8 +1850,8 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
       {
         file: COMMIT,
         anchor:
-          "  } else {\n    const actual = revParse(ctx.git, 'refs/heads/rsi');\n    if (actual !== oldHead) bad = { kind: 'ref_moved', actual };\n  }\n",
-        replacement: '  }\n',
+          "  const actual = revParse(ctx.git, 'refs/heads/rsi');\n  if (actual !== oldHead) return { kind: 'ref_moved', actual };\n  await ctx.onStep?.('discard:before-unlink');\n",
+        replacement: "  await ctx.onStep?.('discard:before-unlink');\n",
       },
     ],
     tests: [HOOK_T],
@@ -1840,8 +1865,8 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
       {
         file: COMMIT,
         anchor:
-          "  const after = revParse(ctx.git, 'refs/heads/rsi');\n  if (after !== oldHead) return { kind: 'ref_moved', actual: after };\n  return { kind: 'clean' };\n",
-        replacement: "  return { kind: 'clean' };\n",
+          "      const after = revParse(ctx.git, 'refs/heads/rsi');\n      if (after !== oldHead) return { kind: 'ref_moved', actual: after };\n      return { kind: 'clean' };\n",
+        replacement: "      return { kind: 'clean' };\n",
       },
     ],
     tests: [HOOK_T],
@@ -1853,14 +1878,301 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
     clause: 'R3-1:墓碑核对通过后被 unlink(不删 → 每次拒绝都在状态目录留下墓碑)',
     edits: [
       {
-        file: COMMIT,
-        anchor: '    await removeJournalTombstone(ctx.h, mine.txn_id);',
-        replacement: '    void 0;',
+        file: HFS,
+        anchor:
+          "    await fsp.unlink(info.abs);\n    await syncDir(info.parentAbs);\n    const after = await fh.stat();\n    return after.nlink === 0 ? { kind: 'removed' } : { kind: 'not_removed_object' };\n",
+        replacement: "    return { kind: 'removed' };\n",
       },
     ],
     tests: [HOOK_T],
     expectRed: [D_HOOK_DENY, D_HOOK_POS, D_HOOK_ASIDE, 'denied_cleanup_rename_then_verify_ok'],
     mustKill: ['denied_cleanup_rename_then_verify_ok'],
+  },
+  // 返工第 5 轮(主代理验收第 3 轮):随机墓碑名 / 不覆盖移入 / fd 绑定删除 / 半完成态收尾 / 回滚所有权
+  {
+    id: 'tombstone_name_not_random',
+    clause: 'R5-1:墓碑名随机不可推导(退成常量 → 两次清理同名、可预测)',
+    edits: [
+      {
+        file: HSTATE,
+        anchor: "randomBytes(16).toString('hex')",
+        replacement: "'0'.repeat(32)",
+      },
+    ],
+    tests: [HOOK_T],
+    expectRed: [D_HOOK_DENY, D_HOOK_POS, D_HOOK_ASIDE, 'denied_cleanup_tombstone_name_random'],
+    mustKill: ['denied_cleanup_tombstone_name_random'],
+  },
+  {
+    id: 'tombstone_move_overwrites',
+    clause: 'R5-1:移入墓碑不覆盖(用会覆盖的 rename → 被占用的墓碑名上的第三方内容被抹掉)',
+    edits: [
+      {
+        file: HSTATE,
+        anchor: '  renameExclusive,\n  settleHalfLink,\n',
+        replacement: '  rename,\n  renameExclusive,\n  settleHalfLink,\n',
+      },
+      {
+        file: HSTATE,
+        anchor:
+          '    await renameExclusive(homeFsFor(h, [from, tombName]), stateRel(from), stateRel(tombName));',
+        replacement:
+          '    await rename(homeFsFor(h, [from, tombName]), stateRel(from), stateRel(tombName));',
+      },
+    ],
+    tests: [HOOK_T],
+    expectRed: [
+      D_HOOK_DENY,
+      D_HOOK_POS,
+      D_HOOK_ASIDE,
+      'denied_cleanup_tombstone_occupied_not_overwritten',
+    ],
+    mustKill: ['denied_cleanup_tombstone_occupied_not_overwritten'],
+  },
+  {
+    id: 'tombstone_occupied_ignored',
+    clause: 'R5-1:墓碑名已被占用 = invalid(去掉该分支 → 继续核对占位文件,报成别的原因)',
+    edits: [
+      {
+        file: COMMIT,
+        anchor:
+          "  if (moved === 'occupied')\n    return { kind: 'journal_unverified', why: 'journal_tombstone_occupied' };\n",
+        replacement: '',
+      },
+    ],
+    tests: [HOOK_T],
+    expectRed: [
+      D_HOOK_DENY,
+      D_HOOK_POS,
+      D_HOOK_ASIDE,
+      'denied_cleanup_tombstone_occupied_not_overwritten',
+    ],
+    mustKill: ['denied_cleanup_tombstone_occupied_not_overwritten'],
+  },
+  {
+    id: 'remove_verified_path_identity_skipped',
+    clause: 'R5-1:unlink 前在路径上比对 dev:ino(去掉 → 核对之后换上的文件被 unlink)',
+    edits: [
+      {
+        file: HFS,
+        anchor:
+          "    if (now === undefined || now.dev !== st.dev || now.ino !== st.ino) return { kind: 'replaced' };\n",
+        replacement: '',
+      },
+    ],
+    tests: [HOOK_T, HFS_T],
+    expectRed: [
+      D_HOOK_DENY,
+      D_HOOK_POS,
+      D_HOOK_ASIDE,
+      'removeVerified:核对的就是删除的那个对象',
+      'denied_cleanup_unlink_bound_to_verified_object',
+      'remove_verified_path_identity_checked',
+    ],
+    mustKill: [
+      'denied_cleanup_unlink_bound_to_verified_object',
+      'remove_verified_path_identity_checked',
+    ],
+  },
+  {
+    id: 'remove_verified_nlink_check_skipped',
+    clause: 'R5-1:unlink 后对同一 fd 确认 nlink==0(去掉 → 被删的不是核对过的对象也报成功)',
+    edits: [
+      {
+        file: HFS,
+        anchor:
+          "    return after.nlink === 0 ? { kind: 'removed' } : { kind: 'not_removed_object' };\n",
+        replacement: "    return { kind: 'removed' };\n",
+      },
+    ],
+    tests: [HOOK_T, HFS_T],
+    expectRed: [
+      D_HOOK_DENY,
+      D_HOOK_POS,
+      D_HOOK_ASIDE,
+      'removeVerified:核对的就是删除的那个对象',
+      'denied_cleanup_nlink_zero_confirmed',
+      'remove_verified_nlink_zero_checked',
+    ],
+    mustKill: ['denied_cleanup_nlink_zero_confirmed', 'remove_verified_nlink_zero_checked'],
+  },
+  {
+    id: 'rename_exclusive_rollback_unconditional',
+    clause:
+      'R5-3:移回失败回滚前核对目标名仍是本次创建的链接(去掉 → 原名被换上的第三方 journal 被删)',
+    edits: [
+      {
+        file: HFS,
+        anchor:
+          '    const cur = lstatIfExists(to.abs);\n    if (cur !== undefined && cur.dev === ident.dev && cur.ino === ident.ino) {\n      await fsp.unlink(to.abs).catch(() => undefined);\n      throw e;\n    }\n    if (cur === undefined) throw e;\n    throw new HomeRenameRaceError(toRel);\n',
+        replacement: '    await fsp.unlink(to.abs).catch(() => undefined);\n    throw e;\n',
+      },
+    ],
+    tests: [HOOK_T, HFS_T],
+    expectRed: [
+      D_HOOK_DENY,
+      D_HOOK_POS,
+      D_HOOK_ASIDE,
+      'renameExclusive:半完成态与竞态(link 之后)',
+      'denied_cleanup_restore_rollback_requires_own_link',
+      'rename_exclusive_rollback_requires_own_link',
+    ],
+    mustKill: [
+      'denied_cleanup_restore_rollback_requires_own_link',
+      'rename_exclusive_rollback_requires_own_link',
+    ],
+  },
+  {
+    id: 'rename_exclusive_source_identity_skipped',
+    clause: 'R5:link 之后 unlink(来源) 前核对来源名仍是同一 inode(去掉 → 被换上的文件被 unlink)',
+    edits: [
+      {
+        file: HFS,
+        anchor:
+          '    if (src !== undefined && src.dev === ident.dev && src.ino === ident.ino) {\n      await fsp.unlink(from.abs);\n    }\n',
+        replacement: '    await fsp.unlink(from.abs);\n',
+      },
+    ],
+    tests: [HOOK_T, HFS_T],
+    expectRed: [
+      D_HOOK_DENY,
+      D_HOOK_POS,
+      D_HOOK_ASIDE,
+      'renameExclusive:半完成态与竞态(link 之后)',
+      'denied_cleanup_move_source_swapped_not_unlinked',
+      'rename_exclusive_source_swapped_not_unlinked',
+    ],
+    mustKill: [
+      'denied_cleanup_move_source_swapped_not_unlinked',
+      'rename_exclusive_source_swapped_not_unlinked',
+    ],
+  },
+  {
+    id: 'rename_race_not_occupied',
+    clause:
+      'R5-3:改回途中目标被换 = 被占用(invalid / journal_not_mine);不识别 → 被当成普通改回失败,降级成 deferred',
+    edits: [
+      {
+        file: HSTATE,
+        anchor: '  e instanceof HomeExistsError || e instanceof HomeRenameRaceError;',
+        replacement: '  e instanceof HomeExistsError;',
+      },
+    ],
+    tests: [HOOK_T],
+    expectRed: [
+      D_HOOK_DENY,
+      D_HOOK_POS,
+      D_HOOK_ASIDE,
+      'denied_cleanup_restore_rollback_requires_own_link',
+    ],
+    mustKill: ['denied_cleanup_restore_rollback_requires_own_link'],
+  },
+  {
+    id: 'half_state_settle_not_called',
+    clause:
+      'R5-2:读 journal 之前收尾半完成态(去掉 → link 后崩溃的 nlink=2 journal 永远按硬链接拒绝而熔断)',
+    edits: [
+      {
+        file: COMMIT,
+        anchor: '  await settleHalfMovedJournal(deps.h);\n',
+        replacement: '',
+      },
+    ],
+    tests: [HOOK_T],
+    expectRed: [
+      D_HOOK_DENY,
+      D_HOOK_POS,
+      D_HOOK_ASIDE,
+      'denied_cleanup_crash_after_link_move_aside_recovers',
+      'denied_cleanup_crash_after_link_restore_recovers',
+    ],
+    mustKill: [
+      'denied_cleanup_crash_after_link_move_aside_recovers',
+      'denied_cleanup_crash_after_link_restore_recovers',
+    ],
+  },
+  {
+    id: 'half_state_settle_any_name',
+    clause:
+      'R5-2:只收尾「墓碑名」的半完成态(放宽到任意 commit-journal.json.* 名字 → 用户 / 第三方的硬链接被删)',
+    edits: [
+      {
+        file: HSTATE,
+        anchor: '.filter(isTombstoneName);',
+        replacement: '.filter((n) => n.startsWith(`${PERSONAL_STATE_FILES.journal}.`));',
+      },
+    ],
+    tests: [HOOK_T],
+    expectRed: [D_HOOK_DENY, D_HOOK_POS, D_HOOK_ASIDE, 'half_state_settle_requires_tombstone_name'],
+    mustKill: ['half_state_settle_requires_tombstone_name'],
+  },
+  {
+    id: 'settle_half_link_ident_unchecked',
+    clause: 'R5-2:收尾要求两个名字是同一 inode(去掉 → 不同 inode 各 nlink=2 的文件被删)',
+    edits: [
+      {
+        file: HFS,
+        anchor: '  if (a.dev !== b.dev || a.ino !== b.ino || a.nlink !== 2 || b.nlink !== 2) {',
+        replacement: '  if (a.nlink !== 2 || b.nlink !== 2) {',
+      },
+    ],
+    tests: [HFS_T],
+    expectRed: ['settleHalfLink:只收尾确定的半完成态', 'settle_half_link_requires_same_inode'],
+    mustKill: ['settle_half_link_requires_same_inode'],
+  },
+  {
+    id: 'settle_half_link_nlink_unchecked',
+    clause: 'R5-2:收尾要求 nlink 恰为 2(去掉 → nlink=3 的非确定形态也被收尾)',
+    edits: [
+      {
+        file: HFS,
+        anchor: '  if (a.dev !== b.dev || a.ino !== b.ino || a.nlink !== 2 || b.nlink !== 2) {',
+        replacement: '  if (a.dev !== b.dev || a.ino !== b.ino) {',
+      },
+    ],
+    tests: [HOOK_T, HFS_T],
+    expectRed: [
+      D_HOOK_DENY,
+      D_HOOK_POS,
+      D_HOOK_ASIDE,
+      'settleHalfLink:只收尾确定的半完成态',
+      'half_state_settle_requires_nlink_two',
+    ],
+    mustKill: ['half_state_settle_requires_nlink_two'],
+  },
+  {
+    id: 'rename_exclusive_target_unchecked',
+    clause:
+      'R5-Pi:link 之后、unlink(来源) 之前核对目标名仍持有本次链入的对象(去掉 → 目标名被换时来源——可能是最后一个有效名字——也被删,且报成功)',
+    edits: [
+      {
+        file: HFS,
+        anchor:
+          '    const dst = lstatIfExists(to.abs);\n    if (dst === undefined || dst.dev !== ident.dev || dst.ino !== ident.ino) {\n      throw new HomeRenameRaceError(toRel);\n    }\n',
+        replacement: '',
+      },
+    ],
+    tests: [HFS_T],
+    expectRed: [
+      'renameExclusive:半完成态与竞态(link 之后)',
+      'rename_exclusive_target_checked_before_source_unlink',
+    ],
+    mustKill: ['rename_exclusive_target_checked_before_source_unlink'],
+  },
+  {
+    id: 'settle_half_link_same_name_allowed',
+    clause: 'R5-Pi:收尾原语拒绝保留名与删除名相同(去掉 → 同名且另有硬链接时把保留名删掉)',
+    edits: [
+      {
+        file: HFS,
+        anchor:
+          '  if (dropRel === keepRel) throw new HomeWriteDeniedError(HOME_DENY.PATH_INVALID, dropRel);\n',
+        replacement: '',
+      },
+    ],
+    tests: [HFS_T],
+    expectRed: ['settleHalfLink:只收尾确定的半完成态', 'settle_half_link_rejects_same_name'],
+    mustKill: ['settle_half_link_rejects_same_name'],
   },
 ];
 

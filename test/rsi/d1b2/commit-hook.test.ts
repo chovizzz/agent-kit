@@ -3,28 +3,38 @@
  * 契约:钩子在**最后一次 `assertLocks` 之后、`update-ref` 之前**调用,返回后再复核一次锁;只认 `BeforeRefUpdateDenied` 为拒绝
  * (→ `denied`,引用不动,自己写下的 journal 在所有权核对后删除);其它错误(含 `RsiLockError`)原样传播,不删 journal、不改引用。
  */
+import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { exists, readDir, readText } from '../../../src/io/read-fs.js';
+import { exists, lstat, readDir, readText } from '../../../src/io/read-fs.js';
 import * as safe from '../../../src/io/safe-fs.js';
 import type { PersonalCommitJournal } from '../../../src/contracts/rsi-personal.js';
 import { RsiLockError } from '../../../src/rsi/lock-error.js';
 import {
   BeforeRefUpdateDenied,
   commitPersonal,
+  inspectPersonalRepo,
+  openPersonalRepo,
   type PersonalLocks,
+  type StepHook,
 } from '../../../src/rsi/personal/commit.js';
 import { EMPTY_TREE } from '../../../src/rsi/personal/commit-journal.js';
 import {
   PERSONAL_STATE_FILES,
+  isTombstoneName,
+  personalHome,
+  type PersonalHome,
   readJournal,
   removeJournal,
   statePath,
   writeJournal,
 } from '../../../src/rsi/personal/home-state.js';
 import {
+  crashAt,
   git,
+  InjectedCrash,
   makeWorld,
   NEXT_FILES,
+  READ_OPTS,
   repoDeps,
   setupRepo,
   slowTests,
@@ -452,9 +462,15 @@ describe('beforeRefUpdate:位置与锁复核', () => {
  * R3:拒绝后清理 journal 的「先原子改名到墓碑 → 对墓碑核对 → unlink 墓碑」协议。
  * 注入点(`onStep`):`discard:after-rename`(改名之后、核对墓碑之前)、`discard:before-unlink`(核对之后、unlink 之前);「改名之前」= 第 2 次锁断言(上面已有用例)。
  */
+type HomeFsStage = Parameters<NonNullable<PersonalHome['onStage']>>[0];
+
 describe('beforeRefUpdate:拒绝后清理的改名协议', () => {
-  const tombOf = (w: World, txn: string): string =>
-    statePath(w.h, `${PERSONAL_STATE_FILES.journal}.denied-${txn}`);
+  /** 墓碑名是随机的:在注入点上从状态目录里找出实际名字(恰好一个) */
+  const findTomb = async (w: World): Promise<string> => {
+    const names = (await readDir(w.h.stateDir)).map((e) => e.name).filter(isTombstoneName);
+    if (names.length !== 1) throw new Error(`应恰有一个墓碑:${JSON.stringify(names)}`);
+    return statePath(w.h, names[0] as string);
+  };
   const leftovers = async (w: World): Promise<string[]> =>
     (await readDir(w.h.stateDir))
       .map((e) => e.name)
@@ -518,36 +534,24 @@ describe('beforeRefUpdate:拒绝后清理的改名协议', () => {
   });
 
   it('denied_cleanup_tombstone_replaced_not_mine:改名之后核对期间墓碑被换成别的事务的内容 → invalid / journal_not_mine;第三方内容改回原名,不删', async () => {
-    const { w, r, txn } = await run(
-      'd1b2-aside-tomb-',
-      'discard:after-rename',
-      async (w2, base) => {
-        await writeJournal(w2.h, { ...base, txn_id: foreignA });
-        await safe.rename(
-          w2.io,
-          statePath(w2.h, PERSONAL_STATE_FILES.journal),
-          tombOf(w2, base.txn_id),
-        );
-      },
-    );
+    const { w, r } = await run('d1b2-aside-tomb-', 'discard:after-rename', async (w2, base) => {
+      await writeJournal(w2.h, { ...base, txn_id: foreignA });
+      await safe.rename(w2.io, statePath(w2.h, PERSONAL_STATE_FILES.journal), await findTomb(w2));
+    });
     expect(r).toMatchObject({ status: 'invalid', why: 'journal_not_mine' });
     expect(await journalTxn(w)).toBe(foreignA);
-    expect(await exists(tombOf(w, txn))).toBe(false);
+    expect(await leftovers(w)).toEqual([PERSONAL_STATE_FILES.journal]);
   });
 
   it('denied_cleanup_restore_never_clobbers:墓碑不符且原名已被占 → invalid / journal_not_mine;原名上的内容与墓碑都原样保留(改回不覆盖)', async () => {
-    const { w, r, txn } = await run('d1b2-aside-occ-', 'discard:after-rename', async (w2, base) => {
+    const { w, r } = await run('d1b2-aside-occ-', 'discard:after-rename', async (w2, base) => {
       await writeJournal(w2.h, { ...base, txn_id: foreignB });
-      await safe.rename(
-        w2.io,
-        statePath(w2.h, PERSONAL_STATE_FILES.journal),
-        tombOf(w2, base.txn_id),
-      );
+      await safe.rename(w2.io, statePath(w2.h, PERSONAL_STATE_FILES.journal), await findTomb(w2));
       await writeJournal(w2.h, { ...base, txn_id: foreignA });
     });
     expect(r).toMatchObject({ status: 'invalid', why: 'journal_not_mine' });
     expect(await journalTxn(w)).toBe(foreignA);
-    const tomb = JSON.parse(await readText(tombOf(w, txn))) as { txn_id: string };
+    const tomb = JSON.parse(await readText(await findTomb(w))) as { txn_id: string };
     expect(tomb.txn_id).toBe(foreignB);
   });
 
@@ -588,5 +592,243 @@ describe('beforeRefUpdate:拒绝后清理的改名协议', () => {
     expect(refOf(w)).toBe(moved);
     expect(await readJournal(w.h)).toEqual({ kind: 'absent' });
     expect(await leftovers(w)).toEqual([]);
+  });
+
+  // ---- R5:随机墓碑名 / 不覆盖移入 / fd 绑定的核对与删除 / 半完成态收尾 / 回滚所有权 ----
+
+  type Wired = {
+    onStage?: (s: HomeFsStage) => void | Promise<void>;
+    onStep?: StepHook;
+    tombstoneHex?: () => string;
+  };
+  /** 钩子拒绝后跑清理;`wire` 给出注入点(经 `personalHome` 的 onStage / tombstoneHex 与 deps.onStep),`pre` 在提交前布置现场 */
+  async function runDeny(
+    prefix: string,
+    wire: (w: World, base: () => PersonalCommitJournal) => Wired,
+    pre: (w: World) => Promise<void> = async () => undefined,
+  ): Promise<{
+    w: World;
+    r: Awaited<ReturnType<typeof commitPersonal>>;
+    base: PersonalCommitJournal;
+  }> {
+    const w = await makeWorld(prefix);
+    await setupRepo(w);
+    await pre(w);
+    let base: PersonalCommitJournal | null = null;
+    const o = wire(w, () => {
+      if (base === null) throw new Error('钩子尚未被调用');
+      return base;
+    });
+    const h2 = personalHome(w.io, w.home, {
+      ...(o.onStage !== undefined ? { onStage: o.onStage } : {}),
+      ...(o.tombstoneHex !== undefined ? { tombstoneHex: o.tombstoneHex } : {}),
+    });
+    const deps = repoDeps(w, { h: h2, ...(o.onStep !== undefined ? { onStep: o.onStep } : {}) });
+    const r = await withLock(w, (locks) =>
+      commitPersonal(deps, locks, {
+        ...spec('2', NEXT_FILES),
+        beforeRefUpdate: async () => {
+          const j = await readJournal(w.h);
+          if (j.kind !== 'ok') throw new Error('journal 应在');
+          base = j.value;
+          throw new BeforeRefUpdateDenied('x');
+        },
+      }),
+    );
+    if (base === null) throw new Error('钩子未被调用');
+    return { w, r, base };
+  }
+  const FIXED = 'c'.repeat(32);
+  const fixedHex = (): string => FIXED;
+  const fixedTomb = (w: World): string =>
+    statePath(w.h, `${PERSONAL_STATE_FILES.journal}.denied-${FIXED}`);
+  const journalPath = (w: World): string => statePath(w.h, PERSONAL_STATE_FILES.journal);
+  const failOnceAt = (stage: HomeFsStage, nth: number, act: () => Promise<void>) => {
+    let n = 0;
+    return async (s: HomeFsStage): Promise<void> => {
+      if (s !== stage) return;
+      n++;
+      if (n === nth) await act();
+    };
+  };
+
+  it('denied_cleanup_tombstone_name_random:墓碑名 = 固定前缀 + 32 位随机十六进制,不含 txn_id、两次清理不同(不可从 journal 内容推导)', async () => {
+    const names: string[] = [];
+    const txns: string[] = [];
+    for (const prefix of ['d1b2-tname-1-', 'd1b2-tname-2-']) {
+      const { r, base } = await runDeny(prefix, (w) => ({
+        onStep: async (step) => {
+          if (step === 'discard:after-rename') names.push(path.basename(await findTomb(w)));
+        },
+      }));
+      expect(r).toEqual({ status: 'denied', code: 'x' });
+      txns.push(base.txn_id);
+    }
+    expect(names).toHaveLength(2);
+    expect(names[0]).not.toBe(names[1]);
+    for (const n of names) expect(n).toMatch(/^commit-journal\.json\.denied-[0-9a-f]{32}$/);
+    for (const n of names) for (const t of txns) expect(n).not.toContain(t);
+  });
+
+  it('denied_cleanup_tombstone_occupied_not_overwritten:墓碑名已被占用 → 不覆盖、不动现场,invalid / journal_tombstone_occupied(不是普通 denied);原名上自己的 journal 与占位文件原样保留', async () => {
+    const { w, r, base } = await runDeny(
+      'd1b2-tocc-',
+      () => ({ tombstoneHex: fixedHex }),
+      async (w2) => {
+        await safe.writeFile(w2.io, fixedTomb(w2), 'FOREIGN', { mode: 0o600 });
+      },
+    );
+    expect(r).toMatchObject({ status: 'invalid', why: 'journal_tombstone_occupied' });
+    expect(await readText(fixedTomb(w))).toBe('FOREIGN');
+    expect(await journalTxn(w)).toBe(base.txn_id);
+  });
+
+  it('denied_cleanup_unlink_bound_to_verified_object:核对通过之后、unlink 之前墓碑被换成别的文件 → 不 unlink 换上者(invalid / journal_tombstone_replaced);换上的文件原样保留', async () => {
+    const { w, r } = await runDeny('d1b2-tswap-', (w2) => ({
+      tombstoneHex: fixedHex,
+      onStage: failOnceAt('pre-unlink-verified', 1, async () => {
+        await safe.writeFile(w2.io, `${fixedTomb(w2)}.swap`, 'FOREIGN', { mode: 0o600 });
+        await safe.rename(w2.io, `${fixedTomb(w2)}.swap`, fixedTomb(w2));
+      }),
+    }));
+    expect(r).toMatchObject({ status: 'invalid', why: 'journal_tombstone_replaced' });
+    expect(await readText(fixedTomb(w))).toBe('FOREIGN');
+  });
+
+  it('denied_cleanup_nlink_zero_confirmed:unlink 之后核对过的对象仍有别的名字(nlink≠0)→ invalid / journal_tombstone_not_removed,不是普通 denied', async () => {
+    const { w, r, base } = await runDeny('d1b2-tnlink-', (w2) => ({
+      tombstoneHex: fixedHex,
+      onStage: failOnceAt('pre-unlink-verified', 1, async () => {
+        await safe.hardlink(w2.io, fixedTomb(w2), `${fixedTomb(w2)}.extra`);
+      }),
+    }));
+    expect(r).toMatchObject({ status: 'invalid', why: 'journal_tombstone_not_removed' });
+    const kept = JSON.parse(await readText(`${fixedTomb(w)}.extra`)) as { txn_id: string };
+    expect(kept.txn_id).toBe(base.txn_id);
+  });
+
+  it('denied_cleanup_move_source_swapped_not_unlinked:移入墓碑时 link 之后原名被换成别的事务的 journal → 不删换上者(denied;墓碑里是自己的 journal,核对后删除)', async () => {
+    const { w, r } = await runDeny('d1b2-msrc-', (w2, base) => ({
+      onStage: failOnceAt('post-link', 1, async () => {
+        await safe.remove(w2.io, journalPath(w2));
+        await writeJournal(w2.h, { ...base(), txn_id: foreignA });
+      }),
+    }));
+    expect(r).toEqual({ status: 'denied', code: 'x' });
+    expect(await journalTxn(w)).toBe(foreignA);
+    expect(await leftovers(w)).toEqual([PERSONAL_STATE_FILES.journal]);
+  });
+
+  it('denied_cleanup_crash_after_link_move_aside_recovers:移入墓碑的 link 之后崩溃(原名与墓碑同 inode、nlink=2)→ 普通读取 fail-closed;重启(openPersonalRepo 持锁)自动收尾后恢复正常,原名 nlink=1、无墓碑', async () => {
+    const { w, r } = await runDeny('d1b2-crash-mv-', () => ({
+      tombstoneHex: fixedHex,
+      onStage: failOnceAt('post-link', 1, async () => {
+        throw new InjectedCrash('post-link');
+      }),
+    }));
+    // 崩溃被清理流程按 journal_rename_failed 吞下;盘上就是崩溃快照
+    expect(r).toMatchObject({ status: 'invalid', why: 'journal_rename_failed' });
+    expect((await lstat(journalPath(w))).nlink).toBe(2);
+    expect((await lstat(fixedTomb(w))).nlink).toBe(2);
+    expect(await readJournal(w.h)).toEqual({ kind: 'invalid', why: 'unsafe' });
+    // 只读检视不收尾:遇半完成态 = invalid,两个名字都不动
+    expect(await inspectPersonalRepo(repoDeps(w))).toMatchObject({
+      kind: 'invalid',
+      why: 'journal_unsafe',
+    });
+    expect((await lstat(journalPath(w))).nlink).toBe(2);
+    expect((await lstat(fixedTomb(w))).nlink).toBe(2);
+    const re = await withLock(w, (locks) => openPersonalRepo(repoDeps(w), locks, READ_OPTS));
+    expect(re.kind).toBe('ready');
+    expect(await leftovers(w)).toEqual([]);
+  });
+
+  it('denied_cleanup_crash_after_link_restore_recovers:改回原名的 link 之后崩溃(核对中 ref 被推进、要改回)→ 重启自动收尾:journal 在原名下(nlink=1)、无墓碑;恢复把推进过的 ref 判为 diverged(deferred),不是 invalid', async () => {
+    let moved = '';
+    const { w, r, base } = await runDeny('d1b2-crash-rs-', (w2) => ({
+      tombstoneHex: fixedHex,
+      onStep: async (step) => {
+        if (step === 'discard:after-rename') moved = advance(w2);
+      },
+      onStage: failOnceAt('post-link', 2, async () => {
+        throw new InjectedCrash('post-link');
+      }),
+    }));
+    expect(r).toMatchObject({ status: 'deferred', why: 'ref_moved_after_denied' });
+    expect((await lstat(journalPath(w))).nlink).toBe(2);
+    expect(await exists(fixedTomb(w))).toBe(true);
+    const re = await withLock(w, (locks) => openPersonalRepo(repoDeps(w), locks, READ_OPTS));
+    expect(re).toMatchObject({ kind: 'deferred', reason: 'personal_repo_diverged' });
+    expect(await journalTxn(w)).toBe(base.txn_id);
+    expect((await lstat(journalPath(w))).nlink).toBe(1);
+    expect(await exists(fixedTomb(w))).toBe(false);
+    expect(refOf(w)).toBe(moved);
+  });
+
+  it('denied_cleanup_restore_rollback_requires_own_link:改回时 unlink(墓碑) 失败,且原名在此期间被换成别的事务的 journal → 回滚不删它(invalid / journal_not_mine);换上的 journal 与墓碑都保留', async () => {
+    const { w, r, base } = await runDeny('d1b2-rb-', (w2, mine) => ({
+      tombstoneHex: fixedHex,
+      onStep: async (step) => {
+        if (step === 'discard:after-rename') advance(w2); // 迫使走改回分支
+      },
+      onStage: failOnceAt('pre-unlink-source', 2, async () => {
+        await safe.remove(w2.io, journalPath(w2)); // 我们刚建的原名链接被拿走
+        await writeJournal(w2.h, { ...mine(), txn_id: foreignA });
+        throw new Error('unlink failed');
+      }),
+    }));
+    expect(r).toMatchObject({ status: 'invalid', why: 'journal_not_mine' });
+    expect(await journalTxn(w)).toBe(foreignA);
+    const tomb = JSON.parse(await readText(fixedTomb(w))) as { txn_id: string };
+    expect(tomb.txn_id).toBe(base.txn_id);
+  });
+
+  /** 崩在 update-ref 之前,留下一个 objects_written 的 journal(ref 未动) */
+  async function pendingJournalWorld(prefix: string): Promise<World> {
+    const w = await makeWorld(prefix);
+    await setupRepo(w);
+    await expect(
+      withLock(w, (locks) =>
+        commitPersonal(
+          repoDeps(w, { onStep: crashAt('before:update-ref') }),
+          locks,
+          spec('2', NEXT_FILES),
+        ),
+      ),
+    ).rejects.toBeInstanceOf(InjectedCrash);
+    expect((await readJournal(w.h)).kind).toBe('ok');
+    return w;
+  }
+  const openAgain = (w: World) =>
+    withLock(w, (locks) => openPersonalRepo(repoDeps(w), locks, READ_OPTS));
+
+  it('half_state_settle_ignores_orphan_tombstones:孤立墓碑(另一个 inode、nlink=1)与待恢复的 journal 并存 → 不被收尾、不被删,也不触发熔断(恢复照常丢弃自己的 journal)', async () => {
+    const w = await pendingJournalWorld('d1b2-orphan-');
+    const orphan = fixedTomb(w);
+    await safe.writeFile(w.io, orphan, 'ORPHAN', { mode: 0o600 });
+    const re = await openAgain(w);
+    expect(re.kind).toBe('ready');
+    expect(await readText(orphan)).toBe('ORPHAN');
+  });
+
+  it('half_state_settle_requires_tombstone_name:journal 与「非墓碑名」文件互为硬链接 → 不自动修复,仍 invalid / journal_unsafe(两个名字都保留)', async () => {
+    const w = await pendingJournalWorld('d1b2-nontomb-');
+    const other = statePath(w.h, `${PERSONAL_STATE_FILES.journal}.keep`);
+    await safe.hardlink(w.io, journalPath(w), other);
+    const re = await openAgain(w);
+    expect(re).toMatchObject({ kind: 'invalid', why: 'journal_unsafe' });
+    expect((await lstat(journalPath(w))).nlink).toBe(2);
+    expect(await exists(other)).toBe(true);
+  });
+
+  it('half_state_settle_requires_nlink_two:journal 同时是两个墓碑名的硬链接(nlink=3,不是确定的半完成态)→ 不收尾,invalid / journal_unsafe', async () => {
+    const w = await pendingJournalWorld('d1b2-nlink3-');
+    const t1 = fixedTomb(w);
+    const t2 = statePath(w.h, `${PERSONAL_STATE_FILES.journal}.denied-${'d'.repeat(32)}`);
+    await safe.hardlink(w.io, journalPath(w), t1);
+    await safe.hardlink(w.io, journalPath(w), t2);
+    const re = await openAgain(w);
+    expect(re).toMatchObject({ kind: 'invalid', why: 'journal_unsafe' });
+    expect((await lstat(journalPath(w))).nlink).toBe(3);
   });
 });

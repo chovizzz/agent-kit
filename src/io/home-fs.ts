@@ -67,6 +67,8 @@ export const HOME_DENY = {
   STAT_FAILED: 'HOME_STAT_FAILED',
   /** 文件权限位含 rwx 之外的位(setuid 等)或不是整数 */
   BAD_MODE: 'HOME_BAD_MODE',
+  /** 经 fd 读取的文件属主不是当前用户 / 权限位宽于调用方给的上限(removeVerified) */
+  OWNER: 'HOME_OWNER',
   /** 目标应是符号链接(current)却是别的类型 */
   NOT_SYMLINK: 'HOME_NOT_SYMLINK',
   /** 版本号语法不合法(switchCurrent) */
@@ -100,8 +102,34 @@ export class HomeExistsError extends Error {
   }
 }
 
-/** 原子写的各阶段;`onStage` 抛错即模拟该阶段失败(测试注入口,产品代码不传)。 */
-export type HomeFsStage = 'temp-created' | 'temp-written' | 'temp-synced' | 'pre-rename';
+/**
+ * 改名在 `link` 与 `unlink(来源)` 之间,来源与目标暂时是同一 inode 的两个名字(nlink=2)。该竞态被别人替换内容的结果,见 {@link renameExclusive}。
+ * 抛 = 「目标名已被换成别的文件」,**来源名已不被我们动**,调用方应当按「现场被占用」处理(不覆盖、不删别人的东西)。
+ */
+export class HomeRenameRaceError extends Error {
+  readonly code = 'HOME_RENAME_RACE';
+  readonly rel: string;
+  constructor(rel: string) {
+    super(`HOME_RENAME_RACE path=${JSON.stringify(rel.slice(0, 200))}`);
+    this.name = 'HomeRenameRaceError';
+    this.rel = rel;
+  }
+}
+
+/**
+ * 写原语的阶段;`onStage` 抛错即模拟该阶段失败(测试注入口,产品代码不传)。
+ *  - `post-link`:`renameExclusive` 的 `link` 之后、`unlink(来源)` 之前,在回滚 try 之外:抛 = 进程死在半完成态(不回滚);正常返回 = 测试在此处插入并发动作;
+ *  - `pre-unlink-source`:同一窗口内、回滚 try 之内:抛 = `unlink(来源)` 失败,走回滚;
+ *  - `pre-unlink-verified`:`removeVerified` 核对通过之后、unlink 之前。
+ */
+export type HomeFsStage =
+  | 'temp-created'
+  | 'temp-written'
+  | 'temp-synced'
+  | 'pre-rename'
+  | 'post-link'
+  | 'pre-unlink-source'
+  | 'pre-unlink-verified';
 
 export interface HomeFsContext {
   /** 传入的 HOME(字面) */
@@ -383,6 +411,7 @@ function inspect(
   rel: string,
   want: 'file' | 'dir',
   allowLeafSymlink = false,
+  allowLinkedLeaf = false,
 ): Inspected {
   const state = stateOf(ctx);
   const home = resolveHome(ctx, state.env, state.homeIdent);
@@ -404,6 +433,8 @@ function inspect(
     if (last) {
       if (allowLeafSymlink && st.isSymbolicLink()) {
         leaf = st; // 仅 switchCurrent 的 current 链接:调用方自己核对它是链接
+      } else if (allowLinkedLeaf && st.isFile() && st.nlink > 1) {
+        leaf = st; // 仅 settleHalfLink:半完成改名留下的两个名字(nlink>1),调用方自己核对身份与链接数
       } else {
         const bad = classifyLeaf(st, want);
         if (bad !== undefined) throw new HomeWriteDeniedError(bad, rel);
@@ -666,8 +697,14 @@ export async function rename(ctx: HomeFsContext, fromRel: string, toRel: string)
 /**
  * 不覆盖的改名:两端都必须是表内、计划内的文件路径;目标已存在 → `HomeExistsError`(原路径与来源都不动)。
  * 用 `link(来源, 目标)`(目标存在即 EEXIST,由内核原子判定)再 `unlink(来源)` 实现——`rename` 会静默覆盖目标,Node 没有 no-replace 选项。
- * **不是原子移动**,只保证「不覆盖已存在的目标」:两步之间来源与目标短暂是同一 inode 的两个名字(`nlink=2`,此时进程死亡则两个名字都会被安全读取拒绝);
- * `link` 之后来源若被换掉,`unlink(来源)` 作用于换上的那个名字;`unlink` 失败时抛错并尽力撤销刚建的目标名(无所有权核对)。目标是链接 / 目录 / 硬链接 → 守卫抛 `HomeWriteDeniedError`(不是 `HomeExistsError`)。来源不存在 → ENOENT。
+ * **不是原子移动**,只保证「不覆盖已存在的目标」。残余与半完成态:
+ *  - `link` 之后 `unlink` 之前,来源与目标是同一 inode 的两个名字(nlink=2)。此刻进程死亡 → 盘上留下这个**确定形态**(两个名字、同 dev:ino、nlink=2):
+ *    普通读取按硬链接拒绝(fail-closed);要自动收尾由调用方用 {@link settleHalfLink} 删掉其中一个名字;
+ *  - `unlink(来源)` 之前先核对**目标名仍持有本次链入的对象**(否则来源名可能是最后一个有效名字:不删来源,抛 {@link HomeRenameRaceError}),再核对来源名仍是同一 inode
+ *    (挡掉「link 之后来源被换成别的文件」时误删换上者);来源名已不在 / 已是别的文件 = 视为移动已完成(目标名持有我们的对象),不删来源名上的任何东西;
+ *    以上核对与 `unlink` 之间仍是按路径的窗口(home-fs 文件头已声明的残余,只缩小不消除);
+ *  - `unlink` 失败 → 先核对目标名仍是**本次创建的那个链接**(同 dev:ino)才撤销它;目标名已被换成别的东西 → 不删,抛 {@link HomeRenameRaceError}。
+ * 目标是链接 / 目录 / 硬链接 → 守卫抛 `HomeWriteDeniedError`(不是 `HomeExistsError`)。来源不存在 → ENOENT。
  */
 export async function renameExclusive(
   ctx: HomeFsContext,
@@ -680,6 +717,7 @@ export async function renameExclusive(
   const to = checkFile(ctx, toRel);
   if (from.leaf === undefined) throw enoent();
   if (to.leaf !== undefined) throw new HomeExistsError(toRel);
+  const ident = from.leaf;
   try {
     await fsp.link(from.abs, to.abs);
   } catch (e) {
@@ -687,14 +725,140 @@ export async function renameExclusive(
     if (code === 'EEXIST') throw new HomeExistsError(toRel);
     throw e;
   }
+  await ctx.onStage?.('post-link'); // 在回滚 try 之外:这里抛 = 进程死在半完成态
   try {
-    await fsp.unlink(from.abs);
+    await ctx.onStage?.('pre-unlink-source');
+    // 删来源之前先确认目标名仍持有我们链入的对象:否则来源名可能是最后一个有效名字,不能删
+    const dst = lstatIfExists(to.abs);
+    if (dst === undefined || dst.dev !== ident.dev || dst.ino !== ident.ino) {
+      throw new HomeRenameRaceError(toRel);
+    }
+    const src = lstatIfExists(from.abs);
+    if (src !== undefined && src.dev === ident.dev && src.ino === ident.ino) {
+      await fsp.unlink(from.abs);
+    }
   } catch (e) {
-    await fsp.unlink(to.abs).catch(() => undefined);
-    throw e;
+    const cur = lstatIfExists(to.abs);
+    if (cur !== undefined && cur.dev === ident.dev && cur.ino === ident.ino) {
+      await fsp.unlink(to.abs).catch(() => undefined);
+      throw e;
+    }
+    if (cur === undefined) throw e;
+    throw new HomeRenameRaceError(toRel);
   }
   await syncDir(to.parentAbs);
   if (from.parentAbs !== to.parentAbs) await syncDir(from.parentAbs);
+}
+
+function lstatIfExists(abs: string): fs.Stats | undefined {
+  try {
+    return fs.lstatSync(abs);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw e;
+  }
+}
+
+/**
+ * 收尾 {@link renameExclusive} 死在 `link` 之后留下的**确定半完成态**:`dropRel` 与 `keepRel` 都是普通文件、同 dev:ino、`nlink` 恰为 2
+ * → 只删 `dropRel` 这个名字(`keepRel` 保留,链接数回到 1)。其它任何形态(任一不存在、不同 inode、nlink≠2、非普通文件)一律不动,返回 `'not_half_state'`。
+ * 路径守卫与其它写原语相同(表内、计划内、逐段 lstat;守卫拒绝 / 链接 / 目录等异类叶子抛 `HomeWriteDeniedError`,不是返回 `'not_half_state'`);唯一放宽是叶子允许 nlink>1(这正是要收尾的形态)。
+ * 两个名字相同 → `HomeWriteDeniedError(PATH_INVALID)`(同名 + 另一个硬链接会把「保留名」删掉)。两次检查与 `unlink` 不是同一时点(按路径,不是原子条件删除):调用方须持锁,使合作写者不会并发改这两个名字。
+ */
+export async function settleHalfLink(
+  ctx: HomeFsContext,
+  dropRel: string,
+  keepRel: string,
+): Promise<'settled' | 'not_half_state'> {
+  audit(ctx, 'settleHalfLink.keep', keepRel);
+  audit(ctx, 'settleHalfLink', dropRel);
+  if (dropRel === keepRel) throw new HomeWriteDeniedError(HOME_DENY.PATH_INVALID, dropRel);
+  assertFileInTable(keepRel);
+  assertFileInScope(ctx, keepRel);
+  assertFileInTable(dropRel);
+  assertFileInScope(ctx, dropRel);
+  const keep = inspect(ctx, keepRel, 'file', false, true);
+  const drop = inspect(ctx, dropRel, 'file', false, true);
+  const a = keep.leaf;
+  const b = drop.leaf;
+  if (a === undefined || b === undefined) return 'not_half_state';
+  if (!a.isFile() || !b.isFile()) return 'not_half_state';
+  if (a.dev !== b.dev || a.ino !== b.ino || a.nlink !== 2 || b.nlink !== 2) {
+    return 'not_half_state';
+  }
+  await fsp.unlink(drop.abs);
+  await syncDir(drop.parentAbs);
+  return 'settled';
+}
+
+export interface RemoveVerifiedOptions {
+  /** 内容字节上限(超过 → `HomeWriteDeniedError(NOT_REGULAR)`) */
+  readonly maxBytes: number;
+  /** 权限位不得宽于它(如 0o600);属主须为当前用户(平台没有 getuid 时不校验) */
+  readonly maxPerm: number;
+}
+
+export type RemoveVerifiedResult<T> =
+  /** 核对通过、unlink 完成,且被删的就是核对过的那个对象(fd 的 nlink 归 0) */
+  | { kind: 'removed' }
+  | { kind: 'absent' }
+  /** `verify` 拒绝:什么也没删,`value` 是它给的原因 */
+  | { kind: 'rejected'; value: T }
+  /** unlink 之前路径已不是核对过的那个对象(dev:ino 变了):什么也没删 */
+  | { kind: 'replaced' }
+  /** unlink 之后核对过的对象仍有别的名字(nlink>0)= 被删的不是它 / 它另有硬链接:无法撤销 */
+  | { kind: 'not_removed_object' };
+
+/**
+ * 删除**核对过的那个对象**:O_NOFOLLOW 打开并保留 fd → 对 fd 复核类型 / nlink / 属主 / 权限、有界读出内容 → `verify(bytes)`(返回 `undefined` = 接受;其它值 = 拒绝并原样带回)
+ * → 在路径上 lstat,dev:ino 必须仍与 fd 一致(不一致 = `replaced`,**不 unlink**)→ unlink → 对同一个 fd 再 fstat,`nlink` 必须为 0。
+ * 残余(home-fs 文件头已声明的「按路径」):lstat 与 unlink 之间路径被换上别的文件时,被 unlink 的是换上者。事后的 nlink 检查只在核对过的对象**仍有别的名字**时能发现(`not_removed_object`,无法撤销);
+ * **检不出的情形**:核对过的对象恰因这次替换(原子 rename 覆盖)失去最后一个名字,fd 的 nlink 本来就是 0,即使被 unlink 的是换上者也会报 `removed`。所以本函数证明的是「核对过的对象事后没有名字」,不是「本次 unlink 删的就是它」。
+ * fd 只在本函数内部存在,不外泄给调用方。
+ */
+export async function removeVerified<T>(
+  ctx: HomeFsContext,
+  rel: string,
+  opts: RemoveVerifiedOptions,
+  verify: (bytes: Buffer) => T | undefined | Promise<T | undefined>,
+): Promise<RemoveVerifiedResult<T>> {
+  audit(ctx, 'removeVerified', rel);
+  const info = checkFile(ctx, rel);
+  if (info.leaf === undefined) return { kind: 'absent' };
+  let fh: fsp.FileHandle;
+  try {
+    fh = await openChecked(info.abs, rel, info.leaf);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'absent' };
+    throw e;
+  }
+  try {
+    const st = await fh.stat();
+    const want = typeof process.getuid === 'function' ? process.getuid() : undefined;
+    if ((want !== undefined && st.uid !== want) || (st.mode & 0o777 & ~opts.maxPerm) !== 0) {
+      throw new HomeWriteDeniedError(HOME_DENY.OWNER, rel);
+    }
+    if (st.size > opts.maxBytes) throw new HomeWriteDeniedError(HOME_DENY.NOT_REGULAR, rel);
+    const buf = Buffer.allocUnsafe(opts.maxBytes + 1);
+    let total = 0;
+    for (;;) {
+      const { bytesRead } = await fh.read(buf, total, buf.length - total, null);
+      if (bytesRead === 0) break;
+      total += bytesRead;
+      if (total > opts.maxBytes) throw new HomeWriteDeniedError(HOME_DENY.NOT_REGULAR, rel);
+    }
+    const rejected = await verify(buf.subarray(0, total));
+    if (rejected !== undefined) return { kind: 'rejected', value: rejected };
+    await ctx.onStage?.('pre-unlink-verified');
+    const now = lstatIfExists(info.abs);
+    if (now === undefined || now.dev !== st.dev || now.ino !== st.ino) return { kind: 'replaced' };
+    await fsp.unlink(info.abs);
+    await syncDir(info.parentAbs);
+    const after = await fh.stat();
+    return after.nlink === 0 ? { kind: 'removed' } : { kind: 'not_removed_object' };
+  } finally {
+    await fh.close().catch(() => undefined);
+  }
 }
 
 /** 对已校验文件的 fd 做 fchmod(不跟随检查后换上的链接)。 */

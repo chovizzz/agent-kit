@@ -114,6 +114,31 @@ const cases: Case[] = [
     ],
   },
   {
+    name: 'removeVerified',
+    scope: [`${S}/rv`],
+    prep: async (fx) => hfs.writeFile(fx.mk([`${S}/rv`], false), `${S}/rv`, 'x', { mode: 0o600 }),
+    ok: (c) => hfs.removeVerified(c, `${S}/rv`, { maxBytes: 16, maxPerm: 0o600 }, () => undefined),
+    expected: [['home.removeVerified', `${S}/rv`]],
+    denied: (c) =>
+      hfs.removeVerified(c, '.ssh/rv', { maxBytes: 16, maxPerm: 0o600 }, () => undefined),
+    deniedExpected: [['home.removeVerified', '.ssh/rv']],
+  },
+  {
+    name: 'settleHalfLink(保留名 + 删除名各一条,保留名先)',
+    scope: [`${S}/a`, `${S}/b`],
+    prep: async (fx) => hfs.writeFile(fx.mk([`${S}/a`], false), `${S}/a`, 'a'),
+    ok: (c) => hfs.settleHalfLink(c, `${S}/b`, `${S}/a`),
+    expected: [
+      ['home.settleHalfLink.keep', `${S}/a`],
+      ['home.settleHalfLink', `${S}/b`],
+    ],
+    denied: (c) => hfs.settleHalfLink(c, '.ssh/b', `${S}/a`),
+    deniedExpected: [
+      ['home.settleHalfLink.keep', `${S}/a`],
+      ['home.settleHalfLink', '.ssh/b'],
+    ],
+  },
+  {
     name: 'chmod',
     scope: [`${S}/m`],
     prep: async (fx) => hfs.writeFile(fx.mk([`${S}/m`], false), `${S}/m`, 'm'),

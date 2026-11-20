@@ -20,6 +20,9 @@ async function setup(scope: string[]) {
     home,
     fx,
     mk: (s = scope) => hfs.createHomeFsContext({ home, planScope: s, tmpDir }),
+    /** 带阶段注入口的上下文(`post-link` 等) */
+    mkStage: (onStage: (stage: hfs.HomeFsStage) => void | Promise<void>, s = scope) =>
+      hfs.createHomeFsContext({ home, planScope: s, tmpDir, onStage }),
   };
 }
 
@@ -253,5 +256,259 @@ describe('switchCurrent', () => {
     await hfs.switchCurrent(s.mk(), null);
     await expect(lstat(path.join(s.home, LINK))).rejects.toThrow();
     await hfs.switchCurrent(s.mk(), null);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R5:renameExclusive 的半完成态 / 回滚所有权 / 来源被换;settleHalfLink;removeVerified(绑定对象的删除)
+// ---------------------------------------------------------------------------
+
+const SD = '.local/state/agent-kit/x';
+const FA = `${SD}/a`;
+const FB = `${SD}/b`;
+
+async function seed(s: Awaited<ReturnType<typeof setup>>, rel: string, text: string) {
+  await hfs.writeFile(s.mk([rel]), rel, text, { mode: 0o600, dirMode: 0o700 });
+}
+const abs = (s: { home: string }, rel: string): string => path.join(s.home, rel);
+
+describe('renameExclusive:半完成态与竞态(link 之后)', () => {
+  it('rename_exclusive_crash_after_link_is_two_names_one_inode:link 之后「进程死亡」→ 两个名字、同 inode、nlink=2;随后 settleHalfLink 只删目标名(这里是墓碑方向:删来源名的对端)', async () => {
+    const s = await setup([FA, FB]);
+    await seed(s, FA, 'one');
+    const boom = new Error('crash@post-link');
+    await expect(
+      hfs.renameExclusive(
+        s.mkStage((st) => {
+          if (st === 'post-link') throw boom;
+        }),
+        FA,
+        FB,
+      ),
+    ).rejects.toBe(boom);
+    const a = await lstat(abs(s, FA));
+    const b = await lstat(abs(s, FB));
+    expect([a.nlink, b.nlink]).toEqual([2, 2]);
+    expect(a.ino).toBe(b.ino);
+    // 收尾:删掉 FB(墓碑方向),保留 FA
+    expect(await hfs.settleHalfLink(s.mk(), FB, FA)).toBe('settled');
+    expect(await readText(abs(s, FA))).toBe('one');
+    expect((await lstat(abs(s, FA))).nlink).toBe(1);
+    await expect(lstat(abs(s, FB))).rejects.toThrow();
+  });
+
+  it('rename_exclusive_rollback_requires_own_link:unlink(来源) 失败 → 回滚只删「本次创建的那个链接」;目标名已被换成别的文件 → 不删,抛 HomeRenameRaceError', async () => {
+    const s = await setup([FA, FB]);
+    await seed(s, FA, 'one');
+    const hook = async (st: hfs.HomeFsStage): Promise<void> => {
+      if (st !== 'pre-unlink-source') return;
+      await safe.remove(s.fx, abs(s, FB)); // 我们刚建的链接被拿走
+      await safe.writeFile(s.fx, abs(s, FB), 'FOREIGN', { mode: 0o600 }); // 换上别人的文件
+      throw new Error('unlink failed');
+    };
+    await expect(hfs.renameExclusive(s.mkStage(hook), FA, FB)).rejects.toBeInstanceOf(
+      hfs.HomeRenameRaceError,
+    );
+    expect(await readText(abs(s, FB))).toBe('FOREIGN');
+    expect(await readText(abs(s, FA))).toBe('one');
+  });
+
+  it('rename_exclusive_rollback_removes_own_link:unlink(来源) 失败且目标名仍是自己建的链接 → 撤销该链接并原样抛错;来源不动、nlink 回到 1', async () => {
+    const s = await setup([FA, FB]);
+    await seed(s, FA, 'one');
+    const err = new Error('unlink failed');
+    await expect(
+      hfs.renameExclusive(
+        s.mkStage((st) => {
+          if (st === 'pre-unlink-source') throw err;
+        }),
+        FA,
+        FB,
+      ),
+    ).rejects.toBe(err);
+    await expect(lstat(abs(s, FB))).rejects.toThrow();
+    expect(await readText(abs(s, FA))).toBe('one');
+    expect((await lstat(abs(s, FA))).nlink).toBe(1);
+  });
+
+  it('rename_exclusive_target_checked_before_source_unlink:link 之后目标名被换成别的文件(不抛错)→ 不删来源(它可能是最后一个有效名字),抛 HomeRenameRaceError;来源与换上的目标都原样保留', async () => {
+    const s = await setup([FA, FB]);
+    await seed(s, FA, 'one');
+    await expect(
+      hfs.renameExclusive(
+        s.mkStage(async (st) => {
+          if (st !== 'pre-unlink-source') return;
+          await safe.remove(s.fx, abs(s, FB));
+          await safe.writeFile(s.fx, abs(s, FB), 'FOREIGN', { mode: 0o600 });
+        }),
+        FA,
+        FB,
+      ),
+    ).rejects.toBeInstanceOf(hfs.HomeRenameRaceError);
+    expect(await readText(abs(s, FA))).toBe('one');
+    expect(await readText(abs(s, FB))).toBe('FOREIGN');
+  });
+
+  it('rename_exclusive_source_swapped_not_unlinked:link 之后来源名被换成别的文件 → 不 unlink 换上者(视为移动已完成:目标名持有原对象)', async () => {
+    const s = await setup([FA, FB]);
+    await seed(s, FA, 'one');
+    await hfs.renameExclusive(
+      s.mkStage(async (st) => {
+        if (st !== 'post-link') return;
+        await safe.remove(s.fx, abs(s, FA));
+        await safe.writeFile(s.fx, abs(s, FA), 'FOREIGN', { mode: 0o600 });
+      }),
+      FA,
+      FB,
+    );
+    expect(await readText(abs(s, FA))).toBe('FOREIGN');
+    expect(await readText(abs(s, FB))).toBe('one');
+    expect((await lstat(abs(s, FB))).nlink).toBe(1);
+  });
+});
+
+describe('settleHalfLink:只收尾确定的半完成态', () => {
+  it('不同 inode(各自 nlink=1)→ not_half_state,两个文件都不动', async () => {
+    const s = await setup([FA, FB]);
+    await seed(s, FA, 'one');
+    await seed(s, FB, 'two');
+    expect(await hfs.settleHalfLink(s.mk(), FB, FA)).toBe('not_half_state');
+    expect(await readText(abs(s, FA))).toBe('one');
+    expect(await readText(abs(s, FB))).toBe('two');
+  });
+
+  it('settle_half_link_requires_same_inode:两个名字各自 nlink=2、但不是同一个 inode(各另有一个链接)→ not_half_state,不动', async () => {
+    const s = await setup([FA, FB]);
+    await seed(s, FA, 'one');
+    await seed(s, FB, 'two');
+    await safe.hardlink(s.fx, abs(s, FA), abs(s, `${SD}/ka`));
+    await safe.hardlink(s.fx, abs(s, FB), abs(s, `${SD}/kb`));
+    expect(await hfs.settleHalfLink(s.mk(), FB, FA)).toBe('not_half_state');
+    expect((await lstat(abs(s, FA))).nlink).toBe(2);
+    expect((await lstat(abs(s, FB))).nlink).toBe(2);
+  });
+
+  it('同 inode 但 nlink=3(另有第三个名字)→ not_half_state,不动', async () => {
+    const s = await setup([FA, FB]);
+    await seed(s, FA, 'one');
+    await safe.hardlink(s.fx, abs(s, FA), abs(s, FB));
+    await safe.hardlink(s.fx, abs(s, FA), abs(s, `${SD}/third`));
+    expect(await hfs.settleHalfLink(s.mk(), FB, FA)).toBe('not_half_state');
+    expect((await lstat(abs(s, FA))).nlink).toBe(3);
+    expect(await readText(abs(s, FB))).toBe('one');
+  });
+
+  it('settle_half_link_rejects_same_name:保留名与删除名相同 → 守卫拒绝(同名 + 另一个硬链接会把保留名删掉),文件不动', async () => {
+    const s = await setup([FA]);
+    await seed(s, FA, 'one');
+    await safe.hardlink(s.fx, abs(s, FA), abs(s, `${SD}/other`));
+    expect(await code(hfs.settleHalfLink(s.mk(), FA, FA))).toBe(HOME_DENY.PATH_INVALID);
+    expect((await lstat(abs(s, FA))).nlink).toBe(2);
+    expect(await readText(abs(s, FA))).toBe('one');
+  });
+
+  it('任一名字不存在 → not_half_state;表外 / 计划外路径照常被拒', async () => {
+    const s = await setup([FA, FB]);
+    await seed(s, FA, 'one');
+    expect(await hfs.settleHalfLink(s.mk(), FB, FA)).toBe('not_half_state');
+    expect(await hfs.settleHalfLink(s.mk(), FA, FB)).toBe('not_half_state');
+    expect(await code(hfs.settleHalfLink(s.mk(), '.ssh/b', FA))).not.toBe('ok');
+    expect(await code(hfs.settleHalfLink(s.mk([FA]), FB, FA))).toBe(HOME_DENY.OUT_OF_PLAN_SCOPE);
+  });
+
+  it('符号链接作为其中一个名字 → 守卫拒绝,不动', async () => {
+    const s = await setup([FA, FB]);
+    await seed(s, FA, 'one');
+    await safe.symlink(s.fx, abs(s, FA), abs(s, FB));
+    expect(await code(hfs.settleHalfLink(s.mk(), FB, FA))).toBe(HOME_DENY.TARGET_SYMLINK);
+    expect(await readText(abs(s, FA))).toBe('one');
+  });
+});
+
+describe('removeVerified:核对的就是删除的那个对象', () => {
+  const OPTS = { maxBytes: 1024, maxPerm: 0o600 } as const;
+
+  it('核对通过 → removed;verify 收到文件全文;文件消失', async () => {
+    const s = await setup([FA]);
+    await seed(s, FA, 'payload');
+    let seen = '';
+    const r = await hfs.removeVerified(s.mk(), FA, OPTS, (b) => {
+      seen = b.toString('utf8');
+      return undefined;
+    });
+    expect(r).toEqual({ kind: 'removed' });
+    expect(seen).toBe('payload');
+    await expect(lstat(abs(s, FA))).rejects.toThrow();
+  });
+
+  it('verify 拒绝 → rejected(带原因),文件原样保留', async () => {
+    const s = await setup([FA]);
+    await seed(s, FA, 'payload');
+    const r = await hfs.removeVerified(s.mk(), FA, OPTS, () => 'no');
+    expect(r).toEqual({ kind: 'rejected', value: 'no' });
+    expect(await readText(abs(s, FA))).toBe('payload');
+  });
+
+  it('不存在 → absent', async () => {
+    const s = await setup([FA]);
+    await safe.mkdirp(s.fx, path.join(s.home, SD), 0o700);
+    expect(await hfs.removeVerified(s.mk(), FA, OPTS, () => undefined)).toEqual({
+      kind: 'absent',
+    });
+  });
+
+  it('remove_verified_path_identity_checked:核对之后、unlink 之前路径被换成别的文件 → replaced,换上者不被删', async () => {
+    const s = await setup([FA]);
+    await seed(s, FA, 'payload');
+    const r = await hfs.removeVerified(
+      s.mkStage(async (st) => {
+        if (st !== 'pre-unlink-verified') return;
+        await safe.writeFile(s.fx, abs(s, `${SD}/swap`), 'FOREIGN', { mode: 0o600 });
+        await safe.rename(s.fx, abs(s, `${SD}/swap`), abs(s, FA));
+      }),
+      FA,
+      OPTS,
+      () => undefined,
+    );
+    expect(r).toEqual({ kind: 'replaced' });
+    expect(await readText(abs(s, FA))).toBe('FOREIGN');
+  });
+
+  it('remove_verified_nlink_zero_checked:核对之后给对象加了第二个名字 → unlink 后 fd 的 nlink≠0 → not_removed_object(对象仍在另一个名字下)', async () => {
+    const s = await setup([FA]);
+    await seed(s, FA, 'payload');
+    const r = await hfs.removeVerified(
+      s.mkStage(async (st) => {
+        if (st === 'pre-unlink-verified') {
+          await safe.hardlink(s.fx, abs(s, FA), abs(s, `${SD}/extra`));
+        }
+      }),
+      FA,
+      OPTS,
+      () => undefined,
+    );
+    expect(r).toEqual({ kind: 'not_removed_object' });
+    expect(await readText(abs(s, `${SD}/extra`))).toBe('payload');
+  });
+
+  it('读取强度:硬链接 / 权限宽于上限 / 超过字节上限 → 守卫拒绝,不调用 verify、不删', async () => {
+    const s = await setup([FA, FB]);
+    let called = 0;
+    const v = (): undefined => {
+      called++;
+      return undefined;
+    };
+    await seed(s, FA, 'payload');
+    await safe.hardlink(s.fx, abs(s, FA), abs(s, FB));
+    expect(await code(hfs.removeVerified(s.mk(), FA, OPTS, v))).toBe(HOME_DENY.HARDLINK);
+    await safe.remove(s.fx, abs(s, FB));
+    await safe.chmod(s.fx, abs(s, FA), 0o644);
+    expect(await code(hfs.removeVerified(s.mk(), FA, OPTS, v))).toBe(HOME_DENY.OWNER);
+    await safe.chmod(s.fx, abs(s, FA), 0o600);
+    expect(await code(hfs.removeVerified(s.mk(), FA, { ...OPTS, maxBytes: 3 }, v))).toBe(
+      HOME_DENY.NOT_REGULAR,
+    );
+    expect(called).toBe(0);
+    expect(await readText(abs(s, FA))).toBe('payload');
   });
 });
