@@ -703,7 +703,8 @@ export async function rename(ctx: HomeFsContext, fromRel: string, toRel: string)
  *  - `unlink(来源)` 之前先核对**目标名仍持有本次链入的对象**(否则来源名可能是最后一个有效名字:不删来源,抛 {@link HomeRenameRaceError}),再核对来源名仍是同一 inode
  *    (挡掉「link 之后来源被换成别的文件」时误删换上者);来源名已不在 / 已是别的文件 = 视为移动已完成(目标名持有我们的对象),不删来源名上的任何东西;
  *    以上核对与 `unlink` 之间仍是按路径的窗口(home-fs 文件头已声明的残余,只缩小不消除);
- *  - `unlink` 失败 → 先核对目标名仍是**本次创建的那个链接**(同 dev:ino)才撤销它;目标名已被换成别的东西 → 不删,抛 {@link HomeRenameRaceError}。
+ *  - `unlink` 失败 → 先核对目标名仍是**本次创建的那个链接**(同 dev:ino)**且来源名仍持有原对象**(同 dev:ino)才撤销目标;目标名已被换成别的东西 → 不删,抛 {@link HomeRenameRaceError};
+ *    来源名已消失 / 被换(目标名可能是原对象仅剩的名字)→ 同样不删目标,抛 {@link HomeRenameRaceError};来源名探测本身 IO 失败 → 无法确认,保留目标(抛出探测错误)。
  * 目标是链接 / 目录 / 硬链接 → 守卫抛 `HomeWriteDeniedError`(不是 `HomeExistsError`)。来源不存在 → ENOENT。
  */
 export async function renameExclusive(
@@ -739,12 +740,15 @@ export async function renameExclusive(
     }
   } catch (e) {
     const cur = lstatIfExists(to.abs);
-    if (cur !== undefined && cur.dev === ident.dev && cur.ino === ident.ino) {
-      await fsp.unlink(to.abs).catch(() => undefined);
-      throw e;
-    }
     if (cur === undefined) throw e;
-    throw new HomeRenameRaceError(toRel);
+    if (cur.dev !== ident.dev || cur.ino !== ident.ino) throw new HomeRenameRaceError(toRel);
+    // 目标名是本次建的链接。撤销它之前还要确认来源名仍持有原对象:来源已消失 / 被换时,目标名可能是原对象仅剩的名字,不能删(无法确认 = 保留)
+    const src = lstatIfExists(from.abs); // 探测失败(IO)= 抛出探测错误,尚未撤销目标:无法确认就保留
+    if (src === undefined || src.dev !== ident.dev || src.ino !== ident.ino) {
+      throw new HomeRenameRaceError(fromRel);
+    }
+    await fsp.unlink(to.abs).catch(() => undefined);
+    throw e;
   }
   await syncDir(to.parentAbs);
   if (from.parentAbs !== to.parentAbs) await syncDir(from.parentAbs);
@@ -799,7 +803,7 @@ export interface RemoveVerifiedOptions {
 }
 
 export type RemoveVerifiedResult<T> =
-  /** 核对通过、unlink 完成,且被删的就是核对过的那个对象(fd 的 nlink 归 0) */
+  /** 核对通过、unlink 完成,且核对过的对象事后没有任何名字(fd 的 nlink 归 0;不证明「本次 unlink 删的就是它」,见函数说明的检不出情形) */
   | { kind: 'removed' }
   | { kind: 'absent' }
   /** `verify` 拒绝:什么也没删,`value` 是它给的原因 */
@@ -810,7 +814,7 @@ export type RemoveVerifiedResult<T> =
   | { kind: 'not_removed_object' };
 
 /**
- * 删除**核对过的那个对象**:O_NOFOLLOW 打开并保留 fd → 对 fd 复核类型 / nlink / 属主 / 权限、有界读出内容 → `verify(bytes)`(返回 `undefined` = 接受;其它值 = 拒绝并原样带回)
+ * 对**核对过的那个对象**做「核对后删除」:O_NOFOLLOW 打开并保留 fd → 对 fd 复核类型 / nlink / 属主 / 权限、有界读出内容 → `verify(bytes)`(返回 `undefined` = 接受;其它值 = 拒绝并原样带回)
  * → 在路径上 lstat,dev:ino 必须仍与 fd 一致(不一致 = `replaced`,**不 unlink**)→ unlink → 对同一个 fd 再 fstat,`nlink` 必须为 0。
  * 残余(home-fs 文件头已声明的「按路径」):lstat 与 unlink 之间路径被换上别的文件时,被 unlink 的是换上者。事后的 nlink 检查只在核对过的对象**仍有别的名字**时能发现(`not_removed_object`,无法撤销);
  * **检不出的情形**:核对过的对象恰因这次替换(原子 rename 覆盖)失去最后一个名字,fd 的 nlink 本来就是 0,即使被 unlink 的是换上者也会报 `removed`。所以本函数证明的是「核对过的对象事后没有名字」,不是「本次 unlink 删的就是它」。

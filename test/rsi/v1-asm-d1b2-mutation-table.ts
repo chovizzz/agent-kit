@@ -100,6 +100,7 @@ const K_ARCH_REFS = '受保护写能力的引用';
 const D_ARCH_AUTH = '④ 权威写出口反查:调用者 ⊆ 登记汇点 ∪ 精确白名单(不看钩子、不看拼写)';
 const K_ARCH_AUTH = '提交类出口调用者恰为允许集';
 const K_ARCH_FLOW = '钩子数据流:claim 返回值 → 拒绝分支先于提交';
+const D_HFS_RACE = 'renameExclusive:半完成态与竞态(link 之后)';
 const K_ARCH_INONLY = 'applyIn 只被 applyEvent 调用';
 
 const PASS_GATE_GRANT =
@@ -1808,7 +1809,7 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
       {
         file: COMMIT,
         anchor:
-          "  try {\n    const restored = await restoreJournalFromTombstone(ctx.h, tomb);\n    if (restored === 'occupied') return { kind: 'journal_unverified', why: 'journal_not_mine' };\n    // 墓碑已不在:没有任何名字下有这份 journal(现场已丢),同样不能按核对结果返回\n    if (restored === 'absent') return { kind: 'journal_unverified', why: 'journal_restore_failed' };\n  } catch (e) {\n    // 改回时的文件系统 IO 失败(带 errno code,非 occupied):journal 只剩随机墓碑名(恢复路径不读孤立墓碑),现场已丢——\n    // 不能再按核对结果返回(那可能是 deferred / ref_moved);invalid,墓碑原样保留。\n    // 非 IO 错误(含测试用的 InjectedCrash 进程死亡模拟、编程错误)不在此列:维持原行为,按核对结果返回,崩溃现场交重启收尾\n    if (isFsIoError(e)) return { kind: 'journal_unverified', why: 'journal_restore_failed' };\n  }\n",
+          "  try {\n    const restored = await restoreJournalFromTombstone(ctx.h, tomb);\n    if (restored === 'occupied') return { kind: 'journal_unverified', why: 'journal_not_mine' };\n    // 墓碑已不在:没有任何名字下有这份 journal(现场已丢),同样不能按核对结果返回\n    if (restored === 'absent') return { kind: 'journal_unverified', why: 'journal_restore_failed' };\n    // 路径探测(lstat / readdir)IO 失败:不是被占用,journal 只剩墓碑名,现场已丢 → invalid,墓碑保留\n    if (restored === 'io_failed') {\n      return { kind: 'journal_unverified', why: 'journal_restore_failed' };\n    }\n    // 守卫拒绝了墓碑本身(链接 / 硬链接 / 目录):来源不可信,不是原名被占用\n    if (restored === 'source_rejected')\n      return { kind: 'journal_unverified', why: 'journal_unsafe' };\n  } catch (e) {\n    // 改回时的文件系统 IO 失败(带 errno code,非 occupied):journal 只剩随机墓碑名(恢复路径不读孤立墓碑),现场已丢——\n    // 不能再按核对结果返回(那可能是 deferred / ref_moved);invalid,墓碑原样保留。\n    // 非 IO 错误(含测试用的 InjectedCrash 进程死亡模拟、编程错误)不在此列:维持原行为,按核对结果返回,崩溃现场交重启收尾\n    if (isFsIoError(e)) return { kind: 'journal_unverified', why: 'journal_restore_failed' };\n  }\n",
         replacement: '',
       },
     ],
@@ -2055,7 +2056,7 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
       {
         file: HFS,
         anchor:
-          '    const cur = lstatIfExists(to.abs);\n    if (cur !== undefined && cur.dev === ident.dev && cur.ino === ident.ino) {\n      await fsp.unlink(to.abs).catch(() => undefined);\n      throw e;\n    }\n    if (cur === undefined) throw e;\n    throw new HomeRenameRaceError(toRel);\n',
+          '    const cur = lstatIfExists(to.abs);\n    if (cur === undefined) throw e;\n    if (cur.dev !== ident.dev || cur.ino !== ident.ino) throw new HomeRenameRaceError(toRel);\n    // 目标名是本次建的链接。撤销它之前还要确认来源名仍持有原对象:来源已消失 / 被换时,目标名可能是原对象仅剩的名字,不能删(无法确认 = 保留)\n    const src = lstatIfExists(from.abs); // 探测失败(IO)= 抛出探测错误,尚未撤销目标:无法确认就保留\n    if (src === undefined || src.dev !== ident.dev || src.ino !== ident.ino) {\n      throw new HomeRenameRaceError(fromRel);\n    }\n    await fsp.unlink(to.abs).catch(() => undefined);\n    throw e;\n',
         replacement: '    await fsp.unlink(to.abs).catch(() => undefined);\n    throw e;\n',
       },
     ],
@@ -2224,6 +2225,111 @@ export const V1_ASM_D1B2_MUTATIONS: readonly V1AsmD1b2Mutation[] = [
     tests: [HFS_T],
     expectRed: ['settleHalfLink:只收尾确定的半完成态', 'settle_half_link_rejects_same_name'],
     mustKill: ['settle_half_link_rejects_same_name'],
+  },
+  {
+    id: 'rename_exclusive_rollback_source_unchecked',
+    clause:
+      'R7-1:回滚撤销目标前确认来源名仍持有原对象(去掉 → 来源已消失 / 被换时目标被撤销,原对象失去最后一个名字 = 数据丢失)',
+    edits: [
+      {
+        file: HFS,
+        anchor:
+          '    if (src === undefined || src.dev !== ident.dev || src.ino !== ident.ino) {\n      throw new HomeRenameRaceError(fromRel);\n    }\n',
+        replacement: '',
+      },
+    ],
+    tests: [HFS_T],
+    expectRed: [
+      D_HFS_RACE,
+      'rename_exclusive_rollback_keeps_target_when_source_swapped',
+      'rename_exclusive_rollback_keeps_target_when_source_gone',
+    ],
+    mustKill: [
+      'rename_exclusive_rollback_keeps_target_when_source_swapped',
+      'rename_exclusive_rollback_keeps_target_when_source_gone',
+    ],
+  },
+  {
+    id: 'denied_cleanup_restore_probe_io_failure_as_occupied',
+    clause:
+      'R7-3:路径探测(lstat / readdir)IO 失败不是「原名被占用」:去掉 STAT_FAILED 分支 → 落回 occupied → journal_not_mine(分类错误)',
+    edits: [
+      {
+        file: HSTATE,
+        anchor: "      if (e.code === HOME_DENY.STAT_FAILED) return 'io_failed';\n",
+        replacement: '',
+      },
+    ],
+    tests: [HOOK_T],
+    expectRed: [
+      D_HOOK_DENY,
+      D_HOOK_POS,
+      D_HOOK_ASIDE,
+      'denied_cleanup_restore_probe_io_failure_invalid',
+    ],
+    mustKill: ['denied_cleanup_restore_probe_io_failure_invalid'],
+  },
+  {
+    id: 'denied_cleanup_restore_source_rejected_as_occupied',
+    clause:
+      'R7-3:守卫拒绝墓碑本身(来源不可信)与原名被占用分开:去掉来源判定 → 落回 occupied → journal_not_mine',
+    edits: [
+      {
+        file: HSTATE,
+        anchor: "      if (e.rel === stateRel(tombName)) return 'source_rejected';\n",
+        replacement: '',
+      },
+    ],
+    tests: [HOOK_T],
+    expectRed: [
+      D_HOOK_DENY,
+      D_HOOK_POS,
+      D_HOOK_ASIDE,
+      'denied_cleanup_restore_source_rejected_unsafe',
+    ],
+    mustKill: ['denied_cleanup_restore_source_rejected_unsafe'],
+  },
+  {
+    id: 'denied_cleanup_restore_io_failed_unmapped',
+    clause:
+      'R7-3:restore 返回 io_failed 必须映射 invalid / journal_restore_failed(去掉 → 落到按核对结果返回,可能 deferred / ref_moved)',
+    edits: [
+      {
+        file: COMMIT,
+        anchor:
+          "    if (restored === 'io_failed') {\n      return { kind: 'journal_unverified', why: 'journal_restore_failed' };\n    }\n",
+        replacement: '',
+      },
+    ],
+    tests: [HOOK_T],
+    expectRed: [
+      D_HOOK_DENY,
+      D_HOOK_POS,
+      D_HOOK_ASIDE,
+      'denied_cleanup_restore_probe_io_failure_invalid',
+    ],
+    mustKill: ['denied_cleanup_restore_probe_io_failure_invalid'],
+  },
+  {
+    id: 'denied_cleanup_restore_source_rejected_unmapped',
+    clause:
+      'R7-3:restore 返回 source_rejected 必须映射 invalid / journal_unsafe(去掉 → 落到按核对结果返回)',
+    edits: [
+      {
+        file: COMMIT,
+        anchor:
+          "    if (restored === 'source_rejected')\n      return { kind: 'journal_unverified', why: 'journal_unsafe' };\n",
+        replacement: '',
+      },
+    ],
+    tests: [HOOK_T],
+    expectRed: [
+      D_HOOK_DENY,
+      D_HOOK_POS,
+      D_HOOK_ASIDE,
+      'denied_cleanup_restore_source_rejected_unsafe',
+    ],
+    mustKill: ['denied_cleanup_restore_source_rejected_unsafe'],
   },
 ];
 

@@ -821,6 +821,51 @@ describe('beforeRefUpdate:拒绝后清理的改名协议', () => {
     expect(refOf(w)).toBe(moved);
   });
 
+  it('denied_cleanup_restore_probe_io_failure_invalid:改回时路径探测(readdir)IO 失败 → invalid / journal_restore_failed,不是「原名被占用」(journal_not_mine);墓碑原样保留,原名无文件', async () => {
+    if (process.getuid?.() === 0) return; // root 不受权限位约束,无法注入探测失败
+    let dir = '';
+    let fx: World['io'] | undefined;
+    let moved = '';
+    try {
+      const { w, r, base } = await runDeny('d1b2-rsprobe-', (w2) => ({
+        tombstoneHex: fixedHex,
+        onStep: async (step) => {
+          if (step === 'discard:after-rename') moved = advance(w2); // 迫使走改回分支
+          if (step === 'discard:before-restore') {
+            dir = w2.h.stateDir;
+            fx = w2.io;
+            await safe.chmod(w2.io, dir, 0o300); // 可进入、可写、不可列出:路径探测的 readdir 失败(lstat 仍成功)
+          }
+        },
+      }));
+      await safe.chmod(w.io, dir, 0o700);
+      dir = '';
+      expect(r).toMatchObject({ status: 'invalid', why: 'journal_restore_failed' });
+      expect(r).not.toMatchObject({ why: 'journal_not_mine' });
+      expect(await exists(journalPath(w))).toBe(false);
+      const tomb = JSON.parse(await readText(fixedTomb(w))) as PersonalCommitJournal;
+      expect(tomb).toEqual(expect.objectContaining(base));
+      expect(refOf(w)).toBe(moved);
+    } finally {
+      if (dir !== '' && fx !== undefined) await safe.chmod(fx, dir, 0o700);
+    }
+  });
+
+  it('denied_cleanup_restore_source_rejected_unsafe:改回时守卫拒绝的是墓碑本身(核对后墓碑多了一个名字 = 硬链接)→ invalid / journal_unsafe,不是「原名被占用」(journal_not_mine);墓碑与新名字原样保留,原名无文件', async () => {
+    const { w, r } = await runDeny('d1b2-rssrc-', (w2) => ({
+      tombstoneHex: fixedHex,
+      onStep: async (step) => {
+        if (step === 'discard:after-rename') advance(w2); // 迫使走改回分支
+        if (step === 'discard:before-restore') {
+          await rawLink(fixedTomb(w2), statePath(w2.h, `${PERSONAL_STATE_FILES.journal}.extra`));
+        }
+      },
+    }));
+    expect(r).toMatchObject({ status: 'invalid', why: 'journal_unsafe' });
+    expect(await exists(journalPath(w))).toBe(false);
+    expect((await lstat(fixedTomb(w))).nlink).toBe(2);
+  });
+
   /** 崩在 update-ref 之前,留下一个 objects_written 的 journal(ref 未动) */
   async function pendingJournalWorld(prefix: string): Promise<World> {
     const w = await makeWorld(prefix);
@@ -868,5 +913,14 @@ describe('beforeRefUpdate:拒绝后清理的改名协议', () => {
     const re = await openAgain(w);
     expect(re).toMatchObject({ kind: 'invalid', why: 'journal_unsafe' });
     expect((await lstat(journalPath(w))).nlink).toBe(3);
+  });
+
+  it('half_state_settle_is_shape_based_not_provenance:半完成态收尾只按形状(墓碑名形态 + 与原名同 dev:ino + nlink=2)认,不证明链接由本协议创建——预先存在的同形硬链接同样被收尾(契约写明:对硬链接守卫的有意放宽,只删墓碑名、原名保留,无信息丢失)', async () => {
+    const w = await pendingJournalWorld('d1b2-shape-');
+    await safe.hardlink(w.io, journalPath(w), fixedTomb(w)); // 不是协议崩溃留下的,只是同形
+    const re = await openAgain(w);
+    expect(re.kind).toBe('ready');
+    expect(await exists(fixedTomb(w))).toBe(false);
+    expect((await lstat(journalPath(w))).nlink).toBe(1);
   });
 });

@@ -26,6 +26,7 @@ import { RSI_FILE_MODE, RSI_REVOCATIONS_MAX_BYTES } from '../../contracts/rsi.js
 import { canonicalJson } from '../../io/canonical-json.js';
 import {
   createHomeFsContext,
+  HOME_DENY,
   HomeExistsError,
   HomeRenameRaceError,
   HomeWriteDeniedError,
@@ -187,7 +188,8 @@ export const removeJournal = (h: PersonalHome): Promise<void> =>
 // 拒绝后清理 journal 用的墓碑(同目录;名字 = 固定前缀 + 本次生成的 crypto 随机数,**不含 txn_id、不可从 journal 内容推导**):
 // journal 先不覆盖地改名到墓碑 → 经 fd 核对内容与身份 → 对同一对象 unlink(见 `removeVerified`)。
 // 保证的边界(分三类,契约 §21 同文):
-//  - 已验证:墓碑被换成别的文件时,unlink 之前的 lstat 比对 dev:ino、unlink 之后的 fd nlink 检查都会发现并返回 invalid(不报普通 denied);
+//  - 已验证:在 lstat 比对 dev:ino 与 unlink 之间**没有**换入的前提下:unlink 之前路径已被换成别的文件 → lstat 比对发现;核对过的对象 unlink 后仍有别的名字 → fd nlink 检查发现;两者都返回 invalid(不报普通 denied)。
+//    nlink==0 只证明「核对过的对象事后没有任何名字」,不证明「本次 unlink 删的就是它」(检不出情形见 `removeVerified`);
 //  - 未验证的残留:改名完成后、核对前进程死亡 → 状态目录里留下一个孤立墓碑(内容未核对,不被任何读取路径当作 journal;恢复不碰它);
 //  - 半完成态:改名 / 改回是 link+unlink,死在 link 之后 = 原名与墓碑同 inode、nlink=2 —— `openPersonalRepo` 持锁读 journal 之前自动收尾({@link settleHalfMovedJournal})。
 // lstat 与 unlink 之间的按路径窗口仍是 home-fs 文件头已声明的残余,不在此处消除。
@@ -242,7 +244,8 @@ export const removeVerifiedTombstone = <T>(
   );
 
 /**
- * 墓碑 → 原名(不覆盖):`'occupied'` = 原路径已被别人占用,或改回途中目标被换成别的东西(墓碑 / 别人的内容都不删);`'absent'` = 墓碑不在。
+ * 墓碑 → 原名(不覆盖):`'occupied'` = 原路径已被别人占用,或改回途中目标被换成别的东西(墓碑 / 别人的内容都不删);`'absent'` = 墓碑不在;
+ * `'io_failed'` = 路径探测 IO 失败(不是被占用);`'source_rejected'` = 守卫拒绝了墓碑本身(来源不可信)。后两者墓碑都原样保留。
  * 原名上已有东西:普通文件(EEXIST)或 home-fs 守卫拒绝的异类(链接 / 目录 / 硬链接)——一律当作被占用,墓碑原样保留。
  * 残余(已知,不消除):改回按**路径**取墓碑,没有延续核对时 fd 的身份——核对与改回之间墓碑被换成别的文件时,换上者会被放回原名。
  * 原名在此之前就可被同权限的对抗者直接写入,这不增加其能力;只是「改回的就是刚核对过的那个对象」不在保证范围内。
@@ -250,13 +253,21 @@ export const removeVerifiedTombstone = <T>(
 export async function restoreJournalFromTombstone(
   h: PersonalHome,
   tombName: string,
-): Promise<'restored' | 'occupied' | 'absent'> {
+): Promise<'restored' | 'occupied' | 'absent' | 'io_failed' | 'source_rejected'> {
   const to = PERSONAL_STATE_FILES.journal;
   try {
     await renameExclusive(homeFsFor(h, [to, tombName]), stateRel(tombName), stateRel(to));
   } catch (e) {
-    // 原名上是链接 / 目录 / 硬链接等异类时守卫抛 HomeWriteDeniedError:同样当作被占用(墓碑保留)
-    if (isOccupied(e) || e instanceof HomeWriteDeniedError) return 'occupied';
+    if (e instanceof HomeWriteDeniedError) {
+      // 三类分开(先判 code 再判 rel:STAT_FAILED 带的 rel 是正在探测的那条路径,可能正是墓碑):
+      //  - 路径探测(lstat / readdir)IO 失败:不是「被占用」,journal 只剩墓碑名 → io_failed;
+      //  - 守卫拒绝的是**墓碑**(来源:链接 / 硬链接 / 目录…)→ source_rejected;
+      //  - 其余守卫拒绝落在原名上(链接 / 目录 / 硬链接等异类)→ 同样是被占用(墓碑保留)。
+      if (e.code === HOME_DENY.STAT_FAILED) return 'io_failed';
+      if (e.rel === stateRel(tombName)) return 'source_rejected';
+      return 'occupied';
+    }
+    if (isOccupied(e)) return 'occupied';
     if ((e as NodeJS.ErrnoException).code === 'ENOENT') return 'absent';
     throw e;
   }
@@ -265,6 +276,7 @@ export async function restoreJournalFromTombstone(
 
 /**
  * 收尾改名 / 改回死在 `link` 之后的**确定半完成态**:状态目录里每个墓碑名文件,若与 `commit-journal.json` 同 dev:ino 且 nlink 恰为 2 → 只删墓碑名,保留原名。
+ * **只按形状认,不证明链接由本协议创建**(没有同 UID 对抗者伪造不了的凭据):预先存在的同名同形硬链接同样被收尾——对硬链接守卫的有意放宽,只删多出来的名字,原名与内容不变。
  * 调用方须持 `personal/lock`(`openPersonalRepo` 在读 journal 之前调)。其它形态(孤立墓碑、墓碑与原名不同 inode、原名与非墓碑文件的硬链接)一律不动。
  * 单个墓碑的守卫拒绝 / IO 失败被吞(留给随后的 journal 读取按既有口径 fail-closed);状态目录不存在 = 没有可收尾的。返回收尾的个数。
  */

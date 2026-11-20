@@ -332,6 +332,44 @@ describe('renameExclusive:半完成态与竞态(link 之后)', () => {
     expect((await lstat(abs(s, FA))).nlink).toBe(1);
   });
 
+  it('rename_exclusive_rollback_keeps_target_when_source_swapped:unlink(来源) 失败进入回滚时来源名已被换成别的文件 → 不撤销目标(它是原对象仅剩的名字),抛 HomeRenameRaceError;换上的来源不动', async () => {
+    const s = await setup([FA, FB]);
+    await seed(s, FA, 'one');
+    await expect(
+      hfs.renameExclusive(
+        s.mkStage(async (st) => {
+          if (st !== 'pre-unlink-source') return;
+          await rawUnlink(abs(s, FA)); // 来源名被拿走(此刻 FB 是原对象唯一的名字,nlink=1)
+          await safe.writeFile(s.fx, abs(s, FA), 'FOREIGN', { mode: 0o600 });
+          throw new Error('unlink failed');
+        }),
+        FA,
+        FB,
+      ),
+    ).rejects.toBeInstanceOf(hfs.HomeRenameRaceError);
+    expect(await readText(abs(s, FB))).toBe('one');
+    expect(await readText(abs(s, FA))).toBe('FOREIGN');
+  });
+
+  it('rename_exclusive_rollback_keeps_target_when_source_gone:进入回滚时来源名已消失 → 不撤销目标(原对象唯一的名字),抛 HomeRenameRaceError', async () => {
+    const s = await setup([FA, FB]);
+    await seed(s, FA, 'one');
+    await expect(
+      hfs.renameExclusive(
+        s.mkStage(async (st) => {
+          if (st !== 'pre-unlink-source') return;
+          await rawUnlink(abs(s, FA));
+          throw new Error('unlink failed');
+        }),
+        FA,
+        FB,
+      ),
+    ).rejects.toBeInstanceOf(hfs.HomeRenameRaceError);
+    expect(await readText(abs(s, FB))).toBe('one');
+    expect((await lstat(abs(s, FB))).nlink).toBe(1);
+    await expect(lstat(abs(s, FA))).rejects.toThrow();
+  });
+
   it('rename_exclusive_target_checked_before_source_unlink:link 之后目标名被换成别的文件(不抛错)→ 不删来源(它可能是最后一个有效名字),抛 HomeRenameRaceError;来源与换上的目标都原样保留', async () => {
     const s = await setup([FA, FB]);
     await seed(s, FA, 'one');

@@ -428,12 +428,12 @@ type DiscardResult =
  *  1. 复核锁(抛 → 传播,不动)→ 读盘快速核对所有权与 ref(只是快速失败,不是依据)→ 最后一次锁复核;
  *  2. **不覆盖地**把 journal 改名到本次清理唯一的**随机**墓碑名(同目录;名字不含 txn_id、不可推导;{@link discardViaTombstone});墓碑名已被占用 → 不动现场,invalid;
  *  3. 对墓碑**经已打开的 fd**核对:内容与本次写下的逐字段全等(含 phase)、`refs/heads/rsi === oldHead`;不符 → 把墓碑不覆盖地改回原名(原名已被占 / 改回途中被换 → 墓碑保留,invalid);
- *  4. 核对通过后:unlink 前在路径上 lstat 比对 dev:ino(已不是核对过的那个对象 → 不删,invalid);unlink 后对**同一个 fd** 再 fstat,nlink 必须为 0(否则删的不是核对过的对象 → invalid);
+ *  4. 核对通过后:unlink 前在路径上 lstat 比对 dev:ino(已不是核对过的那个对象 → 不删,invalid);unlink 后对**同一个 fd** 再 fstat,nlink 必须为 0(核对过的对象仍有别的名字 → invalid;nlink==0 只证明该对象事后没有名字,不证明本次 unlink 删的就是它);
  *  5. 删除完成后**再读一次** ref,与 `oldHead` 不符(核对之后被外部 `git update-ref` 推进)→ `ref_moved`(不回滚已删的自己的 journal,但绝不返回普通 denied)。
  * 只有 `clean` 才允许对外返回普通 `denied`;其余保留现场(不改引用),由调用方走既有完整性失败路径。丢锁照旧传播。
  *
  * 三类结果,不混:
- *  - **已验证**:步骤 3 / 4 观测到的替换(墓碑被换、unlink 前身份变了、unlink 后 nlink≠0)一律 invalid;步骤 2 之后原路径上换上的 journal 不会被本函数删;
+ *  - **已验证**:步骤 3 / 4 **观测到**的替换(墓碑被换、unlink 前 lstat 身份变了、unlink 后 nlink≠0)一律 invalid;步骤 2 之后原路径上换上的 journal 不会被本函数删;
  *  - **未验证的残留**:lstat 与 unlink 之间路径被换上别的文件(按路径的窗口,home-fs 文件头已声明)——只能事后发现(nlink),不能撤销;步骤 5 之后的推进观测不到;步骤 5 报 `ref_moved` 时 journal 已删(不回滚);
  *    步骤 2 与 3 之间进程死亡:孤立墓碑(内容未核对),原名无 journal(与「已丢弃」同形:ref / 索引 / 工作树都没动,钩子拒绝发生在 `update-ref` 之前),恢复不读墓碑;
  *  - **半完成态**:步骤 2 / 3 的改名 / 改回是 link+unlink,死在 link 之后 = 原名与墓碑同 inode、nlink=2;下次 `openPersonalRepo` 持锁读 journal 之前自动收尾(只删墓碑名)。
@@ -523,6 +523,13 @@ async function discardViaTombstone(
     if (restored === 'occupied') return { kind: 'journal_unverified', why: 'journal_not_mine' };
     // 墓碑已不在:没有任何名字下有这份 journal(现场已丢),同样不能按核对结果返回
     if (restored === 'absent') return { kind: 'journal_unverified', why: 'journal_restore_failed' };
+    // 路径探测(lstat / readdir)IO 失败:不是被占用,journal 只剩墓碑名,现场已丢 → invalid,墓碑保留
+    if (restored === 'io_failed') {
+      return { kind: 'journal_unverified', why: 'journal_restore_failed' };
+    }
+    // 守卫拒绝了墓碑本身(链接 / 硬链接 / 目录):来源不可信,不是原名被占用
+    if (restored === 'source_rejected')
+      return { kind: 'journal_unverified', why: 'journal_unsafe' };
   } catch (e) {
     // 改回时的文件系统 IO 失败(带 errno code,非 occupied):journal 只剩随机墓碑名(恢复路径不读孤立墓碑),现场已丢——
     // 不能再按核对结果返回(那可能是 deferred / ref_moved);invalid,墓碑原样保留。
